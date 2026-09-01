@@ -25,7 +25,12 @@ def _require_owner(business_id: str, user: AuthedUser) -> None:
     # unauthenticated + service-role (RLS-bypassed). Verify the caller
     # owns the business before any read/write.
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1")
+    # None is a FAILED read (transport error, or PostgREST 4xx such as a
+    # non-uuid id) — not an empty one. Reporting it as 404 is how the
+    # shadowed-route bug above hid for four months.
+    if rows is None:
+        raise HTTPException(status_code=503, detail="business lookup failed")
     if not rows:
         raise HTTPException(status_code=404, detail="business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
@@ -73,31 +78,13 @@ def archetype(business_type: str) -> JSONResponse:
     return JSONResponse({"ok": True, "archetype": row})
 
 
-@router.get("/profile/{business_id}")
-def profile(business_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
-    _require_owner(business_id, user)
-    row = bp.get_profile(business_id)
-    return JSONResponse({"ok": True, "profile": row})
-
-
-@router.post("/profile/{business_id}")
-def save_profile(business_id: str, data: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
-    _require_owner(business_id, user)
-    row = bp.upsert_profile(business_id, data or {})
-    if row is None:
-        return JSONResponse({"ok": False, "error": "save failed"}, status_code=500)
-    return JSONResponse({"ok": True, "profile": row})
-
-
-@router.post("/profile/{business_id}/seed-from-archetype")
-def seed_from_archetype(business_id: str, body: SeedBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
-    _require_owner(business_id, user)
-    row = bp.apply_archetype_defaults(business_id, body.business_type)
-    if row is None:
-        return JSONResponse({"ok": False, "error": "unknown archetype"}, status_code=400)
-    return JSONResponse({"ok": True, "profile": row})
-
-
+# ROUTE ORDER IS LOAD-BEARING. Starlette matches in declaration order, and
+# `POST /profile/{business_id}` below would otherwise capture the literal
+# path `/profile/seed-from-onboarding` with business_id="seed-from-onboarding"
+# (it did, from 2026-05-02 to 2026-09-01: every onboarding seed answered 404
+# "business not found" and no new business got a profile, a blueprint module
+# set, or a vertical autopilot). Literal paths under /profile/ go ABOVE the
+# parameter routes; __tests__/test_business_profile_route_order.py enforces it.
 @router.post("/profile/seed-from-onboarding")
 def seed_from_onboarding(body: SeedFromOnboardingBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
     """
@@ -141,6 +128,31 @@ def seed_from_onboarding(body: SeedFromOnboardingBody, user: AuthedUser = Depend
     except Exception as e:
         logger.warning(f"seed-from-onboarding autopilot seed failed (non-fatal): {e}")
 
+    return JSONResponse({"ok": True, "profile": row})
+
+
+@router.get("/profile/{business_id}")
+def profile(business_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
+    row = bp.get_profile(business_id)
+    return JSONResponse({"ok": True, "profile": row})
+
+
+@router.post("/profile/{business_id}")
+def save_profile(business_id: str, data: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
+    row = bp.upsert_profile(business_id, data or {})
+    if row is None:
+        return JSONResponse({"ok": False, "error": "save failed"}, status_code=500)
+    return JSONResponse({"ok": True, "profile": row})
+
+
+@router.post("/profile/{business_id}/seed-from-archetype")
+def seed_from_archetype(business_id: str, body: SeedBody, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
+    row = bp.apply_archetype_defaults(business_id, body.business_type)
+    if row is None:
+        return JSONResponse({"ok": False, "error": "unknown archetype"}, status_code=400)
     return JSONResponse({"ok": True, "profile": row})
 
 
