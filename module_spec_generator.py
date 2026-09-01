@@ -295,6 +295,7 @@ ArchetypeEnum = Literal[
     "booking_calendar",   # C.1 vertical slice — appointment / time-slot tracking
     "work_pipeline",      # staged work moving toward done — Matters/Jobs/Engagements
     "event_roster",       # one occasion, many people — RSVP headcount + named roles
+    "agreement_ledger",   # a document somebody signs — signed / expiring / expired
 ]
 
 
@@ -396,6 +397,17 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         # group alongside Calendar + Tasks (sidebar's append-into-existing
         # merge step picks this up).
         "operate_group": "schedule",
+    },
+    "agreement_ledger": {
+        "config_surface": "build",
+        "daily_use_surface": "operate",
+        "chief_can_suggest": True,
+        "label": "Agreements",
+        # 'work', not 'schedule'. An unsigned engagement letter is
+        # outstanding WORK, not an occasion on a calendar — and the
+        # whole point of the archetype is that the unsigned ones are
+        # a thing to act on rather than a date to keep.
+        "operate_group": "work",
     },
 }
 
@@ -499,12 +511,43 @@ class EventRosterParams(BaseModel):
     occasion_noun: Optional[str] = None    # "Service", "Event", "Gathering"
 
 
+class AgreementLedgerParams(BaseModel):
+    """Parameters for the AgreementLedger archetype — a document somebody
+    has to sign, and whether they have.
+
+    STATE IS DERIVED, NOT STORED, and that is the load-bearing decision.
+    The six modules this covers (creative/service_provider agreements,
+    lawyer engagement-letters, course_creator terms, fitness_wellness
+    waivers, financial_educator disclosures) mostly have no status field
+    at all — they carry a signed date and, for a waiver, an expiry.
+    Requiring a status column would have meant a migration and a backfill
+    of rows nobody has touched, so the frontend computes the state from
+    the two date fields those modules already have.
+
+    Consequence worth knowing: `signed_field` empty means UNSIGNED. A
+    field name pointed at the wrong key therefore reads as "nobody has
+    signed anything", which is the safe direction to be wrong in (it
+    over-reports work to do rather than hiding a liability) but is still
+    wrong — hence the *_field refs are checked against schema.fields like
+    every other archetype's.
+
+    All fields optional; the frontend resolveParams() falls back to
+    conventional names ('name', 'contact_id', 'signed_date', 'expires')."""
+    title_field: Optional[str] = None      # what the agreement is ABOUT
+    party_field: Optional[str] = None      # entry.data key holding the contact id
+    signed_field: Optional[str] = None     # date signed; empty = unsigned
+    expires_field: Optional[str] = None    # date it stops being valid, if it does
+    expiring_soon_days: Optional[int] = None   # warn window; frontend defaults to 30
+    item_noun: Optional[str] = None        # "Waiver", "Engagement Letter", "Disclosure"
+
+
 # Validators dispatched by archetype value.
 _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "booking_calendar": BookingCalendarParams,
     "fallback_generic": FallbackGenericParams,
     "work_pipeline": WorkPipelineParams,
     "event_roster": EventRosterParams,
+    "agreement_ledger": AgreementLedgerParams,
 }
 
 
@@ -740,6 +783,29 @@ class ModuleSpec(BaseModel):
             if len(role_ids) != len(set(role_ids)):
                 raise ValueError(
                     f"event_roster roles have duplicate ids: {role_ids}"
+                )
+
+        # agreement_ledger: same discipline. The stakes are a shade higher
+        # here than for the others, because a *_field pointing at nothing
+        # does not render an empty column — signed_field resolving to a
+        # missing key reads as "nobody has signed anything", and the whole
+        # module quietly becomes one long unsigned list. Loud at validation
+        # is the only place to catch that.
+        if self.archetype == "agreement_ledger":
+            field_names = {f.name for f in self.schema_.fields}
+            for k in ("title_field", "party_field", "signed_field",
+                      "expires_field"):
+                v = self.archetype_params.get(k)
+                if v and v not in field_names:
+                    raise ValueError(
+                        f"agreement_ledger {k} '{v}' is not in schema.fields "
+                        f"(have: {sorted(field_names)})"
+                    )
+            days = self.archetype_params.get("expiring_soon_days")
+            if days is not None and (not isinstance(days, int) or days <= 0):
+                raise ValueError(
+                    f"agreement_ledger expiring_soon_days must be a positive "
+                    f"integer, got {days!r}"
                 )
 
         return self
@@ -1159,6 +1225,36 @@ Available archetypes:
                 (greeter, nursery, sound). Omit for pure RSVP headcount.
         occasion_noun — what one occasion is called ("Service", "Event")
       title/date/location/capacity refs MUST name fields in schema.fields.
+
+  agreement_ledger
+    purpose: DOCUMENTS SOMEBODY HAS TO SIGN, and whether they have —
+      agreements, engagement letters, waivers, terms, disclosures, consents
+    when to pick: intake describes paperwork a client signs, and the
+      practitioner's real question is "who hasn't signed yet" or "whose has
+      expired" — a gym's liability waivers, a firm's engagement letters, an
+      agency's contracts, a course's terms, an educator's disclosures.
+    when NOT to pick: staged work moving toward done (work_pipeline — a
+      signature is not a stage, it is a fact with a date); a file store with
+      no signature question (fallback_generic).
+    schema requirement: schema MUST contain a date field for when it was
+      signed. Include an expiry date field when the document stops being
+      valid (waivers, certifications, insurance). A contact_link for who
+      signed it is strongly recommended.
+    STATE IS DERIVED, NOT STORED — do NOT add a status field for signed
+      vs unsigned. The UI computes it: no signed date = not signed; a past
+      expiry = expired; an expiry inside the warning window = expiring soon.
+      A status field would go stale against the dates and disagree with the
+      grouping.
+    archetype_params (ALL optional — unset keys fall back to sensible
+      defaults in the UI):
+        title_field — name of the field saying what the agreement is about
+        party_field — name of the contact_link field for who signs it
+        signed_field — name of the date field for when it was signed
+                       (default 'signed_date'). EMPTY MEANS UNSIGNED.
+        expires_field — name of the date field for when it lapses, if it does
+        expiring_soon_days — days before expiry to start warning (default 30)
+        item_noun — what one is called ("Waiver", "Engagement Letter")
+      Any *_field you set MUST name a field in schema.fields.
 
   fallback_generic
     purpose: explicit "no archetype fits yet" — renders through the generic
