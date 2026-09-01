@@ -1385,6 +1385,17 @@ async def startup():
                           next_run_time=_dt.now(_tz.utc) + _td(minutes=5))
     except Exception as e:
         print(f"   [warn] ledger anchor sweep not scheduled: {e}")
+    # Lifecycle emails (2026-09-01) — the daily pass that tells a
+    # practitioner their trial ends soon / has ended. Once per business
+    # per email, stamped in businesses.settings; quiet while enforcement
+    # is off. 14:30 UTC = a working-morning inbox across the US.
+    # Kill switch: LIFECYCLE_EMAILS=off.
+    try:
+        import lifecycle_emails as _lifecycle
+        scheduler.add_job(g("lifecycle_emails", _lifecycle.sweep_tick),
+                          "cron", hour=14, minute=30, id="lifecycle_emails")
+    except Exception as e:
+        print(f"   [warn] lifecycle email sweep not scheduled: {e}")
 
     _staggered = stagger_long_interval_first_runs(scheduler)
     if _staggered:

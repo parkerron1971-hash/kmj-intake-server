@@ -312,6 +312,19 @@ def create_business(body: CreateBusinessBody,
     except Exception as e:
         logger.warning(f"[access] capi registration schedule failed: {e}")
 
+    # Lifecycle (2026-09-01) — the welcome email, after the response.
+    # send_welcome decides for itself whether this is the owner's first
+    # business and never raises; a signup must not fail on mail.
+    try:
+        import lifecycle_emails
+        if background_tasks is not None:
+            background_tasks.add_task(
+                lifecycle_emails.send_welcome, row,
+                getattr(user, "email", None),
+                (settings.get("practitioner_name") or None))
+    except Exception as e:
+        logger.warning(f"[access] welcome email schedule failed: {e}")
+
     return {"ok": True, "business": row}
 
 
