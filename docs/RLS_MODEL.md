@@ -19,7 +19,47 @@ hole another time.
    the user's JWT (`authenticated` role); the owner-scoped policy
    evaluates `auth.uid()`.
 
-Verified 2026-07-13: RLS is **on** for all core + sensitive tables.
+~~Verified 2026-07-13: RLS is **on** for all core + sensitive tables.~~
+
+**Corrected 2026-09-01.** That claim was false when it was written, or
+became false without anyone noticing — Supabase's linter reports RLS
+**off** on two `public` tables, `leads` and `discovery_submissions`,
+neither of which has ever carried an RLS statement in any migration in
+this repo. They therefore stood at Supabase defaults: `anon` and
+`authenticated` holding table grants, with RLS the only thing that would
+have restricted rows, and the anon key ships in the frontend bundle.
+Closed by `supabase/APPLY-2026-09-01-rls-advisor-errors.sql`.
+
+The lesson is the same one `vertical_registry.KNOWN_GAPS` records about
+the nonprofit blueprint: **a stale verification claim is worse than no
+claim**, because it is exactly what stops the next person looking. Do
+not write "verified" here without a date AND the query whose output you
+read. If you cannot paste the output, you checked that a file exists.
+
+**Verify with (run live, not from memory):**
+```sql
+SELECT c.relname, c.relrowsecurity
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relrowsecurity
+ ORDER BY 1;
+```
+
+## Rule 0 — a SECURITY DEFINER *view* is not a SECURITY DEFINER *function*
+
+Rule 2 below **requires** `SECURITY DEFINER` functions for cross-table
+policy checks. That is right, and this is not a caveat on it.
+
+A definer *view* is the inverse hazard: it executes with the **view
+owner's** privileges, so RLS on the tables underneath does not apply to
+whoever queries the view. Postgres 15 makes definer the DEFAULT for
+views — you opt out with `security_invoker = true` — which is how eight
+of them accumulated on this project without anyone deciding to.
+
+Today that is mostly latent, because nothing but the practitioner's own
+frontend points a JWT at PostgREST. It stops being latent the moment a
+second kind of account exists: a client-facing surface would be the first
+thing to aim a non-owner JWT at that door. Any new view goes in with
+`security_invoker = true` unless there is a written reason not to.
 
 ## Rule 1 — server code uses service-role, never anon
 
