@@ -729,8 +729,27 @@ async def notify_kevin(submission: dict, qualify_result: dict):
         json.dump(notification, f, indent=2)
     
     # ── Optionally: POST to Supabase for the studio to read ──
+    #
+    # SERVICE ROLE, not the anon key. This wrote with SUPABASE_ANON_KEY
+    # until 2026-09-01, which is the exact pattern docs/RLS_MODEL.md Rule 1
+    # forbids: "Any server path using the anon key on a tenant-scoped table
+    # breaks the moment its permissive policy is removed — this is exactly
+    # what bit us." It was also the reason `leads` could not have RLS
+    # switched on: enabling it would have silently killed this insert,
+    # because the anon role would no longer pass any policy.
+    #
+    # Two smaller things this fixes on the way past. SUPABASE_ANON_KEY is
+    # not a variable this project sets — .env.example documents
+    # SUPABASE_ANON, and 42 call sites use that name against 4 that reach
+    # for this one. So on any environment following .env.example, the
+    # `if` below was simply false and every lead silently skipped the
+    # write with no error, no log, and no row. And a failed write only
+    # ever printed inside the except, so a 401 from a revoked grant would
+    # have looked identical to success from the outside.
     supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_ANON_KEY")
+    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_key:
+        print("Supabase write skipped: SUPABASE_SERVICE_ROLE_KEY not set")
     if supabase_url and supabase_key:
         try:
             async with httpx.AsyncClient() as http:

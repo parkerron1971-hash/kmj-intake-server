@@ -1228,10 +1228,29 @@ async def _sb_service_patch(client: httpx.AsyncClient, path: str, body: dict):
 
 
 async def _sb_post(client: httpx.AsyncClient, path: str, body: dict):
+    """Server-side INSERT for the public site's own writes (/events,
+    /sessions).
+
+    SERVICE ROLE, not anon, since 2026-09-01. This used the anon key for
+    both headers, which is docs/RLS_MODEL.md Rule 1: "server code uses
+    service-role, never anon". The visitor is anonymous; the SERVER
+    writing on their behalf is not, and conflating the two is what makes
+    a table's protection depend on it having a permissive policy.
+
+    Switching the key can only make a write succeed that previously
+    failed — service_role does everything anon does and bypasses RLS —
+    so this cannot break a working path. What it does do is remove the
+    reason `events` and `sessions` would need an anon-writable policy at
+    all, which is the same knot that kept RLS off `leads`.
+
+    Same bounded-use rule as _sb_service_patch above: this is for the
+    server's own writes on a visitor's behalf, never a pass-through for
+    caller-supplied paths."""
+    key = _supabase_service()
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -1244,11 +1263,16 @@ async def _sb_post(client: httpx.AsyncClient, path: str, body: dict):
 
 
 async def _sb_patch(client: httpx.AsyncClient, path: str, body: dict):
-    """Pass 3: PATCH helper for the new Smart Sites endpoints."""
+    """Pass 3: PATCH helper for the new Smart Sites endpoints.
+
+    SERVICE ROLE since 2026-09-01 — see _sb_post for the full reasoning.
+    Same Rule 1 violation, same one-word fix, and the same reason it
+    cannot break anything: service_role can do everything anon could."""
+    key = _supabase_service()
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -1807,10 +1831,13 @@ async def invalidate_site_cache(business_id: str, user: AuthedUser = Depends(req
         if not sites:
             return {"status": "no_site"}
         site_id = sites[0]["id"]
+        # SERVICE ROLE since 2026-09-01 (RLS_MODEL.md Rule 1) — this
+        # touched business_sites, a tenant table, with the public key.
+        _key = _supabase_service()
         url = f"{_supabase_url()}/rest/v1/business_sites?id=eq.{site_id}"
         headers = {
-            "apikey": _supabase_anon(),
-            "Authorization": f"Bearer {_supabase_anon()}",
+            "apikey": _key,
+            "Authorization": f"Bearer {_key}",
             "Content-Type": "application/json",
         }
         try:
