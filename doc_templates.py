@@ -1959,6 +1959,269 @@ for _npt in (_BOARD_LIST, _CONFLICT_POLICY, _WHISTLEBLOWER_POLICY,
     TEMPLATES.append(_npt)
     TEMPLATE_INDEX[_npt["id"]] = _npt
 
+
+# ─── Loan Agreement (Promissory Note) ────────────────────────────────
+#
+# The first template where the BUSINESS is the one who pays. Every other
+# agreement in the library has the practitioner delivering work and the
+# contact paying for it; here the contact is the Lender and the business
+# is the Borrower — the aunt, the friend, the former client who fronts
+# the money for the second chair. The variable names do not change:
+# {client_name} is still the counterparty from the contact record. What
+# changes is that the roles are DEFINED in the first clause and used by
+# name after that, so the paper never says "you" and "we" and leaves the
+# reader to work out which side owes the money.
+#
+# All fixed. A promissory note has no personal paragraph a model should
+# write: the amount, the rate, the schedule and the remedies are the
+# whole document, and every one of them must be byte-for-byte what the
+# practitioner typed. There is nothing here for a drafted section to do.
+#
+# The branch holes are deliberate and audited. Interest and repayment
+# are each a select with a clause per option; the clause that needs a
+# figure ALSO requires that figure's field, so "simple interest" with no
+# rate renders no INTEREST clause at all — and the declared contract
+# (fees, payment) turns that absence into a blocker the practitioner
+# sees, instead of a note that says "at  per year".
+#
+# Its own back page, not the shared one. _GENERAL_TERMS excuses "delay or
+# failure caused by events beyond its reasonable control", which on a
+# service contract is fair and on a promissory note is a borrower's
+# excuse for a missed payment — written by the borrower. And its
+# assignment clause is mutual, where a lender customarily may pass the
+# note on. So the general terms below keep everything the back-page
+# test holds every agreement to (entire agreement, severability,
+# e-signatures) and drop the force-majeure sentence. The notices and
+# dispute clauses are the shared ones; nothing in them favours a side.
+
+_LOAN_SIGNATURE_BLOCK = """ACCEPTED AND AGREED
+
+BORROWER: {business_name}
+
+By: ____________________________     Date: ______________
+Name: {practitioner_name}
+Title: {practitioner_title}
+
+
+LENDER: {client_name}
+
+By: ____________________________     Date: ______________
+Name: {client_name}
+"""
+
+_LOAN_GENERAL_TERMS = fixed("GENERAL TERMS",
+    "(a) Entire agreement. This Note is the entire agreement between "
+    "the parties about the Loan and replaces every earlier discussion, "
+    "promise, or writing about it.\n"
+    "(b) Changes. A change to this Note counts only when it is in "
+    "writing and accepted by both parties; a clear written exchange "
+    "(including email) is enough.\n"
+    "(c) Severability. If any part of this Note is found unenforceable, "
+    "that part is limited or removed to the minimum extent necessary, "
+    "and the rest stays in force. If any interest or charge under this "
+    "Note would exceed what the law allows, it is reduced to the "
+    "maximum the law allows and any excess already paid is applied to "
+    "Principal.\n"
+    "(d) Assignment. The Borrower may not transfer its obligations under "
+    "this Note without the Lender's written consent. The Lender may "
+    "transfer its rights under this Note on written notice to the "
+    "Borrower.\n"
+    "(e) Signatures. This Note may be signed in counterparts, and "
+    "electronic signatures — including through an e-signature service — "
+    "are as valid as ink.\n"
+    "(f) No waiver. Accepting a late or partial payment, or not enforcing "
+    "any part of this Note on one occasion, does not waive the Lender's "
+    "right to enforce that part, or any other part, later.\n"
+    "(g) Headings. Headings are for convenience and do not affect how "
+    "this Note is read.\n"
+    "(h) Effective date. This Note takes effect on "
+    "{effective_date_resolved}.", article="general")
+
+_LOAN_TEMPLATE: Dict[str, Any] = {
+    "id": "loan_agreement",
+    "numbered": True,
+    "title": "Loan Agreement (Promissory Note)",
+    "subtitle": "Principal, Interest, Repayment & Default",
+    "description": "When someone lends your business money: what was "
+                   "borrowed, whether it bears interest, how and when it "
+                   "is paid back, and what happens if a payment is missed. "
+                   "You are the borrower; the contact is the lender.",
+    "category": "money",
+    # Universal — a business in any trade borrows from a person it knows.
+    # Ranked toward the verticals where the family-and-friends loan is
+    # the usual way a shop gets its start; never hidden from anyone.
+    "suggested_for": ["contractor", "personal_services", "creative",
+                      "service_provider", "consultant", "ecommerce",
+                      "fitness_wellness", "coach"],
+    "fields": [
+        field("principal", "Amount borrowed", required=True,
+              placeholder="e.g. $10,000.00"),
+        field("funding_date", "Date the money is (or was) received (optional)",
+              placeholder="e.g. September 5, 2026"),
+        field("purpose", "What the money is for (optional)", type_="textarea",
+              placeholder="e.g. Equipment for the second chair and three months of shop rent"),
+        select_field("interest_type", "Interest",
+                     ["no interest", "simple interest"],
+                     required=True, default="no interest"),
+        field("interest_rate", "Annual interest rate (if simple interest)",
+              placeholder="e.g. 5%"),
+        # First option is the branch that needs no further figure, so a
+        # note generated from the required fields alone is complete
+        # (test_document_verification holds every template to that).
+        select_field("repayment_type", "How it is repaid",
+                     ["one payment on the due date", "monthly installments"],
+                     required=True, default="one payment on the due date"),
+        field("installment_amount", "Amount of each installment (if installments)",
+              placeholder="e.g. $500.00"),
+        field("first_payment_date", "First installment due (if installments)",
+              placeholder="e.g. October 1, 2026"),
+        field("due_date", "Final due date", required=True,
+              placeholder="e.g. September 1, 2028"),
+        field("grace_days", "Days late before a payment counts as missed",
+              default="10", placeholder="10"),
+        field("late_fee", "Late fee per missed installment (optional)",
+              placeholder="e.g. $25.00"),
+        select_field("security", "Is anything pledged as security?",
+                     ["unsecured", "secured"], default="unsecured"),
+        field("collateral", "What is pledged (if secured)", type_="textarea",
+              placeholder="e.g. The 2023 Ford Transit van, VIN 1FTBW2CM..."),
+        field("state", "Governing state (optional)", sticky=True,
+              placeholder="e.g. Georgia"),
+    ],
+    "sections": [
+        fixed("THE PARTIES",
+              "This Loan Agreement and Promissory Note (the \"Note\") is "
+              "made on {date} between {client_name} (the \"Lender\") and "
+              "{business_name} (the \"Borrower\"). The Lender is lending "
+              "money to the Borrower, and the Borrower promises to repay "
+              "it, on the terms below. This Note takes effect on "
+              "{effective_date_resolved}.", article="recitals"),
+        fixed("THE LOAN",
+              "The Lender lends the Borrower {principal} (the "
+              "\"Principal\"). The Principal, together with any interest "
+              "and charges under this Note, is the \"Loan\"."),
+        fixed(None,
+              "The Principal is delivered to the Borrower on {funding_date}. "
+              "If that date has already passed, this Note records the terms "
+              "on which the money was received.",
+              requires="funding_date"),
+        fixed(None,
+              "Purpose of the Loan: {purpose}",
+              requires="purpose"),
+
+        # ── Interest: one clause per option; the rate clause also needs
+        #    the rate, so a blank one leaves the article missing (blocker)
+        #    rather than printing "at  per year".
+        fixed("INTEREST",
+              "The Loan bears no interest. The Borrower repays the "
+              "Principal only, plus any late fee or default interest this "
+              "Note provides for.",
+              requires_value=("interest_type", "no interest"),
+              article="fees"),
+        fixed("INTEREST",
+              "The unpaid Principal bears simple interest at {interest_rate} "
+              "per year from the day the Lender delivers the Principal until "
+              "the Loan is repaid in full, calculated on a 365-day year. "
+              "Each payment is applied first to accrued interest and then "
+              "to Principal.",
+              requires="interest_rate",
+              requires_value=("interest_type", "simple interest"),
+              article="fees"),
+
+        # ── Repayment: same mechanism. The installment amount lives in
+        #    its own clause and the Principal in THE LOAN, so no clause
+        #    ever names two amounts (doc_audit's money_conflict rule).
+        fixed("REPAYMENT",
+              "The Borrower repays the Loan in monthly installments of "
+              "{installment_amount}, each due on the same day of the month "
+              "as the first, until the Principal and all accrued interest "
+              "are paid in full — and in any event no later than {due_date} "
+              "(the \"Maturity Date\"). Any balance remaining on the "
+              "Maturity Date is due on that date.",
+              requires="installment_amount",
+              requires_value=("repayment_type", "monthly installments"),
+              article="payment"),
+        fixed(None,
+              "The first installment is due on {first_payment_date}.",
+              requires="first_payment_date",
+              requires_value=("repayment_type", "monthly installments")),
+        fixed("REPAYMENT",
+              "The Borrower repays the Principal, together with all accrued "
+              "interest, in a single payment on or before {due_date} (the "
+              "\"Maturity Date\").",
+              requires_value=("repayment_type", "one payment on the due date"),
+              article="payment"),
+        fixed("PREPAYMENT",
+              "The Borrower may repay all or part of the Loan early at any "
+              "time without penalty. An early payment is applied first to "
+              "accrued interest and then to Principal, and does not change "
+              "the due date of any later payment unless the Loan is paid in "
+              "full."),
+        fixed("LATE PAYMENT AND DEFAULT",
+              "A payment not received within {grace_days} days after its "
+              "due date is missed. The Borrower is in default if (a) a "
+              "missed payment remains unpaid 15 days after the Lender gives "
+              "written notice of it, or (b) the Borrower becomes insolvent, "
+              "makes an assignment for the benefit of creditors, or is the "
+              "subject of a bankruptcy filing. On default the Lender may "
+              "declare the entire unpaid balance of the Loan immediately "
+              "due. From the date of default the unpaid balance bears "
+              "interest at the rate stated above or, if this Note bears no "
+              "interest, at 6% per year — never more than the maximum rate "
+              "the law allows — until it is paid. The Borrower will pay the "
+              "Lender's reasonable costs of collecting a defaulted Loan, "
+              "including reasonable attorney's fees, where the law allows.",
+              article="overdue"),
+        fixed(None,
+              "Each missed installment also incurs a late fee of {late_fee}, "
+              "in addition to any interest.",
+              requires="late_fee"),
+        fixed("SECURITY",
+              "This Loan is unsecured. The Lender is relying on the "
+              "Borrower's promise to pay and takes no lien on, or interest "
+              "in, any property of the Borrower.",
+              requires_value=("security", "unsecured")),
+        fixed("SECURITY",
+              "As security for the Loan, the Borrower grants the Lender a "
+              "security interest in the following property (the "
+              "\"Collateral\"):\n\n{collateral}\n\nWhile any part of the "
+              "Loan is unpaid the Borrower will keep the Collateral in good "
+              "condition, insured where that is customary, and free of "
+              "other liens, and will not sell or transfer it. The Lender "
+              "may file any notice or financing statement needed to record "
+              "this interest. On default the Lender may take and sell the "
+              "Collateral as the law allows and apply the proceeds to the "
+              "Loan; the Borrower remains responsible for any shortfall.",
+              requires="collateral",
+              requires_value=("security", "secured")),
+        fixed("THE LENDER'S ROLE",
+              "This is a loan, not an investment. By making it the Lender "
+              "does not acquire any ownership of, share in the profits of, "
+              "or right to manage {business_name}, and is not a partner, "
+              "member, or agent of the Borrower. Nothing in this Note "
+              "requires the Lender to lend any further amount.",
+              article="relationship"),
+        fixed("REPRESENTATIONS",
+              "Each party represents to the other that it has the authority "
+              "to enter into this Note and to perform it, and that signing "
+              "it does not breach any other agreement that party is bound "
+              "by.", article="representations"),
+        fixed("GOVERNING LAW",
+              "This Note is governed by the laws of {state_full}.{venue_clause}",
+              requires="state", article="governing_law"),
+        sig(_LOAN_SIGNATURE_BLOCK),
+    ],
+}
+
+# Notices and dispute resolution are the shared clauses (and the notice
+# address fields come with them); the general terms are the Note's own,
+# for the reasons in the header comment.
+_BACK_PAGE[_LOAN_TEMPLATE["id"]] = [_NOTICES, _DISPUTE, _LOAN_GENERAL_TERMS]
+_splice_spine(_LOAN_TEMPLATE)
+
+TEMPLATES.append(_LOAN_TEMPLATE)
+TEMPLATE_INDEX[_LOAN_TEMPLATE["id"]] = _LOAN_TEMPLATE
+
 # Nonprofit language for the shared clause pools, so a generated document
 # says "the Organization" rather than "the Firm".
 VERTICAL_LANGUAGE["nonprofit"] = dict(VERTICAL_LANGUAGE.get("_default") or {})
@@ -2031,6 +2294,9 @@ for _t in TEMPLATES:
 # The letters and the nonprofit governance documents declare nothing.
 # They are not instruments and are not held to an instrument's shape.
 _CONTRACTS: Dict[str, List[str]] = {
+    "loan_agreement": [
+        "recitals", "fees", "payment", "overdue", "relationship",
+        "representations", "notices", "dispute", "general", "signature"],
     "engagement_letter": [
         "recitals", "definitions", "scope", "fees", "payment",
         "client_responsibilities", "no_guarantee", "overdue", "termination",
