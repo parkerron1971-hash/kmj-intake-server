@@ -322,6 +322,12 @@ app.include_router(business_track_router)
 # wall they hit.
 from contacts_import_router import router as contacts_import_router
 app.include_router(contacts_import_router)
+# Structure Import, Stage 0 (2026-09-01). A business that arrives already
+# running hands over its spreadsheet exports; the rubric proposes what
+# each sheet IS (their people → contacts, their jobs → a pipeline module)
+# and the run builds it. Kills "I'd have to rebuild everything".
+from structure_import_router import router as structure_import_router
+app.include_router(structure_import_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)
