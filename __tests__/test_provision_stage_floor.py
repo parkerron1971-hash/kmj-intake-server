@@ -115,3 +115,40 @@ def test_a_failed_maturity_lookup_still_provisions(monkeypatch):
 
     mba.provision_modules("b1", "contractor")
     assert created == ["jobs"]
+
+
+# ─── the second half: it has to be able to WRITE ─────────────────────
+
+def test_the_agent_uses_the_service_role_not_the_anon_key():
+    """Every RLS policy on custom_modules is scoped to `authenticated` and
+    there is no anon policy, so the anon key this module used to use was
+    refused on both reads and writes:
+
+        POST /custom_modules -> 401
+        {"code":"42501","message":"new row violates row-level security
+         policy for table \\"custom_modules\\""}
+
+    Verified against production, not inferred. Both failures were silent —
+    the write went into report["failed"] behind a non-fatal wrapper, and
+    the read made _existing_slugs blind so the idempotency pre-check this
+    module documents never actually deduplicated anything.
+
+    A regression here does not raise. It reports success having done
+    nothing, which is why it is worth a test rather than a comment."""
+    import sb_clients
+
+    # sb_headers_service() raises without a real key, so assert the
+    # DELEGATION rather than the value — that is the contract anyway.
+    sentinel = {"apikey": "service-role-sentinel"}
+    import pytest
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(sb_clients, "sb_headers_service", lambda *a, **k: sentinel)
+        assert mba._sb_headers() is sentinel, (
+            "module_blueprint_agent must read and write as the service role — "
+            "the anon key cannot touch custom_modules under RLS")
+    finally:
+        monkeypatch.undo()
+
+    assert not hasattr(mba, "_sb_anon"), (
+        "_sb_anon is back; the anon key cannot write custom_modules")

@@ -13,9 +13,15 @@ Writes:
   custom_modules                  — one row per provisioned module
 
 Design notes:
-  • Mirrors business_profile_agent.py's sync REST-helper pattern (anon key).
+  • Reads and writes with the SERVICE ROLE. custom_modules RLS is scoped to
+    the `authenticated` role with no anon policy, and this agent runs
+    server-side with no user JWT — the anon key this file used to use could
+    neither read nor write it. See the helpers section for the evidence.
   • Idempotent: never creates a module whose slug already exists for the business
     (custom_modules has UNIQUE(business_id, slug); we also pre-check to avoid 409s).
+    That pre-check only became REAL with the service role — under the anon key
+    _existing_slugs returned an empty set every time and the constraint was
+    doing all the deduplication.
   • Maturity-gated: only provisions core modules at/under PROVISION_MAX_STAGE so a
     brand-new business doesn't get empty downstream modules (e.g. Invoices) on day 1.
     Full maturity computation lands in Phase 2; this is the conservative default.
@@ -31,6 +37,8 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 import httpx
+
+import sb_clients
 
 logger = logging.getLogger("module_blueprint_agent")
 if not logger.handlers:
@@ -48,24 +56,49 @@ PROVISION_MAX_STAGE = "launching"
 
 
 # ──────────────────────────────────────────────────────────────
-# Supabase REST helpers (mirrors business_profile_agent.py)
+# Supabase REST helpers
 # ──────────────────────────────────────────────────────────────
+#
+# THE SERVICE ROLE, NOT THE ANON KEY — and this is the second half of a
+# bug that had two halves.
+#
+# This file used to say it "mirrors business_profile_agent.py's sync
+# REST-helper pattern (anon key)", and it did. That pattern predates the
+# RLS tightening on custom_modules: every policy on that table is now
+# scoped to the `authenticated` role and there is NO anon policy. This
+# agent runs server-side with no user JWT, so the anon key is neither
+# authenticated nor the owner, and Postgres refuses it. Verified against
+# production rather than inferred:
+#
+#   POST /custom_modules -> 401
+#   {"code":"42501","message":"new row violates row-level security
+#    policy for table \"custom_modules\""}
+#
+# Two consequences, both silent:
+#   1. provision_modules could not create ANY module. _sb_post returned
+#      None, the slug went into report["failed"], and the caller's
+#      non-fatal wrapper swallowed it.
+#   2. _existing_slugs returned an empty set for every business, because
+#      the anon key cannot SELECT either — so the idempotency pre-check
+#      this module's docstring promises was blind. It never deduplicated
+#      anything; the UNIQUE(business_id, slug) constraint was doing that
+#      work alone.
+#
+# The service role is the right credential here: this is system-initiated
+# provisioning on a business's behalf, with the business_id supplied by
+# the caller rather than chosen by a request. Same choice sb_clients
+# already makes for every other server-side agent.
+#
+# NOTE: business_profile_agent.py still uses the anon key for the pattern
+# this file copied. Whether its tables are anon-writable was NOT checked
+# here — worth a look, separately.
 
 def _sb_url() -> str:
-    return os.environ.get("SUPABASE_URL", "").rstrip("/")
-
-
-def _sb_anon() -> str:
-    return os.environ.get("SUPABASE_ANON", "")
+    return sb_clients.sb_url()
 
 
 def _sb_headers() -> Dict[str, str]:
-    return {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+    return sb_clients.sb_headers_service()
 
 
 def _sb_get(path: str) -> Optional[Any]:
