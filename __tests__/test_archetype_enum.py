@@ -192,10 +192,11 @@ from typing import get_args
 
 EXPECTED_ARCHETYPES = {
     "fallback_generic", "booking_calendar", "work_pipeline", "event_roster",
+    "agreement_ledger",
 }
 
 
-def test_the_literal_enum_holds_all_four():
+def test_the_literal_enum_holds_every_archetype():
     """This is the assertion whose absence made the gap invisible. A spec
     with archetype='work_pipeline' failed Pydantic validation at the
     Literal — before _validate_archetype ever ran."""
@@ -478,3 +479,98 @@ def test_fallback_generic_suggestions_are_still_filtered(monkeypatch):
     inserted = _emit_harness(monkeypatch)
     cps.maybe_emit_proactive_suggestions({"id": "b1", "type": "lawyer"})
     assert "fallback_generic" not in {r["archetype"] for r in inserted}
+
+
+# ─── agreement_ledger (2026-09-01) ───────────────────────────────────
+# The blueprint audit found six verticals tracking a signature by hand in
+# a generic table: creative/service_provider agreements, lawyer
+# engagement-letters, course_creator terms, fitness_wellness waivers,
+# financial_educator disclosures. Same shape as each other and as nothing
+# else in the enum — a document attached to a person that is either
+# signed or is not, and that sometimes stops being valid.
+
+
+def test_agreement_ledger_is_registered_and_suggestable():
+    assert "agreement_ledger" in msg.ARCHETYPE_METADATA
+    assert "agreement_ledger" in msg.suggestable_archetypes()
+
+
+def test_agreement_ledger_is_not_single_instance():
+    """A gym runs liability waivers AND photo-release consents; a firm runs
+    engagement letters AND NDAs. Both are this archetype."""
+    assert "agreement_ledger" not in msg._SINGLE_INSTANCE_ARCHETYPES
+
+
+def test_agreement_ledger_is_not_the_pipeline():
+    """The distinction that justifies a fifth archetype: a signature is a
+    FACT WITH A DATE, not a stage. Modelling it as a pipeline would make
+    'signed' a column you drag into, which is exactly wrong — nobody drags
+    a client into having signed."""
+    assert (msg.ARCHETYPE_METADATA["agreement_ledger"]["label"]
+            != msg.ARCHETYPE_METADATA["work_pipeline"]["label"])
+
+
+def _agreement_spec(**overrides):
+    base = {
+        "slug": "waivers", "name": "Waivers",
+        "description": "Liability waivers and when they lapse",
+        "intake_excerpt": "everyone signs a waiver before their first session",
+        "reasoning": "a document that is signed or is not, and expires",
+        "archetype": "agreement_ledger",
+        "archetype_params": {
+            "title_field": "waiver_type", "party_field": "contact_id",
+            "signed_field": "signed_date", "expires_field": "expires",
+            "expiring_soon_days": 30, "item_noun": "Waiver",
+        },
+        "schema": {"fields": [
+            {"name": "waiver_type", "type": "text", "label": "Waiver", "required": True},
+            {"name": "contact_id", "type": "contact_link", "label": "Client"},
+            {"name": "signed_date", "type": "date", "label": "Signed"},
+            {"name": "expires", "type": "date", "label": "Expires"},
+        ], "default_view": "list", "views": ["list"]},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_an_agreement_ledger_spec_validates():
+    spec = msg.ModuleSpec.model_validate(_agreement_spec())
+    assert spec.archetype == "agreement_ledger"
+    assert spec.archetype_params["signed_field"] == "signed_date"
+
+
+def test_bare_agreement_params_are_fine():
+    """Every param optional — the frontend resolveParams() degrades to the
+    conventional names. An unconfigured module must validate."""
+    spec = msg.ModuleSpec.model_validate(_agreement_spec(archetype_params={}))
+    assert spec.archetype == "agreement_ledger"
+
+
+def test_dangling_agreement_field_ref_is_rejected():
+    """Higher stakes than the other archetypes' dangling refs: a
+    signed_field naming a missing key does not render a blank column, it
+    reads as 'nobody has signed anything' and turns the whole module into
+    one long unsigned list."""
+    with pytest.raises(Exception, match="not in schema.fields"):
+        msg.ModuleSpec.model_validate(_agreement_spec(
+            archetype_params={"signed_field": "no_such_field"}))
+
+
+def test_nonsense_warning_window_is_rejected():
+    for bad in (0, -5):
+        with pytest.raises(Exception, match="positive"):
+            msg.ModuleSpec.model_validate(_agreement_spec(
+                archetype_params={"expiring_soon_days": bad}))
+
+
+def test_agreement_ledger_materializes_end_to_end(monkeypatch):
+    validated = msg.ModuleSpec.model_validate(_agreement_spec())
+    spec_dict = validated.model_dump(by_alias=True, exclude_none=False)
+    posts = _materialize_harness(monkeypatch, spec_dict, "fitness_wellness")
+
+    res = msg.materialize_spec("s1")
+    assert res["ok"] is True, res
+    cm = next(p for path, p in posts if path == "/custom_modules")
+    assert cm["archetype"] == "agreement_ledger"
+    assert cm["archetype_params"]["expires_field"] == "expires"
+    assert cm["archetype_fallback_reason"] is None
