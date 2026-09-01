@@ -956,6 +956,17 @@ PLATFORM_CHIEF_SYSTEM = (
     "     trials, resend invites, email practitioners, bump lead status.\n\n"
     "Be specific. Quote numbers from the snapshot. If the snapshot does not have the data, SAY so "
     "explicitly — never invent numbers.\n\n"
+    "You CANNOT run SQL, and Kevin should never be asked to run it for you. Telling the operator "
+    "to go query the database himself is not an answer — it hands back the job he asked you to do. "
+    "If something genuinely is not in the snapshot, name the gap in one line and say what you CAN "
+    "do with what is there.\n\n"
+    "TRIALS AND PAYMENT ISSUES ARRIVE AS ROWS, NOT JUST COUNTS. subscriptions.trials_ending_soon "
+    "lists every expiring trial with business_name, business_id, the exact trial_ends_at, days_left, "
+    "the owner email, when that owner last signed in, and their vertical. Use them: name the "
+    "business, say when it lapses, and make the advice specific to that trade and to whether they "
+    "have actually been using the product — an owner who has never signed in needs a different "
+    "message from one who is in every day. Both extend_trial and send_practitioner_email take the "
+    "business_id sitting right there in the row.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "THE BUSINESS YOU ADVISE (strategic context — Kevin's company, not a practitioner's)\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1284,6 +1295,10 @@ async def list_chief_actions(limit: int = 50, _owner=Depends(require_owner)):
 async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
     """Compact platform snapshot for the Chief's system prompt."""
     snap: Dict[str, Any] = {"fetched_at": datetime.now(timezone.utc).isoformat()}
+    # owner_id -> {email, last_sign_in_at}. Filled by the practitioners
+    # block below and reused by the trials block, so naming the person
+    # behind an expiring trial costs no extra round trip.
+    users_by_id: Dict[str, Dict[str, Any]] = {}
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         # Practitioners
@@ -1299,6 +1314,12 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
             if ur.status_code < 400:
                 u = ur.json()
                 users = u.get("users", []) if isinstance(u, dict) else u
+                for x in users:
+                    if x.get("id"):
+                        users_by_id[str(x["id"])] = {
+                            "email": x.get("email"),
+                            "last_sign_in_at": x.get("last_sign_in_at"),
+                        }
                 snap["practitioners"] = {
                     "total":             len(users),
                     "signed_in_ever":    sum(1 for x in users if x.get("last_sign_in_at")),
@@ -1329,27 +1350,85 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
         snap["leads_new"]         = await _head_count("marketing_leads", {"status": "eq.new"})
         snap["leads_onboarded"]   = await _head_count("marketing_leads", {"status": "eq.onboarded"})
 
-        # Subscriptions
+        # Subscriptions.
+        #
+        # This used to select subscription_status + trial_days_left and
+        # hand the Chief a COUNT: "trials_ending_in_7d: 1". Asked which
+        # trial and what to do about it, the Chief could only say it did
+        # not know and tell Kevin to go and run SQL himself — which is a
+        # fair answer to give when you have been handed a number and no
+        # rows, and a useless one to receive. The view already carries
+        # the name, the exact end date and the owner; nothing was
+        # missing except the columns being asked for.
         try:
             sr = await c.get(
                 f"{SUPABASE_URL}/rest/v1/billing_status",
                 headers=headers,
-                params={"select": "subscription_status,trial_days_left"},
+                params={"select": (
+                    "business_id,business_name,owner_id,subscription_status,"
+                    "subscription_plan,trial_ends_at,trial_days_left"
+                )},
             )
             if sr.status_code < 400:
                 rows = sr.json()
                 by_status: Dict[str, int] = {}
-                trials_ending_in_7d = 0
+                trials: List[Dict[str, Any]] = []
+                issues: List[Dict[str, Any]] = []
                 for row in rows:
-                    s = row.get("subscription_status")
-                    if s:
-                        by_status[s] = by_status.get(s, 0) + 1
+                    st = row.get("subscription_status")
+                    if st:
+                        by_status[st] = by_status.get(st, 0) + 1
                     dl = row.get("trial_days_left")
                     if isinstance(dl, (int, float)) and 0 < dl <= 7:
-                        trials_ending_in_7d += 1
+                        owner = users_by_id.get(str(row.get("owner_id") or ""), {})
+                        trials.append({
+                            "business_id":     row.get("business_id"),
+                            "business_name":   row.get("business_name") or "(unnamed)",
+                            "trial_ends_at":   row.get("trial_ends_at"),
+                            "days_left":       round(float(dl), 1),
+                            "owner_email":     owner.get("email"),
+                            "owner_last_sign_in_at": owner.get("last_sign_in_at"),
+                        })
+                    if st in ("past_due", "unpaid", "incomplete"):
+                        owner = users_by_id.get(str(row.get("owner_id") or ""), {})
+                        issues.append({
+                            "business_id":   row.get("business_id"),
+                            "business_name": row.get("business_name") or "(unnamed)",
+                            "status":        st,
+                            "owner_email":   owner.get("email"),
+                        })
+
+                # Vertical, so advice can be trade-specific rather than
+                # generic. One request for every trial at once.
+                if trials:
+                    ids = [t["business_id"] for t in trials if t.get("business_id")]
+                    if ids:
+                        try:
+                            br = await c.get(
+                                f"{SUPABASE_URL}/rest/v1/businesses",
+                                headers=headers,
+                                params={
+                                    "select": "id,type,created_at",
+                                    "id": f"in.({','.join(ids)})",
+                                },
+                            )
+                            if br.status_code < 400:
+                                by_id = {str(b.get("id")): b for b in br.json()}
+                                for t in trials:
+                                    b = by_id.get(str(t.get("business_id"))) or {}
+                                    t["vertical"] = b.get("type")
+                                    t["signed_up_at"] = b.get("created_at")
+                        except Exception:
+                            pass  # names and dates still beat a bare count
+
+                trials.sort(key=lambda t: t["days_left"])
                 snap["subscriptions"] = {
                     "by_status":            by_status,
-                    "trials_ending_in_7d":  trials_ending_in_7d,
+                    "trials_ending_in_7d":  len(trials),
+                    # The rows themselves. Capped so a future surge
+                    # cannot quietly bloat the system prompt.
+                    "trials_ending_soon":   trials[:25],
+                    "payment_issues":       issues[:25],
                     "stripe_configured":    bool(os.environ.get("STRIPE_SECRET_KEY")),
                 }
         except Exception as e:
