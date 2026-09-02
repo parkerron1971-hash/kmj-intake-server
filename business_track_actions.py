@@ -187,6 +187,7 @@ BUSINESS_PHASE_GOALS = {
 # ("import your people first, then the campaign has somewhere to land").
 PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
     "import_contacts": {
+        "chief": ("DO IT HERE. Ask for ONE name to start (and a phone or email) and create_contact it; a list means Bring a file over — offer to take them there (navigate build/structure-import) and say it reads their columns and builds around them. After: 'That's your first {clients} in. Who else?'"),
         "title": "Bring your client list over",
         "why": "Everything else — history, campaigns, invoices, the daily "
                "briefing — reads from your contacts. This is the first domino.",
@@ -200,6 +201,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 100,
     },
     "offerings": {
+        "chief": ("DO IT HERE. Ask 'what is the one thing people come to you for most, and what do you charge?' then create_offering with the real price. After: say it now lives under Services & Products and drives booking, invoices and the site."),
         "title": "Load what you sell",
         "why": "Your prices drive booking, invoices, your site, and every "
                "quote Chief writes for you.",
@@ -212,6 +214,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 95,
     },
     "payments": {
+        "chief": ('DOOR. navigate build/integrations, say what it unlocks (an invoice becomes money that arrives), and ask them to tell you when it is connected — you will see it on the next turn.'),
         "title": "Connect how you get paid",
         "why": "Turns an invoice from a PDF into money that actually arrives.",
         "nav": {"tab": "build", "page": "integrations"},
@@ -220,6 +223,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 90,
     },
     "availability": {
+        "chief": ("DO IT HERE. Ask the days and hours they actually work (confirm the timezone once), then set_availability_day for each day. After: 'Done. Your booking page now only offers times you are open.'"),
         "title": "Set the hours you actually work",
         "why": "Without this, booking either offers times you don't want or "
                "offers nothing at all.",
@@ -231,6 +235,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 85,
     },
     "site": {
+        "chief": ('DOOR. navigate build/my-site; it sells what they just told you they sell. This is usually the thing they can send someone.'),
         "title": "Put your site up",
         "why": "The front door. It sells what you already told me you sell.",
         "nav": {"tab": "build", "page": "my-site"},
@@ -239,6 +244,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 80,
     },
     "bank": {
+        "chief": ('DOOR. navigate build/integrations; say the books start keeping themselves; ask them to tell you when the bank is linked.'),
         "title": "Link your bank",
         "why": "Bookkeeping stops being a monthly evening you lose.",
         "nav": {"tab": "build", "page": "integrations"},
@@ -247,6 +253,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 70,
     },
     "quickbooks": {
+        "chief": ('DOOR. navigate build/integrations; only offer if they already keep books there — never push it on someone without an accountant.'),
         "title": "Connect QuickBooks",
         "why": "Keeps the books you already keep — your accountant never has "
                "to learn a new system.",
@@ -256,6 +263,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 65,
     },
     "email_domain": {
+        "chief": ('DOOR. navigate build/integrations; mail from their own address lands better and looks like them.'),
         "title": "Send from your own address",
         "why": "Mail from your domain instead of ours — it lands better and "
                "it looks like you.",
@@ -265,6 +273,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 60,
     },
     "site_domain": {
+        "chief": ('DOOR. navigate build/my-site; their own address on the front door. Only after the site is up.'),
         "title": "Point your domain at your site",
         "why": "Your own address on the front door.",
         "nav": {"tab": "build", "page": "my-site"},
@@ -273,6 +282,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 55,
     },
     "brand": {
+        "chief": ('DOOR. navigate build/brand. If they name colors or a font in passing, remember it and carry it to the door with them.'),
         "title": "Set your colors and type",
         "why": "Everything the system makes for you inherits this — site, "
                "invoices, PDFs, posts.",
@@ -282,6 +292,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 50,
     },
     "meta": {
+        "chief": ('DOOR. navigate build/integrations; posting from here reaches where their people already are.'),
         "title": "Connect Facebook + Instagram",
         "why": "Post from here, and let what you publish reach where your "
                "people already are.",
@@ -291,6 +302,7 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 40,
     },
     "concierge": {
+        "chief": ('DOOR. navigate build/settings; it answers visitors at 11pm so they do not have to. Only after the site is up.'),
         "title": "Turn on the website concierge",
         "why": "Answers your visitors' questions at 11pm so you don't have to.",
         "nav": {"tab": "build", "page": "settings"},
@@ -299,6 +311,59 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 30,
     },
 }
+
+
+# THE FIRST HOUR ENDS WITH SOMETHING TO SEND (2026-09-02). Setup is not
+# the goal; a link they can text to a real person tonight is. Per
+# canonical vertical: what that thing is called in their words, which
+# plug-in keys make it real, and where it lives. Chief names it on day
+# one and celebrates when it exists. Anything not listed falls back to
+# the site itself.
+SENDABLE_ARTIFACT: Dict[str, Dict[str, Any]] = {
+    "personal_services": {"label": "a booking link your regulars can use tonight",
+                          "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    "coach":             {"label": "a booking link for a first session",
+                          "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    "consultant":        {"label": "a booking link for a discovery call",
+                          "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    "fitness_wellness":  {"label": "a booking link for a first session",
+                          "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    "service_provider":  {"label": "a booking link for an estimate visit",
+                          "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    "contractor":        {"label": "a booking link for an estimate visit",
+                          "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    "therapist":         {"label": "the intake form a new client fills out",
+                          "keys": ["offerings"], "nav": {"tab": "build", "page": "intake-forms"}},
+    "lawyer":            {"label": "the questionnaire a new client fills out",
+                          "keys": ["offerings"], "nav": {"tab": "build", "page": "intake-forms"}},
+    "nonprofit":         {"label": "a giving page you can share",
+                          "keys": ["site"], "nav": {"tab": "build", "page": "my-site"}},
+    "ministry":          {"label": "a giving page you can share",
+                          "keys": ["site"], "nav": {"tab": "build", "page": "my-site"}},
+    "ecommerce":         {"label": "a product link you can post",
+                          "keys": ["offerings", "site"], "nav": {"tab": "build", "page": "my-site"}},
+    "course_creator":    {"label": "a link to your first course",
+                          "keys": ["offerings", "site"], "nav": {"tab": "build", "page": "my-site"}},
+    "creative":          {"label": "a link that shows your work and takes a booking",
+                          "keys": ["offerings", "site"], "nav": {"tab": "build", "page": "my-site"}},
+    "financial_educator": {"label": "a booking link for a first session",
+                           "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    "saas":              {"label": "a link to book a demo",
+                          "keys": ["offerings", "site"], "nav": {"tab": "build", "page": "my-site"}},
+    "custom":            {"label": "your site's front door, live",
+                          "keys": ["offerings", "site"], "nav": {"tab": "build", "page": "my-site"}},
+}
+
+
+def sendable_artifact_for(business_type: Optional[str]) -> Dict[str, Any]:
+    """The thing this vertical's first hour aims at. Always returns one."""
+    raw = (business_type or "").strip().lower()
+    try:
+        import vertical_registry
+        canonical = vertical_registry.resolve(raw)
+    except Exception:
+        canonical = raw
+    return SENDABLE_ARTIFACT.get(canonical) or SENDABLE_ARTIFACT.get(raw) or SENDABLE_ARTIFACT["custom"]
 
 
 def plugins_for_vertical(business_type: Optional[str]) -> List[str]:
@@ -511,7 +576,17 @@ def format_business_track_block(biz: Dict[str, Any],
 
     Kept tight — this ships on every Chief request."""
     if not track:
-        return ""
+        # Never opened. For a young business the sit-down is still owed
+        # — Kevin's rule (2026-09-02): mandatory, held and resurfaced,
+        # never a wall. Nothing to hold once the business is established.
+        age = _biz_age_days(biz)
+        if age is None or age > 30:
+            return ""
+        return "\n".join([
+            "BUSINESS TRACK:",
+            "  Status: not started. Nothing captured yet.",
+            _standing_offer(age),
+        ])
 
     done = completed_phases(track)
     current = track.get("current_phase") or "owner"
@@ -597,7 +672,39 @@ def format_business_track_block(biz: Dict[str, Any],
             " [ACTION:{\"type\":\"navigate\",\"tab\":\"build\",\"page\":\"business-track\"}]."
             " Never re-ask something the list above says they already told you."
         )
+        lines.append(_standing_offer(_biz_age_days(biz)))
     return "\n".join(lines)
+
+
+def _biz_age_days(biz: Dict[str, Any]) -> Optional[int]:
+    """Whole days since created_at; None when unknown (fails closed)."""
+    from datetime import datetime, timezone
+    raw = str((biz or {}).get("created_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - dt).total_seconds() // 86400))
+
+
+def _standing_offer(age: Optional[int]) -> str:
+    """The sit-down, held. Offered once per conversation, timed to the
+    week: day one it is a choice, from day three it is a reminder, after
+    a week it is 'when you have twenty minutes'. Never a wall, never
+    the first thing said unless nothing else is pressing."""
+    when = ("Day one: offer it as a choice — 'twenty minutes now, or start with setup and we'll do it by day three.'"
+            if (age or 0) < 3 else
+            "Day three onward: bring it up ONCE this conversation as a reminder, after the first real move is done."
+            if (age or 0) < 7 else
+            "It has been a week: mention it once, lightly — 'when you have twenty minutes, I still want to learn how you run.'")
+    return ("  THE SIT-DOWN IS HELD, NOT DROPPED. " + when +
+            " On yes: emit [ACTION:{\"type\":\"navigate\",\"tab\":\"build\",\"page\":\"business-track\"}]."
+            " On 'later': say you'll ask again in a couple of days and do not raise it again this conversation."
+            " Never more than once per conversation.")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -706,10 +813,13 @@ def build_business_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
                 f"{practitioner} already runs {biz_name}. They are not starting from "
                 "nothing and they should never be spoken to as though they are.\n"
                 "Open warm and short. Say who you are, and be honest about why you're "
-                "asking: you'd rather spend a few minutes learning their business "
+                "asking: you'd rather spend twenty minutes learning their business "
                 "properly now than guess at it for the next month. Tell them it's a "
-                "conversation, they can stop any time, and it picks back up where they "
-                "left off.\n"
+                "conversation, about twenty minutes, they can stop any time, and it "
+                "picks back up where they left off. If they say now is not a good "
+                "time, do not argue: say you'll hold it and bring it up again in a "
+                "couple of days, emit business_session_summary with what little you "
+                "have, and let them go — setup on Home does not need this first.\n"
                 "Then ask ONE real opening question — something like 'How long have you "
                 "been running it?' or 'Tell me what you do — in your words, not "
                 "brochure words.' 3-4 sentences total. No actions in the opening."

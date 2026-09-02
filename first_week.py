@@ -50,7 +50,9 @@ ACTIVATION_PLUGINS = 3
 
 # The onboarding flow's screens, in order. The frontend sends the index
 # and the name; the name is what the panel shows.
-ONBOARDING_STEPS = ["welcome", "path", "about_you", "your_work", "your_voice", "launch"]
+# The three-screen flow (FE Wave B); older rows may carry indexes up to 5
+# from the six-screen version, which fall off the end as "unknown".
+ONBOARDING_STEPS = ["who_you_are", "your_work", "your_voice"]
 
 
 def _now() -> datetime:

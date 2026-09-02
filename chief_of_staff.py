@@ -16015,14 +16015,25 @@ def _fetch_setup_snapshot(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         items = btr.resolve_plugins(biz)
         if not items:
             return None
+        try:
+            artifact = btr_artifact(biz)
+        except Exception:  # pragma: no cover
+            artifact = {}
         return {
             "items": items,
             "done": sum(1 for p in items if p.get("done")),
             "total": len(items),
+            "artifact": artifact,
         }
     except Exception as e:  # pragma: no cover
         logger.warning(f"setup snapshot failed (non-fatal): {e}")
         return None
+
+
+def btr_artifact(biz: Dict[str, Any]) -> Dict[str, Any]:
+    """The vertical's sendable artifact, from the catalog module."""
+    import business_track_actions as _bta
+    return _bta.sendable_artifact_for((biz or {}).get("type"))
 
 
 def _format_setup_block(snapshot: Optional[Dict[str, Any]]) -> str:
@@ -16038,21 +16049,46 @@ def _format_setup_block(snapshot: Optional[Dict[str, Any]]) -> str:
     ]
     if undone:
         lines.append("  Still to plug in, in payoff order:")
+        try:
+            import business_track_actions as _bta
+            _catalog = _bta.PLUGIN_CATALOG
+        except Exception:  # pragma: no cover
+            _catalog = {}
         for i, p in enumerate(undone, 1):
             nav = json.dumps(p.get("nav") or {})
             blocked = p.get("blocked_by") or []
             tail = f" [best after: {', '.join(blocked)}]" if blocked else ""
             lines.append(f"    {i}. {p['title']} — {str(p['why'])[:140]}"
                          f" — nav {nav}{tail}")
+            hint = (_catalog.get(p.get("key") or "") or {}).get("chief")
+            if hint:
+                lines.append(f"       how: {hint}")
+        artifact = snapshot.get("artifact") or {}
+        if artifact.get("label"):
+            lines.append(
+                f"  THE FIRST HOUR ENDS WITH SOMETHING TO SEND: {artifact['label']}"
+                f" (real once {', '.join(artifact.get('keys') or [])} are done;"
+                f" nav {json.dumps(artifact.get('nav') or {})})."
+                " Name it on day one as where this is going. When it exists, hand"
+                " them the link and say who to send it to first.")
         lines.append(
-            "  HOW TO USE THIS:\n"
-            "  - When they ask where to start, what's next, or what's missing, "
-            "name the FIRST unblocked item above, give the why in their "
-            "vertical's own words, and OFFER to take them there.\n"
-            "  - On a yes, emit [ACTION:{\"type\":\"navigate\",...}] using that "
-            "item's nav EXACTLY as printed — never invent a destination.\n"
-            "  - Walk, don't dump: one stop per turn, celebrate each completion, "
-            "then offer the next.\n"
+            "  HOW TO USE THIS — you are building it WITH them, not describing it:\n"
+            "  - ASK WITH THE WHY. Every question names what it unlocks, in their "
+            "vertical's own words: not 'set your availability' but 'what days and "
+            "hours do you cut? I'll open those on your booking page so people can "
+            "only pick times you actually work.' The why for each item is printed "
+            "above; say it before you ask, never after.\n"
+            "  - DO IT HERE when the 'how' says so: the answer becomes the action in "
+            "the same turn (create_contact, create_offering, set_availability_day), "
+            "then SAY WHAT YOU BUILT and where it now lives — 'Done. Bookings is open "
+            "Tuesday to Saturday, nine to six. Lunch break?' — then the next question.\n"
+            "  - DOORS you cannot walk through yourself (payments, bank, site): emit "
+            "[ACTION:{\"type\":\"navigate\",...}] using that item's nav EXACTLY as "
+            "printed — never invent a destination — say what it unlocks, and ask "
+            "them to tell you when it is done; you will see it next turn.\n"
+            "  - When they ask where to start, what's next, or what's missing, name "
+            "the FIRST unblocked item above and ask its question. Walk, don't dump: "
+            "one stop per turn, celebrate each completion in one line, then the next.\n"
             "  - This list is measured from their real data this turn. Never "
             "contradict it — do not tell them to set up something marked done, "
             "or claim something undone is connected."
@@ -16186,11 +16222,11 @@ Pick up naturally — don't re-introduce yourself. If they reference something f
     if is_greeting and first_run:
         launch_clause = f"""
 
-LAUNCH GREETING — THIS BUSINESS IS BRAND NEW (server-verified: almost nothing is connected yet — see SETUP STATUS above for the exact list). Your greeting IS their launch plan, not a day-read. Shape:
-1. Welcome them warmly and NAME their business type back to them: "I see you run a salon — here's what I'd set up first."
-2. List the top 3 undone plug-ins from SETUP STATUS, in that order, each translated into THEIR vertical's language — never system jargon ("bring your client list over" for a salon is "your regulars"; a ministry gathers "members"; a lawyer's intake form is "the questionnaire new clients fill out").
-3. Close by offering to take them to the first stop: "Want me to take you there right now?" On their YES in the NEXT turn, emit that item's navigate exactly as SETUP STATUS prints it — one stop per turn, celebrating each completion.
-Keep it warm, specific, under 6 short sentences plus the list. Do NOT emit actions in the greeting itself."""
+LAUNCH GREETING — THIS BUSINESS IS BRAND NEW (server-verified: almost nothing is connected yet — see SETUP STATUS above for the exact list). Your greeting IS the start of building it with them, not a day-read and not a list. Shape:
+1. Welcome them by name and NAME their business type back to them, then say in one line what already exists for them: the rooms you built from their type (name two from CUSTOM MODULES if present, in their words) and where the first hour is going — the SENDABLE thing SETUP STATUS names ("by the end of this you'll have a booking link you can text a regular tonight").
+2. Ask ONE question: the FIRST unblocked item in SETUP STATUS, asked WITH ITS WHY in their vertical's own words, exactly as the 'how' line says — "What days and hours do you cut? I'll open those on your booking page so people can only pick times you actually work." One question. Not a menu.
+3. If BUSINESS TRACK says the sit-down is not done, add ONE honest sentence: it is a twenty-minute conversation to learn how they run, and they can do it now or start with setup and do it by day three. Their answer to the question in step 2 is the next turn's action (create it, set it, or open the door) — celebrate in one line, then the next question.
+Keep it warm and specific, under 6 short sentences. Do NOT emit actions in the greeting itself."""
     elif is_greeting:
         launch_clause = """
 
@@ -16737,7 +16773,8 @@ ACTIONS — NAVIGATION + MEMORY:
     • tab:"grow" subs: dashboard | briefing | insights | goals | revenue | retention | reviews | content | campaigns | funnel | timeline | ideas | notes
       — notes = the Notes tab (their parking lot of saved notes — everything filed via save_note plus notes they typed themselves). It DISPLAYS under the WORKSPACE sidebar group even though the route is grow/notes, so when they ask "where are my notes?" say "the Notes tab under Workspace" and take them there with [ACTION:{{"type":"navigate","tab":"grow","sub":"notes"}}].
       — ideas = the Observatory's Board (vision + pinned ideas).
-    • tab:"build" pages (use "page", not "sub"): strategy-track | business-track | course-studio | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | intake-forms | custom-modules | module-builder | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
+    • tab:"build" pages (use "page", not "sub"): strategy-track | business-track | course-studio | business-profile | about-me | foundation-track | brand | media-library | print-materials | my-site | link-page | booking | booking-share | intake-forms | custom-modules | module-builder | structure-import | social-media | email-templates | resources | products | analytics | integrations | settings | module:<uuid>
+      — booking-share = the booking LINK they can send someone (the sendable artifact for anyone who takes appointments). structure-import = Bring a file over: their spreadsheets become their client list and their solutions; the door for anyone who already has a list.
       — business-track = the Business Coach session (the guided sit-down from their first day). Offer it when they want to go deep on business shape, pricing, or their plan.
   — Pick the closest destination even for indirect asks ("where do I change my colors?" → build/brand; "I want to text a client" → operate/sms; "show me my website" → build/my-site).
   — SURFACE NAMES (terminology arc): the ids above never change, but when you TALK about these surfaces use their on-screen names: operate/dashboard = "Today" (the working deck — NOT a second dashboard; Home is "Dashboard") · queue = "Approvals" · funnel = "Lead Flow" · intake-forms = "Client Forms" · custom-modules = "Custom Solutions" · module-builder = "Build a Solution" · link-page = "My Links" · offerings-manager = "Services & Products" (verticals may show Programs/Packages instead). Never say "funnel tab", "queue", "intake forms", or "modules" as surface names to the practitioner.
