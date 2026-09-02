@@ -3291,7 +3291,7 @@ def render_home() -> str:
                 aria-haspopup="dialog" aria-controls="videoModal">
           <span class="tag">New</span>
           <b>See it move</b>
-          <span class="dur">&middot; 45 seconds</span>
+          <span class="dur">&middot; 58 seconds</span>
           <span class="play" aria-hidden="true">&#9654;</span>
         </button>
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
@@ -3773,21 +3773,22 @@ def render_home() -> str:
      Deliberately no `.reveal` anywhere in here: see DEVICE_BAND_CSS.
      The scene is aria-hidden — it is product art, and the copy above it
      already says everything a screen reader needs. ══ -->
-<!-- The walkthrough. preload="none" so the 8.7MB costs nothing until
-     somebody asks for it; the source is only fetched on the first open.
-     The same film is still inline on /features for anyone reading that
-     page top to bottom. -->
+<!-- The film. preload="none" so the 6.8MB costs nothing until somebody
+     asks for it; the source is only fetched on the first open. The same
+     film is still inline on /features for anyone reading that page top
+     to bottom. ?v=2 since 2026-09-02: "The System" replaced "Takes Shape"
+     at the same URL, and a cached poster would have shown the old film. -->
 <div class="vmodal" id="videoModal" role="dialog" aria-modal="true"
-     aria-label="The Solutionist System, forty-five seconds end to end">
+     aria-label="The Solutionist System, fifty-eight seconds of the product at work">
   <div class="vmodal-box">
     <button type="button" class="vmodal-x" id="videoModalClose" aria-label="Close video">&times;</button>
     <video id="videoModalPlayer" controls playsinline preload="none"
-           poster="/assets/film-poster.jpg?v=1">
-      <source src="/assets/film.mp4?v=1" type="video/mp4">
+           poster="/assets/film-poster.jpg?v=2">
+      <source src="/assets/film.mp4?v=2" type="video/mp4">
       Your browser doesn&rsquo;t support embedded video.
-      <a href="/assets/film.mp4?v=1">Download the film</a>.
+      <a href="/assets/film.mp4?v=2">Download the film</a>.
     </video>
-    <div class="vmodal-cap">The same system in three different businesses, the shift it works while you are closed, and the one thing it will not do without you.</div>
+    <div class="vmodal-cap">One photographer&rsquo;s Tuesday: Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</div>
   </div>
 </div>
 
@@ -4662,14 +4663,14 @@ def render_features() -> str:
   <div class="container">
     <div class="section-head reveal">
             <span data-spine class="eyebrow">See it move</span>
-      <h2>Forty-five seconds, <span class="gradient-text">end to end.</span></h2>
-      <p>The same system in three different businesses, the shift it works while you are closed, and the one thing it will not do without you.</p>
+      <h2>Fifty-eight seconds, <span class="gradient-text">end to end.</span></h2>
+      <p>One photographer's Tuesday: Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</p>
     </div>
     <div class="demo-frame reveal">
       <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
-      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/film-poster.jpg?v=1">
-        <source src="/assets/film.mp4?v=1" type="video/mp4">
-        Your browser doesn't support embedded video. <a href="/assets/film.mp4?v=1">Download the film</a>.
+      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/film-poster.jpg?v=2">
+        <source src="/assets/film.mp4?v=2" type="video/mp4">
+        Your browser doesn't support embedded video. <a href="/assets/film.mp4?v=2">Download the film</a>.
       </video>
     </div>
   </div>
