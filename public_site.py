@@ -6786,10 +6786,10 @@ async def asset_mark_webp():
 async def asset_mark_png():
     return _brand_file("solutionist-mark.png", "image/png")
 
-# The real demo video (Remotion-rendered, ~7MB) + its poster frame —
-# replaces the animated HTML loop on the marketing home.
-# The film the site plays. Range-aware, because a phone will not play a
-# <video> whose server ignores Range.
+# The film the site plays: "The System" (2026-09-02), 58 seconds, the
+# product itself in its default theme doing the work, voiced. Web encode
+# (~6.8MB) of the Remotion render in my-video/src/System. Range-aware,
+# because a phone will not play a <video> whose server ignores Range.
 @router.get("/assets/film.mp4", include_in_schema=False)
 async def asset_film(request: Request):
     return _brand_file_ranged(request, "solutionist-film.mp4", "video/mp4")
@@ -6797,6 +6797,18 @@ async def asset_film(request: Request):
 @router.get("/assets/film-poster.jpg", include_in_schema=False)
 async def asset_film_poster(request: Request):
     return _brand_file_ranged(request, "solutionist-film-poster.jpg", "image/jpeg")
+
+# "Takes Shape", the 45-second white-field cut that played here from
+# 2026-08-22 to 2026-09-02. Kept reachable, not linked, same as the demo
+# below: it is the one cut that shows the system re-lettering itself for
+# three different businesses, and it may come back for a campaign.
+@router.get("/assets/film-takes-shape.mp4", include_in_schema=False)
+async def asset_film_takes_shape(request: Request):
+    return _brand_file_ranged(request, "solutionist-film-takes-shape.mp4", "video/mp4")
+
+@router.get("/assets/film-takes-shape-poster.jpg", include_in_schema=False)
+async def asset_film_takes_shape_poster(request: Request):
+    return _brand_file_ranged(request, "solutionist-film-takes-shape-poster.jpg", "image/jpeg")
 
 # The 55-second walkthrough that ran until 2026-08-22. Deliberately kept
 # reachable rather than deleted: it is the only recording of the product
