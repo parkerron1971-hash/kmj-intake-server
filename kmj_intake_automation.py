@@ -317,6 +317,9 @@ app.include_router(customer_balances_router)
 # can never disagree about what to switch on next.
 from business_track_router import router as business_track_router
 app.include_router(business_track_router)
+# Wave C (2026-09-02): the room card behind "What is this room?" — no model call.
+from room_card_router import router as room_card_router
+app.include_router(room_card_router)
 # Bring an existing client list in. /contacts had CSV export and no
 # import; for a business that arrives with people, that was the first
 # wall they hit.
