@@ -227,6 +227,51 @@ def _attribution_from_funnel(email: Optional[str]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _seed_new_business(row: Dict[str, Any], business_type: str,
+                       voice_profile: Optional[Dict[str, Any]], owner_id: str) -> Dict[str, bool]:
+    """Everything a new business should be born with, run server-side
+    right after the row exists: the profile defaults for its archetype,
+    the blueprint module set, and the vertical's default autopilot.
+
+    Until 2026-09-02 all three hung off a SEPARATE client call
+    (POST /business-profile/profile/seed-from-onboarding) that the
+    frontend made one second after creation — and that call answered
+    404 from May to September (route-order bug, #777), so no real
+    business ever received any of it, and nothing noticed because the
+    client called the failure "non-fatal". The client call still exists
+    and is idempotent (it only fills empty fields), so a practitioner
+    with an older tab loses nothing; this just stops the birth of a
+    business depending on a second request nobody monitors.
+
+    Never raises. Each step is its own try, each failure its own
+    warning, and the result names what ran so a test can see it."""
+    biz_id = str((row or {}).get("id") or "")
+    out = {"profile": False, "modules": False, "autopilot": False}
+    if not biz_id:
+        return out
+    try:
+        import business_profile_agent as bp
+        out["profile"] = bp.seed_from_onboarding(
+            business_id=biz_id, business_type=business_type,
+            tones=None, voice_profile=voice_profile or None) is not None
+    except Exception as e:
+        logger.warning(f"[access] seed profile failed for {biz_id}: {e}")
+    try:
+        import module_blueprint_agent
+        module_blueprint_agent.provision_modules(biz_id, business_type)
+        out["modules"] = True
+    except Exception as e:
+        logger.warning(f"[access] blueprint provision failed for {biz_id}: {e}")
+    try:
+        import vertical_autopilot
+        vertical_autopilot.seed_defaults(
+            business_id=biz_id, business_type=business_type, owner_id=owner_id)
+        out["autopilot"] = True
+    except Exception as e:
+        logger.warning(f"[access] autopilot seed failed for {biz_id}: {e}")
+    return out
+
+
 @router.post("/businesses/create")
 def create_business(body: CreateBusinessBody,
                     user: AuthedUser = Depends(require_user),
@@ -297,6 +342,15 @@ def create_business(body: CreateBusinessBody,
     row = (res or [None])[0] if isinstance(res, list) else res
     if not row:
         raise HTTPException(500, "business insert failed")
+
+    # Born whole (2026-09-02): profile defaults, blueprint modules and the
+    # vertical autopilot, after the response, no second request needed.
+    try:
+        if background_tasks is not None:
+            background_tasks.add_task(_seed_new_business, row, btype,
+                                      body.voice_profile or None, uid)
+    except Exception as e:
+        logger.warning(f"[access] seed schedule failed: {e}")
 
     # Growth arc Rung 2 — tell Meta a signup completed, after the
     # response. No-op unless the pixel + CAPI token are configured.

@@ -302,11 +302,25 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
 
 
 def plugins_for_vertical(business_type: Optional[str]) -> List[str]:
-    """Catalog keys applicable to this vertical, most valuable first."""
-    bt = (business_type or "").strip().lower()
+    """Catalog keys applicable to this vertical, most valuable first.
+
+    Matches on the CANONICAL vertical, not the raw string. `availability`
+    lists canonical keys only, and before 2026-09-02 this compared the raw
+    lowercased `businesses.type` against them — so a business stamped
+    "barber", "counselor" or "law" was never offered "Set the hours you
+    actually work" while "personal_services", "therapist" and "lawyer"
+    were. Every other reader of the type (blueprint, autopilot) already
+    resolved aliases; this one now does too. The raw value still matches,
+    for any catalog entry that ever lists a non-canonical name."""
+    raw = (business_type or "").strip().lower()
+    try:
+        import vertical_registry
+        canonical = vertical_registry.resolve(raw)
+    except Exception:
+        canonical = raw
     keys = [
         k for k, v in PLUGIN_CATALOG.items()
-        if v["verticals"] == "*" or bt in v["verticals"]
+        if v["verticals"] == "*" or raw in v["verticals"] or canonical in v["verticals"]
     ]
     return sorted(keys, key=lambda k: -PLUGIN_CATALOG[k]["weight"])
 
