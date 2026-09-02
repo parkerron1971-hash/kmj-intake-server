@@ -1754,6 +1754,17 @@ async def platform_inbox_reply(
 # missing because nothing records a pack PURCHASE, so these figures are
 # a floor rather than an estimate.
 
+@router.get("/first-week")
+async def first_week_view(days: int = 30, _owner=Depends(require_owner)):
+    """What every business created in the window actually did in its
+    first days — the onboarding steps it reached, whether the sit-down
+    with Chief was opened, paused or finished, how many plug-ins are
+    probed done and which comes next, and whether it ever came back.
+    The read side of the onboarding telemetry (see first_week.py)."""
+    import first_week
+    return first_week.first_week_report(days=max(1, min(365, days)))
+
+
 @router.get("/margin")
 async def platform_margin_view(days: int = 30, _owner=Depends(require_owner)):
     """Platform-wide margin, per tier, worst 20 accounts first."""
