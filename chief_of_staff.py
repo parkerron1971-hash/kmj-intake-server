@@ -14311,6 +14311,14 @@ def _format_view_block(view: Optional[CurrentContext], detail: Dict[str, Any]) -
     lines.append("")
     lines.append("When the practitioner says 'him'/'her'/'this one'/'it'/'this contact'/'this entry',")
     lines.append("they are referring to the entity in CURRENTLY VIEWING above.")
+    # What this room is FOR, so a 'what is this / what do I do here' gets
+    # a real answer on day one or day ninety (room_orientation.py).
+    try:
+        import room_orientation
+        lines.append("")
+        lines.append(room_orientation.orientation_block(view.tab, view.sub_tab, getattr(view, 'page', None)))
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"room orientation block failed (non-fatal): {e}")
 
     return "\n".join(lines)
 
@@ -16120,7 +16128,8 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          learned_block: str = "",
                          growth_block: str = "",
                          setup_block: str = "",
-                         first_run: bool = False) -> str:
+                         first_run: bool = False,
+                         orientation_kind: Optional[str] = None) -> str:
     # Coach modes are different personas entirely — neither shares the
     # operational Chief's prompt.
     if mode == "strategy_coach":
@@ -16235,6 +16244,19 @@ LAUNCH GREETING — when the business is clearly BRAND NEW (context shows zero o
 2. List the 3-4 highest-leverage launch steps FOR THEIR TYPE, in THEIR language, never system jargon. If a SETUP STATUS block is present above, its undone items ARE the list — use its order. Otherwise derive the steps from what their kind of business needs to take money and serve people: (a) the way customers book or reach them, (b) what they sell with prices, (c) their web presence check, (d) their first few real contacts imported.
 3. Close by offering to take them to the first step: "Want me to take you to your booking setup right now?" On their YES in the NEXT turn, emit the navigate — walk them step by step, one step per turn, celebrating each completion.
 This launch greeting outranks the day-read whenever the newness condition holds. Keep it warm, specific, and under 6 short sentences plus the list."""
+
+    # Room orientation turns (first visit / the door / the guided walk)
+    # are not greetings: no day-read, their own instructions instead.
+    orientation_clause = ""
+    if orientation_kind:
+        try:
+            import room_orientation
+            orientation_clause = room_orientation.mode_clause(
+                orientation_kind,
+                view.tab if view else None, view.sub_tab if view else None,
+                getattr(view, 'page', None) if view else None)
+        except Exception as e:  # pragma: no cover
+            logger.warning(f"room orientation clause failed (non-fatal): {e}")
 
     greeting_clause = ""
     if is_greeting:
@@ -17120,7 +17142,7 @@ THIS TURN (fresh every message):
 
 {catchup_block}
 
-{eod_block}{greeting_clause}{resume_clause}"""
+{eod_block}{greeting_clause}{orientation_clause}{resume_clause}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -17342,6 +17364,10 @@ class ChatMessage(BaseModel):
 class CurrentContext(BaseModel):
     tab: Optional[str] = None
     sub_tab: Optional[str] = None
+    # The BUILD page (my-site, booking, structure-import…). Before
+    # 2026-09-02 a BUILD view arrived as tab only, so Chief could not
+    # tell the site from the brand studio when asked "what is this?".
+    page: Optional[str] = None
     viewing_contact_id: Optional[str] = None
     viewing_module_id: Optional[str] = None
     viewing_session_id: Optional[str] = None
@@ -17713,6 +17739,13 @@ async def chief_chat(
             biz = ctx["business"]
 
             is_greeting = _is_greeting(req.message)
+            # Room orientation turns (first visit / the door / the walk)
+            # get their own instructions instead of the day-read.
+            try:
+                import room_orientation as _ro
+                orientation_kind = _ro.sentinel_kind(req.message)
+            except Exception:  # pragma: no cover
+                orientation_kind = None
             tod = _parse_greeting_tod(req.message) if is_greeting else None
             is_coach_pause = _is_coach_pause(req.message)
             # Coach-context isolation (2026-07-16, Kevin's transcript): the
@@ -17879,6 +17912,7 @@ async def chief_chat(
                 growth_block=growth_block,
                 setup_block=setup_block,
                 first_run=first_run,
+                orientation_kind=orientation_kind,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt
