@@ -145,7 +145,12 @@ def _compose_prompt(task: Dict[str, Any]) -> str:
         "when finished, or 'failed' with the reason. note is a short "
         "plain-language message to Kevin: what you did, where, and anything "
         "he should check.\n"
-        f"  key: {task.get('report_key', '')}\n\n"
+        f"  key: {task.get('report_key', '')}\n"
+        "  If this task came from a support ticket, the final 'done' report "
+        "may also carry a fourth field, for_practitioner: ONE plain sentence "
+        "saying what the person who reported it will now see differently. It "
+        "is shown to them as-is, so write it in their language — nothing "
+        "about repos, branches, PRs or the tooling.\n\n"
         "If you need a decision from Kevin, post a 'working' report that asks "
         "the question, then wait. His reply will arrive here as a new message "
         "in this session, prefixed 'Kevin (from the Dev Desk)'. Always finish "
@@ -342,6 +347,11 @@ class ReportBody(BaseModel):
     key: str
     status: str
     note: Optional[str] = None
+    # One plain sentence for the person who reported the problem, when this
+    # task came from a support ticket. It is shown to them verbatim if it
+    # passes the practitioner guard, so it must read like something a human
+    # would say about their own business — never about the work.
+    for_practitioner: Optional[str] = None
 
 
 @router.get("/dev-bridge/queue")
@@ -491,4 +501,16 @@ async def bridge_report(task_id: str, body: ReportBody):
         await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
         if body.note:
             await _append_note(c, task, "dev", body.note)
-    return {"ok": True}
+
+    # If this task came from a support ticket, the person who reported the
+    # problem hears about it now — in the session's own sentence when it is
+    # fit to send, and the standard one when it is not. Fail-soft: a task
+    # report must never fail because the telling did.
+    told = False
+    if status == "done":
+        try:
+            from support_router import note_fix_shipped
+            told = await note_fix_shipped(task_id, body.for_practitioner)
+        except Exception as e:
+            logger.warning(f"ticket walk-back failed for {task_id}: {e}")
+    return {"ok": True, "told_the_practitioner": told}

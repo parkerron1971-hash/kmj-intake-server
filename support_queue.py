@@ -173,6 +173,10 @@ AGE_POINTS_CAP = 240          # 30 days of waiting
 REPEAT_POINTS = 60
 REPEAT_POINTS_CAP = 300
 UNANSWERED_POINTS = 50
+# They wrote back and nobody has since. Worth more than a first silence:
+# the first is a queue that has not got there yet, this is a conversation
+# somebody has walked away from mid-sentence.
+AWAITING_REPLY_POINTS = 90
 
 
 def parse_ts(value: Optional[str]) -> Optional[datetime]:
@@ -222,6 +226,10 @@ def rank(ticket: Dict[str, Any], triage: Dict[str, Any], repeats: int = 1,
     if not (triage.get("first_response_at") or ticket.get("replied_at")):
         score += UNANSWERED_POINTS
         why.append("never answered")
+
+    if ticket.get("last_message_author") == "practitioner":
+        score += AWAITING_REPLY_POINTS
+        why.append("they replied, waiting on you")
 
     return score, why
 

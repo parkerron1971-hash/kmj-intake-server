@@ -6,8 +6,10 @@ plan to improve operation in handling issues… set up a list and create a queue
 for fixing them, so inside Solution Space we create a ticket area that is
 focused on fixing the problems."
 **Status:** Part 1 (the audit) and Part 2 (the plan) are below. **Phase 1 —
-the backend — ships with this document.** Phases 2–4 are the two UIs and the
-practitioner's side, specified here against a contract that already exists.
+the backend — ships with this document**, and so does the conversation layer
+that was originally Phase 4 (Kevin, same day: *"people should see tickets
+being worked on and being updated so there is no dead conversation"*). Phases
+2–3 are the two operator UIs, specified against a contract that already exists.
 
 ---
 
@@ -39,10 +41,15 @@ even a perfectly handled problem stays on the board until someone remembers it.
 The board therefore stops being trustworthy, which is the point at which people
 stop reading it and start working from whatever they remember.
 
-**3. Nobody is ever told.** The reply is a column. The practitioner has to
+**3. Nobody is ever told, and nobody can answer back.** The reply is a
+column — one of them, overwritten by the next reply. The practitioner has to
 reopen Help & Support and click *My tickets* to discover it. There is no email,
-no in-app notification, no Chief message. Measured from where the practitioner
-sits, reporting a problem is indistinguishable from shouting into a well.
+no in-app notification, no Chief message, and no way for them to say "that's
+still not right" without filing a second ticket. Measured from where the
+practitioner sits, reporting a problem is indistinguishable from shouting into
+a well. The support-tickets migration named the fix in its own header — *"a
+support_ticket_messages table is the clean v2 extension"* — and then it was
+never built.
 
 **4. There is no priority at all.** The list is newest-first. A blocker filed
 last Tuesday sits below a feature idea filed this morning. `category` is not
@@ -232,26 +239,81 @@ makes every future automation possible.
 
 ---
 
-## 6. Phase 4 — the practitioner's side
+## 6. The practitioner's side — the conversation (SHIPPED)
 
-The loop only actually closes at a person.
+The loop only actually closes at a person, so this moved forward out of
+Phase 4 and ships with the backend.
 
-- **Chief can answer "what happened to my ticket?"** — a read action over the
-  tenant's own tickets, in plain language: *"You reported the cancel button on
-  1 Sept. It's fixed as of yesterday — try it and tell me if it still misses."*
-  Chief must never say builder, GitHub or Claude Code; the dispatch brief
-  already ends by asking the fixing session for the one plain sentence that
-  goes back.
-- **A shipped fix announces itself** in the app, once, on next open.
-- **The diagnostics gap.** Today a bug ticket carries app version, screen,
-  theme, viewport and user agent — and nothing about what actually broke.
-  Client errors go to `platform_watchdog._ERRORS`, an in-process ring buffer of
-  400 entries with no `business_id`, lost on every deploy. So the errors that
-  would explain the ticket are usually gone before the ticket is read. The fix
-  is a small `client_errors` table (business, user, screen, message, stack,
-  timestamp) and attaching that business's last few errors to the ticket at
-  filing time. That is its own arc; it is the highest-value one after the UIs,
-  because it decides whether "something looks wrong" is reproducible.
+**`support_ticket_messages`** — the v2 the original support-tickets migration
+named and never got. Three authors:
+
+| author | what it is |
+|---|---|
+| `practitioner` | what they wrote, including writing back later |
+| `support` | a person answering |
+| `system` | the ticket telling its own story as the work moves |
+
+The system messages are the part that kills dead conversation, because they
+arrive with nobody typing them. `looking` when it's triaged, `working` when
+it's dispatched, `fixed` when the dev task reports done, `stalled` when that
+task dies. Said **once** each — `queued → fixing` is the same news from where
+they sit, and a thread that repeats itself reads like a machine.
+
+**`stage`** is the badge they see: received → looking → working → fixed →
+answered. Not a fourth `status` (that column's CHECK is load-bearing for
+Mission Control's panel) and not a second source of truth — it is written by
+the same call that appends the matching message, so the badge and the thread
+cannot disagree. No CHECK on it, on purpose: the archetype constraint went out
+of step with the app's own list in August and Postgres silently rejected writes
+the app had already called successful.
+
+**Two walls, because everything in that table is tenant-readable by design:**
+
+1. Operator judgement stays in `support_triage`, which no tenant can read.
+   "Won't fix, and here is why" never enters the thread — and there is
+   deliberately no canned system message for it, because that is a sentence a
+   person has to write.
+2. `support_thread.practitioner_safe()` runs before every system write. The
+   sentence closing a ticket now comes from a session that has spent an hour
+   inside a repo, and it talks like one — so a sentence carrying *claude,
+   github, PR #, branch, merge, migration, deploy, stack trace* (and the rest
+   of the list) is **replaced** by the standard message, never edited, with the
+   original kept on the operator-only note. Fail-safe, not fail-open. A test
+   runs every built-in system message through the same guard, so a careless
+   future edit fails the build.
+
+**The fix writes its own sentence.** A `done` report on `/dev-bridge/tasks/
+{id}/report` may carry `for_practitioner`: one plain sentence about what they
+will now see differently. If it passes the guard it goes to them verbatim,
+because "The cancel button on a booking works now" is worth more than any
+status change. The dispatch brief has always asked the session for that
+sentence; now there is somewhere for it to go.
+
+**They can answer.** `POST /support/tickets/{id}/messages` (JWT + owner check,
+not a PostgREST insert) appends their message, reopens a ticket that was
+closed, puts it back in the ready lane, and emails the operator. A reply from
+them adds **90** to the ticket's rank with the reason *"they replied, waiting
+on you"* — more than a first silence is worth, because the first is a queue
+that hasn't got there yet and this is a conversation somebody walked away from
+mid-sentence. `counts.awaiting_you` is the number that should be zero.
+
+**Email:** on `working`, on `fixed`, and on every human reply. Each state
+fires at most once. All fail-soft, all reported rather than swallowed.
+
+### Still to come on this side
+
+- **Chief answering "what happened to my ticket?"** — a read action over the
+  tenant's own tickets. The stage and the thread now give it something true to
+  read from, and the same guard applies to anything it says.
+- **The diagnostics gap.** A bug ticket carries app version, screen, theme,
+  viewport and user agent — and nothing about what actually broke. Client
+  errors go to `platform_watchdog._ERRORS`, an in-process ring buffer of 400
+  entries with no `business_id`, lost on every deploy, so the errors that would
+  explain the ticket are usually gone before it is read. The fix is a small
+  `client_errors` table (business, user, screen, message, stack, timestamp) and
+  attaching that business's last few errors at filing time. Its own arc, and
+  the highest-value one left: it decides whether "something looks wrong" is
+  reproducible.
 
 ---
 
@@ -266,13 +328,17 @@ Not a process document — four habits:
    there so the choice is already made.
 3. **Never touch FIXING.** It reports its own progress. If a card sits there
    for days, the dev task stalled, and that is a Dev Desk problem.
-4. **Empty CONFIRM before starting anything new.** Every card is a person who
-   reported something, waited, got it fixed, and still doesn't know. This is
-   the lane that turns support from a cost into the reason someone stays.
+4. **Answer anyone who wrote back, first.** A card marked *"they replied,
+   waiting on you"* is a conversation somebody walked away from mid-sentence.
+   It outranks everything at the same severity for exactly that reason.
+5. **Empty CONFIRM before starting anything new.** Every card is a person who
+   reported something, waited, got it fixed, and still doesn't know. The
+   `fixed` message goes out on its own now, so this lane is thinner than it
+   was — what's left in it is the tickets that need a human sentence.
 
-The health of the whole thing is two numbers, both already in `counts`:
-`unanswered` and `oldest_open_days`. If those two are small, support is fine no
-matter what the total is.
+The health of the whole thing is three numbers, all in `counts`:
+`awaiting_you`, `unanswered` and `oldest_open_days`. If those are small,
+support is fine no matter what the total is.
 
 ---
 

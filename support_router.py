@@ -46,6 +46,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 import support_queue as sq
+import support_thread as st
+from auth_supabase import AuthedUser, require_user
 from lead_admin import require_owner, _service_headers, SUPABASE_URL
 
 logger = logging.getLogger("support_router")
@@ -58,6 +60,9 @@ HTTP_TIMEOUT = httpx.Timeout(20.0)
 # a guard against the day it is not.
 QUEUE_LIMIT = 300
 MESSAGE_PREVIEW = 500
+# How much of each conversation the board carries. Enough to see who spoke
+# last and what was said; the full thread lives in the app they filed from.
+THREAD_TAIL = 6
 
 
 def _now() -> str:
@@ -82,9 +87,12 @@ async def _sb_insert(c: httpx.AsyncClient, path: str,
         headers["Prefer"] = "return=representation,resolution=merge-duplicates"
     r = await c.post(f"{SUPABASE_URL}/rest/v1/{path}", headers=headers, json=body)
     if r.status_code >= 400:
-        raise HTTPException(502, f"support write failed — is the "
-                                 f"APPLY-2026-09-02-support-fix-queue migration "
-                                 f"applied? {r.text[:200]}")
+        # Name the table, not one migration: support_triage and
+        # support_ticket_messages ship in two files and either one being
+        # unapplied looks identical from here otherwise.
+        raise HTTPException(502, f"support write to '{path}' failed — are the "
+                                 f"2026-09-02 support migrations applied? "
+                                 f"{r.text[:200]}")
     rows = r.json() if r.text else []
     return rows if isinstance(rows, list) else [rows]
 
@@ -184,12 +192,94 @@ async def _upsert_triage(c: httpx.AsyncClient, ticket: Dict[str, Any],
                              {**_seed_triage(ticket), **patch}))[0]
 
 
+# --- the thread ------------------------------------------------------
+# Everything written here is read by the person who filed the ticket.
+# That is the point of it, and it is also the whole risk: support_triage
+# holds what the operator thinks, this holds what the practitioner is
+# told, and nothing may cross from the first to the second.
+
+_STAGE_FOR_KIND = {"looking": "looking", "working": "working",
+                   "fixed": "fixed", "stalled": "looking"}
+
+
+async def _append_message(c: httpx.AsyncClient, ticket: Dict[str, Any],
+                          author: str, body: str, *, kind: Optional[str] = None,
+                          stage: Optional[str] = None,
+                          email: bool = False) -> Dict[str, Any]:
+    """One message onto the ticket's thread, plus the projection the list
+    view reads. Both writes always happen together — the badge and the
+    thread are the same event, and a badge that disagrees with the last
+    message is worse than no badge."""
+    ok, hits = st.practitioner_safe(body) if author == "system" else (True, [])
+    if not ok:
+        # A system message is a fixed sentence from support_thread, so this
+        # can only fire if someone adds a new one carelessly. Loud, not
+        # silent: it is the guard doing its job at the last possible moment.
+        logger.error(f"blocked an internal system message: {hits}")
+        raise HTTPException(500, "system message failed the practitioner guard")
+
+    row = (await _sb_insert(c, "support_ticket_messages", {
+        "ticket_id": ticket["id"],
+        "business_id": ticket.get("business_id"),
+        "author": author,
+        "kind": kind,
+        "body": (body or "").strip()[:5000],
+    }))[0]
+
+    patch: Dict[str, Any] = {
+        "last_message_at": row.get("created_at") or _now(),
+        "last_message_author": author,
+    }
+    want_stage = stage or (_STAGE_FOR_KIND.get(kind or "") if kind else None)
+    if want_stage:
+        patch["stage"] = want_stage
+    await _sb_patch(c, "support_tickets", {"id": f"eq.{ticket['id']}"}, patch)
+    ticket.update(patch)
+
+    if email:
+        await _email_practitioner(c, ticket, body)
+    return row
+
+
+async def _note_transition(c: httpx.AsyncClient, ticket: Optional[Dict[str, Any]],
+                           kind: str) -> None:
+    """The ticket telling its own story. Fail-soft: a thread message that
+    could not be written must never stop the state change that caused it —
+    the queue's correctness does not depend on the telling, only the
+    practitioner's experience does, and a 500 here would strand the
+    board."""
+    if not ticket or kind not in st.SYSTEM_MESSAGE:
+        return
+    # Said once. queued -> fixing is the same news from where they sit, and
+    # a thread that repeats itself reads like a machine, which is the thing
+    # this is trying not to be. 'stalled' is exempt: a fix that fell over
+    # twice is twice worth saying.
+    if kind != "stalled" and ticket.get("stage") == _STAGE_FOR_KIND.get(kind):
+        return
+    try:
+        await _append_message(c, ticket, "system", st.SYSTEM_MESSAGE[kind],
+                              kind=kind, email=kind in st.EMAIL_ON)
+    except Exception as e:
+        logger.warning(f"thread note '{kind}' failed for {ticket.get('id')}: {e}")
+
+
 # --- 3. The walk-back -------------------------------------------------
 
+# Which system message a fix_state arrival is worth telling them about.
+# 'queued' and 'fixing' are one story from where they sit — somebody is on
+# it — so only the first of the two speaks.
+_TELL_ON_ARRIVAL = {"queued": "working", "fixing": "working",
+                    "shipped": "fixed", "triaged": None}
+
+
 async def _reconcile(c: httpx.AsyncClient, triage: Dict[str, Dict[str, Any]],
-                     tasks: Dict[str, Dict[str, Any]]) -> int:
-    """Move tickets whose dev task has moved. Runs on every queue read:
-    the board cannot go stale, and no scheduler has to be trusted."""
+                     tasks: Dict[str, Dict[str, Any]],
+                     tickets: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+    """Move tickets whose dev task has moved, and say so on the thread.
+    Runs on every queue read: the board cannot go stale, no scheduler has
+    to be trusted, and the person waiting hears about it without anyone
+    remembering to tell them."""
+    tickets = tickets or {}
     moved = 0
     for row in triage.values():
         task = tasks.get(row.get("dev_task_id") or "")
@@ -214,16 +304,33 @@ async def _reconcile(c: httpx.AsyncClient, triage: Dict[str, Dict[str, Any]],
                         {"ticket_id": f"eq.{row['ticket_id']}"}, patch)
         row.update(patch)
         moved += 1
+
+        ticket = tickets.get(row["ticket_id"])
+        if status in ("failed", "cancelled"):
+            await _note_transition(c, ticket, "stalled")
+        else:
+            await _note_transition(c, ticket, _TELL_ON_ARRIVAL.get(want) or "")
     return moved
 
 
 # --- the queue itself -------------------------------------------------
 
 def _item(ticket: Dict[str, Any], triage: Dict[str, Any], repeats: int,
-          task: Optional[Dict[str, Any]], now: datetime) -> Dict[str, Any]:
+          task: Optional[Dict[str, Any]], now: datetime,
+          thread: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     score, why = sq.rank(ticket, triage, repeats, now)
     message = ticket.get("message") or ""
     return {
+        # What THEY see, and who spoke last. A ticket whose last word came
+        # from the practitioner is a conversation waiting on an answer, and
+        # that is the state this whole board exists to keep at zero.
+        "stage": ticket.get("stage") or st.stage_of(triage.get("fix_state")),
+        "stage_label": st.STAGE_LABEL.get(
+            ticket.get("stage") or st.stage_of(triage.get("fix_state")), "Received"),
+        "last_message_at": ticket.get("last_message_at"),
+        "last_message_author": ticket.get("last_message_author"),
+        "awaiting_you": ticket.get("last_message_author") == "practitioner",
+        "thread": thread or [],
         "id": ticket["id"],
         "business_id": ticket.get("business_id"),
         "business": ticket.get("business_name") or (ticket.get("business_id") or "")[:8],
@@ -257,13 +364,40 @@ def _item(ticket: Dict[str, Any], triage: Dict[str, Any], repeats: int,
     }
 
 
+async def _threads_for(c: httpx.AsyncClient,
+                       ticket_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """The tail of each ticket's conversation, in one read per chunk. The
+    board shows it because a card that only shows what somebody reported
+    three weeks ago cannot tell you whether anyone has spoken since."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for i in range(0, len(ticket_ids), _ID_CHUNK):
+        chunk = ticket_ids[i:i + _ID_CHUNK]
+        if not chunk:
+            continue
+        rows = await _sb_get(c, "support_ticket_messages", {
+            "ticket_id": f"in.({','.join(chunk)})",
+            "select": "ticket_id,created_at,author,kind,body",
+            "order": "created_at.desc",
+            "limit": str(_ID_CHUNK * THREAD_TAIL),
+        })
+        for r in rows:
+            bucket = out.setdefault(r["ticket_id"], [])
+            if len(bucket) < THREAD_TAIL:
+                bucket.append(r)
+    for tid in out:
+        out[tid].reverse()          # back into the order it was said in
+    return out
+
+
 async def _load_queue(c: httpx.AsyncClient) -> Dict[str, Any]:
     tickets = await _sb_get(c, "support_tickets", {
         "select": "id,business_id,business_name,category,subject,message,context,"
-                  "status,admin_reply,replied_at,created_at,updated_at",
+                  "status,admin_reply,replied_at,created_at,updated_at,"
+                  "stage,last_message_at,last_message_author",
         "order": "created_at.desc",
         "limit": str(QUEUE_LIMIT),
     })
+    by_id = {t["id"]: t for t in tickets}
     triage = await _triage_for(c, [t["id"] for t in tickets])
     await _ensure_triage(c, tickets, triage)
 
@@ -276,7 +410,11 @@ async def _load_queue(c: httpx.AsyncClient) -> Dict[str, Any]:
             "select": "id,lane,status,title,issue_url,updated_at",
         })
         tasks = {r["id"]: r for r in rows}
-    moved = await _reconcile(c, triage, tasks)
+    moved = await _reconcile(c, triage, tasks, by_id)
+
+    threads = await _threads_for(c, [
+        t["id"] for t in tickets
+        if sq.lane_of((triage.get(t["id"]) or {}).get("fix_state")) != "closed"])
 
     now = datetime.now(timezone.utc)
     repeats: Dict[str, int] = {}
@@ -289,17 +427,21 @@ async def _load_queue(c: httpx.AsyncClient) -> Dict[str, Any]:
     lanes["closed"] = []
     counts = {s: 0 for s in sq.FIX_STATES}
     unanswered = 0
+    awaiting_you = 0
     oldest_open = 0.0
     for t in tickets:
         tr = triage.get(t["id"]) or {}
         key = tr.get("problem_key")
         item = _item(t, tr, repeats.get(key, 1) if key else 1,
-                     tasks.get(tr.get("dev_task_id") or ""), now)
+                     tasks.get(tr.get("dev_task_id") or ""), now,
+                     threads.get(t["id"]))
         lanes.setdefault(item["lane"], []).append(item)
         counts[tr.get("fix_state") or "new"] = counts.get(tr.get("fix_state") or "new", 0) + 1
         if item["lane"] != "closed":
             if not item["answered"]:
                 unanswered += 1
+            if item["awaiting_you"]:
+                awaiting_you += 1
             oldest_open = max(oldest_open, item["age_days"])
     for ln in lanes:
         lanes[ln].sort(key=lambda i: i["rank"], reverse=True)
@@ -335,6 +477,7 @@ async def _load_queue(c: httpx.AsyncClient) -> Dict[str, Any]:
             **counts,
             "open_total": sum(len(lanes[ln]) for ln in sq.OPEN_LANES),
             "unanswered": unanswered,
+            "awaiting_you": awaiting_you,
             "oldest_open_days": round(oldest_open, 1),
             "blockers": sum(1 for ln in sq.OPEN_LANES for i in lanes[ln]
                             if i["severity"] == "blocker"),
@@ -438,6 +581,11 @@ async def _dispatch(c: httpx.AsyncClient, ticket: Dict[str, Any], *,
     if (ticket.get("status") or "open") == "open":
         await _sb_patch(c, "support_tickets", {"id": f"eq.{ticket['id']}"},
                         {"status": "in_progress"})
+    # And say it in words, on their thread. Dispatch sets 'queued' directly
+    # rather than through the reconciler, so the telling has to happen here
+    # too or the one state change that always matters would be the one they
+    # never hear about.
+    await _note_transition(c, ticket, "working")
     return {"ok": True, "task": row, "ticket_id": ticket["id"]}
 
 
@@ -492,6 +640,12 @@ async def triage_ticket(ticket_id: str, body: TriageBody,
         if patch.get("fix_state") in ("wont_fix", "duplicate"):
             await _sb_patch(c, "support_tickets", {"id": f"eq.{ticket_id}"},
                             {"status": "resolved"})
+            # Deliberately NO system message here. "We are not going to fix
+            # this" is a sentence a person has to write; a canned one is
+            # worse than the silence it replaces. The reply endpoint is how
+            # that gets said, and the confirm lane keeps nagging until it is.
+        elif patch.get("fix_state") == "triaged":
+            await _note_transition(c, ticket, "looking")
     return {"ok": True, "triage": row}
 
 
@@ -539,11 +693,31 @@ async def _recipient_email(c: httpx.AsyncClient,
     return None
 
 
-async def _email_reply(c: httpx.AsyncClient, ticket: Dict[str, Any],
-                       text: str) -> Tuple[bool, Optional[str]]:
-    """Fail-soft: the reply is saved either way. An email that could not go
-    out must not lose the answer, but it must be REPORTED — a silent
-    failure here is the exact hole this endpoint exists to close."""
+async def _email_operator(subject: str, body: str) -> None:
+    """Somebody is waiting on an answer. Fail-soft and quiet: this is a
+    nudge, and a nudge that cannot be delivered must not fail the write
+    that earned it."""
+    try:
+        from email_sender import send_via_resend
+        from platform_addresses import operator_email, public_contact_email
+        await send_via_resend(
+            to_email=operator_email(),
+            to_name=None,
+            from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
+            from_name="Solutionist Support",
+            subject=subject[:150],
+            body=body,
+            reply_to=public_contact_email(),
+        )
+    except Exception as e:
+        logger.warning(f"operator nudge failed: {e}")
+
+
+async def _email_practitioner(c: httpx.AsyncClient, ticket: Dict[str, Any],
+                              text: str) -> Tuple[bool, Optional[str]]:
+    """Fail-soft: whatever prompted this is saved either way. An email that
+    could not go out must not lose the answer, but it must be REPORTED — a
+    silent failure here is the exact hole this endpoint exists to close."""
     to = await _recipient_email(c, ticket)
     if not to:
         return False, "no email on file for the person who filed it"
@@ -561,14 +735,15 @@ async def _email_reply(c: httpx.AsyncClient, ticket: Dict[str, Any],
                 f"---\n"
                 f"You wrote on {ticket.get('created_at', '')[:10]}:\n"
                 f"{(ticket.get('message') or '').strip()[:1200]}\n\n"
-                f"You can see this and everything else you have sent in the app "
-                f"under Help & Support, My tickets."
+                f"You can reply to this ticket in the app under Help & Support, "
+                f"My tickets — everything said about it is there, and anything "
+                f"you write comes straight back to us."
             ),
             reply_to=public_contact_email(),
         )
         return True, None
     except Exception as e:
-        logger.warning(f"support reply email failed: {e}")
+        logger.warning(f"support email failed: {e}")
         return False, str(e)[:200]
 
 
@@ -581,13 +756,18 @@ async def reply_ticket(ticket_id: str, body: ReplyBody, _owner=Depends(require_o
         raise HTTPException(422, "text required")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         ticket = await _get_ticket(c, ticket_id)
-        emailed, why = await _email_reply(c, ticket, text)
+        emailed, why = await _email_practitioner(c, ticket, text)
         await _sb_patch(c, "support_tickets", {"id": f"eq.{ticket_id}"}, {
             "admin_reply": text[:5000],
             "replied_at": _now(),
             "status": "resolved" if body.resolve else (
                 "in_progress" if ticket.get("status") == "open" else ticket.get("status")),
         })
+        # admin_reply is the LATEST answer; the thread is all of them. Both
+        # get written — the old column is what the panel that exists today
+        # reads, and the thread is what stops the conversation dying.
+        await _append_message(c, ticket, "support", text,
+                              stage="answered" if body.resolve else None)
         existing = await _sb_get(c, "support_triage", {
             "ticket_id": f"eq.{ticket_id}", "select": "first_response_at"})
         patch: Dict[str, Any] = {"updated_at": _now()}
@@ -600,6 +780,109 @@ async def reply_ticket(ticket_id: str, body: ReplyBody, _owner=Depends(require_o
             patch["closed_at"] = _now()
         await _upsert_triage(c, ticket, patch)
     return {"ok": True, "emailed": emailed, "email_error": why}
+
+
+# --- The sentence the fix itself writes -------------------------------
+
+async def note_fix_shipped(task_id: str,
+                           sentence: Optional[str] = None) -> bool:
+    """Called by the dev bridge when a task reports 'done'. If that task
+    came from a ticket, the ticket hears about it now rather than on the
+    next queue read — and in the fixing session's own words, which is the
+    only way the message says anything more than "it changed".
+
+    The guard is the whole reason this is not just a passthrough: a session
+    that has spent an hour in a repo writes like it, and every word of this
+    lands in front of a practitioner. An unsafe sentence is REPLACED, never
+    edited, and the original is kept on the operator-only note so nothing
+    is lost — see support_thread.clean_for_practitioner.
+    """
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        rows = await _sb_get(c, "support_triage", {
+            "dev_task_id": f"eq.{task_id}", "select": "ticket_id,fix_state,note"})
+        if not rows:
+            return False                      # an ordinary dev task, not a fix
+        row = rows[0]
+        ticket = await _get_ticket(c, row["ticket_id"])
+
+        raw = (sentence or "").strip()
+        body = st.clean_for_practitioner(raw, st.SYSTEM_MESSAGE["fixed"])
+        patch: Dict[str, Any] = {"updated_at": _now()}
+        if row.get("fix_state") in ("queued", "fixing"):
+            patch["fix_state"] = "shipped"
+            patch["shipped_at"] = _now()
+        if raw and body != raw:
+            patch["note"] = ((row.get("note") or "") + f"\n[{_now()}] the session's "
+                             f"own words did not pass the practitioner guard, so the "
+                             f"standard message went instead: {raw[:600]}").strip()
+        await _upsert_triage(c, ticket, patch)
+
+        # Not _note_transition: that one says the standard sentence and
+        # skips when the stage already matches. This is the specific one.
+        if ticket.get("stage") != "fixed":
+            try:
+                await _append_message(c, ticket, "system", body,
+                                      kind="fixed", email=True)
+            except Exception as e:
+                logger.warning(f"fix note failed for {ticket.get('id')}: {e}")
+                return False
+    return True
+
+
+# --- The practitioner's own end of it ---------------------------------
+# Their side is a JWT plus an owner check on the business the ticket
+# belongs to — the same gate every other tenant write uses, and NOT a
+# direct PostgREST insert, because sending a message has to DO things:
+# reopen a ticket somebody thought was finished, put it back in the queue,
+# and tell the operator that a person is waiting. None of that can hang
+# off a row appearing in a table.
+
+class TicketMessageBody(BaseModel):
+    text: str
+
+
+def _require_ticket_owner(ticket: Dict[str, Any], owner_id: Optional[str],
+                          user: AuthedUser) -> None:
+    if not owner_id or str(owner_id) != str(user.id):
+        # The same indistinguishable 404 the rest of the app uses: whether
+        # a ticket id exists is not a stranger's business.
+        raise HTTPException(404, "No such ticket")
+
+
+@router.post("/support/tickets/{ticket_id}/messages")
+async def add_ticket_message(ticket_id: str, body: TicketMessageBody,
+                             user: AuthedUser = Depends(require_user)):
+    """The practitioner writing back. This is the half that turns a ticket
+    from a form submission into a conversation."""
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(422, "text required")
+
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        ticket = await _get_ticket(c, ticket_id)
+        rows = await _sb_get(c, "businesses", {
+            "id": f"eq.{ticket.get('business_id')}", "select": "owner_id", "limit": "1"})
+        _require_ticket_owner(ticket, rows[0].get("owner_id") if rows else None, user)
+
+        msg = await _append_message(c, ticket, "practitioner", text)
+
+        # A closed ticket they have replied to is open again. Anything else
+        # is a conversation that ends the moment support stops typing.
+        triage = (await _sb_get(c, "support_triage", {
+            "ticket_id": f"eq.{ticket_id}", "select": "fix_state"}) or [{}])[0]
+        if sq.lane_of(triage.get("fix_state")) == "closed":
+            await _upsert_triage(c, ticket, {"fix_state": "triaged",
+                                             "closed_at": None,
+                                             "updated_at": _now()})
+            await _sb_patch(c, "support_tickets", {"id": f"eq.{ticket_id}"},
+                            {"status": "in_progress"})
+
+        await _email_operator(
+            f"Support: {(ticket.get('business_name') or 'a practitioner')} replied",
+            f"{(ticket.get('business_name') or ticket.get('business_id'))} wrote back on "
+            f"\"{(ticket.get('subject') or '')[:120]}\":\n\n{text[:1500]}\n\n"
+            f"It is back in the fix queue, waiting on an answer.")
+    return {"ok": True, "message": msg}
 
 
 # --- The Solution Space lane ------------------------------------------
