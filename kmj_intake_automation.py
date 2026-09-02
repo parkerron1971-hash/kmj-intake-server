@@ -490,6 +490,12 @@ app.include_router(platform_console_router)
 # (owner JWT) + /dev-bridge/* (device token / per-task report key).
 from dev_bridge import router as dev_bridge_router
 app.include_router(dev_bridge_router)
+# The fix queue (2026-09-02) — support tickets ranked, dispatched into dev
+# tasks, walked back when the fix ships, and answered by email.
+# /platform/support/* (owner JWT) + /dev-bridge/tickets* (device token, so
+# the ticket area in Solution Space renders without Kevin's JWT).
+from support_router import router as support_queue_router
+app.include_router(support_queue_router)
 # Phase 5b of BILLING_PLAN — Stripe subscription billing.
 # /billing/checkout (authed), /billing/portal (authed),
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
