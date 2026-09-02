@@ -85,8 +85,8 @@ class TestTheAuditShape:
         kwargs = dict(
             businesses=[_biz(BIZ_B, "B", 5), _biz(BIZ_A, "A", 13), _biz(BIZ_C, "C", 1)],
             events=[
-                _ev(BIZ_A, "onboarding_step", a_created - timedelta(minutes=3), step=3, name="your_work"),
-                _ev(BIZ_A, "onboarding_step", a_created - timedelta(minutes=2), step=5, name="launch"),
+                _ev(BIZ_A, "onboarding_step", a_created - timedelta(minutes=3), step=1, name="your_work"),
+                _ev(BIZ_A, "onboarding_step", a_created - timedelta(minutes=2), step=2, name="your_voice"),
                 _ev(BIZ_A, "business_created", a_created),
                 _ev(BIZ_A, "session_opened", a_created + timedelta(minutes=1), kind="business"),
                 _ev(BIZ_A, "session_paused", a_created + timedelta(minutes=12), kind="business", phase="owner"),
@@ -124,8 +124,8 @@ class TestTheAuditShape:
     def test_the_stranger_who_stopped_in_phase_one(self, monkeypatch):
         r = self._wire_three(monkeypatch)
         a = {b["business_id"]: b for b in r["businesses"]}[BIZ_A]
-        assert a["onboarding"]["furthest_step"] == 5
-        assert a["onboarding"]["furthest_step_name"] == "launch"
+        assert a["onboarding"]["furthest_step"] == 2
+        assert a["onboarding"]["furthest_step_name"] == "your_voice"
         assert a["session"] == {"kind": "business", "status": "in_progress", "phase": "owner",
                                 "opened": True, "paused": True, "completed": False}
         assert a["plugins"]["done"] == 0 and a["plugins"]["total"] == 3
