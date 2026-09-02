@@ -2154,8 +2154,17 @@ def _price_cards_html() -> str:
     return (
         card("starter", "Starter",
              "The full workspace. Contacts, invoicing, scheduling, content, goals, your site, and Chief.")
+        # 9/02: this card sold "Autopilot running overnight" as the
+        # Professional difference. Autopilot has no gate — it is in
+        # neither FEATURE_MIN_PLAN nor any has_feature() call — so it
+        # runs on Starter too, and the /features page has always said
+        # so. The card was inventing a tier difference. What
+        # Professional actually buys is the gate map's professional
+        # block, so that is what it says now.
         + card("professional", "Professional",
-               "Everything in Starter, plus Autopilot running overnight and deeper Chief automation.",
+               "Everything in Starter, plus the full accounting layer &mdash; closing, "
+               "1099s, the year-end package &mdash; and Chief on your books, your site "
+               "and your sourcing.",
                mid=True)
         + card("practice", "Solutionist",
                "For the operator running everything through the system: "
@@ -2163,62 +2172,199 @@ def _price_cards_html() -> str:
     )
 
 
-# Feature rows for the tier table on /compare — keys are
-# feature_gates.FEATURE_MIN_PLAN entries; only labeled features render,
-# so an unlabeled future gate never leaks a raw key onto the site.
-_SITE_FEATURE_LABELS = (
-    ("general_ledger", "General Ledger &amp; Trial Balance"),
-    ("reports_full", "Full financial reports"),
-    ("period_close", "Period closing"),
-    ("contractor_payments", "Contractor payments + 1099"),
-    ("accountant_package", "Year-end accountant package"),
-    ("sourcing_desk", "Sourcing Desk — find &amp; RFQ vendors"),
-    ("vertical_ledgers", "Trust accounting check (IOLTA)"),
-    ("vertical_reports", "Compliance reports (trust reconciliation, 990 prep)"),
-    ("accountant_collaborator", "Accountant collaborator seat"),
-    ("audit_trail", "Audit trail"),
+# ══════════════════════════════════════════════════════════════════════
+# The tier table on /compare — "what do I actually get?"
+# ══════════════════════════════════════════════════════════════════════
+# 9/02: this table listed ten rows and every one of them was accounting.
+# Someone deciding whether $79 was worth it could not see that it sends
+# invoices, or texts, or email, or takes bookings — the things they were
+# actually shopping for. The table was drawn from the GATE MAP, so it
+# could only ever describe the DIFFERENCES between tiers, and the answer
+# to "is it worth it" is mostly the part that does NOT differ.
+#
+# So the table now names the whole product, and each row says where its
+# ✓ comes from:
+#
+#   _ALL         — no gate exists. feature_gates.FEATURE_MIN_PLAN is the
+#                  ENTIRE gate map (every require_feature/has_feature
+#                  call in the backend keys off it), so a capability
+#                  absent from that map ships on all three tiers and
+#                  saying so out loud is simply true.
+#   "<key>"      — a FEATURE_MIN_PLAN key; the ✓/— comes from the map,
+#                  never from a hand-typed guess. An unlabeled gate does
+#                  not render, so a raw key can never leak onto the page.
+#   callable     — a number row, read from the live dials.
+#
+# THE RULE: a row may only claim a difference the code actually
+# enforces. The 8/18 pricing review caught this site inventing tier
+# differences that did not exist ("priority onboarding"); the
+# completeness test in __tests__/test_marketing_site_pricing.py now
+# fails if a new gate lands in FEATURE_MIN_PLAN and nobody decides where
+# it belongs here — which is the moment an _ALL row would start lying.
+_ALL = "__every_plan__"
+
+# Keys deliberately not sold as their own row. Same two the in-app cards
+# hide (BillingPanel.HIDDEN_FEATURES), for the same reasons: seats show
+# as a number, and chief_unlimited gates nothing an allowance row does
+# not already say honestly.
+_NOT_A_ROW = ("multi_seat", "chief_unlimited")
+
+_COMPARE_GROUPS = (
+    ("The day-to-day work", (
+        ("Contacts &amp; CRM", _ALL,
+         "Everyone you work with in one list, with the whole history attached."),
+        ("Invoices &amp; estimates", "invoicing",
+         "Send it, they pay by card, and the books post themselves."),
+        ("Card payments &amp; checkout", _ALL,
+         "Stripe on your own account &mdash; the money lands in your bank, never ours."),
+        ("Email &mdash; send, receive, templates", _ALL,
+         "A real inbox for the business, sending from your own domain once you connect one."),
+        ("Text messaging (SMS)", _ALL,
+         "Two-way threads, appointment reminders, and broadcasts to your own list."),
+        ("Calendar &amp; self-serve booking page", _ALL,
+         "Clients pick their own slot; confirmations and reminders go out without you."),
+        ("Documents &amp; e-signature", _ALL,
+         "Ready-made agreements, sent for signature, tracked until they come back signed."),
+        ("Expenses &amp; receipt capture", _ALL,
+         "Photograph the receipt and it files itself against the right account."),
+        ("Products, services &amp; online store", _ALL,
+         "A catalogue, a storefront that takes payment, and counter sales for walk-ins."),
+        ("Inventory &amp; stock counts", _ALL,
+         "What you hold, what it cost you, and what is about to run out."),
+        ("Projects, tasks &amp; billable time", _ALL,
+         "The work in flight, who it is for, and the hours behind the invoice."),
+        ("Intake forms &amp; lead capture", _ALL,
+         "Forms that arrive as contacts, already scored and routed."),
+    )),
+    ("Your presence", (
+        ("Your website, designed and built for you", _ALL,
+         "Chief builds it from what it knows about the business; you edit it in place."),
+        ("Brand kit &mdash; logo, palette, type, voice", _ALL,
+         "One brand, applied everywhere the business shows up."),
+        ("Print materials &amp; flyers", _ALL,
+         "Designed in the same brand, ready to hand out or post."),
+        ("Facebook &amp; Instagram publishing", _ALL,
+         "Draft, schedule, post, and read the engagement back."),
+    )),
+    ("Chief, your AI Chief of Staff", (
+        ("Chief on every screen &mdash; chat and voice", _ALL,
+         "Ask for it in plain words and the system moves."),
+        ("AI actions a month", lambda t: t["credits"],
+         "One action is a message, a piece of analysis, or a build. Top up any time; credits never expire."),
+        ("Depth of analysis", lambda t: t["analysis"],
+         "How hard the system is allowed to think on the slow, careful work."),
+        ("Autopilot &mdash; the overnight run", _ALL,
+         "Chief works the list while you sleep, and logs a line for everything it did."),
+        ("Memory, standing instructions &amp; weekly briefing", _ALL,
+         "It remembers how you work, and tells you what changed before you ask."),
+        ("Chief reads and explains your books", "chief_bookkeeping",
+         "Ask why the month looks like that, and get the answer from the ledger."),
+        ("Website concierge &mdash; Chief answers your visitors", "site_concierge",
+         "The chat on your own site, answering from your real business facts."),
+        ("Connect your own AI to this business", "agent_connector",
+         "Point the assistant you already carry at your workspace."),
+        ("Sourcing Desk &mdash; find &amp; RFQ vendors", "sourcing_desk",
+         "Search the live web for suppliers, then send them a request for quote."),
+    )),
+    ("Books, tax &amp; compliance", (
+        ("Bookkeeping &amp; bank reconciliation", "bookkeeping_basic",
+         "Connect the bank, match the transactions, keep the balance honest."),
+        ("Bank connections", lambda t: t["banks"], ""),
+        ("Core reports &mdash; P&amp;L, balance sheet, AR aging", "reports_basic", ""),
+        ("General Ledger &amp; Trial Balance", "general_ledger",
+         "Your authoritative books. Every business gets to see its own record."),
+        ("Full GL-authoritative reports", "reports_full",
+         "Period comparisons and statements drawn straight from the ledger."),
+        ("Period closing", "period_close", ""),
+        ("Contractor payments + 1099", "contractor_payments", ""),
+        ("Year-end accountant package + IIF", "accountant_package",
+         "One archive your accountant can open without asking you anything."),
+        ("Trust accounting check (IOLTA)", "vertical_ledgers", ""),
+        ("Compliance reports (trust reconciliation, 990 prep)", "vertical_reports", ""),
+        ("Accountant collaborator seat", "accountant_collaborator",
+         "A login for your accountant that sees the books and nothing else."),
+        ("Audit trail", "audit_trail", ""),
+    )),
+    ("Room to grow", (
+        ("Team seats", lambda t: t["seats"], ""),
+        ("Businesses in one account", lambda t: t["businesses"], ""),
+    )),
+    ("Getting set up &mdash; and getting out", (
+        ("Guided setup", _ALL,
+         "Three questions, then Chief builds the workspace around your answers."),
+        ("Bring the spreadsheets you already have", _ALL,
+         "Drop the file in; it reads your columns and turns them into a working list."),
+        ("Import your contacts", _ALL, ""),
+        ("Free trial on every plan", _ALL,
+         "__TRIAL_FREE__, then the plan you picked. Switch tier or cancel from inside the app."),
+        ("Your data stays yours", _ALL,
+         "Export the whole account &mdash; every business, every table &mdash; whenever you want it."),
+    )),
 )
 
 
 def _plan_compare_section_html() -> str:
-    """Tier-vs-tier table for /compare — the same rows the in-app
-    comparison shows, driven by the same feature map and dials."""
+    """Tier-vs-tier table for /compare. Numbers come from the live dials
+    and every ✓ comes from feature_gates.FEATURE_MIN_PLAN, so the page
+    cannot promise a tier difference the product does not enforce."""
     import feature_gates
     d = _tier_dials()
     plans = ("starter", "professional", "practice")
-
-    def num_row(label, value):
-        cells = "".join(f"<td>{value(d[p])}</td>" for p in plans)
-        return f"<tr><td>{label}</td>{cells}</tr>"
-
-    rows = [
-        num_row("AI actions / month", lambda t: t["credits"]),
-        num_row("Team seats", lambda t: t["seats"]),
-        num_row("Businesses", lambda t: t["businesses"]),
-        num_row("Bank connections", lambda t: t["banks"]),
-    ]
-    if all(d[p]["analysis"] for p in plans):
-        rows.insert(1, num_row("Deep analysis", lambda t: t["analysis"]))
+    names = ("Starter", "Professional", "Solutionist")
     rank = feature_gates._PLAN_RANK
-    for key, label in _SITE_FEATURE_LABELS:
-        min_plan = feature_gates.FEATURE_MIN_PLAN.get(key)
-        if not min_plan:
+
+    # data-p is what the mobile card reads back as the column name once
+    # the head is hidden — without it a stacked row is three unlabelled
+    # ticks. Kept on every cell so the two layouts cannot disagree.
+    def cell(plan_name, cls, body):
+        klass = f' class="{cls}"' if cls else ""
+        return f'<td data-p="{plan_name}"{klass}>{body}</td>'
+
+    def cell_html(label, source, note):
+        if callable(source):
+            # A dial with nothing behind it (the analysis ladder while a
+            # model override is set) drops rather than promising a
+            # difference nobody would get.
+            values = [source(d[p]) for p in plans]
+            if not all(str(v).strip() for v in values):
+                return ""
+            cells = "".join(cell(n, "", v) for n, v in zip(names, values))
+        elif source == _ALL:
+            cells = "".join(cell(n, "sol", "✓") for n in names)
+        else:
+            min_plan = feature_gates.FEATURE_MIN_PLAN.get(source)
+            if not min_plan:
+                return ""
+            cells = "".join(
+                cell(n, "sol", "✓") if rank.get(p, 0) >= rank.get(min_plan, 99)
+                else cell(n, "alt", "&mdash;")
+                for p, n in zip(plans, names))
+        sub = f'<span class="cp-note">{note}</span>' if note else ""
+        return f'<tr><td class="cp-what">{label}{sub}</td>{cells}</tr>'
+
+    rows = []
+    for group, entries in _COMPARE_GROUPS:
+        body = "".join(cell_html(label, source, note)
+                       for label, source, note in entries)
+        if not body:
             continue
-        cells = "".join(
-            '<td class="sol">✓</td>' if rank.get(p, 0) >= rank.get(min_plan, 99)
-            else '<td class="alt">&mdash;</td>'
-            for p in plans)
-        rows.append(f"<tr><td>{label}</td>{cells}</tr>")
-    header = "".join(
-        f'<th class="sol-col">{name} {d[p]["price"]}/mo</th>'
-        for p, name in zip(plans, ("Starter", "Professional", "Solutionist")))
+        rows.append(f'<tr class="cp-grp"><td colspan="{len(plans) + 1}">{group}</td></tr>')
+        rows.append(body)
+    header = "".join(f'<th class="sol-col">{name} {d[p]["price"]}/mo</th>'
+                     for p, name in zip(plans, names))
+    mprice = " &middot; ".join(f"{name} {d[p]['price']}"
+                               for p, name in zip(plans, names))
     return f"""
 <section>
   <div class="container">
     <div class="section-head reveal">
       <span class="eyebrow">Which plan</span>
       <h2>Every plan is the whole product.</h2>
-      <p>Bigger plans add AI headroom, deeper analysis, seats for a team, and room for more than one business.</p>
+      <p>Here is the whole thing, line by line. Most of it is on every plan &mdash;
+        the columns only differ where the system genuinely does something different.
+        Bigger plans add AI headroom, the full accounting layer, seats for a team,
+        and room for more than one business.</p>
+      <p class="cp-mprice">{mprice} &mdash; per month.</p>
     </div>
     <div class="table-wrap reveal reveal-delay-1">
       <table class="compare plans">
@@ -4681,6 +4827,72 @@ def render_compare() -> str:
       .table-wrap{overflow-x:auto;}
       .compare.plans{min-width:600px;}
       .compare.plans td{font-variant-numeric:tabular-nums;}
+
+      /* ── the tier table, now that it names the whole product ──────
+         Forty-odd rows need banding or they read as one wall. The group
+         row is a full-width band; the row under it carries a "what it
+         is" line so the label does not have to do the selling on its
+         own. The tier columns are held narrow so the description column
+         keeps the room — that column is the one being read. */
+      .compare.plans .cp-grp td{padding:16px 18px 8px;
+        background:color-mix(in srgb, var(--accent) 6%, transparent);
+        border-top:1px solid var(--border);
+        font-family:var(--font-heading);font-size:11px;font-weight:700;
+        letter-spacing:1.8px;text-transform:uppercase;color:var(--accent);}
+      .compare.plans .cp-grp + tr td{border-top:none;}
+      .compare.plans td.cp-what{font-weight:600;color:var(--text-primary);
+        line-height:1.45;font-variant-numeric:normal;}
+      .cp-note{display:block;margin-top:3px;font-size:12px;font-weight:400;
+        line-height:1.5;color:var(--text-dim);}
+      .compare.plans thead th:not(:first-child),
+      .compare.plans tbody tr:not(.cp-grp) td:not(:first-child){
+        text-align:center;width:15%;}
+      .cp-mprice{display:none;}
+
+      /* ── on a phone, this stops being a table ─────────────────────
+         It carried a 600px min-width, so every phone got a horizontal
+         drag across the one surface where the decision is made — and
+         the column you have to drag to reach is the tier we are trying
+         to sell. Narrowing the columns instead is worse, not better: at
+         360px the label column collapses to a 90px ribbon and
+         "checkout" breaks as "checkou / t". Measured both before
+         writing this.
+         So each row becomes a card: the capability and its description
+         at full width, then the three verdicts as chips underneath,
+         each labelled from data-p (the head is hidden, so the cell has
+         to carry its own column name). Same rows, same source of truth,
+         no drag. The prices move to .cp-mprice above the list. */
+      @media (max-width: 720px){
+        .cp-mprice{display:block;margin-top:10px;font-size:12.5px;
+          color:var(--text-muted);font-variant-numeric:tabular-nums;}
+        .table-wrap{overflow-x:visible;}
+        .compare.plans{min-width:0;display:block;}
+        .compare.plans thead{display:none;}
+        .compare.plans tbody{display:block;}
+        .compare.plans tr{display:block;}
+        .compare.plans .cp-grp td{display:block;padding:15px 14px 8px;
+          font-size:10px;border-top:1px solid var(--border);}
+        .compare.plans tbody tr:not(.cp-grp){padding:13px 14px;
+          border-top:1px solid var(--border-subtle, var(--border));}
+        .compare.plans .cp-grp + tr{border-top:none;}
+        .compare.plans tbody tr:not(.cp-grp) td{border:none;padding:0;}
+        .compare.plans td.cp-what{display:block;font-size:13.5px;}
+        .cp-note{font-size:12px;margin-top:4px;}
+        /* NOTE THE `tbody`. A media query adds no specificity, so this
+           rule has to out-specify the desktop one it is overriding
+           (.compare.plans tbody tr:not(.cp-grp) td:not(:first-child)),
+           and without the tbody it loses on element count and keeps the
+           desktop width:15% — ~43px, narrower than the word
+           "PROFESSIONAL", so the three chips printed on top of each
+           other. Same reason width and text-align are reset by hand. */
+        .compare.plans tbody tr:not(.cp-grp) td:not(.cp-what){
+          display:inline-flex;align-items:baseline;gap:5px;
+          width:auto;text-align:left;white-space:nowrap;
+          margin:9px 14px 0 0;font-size:12.5px;font-style:normal;}
+        .compare.plans tbody tr:not(.cp-grp) td:not(.cp-what)::before{
+          content:attr(data-p);font-size:9.5px;font-weight:700;
+          letter-spacing:1.1px;text-transform:uppercase;color:var(--text-dim);}
+      }
       .switch-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;margin-top:14px;}
       @media (max-width: 860px){.switch-grid{grid-template-columns:1fr;}}
       .switch-card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
