@@ -68,6 +68,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # plan (data is never plan-
                                            # locked).
     # Practice — collaboration + compliance deliverables + scale
+    "dedicated_sms_number": "practice",    # a private texting line (sms_numbers_router).
+                                           # Kevin's call 2026-09-02: included at
+                                           # Practice first; a Professional add-on
+                                           # is a later, separate change.
     "accountant_collaborator": "practice",
     "audit_trail": "practice",
     "vertical_reports": "practice",        # Trust Reconciliation, 990 prep (I.10)
