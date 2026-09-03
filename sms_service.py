@@ -239,6 +239,17 @@ def _twilio_configured() -> bool:
     )
 
 
+async def sender_for(client: Optional[httpx.AsyncClient], business_id: Optional[str]) -> str:
+    """The number this business texts FROM. Today: always the platform
+    number (TWILIO_PLATFORM_NUMBER). Phase B reads sms_numbers here and
+    returns the business's own line when it has an active one — this is
+    the single seam, so every send (Chief, scheduler, broadcast, booking
+    alerts, campaigns) inherits it. Empty string = unpinned (see
+    twilio_sms.send_sms)."""
+    import twilio_sms
+    return twilio_sms.platform_number()
+
+
 class SmsSendError(RuntimeError):
     """A send failure with the practitioner-readable reason + the HTTP
     status the endpoint wrapper should return."""
@@ -500,7 +511,9 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
         # Twilio's MessageSid lands in the telnyx_id column — see the
         # note at the top of this file. /webhooks/twilio/status PATCHes
         # delivery receipts by matching on it.
-        telnyx_id = await run_in_threadpool(twilio_sms.send_sms, to_clean, message)
+        from_number = await sender_for(client, business_id)
+        telnyx_id = await run_in_threadpool(
+            twilio_sms.send_sms, to_clean, message, from_number=from_number)
     except Exception as e:
         logger.warning(f"[SMS] twilio send failed: {e}")
         raise SmsSendError(str(e)[:300], 502)

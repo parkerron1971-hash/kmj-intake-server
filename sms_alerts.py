@@ -256,7 +256,8 @@ async def send_booking_confirmation(
             first = (customer_name or "").strip().split()[0] if (customer_name or "").strip() else "there"
             body = confirmation_text(first, biz_name, parts["date"], parts["time"])
 
-            provider_id = await _send_platform_sms(phone, body)
+            provider_id = await _send_platform_sms(
+                phone, body, business_id=biz_id, client=client)
 
             # Record exactly like /sms/send does: sms_messages row + event.
             contact = await _find_contact_by_phone(client, biz_id, phone)
@@ -406,7 +407,8 @@ async def reminder_sweep() -> Dict[str, int]:
                 body = reminder_text(biz.get("name") or "the business",
                                      parts["day"], parts["time"])
                 try:
-                    provider_id = await _send_platform_sms(phone, body)
+                    provider_id = await _send_platform_sms(
+                        phone, body, business_id=biz["id"], client=client)
                     msg_id = await _store_sms(
                         client, business_id=biz["id"],
                         contact_id=contact.get("id"), phone_number=phone,
