@@ -671,7 +671,8 @@ async def _send_touch(biz, camp, idx, touch, contact,
             msg_id = await send_platform_sms(
                 phone, sms_body, business_id=biz["id"])
             await store_sms(client, camp["business_id"], contact["id"],
-                            phone, sms_body, "outbound", telnyx_id=msg_id or "")
+                            phone, sms_body, "outbound", telnyx_id=msg_id or "",
+                            sent_by="system")
         _log_campaign_event(camp, contact, "campaign_sms_sent", {"touch_idx": idx})
         return "sms"
 

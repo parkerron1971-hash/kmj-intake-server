@@ -553,7 +553,7 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
                 await _store_sms(
                     client, business_id=body.business_id, contact_id=c.get("id"),
                     phone_number=phone, message=msg, direction="outbound",
-                    telnyx_id=sid, status="sent",
+                    telnyx_id=sid, status="sent", sent_by="practitioner",
                 )
                 sent += 1
             except Exception as e:

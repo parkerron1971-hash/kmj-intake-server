@@ -46,8 +46,8 @@ def sms_world(monkeypatch):
             return [c for c in state["contacts"] if c["id"] == cid]
         return []
 
-    async def send_sms_core(client, *, business_id, to, message, contact_id=None):
-        state["sent"].append({"to": to, "contact_id": contact_id, "message": message})
+    async def send_sms_core(client, *, business_id, to, message, contact_id=None, sent_by=None):
+        state["sent"].append({"to": to, "contact_id": contact_id, "message": message, "sent_by": sent_by})
         return {"id": "m1", "telnyx_id": "SM1"}
 
     import sms_service
@@ -64,6 +64,7 @@ def test_one_textable_kevin_among_three_gets_the_text(sms_world):
     assert res["result"] == "sent", res
     assert sms_world["sent"][0]["contact_id"] == "c-phone"
     assert sms_world["sent"][0]["to"] == "2313430578"
+    assert sms_world["sent"][0]["sent_by"] == "chief"     # the thread marks it as Chief's
 
 
 def test_two_textable_namesakes_still_ask_with_last_four(sms_world):
@@ -156,3 +157,42 @@ def test_search_prompt_forbids_narrating_a_stray_search():
     block = cos._build_web_search_block()
     assert "telling you to DO something" in block
     assert "never apologise for or narrate a search" in block
+
+
+# ─── 4. the thread knows who sent it ──────────────────────────────────
+
+def test_store_sms_tags_the_author_on_outbound_only(monkeypatch):
+    import sms_service
+    seen = []
+
+    async def _sb_post(client, path, body):
+        seen.append(body)
+        return [{"id": "m1"}]
+    monkeypatch.setattr(sms_service, "_sb_post", _sb_post)
+    _run(sms_service._store_sms(None, business_id="b1", contact_id=None, phone_number="+1",
+                                message="x", direction="outbound", sent_by="chief"))
+    _run(sms_service._store_sms(None, business_id="b1", contact_id=None, phone_number="+1",
+                                message="x", direction="inbound", sent_by="chief"))
+    _run(sms_service._store_sms(None, business_id="b1", contact_id=None, phone_number="+1",
+                                message="x", direction="outbound", sent_by="bogus"))
+    assert seen[0]["sent_by"] == "chief"
+    assert "sent_by" not in seen[1]            # inbound has no author
+    assert "sent_by" not in seen[2]            # unknown values never reach the check constraint
+
+
+@pytest.mark.parametrize("module, fn, author", [
+    ("sms_alerts", "send_booking_confirmation", "system"),
+    ("sms_alerts", "reminder_sweep", "system"),
+    ("sms_routing", "broadcast", "practitioner"),
+    ("campaigns_router", "_send_touch", "system"),
+    ("chief_of_staff", "handle_send_sms", "chief"),
+])
+def test_every_outbound_path_names_its_author(module, fn, author):
+    import importlib
+    src = inspect.getsource(getattr(importlib.import_module(module), fn))
+    assert f'sent_by="{author}"' in src, f"{module}.{fn} stores an outbound without saying who sent it"
+
+
+def test_desk_send_defaults_to_the_practitioner():
+    import sms_service
+    assert inspect.signature(sms_service.send_sms_core).parameters["sent_by"].default == "practitioner"

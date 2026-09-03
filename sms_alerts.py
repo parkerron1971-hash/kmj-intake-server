@@ -265,7 +265,7 @@ async def send_booking_confirmation(
             msg_id = await _store_sms(
                 client, business_id=biz_id, contact_id=contact_id,
                 phone_number=phone, message=body, direction="outbound",
-                telnyx_id=provider_id, status="sent",
+                telnyx_id=provider_id, status="sent", sent_by="system",
             )
             await _log_event(client, biz_id, contact_id, "sms_confirmation_sent", {
                 "to": phone,
@@ -413,7 +413,7 @@ async def reminder_sweep() -> Dict[str, int]:
                         client, business_id=biz["id"],
                         contact_id=contact.get("id"), phone_number=phone,
                         message=body, direction="outbound",
-                        telnyx_id=provider_id, status="sent",
+                        telnyx_id=provider_id, status="sent", sent_by="system",
                     )
                     # The dedupe marker — logged AFTER a successful send
                     # so failures retry on the next hourly pass.

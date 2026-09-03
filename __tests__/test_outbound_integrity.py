@@ -70,7 +70,7 @@ def _run_send_touch(touch_body: str, biz_name: str = "Craft & Co",
         return "SM123"
 
     async def store_sms(client, business_id, contact_id, phone_number,
-                        message, direction, telnyx_id=""):
+                        message, direction, telnyx_id="", sent_by=None):
         stored.append((phone_number, message, direction))
 
     def fake_post(path, payload, prefer="return=representation"):
