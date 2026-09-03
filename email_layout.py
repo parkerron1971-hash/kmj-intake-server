@@ -191,6 +191,19 @@ def signature_html(sig: Dict[str, Any], primary: str) -> str:
     )
 
 
+def _drop_trailing_name(text: str, sig: Dict[str, Any]) -> str:
+    """The seeded templates end with "{closing_line}\\n{practitioner_name}".
+    With a signature that starts with the same name, the send read
+    "Best,\\nKevin McCloud\\nKevin McCloud\\n...". One name is enough."""
+    name = str(sig.get("name") or "").strip()
+    if not name:
+        return text
+    stripped = text.rstrip()
+    if stripped.endswith("\n" + name) or stripped == name:
+        return stripped[: -len(name)].rstrip()
+    return text
+
+
 def compose_trailers(body: str, settings: Optional[Dict[str, Any]]) -> str:
     """Closing line + signature + disclaimer, appended per global_rules.
     Mirrors chief_of_staff._compose_body_with_signature so a preview and
@@ -204,6 +217,7 @@ def compose_trailers(body: str, settings: Optional[Dict[str, Any]]) -> str:
     if rules.get("always_include_signature", True):
         sig_text = signature_plaintext(sig)
         if sig_text and sig_text not in out:
+            out = _drop_trailing_name(out, sig)
             out += f"\n{sig_text}" if closing else f"\n\n{sig_text}"
     disclaimer = (rules.get("disclaimer") or "").strip()
     if disclaimer and disclaimer not in out:

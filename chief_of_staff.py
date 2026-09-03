@@ -5485,6 +5485,10 @@ def _compose_body_with_signature(body: str, biz: Dict[str, Any]) -> str:
     if rules.get("always_include_signature", True):
         sig_text = _build_signature_plaintext(sig)
         if sig_text and sig_text not in out:
+            # The seeded templates end with {practitioner_name}; the
+            # signature starts with it. One name, not two.
+            import email_layout
+            out = email_layout._drop_trailing_name(out, sig)
             out += f"\n{sig_text}" if closing else f"\n\n{sig_text}"
 
     disclaimer = (rules.get("disclaimer") or "").strip()
