@@ -316,7 +316,24 @@ async def domain_status(business_id: str,
     records = _records_from(live)
     if records:
         cfg = {**cfg, "records": records}
-    return _payload(cfg, biz, live_status=_normalize_status(live.get("status")))
+    live_status = _normalize_status(live.get("status"))
+    if live_status == "verified" and cfg.get("status") != "verified":
+        # Resend verified the records on its own (the operator pasted
+        # them and never pressed Verify, or the setup room's auto-verify
+        # saw the live answer and stopped). The identity seam reads the
+        # STORED status, so until this is written every send still left
+        # as the platform while the screen said Verified. Record it.
+        cfg = {**cfg, "status": "verified",
+               "verified_at": cfg.get("verified_at") or _now_iso()}
+        _write_settings(biz, cfg)
+        try:
+            import email_sender
+            email_sender._IDENTITY_CACHE.pop(f"id:{business_id}", None)
+            email_sender._IDENTITY_CACHE.pop(f"pfx:{business_id[:8]}", None)
+        except Exception:
+            pass
+        logger.info(f"[email-domain] VERIFIED (observed) {cfg.get('domain')} biz={business_id[:8]}")
+    return _payload(cfg, biz, live_status=live_status)
 
 
 @router.post("/{business_id}/verify")
