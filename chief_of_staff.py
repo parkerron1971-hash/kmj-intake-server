@@ -11572,7 +11572,8 @@ async def handle_send_sms(client, biz, action) -> Dict:
         import sms_service
         data = await sms_service.send_sms_core(
             client, business_id=biz["id"], to=contact_phone,
-            message=message, contact_id=contact_id or None)
+            message=message, contact_id=contact_id or None,
+            sent_by="chief")   # the thread marks it as Chief's, not "You:"
     except Exception as e:
         # SmsSendError carries a PRACTITIONER-READABLE reason by
         # construction — "Marcus has opted out of texts (STOP)" is a fact

@@ -44,7 +44,7 @@ def _patch_contacts(monkeypatch, rows, sent=None):
             return rows
         return []
 
-    async def _core(client, *, business_id, to, message, contact_id=None):
+    async def _core(client, *, business_id, to, message, contact_id=None, sent_by=None):
         (sent if sent is not None else []).append((to, message))
         return {"id": "m1", "telnyx_id": "SM1"}
 

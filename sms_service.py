@@ -164,6 +164,9 @@ class SendSmsRequest(BaseModel):
     message: str
 
 
+SENT_BY = ("practitioner", "chief", "system")
+
+
 async def _store_sms(
     client: httpx.AsyncClient,
     business_id: str,
@@ -174,8 +177,13 @@ async def _store_sms(
     telnyx_id: str = "",
     status: Optional[str] = None,
     media: Optional[List[Dict[str, Any]]] = None,
+    sent_by: Optional[str] = None,
 ) -> Optional[str]:
-    """Insert a row into sms_messages. Returns the new id."""
+    """Insert a row into sms_messages. Returns the new id.
+
+    sent_by (outbound only): 'practitioner' | 'chief' | 'system' — who
+    authored it, so the thread can say so. A text Chief sent used to
+    render as "You:" exactly like one the practitioner typed."""
     row = {
         "business_id": business_id,
         "contact_id": contact_id,
@@ -189,6 +197,8 @@ async def _store_sms(
         # Outbound messages count as "read" — only inbound is unread by default.
         "read": direction == "outbound",
     }
+    if direction == "outbound" and sent_by in SENT_BY:
+        row["sent_by"] = sent_by
     inserted = await _sb_post(client, "/sms_messages", row)
     if isinstance(inserted, list) and inserted:
         return inserted[0].get("id")
@@ -479,7 +489,8 @@ async def _business_name(client: httpx.AsyncClient, business_id: str) -> str:
 
 async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
                         to: str, message: str,
-                        contact_id: Optional[str] = None) -> Dict[str, Any]:
+                        contact_id: Optional[str] = None,
+                        sent_by: str = "practitioner") -> Dict[str, Any]:
     """The whole outbound send (validate → consent gate → contact
     resolve → Twilio/Telnyx → store → event log), callable IN-PROCESS.
 
@@ -574,6 +585,7 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
         direction="outbound",
         telnyx_id=telnyx_id,
         status="sent",
+        sent_by=sent_by,
     )
 
     await _log_event(client, business_id, contact_id, "sms_sent", {
