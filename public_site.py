@@ -7015,6 +7015,27 @@ async def public_robots(request: Request):
     return PlainTextResponse(body)
 
 
+# ─── Google Search Console ownership, for the apex ────────────────────
+# Google's OAuth verification (the Gmail connect) only accepts an
+# authorized domain the project owner has verified in Search Console.
+# Search Console proves ownership by fetching a file it names at the
+# site root. The apex is served by this router, so the file is a route,
+# not an upload — and it must stay: Google re-checks it periodically and
+# un-verifies the domain when it disappears.
+
+GOOGLE_SITE_VERIFICATION_TOKENS = ("google356ece60ef1330cd",)
+
+
+@router.get("/google{token}.html", include_in_schema=False)
+async def public_google_site_verification(token: str, request: Request):
+    site = await _site_response_or_none(request)
+    if site is not None:
+        return site
+    name = f"google{token}"
+    if name not in GOOGLE_SITE_VERIFICATION_TOKENS:
+        raise HTTPException(status_code=404)
+    return PlainTextResponse(f"google-site-verification: {name}.html\n")
+
 @router.get("/sitemap.xml", include_in_schema=False)
 async def public_sitemap(request: Request):
     site = await _site_response_or_none(request)

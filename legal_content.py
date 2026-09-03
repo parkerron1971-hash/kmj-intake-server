@@ -513,7 +513,14 @@ practices:</p>
       the Service can show you customer replies in context. We do not send mail
       as you, and we do not request access to anything else in your Google
       account. You can disconnect at any time, from the Service or from your
-      Google account&rsquo;s security settings.</li>
+      Google account&rsquo;s security settings. Our use and transfer of
+      information received from Google APIs to any other app adheres to the
+      <a href="https://developers.google.com/terms/api-services-user-data-policy">Google
+      API Services User Data Policy</a>, including the Limited Use
+      requirements: Gmail data is used only to show you your own mail inside
+      the Service and to let Chief read messages from people already in your
+      contacts; it is never used for advertising, never sold, and never read by
+      a human except with your permission for support or as required by law.</li>
   <li><strong>Intuit (QuickBooks)</strong>: if you connect QuickBooks, accounting
       data moves between it and the Service so your books stay consistent.
       Connected only when you authorize it.</li>
