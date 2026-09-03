@@ -214,3 +214,19 @@ def test_preview_composes_and_renders(monkeypatch):
     assert "Sarah Okafor" in out["html"]                  # signature appended the way a send would
     assert "Warmly," in out["text"]
     assert out["from_email"]
+
+
+# ─── the closing line is its own paragraph ───────────────────────────
+
+
+def test_inline_closing_line_gets_its_own_paragraph():
+    assert L.break_before_closing("Thanks for reading. Best,", "Best,") == "Thanks for reading.\n\nBest,"
+    assert L.break_before_closing("Thanks for reading.\n\nBest,", "Best,") == "Thanks for reading.\n\nBest,"   # already its own
+    assert L.break_before_closing("Best,", "Best,") == "Best,"
+    assert L.break_before_closing("No closing here.", "Best,") == "No closing here."
+
+
+def test_render_breaks_an_inline_closing_before_the_signature():
+    composed = L.compose_trailers("Hi Jordan, welcome aboard. Warmly,", SETTINGS)
+    html, _ = L.render_for_send(composed, BIZ)
+    assert "welcome aboard.</p>" in html and ">Warmly,</p>" in html
