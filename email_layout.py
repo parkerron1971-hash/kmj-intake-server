@@ -191,6 +191,20 @@ def signature_html(sig: Dict[str, Any], primary: str) -> str:
     )
 
 
+def break_before_closing(message: str, closing: str) -> str:
+    """A template written as "...part of it. {closing_line}" puts the
+    closing on the end of the last sentence. A closing line is its own
+    paragraph; give it one when it directly follows a sentence."""
+    closing = (closing or "").strip()
+    text = (message or "").rstrip()
+    if not closing or not text.endswith(closing):
+        return message
+    head = text[: -len(closing)]
+    if head.endswith("\n") or not head.strip():
+        return message
+    return head.rstrip() + "\n\n" + closing
+
+
 def _drop_trailing_name(text: str, sig: Dict[str, Any]) -> str:
     """The seeded templates end with "{closing_line}\\n{practitioner_name}".
     With a signature that starts with the same name, the send read
@@ -313,6 +327,7 @@ def render_for_send(body: str, biz: Dict[str, Any], *,
     rules = rules_of(settings)
     brand = brand_of(settings)
     message, had_sig, disclaimer = split_trailers(body, sig, rules.get("disclaimer") or "")
+    message = break_before_closing(message, rules.get("closing_line") or "")
     html_out = render_html(
         message,
         business_name=biz.get("name") or sig.get("business") or "",
