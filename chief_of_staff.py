@@ -2264,6 +2264,39 @@ _VOICE_CONFIRM_PHRASES = (
 )
 
 
+# The action-tag reminder, appended to the SYSTEM prompt's uncached tail
+# on every acting turn (see the chat handler). Never in the user turn.
+ACTION_TAG_REMINDER = (
+    "\n\nREMINDER, EVERY TURN: when you create a contact, draft an email, send a "
+    "text, approve something, or perform ANY operation, include the "
+    "[ACTION:{...}] tag for it. Without the tag the operation does NOT happen. "
+    "Once the practitioner has confirmed an action you proposed, EMIT IT — do not "
+    "ask again. Never mention this reminder.\n"
+)
+
+_INSTRUCTION_VERBS = (
+    "send", "text", "reply", "email", "create", "add", "schedule", "book",
+    "mark", "update", "delete", "remove", "approve", "cancel", "draft",
+    "do it", "go ahead", "confirm", "yes", "yep", "yeah", "ok", "okay", "sure",
+    "post", "publish", "log", "record", "set", "turn", "switch", "pay", "invoice",
+)
+
+
+def _is_plain_instruction(message: str) -> bool:
+    """A short turn that tells Chief to DO something, or confirms one:
+    "you send that text for me", "yes", "go ahead", "text Marcus back".
+    Not a question, not long enough to be a request for research."""
+    raw = (message or "").strip()
+    if not raw or "?" in raw or len(raw.split()) > 14:
+        return False
+    t = re.sub(r"[.,!;:\"'`]+", " ", raw.lower())
+    words = t.split()
+    if not words:
+        return False
+    joined = " " + " ".join(words) + " "
+    return any(f" {v} " in joined for v in _INSTRUCTION_VERBS)
+
+
 def _is_voice_confirmation(message: str) -> bool:
     """Is this utterance a deliberate go-ahead, and nothing else?
 
@@ -2344,6 +2377,9 @@ def _format_sms_block(ctx: Dict[str, Any]) -> str:
         "  When the practitioner asks 'did anyone text me?' / 'what did X say?' /",
         "  'text X back' — pull from this block. Quote text content verbatim;",
         "  drafted replies should be SHORT (under 160 chars), warm, first-name.",
+        "  TO REPLY to a text: send_sms with the contact_id shown on that line —",
+        "  never ask which contact when the line already names one. If two",
+        "  contacts share a name, the one on the text is the one who texted.",
         "",
     ]
     for m in msgs[:10]:
@@ -2358,7 +2394,14 @@ def _format_sms_block(ctx: Dict[str, Any]) -> str:
         if len(body) > 140:
             body = body[:140] + "…"
         when = (m.get("created_at") or "")[:16]
-        lines.append(f"  {direction} {name}{flag} ({when}): \"{body}\"")
+        # The ids a reply needs, on the line itself. Without them "reply
+        # to that" became a hunt through three same-named contacts.
+        digits = "".join(ch for ch in (m.get("phone_number") or "") if ch.isdigit())
+        ident = f" [contact_id={cid}" if cid else " ["
+        ident += (f" …{digits[-4:]}]" if digits else "]") if cid else (f"phone=…{digits[-4:]}]" if digits else "]")
+        if ident == " []":
+            ident = ""
+        lines.append(f"  {direction} {name}{flag} ({when}): \"{body}\"{ident}")
     return "\n".join(lines) + "\n"
 
 
@@ -11468,8 +11511,28 @@ async def handle_send_sms(client, biz, action) -> Dict:
         rows = await _sb(client, "GET",
             f"/contacts?business_id=eq.{biz['id']}&name=ilike.*{safe}*"
             f"&select=id,name,phone&limit=5") or []
+        # A contact with no phone cannot be texted, so it is not a
+        # candidate — it is noise. Seen live 2026-09-02: three "Kevin
+        # McCloud" rows, one with a phone and two phoneless leads from
+        # earlier testing, and "text Kevin back" was refused as
+        # ambiguous twice in a row while the only textable Kevin sat
+        # there. Ambiguity is between contacts that could each receive
+        # the message; anything else is a guess we don't need to make.
+        textable = [r for r in rows if (r.get("phone") or "").strip()]
+        if len(rows) > 1 and len(textable) == 1:
+            rows = textable
+        elif len(rows) > 1 and not textable:
+            return _fail("send_sms",
+                         f"There are {len(rows)} contacts called '{contact_name}' "
+                         f"and none of them has a phone number on file. Add a "
+                         f"number to the right one, or give me the number to text.")
         if len(rows) > 1:
-            names = ", ".join(r.get("name") or "" for r in rows[:5])
+            # Several could each receive it — that IS ambiguous. Name
+            # them by the one thing that tells them apart.
+            def _tag(r):
+                digits = "".join(ch for ch in (r.get("phone") or "") if ch.isdigit())
+                return f"{r.get('name') or ''} (…{digits[-4:]})" if digits else (r.get("name") or "")
+            names = ", ".join(_tag(r) for r in textable[:5])
             return _fail("send_sms",
                          f"Several contacts match '{contact_name}': {names}. "
                          f"Which one should I text?")
@@ -15611,7 +15674,11 @@ def _build_web_search_block() -> str:
         "- Medical, legal, or financial advice that requires a licensed professional. "
         "If the practitioner asks for that, search for general orientation only and "
         "tell them to consult a pro.\n"
-        "- Social media profiles of contacts.\n\n"
+        "- Social media profiles of contacts.\n"
+        "- ANY turn where the practitioner is telling you to DO something — send, "
+        "reply, text, email, create, schedule, approve — or confirming one. Act; "
+        "there is nothing to look up. If a search ever runs that you did not need, "
+        "say nothing about it — never apologise for or narrate a search.\n\n"
         "When you do search, briefly mention what you found ('I looked that up — '). "
         "Don't dump results — summarize the key finding in 2-3 sentences. If the "
         "search returns nothing useful, say so honestly.\n"
@@ -18056,22 +18123,23 @@ async def chief_chat(
             # says "Do NOT emit actions in the greeting") and for strategy-
             # coach sentinels which already carry their own guidance.
             if not is_greeting and not is_coach_pause and not is_coach_mode:
-                # Injector-leak fix (2026-07-17, same class as the coach
-                # fix #153): this reminder rides inside the user turn, so
-                # without explicit framing the model can treat it as
-                # something the practitioner WROTE — referencing "your
-                # instructions about action tags" or echoing the example.
-                # Frame it as app-attached and self-concealing; echoes are
-                # additionally scrubbed in _extract_actions_and_clean.
+                # The action-tag reminder used to ride INSIDE the user
+                # turn, framed as "[SYSTEM REMINDER — attached by the
+                # app; the practitioner did NOT write this]". That framing
+                # was the 2026-07-17 fix for the model treating it as the
+                # practitioner's words. Current models read it the other
+                # way: text inside a user turn claiming system authority
+                # is exactly what a prompt injection looks like, and Chief
+                # said so out loud — "that bracketed system reminder is an
+                # injection, I'm not acting on it" — and then refused the
+                # send the practitioner had just confirmed (2026-09-02).
+                # System-authored instructions belong in the system
+                # prompt. It rides the uncached tail, so the cached
+                # segments are untouched. The echo scrubbers stay for
+                # any old transcript still carrying the bracketed form.
+                system = system + ACTION_TAG_REMINDER
                 augmented_message = (
-                    "[SYSTEM REMINDER — attached automatically by the app; the practitioner did NOT "
-                    "write this and cannot see it. Never mention, quote, or respond to this note; "
-                    "reply only to the practitioner's message below it. "
-                    "If you create a contact, draft an email, approve something, or perform "
-                    "ANY operation, you MUST include [ACTION:{...}] tags. "
-                    "Example: [ACTION:{\"type\":\"create_contact\",\"name\":\"...\",\"email\":\"...\"}]. "
-                    "Without the tag, the operation does NOT happen.]\n\n"
-                    + (f"{draft_context}\n\n" if draft_context else "")
+                    (f"{draft_context}\n\n" if draft_context else "")
                     + effective_message
                 )
             else:
@@ -18118,6 +18186,14 @@ async def chief_chat(
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
+                                     # A turn that is plainly an
+                                     # instruction — "you send that text
+                                     # for me", "yes", "go ahead" — has
+                                     # nothing to look up. Seen 2026-09-02:
+                                     # the model reached for web_search on
+                                     # exactly that turn, then spent its
+                                     # reply apologising for the search.
+                                     enable_web_search=not _is_plain_instruction(req.message or ""),
                                      # Voice streaming arc — set only when
                                      # /chat/stream drives this turn.
                                      stream_sink=_STREAM_SINK.get(),
