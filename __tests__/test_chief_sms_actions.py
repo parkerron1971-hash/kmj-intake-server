@@ -359,7 +359,8 @@ def test_every_return_path_carries_result_and_label(monkeypatch):
 
 # ─── registration: a handler is not a capability ──────────────────────
 
-VERBS = ("set_sms_keyword", "set_sms_alerts", "sms_status")
+VERBS = ("set_sms_keyword", "set_sms_alerts", "sms_status",
+         "provision_sms_number", "release_sms_number", "restore_sms_number")
 
 
 @pytest.mark.parametrize("verb", VERBS)
