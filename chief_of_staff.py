@@ -663,6 +663,20 @@ def _anthropic_key(): return os.environ.get("ANTHROPIC_API_KEY", "")
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
+def _ts(dt: datetime) -> str:
+    """A timestamp that survives a PostgREST query string.
+
+    datetime.isoformat() ends in '+00:00', and a '+' in a URL query
+    decodes to a SPACE — so `created_at=gte.2026-08-04T12:11:50+00:00`
+    reaches Postgres as '2026-08-04T12:11:50 00:00' and 400s with
+    22007. Found 2026-09-03 in _gather_context: the unread-insights and
+    upcoming-sessions reads had been failing on every single turn, so
+    Chief's context silently had no insights and no sessions in it. The
+    same '+' lesson sms_service._pq records for phone numbers. 'Z' is
+    the same instant and needs no encoding."""
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
     """RLS-readiness migration: delegates to sb_clients.sb_as_current_context,
     which picks the right credentials per request.
@@ -1388,7 +1402,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     unioned into the candidate pool before the importance/recency blend,
     so an old low-importance-but-relevant memory still surfaces."""
     now = datetime.now(timezone.utc)
-    in_7d = (now + timedelta(days=7)).isoformat()
+    in_7d = _ts(now + timedelta(days=7))
     # Insight rows go stale and STAY stale. Until 2026-08-23 the GROW →
     # Insights feed was the only thing that ever marked one read; that
     # page is retired (FE: the Briefing is the one intelligence surface),
@@ -1396,7 +1410,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # below would be the same five April rows injected into every prompt
     # this business ever sends. Thirty days is the window the generator
     # itself analyses, so an insight outlives its own evidence by nothing.
-    insights_since = (now - timedelta(days=30)).isoformat()
+    insights_since = _ts(now - timedelta(days=30))
 
     tasks = [
         _sb(client, "GET", f"/businesses?id=eq.{biz_id}&select=*&limit=1"),
@@ -5905,7 +5919,7 @@ async def _autopilot_sweep(client, biz: Dict[str, Any], lookback_minutes: int = 
     etc) without having to instrument every insertion site.
     Returns the number of drafts auto-approved."""
     biz_id = biz["id"]
-    since = (datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)).isoformat()
+    since = _ts(datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes))
     try:
         drafts = await _sb(
             client, "GET",
@@ -11297,7 +11311,7 @@ async def handle_catch_up(client, biz, action) -> Dict:
             since_dt = datetime.now(timezone.utc) - timedelta(hours=8)
     except Exception:
         since_dt = datetime.now(timezone.utc) - timedelta(hours=8)
-    since_iso = since_dt.astimezone(timezone.utc).isoformat()
+    since_iso = _ts(since_dt)
 
     events = await _sb(
         client, "GET",
