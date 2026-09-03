@@ -137,6 +137,56 @@ def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
     return message.sid
 
 
+# ─── Number lifecycle (dedicated numbers, phase C) ─────────────────────
+# Blocking — call via run_in_threadpool. All on the platform account;
+# every number bought here is attached to the one Messaging Service so
+# it rides the registered 10DLC campaign. sms_numbers_router owns the
+# order of operations and the rollback.
+
+def search_numbers(area_code: Optional[str], limit: int = 10) -> list:
+    """Local, SMS-capable US numbers in an area code."""
+    kwargs = dict(sms_enabled=True, limit=max(1, min(int(limit), 20)))
+    if area_code:
+        kwargs["area_code"] = int(area_code)
+    found = _twilio_client().available_phone_numbers("US").local.list(**kwargs)
+    return [{
+        "phone_number": n.phone_number,
+        "friendly_name": n.friendly_name,
+        "locality": getattr(n, "locality", None),
+        "region": getattr(n, "region", None),
+    } for n in found]
+
+
+def buy_number(phone_number: str) -> dict:
+    pn = _twilio_client().incoming_phone_numbers.create(
+        phone_number=phone_number, friendly_name="Solutionist private line")
+    logger.info(f"bought {pn.phone_number} sid={pn.sid}")
+    return {"sid": pn.sid, "phone_number": pn.phone_number}
+
+
+def attach_to_service(pn_sid: str) -> str:
+    """Add a bought number to the Messaging Service's sender pool.
+    Returns the service SID it joined."""
+    mg = _require_env("TWILIO_MESSAGING_SERVICE_SID")
+    _twilio_client().messaging.v1.services(mg).phone_numbers.create(phone_number_sid=pn_sid)
+    logger.info(f"attached {pn_sid} to {mg}")
+    return mg
+
+
+def detach_from_service(pn_sid: str) -> None:
+    """Best effort — a number already out of the pool is fine."""
+    mg = _require_env("TWILIO_MESSAGING_SERVICE_SID")
+    try:
+        _twilio_client().messaging.v1.services(mg).phone_numbers(pn_sid).delete()
+    except Exception as e:
+        logger.warning(f"detach {pn_sid} from {mg}: {e}")
+
+
+def release_number(pn_sid: str) -> None:
+    _twilio_client().incoming_phone_numbers(pn_sid).delete()
+    logger.info(f"released {pn_sid}")
+
+
 # ─── Test send ─────────────────────────────────────────────────────────
 
 @router.post("/twilio/test-send")

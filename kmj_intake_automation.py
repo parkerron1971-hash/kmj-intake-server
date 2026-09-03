@@ -249,6 +249,10 @@ from sms_routing import router as sms_routing_router
 from consent_router import router as consent_router
 app.include_router(sms_routing_router)
 app.include_router(consent_router)
+# Dedicated numbers (2026-09-02): a practitioner's own line, bought on
+# the platform account, attached to the one Messaging Service.
+from sms_numbers_router import router as sms_numbers_router
+app.include_router(sms_numbers_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 # THE OBSERVATORY — research a card (docs/STRATEGY_ROOM.md phase 3c)
@@ -1166,6 +1170,14 @@ async def startup():
                           "interval", hours=1, id="sms_reminder_sweep")
     except Exception as e:
         print(f"   [warn] sms reminder sweep not scheduled: {e}")
+    # Dedicated numbers (2026-09-02) — hourly: hand back lines whose
+    # release grace window has passed (SMS_NUMBER_RELEASE_GRACE_DAYS).
+    try:
+        import sms_numbers_router as _sms_numbers
+        scheduler.add_job(g("sms_number_release_sweep", _sms_numbers.release_sweep),
+                          "interval", hours=1, id="sms_number_release_sweep")
+    except Exception as e:
+        print(f"   [warn] sms number release sweep not scheduled: {e}")
     # THE LEAD ARC PR 2 (2026-08-14) — the notification engine, which
     # until now was imported as a ROUTER ONLY.
     #
