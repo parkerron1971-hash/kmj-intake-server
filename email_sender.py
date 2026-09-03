@@ -246,6 +246,22 @@ async def _business_identity_row(
     return row
 
 
+async def _business_row_for_send(business_id: Optional[str],
+                                 reply_to: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The business a send belongs to, for the branded layout. Same
+    attribution rule as the identity seam: an explicit business_id, or
+    a routed reply-to we can parse a prefix out of. Fails open (None):
+    a lookup problem means plain text, never a failed send."""
+    try:
+        if business_id:
+            return await _business_identity_row(business_id=business_id)
+        prefix = _routed_reply_biz_prefix(reply_to)
+        if prefix:
+            return await _business_identity_row(biz_prefix=prefix)
+    except Exception:
+        return None
+    return None
+
 async def _apply_business_identity(
     from_email: str,
     from_name: Optional[str],
@@ -410,9 +426,25 @@ async def send_via_resend(
         },
     }
     if _body_is_html(body):
+        # A caller that built its own markup keeps it.
         payload["html"] = body
     else:
-        payload["text"] = body
+        # Business-originated plain text leaves as a laid-out, branded
+        # email (email_layout) with the composed text as the alternative.
+        # Platform mail with no business behind it stays plain.
+        biz_row = await _business_row_for_send(business_id, reply_to)
+        rendered = None
+        if biz_row:
+            try:
+                import email_layout
+                rendered = email_layout.render_for_send(
+                    body, biz_row, unsubscribe_url=_unsubscribe_url(to_email))
+            except Exception as e:  # the layout must never cost a send
+                logger.warning(f"email layout failed, sending plain text: {e}")
+        if rendered:
+            payload["html"], payload["text"] = rendered
+        else:
+            payload["text"] = body
     if reply_to:
         payload["reply_to"] = reply_to
     if attachments:
@@ -500,6 +532,36 @@ async def send_email(req: SendEmailRequest, user: AuthedUser = Depends(require_u
     )
     return SendEmailResponse(ok=True, id=data.get("id"), provider_response=data)
 
+
+class EmailPreviewRequest(BaseModel):
+    business_id: str
+    body: str
+    subject: Optional[str] = None
+    contact_name: Optional[str] = None
+
+
+@router.post("/email/preview")
+async def email_preview(req: EmailPreviewRequest, user: AuthedUser = Depends(require_user)):
+    """What a business email will look like when it leaves: placeholders
+    filled, closing line + signature + disclaimer appended the way a
+    Chief send appends them, then the branded layout. Read-only; the
+    compose sheet and the templates page render the result."""
+    import business_access
+    business_access.assert_access(str(req.business_id), user, "member")
+    biz = await _business_identity_row(business_id=req.business_id)
+    if not biz:
+        raise HTTPException(404, "business not found")
+    import email_layout
+    values = email_layout.placeholder_values(biz, contact_name=req.contact_name)
+    body = email_layout.fill_placeholders(req.body or "", values)
+    subject = email_layout.fill_placeholders(req.subject or "", values)
+    composed = email_layout.compose_trailers(body, biz.get("settings"))
+    html_body, text_body = email_layout.render_for_send(composed, biz, unsubscribe_url=None)
+    from_email, from_name = resolve_from_address(
+        biz, default_email=os.environ.get("RESEND_FROM_EMAIL") or DEFAULT_FROM_EMAIL,
+        default_name=biz.get("name"))
+    return {"ok": True, "subject": subject, "html": html_body, "text": text_body,
+            "from_email": from_email, "from_name": from_name}
 
 @router.get("/email/health")
 async def email_health():

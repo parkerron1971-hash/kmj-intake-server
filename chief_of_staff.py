@@ -5534,7 +5534,15 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
         return out
 
     # Build the final body (append closing + signature + disclaimer per rules)
-    composed_body = _compose_body_with_signature(item.get("body") or "", biz)
+    # Fill what the draft left as tokens ({contact_name}, {business_name},
+    # {closing_line}, ...) BEFORE the trailers go on. Real mail carried
+    # '{business_name}' in the greeting until this line existed.
+    import email_layout
+    _values = email_layout.placeholder_values(biz, contact_name=contact.get("name"))
+    composed_body = _compose_body_with_signature(
+        email_layout.fill_placeholders(item.get("body") or "", _values), biz)
+    _subject = email_layout.fill_placeholders(
+        item.get("subject") or f"Message from {biz.get('name', '')}", _values)
 
     settings = biz.get("settings") or {}
     et = settings.get("email_templates") or {}
@@ -5555,7 +5563,7 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
             to_name=contact.get("name"),
             from_email=_format_from_email(),
             from_name=from_name,
-            subject=item.get("subject") or f"Message from {biz.get('name', '')}",
+            subject=_subject,
             body=composed_body,
             reply_to=routed or reply_to,
             # WHOSE NAME IS ON IT.
@@ -9436,7 +9444,7 @@ async def handle_batch_email(client, biz, action) -> Dict:
         else:
             body_personal = body_personal.replace("{contact_name}", "").strip()
         # Convert plain newlines to <br> so the practitioner's draft renders
-        body_html = body_personal.replace("\r\n", "\n").replace("\n", "<br/>")
+        body_html = body_personal.replace("\r\n", "\n")  # plain; the layout makes paragraphs
         try:
             from email_sender import send_via_resend, build_routed_reply_to
             routed = build_routed_reply_to(biz["id"], cid)
@@ -9448,6 +9456,7 @@ async def handle_batch_email(client, biz, action) -> Dict:
                 subject=subj,
                 body=body_html,
                 reply_to=routed or reply_to,
+                business_id=biz["id"],
             )
             sent += 1
             sample_subject = subj
