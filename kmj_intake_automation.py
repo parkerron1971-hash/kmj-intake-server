@@ -1158,6 +1158,14 @@ async def startup():
             import hermes_agent as _hermes
             scheduler.add_job(g("hermes_tick", _hermes.hermes_tick), "interval", hours=1,
                               id="hermes_tick")
+            # Email domain drift (setup room, Phase 1) — hourly re-check of
+            # every VERIFIED sending domain. Without it a DNS record that
+            # vanishes flips sends back to the platform address in
+            # silence; the operator's "Verified" badge stays green and
+            # nobody is told. Only changes are written.
+            import email_domain_monitor as _edm
+            scheduler.add_job(g("email_domain_monitor", _edm.monitor_tick), "interval",
+                              hours=1, id="email_domain_monitor")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly

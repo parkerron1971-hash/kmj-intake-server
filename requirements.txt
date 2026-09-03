@@ -54,3 +54,8 @@ opentimestamps>=0.4.5
 # LEDGER_ANCHOR_PROVIDER=hedera, and it refuses with a named-missing-var
 # error rather than anchoring nowhere.
 hiero-sdk-python>=0.1.0
+
+# Email setup room — email_domain_dns resolves the operator's SPF/DKIM/
+# MX/DMARC records itself so the UI can show expected vs FOUND instead
+# of Resend's bare "pending". Pure Python.
+dnspython>=2.6.0
