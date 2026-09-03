@@ -668,7 +668,8 @@ async def _send_touch(biz, camp, idx, touch, contact,
             })
             if not claimed:
                 return "skipped"
-            msg_id = await send_platform_sms(phone, sms_body)
+            msg_id = await send_platform_sms(
+                phone, sms_body, business_id=biz["id"])
             await store_sms(client, camp["business_id"], contact["id"],
                             phone, sms_body, "outbound", telnyx_id=msg_id or "")
         _log_campaign_event(camp, contact, "campaign_sms_sent", {"touch_idx": idx})

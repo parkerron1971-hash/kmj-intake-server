@@ -13,6 +13,11 @@ ENV (Railway) — never hardcoded, never sent to any client
     TWILIO_API_KEY_SID            SK…   (API key)
     TWILIO_API_KEY_SECRET               (API key secret)
     TWILIO_MESSAGING_SERVICE_SID  MG…   (Messaging Service — sender pool)
+    TWILIO_PLATFORM_NUMBER        +1…   (the shared platform number, E.164.
+                                         Every send PINS a from_ number;
+                                         this is the default. Unset → the
+                                         service picks from its pool, with
+                                         a loud warning — see send_sms.)
     TEST_SMS_TO                   +1…   (verified cell, E.164, test sends)
     TWILIO_AUTH_TOKEN                   (OPTIONAL but strongly recommended:
                                          inbound signature validation needs
@@ -42,6 +47,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
@@ -86,18 +92,48 @@ def _twilio_client():
     return Client(api_key_sid, api_key_secret, account_sid)
 
 
-def send_sms(to: str, body: str) -> str:
-    """Send one SMS through the Messaging Service (no from_ number —
-    Twilio picks the sender from the service's pool). Returns the
-    created Message SID. Blocking — call via run_in_threadpool from
-    async handlers."""
+def platform_number() -> str:
+    """The shared platform number (E.164) — the sender every business
+    texts from until it has a number of its own."""
+    return (os.environ.get("TWILIO_PLATFORM_NUMBER") or "").strip()
+
+
+_warned_unpinned = False
+
+
+def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
+    """Send one SMS through the Messaging Service, PINNED to a sender.
+    Returns the created Message SID. Blocking — call via
+    run_in_threadpool from async handlers.
+
+    Why pinned (2026-09-02, dedicated numbers phase A): a send through
+    a Messaging Service with no from_ lets Twilio pick ANY number in
+    the service's pool. That is fine while the pool holds one number.
+    The moment a practitioner's own number joins the pool, an unpinned
+    booking alert for Business A can go out from Business B's line. So
+    every send names its sender — the business's own number when it
+    has one, else the platform number — and Twilio honors from_ +
+    messaging_service_sid together (the specific number is used; the
+    service's opt-out handling and status callbacks still apply).
+
+    TWILIO_PLATFORM_NUMBER unset → today's behavior (pool pick) with a
+    warning, so a missing env var degrades to the old path rather than
+    stopping texts; provisioning a dedicated number refuses to run in
+    that state, which is what keeps the old path safe."""
+    global _warned_unpinned
     messaging_service_sid = _require_env("TWILIO_MESSAGING_SERVICE_SID")
-    message = _twilio_client().messages.create(
-        to=to,
-        body=body,
-        messaging_service_sid=messaging_service_sid,
-    )
-    logger.info(f"sent SMS to={to} sid={message.sid}")
+    sender = (from_number or "").strip() or platform_number()
+    kwargs = dict(to=to, body=body, messaging_service_sid=messaging_service_sid)
+    if sender:
+        kwargs["from_"] = sender
+    elif not _warned_unpinned:
+        _warned_unpinned = True
+        logger.warning(
+            "TWILIO_PLATFORM_NUMBER is not set — sends are UNPINNED and the "
+            "Messaging Service picks the sender. Set it before any dedicated "
+            "number joins the pool.")
+    message = _twilio_client().messages.create(**kwargs)
+    logger.info(f"sent SMS to={to} from={sender or 'pool'} sid={message.sid}")
     return message.sid
 
 

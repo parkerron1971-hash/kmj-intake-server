@@ -56,7 +56,7 @@ from pydantic import BaseModel
 from sms_service import (
     _pq, _sb_get, _sb_post, _sb_patch, _sb_headers, _store_sms, _log_event,
     _find_contact_by_phone, normalize_phone, record_inbound_sms,
-    _twilio_configured, is_opted_out,
+    _twilio_configured, is_opted_out, sender_for,
 )
 
 logger = logging.getLogger("sms_routing")
@@ -97,9 +97,15 @@ CONTINUITY_HOURS = 72
 
 # ─── Outbound (single seam for auto-replies + broadcast) ──────────────
 
-async def _send_platform_sms(to_number: str, body: str) -> str:
+async def _send_platform_sms(to_number: str, body: str, *,
+                             business_id: str,
+                             client: Optional[httpx.AsyncClient] = None) -> str:
     """Send one SMS as the platform brand via Twilio's Messaging
-    Service. Returns the provider message id; raises on hard failure.
+    Service, FROM the number that business texts from (sender_for —
+    the platform number until the business has its own). business_id
+    is keyword-only and required: every caller has it, and a send that
+    cannot name its business cannot name its sender. Returns the
+    provider message id; raises on hard failure.
 
     This used to fall through to Telnyx when Twilio was unconfigured.
     That branch was only reachable in an environment with no Twilio
@@ -113,7 +119,9 @@ async def _send_platform_sms(to_number: str, body: str) -> str:
             "SMS is not configured — set the TWILIO_* vars in Railway.")
     from starlette.concurrency import run_in_threadpool
     import twilio_sms
-    return await run_in_threadpool(twilio_sms.send_sms, to_number, body)
+    from_number = await sender_for(client, business_id)
+    return await run_in_threadpool(
+        twilio_sms.send_sms, to_number, body, from_number=from_number)
 
 
 # ─── Routing helpers ──────────────────────────────────────────────────
@@ -483,7 +491,8 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
                 skipped += 1
                 continue
             try:
-                sid = await _send_platform_sms(phone, msg)
+                sid = await _send_platform_sms(
+                    phone, msg, business_id=body.business_id, client=client)
                 await _store_sms(
                     client, business_id=body.business_id, contact_id=c.get("id"),
                     phone_number=phone, message=msg, direction="outbound",

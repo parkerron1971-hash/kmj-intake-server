@@ -63,7 +63,9 @@ def _run_send_touch(touch_body: str, biz_name: str = "Craft & Co",
 
     sent, stored, claims = [], [], []
 
-    async def send_platform_sms(phone, body):
+    async def send_platform_sms(phone, body, *, business_id, client=None):
+        # business_id is keyword-only and REQUIRED on the real seam —
+        # the fake mirrors that so a call site that drops it fails here.
         sent.append((phone, body))
         return "SM123"
 
