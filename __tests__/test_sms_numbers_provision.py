@@ -329,6 +329,48 @@ def test_router_and_sweep_are_mounted():
     assert "_sms_numbers.release_sweep" in src
 
 
+def test_lifecycle_uses_the_account_token_when_present(monkeypatch):
+    """The API key is restricted to sending (proven 2026-09-02: 401 on
+    services.phonenumbers/list and active-numbers/list). Lifecycle
+    calls must authenticate as the account, and sending must not."""
+    import sys, types
+    made = []
+
+    class FakeClient:
+        def __init__(self, *args):
+            made.append(args)
+    monkeypatch.setitem(sys.modules, "twilio", types.ModuleType("twilio"))
+    rest = types.ModuleType("twilio.rest"); rest.Client = FakeClient
+    monkeypatch.setitem(sys.modules, "twilio.rest", rest)
+    monkeypatch.setenv("TWILIO_ACCOUNT_SID", "AC_test")
+    monkeypatch.setenv("TWILIO_API_KEY_SID", "SK_test")
+    monkeypatch.setenv("TWILIO_API_KEY_SECRET", "sk_secret")
+    monkeypatch.setenv("TWILIO_AUTH_TOKEN", "tok_secret")
+    twilio_sms._twilio_client.cache_clear()
+    twilio_sms._twilio_admin_client.cache_clear()
+
+    twilio_sms._twilio_admin_client()
+    assert made[-1] == ("AC_test", "tok_secret")          # the account, for lifecycle
+    twilio_sms._twilio_client()
+    assert made[-1] == ("SK_test", "sk_secret", "AC_test")  # the key, for sending
+
+    # No token → the key (works if it has been granted the permissions).
+    monkeypatch.delenv("TWILIO_AUTH_TOKEN")
+    twilio_sms._twilio_admin_client.cache_clear()
+    assert twilio_sms._twilio_admin_client() is twilio_sms._twilio_client()
+    twilio_sms._twilio_client.cache_clear()
+    twilio_sms._twilio_admin_client.cache_clear()
+
+
+def test_every_lifecycle_helper_uses_the_admin_client():
+    import inspect
+    for name in ("search_numbers", "buy_number", "attach_to_service",
+                 "detach_from_service", "release_number"):
+        src = inspect.getsource(getattr(twilio_sms, name))
+        assert "_twilio_admin_client()" in src and "_twilio_client()" not in src, name
+    assert "_twilio_admin_client" not in inspect.getsource(twilio_sms.send_sms)
+
+
 def test_twilio_helpers_exist_and_block():
     import inspect
     for name in ("search_numbers", "buy_number", "attach_to_service",

@@ -143,12 +143,32 @@ def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
 # it rides the registered 10DLC campaign. sms_numbers_router owns the
 # order of operations and the rollback.
 
+@lru_cache(maxsize=1)
+def _twilio_admin_client():
+    """The client for number LIFECYCLE calls (search, buy, attach,
+    release). The platform's API key is a restricted one — it can send
+    (messages.create) and that is all; proven 2026-09-02 against the
+    live account: listing the sender pool with it returns 401 "required
+    permission twilio/messaging/services.phonenumbers/list is missing",
+    and active-numbers/list the same. The ACCOUNT auth token can do all
+    of it, and it is already in Railway for inbound signature
+    validation. So lifecycle uses the token when present, and the key
+    otherwise — a key that has been granted the permissions works too.
+    Sending stays on the key: least privilege for the hot path."""
+    from twilio.rest import Client
+    account_sid = _require_env("TWILIO_ACCOUNT_SID")
+    token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+    if token:
+        return Client(account_sid, token)
+    return _twilio_client()
+
+
 def search_numbers(area_code: Optional[str], limit: int = 10) -> list:
     """Local, SMS-capable US numbers in an area code."""
     kwargs = dict(sms_enabled=True, limit=max(1, min(int(limit), 20)))
     if area_code:
         kwargs["area_code"] = int(area_code)
-    found = _twilio_client().available_phone_numbers("US").local.list(**kwargs)
+    found = _twilio_admin_client().available_phone_numbers("US").local.list(**kwargs)
     return [{
         "phone_number": n.phone_number,
         "friendly_name": n.friendly_name,
@@ -158,7 +178,7 @@ def search_numbers(area_code: Optional[str], limit: int = 10) -> list:
 
 
 def buy_number(phone_number: str) -> dict:
-    pn = _twilio_client().incoming_phone_numbers.create(
+    pn = _twilio_admin_client().incoming_phone_numbers.create(
         phone_number=phone_number, friendly_name="Solutionist private line")
     logger.info(f"bought {pn.phone_number} sid={pn.sid}")
     return {"sid": pn.sid, "phone_number": pn.phone_number}
@@ -168,7 +188,7 @@ def attach_to_service(pn_sid: str) -> str:
     """Add a bought number to the Messaging Service's sender pool.
     Returns the service SID it joined."""
     mg = _require_env("TWILIO_MESSAGING_SERVICE_SID")
-    _twilio_client().messaging.v1.services(mg).phone_numbers.create(phone_number_sid=pn_sid)
+    _twilio_admin_client().messaging.v1.services(mg).phone_numbers.create(phone_number_sid=pn_sid)
     logger.info(f"attached {pn_sid} to {mg}")
     return mg
 
@@ -177,13 +197,13 @@ def detach_from_service(pn_sid: str) -> None:
     """Best effort — a number already out of the pool is fine."""
     mg = _require_env("TWILIO_MESSAGING_SERVICE_SID")
     try:
-        _twilio_client().messaging.v1.services(mg).phone_numbers(pn_sid).delete()
+        _twilio_admin_client().messaging.v1.services(mg).phone_numbers(pn_sid).delete()
     except Exception as e:
         logger.warning(f"detach {pn_sid} from {mg}: {e}")
 
 
 def release_number(pn_sid: str) -> None:
-    _twilio_client().incoming_phone_numbers(pn_sid).delete()
+    _twilio_admin_client().incoming_phone_numbers(pn_sid).delete()
     logger.info(f"released {pn_sid}")
 
 
