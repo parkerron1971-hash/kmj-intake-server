@@ -415,3 +415,192 @@ async def sweep_tick() -> Dict[str, Any]:
     logger.info(f"[lifecycle] sweep scanned={out['scanned']} sent={out['sent']} "
                 f"failed={out['failed']}")
     return out
+
+
+# ─── The week: day three and day seven ───────────────────────────────
+#
+# Wave C (2026-09-02). The welcome goes out on day one and the trial
+# mail at the end; in between, nothing reached out, and nobody who
+# signed up in August came back after day one. Two beats, each with ONE
+# ask, each built from the practitioner's own setup state (the same
+# plug-in probes Chief reads), so the email and Chief say the same thing.
+#
+#   day_three — "here is where you are; here is the one next thing"
+#   day_seven — the share kit if their site is up; else the same shape
+#               as day three, a week in.
+#
+# Any active business created in the window, whatever it pays (a comped
+# account gets its first week too). Grandfathered owners are skipped like
+# the trial mail. Stamped in settings.lifecycle_emails.<kind>_at.
+
+DAY_THREE_FROM = 2.5   # days since creation
+DAY_THREE_UNTIL = 5.0
+DAY_SEVEN_FROM = 6.5
+DAY_SEVEN_UNTIL = 9.0
+
+
+def _age_days(row: Dict[str, Any], now: datetime) -> Optional[float]:
+    created = _parse(row.get("created_at"))
+    if not created:
+        return None
+    return (now - created).total_seconds() / 86400.0
+
+
+def _classify_week(row: Dict[str, Any], now: datetime) -> Optional[str]:
+    """'day_three' | 'day_seven' | None, pure over the row and the clock."""
+    age = _age_days(row, now)
+    if age is None:
+        return None
+    stamps = _stamps(row)
+    if DAY_THREE_FROM <= age < DAY_THREE_UNTIL and not stamps.get("day_three_at"):
+        return "day_three"
+    if DAY_SEVEN_FROM <= age < DAY_SEVEN_UNTIL and not stamps.get("day_seven_at"):
+        return "day_seven"
+    return None
+
+
+def _setup_state(row: Dict[str, Any]) -> Dict[str, Any]:
+    """done / total / the next unblocked move, from the plug-in probes.
+    Empty on failure — the email still goes, shorter."""
+    try:
+        import business_track_router as btr
+        items = btr.resolve_plugins(row) or []
+    except Exception as e:
+        logger.warning(f"[lifecycle] plugins read failed: {e}")
+        return {}
+    undone = [p for p in items if not p.get("done")]
+    nxt = next((p for p in undone if not (p.get("blocked_by") or [])), undone[0] if undone else None)
+    return {"done": len(items) - len(undone), "total": len(items), "next": nxt}
+
+
+def _site_link(row: Dict[str, Any]) -> Optional[str]:
+    try:
+        sites = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{row['id']}&status=eq.published"
+            f"&select=id,slug,site_config&limit=1") or []
+        if not sites:
+            return None
+        import brand_engine
+        return brand_engine.public_site_url(sites[0])
+    except Exception as e:
+        logger.warning(f"[lifecycle] site link failed: {e}")
+        return None
+
+
+def day_three_body(*, business_name: str, first_name: str,
+                   done: int, total: int, next_title: Optional[str],
+                   next_why: Optional[str]) -> str:
+    app = app_base_url()
+    where = (f"So far {done} of {total} pieces of {business_name} are plugged in."
+             if total else f"{business_name} is set up and waiting for its first pieces.")
+    if next_title:
+        ask = (f"The one thing to do today: {next_title}.\n"
+               f"{(next_why or '').strip()}\n\n"
+               f"Open Chief and say \"let's do this one\" — it walks you through it, or does it with you.\n"
+               f"   {app}/")
+    else:
+        ask = (f"Everything on the list is connected. Open Chief and ask what "
+               f"it would do this week.\n   {app}/")
+    return (
+        f"Hi {first_name},\n\n"
+        f"Day three. {where}\n\n"
+        f"{ask}\n\n"
+        f"Twenty minutes with Chief, when you have them, and it learns how you "
+        f"actually run — it will keep offering until you do, and it never blocks you.\n\n"
+        f"— The Solutionist System\n"
+        f"{_support_email()}"
+    )
+
+
+def day_seven_body(*, business_name: str, first_name: str, site_url: Optional[str],
+                   done: int, total: int, next_title: Optional[str]) -> str:
+    app = app_base_url()
+    if site_url:
+        middle = (
+            f"Your site is up: {site_url}\n\n"
+            f"Send it to one person today — a regular, a friend who asks what you do, "
+            f"the group chat. That is the whole ask. Chief can write the message for you: "
+            f"open it and say \"write a text sending my site to a regular.\"\n   {app}/"
+        )
+    elif next_title:
+        middle = (
+            f"{done} of {total} pieces are plugged in. The one that gets you a link you can "
+            f"send someone: {next_title}. Open Chief and say \"let's do this one.\"\n   {app}/"
+        )
+    else:
+        middle = f"Everything is connected. Open Chief and ask what it would do this week.\n   {app}/"
+    return (
+        f"Hi {first_name},\n\n"
+        f"One week in with {business_name}.\n\n"
+        f"{middle}\n\n"
+        f"— The Solutionist System\n"
+        f"{_support_email()}"
+    )
+
+
+async def week_beats_tick() -> Dict[str, Any]:
+    """Daily. Every active business created in the last ten days gets its
+    day-three and day-seven beats, once each. Never raises."""
+    out: Dict[str, Any] = {"ok": True, "scanned": 0, "sent": 0, "skipped": 0,
+                           "failed": 0, "sent_kinds": []}
+    if not enabled():
+        out["ok"] = False
+        out["reason"] = "disabled"
+        return out
+    now = _now()
+    since = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        rows: List[Dict[str, Any]] = sb_clients.sb_get_as_service(
+            f"/businesses?select={_BIZ_SELECT},stripe_account_id&is_active=eq.true"
+            f"&created_at=gte.{since}&limit=1000") or []
+    except Exception as e:
+        logger.warning(f"[lifecycle] week sweep read failed: {e}")
+        out["ok"] = False
+        out["reason"] = f"read_failed: {str(e)[:120]}"
+        return out
+
+    for row in rows:
+        out["scanned"] += 1
+        try:
+            kind = _classify_week(row, now)
+            if not kind:
+                out["skipped"] += 1
+                continue
+            owner_id = str(row.get("owner_id") or "")
+            if _is_grandfathered(owner_id):
+                out["skipped"] += 1
+                continue
+            to = await _owner_email(owner_id)
+            if not to:
+                out["skipped"] += 1
+                continue
+            name = (row.get("name") or "Your business").strip()
+            first = _first_name(((row.get("settings") or {}).get("practitioner_name")) or None)
+            st = _setup_state(row)
+            nxt = st.get("next") or {}
+            if kind == "day_three":
+                await _send(
+                    to_email=to, to_name=None,
+                    subject=f"Day three with {name}: one thing to do today",
+                    body=day_three_body(business_name=name, first_name=first,
+                                        done=int(st.get("done") or 0), total=int(st.get("total") or 0),
+                                        next_title=nxt.get("title"), next_why=nxt.get("why")))
+                _stamp(str(row["id"]), "day_three_at")
+            else:
+                site = _site_link(row)
+                await _send(
+                    to_email=to, to_name=None,
+                    subject=(f"One week in: send {name}'s site to one person" if site
+                             else f"One week in with {name}"),
+                    body=day_seven_body(business_name=name, first_name=first, site_url=site,
+                                        done=int(st.get("done") or 0), total=int(st.get("total") or 0),
+                                        next_title=nxt.get("title")))
+                _stamp(str(row["id"]), "day_seven_at")
+            out["sent"] += 1
+            out["sent_kinds"].append(kind)
+        except Exception as e:
+            out["failed"] += 1
+            logger.warning(f"[lifecycle] week beat failed biz={row.get('id')}: {e}")
+    logger.info(f"[lifecycle] week beats scanned={out['scanned']} sent={out['sent']} "
+                f"failed={out['failed']}")
+    return out

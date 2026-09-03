@@ -1003,6 +1003,30 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
 
+    # Day one starts HERE. A subscription entering `trialing` is the only
+    # place the system learns a trial has begun, and until now nothing
+    # reacted to it — the trial_ends_at above was written and that was
+    # the end of it.
+    #
+    # Gated on the STATUS, not the event type: Stripe can deliver
+    # `updated` ahead of `created`, and begin() is idempotent, so
+    # whichever arrives first opens the arc and the other stands down.
+    #
+    # Best-effort, off the event loop, and swallowed. The patch above is
+    # what this webhook exists for; losing a billing event over a day-one
+    # nicety would be the wrong trade. first_run_arc is sync (sb_clients
+    # uses a blocking client), so it must not run on the loop.
+    if status_value == "trialing":
+        try:
+            import asyncio
+            import first_run_arc
+            await asyncio.to_thread(
+                first_run_arc.begin, business_id,
+                source="subscription",
+                trial_ends_at=patch.get("trial_ends_at"))
+        except Exception as e:
+            logger.warning(f"[first-run] arc begin failed (non-fatal): {e}")
+
 
 async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optional[str]) -> None:
     """Bump status to past_due. Stripe will also fire

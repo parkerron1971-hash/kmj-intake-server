@@ -16129,7 +16129,8 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          growth_block: str = "",
                          setup_block: str = "",
                          first_run: bool = False,
-                         orientation_kind: Optional[str] = None) -> str:
+                         orientation_kind: Optional[str] = None,
+                         week_day: int = 0) -> str:
     # Coach modes are different personas entirely — neither shares the
     # operational Chief's prompt.
     if mode == "strategy_coach":
@@ -16227,6 +16228,18 @@ Pick up naturally — don't re-introduce yourself. If they reference something f
     # so the model is told plainly instead of being asked to infer it
     # from context. The model-judged fallback below stays for businesses
     # with no snapshot (older accounts, probe failure).
+    # Days two to seven of the first week. Chief opens with where they
+    # are, not with a day-read of a business that has nothing in it yet.
+    week_clause = ""
+    if is_greeting and week_day and not first_run:
+        week_clause = f"""
+
+FIRST WEEK, DAY {week_day} — this business is days old and setup is not finished (SETUP STATUS above has the count). Your greeting is a daily read of THEIR FIRST WEEK, not a general day-read and not the launch script:
+1. One line on where they are: what is plugged in so far (the count from SETUP STATUS) and, if BUSINESS STATE shows something new since yesterday (people added, a booking, an invoice, a site up), name it — "Yesterday you brought 12 regulars in."
+2. Then ONE question: the first unblocked item in SETUP STATUS, asked WITH ITS WHY, exactly as its 'how' line says. "Today, your hours: what days do you cut? I'll open those on your booking page."
+3. If BUSINESS TRACK holds the sit-down offer for this day, one sentence for it, after the question.
+Under 4 sentences. Warm, specific, no list. Do NOT emit actions in the greeting."""
+
     launch_clause = ""
     if is_greeting and first_run:
         launch_clause = f"""
@@ -16274,7 +16287,7 @@ RULES:
 - Conversational, not a data dump
 - End with a clear next step or question
 - Keep it under 4 sentences
-Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate).{launch_clause}"""
+Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate).{launch_clause}{week_clause}"""
 
     return f"""{CHIEF_IDENTITY}
 
@@ -17862,6 +17875,28 @@ async def chief_chat(
                 and setup_snapshot["done"] <= FIRST_RUN_MAX_DONE
                 and _age_days is not None
                 and _age_days <= FIRST_RUN_MAX_AGE_DAYS)
+            # The launch script is said ONCE. The day-one arc remembers
+            # that it was (intro_delivered_at); before it existed, a
+            # 20-day-old business with nothing connected heard "this
+            # business is brand new" on every greeting.
+            if first_run and is_greeting:
+                try:
+                    import first_run_arc as _fra
+                    if _fra.intro_delivered(biz.get("id")):
+                        first_run = False
+                    else:
+                        asyncio.create_task(asyncio.to_thread(
+                            _fra.mark_intro_delivered, biz.get("id")))
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"first-run arc check failed (non-fatal): {e}")
+            # Days two to seven: Chief's greeting knows the day. Not the
+            # launch script, not the ordinary day-read — one line on what
+            # is in so far, then the one next move with its why.
+            week_day = 0
+            if (is_greeting and not first_run and setup_snapshot
+                    and _age_days is not None and 1 <= _age_days <= 6
+                    and setup_snapshot["done"] < setup_snapshot["total"]):
+                week_day = _age_days + 1
 
             # Pure, no I/O — computed off what the gather returned.
             priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
@@ -17913,6 +17948,7 @@ async def chief_chat(
                 setup_block=setup_block,
                 first_run=first_run,
                 orientation_kind=orientation_kind,
+                week_day=week_day,
             )
 
             # JIT capture: prepend a directive at the very top of the prompt
