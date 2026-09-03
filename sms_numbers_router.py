@@ -19,6 +19,12 @@ Endpoints (mounted in kmj_intake_automation.py):
   POST   /sms/numbers/{number_id}/restore {business_id}
                                                     admin   releasing → active (inside the window)
 
+The work itself lives in provision_core / release_core / restore_core,
+callable IN-PROCESS — the endpoints wrap them with the access check, and
+Chief's verbs (chief_sms_actions) call them directly, the same way
+send_sms_core serves both /sms/send and Chief's send_sms. The plan gate
+lives in the core, so Chief cannot route around it.
+
 Lifecycle: provisioning → active → releasing → released. The row is
 written FIRST (the partial unique index makes a double-provision race a
 409, not two numbers), then the purchase, then the attach. A purchase
@@ -151,7 +157,7 @@ async def _default_area_code(client: httpx.AsyncClient, business_id: str) -> Opt
     return None
 
 
-# ─── Eligibility (shared by GET and POST) ─────────────────────────────
+# ─── Eligibility (shared by GET, POST and Chief) ──────────────────────
 
 def _ready_or_raise() -> None:
     if not _twilio_configured():
@@ -174,6 +180,172 @@ def _plan_allows(business_id: str) -> Optional[str]:
     except HTTPException as e:
         detail = e.detail if isinstance(e.detail, dict) else {}
         return str(detail.get("required_plan") or "practice")
+
+
+def _valid_area_code(code: str) -> None:
+    if code and not (code.isdigit() and len(code) == 3):
+        raise HTTPException(400, {"error": "bad_area_code",
+                                  "message": "An area code is three digits."})
+
+
+# ─── The cores — endpoints and Chief both call these ──────────────────
+
+async def provision_core(client: httpx.AsyncClient, business_id: str, *,
+                         phone_number: Optional[str] = None,
+                         area_code: Optional[str] = None,
+                         friendly_label: Optional[str] = None) -> Dict[str, Any]:
+    """Buy → attach → active. Raises HTTPException with a practitioner-
+    readable {error, message} detail; returns the public row."""
+    required_plan = _plan_allows(business_id)
+    if required_plan:
+        raise HTTPException(402, {"error": "feature_locked", "feature": FEATURE,
+                                  "required_plan": required_plan,
+                                  "message": "A private texting number comes with the "
+                                             f"{required_plan.title()} plan."})
+    _ready_or_raise()
+    biz = business_id
+
+    existing = await _live_row(client, biz)
+    if existing:
+        raise HTTPException(409, {"error": "already_has_number",
+                                  "number": _public(existing),
+                                  "message": "This business already has a number."})
+
+    used, cap = await _live_count(client), campaign_cap()
+    if used >= cap:
+        logger.error(f"campaign cap reached ({used}/{cap}) — request a number pool from Twilio")
+        raise HTTPException(409, {"error": "campaign_full",
+                                  "message": "Private numbers are fully allocated right now — "
+                                             "we're adding capacity. Try again soon."})
+    if used + 1 >= int(cap * 0.8):
+        logger.warning(f"campaign at {used + 1}/{cap} numbers — time to request a number pool")
+
+    # Which number?
+    phone = normalize_phone(phone_number) if phone_number else ""
+    code = (area_code or "").strip()
+    if phone:
+        code = code or phone[2:5]
+    else:
+        _valid_area_code(code)
+        code = code or await _default_area_code(client, biz) or ""
+        if not code:
+            raise HTTPException(400, {"error": "area_code_required",
+                                      "message": "Which area code would you like?"})
+        try:
+            found = await run_in_threadpool(twilio_sms.search_numbers, code, 1)
+        except Exception as e:
+            logger.warning(f"search failed area_code={code}: {e}")
+            raise HTTPException(502, {"error": "search_failed",
+                                      "message": "Couldn't look up numbers right now — try again in a minute."})
+        if not found:
+            raise HTTPException(404, {"error": "no_numbers",
+                                      "message": f"No local numbers in {code} right now — try a nearby area code."})
+        phone = normalize_phone(found[0]["phone_number"])
+
+    # 1. The row, first. The partial unique index turns a concurrent
+    #    second provision into a failed insert here, not a second
+    #    purchase.
+    rows = await _sb_post(client, "/sms_numbers", {
+        "business_id": biz, "phone_number": phone, "status": "provisioning",
+        "area_code": code or None,
+        "friendly_label": (friendly_label or "").strip()[:60] or None,
+    })
+    if not rows:
+        raise HTTPException(409, {"error": "provision_conflict",
+                                  "message": "That number is being set up already — refresh in a moment."})
+    row = rows[0] if isinstance(rows, list) else rows
+    row_id = row.get("id")
+
+    # 2. Buy.
+    try:
+        bought = await run_in_threadpool(twilio_sms.buy_number, phone)
+    except Exception as e:
+        logger.error(f"buy failed {phone} biz={biz[:8]}: {e}")
+        await _sb_delete(client, f"/sms_numbers?id=eq.{_pq(row_id)}")
+        raise HTTPException(502, {"error": "purchase_failed",
+                                  "message": "That number couldn't be reserved — pick another or try again."})
+
+    # 3. Attach to the Messaging Service (the 10DLC campaign). A line
+    #    that isn't attached can't send compliantly and won't route
+    #    inbound through our webhook — so it's not a line we keep.
+    try:
+        mg = await run_in_threadpool(twilio_sms.attach_to_service, bought["sid"])
+    except Exception as e:
+        logger.error(f"attach failed {phone} sid={bought['sid']}: {e} — releasing")
+        try:
+            await run_in_threadpool(twilio_sms.release_number, bought["sid"])
+        except Exception as e2:
+            logger.error(f"release after failed attach ALSO failed sid={bought['sid']}: {e2} — orphan on the account")
+        await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(row_id)}", {
+            "status": "released", "provider_sid": bought["sid"],
+            "released_at": _now().isoformat(), "updated_at": _now().isoformat(),
+        })
+        raise HTTPException(502, {"error": "attach_failed",
+                                  "message": "The number couldn't be connected — nothing was kept. Try again."})
+
+    await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(row_id)}", {
+        "status": "active", "provider_sid": bought["sid"],
+        "messaging_service_sid": mg, "updated_at": _now().isoformat(),
+    })
+    await _log_event(client, biz, None, "sms_number_provisioned",
+                     {"phone_number": phone, "area_code": code})
+    row = await _live_row(client, biz) or {**row, "status": "active"}
+    logger.info(f"provisioned {phone} for biz {biz[:8]}")
+    return _public(row)
+
+
+async def release_core(client: httpx.AsyncClient, business_id: str,
+                       number_id: Optional[str] = None) -> Dict[str, Any]:
+    """active → releasing with a grace window. number_id may be omitted
+    (Chief doesn't know row ids) — the business's live row is used."""
+    if number_id:
+        row = await _row_for(client, number_id, business_id)
+    else:
+        row = await _live_row(client, business_id)
+    if not row:
+        raise HTTPException(404, {"error": "not_found",
+                                  "message": "There's no number to release."})
+    if row.get("status") not in ("active", "suspended"):
+        raise HTTPException(409, {"error": "not_releasable", "status": row.get("status"),
+                                  "number": _public(row),
+                                  "message": "That number is already being released."
+                                  if row.get("status") == "releasing" else
+                                  "That number can't be released right now."})
+    release_after = _now() + timedelta(days=release_grace_days())
+    await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(row['id'])}", {
+        "status": "releasing", "release_after": release_after.isoformat(),
+        "updated_at": _now().isoformat(),
+    })
+    await _log_event(client, business_id, None, "sms_number_release_requested",
+                     {"phone_number": row.get("phone_number"),
+                      "release_after": release_after.isoformat()})
+    logger.info(f"release requested {row.get('phone_number')} biz={business_id[:8]} after={release_after.date()}")
+    return {"ok": True, "status": "releasing", "release_after": release_after.isoformat(),
+            "grace_days": release_grace_days(),
+            "number": _public({**row, "status": "releasing",
+                               "release_after": release_after.isoformat()})}
+
+
+async def restore_core(client: httpx.AsyncClient, business_id: str,
+                       number_id: Optional[str] = None) -> Dict[str, Any]:
+    """releasing → active, inside the window."""
+    if number_id:
+        row = await _row_for(client, number_id, business_id)
+    else:
+        row = await _live_row(client, business_id)
+    if not row:
+        raise HTTPException(404, {"error": "not_found",
+                                  "message": "There's no number to bring back."})
+    if row.get("status") != "releasing":
+        raise HTTPException(409, {"error": "not_restorable", "status": row.get("status"),
+                                  "message": "That number is no longer held."})
+    await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(row['id'])}", {
+        "status": "active", "release_after": None, "updated_at": _now().isoformat(),
+    })
+    await _log_event(client, business_id, None, "sms_number_restored",
+                     {"phone_number": row.get("phone_number")})
+    return {"ok": True, "status": "active",
+            "number": _public({**row, "status": "active", "release_after": None})}
 
 
 # ─── GET /sms/numbers ─────────────────────────────────────────────────
@@ -212,9 +384,7 @@ async def available_numbers(business_id: str, area_code: Optional[str] = None,
     business_access.assert_access(str(business_id), user, "viewer")
     _ready_or_raise()
     code = (area_code or "").strip()
-    if code and not (code.isdigit() and len(code) == 3):
-        raise HTTPException(400, {"error": "bad_area_code",
-                                  "message": "An area code is three digits."})
+    _valid_area_code(code)
     async with httpx.AsyncClient() as client:
         if not code:
             code = await _default_area_code(client, business_id) or ""
@@ -243,106 +413,11 @@ class ProvisionBody(BaseModel):
 async def provision_number(body: ProvisionBody, user: AuthedUser = Depends(require_user)):
     import business_access
     business_access.assert_access(str(body.business_id), user, "admin")
-    required_plan = _plan_allows(body.business_id)
-    if required_plan:
-        raise HTTPException(402, {"error": "feature_locked", "feature": FEATURE,
-                                  "required_plan": required_plan,
-                                  "message": "A private texting number comes with the "
-                                             f"{required_plan.title()} plan."})
-    _ready_or_raise()
-    biz = body.business_id
-
     async with httpx.AsyncClient() as client:
-        existing = await _live_row(client, biz)
-        if existing:
-            raise HTTPException(409, {"error": "already_has_number",
-                                      "number": _public(existing),
-                                      "message": "This business already has a number."})
-
-        used, cap = await _live_count(client), campaign_cap()
-        if used >= cap:
-            logger.error(f"campaign cap reached ({used}/{cap}) — request a number pool from Twilio")
-            raise HTTPException(409, {"error": "campaign_full",
-                                      "message": "Private numbers are fully allocated right now — "
-                                                 "we're adding capacity. Try again soon."})
-        if used + 1 >= int(cap * 0.8):
-            logger.warning(f"campaign at {used + 1}/{cap} numbers — time to request a number pool")
-
-        # Which number?
-        phone = normalize_phone(body.phone_number) if body.phone_number else ""
-        code = (body.area_code or "").strip()
-        if phone:
-            code = code or phone[2:5]
-        else:
-            if code and not (code.isdigit() and len(code) == 3):
-                raise HTTPException(400, {"error": "bad_area_code",
-                                          "message": "An area code is three digits."})
-            code = code or await _default_area_code(client, biz) or ""
-            if not code:
-                raise HTTPException(400, {"error": "area_code_required",
-                                          "message": "Which area code would you like?"})
-            try:
-                found = await run_in_threadpool(twilio_sms.search_numbers, code, 1)
-            except Exception as e:
-                logger.warning(f"search failed area_code={code}: {e}")
-                raise HTTPException(502, {"error": "search_failed",
-                                          "message": "Couldn't look up numbers right now — try again in a minute."})
-            if not found:
-                raise HTTPException(404, {"error": "no_numbers",
-                                          "message": f"No local numbers in {code} right now — try a nearby area code."})
-            phone = normalize_phone(found[0]["phone_number"])
-
-        # 1. The row, first. The partial unique index turns a concurrent
-        #    second provision into a failed insert here, not a second
-        #    purchase.
-        rows = await _sb_post(client, "/sms_numbers", {
-            "business_id": biz, "phone_number": phone, "status": "provisioning",
-            "area_code": code or None,
-            "friendly_label": (body.friendly_label or "").strip()[:60] or None,
-        })
-        if not rows:
-            raise HTTPException(409, {"error": "provision_conflict",
-                                      "message": "That number is being set up already — refresh in a moment."})
-        row = rows[0] if isinstance(rows, list) else rows
-        row_id = row.get("id")
-
-        # 2. Buy.
-        try:
-            bought = await run_in_threadpool(twilio_sms.buy_number, phone)
-        except Exception as e:
-            logger.error(f"buy failed {phone} biz={biz[:8]}: {e}")
-            await _sb_delete(client, f"/sms_numbers?id=eq.{_pq(row_id)}")
-            raise HTTPException(502, {"error": "purchase_failed",
-                                      "message": "That number couldn't be reserved — pick another or try again."})
-
-        # 3. Attach to the Messaging Service (the 10DLC campaign). A line
-        #    that isn't attached can't send compliantly and won't route
-        #    inbound through our webhook — so it's not a line we keep.
-        try:
-            mg = await run_in_threadpool(twilio_sms.attach_to_service, bought["sid"])
-        except Exception as e:
-            logger.error(f"attach failed {phone} sid={bought['sid']}: {e} — releasing")
-            try:
-                await run_in_threadpool(twilio_sms.release_number, bought["sid"])
-            except Exception as e2:
-                logger.error(f"release after failed attach ALSO failed sid={bought['sid']}: {e2} — orphan on the account")
-            await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(row_id)}", {
-                "status": "released", "provider_sid": bought["sid"],
-                "released_at": _now().isoformat(), "updated_at": _now().isoformat(),
-            })
-            raise HTTPException(502, {"error": "attach_failed",
-                                      "message": "The number couldn't be connected — nothing was kept. Try again."})
-
-        await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(row_id)}", {
-            "status": "active", "provider_sid": bought["sid"],
-            "messaging_service_sid": mg, "updated_at": _now().isoformat(),
-        })
-        await _log_event(client, biz, None, "sms_number_provisioned",
-                         {"phone_number": phone, "area_code": code})
-        row = await _live_row(client, biz) or {**row, "status": "active"}
-
-    logger.info(f"provisioned {phone} for biz {biz[:8]}")
-    return {"ok": True, "number": _public(row)}
+        row = await provision_core(
+            client, body.business_id, phone_number=body.phone_number,
+            area_code=body.area_code, friendly_label=body.friendly_label)
+    return {"ok": True, "number": row}
 
 
 # ─── DELETE /sms/numbers/{id} — releasing, with a way back ────────────
@@ -353,22 +428,7 @@ async def release_number(number_id: str, business_id: str,
     import business_access
     business_access.assert_access(str(business_id), user, "admin")
     async with httpx.AsyncClient() as client:
-        row = await _row_for(client, number_id, business_id)
-        if not row:
-            raise HTTPException(404, {"error": "not_found"})
-        if row.get("status") not in ("active", "suspended"):
-            raise HTTPException(409, {"error": "not_releasable", "status": row.get("status")})
-        release_after = _now() + timedelta(days=release_grace_days())
-        await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(number_id)}", {
-            "status": "releasing", "release_after": release_after.isoformat(),
-            "updated_at": _now().isoformat(),
-        })
-        await _log_event(client, business_id, None, "sms_number_release_requested",
-                         {"phone_number": row.get("phone_number"),
-                          "release_after": release_after.isoformat()})
-    logger.info(f"release requested {row.get('phone_number')} biz={business_id[:8]} after={release_after.date()}")
-    return {"ok": True, "status": "releasing", "release_after": release_after.isoformat(),
-            "grace_days": release_grace_days()}
+        return await release_core(client, business_id, number_id)
 
 
 class RestoreBody(BaseModel):
@@ -381,18 +441,7 @@ async def restore_number(number_id: str, body: RestoreBody,
     import business_access
     business_access.assert_access(str(body.business_id), user, "admin")
     async with httpx.AsyncClient() as client:
-        row = await _row_for(client, number_id, body.business_id)
-        if not row:
-            raise HTTPException(404, {"error": "not_found"})
-        if row.get("status") != "releasing":
-            raise HTTPException(409, {"error": "not_restorable", "status": row.get("status"),
-                                      "message": "That number is no longer held."})
-        await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(number_id)}", {
-            "status": "active", "release_after": None, "updated_at": _now().isoformat(),
-        })
-        await _log_event(client, body.business_id, None, "sms_number_restored",
-                         {"phone_number": row.get("phone_number")})
-    return {"ok": True, "status": "active", "number": _public({**row, "status": "active", "release_after": None})}
+        return await restore_core(client, body.business_id, number_id)
 
 
 # ─── The release sweep (hourly, APScheduler) ──────────────────────────

@@ -119,6 +119,9 @@ from chief_sms_actions import (
     handle_set_sms_alerts,
     handle_set_sms_keyword,
     handle_sms_status,
+    handle_provision_sms_number,
+    handle_release_sms_number,
+    handle_restore_sms_number,
 )
 # Customer drawdown ledger — what a client prepaid and has not used yet.
 from chief_balance_actions import (
@@ -13338,6 +13341,9 @@ ACTION_HANDLERS = {
     "set_sms_keyword":            handle_set_sms_keyword,
     "set_sms_alerts":             handle_set_sms_alerts,
     "sms_status":                 handle_sms_status,
+    "provision_sms_number":       handle_provision_sms_number,
+    "release_sms_number":         handle_release_sms_number,
+    "restore_sms_number":         handle_restore_sms_number,
     "remove_testimonial":         handle_remove_testimonial,
     # Timers & alarms
     "set_timer":                  handle_set_timer,
@@ -16476,6 +16482,9 @@ ACTIONS — TEXT MESSAGES (see TEXT MESSAGES context block above):
   [ACTION:{{"type":"sms_status"}}]  — IS TEXTING ACTUALLY WORKING? Reports the keyword, whether texting is switched on for the account, whether the automated alerts are on, and how many of their contacts have replied STOP. Use it for "why aren't my texts going out?", "is my texting set up?", "did anyone opt out?" — and BEFORE telling them anything is wrong with texting. Never guess at a texting problem you can check.
   [ACTION:{{"type":"set_sms_keyword","keyword":"BLOOM"}}]  — claims the word clients text to reach THEM. One number serves the whole platform, so the keyword is what connects a stranger's text to this business: without one, a client texting the number reaches nobody. 3-20 letters/numbers, usually the business name. Tells: "set up texting", "how do people text me?", "I want clients to be able to text". SUGGEST one from their business name rather than asking them to invent it, and confirm before claiming. If it's taken or reserved the action says so — offer the next best.
   [ACTION:{{"type":"set_sms_alerts","reminders":false}}]  — the switch on the AUTOMATED texts: "confirmations" (sent the moment a client books) and "reminders" (24 hours before the appointment). Both are ON by default. Pass either key, or "on":false to switch both. Tells: "stop texting my clients reminders", "turn the confirmation texts back on", "my clients say they're getting too many texts". This does NOT affect anything the practitioner or you send by hand.
+  [ACTION:{{"type":"provision_sms_number","area_code":"415"}}]  — gets this business a texting number OF ITS OWN. Clients text it and reach them directly — no keyword — and every text they send goes out from it. It's a paid line on their plan, so CONFIRM BEFORE DOING IT: say what you're about to do ("I'll get you a local 415 number — go ahead?") and act on the yes. Leave area_code out to match the area code of their own phone; pass one when they name it; pass "phone_number" when they picked a specific number. If it isn't on their plan the action says which plan is — tell them that, don't guess. Tells: "get me my own number", "I want a number clients can text", "set up a private line". Run sms_status first if you're not sure whether they already have one.
+  [ACTION:{{"type":"release_sms_number"}}]  — gives the number back. Texts to it stop reaching them AT ONCE; the number is held for two weeks (they can change their mind), then it's gone for good. Confirm first and say both of those things. Tells: "get rid of my number", "I don't need the texting line anymore", "cancel my number".
+  [ACTION:{{"type":"restore_sms_number"}}]  — brings back a number released within the last two weeks. Tells: "actually, keep my number", "undo that", "I want my number back".
     — BULK TEXTS GO THROUGH CAMPAIGNS, not a broadcast. When they want to text their whole list ("text everyone about the sale"), use plan_campaign with sms touches — it checks each recipient's consent, honors quiet hours, and shows them the audience first. Never describe a way to text everyone at once outside that.
     — Texts must be SHORT: under 160 chars ideal, never over 320. Warm tone, first-name only, no links in the first text.
     — When the practitioner says "text Marcus" / "send a text to X" / "shoot X a text" → send_sms.

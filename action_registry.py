@@ -352,8 +352,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "set_sms_alerts":         _w("A", "flips businesses.settings.sms_alerts "
                                       "{confirmations, reminders}. A toggle, and the only "
                                       "writer of a key sms_alerts has always read"),
-    "sms_status":             _r("keyword, provider readiness, alert switches and an "
-                                 "opt-out tally for this business; writes nothing"),
+    "sms_status":             _r("keyword, provider readiness, alert switches, the "
+                                 "business's own number and an opt-out tally; writes nothing"),
+    # Dedicated numbers (2026-09-02). Buying a line is a recurring charge
+    # on the platform's carrier bill and a number clients start texting.
+    "provision_sms_number":   _w("C", "buys a phone number on the platform's carrier account "
+                                      "and attaches it to the sender pool — a monthly cost and "
+                                      "a line the outside world starts using. Money-touching"),
+    "release_sms_number":     _w("C", "hands a number back: texts to it stop reaching the "
+                                      "practitioner at once, and after the 14-day window the "
+                                      "sweep releases it from the account for good"),
+    "restore_sms_number":     _w("A", "flips a releasing sms_numbers row back to active inside "
+                                      "its window — the undo for release_sms_number"),
     "notify_practitioner":    _w("A", "in-app notification + push to the OWNER. It does leave the "
                                       "device, but never reaches a client, so it is not the "
                                       "client-facing send class B exists for"),
