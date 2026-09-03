@@ -215,14 +215,19 @@ async def _log_event(
 
 async def is_opted_out(client: httpx.AsyncClient, phone: str,
                        business_id: Optional[str] = None) -> bool:
-    """Platform-wide STOP check (Direct model: one number → STOP
-    suppresses everything). Checked before EVERY outbound send. Fails
-    OPEN — a DB blip must not block transactional sends; carrier-level
-    STOP still protects. business_id reserved for ISV per-pair use."""
+    """STOP check before EVERY outbound send. A STOP texted to the
+    platform number is platform-wide (business_id NULL) and suppresses
+    every business. A STOP texted to a business's OWN number (2026-09-02,
+    dedicated numbers) is scoped to that business — pass business_id and
+    both rows count. Fails OPEN — a DB blip must not block transactional
+    sends; carrier-level STOP still protects."""
+    scope = "business_id=is.null"
+    if business_id:
+        scope = f"or=(business_id.is.null,business_id.eq.{business_id})"
     try:
         rows = await _sb_get(
             client,
-            f"/sms_opt_outs?phone=eq.{_pq(phone)}&business_id=is.null&select=id&limit=1",
+            f"/sms_opt_outs?phone=eq.{_pq(phone)}&{scope}&select=id&limit=1",
         ) or []
         return bool(rows)
     except Exception:
@@ -239,15 +244,57 @@ def _twilio_configured() -> bool:
     )
 
 
+# ─── Dedicated numbers (sms_numbers — supabase/APPLY-2026-09-02-sms-numbers.sql)
+
+async def active_number_for(client: httpx.AsyncClient,
+                            business_id: Optional[str]) -> Optional[str]:
+    """The business's own ACTIVE number, if it has one. Suspended
+    (billing lapsed) still receives — see business_for_number — but
+    does not send."""
+    if not business_id:
+        return None
+    rows = await _sb_get(
+        client,
+        f"/sms_numbers?business_id=eq.{business_id}&status=eq.active"
+        f"&select=phone_number&limit=1",
+    ) or []
+    return (rows[0].get("phone_number") if rows else None) or None
+
+
+async def business_for_number(client: httpx.AsyncClient,
+                              to_number: str) -> Optional[Dict[str, Any]]:
+    """Inbound: which business owns the number a customer texted?
+    {business_id, status} for an active OR suspended line (a lapsed
+    account still gets its inbound; it just can't reply from that
+    number), else None — the caller falls through to the shared-number
+    path."""
+    phone = normalize_phone(to_number)
+    if not phone:
+        return None
+    rows = await _sb_get(
+        client,
+        f"/sms_numbers?phone_number=eq.{_pq(phone)}&status=in.(active,suspended)"
+        f"&select=business_id,status&limit=1",
+    ) or []
+    return rows[0] if rows else None
+
+
 async def sender_for(client: Optional[httpx.AsyncClient], business_id: Optional[str]) -> str:
-    """The number this business texts FROM. Today: always the platform
-    number (TWILIO_PLATFORM_NUMBER). Phase B reads sms_numbers here and
-    returns the business's own line when it has an active one — this is
+    """The number this business texts FROM: its own active line when it
+    has one, else the platform number (TWILIO_PLATFORM_NUMBER). This is
     the single seam, so every send (Chief, scheduler, broadcast, booking
-    alerts, campaigns) inherits it. Empty string = unpinned (see
-    twilio_sms.send_sms)."""
+    alerts, campaigns) inherits it. A DB blip on the lookup degrades to
+    the platform number — the text still goes, from the shared line.
+    Empty string = unpinned (see twilio_sms.send_sms)."""
     import twilio_sms
-    return twilio_sms.platform_number()
+    own: Optional[str] = None
+    if business_id:
+        if client is None:
+            async with httpx.AsyncClient() as c:
+                own = await active_number_for(c, business_id)
+        else:
+            own = await active_number_for(client, business_id)
+    return own or twilio_sms.platform_number()
 
 
 class SmsSendError(RuntimeError):
@@ -452,7 +499,7 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
             "SMS is not configured. Set the TWILIO_* vars in Railway.", 503)
 
     # Consent gate — never send to a number that opted out.
-    if await is_opted_out(client, to_clean):
+    if await is_opted_out(client, to_clean, business_id):
         raise SmsSendError(
             f"{to_clean} has opted out of texts (STOP). "
             f"They can text START to opt back in.", 422)
