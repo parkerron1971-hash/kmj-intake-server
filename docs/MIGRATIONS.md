@@ -134,7 +134,7 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 
 | File | What | Status |
 |---|---|---|
-| `supabase/APPLY-2026-09-02-sms-numbers.sql` | Dedicated SMS numbers phase B — `sms_numbers` (one live number per business; inbound routes by `To`, outbound sends from it). Code reads it fail-soft, so it can go in before or after the deploy. | **pending** — apply, then `select count(*) from sms_numbers` → 0 |
+| `supabase/APPLY-2026-09-02-sms-numbers.sql` | Dedicated SMS numbers phase B — `sms_numbers` (one live number per business; inbound routes by `To`, outbound sends from it). Code reads it fail-soft, so it can go in before or after the deploy. | **applied** 2026-09-02 via the SQL editor (`applied \| 0`); indexes + owner policy verified |
 | `APPLY-2026_08_22_signup_attribution.sql` | Growth arc Rung 1 — `attribution jsonb` on marketing_leads/waitlist/businesses + `data jsonb` on site_events (campaign params by channel) | **applied** 2026-08-22 |
 | `supabase/APPLY-2026-07-13-drop-permissive-policies.sql` | drop the `_all` `USING(true)` policies on invoices/social_accounts/email_replies/business_profiles (cross-tenant fix) | **applied** 2026-07-13 (deploy the paired anon→service code first) |
 | `../solutionist-studio/supabase/APPLY-2026-07-13-insight-category.sql` | add `insight` to `chief_memories_category_check` + backfill | applied 2026-07-13 |
