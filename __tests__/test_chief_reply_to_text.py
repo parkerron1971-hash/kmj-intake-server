@@ -148,9 +148,26 @@ def test_plain_instruction_detection(msg, expect):
     assert cos._is_plain_instruction(msg) is expect
 
 
-def test_chat_turn_disables_search_on_an_instruction():
+def test_chat_turn_uses_the_one_search_switch():
     src = inspect.getsource(cos)
-    assert "enable_web_search=not _is_plain_instruction(req.message" in src
+    assert 'enable_web_search=_web_search_allowed(req.message or "")' in src
+
+
+@pytest.mark.parametrize("msg, allowed", [
+    ("catch me up on my texts and handle anything that needs handling", False),
+    ("did anyone text me today", False),
+    ("what do coaches charge in Michigan?", True),
+    ("you send that text for me", False),
+    ("what's trending in leadership this month?", True),
+    ("summarize my emails from this week", False),
+])
+def test_search_is_off_for_own_data_and_instructions(msg, allowed):
+    assert cos._web_search_allowed(msg) is allowed
+
+
+def test_search_prompt_forbids_narrating_lookups_too():
+    block = cos._build_web_search_block()
+    assert "never apologise for or narrate a search or a lookup" in block
 
 
 def test_search_prompt_forbids_narrating_a_stray_search():

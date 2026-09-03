@@ -2300,6 +2300,31 @@ def _is_plain_instruction(message: str) -> bool:
     return any(f" {v} " in joined for v in _INSTRUCTION_VERBS)
 
 
+_OWN_DATA_TERMS = (
+    "my texts", "my text messages", "my sms", "my inbox", "my emails", "my email",
+    "my contacts", "my clients", "my invoices", "my calendar", "my sessions",
+    "my bookings", "my schedule", "my projects", "my books", "my revenue",
+    "catch me up", "handle my", "did anyone", "what did", "unread",
+)
+
+
+def _is_about_own_data(message: str) -> bool:
+    """A turn about the practitioner's own texts, emails, contacts,
+    invoices or calendar. Every one of those is in the context blocks; a
+    web search cannot see them. Red-teamed 2026-09-03: "catch me up on my
+    texts and handle anything that needs handling" still had web_search
+    on, the model reached for it, and opened its reply with "Disregard
+    those two lookups — I shouldn't have triggered them"."""
+    t = " " + re.sub(r"\s+", " ", (message or "").lower()) + " "
+    return any(term in t for term in _OWN_DATA_TERMS)
+
+
+def _web_search_allowed(message: str) -> bool:
+    """The one switch: off for an instruction turn and off for a turn
+    about the practitioner's own data. On for everything else."""
+    return not (_is_plain_instruction(message) or _is_about_own_data(message))
+
+
 def _is_voice_confirmation(message: str) -> bool:
     """Is this utterance a deliberate go-ahead, and nothing else?
 
@@ -15707,7 +15732,9 @@ def _build_web_search_block() -> str:
         "- ANY turn where the practitioner is telling you to DO something — send, "
         "reply, text, email, create, schedule, approve — or confirming one. Act; "
         "there is nothing to look up. If a search ever runs that you did not need, "
-        "say nothing about it — never apologise for or narrate a search.\n\n"
+        "say nothing about it — never apologise for or narrate a search or a "
+        "lookup. 'Disregard those lookups' is never a sentence the practitioner "
+        "should read: if a lookup added nothing, it does not exist.\n\n"
         "When you do search, briefly mention what you found ('I looked that up — '). "
         "Don't dump results — summarize the key finding in 2-3 sentences. If the "
         "search returns nothing useful, say so honestly.\n"
@@ -18231,7 +18258,7 @@ async def chief_chat(
                                      # the model reached for web_search on
                                      # exactly that turn, then spent its
                                      # reply apologising for the search.
-                                     enable_web_search=not _is_plain_instruction(req.message or ""),
+                                     enable_web_search=_web_search_allowed(req.message or ""),
                                      # Voice streaming arc — set only when
                                      # /chat/stream drives this turn.
                                      stream_sink=_STREAM_SINK.get(),
