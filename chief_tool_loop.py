@@ -106,6 +106,11 @@ def _shrink(result: Any) -> str:
         text = json.dumps(result, default=str)
     except (TypeError, ValueError):
         text = str(result)
+    # A lookup result can carry an email body, a contact's notes, a
+    # form answer — third-party text arriving mid-turn, after the
+    # prompt-time neutraliser ran. Same two layers, same taint.
+    import untrusted_text
+    text = untrusted_text.defuse(text)
     if len(text) > MAX_RESULT_CHARS:
         text = text[:MAX_RESULT_CHARS] + '… [truncated — ask a narrower question]"}'
     return text
