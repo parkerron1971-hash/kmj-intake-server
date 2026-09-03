@@ -1409,6 +1409,9 @@ async def startup():
         import lifecycle_emails as _lifecycle
         scheduler.add_job(g("lifecycle_emails", _lifecycle.sweep_tick),
                           "cron", hour=14, minute=30, id="lifecycle_emails")
+        # The week (2026-09-02): day-three and day-seven beats, once each.
+        scheduler.add_job(g("week_beats", _lifecycle.week_beats_tick),
+                          "cron", hour=14, minute=45, id="week_beats")
     except Exception as e:
         print(f"   [warn] lifecycle email sweep not scheduled: {e}")
 

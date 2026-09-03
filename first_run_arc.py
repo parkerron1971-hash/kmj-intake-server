@@ -247,3 +247,33 @@ def day_of(row: Optional[Dict[str, Any]], *,
     if not started:
         return 0
     return max(1, ((now or _now()) - started).days + 1)
+
+
+def intro_delivered(business_id: Any) -> bool:
+    """Has Chief's introduction already landed for this business? False
+    when there is no arc or the read failed — the caller then falls back
+    to the age-based rule, which is what ran before the arc existed."""
+    row = state(business_id)
+    return bool(row and row.get("intro_delivered_at"))
+
+
+def mark_intro_delivered(business_id: Any) -> bool:
+    """Stamp the introduction as delivered and move the arc to 'walking'.
+    Once. The filter on intro_delivered_at=is.null makes a replay a
+    no-op, and the stamp is what freezes started_at (see the module
+    docstring). Never raises."""
+    biz = str(business_id or "").strip()
+    if not biz:
+        return False
+    row = state(biz)
+    if not row or row.get("intro_delivered_at"):
+        return False
+    try:
+        rows = sb_clients.sb_patch_as_service(
+            f"/first_run_arc?business_id=eq.{biz}",
+            {"intro_delivered_at": _now_iso(), "status": "walking",
+             "updated_at": _now_iso()})
+        return rows is not None
+    except Exception as e:  # pragma: no cover - transport is caught inside sb_clients
+        logger.warning(f"[first-run] intro stamp failed for {biz}: {e}")
+        return False
