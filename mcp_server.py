@@ -269,6 +269,14 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "reminders are on, and how many contacts have replied STOP. No "
         "message contents.",
         _NO_ARGS),
+    "email_setup_status": (
+        "Whether email is actually set up for this business: what address it "
+        "sends from (its own verified domain or the platform address), whether "
+        "the domain is waiting on DNS or has stopped verifying, whether a Gmail "
+        "or Google Workspace inbox is connected and still syncing, whether a "
+        "test email has landed, and the next setup step. Configuration and "
+        "counts only - never a message body.",
+        _NO_ARGS),
     "list_offerings": (
         "The services or packages this business sells, with prices.",
         _NO_ARGS),

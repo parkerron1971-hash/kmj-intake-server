@@ -354,6 +354,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "writer of a key sms_alerts has always read"),
     "sms_status":             _r("keyword, provider readiness, alert switches, the "
                                  "business's own number and an opt-out tally; writes nothing"),
+    "email_setup_status":     _r("sending identity (own domain vs platform), DNS/verify "
+                                 "state incl. drift, connected inbox + sync freshness, last "
+                                 "test; names the next setup step. Writes nothing"),
     # Dedicated numbers (2026-09-02). Buying a line is a recurring charge
     # on the platform's carrier bill and a number clients start texting.
     "provision_sms_number":   _w("C", "buys a phone number on the platform's carrier account "

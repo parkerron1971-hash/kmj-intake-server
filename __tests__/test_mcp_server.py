@@ -141,7 +141,11 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # message body (the conversation itself is not on this surface at
     # all). Same self-description class as site_health. It carries a
     # handoff, because no keyword means inbound texts reach nobody.
-    assert len(tools) == 29, (
+    # 30 (9/2): email_setup_status joined - sending identity, DNS/verify
+    # state incl. drift, inbox + sync freshness, last test, next step.
+    # Configuration and counts, never a message body. Same class as
+    # sms_status; explicitly silent (see SILENT_TOOLS).
+    assert len(tools) == 30, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -556,6 +560,10 @@ SILENT_TOOLS = {
     "propose_brand_kit_from_context",
     "propose_voice_rule", "recall_conversation", "show_revenue",
     "show_view", "site_health", "summarize_module", "what_undo",
+    # email_setup_status (9/2): the next step is a DNS record at the
+    # practitioner's registrar, which no Chief verb can do for them -
+    # the result names the step in words instead.
+    "email_setup_status",
 }
 
 
