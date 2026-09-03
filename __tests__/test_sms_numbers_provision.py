@@ -362,6 +362,30 @@ def test_lifecycle_uses_the_account_token_when_present(monkeypatch):
     twilio_sms._twilio_admin_client.cache_clear()
 
 
+def test_bought_number_carries_its_webhooks(monkeypatch):
+    """A number nobody can reach is not a line. Found live 2026-09-02:
+    inbound on this account is per number, and the first bought number
+    had no sms_url — a reply to it went nowhere."""
+    seen = {}
+
+    class _Numbers:
+        def create(self, **kw):
+            seen.update(kw)
+            return SimpleNamespace(sid="PN_x", phone_number=kw["phone_number"])
+    monkeypatch.setattr(twilio_sms, "_twilio_admin_client",
+                        lambda: SimpleNamespace(incoming_phone_numbers=_Numbers()))
+    monkeypatch.setenv("SMS_WEBHOOK_BASE", "https://example.test/")
+    twilio_sms.buy_number("+12165550100")
+    assert seen["sms_url"] == "https://example.test/webhooks/twilio/sms"
+    assert seen["sms_method"] == "POST"
+    assert seen["status_callback"] == "https://example.test/webhooks/twilio/status"
+
+
+def test_webhook_base_defaults_to_the_live_host(monkeypatch):
+    monkeypatch.delenv("SMS_WEBHOOK_BASE", raising=False)
+    assert twilio_sms.webhook_base() == "https://kmj-intake-server-production.up.railway.app"
+
+
 def test_every_lifecycle_helper_uses_the_admin_client():
     import inspect
     for name in ("search_numbers", "buy_number", "attach_to_service",
