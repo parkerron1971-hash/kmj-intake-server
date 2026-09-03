@@ -177,10 +177,28 @@ def search_numbers(area_code: Optional[str], limit: int = 10) -> list:
     } for n in found]
 
 
+def webhook_base() -> str:
+    """Where Twilio reaches us. The public host, no trailing slash."""
+    return (os.environ.get("SMS_WEBHOOK_BASE")
+            or "https://kmj-intake-server-production.up.railway.app").rstrip("/")
+
+
 def buy_number(phone_number: str) -> dict:
+    """Buy the number WITH its inbound webhook set. Found on the first
+    real provision (2026-09-02): the Messaging Service was configured
+    with use_inbound_webhook_on_number=true and no inbound URL of its
+    own — inbound is per NUMBER on this account, and a freshly bought
+    number has none, so a reply to it went nowhere. The service has
+    since been pointed at /webhooks/twilio/sms for the whole pool; the
+    per-number URL is set here as well so a line answers the door under
+    either service mode."""
+    base = webhook_base()
     pn = _twilio_admin_client().incoming_phone_numbers.create(
-        phone_number=phone_number, friendly_name="Solutionist private line")
-    logger.info(f"bought {pn.phone_number} sid={pn.sid}")
+        phone_number=phone_number, friendly_name="Solutionist private line",
+        sms_url=f"{base}/webhooks/twilio/sms", sms_method="POST",
+        status_callback=f"{base}/webhooks/twilio/status", status_callback_method="POST",
+    )
+    logger.info(f"bought {pn.phone_number} sid={pn.sid} sms_url={base}/webhooks/twilio/sms")
     return {"sid": pn.sid, "phone_number": pn.phone_number}
 
 
