@@ -56,7 +56,7 @@ from pydantic import BaseModel
 from sms_service import (
     _pq, _sb_get, _sb_post, _sb_patch, _sb_headers, _store_sms, _log_event,
     _find_contact_by_phone, normalize_phone, record_inbound_sms,
-    _twilio_configured, is_opted_out, sender_for,
+    _twilio_configured, is_opted_out, sender_for, business_for_number,
 )
 
 logger = logging.getLogger("sms_routing")
@@ -195,16 +195,73 @@ async def route_inbound(
     text: str,
     provider_id: str = "",
     media: Optional[List[Dict[str, Any]]] = None,
+    to_number: str = "",
 ) -> Dict[str, Any]:
     """Layered per the module docstring. Order:
-    STOP/START/HELP → keyword? bind+confirm → binding(s)? route →
-    disambiguate → prompt. Returns {action, ...}; the caller has
-    already validated the Twilio signature (layer 0)."""
+    OWN NUMBER? (the To number is the routing) → STOP/START/HELP →
+    keyword? bind+confirm → binding(s)? route → disambiguate → prompt.
+    Returns {action, ...}; the caller has already validated the Twilio
+    signature (layer 0)."""
     phone = normalize_phone(from_number) or from_number
     body = (text or "").strip()
     first_word = body.split()[0].upper() if body.split() else ""
 
     async with httpx.AsyncClient() as client:
+        # ── Dedicated number (2026-09-02): To IS the routing ──
+        # A customer who texts a business's own line has already said
+        # which business — no keyword, no disambiguation. Consent words
+        # scope to that business (sms_opt_outs.business_id was built
+        # for exactly this). The customer is also bound, so a later
+        # text to the SHARED number still finds them.
+        own = await business_for_number(client, to_number) if to_number else None
+        if own:
+            business_id = own["business_id"]
+            if first_word in STOP_WORDS:
+                logger.info(f"[ROUTE] STOP from {phone} on biz {business_id[:8]}'s own number — scoped opt-out")
+                await _sb_post(client, "/sms_opt_outs?on_conflict=phone,business_id", {
+                    "phone": phone, "business_id": business_id,
+                })
+                return {"action": "opt_out", "business_id": business_id, "reply": None}
+            if first_word in START_WORDS:
+                logger.info(f"[ROUTE] START from {phone} on biz {business_id[:8]}'s own number — scoped opt-out cleared")
+                try:
+                    await client.delete(
+                        f"{os.environ.get('SUPABASE_URL', '').rstrip('/')}/rest/v1"
+                        f"/sms_opt_outs?phone=eq.{_pq(phone)}&business_id=eq.{business_id}",
+                        headers=_sb_headers(),
+                    )
+                except Exception as e:
+                    logger.warning(f"[ROUTE] scoped opt-out clear failed: {e}")
+                return {"action": "opt_in", "business_id": business_id, "reply": None}
+            if first_word in HELP_WORDS:
+                name = await _biz_name(client, business_id)
+                logger.info(f"[ROUTE] HELP from {phone} on biz {business_id[:8]}'s own number")
+                return {"action": "help", "business_id": business_id, "reply": (
+                    f"{sender_brand()}: You've reached {name}. Email "
+                    f"{os.environ.get('SUPPORT_EMAIL', 'kmjcreativesolution@gmail.com')} for help. "
+                    f"Msg & data rates may apply. Reply STOP to opt out."
+                )}
+            logger.info(f"[ROUTE] own-number {phone} → biz {business_id[:8]} (direct)")
+            await _bind(client, phone, business_id)
+            await _ensure_contact(client, business_id, phone)
+            await record_inbound_sms(
+                client, from_number=phone, text=body,
+                provider_id=provider_id, media=media, business_id=business_id,
+            )
+            return {"action": "routed_direct", "business_id": business_id, "reply": None}
+
+        if to_number:
+            import twilio_sms
+            to_clean = normalize_phone(to_number)
+            if to_clean and twilio_sms.platform_number() and to_clean != twilio_sms.platform_number():
+                # A number in the pool that no live row claims — a
+                # released line, or a race with provisioning. Never
+                # dropped: it takes the shared path and says so.
+                import pii_mask
+                logger.warning(
+                    f"[ROUTE] unknown To {pii_mask.mask_phone(to_clean)} — not in sms_numbers "
+                    f"and not the platform number; falling through to the shared path")
+
         # ── Consent keywords (platform-level, before any routing) ──
         if first_word in STOP_WORDS:
             logger.info(f"[ROUTE] STOP from {phone} — platform-wide opt-out recorded")
@@ -487,7 +544,7 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
             if not phone:
                 skipped += 1
                 continue
-            if await is_opted_out(client, phone):
+            if await is_opted_out(client, phone, body.business_id):
                 skipped += 1
                 continue
             try:

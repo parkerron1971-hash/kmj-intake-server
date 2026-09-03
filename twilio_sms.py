@@ -196,7 +196,8 @@ async def twilio_inbound_sms(request: Request):
     body = params.get("Body", "")
     logger.info(f"inbound SMS from={pii_mask.mask_phone(from_number)} len={len(body)}")
 
-    # Routing (2026-07-04, Kevin's architecture): ONE platform number —
+    # Routing (2026-07-04, Kevin's architecture; own numbers 2026-09-02):
+    # a business's OWN number routes by To. Otherwise ONE platform number —
     # Chief routes every inbound BINDING FIRST, KEYWORD SECOND
     # (sms_routing.route_inbound: STOP/START/HELP → keyword bind +
     # connection/consent confirmation → binding route → disambiguate →
@@ -216,6 +217,10 @@ async def twilio_inbound_sms(request: Request):
                 text=body,
                 provider_id=params.get("MessageSid", ""),
                 media=media,
+                # The number the customer texted. A business's own
+                # line routes straight to it; the platform number
+                # takes the keyword/binding path.
+                to_number=params.get("To", ""),
             )
             reply = result.get("reply")
             if reply:

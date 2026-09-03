@@ -157,7 +157,7 @@ async def has_sms_consent(client: httpx.AsyncClient, business_id: str,
     phone = normalize_phone(phone) or (phone or "")
     if not phone:
         return False
-    if await is_opted_out(client, phone):
+    if await is_opted_out(client, phone, business_id):
         return False
     return await _positive_consent(client, business_id, phone)
 
@@ -392,7 +392,7 @@ async def reminder_sweep() -> Dict[str, int]:
                 if not phone:
                     stats["skipped_no_phone"] += 1
                     continue
-                if await is_opted_out(client, phone):
+                if await is_opted_out(client, phone, biz["id"]):
                     stats["skipped_optout"] += 1
                     continue
                 if not await _positive_consent(client, biz["id"], phone):
