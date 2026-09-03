@@ -115,6 +115,7 @@ from chief_workspace_actions import (
 )
 # Texting SETUP — the keyword that routes inbound, and the switch on the
 # automated alerts. See chief_sms_actions module docstring.
+from chief_email_setup_actions import handle_email_setup_status
 from chief_sms_actions import (
     handle_set_sms_alerts,
     handle_set_sms_keyword,
@@ -13341,6 +13342,8 @@ ACTION_HANDLERS = {
     "set_sms_keyword":            handle_set_sms_keyword,
     "set_sms_alerts":             handle_set_sms_alerts,
     "sms_status":                 handle_sms_status,
+    # Email setup room (2026-09-02) — "is my email set up?" read.
+    "email_setup_status":         handle_email_setup_status,
     "provision_sms_number":       handle_provision_sms_number,
     "release_sms_number":         handle_release_sms_number,
     "restore_sms_number":         handle_restore_sms_number,
@@ -16480,6 +16483,7 @@ ACTIONS — TEXT MESSAGES (see TEXT MESSAGES context block above):
   [ACTION:{{"type":"send_sms","to":"+15551234567","message":"..."}}]      — raw phone (skip contact lookup)
   [ACTION:{{"type":"mark_sms_read","contact_name":"Marcus"}}]  — flips that contact's unread texts; omit contact entirely to clear ALL unread texts
   [ACTION:{{"type":"sms_status"}}]  — IS TEXTING ACTUALLY WORKING? Reports the keyword, whether texting is switched on for the account, whether the automated alerts are on, and how many of their contacts have replied STOP. Use it for "why aren't my texts going out?", "is my texting set up?", "did anyone opt out?" — and BEFORE telling them anything is wrong with texting. Never guess at a texting problem you can check.
+  [ACTION:{{"type":"email_setup_status"}}]  — IS EMAIL ACTUALLY SET UP? Reports what address their email sends from (their own domain, verified, or the platform address), whether the domain is waiting on DNS or has stopped verifying, whether an inbox (Gmail / Google Workspace) is connected and still syncing, whether a test email has landed — and names the next step in Build → Email Setup. Use it for "is my email set up?", "why do my emails come from noreply?", "did my domain verify?", "is my inbox connected?" — and BEFORE telling them anything is wrong with email. Never guess at an email problem you can check.
   [ACTION:{{"type":"set_sms_keyword","keyword":"BLOOM"}}]  — claims the word clients text to reach THEM. One number serves the whole platform, so the keyword is what connects a stranger's text to this business: without one, a client texting the number reaches nobody. 3-20 letters/numbers, usually the business name. Tells: "set up texting", "how do people text me?", "I want clients to be able to text". SUGGEST one from their business name rather than asking them to invent it, and confirm before claiming. If it's taken or reserved the action says so — offer the next best.
   [ACTION:{{"type":"set_sms_alerts","reminders":false}}]  — the switch on the AUTOMATED texts: "confirmations" (sent the moment a client books) and "reminders" (24 hours before the appointment). Both are ON by default. Pass either key, or "on":false to switch both. Tells: "stop texting my clients reminders", "turn the confirmation texts back on", "my clients say they're getting too many texts". This does NOT affect anything the practitioner or you send by hand.
   [ACTION:{{"type":"provision_sms_number","area_code":"415"}}]  — gets this business a texting number OF ITS OWN. Clients text it and reach them directly — no keyword — and every text they send goes out from it. It's a paid line on their plan, so CONFIRM BEFORE DOING IT: say what you're about to do ("I'll get you a local 415 number — go ahead?") and act on the yes. Leave area_code out to match the area code of their own phone; pass one when they name it; pass "phone_number" when they picked a specific number. If it isn't on their plan the action says which plan is — tell them that, don't guess. Tells: "get me my own number", "I want a number clients can text", "set up a private line". Run sms_status first if you're not sure whether they already have one.
