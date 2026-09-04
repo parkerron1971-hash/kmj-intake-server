@@ -1,0 +1,61 @@
+{
+  "_about": "The barbershop bench fixture (2026-09-04). A made-up two-chair shop: five services with prices and durations, one testimonial, four phone photos, booking on, no logo, no brand colors. The photo urls do not resolve; `shoot` swaps in labeled stand-ins.",
+  "business": {"id": "00000000-0000-4000-8000-00000000beef", "name": "Marrow & Steel Barber Co.", "type": "barbershop", "slug": "marrow-and-steel"},
+  "founded_year": 2021,
+  "practitioner_name": "Deshawn Ellis",
+  "owner_brief": "I need a website for my barbershop. Marrow & Steel Barber Co in Lakewood. It's me and one other barber, two chairs, walk-ins and appointments. We do classic cuts, skin fades, beard work, and hot towel shaves. I've been cutting 14 years, opened this shop in 2021. I want it to feel like a real shop, not a salon. Dark, clean, a little old-school but not a costume. Guys should be able to book from the site. I don't want it to look like every other barbershop website with the crossed razors and the barber pole. Show the work. We're good at fades and beard lineups and I want that to be obvious. Price list on the site, people always ask.",
+  "booking_url": "https://mysolutionist.app/book/marrow-and-steel",
+  "store_url": "",
+  "offerings": [
+    {"id": "o1", "name": "Classic Cut", "price": 35, "duration_min": 30, "description": "Scissor or clipper cut, shaped to your head and your habits. Neck cleanup and a finish."},
+    {"id": "o2", "name": "Skin Fade", "price": 45, "duration_min": 45, "description": "Down to skin, blended tight, lined up sharp. Low, mid, or high."},
+    {"id": "o3", "name": "Beard Trim & Lineup", "price": 25, "duration_min": 20, "description": "Shaped, edged, and lined. Hot towel and oil to finish."},
+    {"id": "o4", "name": "Hot Towel Shave", "price": 40, "duration_min": 30, "description": "Straight razor, two hot towels, lather, and a cold finish."},
+    {"id": "o5", "name": "The Full Works", "price": 90, "duration_min": 75, "description": "Cut, beard, and hot towel shave in one sitting."}
+  ],
+  "testimonials": [
+    {"id": "t1", "name": "Marcus T.", "quote": "Been going to Deshawn for six years. Only person I trust with a fade. Tomas is just as good, which I didn't think was possible."}
+  ],
+  "gallery": [
+    {"url": "https://cdn.example.invalid/marrow/IMG_4471.jpg", "alt": "IMG_4471.jpg"},
+    {"url": "https://cdn.example.invalid/marrow/IMG_4502.jpg", "alt": "IMG_4502.jpg"},
+    {"url": "https://cdn.example.invalid/marrow/IMG_4388.jpg", "alt": "IMG_4388.jpg"},
+    {"url": "https://cdn.example.invalid/marrow/IMG_4519.jpg", "alt": "IMG_4519.jpg"}
+  ],
+  "contact": {
+    "email": "hello@marrowandsteel.com",
+    "phone": "(216) 555-0148",
+    "address": "14812 Detroit Ave, Lakewood, OH 44107",
+    "hours": "Tue to Fri 10am to 7pm, Sat 9am to 4pm, closed Sun and Mon",
+    "social": {"instagram": "https://instagram.com/marrowandsteel"},
+    "sms_capable": false
+  },
+  "discovery_dossier": {
+    "identity": {
+      "team": [
+        {"name": "Deshawn Ellis", "role": "Owner and barber. Cutting 14 years. Opened the shop in 2021.", "provenance": "asked"},
+        {"name": "Tomas Reyes", "role": "Barber. Joined in 2023.", "provenance": "asked"}
+      ],
+      "shop": {"value": "Two chairs. Walk-ins and appointments.", "provenance": "asked"}
+    },
+    "taste": {
+      "tone_words": {"value": ["real", "sharp", "no nonsense"], "provenance": "asked"},
+      "visual_style": {"value": "dark, clean, a little old-school but not a costume; a real shop, not a salon", "provenance": "asked"},
+      "bans": {"value": ["crossed razors", "barber pole", "the salon look", "looking like every other barbershop site"], "provenance": "asked"}
+    },
+    "signature": {
+      "differentiator": {"value": "Fades and beard lineups. Two barbers who are both actually good.", "provenance": "asked"},
+      "must_show": {"value": "the work; a price list", "provenance": "asked"}
+    },
+    "capabilities": {"booking": {"value": "on", "provenance": "asked"}, "store": {"value": "off", "provenance": "asked"}},
+    "truth": {"proven_stats": [], "colors_must": [], "colors_avoid": []}
+  },
+  "spec_plan": [
+    {"module": "hero", "variant": "cinematic", "content": {"eyebrow": "", "headline": "", "subheadline": "", "cta_label": ""}},
+    {"module": "offerings", "variant": "menu", "content": {"eyebrow": "", "headline": "", "intro": ""}},
+    {"module": "gallery", "variant": "mosaic", "content": {"eyebrow": "", "headline": "", "statement_1": "", "statement_2": "", "statement_3": ""}},
+    {"module": "testimonials", "variant": "spotlight", "content": {"eyebrow": "", "headline": ""}},
+    {"module": "about", "variant": "portrait", "content": {"eyebrow": "", "headline": "", "body": "", "pull_quote": ""}},
+    {"module": "contact", "variant": "standard", "content": {"headline": "", "note": "", "cta_label": ""}}
+  ]
+}
