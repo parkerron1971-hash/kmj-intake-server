@@ -1,16 +1,17 @@
-"""Build the KMJ Creative Solutions site into the SQL that installs it.
+"""Build the KMJ Creative Solutions site.
 
-    python sites/kmj-creative-solutions/build.py
+Installing it is NOT a step here: site_sync.py renders these pages on
+every boot through render_pages() and writes them into the business_sites
+row when their hash changed. Merge → deploy → live.
+
+    python sites/kmj-creative-solutions/build.py [--inline]
 
 Writes:
   sites/kmj-creative-solutions/dist/{home,about,services,contact}.html
       — the assembled pages, for a local look in a browser
-  supabase/APPLY-2026-09-03-kmj-site-manual.sql
-      — one UPDATE on the business_sites row (slug kmj-creative-solutions)
-        that installs the pages and marks the row html_source = "manual"
   supabase/ROLLBACK-2026-09-03-kmj-site-manual.sql
       — restores the previous html_content / generated_pages / html_source
-        from the backup the APPLY stores under site_config.manual_backup
+        from the backup site_sync keeps under site_config.manual_backup
 
 Serve-time tokens left in the HTML on purpose (public_site.py fills them):
   {{BUSINESS_EMAIL}}       the business's verified sending address
@@ -120,13 +121,18 @@ def assemble(page: str, css: str, nav: str, footer: str, logo: str, signature: s
     return html
 
 
-def main() -> None:
-    inline = "--inline" in sys.argv
+def render_pages(inline: bool = False) -> dict:
+    """The site_sync contract: every page, assembled, keyed by page id."""
     css = _read("site.css")
     nav = _read("_nav.html")
     footer = _read("_footer.html")
     logo, signature = _image_refs(inline)
-    pages = {p: assemble(p, css, nav, footer, logo, signature) for p in PAGES}
+    return {p: assemble(p, css, nav, footer, logo, signature) for p in PAGES}
+
+
+def main() -> None:
+    inline = "--inline" in sys.argv
+    pages = render_pages(inline)
 
     dist = os.path.join(HERE, "dist")
     os.makedirs(dist, exist_ok=True)
@@ -135,54 +141,13 @@ def main() -> None:
             f.write(html)
         print(f"{p}: {len(html):,} bytes")
     if inline:
-        print("--inline: dist/ has data-URI images for a local look; the SQL was NOT written")
+        print("--inline: dist/ has data-URI images for a local look")
         return
 
-    def q(s: str) -> str:
-        return f"{DOLLAR}{s}{DOLLAR}"
-
-    generated = ",\n      ".join(
-        f"'{p}', {q(pages[p])}" for p in ("about", "services", "contact"))
-    apply_sql = f"""-- APPLY-{DATE}-kmj-site-manual.sql
--- Installs the hand-built KMJ Creative Solutions site (sites/kmj-creative-solutions/)
--- into its business_sites row and marks it html_source = "manual", which tells
--- public_site.py to serve it as-is (overrides + the business email filled at
--- serve time) and tells the composer's refresh path to leave it alone.
---
--- Apply AFTER the backend that understands html_source = "manual" is live on
--- main, otherwise {{{{BUSINESS_EMAIL}}}} shows literally until it deploys.
--- The previous page set is kept under site_config.manual_backup; see the
--- ROLLBACK file to put it back.
-BEGIN;
-
-UPDATE business_sites
-SET
-  html_content = {q(pages["home"])},
-  site_config = (COALESCE(site_config, '{{}}'::jsonb)
-    || jsonb_build_object(
-      'manual_backup', jsonb_build_object(
-        'saved_at', now(),
-        'html_content', html_content,
-        'html_source', site_config->'html_source',
-        'generated_pages', site_config->'generated_pages',
-        'site_pages', site_config->'site_pages'
-      ),
-      'html_source', 'manual',
-      'site_type', 'multi-page',
-      'site_pages', '["home","about","services","contact"]'::jsonb,
-      'generated_pages', jsonb_build_object(
-      {generated}
-      )
-    )),
-  status = 'published',
-  updated_at = now()
-WHERE slug = '{SLUG}';
-
--- Expect: UPDATE 1
-COMMIT;
-"""
     rollback_sql = f"""-- ROLLBACK-{DATE}-kmj-site-manual.sql
--- Puts back the page set that APPLY-{DATE}-kmj-site-manual.sql replaced.
+-- Puts back the page set site_sync replaced when it first installed the
+-- hand-built site (kept under site_config.manual_backup). Set SITE_SYNC=off
+-- on Railway first, or the next boot installs it again.
 BEGIN;
 
 UPDATE business_sites
@@ -201,11 +166,9 @@ WHERE slug = '{SLUG}' AND site_config ? 'manual_backup';
 COMMIT;
 """
     sb = os.path.join(ROOT, "supabase")
-    with open(os.path.join(sb, f"APPLY-{DATE}-kmj-site-manual.sql"), "w", encoding="utf-8") as f:
-        f.write(apply_sql)
     with open(os.path.join(sb, f"ROLLBACK-{DATE}-kmj-site-manual.sql"), "w", encoding="utf-8") as f:
         f.write(rollback_sql)
-    print(f"wrote supabase/APPLY-{DATE}-kmj-site-manual.sql ({len(apply_sql):,} bytes) and the ROLLBACK")
+    print(f"wrote supabase/ROLLBACK-{DATE}-kmj-site-manual.sql; install happens on deploy (site_sync.py)")
 
 
 if __name__ == "__main__":

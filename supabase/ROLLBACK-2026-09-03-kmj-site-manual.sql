@@ -1,5 +1,7 @@
 -- ROLLBACK-2026-09-03-kmj-site-manual.sql
--- Puts back the page set that APPLY-2026-09-03-kmj-site-manual.sql replaced.
+-- Puts back the page set site_sync replaced when it first installed the
+-- hand-built site (kept under site_config.manual_backup). Set SITE_SYNC=off
+-- on Railway first, or the next boot installs it again.
 BEGIN;
 
 UPDATE business_sites
