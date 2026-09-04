@@ -236,10 +236,13 @@ def test_a_run_acts_through_the_door_unattended_and_never_executes_a_tag(monkeyp
     monkeypatch.setattr(cos, "_execute_actions", _door)
 
     async def fake_claude(client, system, messages, **kw):
-        assert kw.get("read_tools"), "the agent gets the tools"
         assert kw.get("enable_web_search") is False
-        assert "acting on your own" in system
         assert "booking_created" in messages[0]["content"]
+        if not kw.get("read_tools"):
+            # The plan call (outcome_ledger arc): no tools, written first.
+            assert "before you touch" in system.lower()
+            return "Ada booked Thursday; I will note it on her record."
+        assert "acting on your own" in system
         await ctl.execute_tool_use(None, BIZ, "create_note",
                                    {"contact_id": "c1", "note": "New booking Thursday"})
         return ('You have a new booking from Ada on Thursday; I noted it on her record. '

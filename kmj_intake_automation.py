@@ -238,6 +238,9 @@ app.include_router(chief_agent_router)
 # Assignments (2026-09-04): the outcomes the standing agent works over days.
 from chief_assignments import router as chief_assignments_router
 app.include_router(chief_assignments_router)
+# Outcomes (2026-09-04): what came of Chief's moves, per business.
+from outcome_ledger import router as outcome_ledger_router
+app.include_router(outcome_ledger_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
 app.include_router(email_router)
@@ -1427,6 +1430,15 @@ async def startup():
                           "interval", hours=1, id="proposal_life")
     except Exception as e:
         print(f"   [warn] proposal life tick not scheduled: {e}")
+    # The outcome ledger (2026-09-04): every six hours, fill in what
+    # came of Chief's moves with plain reads, and tell a practitioner
+    # once when a proposal verb retires. Kill switch: OUTCOME_LEDGER=off.
+    try:
+        import outcome_ledger as _outcome_ledger
+        scheduler.add_job(g("outcome_ledger", _outcome_ledger.outcomes_tick),
+                          "interval", hours=6, id="outcome_ledger")
+    except Exception as e:
+        print(f"   [warn] outcome ledger tick not scheduled: {e}")
     # Shared rate windows (2026-09-04): drop rows nobody touched in a
     # day, and re-arm the shared path so a migration applied after boot
     # is picked up without a restart.
