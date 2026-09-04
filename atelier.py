@@ -370,6 +370,26 @@ def plan_bespoke(dro: Optional[Dict[str, Any]], spec: List[Dict[str, Any]],
 
 # ─── Section data (the ONLY facts the LLM may render) ─────────────────
 
+def _offering_row(o: Dict[str, Any]) -> Dict[str, Any]:
+    """One offering as the authors read it: name, price, description,
+    and the duration in minutes when the row carries one (absent, never
+    null, so a missing duration is simply not on file)."""
+    row: Dict[str, Any] = {
+        "name": o.get("name") or "",
+        "price": o.get("price"),
+        "description": str(o.get("description") or "")[:200],
+    }
+    d = o.get("duration_min")
+    if d is None:
+        d = o.get("duration_minutes")
+    try:
+        if d is not None and int(d) > 0:
+            row["duration_min"] = int(d)
+    except (TypeError, ValueError):
+        pass
+    return row
+
+
 def _section_data(kind: str, section_copy: Dict[str, Any],
                   ctx: Dict[str, Any]) -> Dict[str, Any]:
     biz = ctx.get("business") or {}
@@ -427,11 +447,15 @@ def _section_data(kind: str, section_copy: Dict[str, Any],
         if about.strip():
             data["about"] = about.strip()[:700]
     if kind == "offerings":
+        # DURATIONS RIDE THE DATA (2026-09-04, the barbershop bench). The
+        # offerings table has carried duration_min since the router's
+        # first day, and the old module renderer prints it, but this
+        # block — the single source both the Director's inventory and
+        # builder_v2's REAL DATA read — dropped it. A skin fade is $45
+        # AND 45 minutes; a service menu without the second number is
+        # what the field research calls a template.
         data["offerings"] = [
-            {"name": o.get("name") or "",
-             "price": o.get("price"),
-             "description": str(o.get("description") or "")[:200]}
-            for o in (ctx.get("offerings") or [])[:8]]
+            _offering_row(o) for o in (ctx.get("offerings") or [])[:8]]
     if kind == "testimonials":
         quotes = []
         for t in (ctx.get("testimonials") or [])[:4]:

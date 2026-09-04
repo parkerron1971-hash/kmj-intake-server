@@ -117,7 +117,7 @@ A business site is GENEROUS. Rich sections executed cleanly beat austere concept
 THE COVERAGE LAW (equal in force to the truth law):
 Every real asset in the dossier gets a home on the page. Omitting real material is a violation exactly as serious as inventing fake material.
 - A fixed NAVIGATION with the business name and section links. Always.
-- EVERY real service/offering appears — each with its own cell/card and copy.
+- EVERY real service/offering appears — each with its own cell/card and copy, its price, and its duration when the inventory carries duration_min (a service menu that says $45 and not 45 minutes is half a menu).
 - EVERY real portfolio/gallery image appears, referenced by its exact url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists. AUTHOR a proper display caption for each piece (a caption describes what the piece is — it is copy, yours to write; a raw filename is data and must never render as a caption). CAPTION TRUTH: describe only what the labeled image actually shows — a caption bound to the wrong url is a truth violation. NO CONDITIONAL ENTRIES: the inventory is definitive; never write "(if provided — otherwise omit)" rows. Spec what exists, exactly.
 - The owner's PORTRAIT appears if provided (about section).
 - Every real testimonial/quote appears.
