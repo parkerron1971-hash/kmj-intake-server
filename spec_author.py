@@ -487,6 +487,27 @@ def _call_llm(system: str, user: str, business_id: str,
         return None
 
 
+def attach_language(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Optional[str]:
+    """THE PICK BINDS (2026-09-04): resolve the design language onto ctx
+    before the brief compiles, so the Director's document speaks the
+    language the owner chose (or the rationale's, or the rubric's).
+    canvas_brief prints THE DESIGN LANGUAGE block only when ctx carries
+    language_key + language_brief_text, and only the canvas run used to
+    set them; the Director never saw a language at all. Fail-open."""
+    try:
+        import design_languages as dl
+        key, because, by = dl.resolve(ctx, dro)
+        if key:
+            ctx["language_key"] = key
+            ctx["language_because"] = because
+            ctx["language_by"] = by
+            ctx["language_brief_text"] = dl.brief_for(key)
+        return key
+    except Exception as e:
+        logger.info(f"[spec] language attach skipped: {e}")
+        return None
+
+
 def author_spec(business_id: str, ctx: Dict[str, Any],
                 dro: Optional[Dict[str, Any]],
                 spec_plan: List[Dict[str, Any]],
@@ -495,6 +516,7 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
     surfaces the failure; nothing is persisted here)."""
     try:
         import canvas_brief
+        attach_language(ctx, dro)
         dossier = canvas_brief.compile_canvas_brief(ctx, dro, spec_plan)
     except Exception as e:
         logger.warning(f"[spec] dossier compile failed ({e}) — minimal dossier")
