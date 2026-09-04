@@ -83,13 +83,18 @@ def _image_refs(inline: bool):
     return _asset_url("logo.webp"), _asset_url("signature.webp")
 
 
-def _portrait(signature: str) -> str:
-    """The founder art block. Swap for a real photo when one arrives:
-    return f'<img class="photo" src="..." alt="Kevin McCloud Jr.">'."""
-    return f'<img src="{signature}" alt="Kevin McCloud Jr., founder of KMJ Creative Solutions">'
+def _photo_refs(inline: bool):
+    """Kevin's portrait (assets/kevin.webp, a transparent cut-out) and the
+    Solutionist System dashboard (assets/dashboard.webp)."""
+    if inline:
+        return _data_uri("kevin.webp"), _data_uri("dashboard.webp")
+    return _asset_url("kevin.webp"), _asset_url("dashboard.webp")
 
 
-def assemble(page: str, css: str, nav: str, footer: str, logo: str, signature: str) -> str:
+def assemble(page: str, css: str, nav: str, footer: str, logo: str, signature: str,
+             kevin: str = "", dashboard: str = "") -> str:
+    if not kevin or not dashboard:
+        kevin, dashboard = _photo_refs(inline=logo.startswith("data:"))
     title, desc = PAGES[page]
     body = _read(f"{page}.html")
     html = (
@@ -108,7 +113,8 @@ def assemble(page: str, css: str, nav: str, footer: str, logo: str, signature: s
     )
     html = (html.replace("{{LOGO}}", logo)
                 .replace("{{SIGNATURE}}", signature)
-                .replace("{{PORTRAIT}}", _portrait(signature))
+                .replace("{{KEVIN}}", kevin)
+                .replace("{{DASHBOARD}}", dashboard)
                 .replace("{{API_BASE}}", API_BASE)
                 .replace("{{BUSINESS_ID}}", BUSINESS_ID)
                 .replace("{{SOLUTIONIST_URL}}", SOLUTIONIST_URL))
@@ -127,7 +133,8 @@ def render_pages(inline: bool = False) -> dict:
     nav = _read("_nav.html")
     footer = _read("_footer.html")
     logo, signature = _image_refs(inline)
-    return {p: assemble(p, css, nav, footer, logo, signature) for p in PAGES}
+    kevin, dashboard = _photo_refs(inline)
+    return {p: assemble(p, css, nav, footer, logo, signature, kevin, dashboard) for p in PAGES}
 
 
 def main() -> None:
