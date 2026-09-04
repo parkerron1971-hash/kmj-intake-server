@@ -1035,6 +1035,13 @@ def tool_definitions(caller: Optional["Caller"] = None) -> List[Dict[str, Any]]:
         description, schema = entry
         out.append({"name": verb, "description": description,
                     "inputSchema": schema})
+    if allow_writes:
+        # PROPOSALS (2026-09-04): the reviewed class C verbs, as
+        # propose_* tools that file for the practitioner's approval and
+        # run nothing. exposed_tools() is untouched — no class C verb
+        # is ever a tool — and these appear only where a write key is.
+        import action_proposals
+        out += action_proposals.tool_definitions()
     return out
 
 
@@ -1451,6 +1458,54 @@ def _tier_allows(biz: Optional[Dict[str, Any]]) -> bool:
 
 # ─── Dispatch ────────────────────────────────────────────────────────
 
+async def _file_proposal(name: str, arguments: Dict[str, Any],
+                         caller: Caller) -> Tuple[bool, bool, Any, Optional[str]]:
+    import asyncio
+    import action_proposals
+    if not caller.may_write:
+        return (False, False,
+                f"tool {name!r} files a proposal for the practitioner and needs a "
+                "key with the 'write' scope. Ask the practitioner to grant one in "
+                "Agent Access.", None)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        biz = await _resolve_business(client, caller)
+    if not biz:
+        return True, False, "no business resolved for this account", None
+    business_id = str(biz.get("id") or "") or None
+    if not _tier_allows(biz):
+        _ledger(business_id, name, caller, allowed=False, ok=False,
+                reason="plan:agent_connector")
+        return (False, False,
+                "Connecting an outside agent to this business needs the "
+                "Professional plan. Everything here stays available "
+                "inside Solutionist.", business_id)
+    try:
+        action = action_proposals.action_for(name, arguments)
+    except ValueError as e:
+        _ledger(business_id, name, caller, allowed=True, ok=False,
+                reason="proposal", error=str(e)[:200])
+        return True, False, str(e), business_id
+    try:
+        qid = await asyncio.to_thread(
+            action_proposals.file, business_id or "", action,
+            actor=f"agent:{caller.actor}", surface="agent")
+    except Exception as e:
+        _ledger(business_id, name, caller, allowed=True, ok=False,
+                reason="proposal", error=f"{type(e).__name__}")
+        return True, False, "the proposal could not be filed", business_id
+    if not qid:
+        _ledger(business_id, name, caller, allowed=True, ok=False,
+                reason="proposal", error="insert failed")
+        return True, False, "the proposal could not be filed", business_id
+    _ledger(business_id, name, caller, allowed=True, ok=True, reason="proposal:filed")
+    return True, True, {
+        "proposed": True, "queue_id": qid,
+        "label": action_proposals.describe(action),
+        "note": ("Filed for the practitioner's approval in their queue. Nothing "
+                 "has been sent, charged or published; it runs only if they approve."),
+    }, business_id
+
+
 async def _call_tool(name: str, arguments: Dict[str, Any],
                      caller: Caller) -> Tuple[bool, bool, Any, Optional[str]]:
     """Run one exposed verb.
@@ -1464,6 +1519,15 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
     # refused even for a verb that is otherwise perfectly exposable.
     if caller.kind == "token" and SCOPE_READ not in caller.scopes:
         return False, False, "token lacks the 'read' scope", None
+
+    # A PROPOSAL is not a call to the verb it names. It files an
+    # Approval Queue row and runs nothing; the practitioner's Approve is
+    # what runs it, prompted, through the same door as a chat action.
+    # Write scope, the tier gate and the ledger apply exactly as for a
+    # write; the policy engine is asked when the person approves.
+    import action_proposals
+    if name in action_proposals.PROPOSALS:
+        return await _file_proposal(name, arguments, caller)
 
     # Authorization, from the registry. Not a list kept here.
     #

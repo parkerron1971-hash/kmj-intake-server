@@ -6231,6 +6231,15 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
         "reviewed_at": now_iso,
     })
 
+    # A PROPOSED ACTION (2026-09-04). An agent that is not the practitioner
+    # — the standing agent, or a connected ChatGPT / Claude — proposed a
+    # class C verb (action_proposals). Approve is the person asking, so
+    # it runs through the door prompted, on surface "approval". Dismiss
+    # never reaches here.
+    if item.get("channel") == "action" or item.get("action_type") == "chief_action":
+        import action_proposals
+        return {**result, **(await action_proposals.execute(client, biz, item))}
+
     # THE BROWSER HAND (2026-09-04). A proposal on channel "hand" is not a
     # message: approving it starts a bounded browser job. Same audited
     # door as every other approval (the endpoint, the verb, autopilot all
@@ -6336,6 +6345,12 @@ def _approve_label(subject: Optional[str], delivery: Dict[str, Any]) -> str:
         target = " to " + " ".join(to_parts) if to_parts else ""
         return f"📧 Sent: {subj}{target}"
     reason = delivery.get("reason") or ""
+    if reason == "action_ran":
+        return f"✓ Approved and done: {delivery.get('action_label') or subj}"
+    if reason == "action_failed":
+        return f"✓ Approved, but it did not go through: {subj} — {delivery.get('message') or 'see History'}"
+    if reason == "action_spec_invalid":
+        return f"✓ Approved, but this proposal could not be read back: {subj}"
     if reason == "hand_started":
         return f"🖐 Approved — the hand is on it: {subj}"
     if reason == "hand_busy":

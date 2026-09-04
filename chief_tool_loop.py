@@ -197,10 +197,18 @@ def write_tool_definitions() -> List[Dict[str, Any]]:
 
 
 def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
-    """Reads always; writes when the turn allows them."""
+    """Reads always; writes when the turn allows them; PROPOSALS — the
+    reviewed class C verbs, filed for the practitioner's approval rather
+    than run — only off the chat turn (the standing agent), where nobody
+    is there to say yes. On the practitioner's own turn the tag path
+    already runs a class C verb under the class-C gate, and a proposal
+    would be a slower way of saying yes to someone sitting right there."""
     tools = read_tool_definitions()
     if writes:
         tools += write_tool_definitions()
+        if _turn_surface.get() != "chat" or not _turn_prompted.get():
+            import action_proposals
+            tools += [_anthropic_shape(t) for t in action_proposals.tool_definitions()]
     return tools
 
 
@@ -233,6 +241,10 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     tool_use block gets a refusal it can read, never an execution.
     """
     import chief_of_staff  # runtime import — this module loads first
+
+    import action_proposals
+    if name in action_proposals.PROPOSALS:
+        return await _file_proposal(client, biz, name, args)
 
     effect = action_registry.effect(name)
     if effect == action_registry.WRITE and name not in _EXCLUDED:
@@ -342,6 +354,52 @@ async def _execute_write(client, biz: Dict[str, Any],
     if chief_of_staff._action_failed(result):
         return True, _shrink(result)
     return False, _shrink(result)
+
+
+async def _file_proposal(client, biz: Dict[str, Any],
+                         name: str, args: Dict[str, Any]) -> Tuple[bool, str]:
+    """A class C verb, proposed. Never executed here: the row goes to the
+    Approval Queue and _do_approve_one runs it when a person approves.
+    Spends the write budget like a write — it is one, deferred."""
+    import asyncio
+    import action_proposals
+    import chief_of_staff
+
+    if not _writes_allowed.get():
+        return True, (f"'{name}' is not available on this turn.")
+    if _turn_surface.get() == "chat" and _turn_prompted.get():
+        return True, ("You are on the practitioner's own turn: do this directly "
+                      "with its [ACTION:] tag; proposals are for when nobody asked.")
+    if _writes_closed.get():
+        return True, ("The write budget for this turn is spent. Say what is still "
+                      "to do; do not retry.")
+    try:
+        action = action_proposals.action_for(name, args)
+    except ValueError as e:
+        return True, f"'{name}': {e}"
+
+    _calls_this_turn.set(_calls_this_turn.get() + 1)
+    _write_calls.set(_write_calls.get() + 1)
+    if _write_calls.get() >= MAX_WRITE_CALLS:
+        _writes_closed.set(True)
+
+    try:
+        qid = await asyncio.to_thread(
+            action_proposals.file, str(biz.get("id") or ""), action,
+            actor="chief:agent", surface=_turn_surface.get())
+    except Exception as e:
+        logger.warning(f"[tool-loop] proposal {name} failed: {e}")
+        qid = None
+    sentence = action_proposals.describe(action)
+    if not qid:
+        return True, f"'{name}' could not be filed. Tell the practitioner in your recap instead."
+    record = {"type": action["type"], "result": "proposed",
+              "label": f"📝 Proposed for approval: {sentence}",
+              "queue_id": qid, "proposed": True,
+              "nav": chief_of_staff._nav("operate", "queue")}
+    _writes_this_turn.set(_writes_this_turn.get() + [record])
+    return False, (f"Filed for the practitioner's approval (queue {qid}): {sentence}. "
+                   "Nothing has been sent or charged; say so in your recap.")
 
 
 async def run_tool_round(client, biz: Dict[str, Any],
