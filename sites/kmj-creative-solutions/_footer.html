@@ -44,7 +44,8 @@
     els.forEach(function (el) { if (el.classList.contains('reveal')) io.observe(el); });
   }
   var layers = Array.prototype.slice.call(document.querySelectorAll('[data-depth]'));
-  if (!still && layers.length) {
+  var pending = Array.prototype.slice.call(document.querySelectorAll('.reveal'));
+  if (!still && (layers.length || pending.length)) {
     var ticking = false;
     var frame = function () {
       var y = window.scrollY || window.pageYOffset || 0;
@@ -54,11 +55,23 @@
           el.style.transform = 'translate3d(0,' + Math.round(y * d) + 'px,0)';
         });
       }
+      // Failsafe for the reveal: anything already in the viewport shows,
+      // whether or not the observer has had its turn yet.
+      if (pending.length) {
+        var vh = window.innerHeight || 800;
+        pending = pending.filter(function (el) {
+          if (el.classList.contains('in')) return false;
+          var r = el.getBoundingClientRect();
+          if (r.top < vh && r.bottom > 0) { el.classList.add('in'); return false; }
+          return true;
+        });
+      }
       ticking = false;
     };
     window.addEventListener('scroll', function () {
       if (!ticking) { ticking = true; window.requestAnimationFrame(frame); }
     }, { passive: true });
+    window.setTimeout(frame, 900);
   }
   var t = document.querySelector('[data-nav-toggle]');
   var l = document.querySelector('[data-nav-links]');
