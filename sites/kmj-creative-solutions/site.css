@@ -99,7 +99,7 @@ p, h1, h2, h3 { margin: 0; }
 [data-depth] { will-change: transform; }
 
 /* scroll reveal — added by script, so no script means everything simply shows */
-.reveal { opacity: 0; transform: translateY(22px); transition: opacity .7s var(--ease), transform .7s var(--ease); transition-delay: calc(var(--i, 0) * 70ms); }
+.reveal { opacity: 0.22; transform: translateY(18px); transition: opacity .55s var(--ease), transform .55s var(--ease); transition-delay: calc(var(--i, 0) * 60ms); }
 .reveal.in { opacity: 1; transform: none; }
 
 /* sections */
