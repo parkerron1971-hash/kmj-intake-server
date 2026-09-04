@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import UserSession, require_user_session
+from business_access import business_access
 
 logger = logging.getLogger("chief_jobs")
 router = APIRouter(prefix="/agents/chief", tags=["chief-jobs"])
@@ -578,6 +579,10 @@ async def hand_runs(
     business_id: str,
     limit: int = 10,
     user_session: UserSession = Depends(require_user_session),
+    # Frames carry whatever a third-party site showed; a seat below
+    # member does not get them. Same 404-for-both answer as every
+    # guarded route (business_access), on top of the user_id filter.
+    _biz: Dict[str, Any] = Depends(business_access("member")),
 ):
     """What the browser hand did, frame by frame (browser_hand.py). One
     entry per run the practitioner approved: the task, what stopped it,

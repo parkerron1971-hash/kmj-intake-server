@@ -52,7 +52,7 @@ def test_runs_are_scoped_signed_and_shaped(monkeypatch):
     monkeypatch.setattr(storage_links, "signed_url_sync",
                         lambda bucket, path, ttl=3600, download_as=None: f"https://signed/{bucket}/{path}?ttl={ttl}")
 
-    out = asyncio.run(chief_jobs.hand_runs("biz-1", 5, _Session()))
+    out = asyncio.run(chief_jobs.hand_runs("biz-1", 5, _Session(), _biz={"id": "biz-1"}))
     q = seen[0]
     assert "user_id=eq.own-1" in q and "business_id=eq.biz-1" in q and "kind=eq.browser_hand" in q
     assert "limit=5" in q
@@ -77,12 +77,18 @@ def test_a_broken_signer_costs_the_link_not_the_run(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("storage down")
     monkeypatch.setattr(storage_links, "signed_url_sync", boom)
-    out = asyncio.run(chief_jobs.hand_runs("biz-1", 10, _Session()))
+    out = asyncio.run(chief_jobs.hand_runs("biz-1", 10, _Session(), _biz={"id": "biz-1"}))
     assert out["runs"][0]["steps"][0]["frame_url"] is None
     assert out["runs"][0]["summary"] == "Renews 2027-01-15"
+
+
+def test_the_route_is_guarded_by_business_access():
+    import inspect
+    sig = inspect.signature(chief_jobs.hand_runs)
+    assert "_biz" in sig.parameters, "business_access is the guard the ratchet counts"
 
 
 def test_no_user_no_runs():
     class _NoUser:
         user = None
-    assert asyncio.run(chief_jobs.hand_runs("biz-1", 10, _NoUser())) == {"runs": []}
+    assert asyncio.run(chief_jobs.hand_runs("biz-1", 10, _NoUser(), _biz={"id": "biz-1"})) == {"runs": []}
