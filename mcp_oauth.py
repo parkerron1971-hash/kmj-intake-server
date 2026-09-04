@@ -27,9 +27,19 @@ HOW THE OWNER PROVES IT IS THEM
   authentication surface at all: the key is already revocable, already
   named, already audited, and already the thing that grants this access.
 
-  This does NOT generalise to customers. Stage 4 needs real per-user
-  login. Single tenant is what makes this acceptable, and the moment a
-  second tenant exists it stops being.
+  Stage 4 (2026-09-03) opened this to every practitioner, and the key IS
+  the per-user login: a key names its business in a signed claim, only
+  that business's owner can mint one (mcp_server._owned_business), and
+  the consent screen resolves the business from the key rather than
+  from anything the client sent. The key also carries the SCOPE the
+  practitioner chose when they made it, and the grant can never exceed
+  it — see _granted_scopes. A bounce through the app's own session would
+  be nicer UX; it is not more secure than this, and it is two repos to
+  debug from a phone.
+
+  It still does NOT generalise to a practitioner's CUSTOMERS. They hold
+  no Agent Access key and never should; the client surface is
+  customer_token.py's, evaluated by policy_engine.evaluate_client.
 
 OPEN DYNAMIC REGISTRATION IS SAFE HERE
   RFC 7591 registration is unauthenticated, per spec, so Claude.ai can
@@ -75,7 +85,23 @@ ACCESS_TTL_DAYS = 90
 REFRESH_TTL_DAYS = 365
 
 SCOPE_READ = "read"
-SUPPORTED_SCOPES = (SCOPE_READ,)
+SCOPE_WRITE = "write"
+SUPPORTED_SCOPES = (SCOPE_READ, SCOPE_WRITE)
+
+
+def _requested_scopes(scope: str) -> List[str]:
+    """The space-separated OAuth scope string, as a list of ones we know.
+    Unknown scopes are dropped, never echoed back as granted."""
+    return [s for s in (scope or "").split() if s in SUPPORTED_SCOPES] or [SCOPE_READ]
+
+
+def _granted_scopes(requested: List[str], key_scopes: List[str]) -> List[str]:
+    """What the grant actually carries: the client asked for X, the key
+    the practitioner pasted carries Y, the token gets X ∩ Y (always at
+    least read). The key is the practitioner's decision about how much
+    their agent may do; the client cannot ask its way past it."""
+    import mcp_tokens
+    return mcp_tokens.normalize_scopes([s for s in requested if s in key_scopes])
 
 DEFAULT_BASE_URL = "https://kmj-intake-server-production.up.railway.app"
 
@@ -448,7 +474,7 @@ async def register_client(body: _RegisterBody, request: Request):
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
-            "scope": SCOPE_READ,
+            "scope": " ".join(SUPPORTED_SCOPES),
         })
 
 
@@ -483,12 +509,27 @@ button { flex:1; padding:11px 16px; border-radius:9px; font-size:14px;
 """
 
 
+_GRANT_READ = (
+    "<b>Read-only.</b> It can see contacts, revenue, pipeline and site "
+    "data. It cannot send, charge, delete, or change anything.")
+_GRANT_WRITE = (
+    "<b>Read, and keep records.</b> It can see your business and change "
+    "what you can take back: contacts, tasks, notes, sessions on your "
+    "calendar, availability, expenses, logged time, and drafts you approve "
+    "later. It cannot send anything to a client, charge anyone, or delete "
+    "for good — those are never available to a connected agent.<br><br>"
+    "Only a key created with the <b>write</b> scope grants this; a read-only "
+    "key connects read-only.")
+
+
 def _consent_page(*, client_name: str, params: Dict[str, str],
                   error: Optional[str] = None) -> HTMLResponse:
     hidden = "".join(
         f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">'
         for k, v in params.items() if v)
     err_html = f'<div class="err">{html.escape(error)}</div>' if error else ""
+    wants_write = SCOPE_WRITE in _requested_scopes(params.get("scope") or "")
+    grant = _GRANT_WRITE if wants_write else _GRANT_READ
     body = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -499,16 +540,15 @@ def _consent_page(*, client_name: str, params: Dict[str, str],
 <p><b>{html.escape(client_name)}</b> is asking to connect to your Solutionist
 business.</p>
 {err_html}
-<div class="grant"><b>Read-only.</b> It can see contacts, revenue, pipeline and
-site data. It cannot send, charge, delete, or change anything.</div>
+<div class="grant">{grant}</div>
 <label for="key">Paste an Agent Access key</label>
 <input id="key" name="agent_key" type="password" required autofocus
-       placeholder="from Mission Control → Agent Access" spellcheck="false">
+       placeholder="from Settings → Agent Access in Solutionist" spellcheck="false">
 <div class="row">
   <button class="deny" type="submit" name="decision" value="deny">Deny</button>
   <button class="approve" type="submit" name="decision" value="approve">Approve</button>
 </div>
-<p class="foot">Revoke any time in Mission Control → Agent Access.</p>
+<p class="foot">Revoke any time in Settings → Agent Access.</p>
 </form></body></html>"""
     return HTMLResponse(
         content=body,
@@ -677,14 +717,20 @@ async def authorize_post(
             error="Connecting an outside agent needs the Professional plan. "
                   "Everything here stays available inside Solutionist.")
 
+    # The grant is what the client asked for, capped by what the pasted
+    # key carries. A read-only key answering a `write` request yields a
+    # read-only connection — silently narrower, never silently wider.
+    granted = _granted_scopes(_requested_scopes(scope),
+                              list(claims.get("scp") or []))
     code = secrets.token_urlsafe(32)
     if not _store_code(code=code, client_id=client_id, redirect_uri=redirect_uri,
                        code_challenge=code_challenge, business_id=business_id,
-                       scope=SCOPE_READ):
+                       scope=" ".join(granted)):
         return _redirect_error(redirect_uri, state, "server_error",
                                "could not issue an authorization code")
 
-    logger.info("[mcp_oauth] code issued to %s for business %s", client_id, business_id)
+    logger.info("[mcp_oauth] code issued to %s for business %s scope=%s",
+                client_id, business_id, " ".join(granted))
     q = {"code": code}
     if state:
         q["state"] = state
@@ -696,18 +742,25 @@ async def authorize_post(
 
 # ─── Token endpoint ──────────────────────────────────────────────────
 
-def _issue(business_id: str, client_id: str, label_hint: str) -> Optional[Dict[str, Any]]:
+def _issue(business_id: str, client_id: str, label_hint: str,
+           scope: str = SCOPE_READ) -> Optional[Dict[str, Any]]:
     """Mint an access token and a fresh refresh token.
 
     The access token is an ordinary `mcp_tokens` row, which is what makes it
     appear in Agent Access alongside hand-minted keys and revoke by the same
     button. There is no OAuth-specific credential to reason about separately.
+
+    `scope` is the GRANTED scope string stored on the code or refresh row —
+    already capped by the key at consent time. It is carried, not
+    re-negotiated: a refresh cannot widen what consent narrowed.
     """
     import mcp_tokens
+    scopes = mcp_tokens.normalize_scopes(_requested_scopes(scope))
     try:
         token, row = mcp_tokens.mint(
             business_id,
             label=f"OAuth · {label_hint}"[:120],
+            scopes=scopes,
             ttl_seconds=ACCESS_TTL_DAYS * 24 * 60 * 60,
             created_by=f"oauth:{client_id}")
     except Exception as e:
@@ -716,7 +769,7 @@ def _issue(business_id: str, client_id: str, label_hint: str) -> Optional[Dict[s
 
     refresh = secrets.token_urlsafe(40)
     if not _store_refresh(token=refresh, client_id=client_id,
-                          business_id=business_id, scope=SCOPE_READ,
+                          business_id=business_id, scope=" ".join(scopes),
                           access_jti=row["jti"]):
         # An access token without a working refresh would look fine for 90
         # days and then fail with no explanation. Refuse now instead.
@@ -727,7 +780,7 @@ def _issue(business_id: str, client_id: str, label_hint: str) -> Optional[Dict[s
         "token_type": "Bearer",
         "expires_in": ACCESS_TTL_DAYS * 24 * 60 * 60,
         "refresh_token": refresh,
-        "scope": SCOPE_READ,
+        "scope": " ".join(scopes),
     }
 
 
@@ -759,7 +812,7 @@ async def token_endpoint(
         if client_id and str(row.get("client_id")) != client_id:
             return _err(400, "invalid_grant", "refresh token was issued to another client")
         issued = _issue(str(row.get("business_id")), str(row.get("client_id")),
-                        "refreshed")
+                        "refreshed", scope=str(row.get("scope") or SCOPE_READ))
         if not issued:
             return _err(500, "server_error", "could not issue a token")
         return JSONResponse(headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
@@ -793,7 +846,7 @@ async def token_endpoint(
         return _err(400, "invalid_grant", "code_verifier does not match")
 
     issued = _issue(str(row.get("business_id")), str(row.get("client_id")),
-                    "authorized")
+                    "authorized", scope=str(row.get("scope") or SCOPE_READ))
     if not issued:
         return _err(500, "server_error", "could not issue a token")
 
