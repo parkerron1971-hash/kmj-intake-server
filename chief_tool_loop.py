@@ -116,12 +116,26 @@ _writes_closed: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "chief_tool_loop.writes_closed", default=False)
 
 
-def reset_turn(writes_allowed: bool = False) -> None:
+# WHO IS ACTING (2026-09-04). A chat turn is a practitioner asking, so a
+# write through this loop reaches the door as surface="chat",
+# prompted=True. The standing agent (chief_agent) runs the same loop on
+# nobody's prompt, and must say so, or the policy engine would hand it
+# the one exemption it grants a human. Set per turn by reset_turn().
+_turn_surface: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "chief_tool_loop.surface", default="chat")
+_turn_prompted: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "chief_tool_loop.prompted", default=True)
+
+
+def reset_turn(writes_allowed: bool = False, *, surface: str = "chat",
+               prompted: bool = True) -> None:
     _calls_this_turn.set(0)
     _writes_allowed.set(bool(writes_allowed))
     _writes_this_turn.set([])
     _write_calls.set(0)
     _writes_closed.set(False)
+    _turn_surface.set(surface or "chat")
+    _turn_prompted.set(bool(prompted))
 
 
 def calls_this_turn() -> int:
@@ -299,9 +313,15 @@ async def _execute_write(client, biz: Dict[str, Any],
         user_id = chief_of_staff._TURN_USER_ID.get() or None
     except Exception:
         user_id = None
+    # The surface is named only when it is not the chat turn, so every
+    # caller and every test double that knows the door's older signature
+    # keeps working unchanged; the agent's turn is the one that says so.
+    door_kwargs: Dict[str, Any] = {}
+    if _turn_surface.get() != "chat" or not _turn_prompted.get():
+        door_kwargs = {"surface": _turn_surface.get(), "prompted": _turn_prompted.get()}
     try:
         results = await chief_of_staff._execute_actions(
-            client, biz, [action], user_id=user_id)
+            client, biz, [action], user_id=user_id, **door_kwargs)
     except Exception as e:
         logger.warning(f"[tool-loop] write {name} raised: {e}")
         return True, f"'{name}' failed: {type(e).__name__}. Tell the practitioner it did not go through."

@@ -14387,7 +14387,21 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
 
 async def _execute_actions(client, biz, actions: List[Dict],
                            user_id: Optional[str] = None,
-                           prior_results: Optional[List[Dict]] = None) -> List[Dict]:
+                           prior_results: Optional[List[Dict]] = None,
+                           surface: str = "chat",
+                           prompted: bool = True) -> List[Dict]:
+    """THE DOOR. Every action Chief takes — from a tag, a tool call, a
+    mission step, an undo — comes through here.
+
+    `surface` / `prompted` (2026-09-04): until the standing agent this
+    function could only be reached on behalf of a practitioner who had
+    just asked, so it told the policy engine `surface="chat",
+    prompted=True` unconditionally. An unattended caller passing through
+    would have claimed the one exemption the engine grants a human — the
+    exact hazard chief_scheduler sidestepped by calling handlers
+    directly. Callers that act on their own say so; the defaults keep
+    every existing call site exactly as it was.
+    """
     results: List[Dict[str, Any]] = []
     class_c_executed = 0
 
@@ -14466,18 +14480,24 @@ async def _execute_actions(client, biz, actions: List[Dict],
         # to now a viewer seat reached the LLM and only died at insert
         # time as a bare "insert failed", and the ledger could not say
         # who was permitted to do what.
-        policy_rule = "chat"
+        policy_rule = surface
         try:
             import policy_engine
             pv = policy_engine.evaluate(
-                str(biz.get("id") or ""), verb=atype, surface="chat",
-                prompted=True, user_id=user_id, biz_row=biz)
+                str(biz.get("id") or ""), verb=atype, surface=surface,
+                prompted=prompted, user_id=user_id, biz_row=biz)
             policy_rule = pv.rule
             if not pv.allowed:
                 results.append(_fail(atype, pv.reason))
                 continue
         except Exception as e:
-            logger.warning(f"[policy] chat evaluation failed for {atype}: {e}")
+            logger.warning(f"[policy] {surface} evaluation failed for {atype}: {e}")
+        if not prompted:
+            # The same mark chief_scheduler sets: handlers with their own
+            # unattended gate (publish_post's approval check) read it.
+            # Set here, never from the payload, so an action cannot claim
+            # to be prompted.
+            resolved["_unattended"] = True
 
         try:
             res = await handler(client, biz, resolved)
