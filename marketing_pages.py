@@ -4,7 +4,7 @@ marketing_pages.py — Multi-page public marketing site for mysolutionist.app.
 Pages served:
   /            → Home (hero + features + audience + why + CTA)
   /features    → Deep feature explanation, surface by surface
-  /compare     → Solutionist vs the 8-tool stack (with cost breakdown)
+  /compare     → Solutionist vs the 7-tool stack (with cost breakdown)
   /faq         → FAQ on its own URL
   /about       → Founder note + company
   /get-started → Talk to a person (intake form, POSTs to /api/leads)
@@ -3302,7 +3302,7 @@ def render_home() -> str:
           <span class="play" aria-hidden="true">&#9654;</span>
         </button>
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
-        <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is one workspace that runs your whole business: clients, money, marketing, and your site. A chief of staff does the work, all under one subscription.</p>
+        <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is the employee of record for your business: a chief of staff who keeps the books, holds the consent records, remembers why, and can be told to stop. Bring whatever assistant you already use; it works through Solutionist.</p>
         <p class="hero-slot-line reveal reveal-delay-1">
           <span>Tell it what you do:</span>
           <span class="hero-slot"><span id="heroWord">barber</span><span class="caret" aria-hidden="true"></span></span>
@@ -4752,7 +4752,7 @@ def render_features() -> str:
 # price change lands in both places or neither. The per-tool prices
 # under STACK_TOTAL are list prices for the named plans and are stated
 # as "about" for that reason.
-STACK_TOTAL = "$125+"
+STACK_TOTAL = "$105+"
 SOLUTIONIST_FROM = "$79"
 
 
@@ -4794,7 +4794,7 @@ def render_compare() -> str:
 
       /* Ten rows is long enough that the column you are reading stops
          being obvious. The head pins under the page's own sticky
-         offset so "Solutionist" and "The 8-tool stack" stay overhead. */
+         offset so "Solutionist" and "The 7-tool stack" stay overhead. */
       table.compare thead th{position:sticky;top:0;z-index:2;
         background:color-mix(in srgb, var(--bg) 92%, transparent);
         backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);}
@@ -4913,14 +4913,14 @@ def render_compare() -> str:
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
     <span class="eyebrow reveal">Solutionist vs. alternatives</span>
-    <h1 class="reveal reveal-delay-1">Eight tools that don&rsquo;t know each other.<br>Or <span class="gradient-text">one that knows you.</span></h1>
+    <h1 class="reveal reveal-delay-1">Seven tools that don&rsquo;t know each other.<br>Or <span class="gradient-text">one that knows you.</span></h1>
     <p class="lead reveal reveal-delay-2" style="max-width:700px;margin:14px auto 0;">The stack is not expensive because of what it costs. It is expensive because you are the integration layer.</p>
     <div class="cmp-math reveal reveal-delay-3">
       <div class="cmp-side">
-        <span class="cmp-lbl">Eight tools, list price</span>
+        <span class="cmp-lbl">Seven tools, list price</span>
         <span class="cmp-fig alt">""" + STACK_TOTAL + """<i>/mo</i></span>
         <span class="cmp-sub">HubSpot &middot; Stripe &middot; Calendly &middot; Buffer &middot; Notion
-          &middot; Mixpanel &middot; Squarespace &middot; ChatGPT</span>
+          &middot; Mixpanel &middot; Squarespace &middot; a spreadsheet for the rest</span>
       </div>
       <div class="cmp-arrow" aria-hidden="true"><span></span></div>
       <div class="cmp-side">
@@ -4938,11 +4938,11 @@ def render_compare() -> str:
     <div class="section-head reveal">
       <span class="eyebrow">The real number</span>
       <h2>The subscriptions are the cheap part.</h2>
-      <p>Add up the subscriptions and you get one number. Add up the re-typing, the copy-paste between tabs, the context you rebuild every time you open ChatGPT, and the client who slipped because two tools disagreed about what happened, and you get the real one. A stack of eight tools has no idea you exist: each one holds a slice of your business and none of them holds the business.</p>
+      <p>Add up the subscriptions and you get one number. Add up the re-typing, the copy-paste between tabs, the context you rebuild every time you open another tab, and the client who slipped because two tools disagreed about what happened, and you get the real one. A stack of seven tools has no idea you exist: each one holds a slice of your business and none of them holds the business.</p>
     </div>
     <div class="cost-grid">
       <div class="cost-card alt reveal">
-        <div class="cost-title">The 8-tool stack (per month)</div>
+        <div class="cost-title">The 7-tool stack (per month)</div>
         <ul class="cost-stack">
           <li><span>HubSpot Starter (CRM)</span><span>$20</span></li>
           <li><span>Stripe (no monthly, fees on volume)</span><span>$0+</span></li>
@@ -4951,7 +4951,6 @@ def render_compare() -> str:
           <li><span>Notion Plus (notes/goals)</span><span>$10</span></li>
           <li><span>Mixpanel / Looker Studio (analytics)</span><span>$25+</span></li>
           <li><span>Squarespace Business (website)</span><span>$23</span></li>
-          <li><span>ChatGPT Plus (AI assistant)</span><span>$20</span></li>
         </ul>
         <div class="cost-total"><span class="label">≈ Total</span><span class="price">""" + STACK_TOTAL + """ /mo</span></div>
         <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Plus the time + headache of stitching them together. Each tool wants its own login, notification settings, billing cycle, and integrations that mostly don't work.</p>
@@ -4970,6 +4969,7 @@ def render_compare() -> str:
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
         <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399. Every plan starts with __TRIAL_FREE__, and you can cancel yourself at any time.</p>
+<p style="margin-top:10px;font-size:12px;color:var(--text-dim);">Already use an AI assistant? Keep it. Connect it from Settings and it works through Solutionist &mdash; reading your business, or, with your permission, keeping its records &mdash; with every action logged, reversible, and yours to revoke.</p>
       </div>
     </div>
   </div>
@@ -4984,7 +4984,7 @@ def render_compare() -> str:
     <div class="reveal reveal-delay-1">
       <table class="compare">
         <thead>
-          <tr><th>What you need</th><th class="sol-col">Solutionist</th><th>The 8-tool stack</th></tr>
+          <tr><th>What you need</th><th class="sol-col">Solutionist</th><th>The 7-tool stack</th></tr>
         </thead>
         <tbody>
           <tr><td>CRM &amp; contacts</td><td class="sol">✓ Built-in</td><td class="alt">HubSpot / Notion / spreadsheet</td></tr>
@@ -5039,7 +5039,7 @@ def render_compare() -> str:
 """
     return _render_shell(
         title="Compare",
-        description="Eight tools that do not know each other, or one that knows you. Feature-by-feature comparison and switching guides for the Solutionist System.",
+        description="Seven tools that do not know each other, or one that knows you. Feature-by-feature comparison and switching guides for the Solutionist System.",
         content_html=body, path="/compare", active="compare", extra_css=extra_css,
     )
 
@@ -5269,7 +5269,7 @@ def render_about() -> str:
         font-family:var(--font-heading);font-size:21px;line-height:1.4;letter-spacing:-.02em;
         color:var(--text-primary);}
 
-      /* Eight tools that never spoke to each other, and the thing that
+      /* Seven tools that never spoke to each other, and the thing that
          replaced them. The page says it; this shows it. */
       .stack-flow{display:grid;grid-template-columns:1fr 72px 1fr;align-items:center;gap:10px;
         max-width:940px;margin:0 auto;}
@@ -5356,7 +5356,7 @@ def render_about() -> str:
   <div class="container">
     <span class="eyebrow reveal">Why this exists</span>
     <h1 class="reveal reveal-delay-1">The work was never <span class="gradient-text">the problem.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">The eight tools
+    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">The seven tools
        around it were.</p>
   </div>
 </section>
