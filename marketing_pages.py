@@ -2221,6 +2221,13 @@ _COMPARE_GROUPS = (
          "A real inbox for the business, sending from your own domain once you connect one."),
         ("Text messaging (SMS)", _ALL,
          "Two-way threads, appointment reminders, and broadcasts to your own list."),
+        # Dedicated numbers (2026-09-02) landed the gate and never told the
+        # compare table, so the SMS row above said "every plan" about a
+        # capability that had just grown a tier difference — the exact
+        # drift the completeness test exists to catch, and main was red
+        # for three merges before anybody decided where this row belongs.
+        ("A texting number of your own", "dedicated_sms_number",
+         "Your business texts from its own line, not the shared platform number."),
         ("Calendar &amp; self-serve booking page", _ALL,
          "Clients pick their own slot; confirmations and reminders go out without you."),
         ("Documents &amp; e-signature", _ALL,
