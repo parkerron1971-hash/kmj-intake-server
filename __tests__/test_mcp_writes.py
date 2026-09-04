@@ -109,9 +109,14 @@ def test_the_write_surface_count_is_a_tripwire():
     calendar (5), the practitioner's own module rows (3), offerings (2),
     drafts/memory/notes/content (7), and undo_last (1) — reads before
     writes, and nothing that sends, spends, or deletes for good.
+    55 (2026-09-04, batch 2): goals and reminders (2), projects (1),
+    booking configuration (4), testimonials and policies (3), email
+    templates and read-marks (3), scheduled/drafts (3), offerings (1),
+    contact health (1), owner notifications (1), time and balances (4),
+    texting switches (2), templates and bookkeeping proposals (2).
     """
     offered = set(mcp.exposed_tools(allow_writes=True)) - set(mcp.exposed_tools())
-    assert len(offered) == 28, (
+    assert len(offered) == 55, (
         f"write surface changed: {sorted(offered)}. If a verb was added, "
         "decide whether an outside agent should change it, write its "
         "schema from the handler, and update this count on purpose.")

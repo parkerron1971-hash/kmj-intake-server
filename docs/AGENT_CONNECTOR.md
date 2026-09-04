@@ -18,7 +18,7 @@ business id anywhere on the wire; a cross-tenant request is unrepresentable, not
 | Scope | What the connected agent can do | What decides it |
 |---|---|---|
 | `read` | Every read verb the action registry marks agent-exposable (30 on 2026-09-03): catch up, contacts, revenue, availability, modules, forms, texting and email setup, inventory, missions… | `action_registry.may_expose_to_agent(verb)` |
-| `write` | The **class A** verbs that also have a reviewed schema in `mcp_server.WRITE_TOOL_SCHEMAS` (28 on 2026-09-03): contacts, notes, activities, tasks, projects, time, expenses, sessions on the practitioner's own calendar, availability, module rows, offerings, email *drafts*, memories, notes, content plans, FAQ, and `undo_last`. | registry ceiling ∩ schema floor |
+| `write` | The **class A** verbs that also have a reviewed schema in `mcp_server.WRITE_TOOL_SCHEMAS` (28 on 2026-09-03; 55 after batch 2 on 2026-09-04, adding goals, projects, booking configuration, testimonials, policies, email templates, read-marks, scheduled cancels, draft saves, contact health, owner notifications, time write-offs, prepaid balances, texting switches, template clauses and bookkeeping-proposal rejections): contacts, notes, activities, tasks, projects, time, expenses, sessions on the practitioner's own calendar, availability, module rows, offerings, email *drafts*, memories, notes, content plans, FAQ, and `undo_last`. | registry ceiling ∩ schema floor |
 
 Never, at any scope: **class C** (anything that sends, charges, refunds, posts publicly,
 hard-deletes, moves money, or starts a mission), sensitive reads (giving records, the

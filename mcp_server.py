@@ -780,6 +780,210 @@ WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "including one this agent just took. Call what_undo first to see "
         "what it would reverse.",
         _NO_ARGS),
+
+    # ── batch 2 (2026-09-04): goals, projects, hours, drafts, balances ─
+    # Same rules as the first 28: every argument name below is one the
+    # handler reads, every enum is one it validates, and nothing here
+    # sends, spends model tokens from outside, reaches a client, or
+    # deletes for good. Site copy, voice, brand, workspace and the
+    # strategy-track deliverables stay tags on purpose (see the header).
+    "create_goal": (
+        "Set a goal the practitioner will track — a number to reach by a "
+        "date. Auto-tracked from live data for the built-in metrics.",
+        _obj({"title": {"type": "string"},
+              "category": {"type": "string",
+                           "enum": ["contacts", "revenue", "sessions", "engagement",
+                                    "marketing", "growth", "learning", "wellness", "custom"],
+                           "description": "Default custom."},
+              "target": {"type": "number", "exclusiveMinimum": 0},
+              "metric": {"type": "string",
+                         "enum": ["total_contacts", "new_contacts", "revenue_collected",
+                                  "revenue_invoiced", "sessions_completed",
+                                  "sessions_scheduled", "engagement_rate", "custom"],
+                         "description": "Defaults to the category's usual metric."},
+              "period": {"type": "string",
+                         "enum": ["weekly", "monthly", "quarterly", "yearly"],
+                         "description": "Default quarterly."},
+              "start": _DATE, "end": _DATE,
+              "description": {"type": "string"}},
+             ["title", "target"])),
+    "add_reminder": (
+        "Attach a dated reminder to an existing goal. Pass goal_id, or "
+        "goal_title to match one.",
+        _obj({"goal_id": {"type": "string"},
+              "goal_title": {"type": "string"},
+              "date": _DATE,
+              "message": {"type": "string"}},
+             ["date"])),
+    "update_project": (
+        "Change one project's status, dates, description, value or client. "
+        "Pass project_id, or title_query to match one project by name.",
+        _obj({"project_id": {"type": "string"},
+              "title_query": {"type": "string",
+                              "description": "Part of the title, when no id."},
+              "status": {"type": "string",
+                         "enum": ["planning", "active", "on_hold", "completed", "cancelled"]},
+              "start_date": _DATE, "target_date": _DATE,
+              "description": {"type": "string"},
+              "notes": {"type": "string"},
+              "value": {"type": "number"},
+              "contact_id": _CONTACT_ID,
+              "contact_name": {"type": "string"}})),
+    "set_availability_day": (
+        "Set the weekly booking hours for ONE weekday. An empty hours list "
+        "closes that day every week.",
+        _obj({"day": {"type": "string",
+                      "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]},
+              "hours": _HOURS},
+             ["day", "hours"])),
+    "set_lead_time": (
+        "How far ahead a client must book — nothing inside this many "
+        "minutes of now is offered.",
+        _obj({"minutes": {"type": "integer", "minimum": 0}}, ["minutes"])),
+    "set_slot_granularity": (
+        "The booking grid: slots start every N minutes.",
+        _obj({"minutes": {"type": "integer", "minimum": 5, "maximum": 240}}, ["minutes"])),
+    "set_business_timezone": (
+        "The business's timezone, used for hours, slots and reminders.",
+        _obj({"timezone": {"type": "string",
+                           "description": "IANA name, e.g. America/New_York."}},
+             ["timezone"])),
+    "add_testimonial": (
+        "Add a client's testimonial, stored exactly as given. Shows on "
+        "the website unless show_on_website is false.",
+        _obj({"quote": {"type": "string"},
+              "name": {"type": "string"},
+              "role": {"type": "string"},
+              "show_on_website": {"type": "boolean", "description": "Default true."}},
+             ["quote", "name"])),
+    "remove_testimonial": (
+        "Remove one testimonial, by id, by the person's name, or by a "
+        "fragment of the quote.",
+        _obj({"testimonial_id": {"type": "string"},
+              "name": {"type": "string"},
+              "quote": {"type": "string", "description": "A fragment of the quote."}})),
+    "set_business_policy": (
+        "Record one policy in the practitioner's words: cancellation, "
+        "deposit, lateness, refunds or no-show. Goes on the website FAQ "
+        "and Chief answers clients with it.",
+        _obj({"policy": {"type": "string",
+                         "enum": ["cancellation", "deposit", "lateness", "refunds", "no_show"]},
+              "text": {"type": "string"}},
+             ["policy", "text"])),
+    "save_email_template": (
+        "Save or update a reusable email template by name. {name}, "
+        "{service}, {date} style placeholders are kept as variables. "
+        "Sends nothing.",
+        _obj({"name": {"type": "string"},
+              "subject": {"type": "string"},
+              "body": {"type": "string"},
+              "category": {"type": "string",
+                           "enum": ["welcome", "follow_up", "reminder", "nurture", "custom"]}},
+             ["name"])),
+    "mark_reply_read": (
+        "Mark an email reply as read — one by reply_id, or every unread "
+        "reply from one contact.",
+        _obj({"reply_id": {"type": "string"},
+              "contact_id": _CONTACT_ID,
+              "contact_name": {"type": "string"}})),
+    "mark_sms_read": (
+        "Mark texts as read — one by sms_id, every unread text from one "
+        "contact, or, with no arguments, all unread texts.",
+        _obj({"sms_id": {"type": "string"},
+              "contact_id": _CONTACT_ID,
+              "contact_name": {"type": "string"}})),
+    "cancel_scheduled": (
+        "Cancel something Chief has queued to run later, by schedule_id "
+        "or by matching its label. See list_scheduled.",
+        _obj({"schedule_id": {"type": "string"},
+              "label": {"type": "string", "description": "Part of the label."}})),
+    "dismiss_draft": (
+        "Dismiss a queued draft without sending it. The row survives.",
+        _obj({"queue_id": {"type": "string"}}, ["queue_id"])),
+    "save_draft": (
+        "Replace a queued draft's body and LEAVE it a draft — nothing is "
+        "approved or sent.",
+        _obj({"queue_id": {"type": "string"},
+              "new_body": {"type": "string", "minLength": 1}},
+             ["queue_id", "new_body"])),
+    "archive_offering": (
+        "Retire an offering. Soft: past bookings and invoices keep its "
+        "name and price. By offering_id or exact name.",
+        _obj({"offering_id": {"type": "string"},
+              "name": {"type": "string"}})),
+    "update_contact_health": (
+        "Set a contact's health score, 0 to 100.",
+        _obj({"contact_id": _CONTACT_ID,
+              "health_score": {"type": "integer", "minimum": 0, "maximum": 100}},
+             ["contact_id", "health_score"])),
+    "notify_practitioner": (
+        "Leave the practitioner an in-app notification (and a push). "
+        "Reaches the OWNER only — never a client.",
+        _obj({"title": {"type": "string"},
+              "body": {"type": "string"}},
+             ["title"])),
+    "write_off_time": (
+        "Mark a logged time entry as never-to-be-billed. The row survives.",
+        _obj({"entry_id": {"type": "string"}}, ["entry_id"])),
+    "grant_balance": (
+        "Record that a client prepaid for something not yet delivered — "
+        "package sessions, retainer hours, a deposit. Bookkeeping about "
+        "money already received; charges nobody.",
+        _obj({"contact_id": _CONTACT_ID,
+              "amount": {"type": "number", "exclusiveMinimum": 0},
+              "kind": {"type": "string",
+                       "description": "What was bought (e.g. package, retainer, "
+                                      "deposit). Defaults to the business's usual."},
+              "unit": {"type": "string",
+                       "description": "sessions, hours or money. Defaults to the "
+                                      "business's usual."},
+              "reason": {"type": "string"},
+              "offering_id": {"type": "string"},
+              "expires_at": {**_DATE, "description": "Optional expiry, YYYY-MM-DD."}},
+             ["contact_id", "amount"])),
+    "consume_balance": (
+        "Draw a prepaid balance down — a session delivered, an hour used. "
+        "Refuses to overdraw unless allow_overdraw is true.",
+        _obj({"contact_id": _CONTACT_ID,
+              "amount": {"type": "number", "exclusiveMinimum": 0,
+                         "description": "Default 1."},
+              "reason": {"type": "string"},
+              "session_id": {"type": "string"},
+              "allow_overdraw": {"type": "boolean"}},
+             ["contact_id"])),
+    "bill_time_to_retainer": (
+        "Bill one logged time entry against the client's prepaid retainer "
+        "hours. Moves prepaid balance; reaches no card and posts no GL "
+        "entry.",
+        _obj({"contact_id": _CONTACT_ID,
+              "entry_id": {"type": "string"}},
+             ["contact_id", "entry_id"])),
+    "set_sms_alerts": (
+        "Turn the automated booking confirmation texts and the 24-hour "
+        "reminder texts on or off.",
+        _obj({"kinds": {"type": "array",
+                        "items": {"type": "string", "enum": ["confirmations", "reminders"]},
+                        "description": "Which switches. Default both."},
+              "on": {"type": "boolean"}},
+             ["on"])),
+    "set_sms_keyword": (
+        "Claim or change the word a client texts to reach this business.",
+        _obj({"keyword": {"type": "string", "minLength": 2}}, ["keyword"])),
+    "adjust_template": (
+        "Add, remove or reword ONE clause of an agreement template the "
+        "business owns. No document is created; existing documents are "
+        "untouched.",
+        _obj({"template_id": {"type": "string"},
+              "operation": {"type": "string", "enum": ["add", "remove", "replace"]},
+              "heading": {"type": "string", "description": "The clause heading."},
+              "text": {"type": "string", "description": "The clause text, for add/replace."}},
+             ["template_id", "operation", "heading"])),
+    "reject_bookkeeping_proposal": (
+        "Decline one bookkeeping proposal Chief made. Inert — nothing is "
+        "posted; the proposal is marked rejected and Chief learns from it.",
+        _obj({"proposal_id": {"type": "string"},
+              "reason": {"type": "string"}},
+             ["proposal_id"])),
 }
 
 
