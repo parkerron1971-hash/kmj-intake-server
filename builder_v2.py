@@ -704,6 +704,7 @@ def check_truth(html: str, real_data: str) -> List[str]:
 
 _FACTS_FOUNDED_RE = re.compile(r"^- Founded: (\d{4}) \((\d+) years in business\)", re.MULTILINE)
 _FACTS_NO_YEAR_RE = re.compile(r"^- Founded: NOT ON FILE", re.MULTILINE)
+_FACTS_STATED_RE = re.compile(r"^- Years the owner stated[^:]*: (.+)$", re.MULTILINE)
 
 
 def check_tenure(html: str, real_data: str) -> List[str]:
@@ -718,6 +719,10 @@ def check_tenure(html: str, real_data: str) -> List[str]:
         facts = {"years_in_business": None}
     else:
         return []
+    # the owner's own stated tenure is on file too (site_facts.stated_years)
+    sm = _FACTS_STATED_RE.search(real_data or "")
+    if sm:
+        facts["stated_years"] = [int(x) for x in re.findall(r"(\d{1,2}) years", sm.group(1))]
     import site_facts
     return site_facts.tenure_claims(_visible_text(html), facts)
 
