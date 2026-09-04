@@ -1096,6 +1096,15 @@ async def startup():
     except Exception as _e:
         print(f"   [warn] ledger vocabulary sync failed: {_e}")
 
+    # Hand-built sites (sites/<dir>/build.py) install themselves from the
+    # repo on boot, hash-gated so an unchanged deploy writes nothing.
+    # Background thread; never blocks or fails startup (site_sync.py).
+    try:
+        import site_sync as _site_sync
+        _site_sync.sync_all_async()
+    except Exception as _e:
+        print(f"   [warn] site sync did not start: {_e}")
+
     scheduler.add_job(scheduler_lock.renew_tick, "interval",
                       seconds=scheduler_lock.RENEW_SEC, id="scheduler_lease_renew")
     g = scheduler_lock.gate
