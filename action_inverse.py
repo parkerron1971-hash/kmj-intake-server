@@ -201,6 +201,24 @@ INVERSES: Dict[str, Inverse] = {
         lambda a, r: ({"type": "archive_offering",
                        "offering_id": _first_id(r, "offering_id", "id")}
                       if _first_id(r, "offering_id", "id") else None)),
+    # ── site copy — an edit is an override row; reverting deletes it, and
+    # re-applying the revert writes the same words back. The target path
+    # comes from the RESULT (edit resolves `find` to it), so an undo never
+    # re-runs a fuzzy match.
+    "edit_site_text": Inverse(
+        "revert_site_text",
+        "put that site text back",
+        lambda a, r: ({"type": "revert_site_text",
+                       "target": _first_id(r, "target_path")}
+                      if _first_id(r, "target_path") else None)),
+    "revert_site_text": Inverse(
+        "edit_site_text",
+        "re-apply that site edit",
+        lambda a, r: ({"type": "edit_site_text",
+                       "target": _first_id(r, "target_path"),
+                       "text": _first_id(r, "previous_text")}
+                      if _first_id(r, "target_path") and _first_id(r, "previous_text")
+                      else None)),
 }
 
 # S11 resolution (2026-07-31): write_off_time is GONE from INVERSES. It
