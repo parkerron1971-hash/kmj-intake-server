@@ -351,8 +351,11 @@ async def public_giving_checkout(
     Returns { ok, url } — the Stripe-hosted payment page.
     """
     # Rate limit FIRST — before any read or write (pinned in tests).
-    from rate_limit import client_ip
-    ip = client_ip(request)
+    # The trusted (last) hop, not the first: this creates Stripe sessions
+    # for amounts up to $25k, and a limiter keyed on a caller-typed
+    # header is decorative (2026-09-04).
+    from rate_limit import trusted_client_ip
+    ip = trusted_client_ip(request)
     if not _check_give_rate(ip):
         raise HTTPException(429, "Too many attempts. Please try again in a minute.")
 

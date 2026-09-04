@@ -85,7 +85,14 @@ class WaitlistBody(BaseModel):
 
 
 @router.post("/waitlist")
-def join_waitlist(body: WaitlistBody, request: Request = None) -> Dict[str, Any]:
+def join_waitlist(body: WaitlistBody, request: Request) -> Dict[str, Any]:
+    # Anonymous insert per novel email, and until 2026-09-04 no limiter,
+    # no captcha, no honeypot — a script varying the local part filled
+    # the table for free. Strict, per trusted IP, per hour. The answer
+    # stays non-enumerating either way.
+    import rate_limit
+    if not rate_limit.allow_strict("waitlist", rate_limit.trusted_client_ip(request)):
+        raise HTTPException(429, "Too many attempts — try again in a little while.")
     email = (body.email or "").strip().lower()
     if not email or "@" not in email or len(email) > 320:
         raise HTTPException(400, "valid email required")

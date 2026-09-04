@@ -101,9 +101,19 @@ async def booking_checkout(
     Anonymous: customer is paying from the wizard or from the email
     Pay Now button without a Solutionist account. We look up the
     booking + business + offering server-side to derive the amount —
-    the caller can't influence it. Rate-limiting handled by the
-    existing wizard rate-limit middleware.
+    the caller can't influence it.
+
+    RATE-LIMITED HERE (2026-09-04). This docstring used to say the
+    limit was "handled by the existing wizard rate-limit middleware".
+    No such middleware exists — the app registers CORS and gzip and
+    nothing else — so an anonymous caller could mint a Stripe Checkout
+    Session per request against an enumerable booking id. Strict, per
+    trusted IP, per hour; the bucket is registered in rate_limit.
     """
+    import rate_limit
+    if not rate_limit.allow_strict("booking_checkout",
+                                   rate_limit.trusted_client_ip(request)):
+        raise HTTPException(429, "Too many attempts — try again in a little while.")
     booking_id = (body.booking_id or "").strip()
     if not booking_id:
         raise HTTPException(400, "booking_id required")

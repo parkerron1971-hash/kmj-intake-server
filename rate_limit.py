@@ -36,6 +36,29 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # the caller is a customer's agent and a looping one is a scripted
     # sweep of every business we host. Per IP.
     "agent_site": (int(os.environ.get("RL_AGENT_SITE_PER_MIN", "60")), 60),
+    # ── Launch hardening (2026-09-04) ─────────────────────────────────
+    # The OAuth front door to the MCP surface. These three were called
+    # with allow_strict() but never registered, so each silently fell to
+    # _DEFAULT (60/min) — a consent form that can be brute-forced 60
+    # times a minute is not what the module docstring promised.
+    "mcp_oauth_register": (int(os.environ.get("RL_MCP_OAUTH_REGISTER_PER_HOUR", "10")), 3600),
+    "mcp_oauth_consent": (int(os.environ.get("RL_MCP_OAUTH_CONSENT_PER_MIN", "6")), 60),
+    "mcp_oauth_token": (int(os.environ.get("RL_MCP_OAUTH_TOKEN_PER_MIN", "30")), 60),
+    # Anonymous Stripe Checkout session for a booking. Its docstring
+    # claimed "handled by the existing wizard rate-limit middleware";
+    # there is no such middleware. Per IP, per hour, strict.
+    "booking_checkout": (int(os.environ.get("RL_BOOKING_CHECKOUT_PER_HOUR", "20")), 3600),
+    # The public waitlist: an anonymous insert per novel email, with no
+    # limiter at all until now.
+    "waitlist": (int(os.environ.get("RL_WAITLIST_PER_HOUR", "10")), 3600),
+    # Web-form SMS consent: writes the A2P audit trail, and was limited
+    # only per PHONE, which the caller chooses. Per IP too, strict.
+    "sms_opt_in": (int(os.environ.get("RL_SMS_OPT_IN_PER_HOUR", "10")), 3600),
+    # The traffic beacon: keyed only on a caller-supplied session id,
+    # which the anon-spend audit's own words call decorative. A per-IP
+    # courtesy bucket beside it — fail-open, because a tracking endpoint
+    # must never surface an error to a visitor's browser.
+    "track": (int(os.environ.get("RL_TRACK_PER_MIN", "240")), 60),
     # Digital-delivery downloads — anon, token-gated; generous enough
     # for a buyer grabbing a multi-item order, tight enough to stop a
     # scripted token search.

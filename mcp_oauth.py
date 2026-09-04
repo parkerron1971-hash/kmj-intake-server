@@ -432,7 +432,7 @@ async def register_client(body: _RegisterBody, request: Request):
     if not enabled():
         return _err(503, "temporarily_unavailable", "MCP surface is disabled")
 
-    ip = rate_limit.client_ip(request)
+    ip = rate_limit.trusted_client_ip(request)
     if not rate_limit.allow_strict("mcp_oauth_register", ip):
         return _err(429, "temporarily_unavailable", "rate limit exceeded")
 
@@ -670,7 +670,7 @@ async def authorize_post(
 
     # Brute-forcing the consent form is the one way in that does not need a
     # key already, so it gets the strict limiter keyed by IP.
-    ip = rate_limit.client_ip(request)
+    ip = rate_limit.trusted_client_ip(request)
     if not rate_limit.allow_strict("mcp_oauth_consent", ip):
         return _consent_page(
             client_name=str(client.get("client_name") or "An application"),
@@ -797,7 +797,7 @@ async def token_endpoint(
     if not enabled():
         return _err(503, "temporarily_unavailable", "MCP surface is disabled")
 
-    ip = rate_limit.client_ip(request)
+    ip = rate_limit.trusted_client_ip(request)
     if not rate_limit.allow_strict("mcp_oauth_token", ip):
         return _err(429, "temporarily_unavailable", "rate limit exceeded")
 

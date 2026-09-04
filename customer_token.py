@@ -21,11 +21,33 @@ Security defaults (per Phase C.1 security design, ruled by user):
   - TTL: 90 days. Customer links sticky-but-not-forever; expired
     tokens hit /widgets/request-fresh-link (rate-limited).
   - Constant-time signature comparison via hmac.compare_digest.
-  - Single global secret from CUSTOMER_TOKEN_SECRET env var.
-    TODO(phase-c-x): per-business token secrets before first real
-    practitioner goes live. Rotation of the global secret invalidates
-    all customer links across all businesses; per-business secrets
-    contain the blast radius.
+  - PER-BUSINESS SIGNING KEYS (2026-09-04; this was the "before first
+    real launch" TODO). The env var CUSTOMER_TOKEN_SECRET is now a ROOT,
+    never used to sign a customer token directly. Each business signs
+    with a key derived from it by HKDF (RFC 5869, HMAC-SHA256) over
+    `customer-token|v2|<business_id>`. Stateless: no table, no read on
+    the hot path, works for a business that does not exist yet. What it
+    buys is CONTAINMENT — a key recovered for one business cannot mint
+    a token for another, which is the property that matters once a
+    saved-card surface hangs off these links. What it does NOT buy is
+    per-business rotation independence: rotating the root still rotates
+    every derived key (fold an epoch into the info string the day that
+    is needed; `settings` is already loaded on every turn).
+
+    Tokens carry `v: 2`. A token with no `v` was signed by the root
+    directly, before this change, and verifies against the root until
+    LEGACY_SUNSET — 90 days after deploy, when the last such token has
+    expired on its own (TTL is 90 days). After that date the legacy
+    branch is dead code and a test says so out loud; delete it then.
+
+    THE WIDER FINDING, not fixed here: mcp_tokens, auditor_links,
+    ledger_unlock, store_files, email_sender and site_composer all read
+    CUSTOMER_TOKEN_SECRET (directly or as a fallback) and sign with it
+    raw. Rotating the one env var still invalidates agent keys, auditor
+    links, product downloads, unsubscribe links and site tokens at
+    once. Each of those surfaces should adopt derive_key() with its own
+    purpose string; set MCP_TOKEN_SECRET / AUDITOR_LINK_SECRET
+    separately meanwhile so the blast radius is at least per-surface.
 """
 
 from __future__ import annotations
@@ -51,8 +73,17 @@ logger = logging.getLogger("customer_token")
 _SECRET_ENV_KEY = "CUSTOMER_TOKEN_SECRET"
 TOKEN_TTL_SECONDS = 90 * 24 * 60 * 60  # 90 days
 
+# Tokens minted since the per-business keys shipped carry this. Absent
+# means "signed by the root directly" — the pre-2026-09-04 format.
+TOKEN_VERSION = 2
+# The day after the last root-signed token can still be unexpired
+# (deploy day + the 90-day TTL). test_launch_hardening trips on this
+# date so the legacy branch gets deleted rather than forgotten.
+LEGACY_SUNSET = "2026-12-04"
+
 
 def _secret() -> bytes:
+    """The ROOT. Never signs a token itself any more — see derive_key."""
     s = os.environ.get(_SECRET_ENV_KEY, "").strip()
     if not s:
         raise RuntimeError(
@@ -60,6 +91,37 @@ def _secret() -> bytes:
             f"any customer-facing widget endpoint can run"
         )
     return s.encode("utf-8")
+
+
+def derive_key(purpose: str, business_id: str, root: Optional[bytes] = None) -> bytes:
+    """HKDF-SHA256 (RFC 5869): extract with an empty salt, then one
+    expand block over `<purpose>|v2|<business_id>`. 32 bytes.
+
+    `purpose` keeps two surfaces that sign for the same business from
+    sharing a key — an agent key and a booking link are different
+    credentials and must not verify each other. This helper is the one
+    the other CUSTOMER_TOKEN_SECRET readers should adopt.
+    """
+    ikm = root if root is not None else _secret()
+    prk = hmac.new(b"\x00" * hashlib.sha256().digest_size, ikm, hashlib.sha256).digest()
+    info = f"{purpose}|v{TOKEN_VERSION}|{business_id}".encode("utf-8")
+    return hmac.new(prk, info + b"\x01", hashlib.sha256).digest()
+
+
+def _signing_key(business_id: str) -> bytes:
+    return derive_key("customer-token", str(business_id))
+
+
+def _peek_payload(payload_b64: str) -> Optional[Dict[str, Any]]:
+    """Read the claims BEFORE verifying. The payload is not secret (it is
+    base64 in a URL) and the key to verify with depends on what it says
+    — the business id and the version. Nothing here is trusted until the
+    signature holds; a forged `biz` just selects a key that will not."""
+    try:
+        payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _b64url_encode(b: bytes) -> str:
@@ -85,41 +147,54 @@ def issue_customer_token(
         "cus": str(customer_id),
         "iat": now,
         "exp": now + int(ttl_seconds),
+        "v": TOKEN_VERSION,
     }
     payload_b64 = _b64url_encode(
         json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     )
-    sig = hmac.new(_secret(), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    sig = hmac.new(_signing_key(business_id), payload_b64.encode("utf-8"),
+                   hashlib.sha256).digest()
     return f"{payload_b64}.{_b64url_encode(sig)}"
 
 
 def verify_customer_token(token: str) -> Optional[Dict[str, Any]]:
     """Verify signature + expiration. Returns claims dict on success, None
     on any failure (bad format, bad signature, expired). Does NOT verify
-    the customer row still exists — that's step 3 of require_customer_token."""
+    the customer row still exists — that's step 3 of require_customer_token.
+
+    The key is chosen by the claims: `v: 2` → the business's derived
+    key; no `v` → the root, until LEGACY_SUNSET. Never both — trying
+    every key on every request doubles the work and makes the sunset
+    unknowable. A token that names version 2 and does not verify under
+    the derived key is refused; it is not retried against the root.
+    """
     if not isinstance(token, str) or "." not in token:
         return None
     try:
         payload_b64, sig_b64 = token.split(".", 1)
     except ValueError:
         return None
-    expected_sig = hmac.new(_secret(), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    payload = _peek_payload(payload_b64)
+    if not payload or not payload.get("biz") or not payload.get("cus"):
+        return None
+    version = payload.get("v")
+    if version == TOKEN_VERSION:
+        key = _signing_key(str(payload["biz"]))
+    elif version is None:
+        # LEGACY: signed by the root directly. Dead code after
+        # LEGACY_SUNSET; delete this branch then.
+        key = _secret()
+    else:
+        return None
+    expected_sig = hmac.new(key, payload_b64.encode("utf-8"), hashlib.sha256).digest()
     try:
         actual_sig = _b64url_decode(sig_b64)
     except Exception:
         return None
     if not hmac.compare_digest(expected_sig, actual_sig):
         return None
-    try:
-        payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
-    except Exception:
-        return None
-    if not isinstance(payload, dict):
-        return None
     exp = payload.get("exp")
     if not isinstance(exp, int) or exp < int(time.time()):
-        return None
-    if not payload.get("biz") or not payload.get("cus"):
         return None
     return payload
 
