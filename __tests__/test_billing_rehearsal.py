@@ -197,3 +197,14 @@ def test_the_endpoint_is_platform_owner_only():
     sig = inspect.signature(br.billing_rehearsal)
     dep = sig.parameters["_owner"].default
     assert dep.dependency is require_owner
+
+
+def test_the_table_prints_on_a_cp1252_console(quiet):
+    """Kevin's first run died on '∞' (infinity) in a Windows console.
+    The table is ASCII; a grandfathered account reads 'unlimited'."""
+    quiet.setattr(um, "is_grandfathered_user", lambda uid: True)
+    quiet.setattr(sb_clients, "sb_get_as_service",
+                  lambda path: [_row()] if path.startswith("/businesses?is_active") else [])
+    text = br.render(br.rehearse_all())
+    text.encode("cp1252")
+    assert "unlimited" in text

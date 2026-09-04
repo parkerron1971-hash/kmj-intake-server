@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
@@ -206,10 +207,10 @@ async def billing_rehearsal(limit: int = 500, _owner=Depends(_require_platform_o
 def render(report: Dict[str, Any]) -> str:
     s = report["summary"]
     lines = [
-        f"Billing rehearsal — enforcement is {'ON' if report['enforcement_on_now'] else 'off'} today",
-        f"  businesses {s['businesses']} · would lock {s['would_lock']} · grace {s['in_grace']} · full {s['full']}",
-        f"  out of units {s['out_of_units']} · over seat cap {s['over_seat_cap']} · over bank cap {s['over_bank_cap']} · over business cap {s['over_business_cap']}",
-        f"  grandfathered {s['grandfathered']} · no plan {s['no_plan']} · errors {s['errors']}",
+        f"Billing rehearsal - enforcement is {'ON' if report['enforcement_on_now'] else 'off'} today",
+        f"  businesses {s['businesses']} | would lock {s['would_lock']} | grace {s['in_grace']} | full {s['full']}",
+        f"  out of units {s['out_of_units']} | over seat cap {s['over_seat_cap']} | over bank cap {s['over_bank_cap']} | over business cap {s['over_business_cap']}",
+        f"  grandfathered {s['grandfathered']} | no plan {s['no_plan']} | errors {s['errors']}",
         "",
     ]
     for b in report["businesses"]:
@@ -219,7 +220,7 @@ def render(report: Dict[str, Any]) -> str:
         a = b["access"]; u = b["units"]
         flag = "LOCK " if a["state"] == "locked" else "grace" if a["state"] == "grace" else "  ok "
         lines.append(f"  {flag} {str(b.get('name') or '')[:28]:<28} {str(b['plan'] or '-'):<12} "
-                     f"{a['reason']:<22} units {u['used']}/{u['allotment'] if u['allotment'] is not None else '∞'}"
+                     f"{a['reason']:<22} units {u['used']}/{u['allotment'] if u['allotment'] is not None else 'unlimited'}"
                      f"{' OUT' if u['out_of_units'] else ''}"
                      f"{' seats>' if b['seats']['over'] else ''}{' banks>' if b['banks']['over'] else ''}"
                      f"{' biz>' if b['businesses']['over'] else ''}"
@@ -228,4 +229,11 @@ def render(report: Dict[str, Any]) -> str:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    # A Windows console is cp1252 by default; the table is ASCII on
+    # purpose, and stdout is widened anyway so a name with an accent
+    # in it cannot crash the report either.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     print(render(rehearse_all()))
