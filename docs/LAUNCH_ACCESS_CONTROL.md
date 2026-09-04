@@ -66,7 +66,7 @@ In the Stripe **platform** account (the LLC account — NOT a Connect account):
 
 1. **Products** — create three: "Solutionist Starter", "Solutionist
    Professional", "Solutionist Practice".
-2. **Subscription Prices** (recurring): monthly $79 / $199 / $399 and annual
+2. **Subscription Prices** (recurring): monthly $79 / $149 / $299 (Founder $99) and annual
    $790 / $1,990 / $3,990 (~17% off).
 3. **Overage Prices** (one per product): *recurring → usage-based
    (metered)*, monthly, aggregation **sum**, per-unit **$0.40 / $0.30 /

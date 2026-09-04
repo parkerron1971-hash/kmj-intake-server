@@ -99,7 +99,7 @@ def test_model_kill_switch_drops_the_analysis_lines(monkeypatch):
 
 def test_faq_publishes_the_ladder_and_drops_the_contradictions():
     html = marketing_pages.render_faq()
-    assert "$79" in html and "$199" in html and "$399" in html
+    assert "$79" in html and "$149" in html and "$299" in html
     assert "Pricing is coming" not in html
     assert "no seat math" not in html.lower()
     assert "team seats" in html                # the team answer tells the truth

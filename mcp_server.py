@@ -1454,7 +1454,8 @@ async def _resolve_business(client: httpx.AsyncClient,
 
 # ─── Entitlement ─────────────────────────────────────────────────────
 
-AGENT_CONNECTOR_FEATURE = "agent_connector"
+AGENT_CONNECTOR_FEATURE = "agent_connector"            # read: every plan (2026-09-04)
+AGENT_CONNECTOR_WRITE_FEATURE = "agent_connector_write"  # write key: Professional
 
 
 def _tier_allows(biz: Optional[Dict[str, Any]]) -> bool:
@@ -1485,6 +1486,24 @@ def _tier_allows(biz: Optional[Dict[str, Any]]) -> bool:
         return True
 
 
+def _tier_allows_write(biz: Optional[Dict[str, Any]]) -> bool:
+    """May an outside agent CHANGE records here? Read is on every plan
+    (2026-09-04); the write key rides Professional. Same fail-open
+    posture as _tier_allows, for the same reason."""
+    try:
+        import feature_gates
+        return bool(feature_gates.has_feature(biz, AGENT_CONNECTOR_WRITE_FEATURE))
+    except Exception as e:
+        logger.warning("[mcp] write tier check unavailable, allowing: %s", e)
+        return True
+
+
+_WRITE_TIER_MESSAGE = ("Changing records from an outside agent needs the "
+                       "Professional plan. Reading stays available on every "
+                       "plan, and everything here stays available inside "
+                       "Solutionist.")
+
+
 # ─── Dispatch ────────────────────────────────────────────────────────
 
 async def _file_proposal(name: str, arguments: Dict[str, Any],
@@ -1505,9 +1524,13 @@ async def _file_proposal(name: str, arguments: Dict[str, Any],
         _ledger(business_id, name, caller, allowed=False, ok=False,
                 reason="plan:agent_connector")
         return (False, False,
-                "Connecting an outside agent to this business needs the "
-                "Professional plan. Everything here stays available "
-                "inside Solutionist.", business_id)
+                "Connecting an outside agent to this business needs an "
+                "active plan. Everything here stays available inside "
+                "Solutionist.", business_id)
+    if not _tier_allows_write(biz):
+        _ledger(business_id, name, caller, allowed=False, ok=False,
+                reason="plan:agent_connector_write")
+        return (False, False, _WRITE_TIER_MESSAGE, business_id)
     try:
         action = action_proposals.action_for(name, arguments)
     except ValueError as e:
@@ -1628,9 +1651,17 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
             _ledger(business_id, name, caller, allowed=False, ok=False,
                     reason="plan:agent_connector")
             return (False, False,
-                    "Connecting an outside agent to this business needs the "
-                    "Professional plan. Everything here stays available "
-                    "inside Solutionist.", business_id)
+                    "Connecting an outside agent to this business needs an "
+                    "active plan. Everything here stays available inside "
+                    "Solutionist.", business_id)
+        # THE WRITE KEY RIDES PROFESSIONAL (2026-09-04). A read costs the
+        # platform nothing — their model thinks — so it is on every plan
+        # and is how a Starter customer feels the connector before paying
+        # for it. A write is records kept by an outside agent.
+        if writing and not _tier_allows_write(biz):
+            _ledger(business_id, name, caller, allowed=False, ok=False,
+                    reason="plan:agent_connector_write")
+            return (False, False, _WRITE_TIER_MESSAGE, business_id)
 
         # THE POLICY ENGINE, on this surface too.
         #
@@ -2089,6 +2120,15 @@ async def mint_token(body: _MintBody,
         biz = await _owned_business(client, user, body.business_id)
     ttl = max(1, min(int(body.ttl_days or 90), 365)) * 24 * 60 * 60
     scopes = mcp_tokens.normalize_scopes(body.scopes)
+    if mcp_tokens.SCOPE_WRITE in scopes and not _tier_allows_write(biz):
+        # The 402 shape the app's upgrade prompt reads (billing_limits
+        # .require_feature); a read-only key is always available.
+        raise HTTPException(status_code=402, detail={
+            "error": "feature_locked", "feature": AGENT_CONNECTOR_WRITE_FEATURE,
+            "required_plan": "professional",
+            "message": ("A write key needs the Professional plan. Read-only "
+                        "keys are included on every plan."),
+        })
     token, row = mcp_tokens.mint(
         str(biz["id"]), label=body.label, scopes=scopes, ttl_seconds=ttl,
         created_by=(user.email or user.id))

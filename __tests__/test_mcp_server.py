@@ -902,14 +902,19 @@ def _plan_row(plan):
     return {"id": "biz-1", "comp_tier": plan}
 
 
-def test_agent_connector_is_declared_professional():
+def test_agent_connector_reads_on_every_plan_and_writes_on_professional():
+    """2026-09-04: a read costs the platform nothing (their model thinks),
+    so it is on every plan; the write key rides Professional."""
     import feature_gates
-    assert feature_gates.FEATURE_MIN_PLAN["agent_connector"] == "professional"
+    assert feature_gates.FEATURE_MIN_PLAN["agent_connector"] == "starter"
+    assert feature_gates.FEATURE_MIN_PLAN["agent_connector_write"] == "professional"
 
 
-def test_starter_is_refused_when_enforcement_is_on(monkeypatch):
+def test_starter_may_read_but_not_write_when_enforcement_is_on(monkeypatch):
     _enforce(monkeypatch)
-    assert mcp._tier_allows(_plan_row("starter")) is False
+    assert mcp._tier_allows(_plan_row("starter")) is True
+    assert mcp._tier_allows_write(_plan_row("starter")) is False
+    assert mcp._tier_allows_write(_plan_row("professional")) is True
 
 
 def test_professional_and_practice_are_allowed(monkeypatch):
@@ -953,8 +958,30 @@ def test_a_below_tier_call_is_REFUSED_not_failed(monkeypatch):
     allowed, ok, msg, biz_id = _run(mcp._call_tool("catch_up", {}, _caller()))
     assert allowed is False and ok is False
     assert biz_id == "biz-1", "the refusal is still attributed to a business"
-    assert "Professional" in msg
+    assert "plan" in msg
     assert "inside Solutionist" in msg, "say what they still have, not just what they lack"
+
+
+def test_a_starter_write_is_refused_with_the_plan_named(monkeypatch):
+    """Read on every plan, write on Professional (2026-09-04). A Starter
+    key with the write scope can look; a write call is refused, names the
+    plan, and never reaches the handler."""
+    _enforce(monkeypatch)
+
+    async def _biz(client, caller):
+        return {"id": "biz-1", "comp_tier": "starter"}
+    monkeypatch.setattr(mcp, "_resolve_business", _biz)
+    import chief_of_staff
+    monkeypatch.setitem(chief_of_staff.ACTION_HANDLERS, "create_contact",
+                        lambda *a, **k: pytest.fail("a refused write must not run"))
+    write_key = mcp.Caller("token", "agent:x", user_id="u", business_id="biz-1",
+                           scopes=["read", "write"], jti="j")
+    allowed, ok, msg, biz_id = _run(mcp._call_tool("create_contact", {"name": "A"}, write_key))
+    assert (allowed, ok, biz_id) == (False, False, "biz-1")
+    assert "Professional" in msg and "Reading stays available" in msg
+    allowed, ok, msg, _ = _run(mcp._call_tool("propose_send_sms",
+                                               {"contact_name": "M", "message": "hi"}, write_key))
+    assert (allowed, ok) == (False, False) and "Professional" in msg
 
 
 def test_a_below_tier_call_never_reaches_the_handler(monkeypatch):

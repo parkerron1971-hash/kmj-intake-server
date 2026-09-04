@@ -74,7 +74,7 @@ def _units_picture(business_id: str, row: Dict[str, Any], plan: Optional[str],
     if on_trial:
         allotment = pricing_config.trial_credits()
     elif plan:
-        allotment = (feature_gates.plan_limits().get(plan) or {}).get("chief_messages_monthly")
+        allotment = feature_gates.monthly_credits(row, plan)
     if allotment is not None:
         bonus = um.grant_units_this_month(business_id)
         if bonus > 0:
