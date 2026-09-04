@@ -234,10 +234,34 @@ def _founder_price_ids() -> list:
     ) if pid]
 
 
+# The seats sold before the 2026-09-04 ladder sit on the OLD founder
+# prices ($149 / $1,490). They are still founder seats — "existing
+# founders keep their terms" — so the cap and the public count must see
+# them, while checkout keeps routing new seats to the current price and
+# feature_gates keeps them on the Professional grant they were promised.
+# Env-overridable; the default is the two ids the ladder replaced.
+FOUNDER_LEGACY_PRICE_IDS = [
+    p.strip() for p in (os.environ.get("STRIPE_PRICE_ID_FOUNDER_LEGACY")
+                        or "price_1Tvf57Rh4utPVrAs9hjaXzTZ,price_1Tvf57Rh4utPVrAs1nV73EsQ").split(",")
+    if p.strip()
+]
+
+
+def _founder_seat_price_ids() -> list:
+    """Every price a founder seat has ever been sold at: the current
+    ids plus the legacy ones. This is what COUNTS a seat; checkout
+    routes with _founder_price_ids alone."""
+    out: list = []
+    for pid in _founder_price_ids() + FOUNDER_LEGACY_PRICE_IDS:
+        if pid and pid not in out:
+            out.append(pid)
+    return out
+
+
 async def _founder_seats_taken() -> int:
-    """Count businesses holding a founder price with a live (or
-    recoverable — past_due keeps the seat) subscription."""
-    ids = _founder_price_ids()
+    """Count businesses holding ANY founder price — current or legacy —
+    with a live (or recoverable — past_due keeps the seat) subscription."""
+    ids = _founder_seat_price_ids()
     if not ids:
         return 0
     headers = {**_service_headers(), "Prefer": "count=exact"}

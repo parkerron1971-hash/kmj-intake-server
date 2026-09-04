@@ -2177,7 +2177,7 @@ def _founder_seats_taken_sync() -> int:
     now = time.monotonic()
     if _FOUNDER_CACHE["taken"] is not None and now - _FOUNDER_CACHE["at"] < FOUNDER_CACHE_S:
         return int(_FOUNDER_CACHE["taken"])
-    ids = stripe_billing._founder_price_ids()
+    ids = stripe_billing._founder_seat_price_ids()
     taken = 0
     if ids:
         rows = sb_clients.sb_get_as_service(
