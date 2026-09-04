@@ -62,7 +62,23 @@ _SECRET_ENVS = ("MCP_TOKEN_SECRET", "CUSTOMER_TOKEN_SECRET")
 
 DEFAULT_TTL_SECONDS = 90 * 24 * 60 * 60      # 90 days
 SCOPE_READ = "read"
-KNOWN_SCOPES = (SCOPE_READ,)
+# `write` lets the holder call the class A verbs the MCP surface offers —
+# reversible records only. It is NOT "everything Chief can do": class C
+# (sends, money, hard deletes) has no scope and never will, and class B
+# does not exist until an outbox does. See action_registry's header.
+SCOPE_WRITE = "write"
+KNOWN_SCOPES = (SCOPE_READ, SCOPE_WRITE)
+
+
+def normalize_scopes(scopes: Optional[List[str]]) -> List[str]:
+    """Unknown scopes are dropped, never honoured; the result is never
+    empty; and `write` always carries `read` with it, because an agent
+    that can change a record it cannot look at is a worse credential,
+    not a narrower one."""
+    keep = [s for s in (scopes or []) if s in KNOWN_SCOPES]
+    if SCOPE_WRITE in keep and SCOPE_READ not in keep:
+        keep.append(SCOPE_READ)
+    return sorted(set(keep)) or [SCOPE_READ]
 
 
 def _secret() -> bytes:
@@ -102,7 +118,7 @@ def mint(business_id: str, *, label: str = "unnamed",
     to the owner immediately; there is no path to recover it afterwards,
     by design.
     """
-    scopes = [s for s in (scopes or [SCOPE_READ]) if s in KNOWN_SCOPES] or [SCOPE_READ]
+    scopes = normalize_scopes(scopes or [SCOPE_READ])
     now = int(time.time())
     jti = secrets.token_urlsafe(16)
     payload = {
