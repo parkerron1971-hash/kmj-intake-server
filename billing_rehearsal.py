@@ -111,12 +111,19 @@ def rehearse_business(row: Dict[str, Any], *, owner_business_count: Optional[int
     access = feature_gates.access_state(row, grandfathered, trial_spent)
 
     seats = billing_limits.seat_count(business_id)
-    seat_limit = feature_gates.limit_for(row, "max_seats")
     banks = sb_clients.sb_get_as_service(
         f"/plaid_accounts?business_id=eq.{business_id}&deleted_at=is.null"
         f"&select=account_id&limit=200") or []
-    bank_limit = feature_gates.limit_for(row, "plaid_connections")
-    biz_limit = feature_gates.limit_for(owner_best_row or row, "max_businesses")
+    # The caps bypass grandfathered accounts entirely (can_create_business,
+    # can_connect_account both return unlimited for them); the first real
+    # run flagged every beta business "over" because this read the plan's
+    # limit without asking. Unlimited is the truth for them.
+    if grandfathered:
+        seat_limit = bank_limit = biz_limit = None
+    else:
+        seat_limit = feature_gates.limit_for(row, "max_seats")
+        bank_limit = feature_gates.limit_for(row, "plaid_connections")
+        biz_limit = feature_gates.limit_for(owner_best_row or row, "max_businesses")
 
     rank = _plan_rank(plan)
     lost = sorted(f for f, mp in feature_gates.FEATURE_MIN_PLAN.items()

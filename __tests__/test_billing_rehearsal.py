@@ -208,3 +208,19 @@ def test_the_table_prints_on_a_cp1252_console(quiet):
     text = br.render(br.rehearse_all())
     text.encode("cp1252")
     assert "unlimited" in text
+
+
+def test_a_grandfathered_account_is_never_over_a_cap(quiet):
+    """The first real run flagged all eighteen beta businesses 'over' the
+    business cap. The caps bypass grandfathered owners; so does the report."""
+    quiet.setattr(um, "is_grandfathered_user", lambda uid: True)
+    def get(path):
+        if path.startswith("/business_users"):
+            return [{"id": "s1"}, {"id": "s2"}]
+        if path.startswith("/plaid_accounts"):
+            return [{"account_id": a} for a in range(6)]
+        return []
+    quiet.setattr(sb_clients, "sb_get_as_service", get)
+    b = _judge(_row(), owner_business_count=9)
+    assert b["seats"]["over"] is False and b["seats"]["limit"] is None
+    assert b["banks"]["over"] is False and b["businesses"]["over"] is False
