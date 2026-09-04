@@ -251,6 +251,20 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
     biz = ctx.get("business") or {}
     parts.append(f"BUSINESS: {biz.get('name') or ''} — type: "
                  f"{biz.get('type') or ''}")
+    # THE OWNER'S WORDS (2026-09-04, the barbershop bench): the Director
+    # read the practitioner's own prompt; the builder never did. What they
+    # said about themselves ("I've been cutting 14 years") is a fact they
+    # stated, and the page's author should hold it as one.
+    owner = str(ctx.get("owner_brief") or "").strip()
+    if owner:
+        try:
+            import canvas_brief
+            cap = int(canvas_brief.OWNER_BRIEF_MAX_CHARS)
+        except Exception:
+            cap = 2400
+        parts.append("THE OWNER'S WORDS (their own prompt for this build, "
+                     "verbatim — facts they state about themselves are on "
+                     "file):\n" + owner[:cap])
     contact = ctx.get("contact") if isinstance(ctx.get("contact"), dict) else {}
     ch = {k: v for k, v in contact.items()
           if isinstance(v, str) and v.strip()}

@@ -389,6 +389,16 @@ def _persist_site_prefs(business_id: str, prefs: Dict[str, Any]) -> None:
 
 # ─── Context gathering ────────────────────────────────────────────────
 
+def _owner_brief_cap() -> int:
+    """One cap for the owner's words (canvas_brief.OWNER_BRIEF_MAX_CHARS);
+    600 here used to cut a practitioner's prompt mid-sentence."""
+    try:
+        import canvas_brief
+        return int(canvas_brief.OWNER_BRIEF_MAX_CHARS)
+    except Exception:
+        return 2400
+
+
 def _slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (name or "site").lower()).strip("-")
     return s[:48] or "site"
@@ -3801,7 +3811,7 @@ def compose_site(business_id: str, brief_notes: str = "",
     # canvas brief can lead with them verbatim. brief_notes already
     # steered the section plan; now the author hears them too.
     if (brief_notes or "").strip():
-        ctx["owner_brief"] = brief_notes.strip()[:600]
+        ctx["owner_brief"] = brief_notes.strip()[:_owner_brief_cap()]
     # Arc 3 — an APPROVED design spec is the law of the page: it leads
     # the canvas brief. Authoring/revision happen via /composer/spec/*
     # for pennies, so only decided designs pay for builds.
@@ -5116,7 +5126,7 @@ def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
 
     ctx, dro, plan = _spec_inputs(business_id)
     if (notes or "").strip() and not revise:
-        ctx["owner_brief"] = notes.strip()[:600]
+        ctx["owner_brief"] = notes.strip()[:_owner_brief_cap()]
 
     _report_progress(progress_cb, 25,
                      "Revising the blueprint" if revise else "Drafting the blueprint")
