@@ -59,6 +59,24 @@ def _secret() -> bytes:
         "minting or verifying auditor links")
 
 
+# PER-BUSINESS SIGNING KEYS (2026-09-04) — the same shape mcp_tokens and
+# customer_token took the same day. A link is a credential in an
+# auditor's inbox; a key recovered for one business must not verify a
+# link for another. HKDF over `auditor-link|v2|<business_id>` from this
+# module's root. `v: 2` in the payload; a link with no `v` was signed by
+# the root and verifies against it until LEGACY_SUNSET (MAX_TTL is 180
+# days, so the sunset here is later than the others). Delete the legacy
+# branch then; a test says so.
+TOKEN_VERSION = 2
+LEGACY_SUNSET = "2027-03-04"
+_PURPOSE = "auditor-link"
+
+
+def _signing_key(business_id: str) -> bytes:
+    from customer_token import derive_key
+    return derive_key(_PURPOSE, str(business_id), root=_secret())
+
+
 def _b64url_encode(raw: bytes) -> str:
     import base64
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -94,6 +112,7 @@ def mint(business_id: str, *, label: str = "unnamed",
         "scp": [SCOPE_LEDGER_READ],
         "iat": now,
         "exp": now + ttl,
+        "v": TOKEN_VERSION,
     }
     # The window rides INSIDE the signed payload as well as the row, so a
     # tampered URL cannot widen what the link may see even if the row
@@ -105,7 +124,8 @@ def mint(business_id: str, *, label: str = "unnamed",
 
     payload_b64 = _b64url_encode(
         json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    sig = hmac.new(_secret(), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    sig = hmac.new(_signing_key(business_id), payload_b64.encode("utf-8"),
+                   hashlib.sha256).digest()
     token = f"{payload_b64}.{_b64url_encode(sig)}"
 
     row = {
@@ -138,12 +158,21 @@ def verify(token: str) -> Optional[Dict[str, Any]]:
         if not isinstance(token, str) or token.count(".") != 1:
             return None
         payload_b64, sig_b64 = token.split(".", 1)
-        expected = hmac.new(_secret(), payload_b64.encode("utf-8"),
+        claims = json.loads(_b64url_decode(payload_b64))
+        if not isinstance(claims, dict) or not claims.get("biz"):
+            return None
+        # The claims pick the key; nothing is trusted until the
+        # signature holds under it.
+        version = claims.get("v")
+        if version == TOKEN_VERSION:
+            key = _signing_key(str(claims["biz"]))
+        elif version is None:
+            key = _secret()          # LEGACY — dead after LEGACY_SUNSET
+        else:
+            return None
+        expected = hmac.new(key, payload_b64.encode("utf-8"),
                             hashlib.sha256).digest()
         if not hmac.compare_digest(_b64url_encode(expected), sig_b64):
-            return None
-        claims = json.loads(_b64url_decode(payload_b64))
-        if not isinstance(claims, dict):
             return None
         exp = claims.get("exp")
         if not isinstance(exp, int) or exp <= time.time():

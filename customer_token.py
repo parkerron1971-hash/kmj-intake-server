@@ -40,14 +40,18 @@ Security defaults (per Phase C.1 security design, ruled by user):
     expired on its own (TTL is 90 days). After that date the legacy
     branch is dead code and a test says so out loud; delete it then.
 
-    THE WIDER FINDING, not fixed here: mcp_tokens, auditor_links,
-    ledger_unlock, store_files, email_sender and site_composer all read
-    CUSTOMER_TOKEN_SECRET (directly or as a fallback) and sign with it
-    raw. Rotating the one env var still invalidates agent keys, auditor
-    links, product downloads, unsubscribe links and site tokens at
-    once. Each of those surfaces should adopt derive_key() with its own
-    purpose string; set MCP_TOKEN_SECRET / AUDITOR_LINK_SECRET
-    separately meanwhile so the blast radius is at least per-surface.
+    THE OTHER SURFACES (2026-09-04, same day): mcp_tokens (agent keys)
+    and auditor_links now derive per business through derive_key() with
+    their own purpose strings and their own roots (MCP_TOKEN_SECRET /
+    AUDITOR_LINK_SECRET, each falling back to this one). The four that
+    stay on a raw root are domain-separated already and are either
+    short-lived or deliberately stable: ledger_unlock (prefixed,
+    per user, short TTL), site_composer preview tokens (prefixed
+    sha256 key, 30 min), store_files download links (the message is
+    `order-download:<id>` and the link is designed never to rot), and
+    email_sender unsubscribe links (set EMAIL_UNSUB_SECRET). Rotating
+    CUSTOMER_TOKEN_SECRET still touches all of those at once; set the
+    dedicated env vars so it does not.
 """
 
 from __future__ import annotations
