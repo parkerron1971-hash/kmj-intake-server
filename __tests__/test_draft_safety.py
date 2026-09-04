@@ -26,6 +26,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import action_registry as ar
@@ -95,7 +96,7 @@ def test_save_draft_is_registered_all_three_places():
     nothing — the lesson giving_statement taught this codebase."""
     assert "save_draft" in cos.ACTION_HANDLERS
     assert "save_draft" in ar.REGISTRY
-    source = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    source = chief_source()
     assert '"type":"save_draft"' in source, "not in the prompt catalogue"
 
 

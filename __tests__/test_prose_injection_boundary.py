@@ -19,6 +19,7 @@ import pytest
 import chief_of_staff as cos
 import chief_tool_loop
 import untrusted_text
+from __tests__._chief_source import chief_source  # noqa: E402
 
 
 def _run(coro):
@@ -121,7 +122,7 @@ def test_bulk_send_is_held_on_a_tainted_turn(monkeypatch):
     """Autopilot 'full' is not a door around the taint hold."""
     cos._UNTRUSTED_TAINT.set(1)
     monkeypatch.setattr(cos, "_autopilot_level", lambda biz, domain: "full")
-    src = inspect.getsource(cos)
+    src = chief_source()
     # Find the gate by its own words rather than a line number.
     assert "holding bulk class-C" in src
     at = src.index("if registry_ok and bulk:")
@@ -133,7 +134,7 @@ def test_bulk_send_is_held_on_a_tainted_turn(monkeypatch):
 # ─── 5. the prompt names who may instruct Chief, once, in the cached segment ─
 
 def test_trust_boundary_block_is_in_the_universal_segment():
-    src = inspect.getsource(cos)
+    src = chief_source()
     assert src.index("TRUST BOUNDARY — WHO IS TALKING TO YOU") < src.index("\n[[CHIEF_GLOBAL_SPLIT]]\n")
 
 

@@ -35,6 +35,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import chief_of_staff as cos
@@ -195,7 +196,7 @@ def test_close_view_returns_the_house_contract():
 def test_close_view_is_documented_in_the_prompt():
     """The prompt is the capability surface — a handler the prompt never
     names is a word Chief doesn't have."""
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     assert '"type":"close_view"' in src.replace(" ", "").replace("{{", "{")
     assert "close it out" in src, "Kevin's own phrasing should route to it"
 
@@ -205,7 +206,7 @@ def test_goodbyes_close_the_room_in_any_mode():
     behind itself as well." The rule existed but was gated on 'while
     voice is active' — a TYPED goodbye left the window up. The prompt
     is the capability surface; the words must say any-mode."""
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     assert "GOODBYES CLOSE THE ROOM BEHIND YOU" in src
     assert "voice OR text" in src
     assert "wraps up while voice is active" not in src, (

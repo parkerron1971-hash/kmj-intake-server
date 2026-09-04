@@ -17,6 +17,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import action_registry
@@ -283,7 +284,7 @@ def test_coaches_stay_tag_only():
 
 
 def test_the_prompt_teaches_tools_that_act():
-    src = inspect.getsource(cos)
+    src = chief_source()
     assert "TOOLS THAT ACT" in src
     i = src.index("TOOLS THAT ACT")
     para = src[i:i + 1500]

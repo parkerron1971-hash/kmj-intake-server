@@ -21,6 +21,7 @@ coming back.
 """
 
 import chief_models
+from __tests__._chief_source import chief_source  # noqa: E402
 
 
 def test_voice_block_tells_chief_to_emit_show_view():
@@ -62,7 +63,7 @@ def test_voice_block_is_appended_only_on_voice_turns():
     injection site so the block cannot be silently orphaned."""
     import inspect
     import chief_of_staff
-    src = inspect.getsource(chief_of_staff)
+    src = chief_source()
     assert 'if lane == "voice":' in src
     assert "system = system + chief_models.VOICE_DELIVERY_BLOCK" in src
 

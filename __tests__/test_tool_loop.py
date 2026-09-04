@@ -36,6 +36,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import action_registry
@@ -371,7 +372,7 @@ def test_stream_with_tools_but_no_tool_use_is_one_round(stream_harness):
 # ─────────────────────────────────────────────────────────────────────
 
 def test_the_prompt_documents_mid_turn_lookups():
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     assert "MID-TURN LOOKUPS" in src
     assert "never claim data is unavailable before trying the tool" in src
 
