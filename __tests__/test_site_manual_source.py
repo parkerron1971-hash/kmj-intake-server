@@ -69,6 +69,23 @@ def test_no_verified_sender_removes_the_mailto_rather_than_showing_a_platform_ad
     assert 'data-override-target="home.hero.lead"' in out
 
 
+def test_no_verified_sender_removes_a_whole_marked_block(monkeypatch):
+    """Contact marks its label + address + note as one block, so an
+    unverified sender leaves no orphaned 'Direct email' heading behind."""
+    monkeypatch.setenv("RESEND_FROM_EMAIL", "hello@mysolutionist.app")
+    monkeypatch.setattr(
+        "agents.override_system.override_resolver.resolve_html_overrides",
+        lambda html, biz: html)
+    page = ('<div class="contact-email" data-needs-email><span>Direct email</span>'
+            '<a href="mailto:{{BUSINESS_EMAIL}}">{{BUSINESS_EMAIL}}</a><span>Every inquiry</span></div>'
+            '<div class="after">kept</div>')
+    out = public_site._apply_manual_source(page, "biz-1", {})
+    assert "Direct email" not in out and "Every inquiry" not in out
+    assert '<div class="after">kept</div>' in out
+    filled = public_site._apply_manual_source(page, "biz-1", VERIFIED)
+    assert "Direct email" in filled and "kevin@kmjcreate.com" in filled
+
+
 def test_override_edits_reach_a_manual_page(monkeypatch):
     def fake_resolve(html, biz):
         assert biz == "biz-1"

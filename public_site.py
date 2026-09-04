@@ -778,8 +778,11 @@ def _use_smart_sites(site_row: Dict[str, Any]) -> bool:
 # {{BUSINESS_EMAIL}}. No verified sender → the whole mailto element goes,
 # never a platform address on a practitioner's site.
 _MANUAL_EMAIL_TOKEN = "{{BUSINESS_EMAIL}}"
+# Any element marked data-needs-email is removed whole (a mailto link, or a
+# block holding label + address + note) — matched to its own closing tag,
+# so the marked element must not nest another of the same tag.
 _MANUAL_EMAIL_BLOCK_RE = re.compile(
-    r"<a\b[^>]*\bdata-needs-email\b[^>]*>.*?</a>", re.S | re.I)
+    r"<([a-z][a-z0-9]*)\b[^>]*\bdata-needs-email\b[^>]*>.*?</\1>", re.S | re.I)
 
 
 def _is_manual_source(site_config: Any) -> bool:
