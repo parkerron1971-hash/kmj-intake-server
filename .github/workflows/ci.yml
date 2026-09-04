@@ -16,15 +16,57 @@ on:
   workflow_dispatch:
     inputs:
       fixture_business_id:
-        description: "KMJ acceptance fixture business id (page gets overwritten)"
-        required: true
+        description: "KMJ acceptance fixture business id (page gets overwritten). Leave empty to skip design acceptance."
+        required: false
+        default: ""
       modes:
         description: "anthropic,moonshot,fallback (or a subset)"
         default: "anthropic,moonshot,fallback"
+      chief_eval:
+        description: "Run the Chief turn eval against the real model (true/false)"
+        required: false
+        default: "false"
+      chief_model_chat:
+        description: "Optional CHIEF_MODEL_CHAT override for the eval run (e.g. a candidate model id)"
+        required: false
+        default: ""
 
 jobs:
+  # Chief turn eval, LIVE (2026-09-04): the golden set in
+  # scripts/chief_turn_eval.py against the real model, verbs only. The
+  # replay mode of the same set runs on every PR inside the `test` job
+  # below with no key. This job is manual for the same reason
+  # design-acceptance is: it spends money, and a pull_request trigger
+  # would hand the key to a fork. Run it before adopting a new model:
+  #   CHIEF_MODEL_CHAT=<candidate> on one run, the current lane on
+  #   another, then --compare the two report artifacts.
+  chief-eval-live:
+    if: github.event_name == 'workflow_dispatch' && inputs.chief_eval == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run the Chief turn eval against the real model
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHIEF_MODEL_CHAT: ${{ inputs.chief_model_chat }}
+        run: python scripts/chief_turn_eval.py --live --out chief-eval-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chief-eval-report
+          path: chief-eval-report.json
+
   design-acceptance:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.fixture_business_id != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
