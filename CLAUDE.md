@@ -53,7 +53,11 @@ all the practitioner-facing data actions.
 
 - 113 `ACTION_HANDLERS`. Every handler returns `{result, label}`; a
   missing `result` blanks the app (toLowerCase crash) — always return
-  both. Actions are emitted by the model as `[ACTION:{"type":...}]` tags.
+  both. Actions are emitted by the model as `[ACTION:{"type":...}]` tags —
+  except the reviewed class-A verbs in `mcp_server.WRITE_TOOL_SCHEMAS`,
+  which are native tool calls inside the turn (`chief_tool_loop`), still
+  dispatched through `_execute_actions`. `CHIEF_NATIVE_WRITES=off` reverts
+  to tags-only.
 - 3-segment prompt cache: `[[CHIEF_GLOBAL_SPLIT]]` (universal, cached once
   globally) → `[[CHIEF_CACHE_SPLIT]]` (per-business stable) → dynamic
   tail. A segment under the model's 1024-token min silently won't cache.

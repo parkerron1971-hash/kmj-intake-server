@@ -17143,7 +17143,8 @@ ACTIONS — NAVIGATION + MEMORY:
     • "bring the chat back" / "show the window again" → visible:true.
     • GOODBYES CLOSE THE ROOM BEHIND YOU — voice OR text. When the practitioner wraps up ("that's all for now", "we're done here", "goodnight", "talk tomorrow", "that'll do it") → say a short, warm goodbye in your reply FIRST, then emit visible:false + keep_talking:false. The window closes after your goodbye (spoken goodbyes finish playing first), and anything on the data stage comes down with it — a clean exit, nothing left hanging. Only on a clear ending: a pause or a thank-you mid-session is NOT a goodbye.
   [ACTION:{{"type":"show_revenue"}}]     — opens GROW → Revenue (the canonical Revenue Analytics surface: Allocator, Expenses, planned-vs-actual, Export, Send to Accountant).
-MID-TURN LOOKUPS — you can READ while you think. When you need data you do not see in this context (a list, a balance, a contact's history, module entries, campaign state), CALL the matching tool mid-reply instead of saying you don't have it loaded — the result arrives and you keep writing with real numbers. These tools are READS ONLY and invisible to the practitioner; anything that changes state still goes through [ACTION:] tags. Look up first, then speak; never guess a figure you could have read, and never claim data is unavailable before trying the tool.
+MID-TURN LOOKUPS — you can READ while you think. When you need data you do not see in this context (a list, a balance, a contact's history, module entries, campaign state), CALL the matching tool mid-reply instead of saying you don't have it loaded — the result arrives and you keep writing with real numbers. Look up first, then speak; never guess a figure you could have read, and never claim data is unavailable before trying the tool.
+TOOLS THAT ACT — some everyday operations are tools as well: adding or updating a contact, a note, an activity, a task, a project, logging time or an expense, putting a session on the calendar or moving one, blocking dates or setting one day's hours, adding a module row, an offering, an email DRAFT, a memory, a note-to-self, a content plan, an FAQ, and undo_last. When a tool exists for what was asked, CALL IT — then tell the practitioner what its result says, in your own words. Do NOT also emit an [ACTION:] tag for the same operation; a tool call is the action. Everything that has no tool (sending, charging, publishing, booking a client, missions, and anything you do not see listed) still goes through [ACTION:] tags exactly as below. A tool result that says HELD is not done: say what is waiting and why, and ask.
 
   [ACTION:{{"type":"show_view","view":"invoices|contacts|sessions|products","filter":"...","form":"list|timeline|chart","group_by":"..."}}]  — SHOW A LIST RIGHT HERE IN THE CHAT. Fetches the actual rows and renders them as a table card under your reply — the practitioner sees every line item without leaving the conversation. Filters: invoices → open (default) | overdue | draft | paid | all; contacts → all (default) | leads | active; sessions → upcoming (default) | all; products → all.
   FORM — "form" chooses how it is DRAWN. WHEN THE PRACTITIONER NAMES A FORM, USE THAT FORM. If they asked to SEE it a certain way that IS the request, not a preference to weigh: never answer a named form with the default one, and never describe the shape in words instead of drawing it.
@@ -18427,8 +18428,17 @@ async def chief_chat(
             # look up what it does not see instead of saying so. Coaches
             # keep their clean context (same isolation reasoning as the
             # injector gates above).
-            chief_tool_loop.reset_turn()
-            _read_tools = None if is_coach_mode else chief_tool_loop.read_tool_definitions()
+            # Native writes (2026-09-04): the reviewed class-A verbs are
+            # tools on this turn too, dispatched through _execute_actions
+            # — see chief_tool_loop's header. Coaches stay tag-only with
+            # their clean context. CHIEF_NATIVE_WRITES=off is the kill
+            # switch back to tags-only; nothing else changes.
+            _native_writes = (not is_coach_mode
+                              and (os.environ.get("CHIEF_NATIVE_WRITES") or "on")
+                              .strip().lower() != "off")
+            chief_tool_loop.reset_turn(writes_allowed=_native_writes)
+            _read_tools = (None if is_coach_mode
+                           else chief_tool_loop.tool_definitions_for_turn(_native_writes))
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
@@ -18458,6 +18468,11 @@ async def chief_chat(
                 }
 
             actions, clean = _extract_actions_and_clean(raw)
+            # What the model already DID this turn, through tools. These
+            # went through _execute_actions as they were called, so they
+            # are `taken` already — and the model wrote its last sentence
+            # after seeing every result.
+            tool_taken = chief_tool_loop.writes_this_turn()
 
             # C.1.5.6 — deterministic propose-framing enforcement. When
             # the LLM emits propose_module_from_intake, scan the prose
@@ -18488,6 +18503,10 @@ async def chief_chat(
             # the retry result if it succeeded.
             if (
                 not actions
+                # A turn that acted through tools has nothing to correct:
+                # "I added Ada" is true, and a tool_use block is the
+                # unambiguous evidence the tag detector never had.
+                and not tool_taken
                 and clean
                 and not is_greeting
                 and not is_coach_pause
@@ -18554,8 +18573,12 @@ async def chief_chat(
                         if isinstance(a, dict) and a.get("type") == "propose_module_from_intake":
                             a["override"] = True
 
-            taken = await _execute_actions(
-                client, biz, actions, user_id=str(user_session.user.id)) if actions else []
+            # Tool writes first (they happened first), then whatever the
+            # reply still carried as tags. Both lists are real results
+            # from the same door; nothing is deduped because nothing ran
+            # twice.
+            taken = tool_taken + (await _execute_actions(
+                client, biz, actions, user_id=str(user_session.user.id)) if actions else [])
 
             # Deterministic goodbye enforcement (8/15). The GOODBYES CLOSE
             # THE ROOM prompt rule (#592) is real but advisory, and Kevin's
@@ -18585,7 +18608,15 @@ async def chief_chat(
             # actually executed. Re-asks the LLM with structured success/
             # failure context to compose an honest reply. Single-pass turns
             # (no actions) skip this entirely — no cost change for chitchat.
-            if taken:
+            #
+            # Native writes (2026-09-04): a turn whose every action ran as a
+            # tool skips this too. Its premise — "the words were written
+            # before anything ran" — is false for a tool turn: every result
+            # was in the model's context before its last sentence. That is
+            # one model call saved on every acting turn, and the reply is
+            # the model's own, not a rewrite. A MIXED turn (tools AND tags)
+            # still recomposes, because the tag half was narrated blind.
+            if taken and actions:
                 try:
                     composed = await _compose_post_action_reply(
                         client,
