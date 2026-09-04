@@ -327,6 +327,29 @@ def _inject_canonical(html: str, slug: str, custom_domain: Optional[str] = None,
     return html
 
 
+def _agent_artifact(path: str, biz_id: Optional[str]):
+    """/.well-known/agent.json or /llms.txt for a served site, or None
+    when the business cannot be resolved — in which case the caller
+    falls through to its normal handling (a soft 404 is still better
+    than a manifest that names nobody). Same edge-cache headers as
+    robots.txt: these change when the catalogue does, and the bundle
+    behind them is cached 60s server-side anyway."""
+    try:
+        import agent_site
+        if path == "/llms.txt":
+            text = agent_site.llms_for(biz_id)
+            if text is None:
+                return None
+            return PlainTextResponse(text, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+        doc = agent_site.manifest_for(biz_id)
+        if doc is None:
+            return None
+        return JSONResponse(content=doc, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+    except Exception as e:
+        logger.info(f"[agent_site] artifact {path} skipped: {e}")
+        return None
+
+
 def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
     """The address the public actually uses for this site. A connected
     custom domain IS the site's home — the platform subdomain is the
@@ -5528,6 +5551,17 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     # legacy sites too — favicons + OG + Twitter Cards now render for
     # everyone, not just Smart Sites users.
     html = _inject_brand_meta(html, biz_id)
+    # Agent-readable (2026-09-04): schema.org for the business, its
+    # offerings and the hours the booking engine actually enforces,
+    # stamped at SERVE time so it carries the live catalogue. Replaces
+    # the builder's stale LocalBusiness block. Composed, manual, custom-
+    # domain and secondary pages all come through here, which is why
+    # this is the one place it lives. Never raises.
+    try:
+        import agent_site
+        html = agent_site.inject_into_page(html, biz_id)
+    except Exception as _ag_e:
+        logger.info(f"[agent_site] head injection skipped: {_ag_e}")
     html = _inject_dynamic_sections(
         html,
         _render_products_section(products, slug, brand_color, biz_settings),
@@ -6480,6 +6514,12 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         if normalized_path == "/robots.txt":
             return PlainTextResponse(_site_robots_txt(slug, _cd),
                                      headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+        # Agent-readable (2026-09-04): the discovery point for a
+        # customer's agent, on the site's own origin like robots.txt.
+        if normalized_path in ("/.well-known/agent.json", "/llms.txt"):
+            _agent = _agent_artifact(normalized_path, biz_id)
+            if _agent is not None:
+                return _agent
         if normalized_path == "/sitemap.xml":
             _news_posts, _, _ = await _news_identity(client, biz_id)
             return Response(
@@ -6626,6 +6666,10 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         if _norm == "/robots.txt":
             return PlainTextResponse(_site_robots_txt(slug, domain),
                                      headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+        if _norm in ("/.well-known/agent.json", "/llms.txt"):
+            _agent = _agent_artifact(_norm, biz_id)
+            if _agent is not None:
+                return _agent
         if _norm == "/sitemap.xml":
             return Response(
                 content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, domain),

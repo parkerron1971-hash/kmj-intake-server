@@ -31,6 +31,11 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # and checked with allow_strict() — an external agent that loops is a
     # different problem from a person clicking twice.
     "mcp": (int(os.environ.get("RL_MCP_PER_MIN", "20")), 60),
+    # The agent-readable public site API (agent_site.py): anonymous,
+    # cheap JSON, no model call — but checked with allow_strict(), because
+    # the caller is a customer's agent and a looping one is a scripted
+    # sweep of every business we host. Per IP.
+    "agent_site": (int(os.environ.get("RL_AGENT_SITE_PER_MIN", "60")), 60),
     # Digital-delivery downloads — anon, token-gated; generous enough
     # for a buyer grabbing a multi-item order, tight enough to stop a
     # scripted token search.

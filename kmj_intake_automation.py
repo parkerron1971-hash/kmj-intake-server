@@ -620,6 +620,12 @@ app.include_router(_health_router)
 from auditor_portal import router as auditor_portal_router
 app.include_router(auditor_portal_router)
 
+# The agent-readable site API (2026-09-04): /public/agent/{slug}/… —
+# services, per-date availability, and booking for a customer's agent.
+# Same reason it sits here: the catch-all below would swallow it.
+from agent_site import router as agent_site_router
+app.include_router(agent_site_router)
+
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
 app.include_router(public_site_router)
