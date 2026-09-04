@@ -62,7 +62,10 @@ DEFAULT_WEIGHT = pricing_config.DEFAULT_WEIGHT
 # Overage rate (cents/unit) per tier — LOCKED 2026-06-10. Legacy shape
 # only: the prepaid model never bills overage.
 OVERAGE_CENTS = {"starter": 40, "professional": 30, "practice": 25}
-TIER_PRICE_CENTS = {"starter": 7900, "professional": 19900, "practice": 39900}
+# From the dials, not a second copy (2026-09-04): the ladder moved and
+# this table had said $199 / $399 since June.
+TIER_PRICE_CENTS = {k: v for k, v in pricing_config.tier_price_cents().items()
+                    if k in ("starter", "professional", "practice")}
 
 # % of allotment that notifies, once each per month; 200 ≈ the cap
 # milestone. Read at import — Railway env is fixed for a process life.
@@ -350,7 +353,7 @@ def usage_summary(business_id: str,
     if on_trial:
         allotment = pricing_config.trial_credits()
     elif plan:
-        allotment = (feature_gates.plan_limits().get(plan) or {}).get("chief_messages_monthly")
+        allotment = feature_gates.monthly_credits(row, plan)
 
     # Launch-ops monthly bonus grants (usage_grants) top up the plan
     # allotment. (Distinct from credit_ledger grants, which never expire.)

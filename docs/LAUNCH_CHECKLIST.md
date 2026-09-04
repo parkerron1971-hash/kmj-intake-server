@@ -29,7 +29,7 @@ already live in both repos.
 
 ### Billing enforcement (when you decide to start charging)
 Create the three products/prices in the Stripe dashboard first
-(Starter $79 / Professional $199 / Agency $399 monthly), then:
+(Starter $79 / Professional $149 / Solutionist $299 monthly, Founder $99), then:
 | Var | Value |
 |---|---|
 | `STRIPE_PRICE_ID_STARTER` | `price_…` |

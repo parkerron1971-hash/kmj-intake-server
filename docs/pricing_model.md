@@ -1,3 +1,5 @@
+> **Superseded 2026-09-04.** The ladder is now Starter $79 / 3,000 credits, Professional $149 / 7,500, Solutionist $299 / 17,500, and a Founder seat at $99 / 6,000 for the first fifty. Credit packs $12 / 650, $25 / 1,400, $50 / 2,800. The read-only connector is on every plan; the write key is Professional. Prices and tanks live in `pricing_config.py`; the numbers below are the history this was reasoned from.
+
 # Solutionist Hybrid Pricing Model — Specification v1 (Phase A)
 
 **Status:** Strategy spec for Kevin's review — NO code in this phase. Phase B (access control + enforcement) builds only after this is approved/adjusted.

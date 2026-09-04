@@ -49,7 +49,7 @@ Revoke in Agent Access; it stops working on the next call, and kills the refresh
 3. Rate limit, `mcp` bucket, **fails closed** (`RL_MCP_PER_MIN`).
 4. Registry: could any scope reach this verb? If not, flat refusal.
 5. Scope: does THIS key carry `write` if the verb writes?
-6. Tier gate: `agent_connector` is a Professional feature (dormant, fails open — an
+6. Tier gate: `agent_connector` (read) is on every plan since 2026-09-04; `agent_connector_write` (the write key, and any write or proposal call) is Professional (fails open — an
    entitlement gate, not a security gate).
 7. `policy_engine.evaluate(surface="agent", prompted=False)` — an agent's call is
    unattended. So a business that **paused automations** pauses its agent; a regulated

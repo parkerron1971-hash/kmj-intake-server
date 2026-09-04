@@ -23,7 +23,8 @@ PLANS = ("starter", "professional", "practice")
 _PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3}
 
 # Gate-ready map: feature → minimum tier. Working pricing hypothesis
-# (2026-06-09 review): Starter $79 / Professional $199 / Practice $399.
+# (2026-06-09 review): Starter $79 / Professional $199 / Practice $399;
+# re-set 2026-09-04 to $79 / $149 / $299 with a $99 Founder seat.
 FEATURE_MIN_PLAN: Dict[str, str] = {
     # Starter — operational core (incl. reconciliation: it's the upgrade wedge)
     "bookkeeping_basic": "starter",        # transactions + cash flow + reconciliation
@@ -50,11 +51,16 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # (site_concierge.py) — an AI
                                            # surface, so it rides the hero
                                            # tier with chief_unlimited
-    "agent_connector": "professional",     # connect the business to the AI
+    "agent_connector": "starter",          # connect the business to the AI
                                            # the practitioner already carries
                                            # (mcp_server.py + mcp_oauth.py).
-                                           # Same rule as site_concierge: an
-                                           # AI surface rides the hero tier.
+                                           # READ on every plan (2026-09-04):
+                                           # their model does the thinking, so
+                                           # a read costs the platform nothing,
+                                           # and feeling it is the upgrade path.
+    "agent_connector_write": "professional",  # the write key — records kept
+                                           # by an outside agent — rides the
+                                           # hero tier, like site_concierge.
                                            # NOT Practice — that tier is
                                            # collaboration and compliance
                                            # deliverables, and this is
@@ -93,7 +99,8 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
     config-driven launch ruling: we ship conservative opening defaults
     and refine against real data once the meter works.
 
-    Opening defaults 3,000 / 10,000 / 25,000, up ~10x from the
+    Opening defaults 3,000 / 10,000 / 25,000 (7,500 / 17,500 for the two
+    bigger tiers since the 2026-09-04 ladder), up ~10x from the
     300/1000/3000 of the 2026-07-12 spec. That rescale is what makes
     per-action pricing expressible at all — a build priced at 600 is
     impossible against a 300 tank. Beyond the allowance, prepaid credits
@@ -124,7 +131,36 @@ def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[in
     plan = plan_of(business_row)
     if not plan:
         return limits["starter"].get(limit)
+    if limit == "chief_messages_monthly":
+        return monthly_credits(business_row, plan)
     return limits.get(plan, {}).get(limit)
+
+
+def is_founder_price(business_row: Optional[Dict[str, Any]]) -> bool:
+    """Is this business on the Founder seat? Decided by the Stripe price
+    id it subscribes to, never by a flag someone could set by hand."""
+    pid = str((business_row or {}).get("subscription_plan") or "").strip()
+    if not pid:
+        return False
+    founder = {(os.environ.get("STRIPE_PRICE_ID_FOUNDER") or "").strip(),
+               (os.environ.get("STRIPE_PRICE_ID_FOUNDER_ANNUAL") or "").strip()} - {""}
+    return pid in founder
+
+
+def monthly_credits(business_row: Optional[Dict[str, Any]],
+                    plan: Optional[str] = None) -> Optional[int]:
+    """The monthly tank for this business: the plan's, except on the
+    Founder seat, which carries Professional's features with its own
+    smaller tank (pricing_config.founder_credits). A comped business is
+    never on the founder tank — comp_tier wins in plan_of and the comp
+    is the whole plan. None when there is no plan."""
+    plan = plan or plan_of(business_row)
+    if not plan:
+        return None
+    comp = str((business_row or {}).get("comp_tier") or "").strip().lower()
+    if plan == "professional" and comp not in PLANS and is_founder_price(business_row):
+        return pricing_config.founder_credits()
+    return (plan_limits().get(plan) or {}).get("chief_messages_monthly")
 
 
 # Price-id env aliases → the tier they entitle (2026-07-21 pricing

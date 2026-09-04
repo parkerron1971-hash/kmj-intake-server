@@ -171,6 +171,24 @@ def _redirect_uri_is_registered(uri: str, registered: List[str]) -> bool:
 # Every reader returns None on failure rather than raising, and every
 # caller treats None as refusal. A database blip must not authorise.
 
+def _tier_allows_write(business_id: str) -> bool:
+    """May a grant carry the write scope here? Fail-open, like the read
+    gate below and for the same reason. See mcp_server._tier_allows_write."""
+    if not business_id:
+        return True
+    try:
+        import feature_gates
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}"
+            f"&select=id,subscription_status,subscription_plan,comp_tier&limit=1")
+        if not rows:
+            return True
+        return bool(feature_gates.has_feature(rows[0], "agent_connector_write"))
+    except Exception as e:
+        logger.warning("[mcp_oauth] write tier check unavailable, allowing: %s", e)
+        return True
+
+
 def _tier_allows_connector(business_id: str) -> bool:
     """Has this business paid for the agent connector?
 
@@ -714,7 +732,7 @@ async def authorize_post(
                     "state": state, "code_challenge": code_challenge,
                     "code_challenge_method": code_challenge_method,
                     "scope": scope},
-            error="Connecting an outside agent needs the Professional plan. "
+            error="Connecting an outside agent needs an active plan. "
                   "Everything here stays available inside Solutionist.")
 
     # The grant is what the client asked for, capped by what the pasted
@@ -722,6 +740,11 @@ async def authorize_post(
     # read-only connection — silently narrower, never silently wider.
     granted = _granted_scopes(_requested_scopes(scope),
                               list(claims.get("scp") or []))
+    # Read on every plan, write on Professional (2026-09-04): a grant
+    # below the tier is narrowed to read, never refused — narrower is
+    # the honest answer and the connection still works.
+    if SCOPE_WRITE in granted and not _tier_allows_write(business_id):
+        granted = [s for s in granted if s != SCOPE_WRITE] or [SCOPE_READ]
     code = secrets.token_urlsafe(32)
     if not _store_code(code=code, client_id=client_id, redirect_uri=redirect_uri,
                        code_challenge=code_challenge, business_id=business_id,

@@ -964,7 +964,7 @@ PLATFORM_CHIEF_SYSTEM = (
     "    One workspace replaces ~8 tools: contacts, invoicing, bookkeeping, scheduling, content,\n"
     "    brand, sites, goals — commanded by a per-business AI Chief of Staff.\n"
     "  • Stage: invite-only private beta. Revenue engine exists (Stripe + hybrid subscription\n"
-    "    + usage-overage pricing: Starter $79 / Professional $199 / Agency $399 hypothesis) but\n"
+    "    + prepaid credits: Starter $79 / Professional $149 / Solutionist $299, Founder seat $99) but\n"
     "    the paying base is small — treat every practitioner as strategically significant.\n"
     "  • Moats to protect and deepen: (1) the Chief — context-rich, acts not just answers;\n"
     "    (2) vertical archetypes + terminology (a barber and a lawyer each see THEIR business);\n"

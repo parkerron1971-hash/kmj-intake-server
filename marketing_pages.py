@@ -114,6 +114,11 @@ CONTACT_TOKEN = "__CONTACT_EMAIL__"
 # five pages, and every one of them has to say what checkout actually
 # grants — so none of them hardcodes a number.
 TRIAL_TOKEN = "__TRIAL_FREE__"
+# Plan prices in prose (2026-09-04): two sentences on /compare and one in
+# the FAQ had "$199" and "$399" typed in, and survived a repricing. They
+# carry these tokens now and read the same dials the price cards do.
+PRICE_TOKENS = {"__PRICE_STARTER__": "starter", "__PRICE_PRO__": "professional",
+                "__PRICE_SOL__": "practice"}
 
 
 def _fill_contact(html: str) -> str:
@@ -134,6 +139,11 @@ def _fill_contact(html: str) -> str:
 def _fill_trial(html: str) -> str:
     """Swap the trial sentinel for the length checkout actually grants.
     Absent-token tolerant for the same reason _fill_contact is."""
+    if any(t in html for t in PRICE_TOKENS):
+        import pricing_config
+        prices = pricing_config.tier_price_cents()
+        for token, plan in PRICE_TOKENS.items():
+            html = html.replace(token, f"${prices.get(plan, 0) // 100}")
     if TRIAL_TOKEN not in html:
         return html
     return html.replace(TRIAL_TOKEN, _html.escape(_trial_free_phrase()))
@@ -2269,7 +2279,9 @@ _COMPARE_GROUPS = (
         ("Website concierge &mdash; Chief answers your visitors", "site_concierge",
          "The chat on your own site, answering from your real business facts."),
         ("Connect your own AI to this business", "agent_connector",
-         "Point the assistant you already carry at your workspace."),
+         "Point the assistant you already carry at your workspace. It can read on every plan."),
+        ("Let your own AI keep records here", "agent_connector_write",
+         "A write key: contacts, tasks, notes, sessions, time, drafts. Never a send, a charge, or a delete."),
         ("Sourcing Desk &mdash; find &amp; RFQ vendors", "sourcing_desk",
          "Search the live web for suppliers, then send them a request for quote."),
     )),
@@ -4968,7 +4980,7 @@ def render_compare() -> str:
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399. Every plan starts with __TRIAL_FREE__, and you can cancel yourself at any time.</p>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter __PRICE_STARTER__ &middot; Professional __PRICE_PRO__ &middot; Solutionist __PRICE_SOL__. Every plan starts with __TRIAL_FREE__, and you can cancel yourself at any time.</p>
 <p style="margin-top:10px;font-size:12px;color:var(--text-dim);">Already use an AI assistant? Keep it. Connect it from Settings and it works through Solutionist &mdash; reading your business, or, with your permission, keeping its records &mdash; with every action logged, reversible, and yours to revoke.</p>
       </div>
     </div>
@@ -5108,7 +5120,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="money">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. Every plan opens with __TRIAL_FREE__, and you can move between tiers or cancel yourself from inside the app.</p></div>
+        <div class="faq-body"><p>Starter is __PRICE_STARTER__/month, Professional __PRICE_PRO__, and Solutionist __PRICE_SOL__. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. Every plan opens with __TRIAL_FREE__, and you can move between tiers or cancel yourself from inside the app.</p></div>
       </details>
       <details class="faq-item" data-g="how">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>

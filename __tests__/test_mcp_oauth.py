@@ -452,9 +452,9 @@ def test_a_refresh_token_from_another_client_is_refused(client):
 # is a worse experience, and a worse support ticket, than never having
 # connected at all.
 
-def test_a_below_tier_business_is_refused_the_grant(client, db, monkeypatch):
+def test_a_business_without_a_plan_is_refused_the_grant(client, db, monkeypatch):
     monkeypatch.setenv("BILLING_ENFORCE", "on")
-    db.tables["businesses"] = [{"id": "biz-1", "comp_tier": "starter"}]
+    db.tables["businesses"] = [{"id": "biz-1"}]          # no plan at all
     cid = register(client)
 
     r = client.post("/oauth/authorize", data={
@@ -464,8 +464,28 @@ def test_a_below_tier_business_is_refused_the_grant(client, db, monkeypatch):
     }, follow_redirects=False)
 
     assert r.status_code == 200, "answered on the consent page, not redirected"
-    assert "Professional" in r.text
+    assert "active plan" in r.text
     assert db.tables.get("mcp_oauth_codes", []) == [], "a code was issued anyway"
+
+
+def test_a_starter_business_gets_the_grant_narrowed_to_read(client, db, monkeypatch):
+    """Read on every plan, write on Professional (2026-09-04). A Starter
+    owner pasting a write key gets a read-only connection: narrower,
+    never refused."""
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    db.tables["businesses"] = [{"id": "biz-1", "comp_tier": "starter"}]
+    cid = register(client)
+    token, _row = mcp_tokens.mint("biz-1", label="KAI — write", scopes=["read", "write"])
+
+    r = client.post("/oauth/authorize", data={
+        "client_id": cid, "redirect_uri": REDIRECT, "state": "xyz",
+        "code_challenge": CHALLENGE, "code_challenge_method": "S256",
+        "scope": "read write", "agent_key": token, "decision": "approve",
+    }, follow_redirects=False)
+
+    assert r.status_code == 302, "the connection is made"
+    codes = db.tables.get("mcp_oauth_codes", [])
+    assert codes and codes[0]["scope"] == "read", "narrowed, not refused"
 
 
 def test_a_professional_business_still_gets_the_grant(client, db, monkeypatch):
