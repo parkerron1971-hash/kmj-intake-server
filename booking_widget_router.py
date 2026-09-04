@@ -1414,6 +1414,23 @@ def _create_appointment(
             })
         except Exception as _re_err:
             logger.warning(f"rules emit booking_created failed soft: {_re_err}")
+        # The spine (2026-09-04): the standing agent's cursor is the
+        # events table, and until now a booking never reached it. Names
+        # and a service, never the notes — a form answer is third-party
+        # text and the event row is read by a model later.
+        try:
+            import event_spine
+            d = data or {}
+            event_spine.emit("booking_created", business_id, {
+                "booking_id": created[0].get("id"),
+                "contact_name": d.get("name") or d.get("customer_name"),
+                "offering": d.get("service_name_at_booking") or d.get("offering_name")
+                or d.get("offering"),
+                "starts_at": d.get("appointment_at") or d.get("starts_at"),
+                "created_by": created_by,
+            }, contact_id=d.get("contact_id"), source=created_by)
+        except Exception as _ev_err:
+            logger.warning(f"spine emit booking_created failed soft: {_ev_err}")
         _notify_practitioner_of_booking(business_id, data or {})
         return created[0]
     # C22 polish — same friendly-error treatment as contact + customer

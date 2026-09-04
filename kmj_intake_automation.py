@@ -232,6 +232,9 @@ app.include_router(module_router)
 app.include_router(chief_router)
 from chief_jobs import router as chief_jobs_router  # Feature 2 — queued desk jobs
 app.include_router(chief_jobs_router)
+# The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.
+from chief_agent import router as chief_agent_router
+app.include_router(chief_agent_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
 app.include_router(email_router)
@@ -1385,6 +1388,16 @@ async def startup():
                           "interval", minutes=5, id="chief_jobs_recover")
     except Exception as e:
         print(f"   [warn] chief jobs recovery tick not scheduled: {e}")
+    # The standing agent (2026-09-04): every ten minutes, for businesses
+    # that opted in, act on the events that arrived since the last look
+    # — through the same tools and the same door as a chat turn, marked
+    # unattended. Kill switch: CHIEF_AGENT=off.
+    try:
+        import chief_agent as _chief_agent
+        scheduler.add_job(g("chief_agent", _chief_agent.agent_tick),
+                          "interval", minutes=10, id="chief_agent")
+    except Exception as e:
+        print(f"   [warn] chief agent tick not scheduled: {e}")
     # Shared rate windows (2026-09-04): drop rows nobody touched in a
     # day, and re-arm the shared path so a migration applied after boot
     # is picked up without a restart.

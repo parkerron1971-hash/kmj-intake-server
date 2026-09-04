@@ -156,6 +156,16 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "source": "public_site contact_submit_endpoint (composed-site contact form)",
         "payload": ["name", "email", "message_preview", "new_contact"],
     },
+    # 2026-09-04: bookings reached the rules engine (rules_engine.on_event)
+    # and the practitioner's notification, but never the spine — so the
+    # standing agent, whose only cursor is this table, could not see the
+    # single event it is most useful for. Emitted by
+    # booking_widget_router._create_appointment for every path that
+    # books (widget, walk-in, Chief).
+    "booking_created": {
+        "source": "booking_widget_router._create_appointment",
+        "payload": ["booking_id", "contact_name", "offering", "starts_at", "created_by"],
+    },
     "lead_scored": {
         "source": ("lead_scoring.store — every capture door (intake form, "
                    "composed-site contact form, site concierge, booking "
