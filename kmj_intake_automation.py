@@ -1385,6 +1385,20 @@ async def startup():
                           "interval", minutes=5, id="chief_jobs_recover")
     except Exception as e:
         print(f"   [warn] chief jobs recovery tick not scheduled: {e}")
+    # Shared rate windows (2026-09-04): drop rows nobody touched in a
+    # day, and re-arm the shared path so a migration applied after boot
+    # is picked up without a restart.
+    try:
+        import rate_limit as _rl
+        async def _rate_purge_tick():
+            import asyncio as _aio
+            n = await _aio.to_thread(_rl.purge_shared)
+            if n:
+                print(f"   [rate_limit] purged {n} idle window(s)")
+        scheduler.add_job(g("rate_windows_purge", _rate_purge_tick),
+                          "interval", hours=1, id="rate_windows_purge")
+    except Exception as e:
+        print(f"   [warn] rate window purge not scheduled: {e}")
     # Campaigns Phase 1 (2026-07-21) — execute due campaign touches
     # through the shared email/SMS rails (suppression + consent + quiet
     # hours inside). Kill switch: CAMPAIGNS=off.
