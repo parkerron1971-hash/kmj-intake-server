@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import UserSession, require_user_session
+from business_access import business_access
 
 logger = logging.getLogger("chief_jobs")
 router = APIRouter(prefix="/agents/chief", tags=["chief-jobs"])
@@ -571,6 +572,63 @@ async def list_jobs(
         out.append({**r, "working": m.get("working", "working on it"),
                     "label": m.get("label", r.get("kind"))})
     return {"jobs": out}
+
+
+@router.get("/hand/runs")
+async def hand_runs(
+    business_id: str,
+    limit: int = 10,
+    user_session: UserSession = Depends(require_user_session),
+    # Frames carry whatever a third-party site showed; a seat below
+    # member does not get them. Same 404-for-both answer as every
+    # guarded route (business_access), on top of the user_id filter.
+    _biz: Dict[str, Any] = Depends(business_access("member")),
+):
+    """What the browser hand did, frame by frame (browser_hand.py). One
+    entry per run the practitioner approved: the task, what stopped it,
+    the summary, and every step with a signed link to the screen the
+    hand saw before it acted. Links are minted here, per request, from
+    the private bucket — nothing about a run is a public URL. Scoped by
+    the caller's user id AND the business, like /jobs."""
+    uid = getattr(getattr(user_session, "user", None), "id", None)
+    if not uid:
+        return {"runs": []}
+    q = (f"/chief_jobs?user_id=eq.{uid}&business_id=eq.{business_id}"
+         "&kind=eq.browser_hand"
+         "&select=id,status,error,result,params,created_at,started_at,finished_at"
+         f"&order=created_at.desc&limit={max(1, min(int(limit or 10), 50))}")
+    async with httpx.AsyncClient() as client:
+        rows = await _sb(client, "GET", q)
+    import browser_hand
+    import storage_links
+    out = []
+    for r in (rows or []):
+        res = r.get("result") if isinstance(r.get("result"), dict) else {}
+        params = r.get("params") if isinstance(r.get("params"), dict) else {}
+        spec = params.get("spec") if isinstance(params.get("spec"), dict) else {}
+        steps = []
+        for s in (res.get("steps") or []):
+            frame = s.get("frame")
+            url = None
+            if frame:
+                try:
+                    url = await asyncio.to_thread(
+                        storage_links.signed_url_sync, browser_hand.FRAME_BUCKET, frame, ttl=3600)
+                except Exception as e:
+                    logger.warning(f"[hand] frame link failed for {r.get('id')}: {e}")
+            steps.append({"n": s.get("n"), "url": s.get("url"), "action": s.get("action"),
+                          "note": s.get("note"), "frame_url": url})
+        out.append({
+            "id": r.get("id"), "status": r.get("status"), "error": r.get("error"),
+            "created_at": r.get("created_at"), "finished_at": r.get("finished_at"),
+            "queue_id": params.get("queue_id"),
+            "task": res.get("task") or spec.get("task"),
+            "domains": res.get("domains") or spec.get("domains") or [],
+            "stopped": res.get("stopped"), "ok": res.get("ok"),
+            "summary": res.get("summary"), "frames": res.get("frames"),
+            "steps": steps,
+        })
+    return {"runs": out}
 
 
 class _RetryReq(BaseModel):
