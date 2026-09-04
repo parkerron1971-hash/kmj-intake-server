@@ -276,3 +276,38 @@ def test_coverage_is_self_consistent():
     assert cov["total"] == len(cos.ACTION_HANDLERS), (
         f"coverage total {cov['total']} != {len(cos.ACTION_HANDLERS)} handlers")
     assert cov["classified"] == cov["read"] + cov["ui"] + cov["A"] + cov["B"] + cov["C"]
+
+
+# ── one definition per verb (2026-09-04, the split along the registry) ─
+
+def test_every_verb_has_exactly_one_definition_and_is_reachable_through_chief():
+    """chief_of_staff.py is being split into chief_<domain>_actions
+    modules. Two things must stay true as families move out:
+
+      1. A verb is defined ONCE. A handler left behind in chief_of_staff
+         after its family moved would shadow — or be shadowed by — the
+         moved one, depending on import order, and the registry would
+         point at whichever won.
+      2. `chief_of_staff.handle_<verb>` is the registered function.
+         Twenty test files monkeypatch through that attribute; a module
+         registered with `**HANDLERS` instead of named imports would
+         make every one of those patches a silent no-op.
+    """
+    import inspect
+    seen = {}
+    for verb, fn in cos.ACTION_HANDLERS.items():
+        name = getattr(fn, "__name__", "")
+        if not name.startswith("handle_"):
+            continue  # dotted refs into helper modules (missions) are fine
+        where = inspect.getsourcefile(fn)
+        prior = seen.setdefault(name, where)
+        assert prior == where, f"{name} is defined in both {prior} and {where}"
+        attr = getattr(cos, name, None)
+        # chief_missions and business_track_actions predate the named-
+        # import convention (dotted refs / **HANDLERS) and their tests
+        # patch those modules directly, so an ABSENT attribute is
+        # tolerated for them. A DIFFERENT function under the same name —
+        # a stale copy left behind by a move — never is.
+        assert attr is None or attr is fn, (
+            f"chief_of_staff.{name} is a different function from the registered "
+            f"handler for {verb!r} — a copy was left behind when its family moved")
