@@ -23,6 +23,7 @@ import inspect
 import pytest
 
 import chief_of_staff as cos
+from __tests__._chief_source import chief_source  # noqa: E402
 
 BIZ = {"id": "b1", "name": "KMJ Creative Solutions"}
 KEVIN_PHONE = {"id": "c-phone", "name": "Kevin McCloud", "phone": "2313430578"}
@@ -116,7 +117,7 @@ def test_texts_block_without_a_contact_still_shows_the_phone():
 # ─── 3. the reminder is system-authored; instruction turns don't search ─
 
 def test_reminder_no_longer_rides_the_user_turn():
-    src = inspect.getsource(cos)
+    src = chief_source()
     at = src.index("augmented_message = (")
     window = src[at:at + 400]
     assert "SYSTEM REMINDER" not in window, "the reminder is back inside the user message"
@@ -129,7 +130,7 @@ def test_reminder_is_appended_after_the_cache_split():
     """It rides the uncached tail — appended to the whole string, which
     ends after [[CHIEF_CACHE_SPLIT]] — so the cached segments stay
     byte-stable."""
-    src = inspect.getsource(cos)
+    src = chief_source()
     assert src.index("system = system + ACTION_TAG_REMINDER") > src.index("[[CHIEF_CACHE_SPLIT]]")
 
 
@@ -149,7 +150,7 @@ def test_plain_instruction_detection(msg, expect):
 
 
 def test_chat_turn_uses_the_one_search_switch():
-    src = inspect.getsource(cos)
+    src = chief_source()
     assert 'enable_web_search=_web_search_allowed(req.message or "")' in src
 
 

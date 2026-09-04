@@ -21,6 +21,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import chief_of_staff as cos
 
 _BIZ = {"id": "biz-1", "name": "KMJ Creative Solutions", "type": "coach",
@@ -113,6 +114,6 @@ def test_the_prompt_names_it_and_forbids_inventing_figures():
     display verb the model authors, so the no-invented-numbers rule has
     to live where the model reads it."""
     import inspect
-    src = inspect.getsource(cos)
+    src = chief_source()
     assert '"type":"show_plan"' in src
     assert "no invented figures" in src.lower()

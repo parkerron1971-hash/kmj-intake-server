@@ -17,6 +17,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import chief_bookkeeping_actions as cba
@@ -227,7 +228,7 @@ def test_verbs_registered_documented_and_async():
     import inspect
 
     import chief_of_staff as cos
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     for verb in ("review_books", "list_bookkeeping_proposals",
                  "approve_bookkeeping_proposal", "reject_bookkeeping_proposal"):
         assert verb in cos.ACTION_HANDLERS, f"{verb} not registered"

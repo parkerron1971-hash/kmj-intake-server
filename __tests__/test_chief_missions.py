@@ -31,6 +31,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import chief_missions as cm
@@ -319,7 +320,7 @@ def test_open_mission_cap(db, executed):
 # ─────────────────────────────────────────────────────────────────────
 
 def test_the_prompt_documents_every_mission_verb():
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     flat = src.replace("{{", "{").replace(" ", "")
     for v in ("propose_mission", "start_mission", "advance_mission",
               "abandon_mission", "mission_status"):
@@ -569,7 +570,7 @@ def test_a_result_ref_stays_small(db, executed):
 def test_the_prompt_documents_references_and_fan_out():
     """Parity ratchet: a capability the prompt does not describe ships
     nothing (the-prompt-is-the-capability-surface class)."""
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     flat = src.replace("{{", "{").replace(" ", "")
     assert '"for_each":"@show_view.rows"' in flat, "fan-out undocumented"
     assert "@create_invoice.invoice_id" in src, "reference syntax undocumented"

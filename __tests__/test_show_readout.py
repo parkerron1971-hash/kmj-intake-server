@@ -20,6 +20,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import chief_of_staff as cos
@@ -149,6 +150,6 @@ def test_it_is_registered_as_UI_and_never_offered_off_app():
 
 def test_the_prompt_documents_it_and_the_missing_block_rule():
     import inspect
-    src = inspect.getsource(cos)
+    src = chief_source()
     assert '"type":"show_readout"' in src
     assert "SAY WHICH PART IS MISSING" in src

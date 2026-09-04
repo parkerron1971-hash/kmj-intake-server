@@ -32,6 +32,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import chief_of_staff as cos
@@ -258,7 +259,7 @@ def test_no_open_invoices_says_none_open():
 def test_the_prompt_documents_the_verb():
     """A word the prompt never says is a word Chief doesn't have — the
     handler alone ships nothing."""
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     assert '"type":"show_view"' in src.replace(" ", "").replace("{{", "{"), \
         "show_view is not documented in the system prompt"
     assert "never answer \"I don't have the breakdown\"" in src or \
@@ -338,7 +339,7 @@ def test_the_prompt_documents_the_form_and_forbids_substituting(db):
     """The prompt is the capability surface: a parameter the prompt never
     mentions is a parameter the model never sends."""
     import inspect
-    src = inspect.getsource(cos)
+    src = chief_source()
     # The exact option list is owned by the ratchet below, which derives
     # it from _SHOW_VIEW_FORMS — hardcoding it here just breaks every
     # time a form is added, which is the opposite of what we want.
@@ -366,7 +367,7 @@ def test_every_form_the_handler_accepts_is_documented_in_the_prompt():
     """The prompt IS the capability surface. A form missing from it is
     dead code the model will never reach for."""
     import inspect
-    src = inspect.getsource(cos)
+    src = chief_source()
     prompt_start = src.index('"type":"show_view"')
     prompt = src[prompt_start:prompt_start + 4000]
     for form in cos._SHOW_VIEW_FORMS:
@@ -380,7 +381,7 @@ def test_every_form_the_prompt_promises_is_actually_accepted():
     """The reverse drift: a shape named in the prompt that the handler
     rejects is Chief promising something it cannot draw."""
     import inspect, re
-    src = inspect.getsource(cos)
+    src = chief_source()
     m = re.search(r'"form":"([a-z|]+)"', src)
     assert m, "the action example must spell out the form options"
     promised = set(m.group(1).split("|"))

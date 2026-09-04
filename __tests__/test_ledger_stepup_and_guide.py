@@ -16,6 +16,7 @@ _here = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_here.parent))
 sys.path.insert(0, str(_here))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest  # noqa: E402
 
 os.environ.setdefault("AUDITOR_LINK_SECRET", "unit-test-secret")
@@ -230,7 +231,7 @@ def test_chief_is_never_handed_the_rows():
     "nothing unusual happened there" — the conclusion the reader has to
     reach alone, and the one a ledger exists to stop software producing
     on someone's behalf."""
-    src = (_here.parent / "chief_of_staff.py").read_text(encoding="utf-8")
+    src = chief_source()
     body = src.split("async def handle_search_ledger(")[1].split("\nasync def ")[0]
     assert '"entries"' not in body, "row contents must not reach Chief's context"
     assert '"count": count' in body
@@ -239,7 +240,7 @@ def test_chief_is_never_handed_the_rows():
 
 def test_chief_returns_the_shape_the_app_needs():
     """Every handler returns result + label or the surface blanks."""
-    src = (_here.parent / "chief_of_staff.py").read_text(encoding="utf-8")
+    src = chief_source()
     body = src.split("async def handle_search_ledger(")[1].split("\nasync def ")[0]
     assert '"result":' in body and '"label":' in body
     assert '"nav": {"tab": "operate", "sub": "history"' in body

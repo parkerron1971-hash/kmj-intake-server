@@ -16,6 +16,7 @@ _here = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_here.parent))
 sys.path.insert(0, str(_here))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest  # noqa: E402
 
 import policy_engine as pe  # noqa: E402
@@ -150,7 +151,7 @@ def test_client_facing_set_is_curated_from_real_verbs():
 def test_autopilot_consults_the_engine_before_its_own_level(monkeypatch):
     """Order matters: a regulated practice set to 'full' autopilot is
     exactly the dangerous case, so the policy check runs FIRST."""
-    src = pathlib.Path(_here.parent / "chief_of_staff.py").read_text(encoding="utf-8")
+    src = chief_source()
     body = src.split("async def _should_auto_approve(")[1].split("async def ")[0]
     assert "policy_engine" in body
     assert body.index("policy_engine") < body.index("_autopilot_level"), \
@@ -170,7 +171,7 @@ def test_autopilot_blocks_a_regulated_send(fake, monkeypatch):
 def test_chat_path_now_computes_the_seat_role():
     """No Chief code path ever called role_of. A viewer seat reached the
     LLM and died at insert time as a bare 'insert failed'."""
-    src = pathlib.Path(_here.parent / "chief_of_staff.py").read_text(encoding="utf-8")
+    src = chief_source()
     body = src.split("async def _execute_actions(")[1].split("async def ")[0]
     assert "policy_engine.evaluate(" in body
     assert "user_id=user_id" in body
@@ -330,7 +331,7 @@ def test_autopilot_writes_to_the_ledger():
     unattended sender. It was the only unattended dispatcher writing no
     audit_log row — an `events` row is not append-only and carries no
     authorized_by."""
-    src = pathlib.Path(_here.parent / "chief_of_staff.py").read_text(encoding="utf-8")
+    src = chief_source()
     body = src.split("async def _process_autopilot_for_draft(")[1].split("\nasync def ")[0]
     assert "audit_log" in body, "the unattended sender must reach the ledger"
     assert "actor_id=\"autopilot\"" in body, \

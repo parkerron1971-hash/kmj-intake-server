@@ -25,6 +25,7 @@ if ROOT not in sys.path:
 import chief_of_staff as cos  # noqa: E402
 import action_inverse as ai  # noqa: E402
 import action_registry  # noqa: E402
+from __tests__._chief_source import chief_source  # noqa: E402
 
 BIZ = {"id": "biz-1", "name": "KMJ"}
 TARGETS = [
@@ -80,7 +81,7 @@ def test_registered_classified_and_taught():
     assert cos.ACTION_HANDLERS["revert_site_text"] is cos.handle_revert_site_text
     assert action_registry.reversibility("edit_site_text") == "A"
     assert action_registry.reversibility("revert_site_text") == "A"
-    src = inspect.getsource(cos)
+    src = chief_source()
     assert '"type":"edit_site_text","find"' in src      # the model is shown the shape
     assert '"type":"revert_site_text","target"' in src
 
