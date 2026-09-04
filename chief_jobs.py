@@ -134,6 +134,16 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "done": "your revised blueprint is ready",
         "nav": "build:mysite",
     },
+    # THE BROWSER HAND (2026-09-04). Starts from an approved proposal
+    # (_do_approve_one, channel "hand"), never from a click or a chat
+    # turn directly. Bounded by browser_hand.run's own budgets; the
+    # heartbeat and orphan sweep cover a deploy mid-run.
+    "browser_hand": {
+        "label": "Browser hand",
+        "working": "working through that site",
+        "done": "the hand finished — see what it found",
+        "nav": "operate:queue",
+    },
 }
 
 
@@ -372,6 +382,21 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             revise=(kind == "revise_spec"),
             progress_cb=progress)
         return result if isinstance(result, dict) else {}
+    if kind == "browser_hand":
+        import browser_hand
+        import event_spine
+        spec = (params or {}).get("spec") or {}
+        result = browser_hand.run(business_id, job_id or "run", spec, progress_cb=progress)
+        if not result.get("ok"):
+            # the recap reads `error` for an honest failure line
+            result.setdefault("error", result.get("summary"))
+        event_spine.emit("hand_run_completed", business_id, data={
+            "job_id": job_id, "queue_id": (params or {}).get("queue_id"),
+            "task": result.get("task"), "ok": bool(result.get("ok")),
+            "stopped": result.get("stopped"), "summary": result.get("summary"),
+            "frames": result.get("frames"), "steps": len(result.get("steps") or []),
+        }, source="browser_hand")
+        return result
     raise ValueError(f"unknown job kind: {kind}")
 
 

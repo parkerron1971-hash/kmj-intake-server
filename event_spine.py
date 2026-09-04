@@ -42,6 +42,12 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "payload": ["invoice_id", "invoice_number", "total", "payment_method"],
         "legacy": True,  # name predates the spine; chief revenue readers filter on it
     },
+    "hand_run_completed": {
+        "source": "chief_jobs kind=browser_hand (browser_hand.run) — one per run, "
+                  "whatever stopped it",
+        "payload": ["job_id", "queue_id", "task", "ok", "stopped", "summary",
+                    "frames", "steps"],
+    },
     "booking_paid": {
         "source": "stripe_connect_router checkout/payment_intent",
         "payload": ["booking_id", "payment_intent_id"],

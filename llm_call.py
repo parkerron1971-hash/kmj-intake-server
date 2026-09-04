@@ -86,6 +86,9 @@ _SELF_METERING = frozenset({
     "design_coach", "design_intent", "doc_intelligence_router",
     "doc_templates_router", "passes", "platform_console", "site_composer",
     "site_concierge", "sourcing_engine", "spec_author", "vision_grader",
+    # browser_hand (2026-09-04): SDK client + its own api_usage row per
+    # decision, attributed to the business, like vision_grader.
+    "browser_hand",
 })
 
 # Frames to walk past when deciding who the caller is. model_ladder

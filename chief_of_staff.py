@@ -207,6 +207,8 @@ from chief_offering_actions import (
     handle_setup_store,
     handle_update_offering,
 )
+# The browser hand (2026-09-04) — proposes; the approval starts the job.
+from chief_hand_actions import handle_use_browser_hand
 # Contribution statements. Both verbs are SENSITIVE in the registry —
 # giving history never reaches an agent surface.
 from chief_giving_actions import (
@@ -6229,6 +6231,26 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
         "reviewed_at": now_iso,
     })
 
+    # THE BROWSER HAND (2026-09-04). A proposal on channel "hand" is not a
+    # message: approving it starts a bounded browser job. Same audited
+    # door as every other approval (the endpoint, the verb, autopilot all
+    # come through here); the run belongs to the job runner, heartbeat
+    # and orphan sweep included. Nothing is sent to anyone.
+    if item.get("channel") == "hand" or item.get("action_type") == "browser_hand":
+        import browser_hand
+        import chief_jobs
+        spec = browser_hand.spec_from_body(item.get("body") or "")
+        if not spec:
+            return {**result, "ok": False, "reason": "hand_spec_invalid",
+                    "message": "this proposal's task could not be read back"}
+        job = await chief_jobs.enqueue(
+            client, user_id=str(biz.get("owner_id") or ""), business_id=biz_id,
+            kind="browser_hand", params={"spec": spec, "queue_id": qid},
+            source="approval") or {}
+        return {**result, "ok": True, "sent": False,
+                "reason": "hand_busy" if job.get("deduped") else "hand_started",
+                "job_id": job.get("id")}
+
     # Step 2: attempt delivery
     delivery = await _send_queued_email(client, biz, item)
     result.update(delivery)
@@ -6314,6 +6336,10 @@ def _approve_label(subject: Optional[str], delivery: Dict[str, Any]) -> str:
         target = " to " + " ".join(to_parts) if to_parts else ""
         return f"📧 Sent: {subj}{target}"
     reason = delivery.get("reason") or ""
+    if reason == "hand_started":
+        return f"🖐 Approved — the hand is on it: {subj}"
+    if reason == "hand_busy":
+        return f"🖐 Approved — it will run after the hand's current task: {subj}"
     if reason == "no_email":
         return f"✓ Approved (no email on file): {subj} — add an email to send"
     if reason == "no_contact":
@@ -10101,6 +10127,7 @@ ACTION_HANDLERS = {
     "remember":              handle_remember,
     "save_note":             handle_save_note,
     "queue_build_request":   handle_queue_build_request,
+    "use_browser_hand":      handle_use_browser_hand,
     "forget":                handle_forget,
     "approve_draft":         handle_approve_draft,
     "dismiss_draft":         handle_dismiss_draft,
@@ -13731,6 +13758,7 @@ ACTIONS — BATCH EMAIL:
 ACTIONS — CAMPAIGNS (multi-touch outreach sequences; you are the marketing director):
   [ACTION:{{"type":"plan_campaign","goal":"win back clients I haven't seen in 60 days","audience":"silent","days_silent":60}}]  — drafts a named campaign (2-4 email/SMS touches in the practitioner's voice) as a DRAFT. Nothing sends. audience is silent|leads|clients|all (silent = quiet for days_silent+ days, default 30).
   [ACTION:{{"type":"launch_campaign","name":"Spring rebook"}}]  — flips a draft/paused campaign to running; the sweep then sends touches on schedule (opt-outs, suppression and quiet hours enforced per message). Launching reaches the WHOLE audience — always show the draft (plan_campaign's result, or campaign_status) before launching.
+  [ACTION:{{"type":"use_browser_hand","task":"find the renewal date on my state massage license","start_url":"https://licensing.example.gov/lookup","domains":["licensing.example.gov"]}}]  — THE BROWSER HAND, only where no integration exists (a licensing portal, a supplier site with no API, a client's insurance form). Files a PROPOSAL in the Approval Queue; nothing runs until they approve it there. It runs only on the sites named, for a bounded number of steps, records every screen, and never types a password or a card number — if the task needs a login or a payment, say so instead of proposing it. Never for anything Solutionist does natively (booking, invoicing, email, texts, the site): use that verb.
   [ACTION:{{"type":"pause_campaign","name":"Spring rebook"}}]  — stops a running campaign immediately; nothing more sends until relaunched. When the practitioner says "stop the campaign", pause first, ask questions after.
   [ACTION:{{"type":"campaign_status"}}]  — all campaigns with honest send counts. Pass "name" for one campaign's full results (sends, replies and bookings since launch — labeled activity, never claimed attribution).
   Campaigns are edited on GROW → Campaigns (touch bodies, timing, audience). "Text everyone about X" as a ONE-OFF is batch_email/send_sms territory; a SEQUENCE over days is a campaign.
