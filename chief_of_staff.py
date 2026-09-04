@@ -11385,9 +11385,45 @@ def _parse_time_range_days(time_range: Optional[str]) -> int:
         return 7
 
 
+def _conversation_matches(row: Dict[str, Any], query: str) -> bool:
+    """Does one archived row mention the query? Summary, topics, AND the
+    messages themselves — the per-turn rows the backend writes carry
+    the practitioner's own words in `messages`, which is where a name
+    or an invoice number actually appears."""
+    q = (query or "").strip().lower()
+    if not q:
+        return True
+    if q in (row.get("summary") or "").lower():
+        return True
+    if any(q in str(t or "").lower() for t in (row.get("key_topics") or [])):
+        return True
+    for m in (row.get("messages") or []):
+        if isinstance(m, dict) and q in str(m.get("content") or "").lower():
+            return True
+    return False
+
+
 async def handle_recall_conversation(client, biz, action) -> Dict:
     """Search archived chief_conversations rows for relevant context.
-    Filters by `query` (matches summary or any key_topic) and `time_range`."""
+    Filters by `query` (matched against summary, key_topics and the
+    messages) and `time_range`.
+
+    THE TABLE IS WRITTEN NOW (2026-09-04). Until today nothing in this
+    backend wrote chief_conversations; the only writer was a browser
+    sweep that fired when the panel was reopened after four idle hours,
+    or on Clear chat — so a practitioner who never did either produced
+    no rows, on any device, ever, and this handler answered "nothing
+    archived" as if that were a fact about their history. chief_chat
+    now archives every turn (see _archive_turn), so recall is
+    structurally true for every turn on every surface.
+
+    Two lies removed on the same day: (1) a query with no matches used
+    to fall back to returning EVERY row, so "what did we say about
+    Marcus" came back with conversations that never mentioned Marcus —
+    the raw material for confabulated recall; it now says no match.
+    (2) The empty-state copy asserted an auto-archive behaviour the
+    backend never had.
+    """
     query = (action.get("query") or "").strip()
     days = _parse_time_range_days(action.get("time_range"))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -11395,9 +11431,12 @@ async def handle_recall_conversation(client, biz, action) -> Dict:
     rows = await _sb(
         client, "GET",
         f"/chief_conversations?business_id=eq.{biz['id']}&ended_at=gte.{since}"
-        f"&order=ended_at.desc&limit=10"
-        f"&select=id,summary,key_topics,actions_taken,started_at,ended_at,message_count",
+        f"&order=ended_at.desc&limit=60"
+        f"&select=id,summary,key_topics,actions_taken,messages,"
+        f"started_at,ended_at,message_count",
     ) or []
+    if not isinstance(rows, list):
+        rows = []
 
     if not rows:
         return {
@@ -11405,22 +11444,26 @@ async def handle_recall_conversation(client, biz, action) -> Dict:
             "result": "no_conversations",
             "label": "📜 No recent conversations to recall",
             "summary": (
-                f"I don't have any archived conversations from the last {days} days. "
-                "Conversations auto-archive after a few hours of inactivity."
+                f"I don't have anything from the last {days} days on file — "
+                "every conversation is kept from here on, so there is simply "
+                "nothing in that window yet."
             ),
             "conversations": [],
         }
 
     if query:
-        q = query.lower()
-        relevant = [
-            c for c in rows
-            if q in (c.get("summary") or "").lower()
-            or any(q in (t or "").lower() for t in (c.get("key_topics") or []))
-        ]
-        # Fall back to all matches when nothing scored — gives the AI raw
-        # material to answer "anything from last week?" type queries.
-        rows = relevant or rows
+        rows = [c for c in rows if _conversation_matches(c, query)]
+        if not rows:
+            return {
+                "type": "recall_conversation",
+                "result": "no_matches",
+                "label": f"📜 Nothing about “{query[:40]}” in the last {days} days",
+                "summary": (
+                    f"Nothing in the last {days} days mentions “{query}”. "
+                    "I can widen the window if you like."
+                ),
+                "conversations": [],
+            }
 
     summaries: List[str] = []
     for conv in rows[:5]:
@@ -17927,6 +17970,66 @@ def _parse_greeting_tod(msg: str) -> Optional[str]:
     return None
 
 
+_ARCHIVE_MESSAGE_CHARS = 4000
+_ARCHIVE_SUMMARY_CHARS = 400
+
+
+def _conversation_row(business_id: str, message: str, reply: str,
+                      taken: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """One chief_conversations row for ONE turn. Pure.
+
+    The same shape the browser's four-hour sweep writes (ChiefOfStaff.tsx
+    archiveToServer), so the recall handler and the welcome-back chip
+    read both without caring which wrote them. No model call: the
+    summary is the exchange itself, trimmed — recall matches on words,
+    and the practitioner's own words are the ones worth matching.
+    `key_topics` are the verbs that ran, so "what did we do about
+    invoices" finds the turn that created one. actions_taken keeps
+    type/label/result only — nav payloads and frontend events are
+    plumbing, not history.
+    """
+    msg = " ".join(str(message or "").split())[:_ARCHIVE_MESSAGE_CHARS]
+    rep = " ".join(str(reply or "").split())[:_ARCHIVE_MESSAGE_CHARS]
+    summary = f"You: {msg[:160]}"
+    if rep:
+        summary += f" — Chief: {rep[:_ARCHIVE_SUMMARY_CHARS - len(summary) - 10]}"
+    kinds: List[str] = []
+    compact: List[Dict[str, Any]] = []
+    for t in (taken or []):
+        if not isinstance(t, dict):
+            continue
+        kind = str(t.get("type") or "").strip()
+        if kind and kind not in kinds:
+            kinds.append(kind)
+        compact.append({k: (str(t.get(k))[:200] if t.get(k) is not None else None)
+                        for k in ("type", "label", "result")})
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "business_id": business_id,
+        "messages": [{"role": "user", "content": msg},
+                     {"role": "assistant", "content": rep}],
+        "summary": summary[:_ARCHIVE_SUMMARY_CHARS],
+        "key_topics": kinds[:10],
+        "actions_taken": compact[:20],
+        "started_at": now,
+        "ended_at": now,
+        "message_count": 2,
+    }
+
+
+async def _archive_turn(client, biz: Dict[str, Any], message: str, reply: str,
+                        taken: Optional[List[Dict[str, Any]]]) -> None:
+    """Persist this turn so recall_conversation has something to recall.
+    Best-effort, never raises: an archive write must not cost the reply."""
+    try:
+        if not biz or not biz.get("id") or not str(message or "").strip():
+            return
+        await _sb(client, "POST", "/chief_conversations",
+                  _conversation_row(str(biz["id"]), message, reply, taken))
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[chief] turn archive failed (non-fatal): {e}")
+
+
 async def _log_chief_activity(client, *, user_id, business_id, source, taken):
     """Best-effort: record the substantive actions Chief just executed to
     public.chief_activity, tagged with the originating device, so the
@@ -18713,6 +18816,13 @@ async def chief_chat(
             # injected into history. Belt-and-suspenders so nothing
             # internal-looking ever reaches the practitioner.
             response_text = clean if clean else _scrub_response_text(raw or "")
+
+            # The turn goes on file (2026-09-04) — every turn, every
+            # surface, no model call — so recall_conversation reads a
+            # table something actually writes. Greeting pulls are the
+            # app talking to itself and are not a conversation.
+            if not is_greeting:
+                await _archive_turn(client, biz, req.message, response_text, taken)
 
             return {
                 "response": response_text,
