@@ -86,9 +86,27 @@ def _client_ip(request: Request) -> str:
     return rate_limit.trusted_client_ip(request)
 
 
+_SHARED_BUCKETS = {
+    "config-anon": "booking_config_anon",
+    "book-anon": "booking_book_anon",
+    "request-fresh-link": "booking_fresh_link",
+}
+
+
 def _rate_limit(bucket_key: str, request: Request) -> None:
-    """Raises HTTPException(429) if the bucket exceeded _RATE_LIMIT in
-    the past _RATE_WINDOW_SEC seconds."""
+    """Raises HTTPException(429) when the caller is over budget.
+
+    2026-09-04: rides rate_limit.allow_strict — strict, keyed on the
+    trusted hop, and SHARED across web replicas (the TODO above, done).
+    The numbers are unchanged: 10 an hour per IP per route, registered
+    in rate_limit._LIMITS. The old deque stays for a bucket name nobody
+    registered, so a new call site cannot silently run unlimited."""
+    import rate_limit
+    shared = _SHARED_BUCKETS.get(bucket_key)
+    if shared:
+        if not rate_limit.allow_strict(shared, _client_ip(request)):
+            raise HTTPException(status_code=429, detail="rate limit exceeded — try again later")
+        return
     ip = _client_ip(request)
     key = f"{bucket_key}::{ip}"
     now = time.time()

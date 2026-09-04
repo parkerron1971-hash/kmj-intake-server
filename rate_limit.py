@@ -18,7 +18,7 @@ env-overridable per bucket.
 
 import os
 import time
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 # bucket name → (max_requests, window_seconds), env-overridable.
 _LIMITS: Dict[str, Tuple[int, int]] = {
@@ -59,6 +59,12 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # courtesy bucket beside it — fail-open, because a tracking endpoint
     # must never surface an error to a visitor's browser.
     "track": (int(os.environ.get("RL_TRACK_PER_MIN", "240")), 60),
+    # The booking widget's three anonymous routes (2026-09-04): they had
+    # their own 10/hour dict in booking_widget_router; they ride the
+    # strict, shared path now with the same numbers.
+    "booking_config_anon": (int(os.environ.get("RL_BOOKING_ANON_PER_HOUR", "10")), 3600),
+    "booking_book_anon": (int(os.environ.get("RL_BOOKING_ANON_PER_HOUR", "10")), 3600),
+    "booking_fresh_link": (int(os.environ.get("RL_BOOKING_ANON_PER_HOUR", "10")), 3600),
     # Digital-delivery downloads — anon, token-gated; generous enough
     # for a buyer grabbing a multi-item order, tight enough to stop a
     # scripted token search.
@@ -155,8 +161,100 @@ def allow(bucket: str, key: str) -> bool:
         return True
 
 
+# ─── The shared window (2026-09-04) ──────────────────────────────────
+#
+# Every bucket above lives in THIS process. The platform runs N web
+# replicas (scheduler_lock exists for that), so every anonymous budget
+# was really N times the number in _LIMITS. The strict buckets — the
+# ones that are a control, not a courtesy — now also take from a window
+# in Postgres (supabase/APPLY-2026-09-04-rate-windows.sql, rate_take()),
+# which every replica shares.
+#
+# Order matters and is deliberate: the in-process check runs FIRST. It
+# is free, and under a flood it answers "no" before a single database
+# round-trip is spent — the shared window exists to stop the sum across
+# replicas, not to absorb one replica's flood. Only a call the local
+# window admits goes on to the shared one.
+#
+# Fail-SOFT to local, not open: if the RPC is missing (migration not
+# applied yet) or the database blips, allow_strict() returns the local
+# answer it already computed, with a warning. That is a limiter still,
+# just per process again — the posture the service had until today.
+# RATE_LIMIT_SHARED=off pins that behaviour deliberately.
+
+_SHARED_RPC = "/rpc/rate_take"
+# Flips False after the first refused RPC so a not-yet-applied migration
+# costs one warning, not one failed round-trip per anonymous request.
+# Re-armed by the purge tick, so an applied migration is picked up
+# within the hour without a restart.
+_shared_ok = True
+
+
+def shared_enabled() -> bool:
+    return (os.environ.get("RATE_LIMIT_SHARED") or "on").strip().lower() != "off"
+
+
+def _shared_take(bucket: str, key: str) -> Optional[bool]:
+    """True/False from the shared window, or None when it could not
+    decide (disabled, unavailable, unexpected shape)."""
+    global _shared_ok
+    if not shared_enabled() or not _shared_ok:
+        return None
+    max_req, window = _LIMITS.get(bucket, _DEFAULT)
+    try:
+        import sb_clients
+        out = sb_clients.sb_post_as_service(_SHARED_RPC, {
+            "p_bucket": str(bucket)[:80], "p_key": str(key or "unknown")[:200],
+            "p_max": int(max_req), "p_window_sec": int(window)})
+    except Exception as e:
+        _shared_ok = False
+        _log_shared_down(e)
+        return None
+    if isinstance(out, bool):
+        return out
+    if isinstance(out, list) and out and isinstance(out[0], bool):
+        return out[0]
+    # sb_post_as_service returns None on any 4xx/5xx (a missing function
+    # is a 404) — treat exactly like a transport failure.
+    _shared_ok = False
+    _log_shared_down(f"unexpected reply {out!r}")
+    return None
+
+
+def _log_shared_down(reason) -> None:
+    import logging
+    logging.getLogger("rate_limit").warning(
+        "[rate_limit] shared window unavailable (%s) — strict buckets are "
+        "per-process until the next purge tick re-arms it. Apply "
+        "APPLY-2026-09-04-rate-windows.sql if this persists.", reason)
+
+
+def rearm_shared() -> None:
+    """Try the shared window again. Called by the purge tick."""
+    global _shared_ok
+    _shared_ok = True
+
+
+def purge_shared(older_than_sec: int = 86400) -> int:
+    """Delete rows nobody has touched in a day. Called hourly on the
+    scheduler leader; re-arms the shared path first so a migration
+    applied after boot is picked up. Never raises."""
+    rearm_shared()
+    if not shared_enabled():
+        return 0
+    try:
+        import sb_clients
+        out = sb_clients.sb_post_as_service("/rpc/rate_purge",
+                                            {"p_older_than_sec": int(older_than_sec)})
+        return int(out) if isinstance(out, int) else 0
+    except Exception as e:
+        _log_shared_down(e)
+        return 0
+
+
 def allow_strict(bucket: str, key: str) -> bool:
-    """`allow`, but FAIL-CLOSED.
+    """`allow`, but FAIL-CLOSED — and, since 2026-09-04, shared across
+    replicas.
 
     Every bucket above fails open, which is right for a practitioner: a
     limiter glitch must never stop someone running their own business.
@@ -167,9 +265,17 @@ def allow_strict(bucket: str, key: str) -> bool:
 
     Kept separate from `allow` rather than adding a flag, so that no
     existing caller can acquire this behaviour by accident.
+
+    The local window decides first (free; absorbs a flood). A call it
+    admits is then counted in the shared window, whose answer wins. If
+    the shared window cannot decide, the local answer stands.
     """
     try:
-        return _check(bucket, key)
+        local = _check(bucket, key)
+        if not local:
+            return False
+        shared = _shared_take(bucket, key)
+        return local if shared is None else shared
     except Exception:
         return False
 
