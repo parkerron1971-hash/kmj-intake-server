@@ -17,10 +17,22 @@ attribute lookup per call and buys two things:
     handler runs, that patch covers the moved handlers unchanged.
 
 Import what you need: `from chief_host import _sb, _fail, _nav`.
+
+The host's own addresses live here too (SELF_BASE, FALLBACK_BASE):
+they are facts about the process, not about Chief, and a handler module
+cannot read them off chief_of_staff at import time.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
+
+# The server's own base URL, for calls that loop back into this process
+# (SELF_BASE) and for links that must resolve from outside (FALLBACK_BASE).
+SELF_BASE = f"http://localhost:{os.environ.get('PORT', '8000')}"
+FALLBACK_BASE = os.environ.get(
+    "RAILWAY_PUBLIC_URL", "https://kmj-intake-server-production.up.railway.app"
+)
 
 
 async def _sb(client, method, path, body=None):
