@@ -38,7 +38,7 @@ Create the three products/prices in the Stripe dashboard first
 | `BILLING_ENFORCE` | `on` — THE switch. Until then trials/past-due never block. |
 
 ⚠ `feature_gates.py` marks **multi_seat as NOT BUILT** — don't market
-the Practice tier's collaboration until it ships.
+the Solutionist tier's collaboration (plan key `practice`) until it ships.
 
 ### Webhook hardening (this PR)
 | Var | Where to get it | Effect |
