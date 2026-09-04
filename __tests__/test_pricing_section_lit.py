@@ -55,8 +55,8 @@ def test_the_strip_reads_the_live_count(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: seen.append(p) or [{"id": i} for i in range(7)])
     seg = _pricing(mp.render_home())
     assert 'id="founderStrip"' in seg and 'data-left="43"' in seg and "43 of 50 seats left" in seg
-    assert "subscription_plan=in.(price_f,price_fa,price_old)" in seen[0] and "active,trialing,past_due" in seen[0], \n        "seats sold at the retired founder price still count"
-    price = pricing_config.tier_price_cents()["founder"] // 100
+    assert "subscription_plan=in.(price_f,price_fa,price_old)" in seen[0] and "active,trialing,past_due" in seen[0], (
+        "seats sold at the retired founder price still count")
     assert f"50 founding seats at ${price} a month" in seg
     assert f"{pricing_config.founder_credits():,} AI actions a month" in seg
     assert 'href="/start?plan=founder"' in seg
