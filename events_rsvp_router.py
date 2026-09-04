@@ -312,8 +312,10 @@ async def public_event_rsvp(
     on the list for the occasion (idempotent double-tap, not an error).
     """
     # Rate limit FIRST — before any read or write (pinned in tests).
-    from rate_limit import client_ip
-    ip = client_ip(request)
+    # The trusted (last) hop, not the first: the first is caller-typed,
+    # and a limiter keyed on it is decorative (2026-09-04).
+    from rate_limit import trusted_client_ip
+    ip = trusted_client_ip(request)
     if not _check_rsvp_rate(ip):
         raise HTTPException(429, "Too many attempts. Please try again in a minute.")
 

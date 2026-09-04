@@ -73,11 +73,17 @@ _rate_buckets: Dict[str, deque] = defaultdict(deque)
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
+    """The LAST X-Forwarded-For hop — the one Railway observed.
+
+    Until 2026-09-04 this read the FIRST hop, which is whatever the
+    caller typed into the header. On an anonymous surface that WRITES
+    (book-anon creates bookings; request-fresh-link sends email) that
+    made the limiter a courtesy: one header per request and the 10/hour
+    budget never filled. rate_limit.trusted_client_ip exists for exactly
+    this and intake_endpoint already used it; this surface did not.
+    """
+    import rate_limit
+    return rate_limit.trusted_client_ip(request)
 
 
 def _rate_limit(bucket_key: str, request: Request) -> None:

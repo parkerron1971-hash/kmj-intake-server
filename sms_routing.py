@@ -48,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -399,11 +399,19 @@ class OptInBody(BaseModel):
 
 
 @router.post("/api/sms/opt-in")
-async def sms_opt_in(body: OptInBody):
+async def sms_opt_in(body: OptInBody, request: Request):
     """Records a web-form SMS consent (sms_consents audit row). Public —
     it backs the crawlable /sms page that A2P reviewers verify. Light
-    in-memory rate limit (same approach as the intake endpoint)."""
+    in-memory rate limit (same approach as the intake endpoint).
+
+    Per IP as well as per phone (2026-09-04): the per-phone limit is
+    keyed on a value the caller chooses, and the rows this writes are
+    the carrier-facing consent audit trail — poisoning it has
+    regulatory cost, not just storage cost. Strict."""
     import time as _time
+    import rate_limit
+    if not rate_limit.allow_strict("sms_opt_in", rate_limit.trusted_client_ip(request)):
+        return JSONResponse({"error": "Too many attempts — try again in a little while."}, 429)
     if not body.consent:
         return JSONResponse({"error": "The consent box must be checked to sign up."}, 400)
     phone = normalize_phone(body.phone)
