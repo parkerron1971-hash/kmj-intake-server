@@ -243,6 +243,9 @@ from outcome_ledger import router as outcome_ledger_router
 app.include_router(outcome_ledger_router)
 # Chief's week (2026-09-04): the report the Home card and Monday read.
 from chief_week import router as chief_week_router
+# Standing permissions (2026-09-04): what Chief may send on its own.
+from standing_permissions import router as standing_router
+app.include_router(standing_router)
 app.include_router(chief_week_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
@@ -1451,6 +1454,17 @@ async def startup():
                           "cron", day_of_week="mon", hour=13, minute=30, id="chief_week")
     except Exception as e:
         print(f"   [warn] chief week job not scheduled: {e}")
+    # Standing permissions (2026-09-04): every minute, release the
+    # proposals whose two-minute window closed without a Stop — through
+    # the same door an approval uses, on surface "standing". Kill
+    # switch: STANDING_PERMISSIONS=off (nothing files with a release
+    # time either; every proposal waits for a tap).
+    try:
+        import standing_permissions as _standing
+        scheduler.add_job(g("standing_release", _standing.release_tick),
+                          "interval", minutes=1, id="standing_release")
+    except Exception as e:
+        print(f"   [warn] standing release tick not scheduled: {e}")
     # Shared rate windows (2026-09-04): drop rows nobody touched in a
     # day, and re-arm the shared path so a migration applied after boot
     # is picked up without a restart.

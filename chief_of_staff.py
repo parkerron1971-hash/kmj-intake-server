@@ -260,6 +260,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 import chief_models
 import chief_missions
 import chief_assignments
+import standing_permissions
 import outcome_ledger
 import chief_prewarm
 import chief_tool_loop
@@ -2935,6 +2936,7 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
 
     assignment_lines = chief_assignments.context_lines(ctx.get("open_assignments") or [])
     learning_lines = list(ctx.get("learning_lines") or [])
+    standing_lines = standing_permissions.context_lines(ctx.get("business") or {})
 
     mission_lines = []
     for m in (ctx.get("open_missions") or [])[:5]:
@@ -2995,6 +2997,9 @@ ASSIGNMENTS CHIEF IS WORKING BETWEEN CONVERSATIONS (answer "how is it going?" fr
 {chr(10).join(assignment_lines) if assignment_lines else '  (none)'}
 
 {chr(10).join(learning_lines) if learning_lines else 'WHAT LANDS WITH THIS PRACTITIONER: nothing recorded yet — no outcomes from your own moves in the last 30 days.'}
+
+STANDING PERMISSIONS:
+{chr(10).join(standing_lines) if standing_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
 
 OPEN INVOICES (this IS the itemized list — answer "who owes what" from these rows; never search for them, never say you don't have the breakdown; to DISPLAY them as a table use show_view):
 {chr(10).join(invoice_lines) if invoice_lines else '  (none open)'}
@@ -10139,6 +10144,8 @@ ACTION_HANDLERS = {
     "create_assignment":      chief_assignments.handle_create_assignment,
     "stop_assignment":        chief_assignments.handle_stop_assignment,
     "assignment_status":      chief_assignments.handle_assignment_status,
+    "grant_standing_permission":  standing_permissions.handle_grant_standing_permission,
+    "revoke_standing_permission": standing_permissions.handle_revoke_standing_permission,
     "close_view":             handle_close_view,
     "create_goal":            handle_create_goal,
     "add_reminder":           handle_add_reminder,

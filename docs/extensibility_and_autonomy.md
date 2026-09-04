@@ -218,7 +218,18 @@ Ship **Tier 1 only** first. Instrument: % of active practitioners with ≥1 enab
   is refused by the tool loop for two weeks, and the practitioner is told
   once. Event runs now write their plan BEFORE the act call too, so §2.2's
   pre-action reasoning holds on both surfaces.
-- **Still owed from §2.2 / §2.4:** permission scopes finer than the one
-  boolean, and the class-B recall window. Trust Track graduation stays a
+- **Standing permissions (`standing_permissions.py`, phase five):** the
+  approval earns the permission. The third yes in a row for one KIND of
+  class-C proposal (read off the outcome ledger) brings one question in
+  the app; yes grants that kind for that business. A granted kind still
+  files as a proposal, but with a two-minute release time and a Stop
+  button on the phone; the minute tick releases it through the door on
+  surface "standing", authorized by the grant. This IS §2.4's class-B
+  recall window, applied to the practitioner's own grant. Guardrails
+  fixed in code: four eligible kinds, never publish; money above the cap
+  still waits; regulated practices cannot grant client-facing sends;
+  three Stops in a row revoke it (the retire rule); chat grant is class C.
+- **Still owed from §2.2:** permission scopes finer than the one boolean
+  for the standing agent itself. Trust Track graduation stays a
   per-category grant the practitioner makes; the ledger's ratios feed the
   weekly report rather than a switch.
