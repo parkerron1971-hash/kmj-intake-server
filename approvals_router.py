@@ -107,6 +107,22 @@ def _load_draft(business_id: str, queue_id: str) -> Dict[str, Any]:
     return item
 
 
+def _standing_offer(biz: Dict[str, Any], item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Only an action proposal (channel "action") can earn a standing
+    permission; an ordinary email draft never asks. Best-effort."""
+    if item.get("channel") != "action":
+        return None
+    try:
+        import action_proposals
+        import standing_permissions
+        spec = action_proposals.spec_from_body(item.get("body") or "")
+        verb = str(((spec or {}).get("action") or {}).get("type") or "")
+        return standing_permissions.offer_after_approval(biz, verb)
+    except Exception as e:
+        logger.warning(f"[approvals] standing offer failed: {e}")
+        return None
+
+
 def _source(value: Optional[str]) -> str:
     return value if value in ("desktop", "mobile", "voice") else "desktop"
 
@@ -183,6 +199,9 @@ async def approve_draft_endpoint(
     return {
         "ok": True,
         "status": "sent" if delivery.get("sent") else "approved",
+        # The third yes in a row for one kind brings one question
+        # (standing_permissions). None when there is nothing to ask.
+        "offer": _standing_offer(biz, item),
         "sent": bool(delivery.get("sent")),
         "reason": delivery.get("reason"),
         "to_email": delivery.get("to_email"),

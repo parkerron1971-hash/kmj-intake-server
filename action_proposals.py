@@ -214,6 +214,14 @@ def file(business_id: str, action: Dict[str, Any], *, actor: str,
     if action_registry.reversibility(verb) != "C":
         raise ValueError(f"{verb!r} is not class C — do it with its own tool")
     spec = {"action": action, "actor": actor, "surface": surface}
+    # A standing permission (standing_permissions, 2026-09-04): the row
+    # carries a release time and the spec says so; the release tick runs
+    # it unless the practitioner stops it first.
+    import standing_permissions
+    biz_row = standing_permissions.load_for_filing(business_id)
+    standing_extra = standing_permissions.filing_extras(biz_row, str(verb))
+    if standing_extra:
+        spec["standing"] = True
     row = {
         "business_id": business_id,
         "contact_id": contact_id or action.get("contact_id") or None,
@@ -232,6 +240,7 @@ def file(business_id: str, action: Dict[str, Any], *, actor: str,
     # ride only when the table has them; the push is best-effort.
     import proposal_life
     row.update(proposal_life.filing_extras())
+    row.update(standing_extra)
     res = sb_clients.sb_post_as_service("/agent_queue", row)
     qid: Optional[str] = None
     if isinstance(res, list) and res:
@@ -239,7 +248,11 @@ def file(business_id: str, action: Dict[str, Any], *, actor: str,
     elif isinstance(res, dict):
         qid = str(res.get("id") or "") or None
     if qid:
-        proposal_life.announce_filed(business_id, qid, describe(action))
+        if standing_extra:
+            standing_permissions.announce_standing(
+                business_id, (biz_row or {}).get("owner_id"), qid, describe(action))
+        else:
+            proposal_life.announce_filed(business_id, qid, describe(action))
     return qid
 
 
@@ -255,7 +268,7 @@ async def execute(client, biz: Dict[str, Any], item: Dict[str, Any]) -> Dict[str
     try:
         results = await chief_of_staff._execute_actions(
             client, biz, [action], user_id=str(biz.get("owner_id") or "") or None,
-            surface="approval", prompted=True)
+            surface=("standing" if item.get("_standing") else "approval"), prompted=True)
     except Exception as e:
         logger.warning(f"[proposal] {action.get('type')} raised: {e}")
         return {"ok": False, "sent": False, "reason": "action_failed",

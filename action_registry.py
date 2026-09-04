@@ -177,6 +177,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                  "go through the door under their own class"),
     "stop_assignment":        _w("A", "flips an open assignment to stopped; moves already "
                                  "made stay made, nothing new happens"),
+    "grant_standing_permission":  _w("C", "lets Chief run one KIND of class-C proposal on its own "
+                                     "after a recall window — the verb that releases future sends "
+                                     "is classified by what it can set in motion; the practitioner's "
+                                     "own words are the approval"),
+    "revoke_standing_permission": _w("A", "removes one standing permission; every later send waits "
+                                     "for a tap again, nothing already sent changes"),
     "assignment_status":   _r("reads open and recent assignments with progress and the "
                               "moves log — operational state, same class as mission_status"),
     "mission_status":      _r("reads open missions with per-step status — operational "

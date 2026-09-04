@@ -397,7 +397,14 @@ async def outcomes_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or _now()
     tally = await asyncio.to_thread(resolve_pending, now)
     told = await asyncio.to_thread(_announce_retirements, now)
-    return {"resolved": tally, "retired_told": told}
+    # A retired kind also loses its standing permission (standing_permissions).
+    try:
+        import standing_permissions
+        revoked = await asyncio.to_thread(standing_permissions.sweep_revocations, now)
+    except Exception as e:
+        logger.warning(f"[outcomes] standing sweep failed: {e}")
+        revoked = []
+    return {"resolved": tally, "retired_told": told, "standing_revoked": revoked}
 
 
 def _announce_retirements(now: datetime) -> List[str]:
