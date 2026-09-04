@@ -114,9 +114,12 @@ def test_the_write_surface_count_is_a_tripwire():
     templates and read-marks (3), scheduled/drafts (3), offerings (1),
     contact health (1), owner notifications (1), time and balances (4),
     texting switches (2), templates and bookkeeping proposals (2).
+    56 (2026-09-04, missions from a non-chat trigger): propose_mission
+    (1) — drafts a plan row and runs nothing; start_mission stays class
+    C and off every surface.
     """
     offered = set(mcp.exposed_tools(allow_writes=True)) - set(mcp.exposed_tools())
-    assert len(offered) == 55, (
+    assert len(offered) == 56, (
         f"write surface changed: {sorted(offered)}. If a verb was added, "
         "decide whether an outside agent should change it, write its "
         "schema from the handler, and update this count on purpose.")

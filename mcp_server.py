@@ -986,6 +986,35 @@ WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         _obj({"proposal_id": {"type": "string"},
               "reason": {"type": "string"}},
              ["proposal_id"])),
+    # ── plans ──────────────────────────────────────────────────────
+    # A mission is a plan row, not an execution: propose_mission drafts
+    # it (class A), start_mission — class C, never a tool — is the
+    # practitioner's yes. Offered so the standing agent can turn an
+    # outcome that takes several moves ("get this overdue invoice
+    # collected") into a plan the practitioner reads and starts.
+    "propose_mission": (
+        "Draft a multi-step PLAN for the practitioner to read and start. "
+        "Executes nothing: the plan sits as a draft until they start it "
+        "in the app, and its irreversible steps pause for their OK even "
+        "then. Use for an outcome that takes several moves. Each step is "
+        "one normal action; a later step may reference an earlier one's "
+        "result as '@<action_type>.<field>'.",
+        _obj({"title": {"type": "string", "description": "Short, the outcome."},
+              "goal": {"type": "string", "description": "The ask, in one or two sentences."},
+              "steps": {"type": "array", "minItems": 1, "maxItems": 12,
+                        "items": {"type": "object",
+                                  "properties": {
+                                      "title": {"type": "string"},
+                                      "action": {"type": "object",
+                                                 "description": "The action this step runs: {type: <verb>, ...its arguments}.",
+                                                 "properties": {"type": {"type": "string"}},
+                                                 "required": ["type"]},
+                                      "for_each": {"type": "string",
+                                                   "description": "Optional: repeat over an earlier step's list, e.g. '@show_view.rows'."},
+                                      "approval": {"type": "boolean",
+                                                   "description": "Optional: pause for the practitioner before this step even if it is reversible."}},
+                                  "required": ["title", "action"]}}},
+             ["title", "steps"])),
 }
 
 
