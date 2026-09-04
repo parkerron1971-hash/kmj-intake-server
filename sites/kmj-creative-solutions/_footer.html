@@ -1,0 +1,59 @@
+<footer class="footer dark">
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <img src="{{LOGO}}" alt="KMJ Creative Solutions">
+        <p class="serif">Elevate your vision. Amplify your impact.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/about" class="link-draw">About</a>
+        <a href="/services" class="link-draw">Services</a>
+        <a href="/contact" class="link-draw">Contact</a>
+        <a href="/book" class="link-draw">Book a Discovery Call</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 KMJ Creative Solutions</span>
+      <a href="mailto:{{BUSINESS_EMAIL}}" data-needs-email>{{BUSINESS_EMAIL}}</a>
+    </div>
+  </div>
+</footer>
+<script>
+(function () {
+  var t = document.querySelector('[data-nav-toggle]');
+  var l = document.querySelector('[data-nav-links]');
+  if (t && l) {
+    t.addEventListener('click', function () {
+      var open = l.classList.toggle('open');
+      t.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  var f = document.querySelector('[data-contact-form]');
+  if (f) {
+    var note = f.querySelector('[data-form-note]');
+    var btn = f.querySelector('button[type="submit"]');
+    f.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (f.querySelector('[name="website"]').value) { return; }
+      var body = {
+        name: f.querySelector('[name="name"]').value.trim(),
+        email: f.querySelector('[name="email"]').value.trim(),
+        message: f.querySelector('[name="message"]').value.trim()
+      };
+      if (!body.name || !body.email || !body.message) {
+        note.textContent = 'Please fill in all three fields.'; note.className = 'form-note err'; return;
+      }
+      btn.disabled = true; note.textContent = 'Sending…'; note.className = 'form-note';
+      fetch('{{API_BASE}}/sites/{{BUSINESS_ID}}/contact-submit', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok && j.status !== 'error', j: j }; }); })
+        .then(function (res) {
+          if (res.ok) { f.reset(); note.textContent = 'Thank you. Your message is in. I will be in touch to set up a conversation.'; note.className = 'form-note ok'; }
+          else { note.textContent = 'Something went wrong sending that. Please try again, or book a call instead.'; note.className = 'form-note err'; }
+        })
+        .catch(function () { note.textContent = 'Something went wrong sending that. Please try again, or book a call instead.'; note.className = 'form-note err'; })
+        .then(function () { btn.disabled = false; });
+    });
+  }
+})();
+</script>

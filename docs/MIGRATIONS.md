@@ -134,6 +134,7 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 
 | File | What | Status |
 |---|---|---|
+| `supabase/APPLY-2026-09-03-kmj-site-manual.sql` | KMJ's hand-built site (`sites/kmj-creative-solutions/`, built by its `build.py`) — one UPDATE on the `business_sites` row: new home + about/services/contact pages, `html_source = manual`, previous page set kept under `site_config.manual_backup` (paired `ROLLBACK-…` file). Apply AFTER the backend that serves `html_source = manual` is on main, or the email token shows literally. | pending — apply after the PR deploys |
 | `supabase/APPLY-2026-09-03-sms-sent-by.sql` | `sms_messages.sent_by` — practitioner / chief / system, so the thread can mark who sent a text. Code writes it on every outbound; reads tolerate NULL. | **applied** 2026-09-03 via the SQL editor |
 | `supabase/APPLY-2026-09-02-sms-numbers.sql` | Dedicated SMS numbers phase B — `sms_numbers` (one live number per business; inbound routes by `To`, outbound sends from it). Code reads it fail-soft, so it can go in before or after the deploy. | **applied** 2026-09-02 via the SQL editor (`applied \| 0`); indexes + owner policy verified |
 | `APPLY-2026_08_22_signup_attribution.sql` | Growth arc Rung 1 — `attribution jsonb` on marketing_leads/waitlist/businesses + `data jsonb` on site_events (campaign params by channel) | **applied** 2026-08-22 |
