@@ -271,7 +271,7 @@ async def _gather_morning_data(client, biz_id: str) -> Dict:
     # Z form — '+00:00' reads as a space in a PostgREST query string.
     day_ago = _z(now - timedelta(hours=24))
 
-    pending, sessions, at_risk, urgent, new_leads, hot_leads = await asyncio.gather(
+    pending, sessions, at_risk, urgent, new_leads, hot_leads, needs_hand = await asyncio.gather(
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,subject&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{morning}&scheduled_for=lte.{end_of_day}&order=scheduled_for.asc&limit=10&select=id,title,scheduled_for,contacts(name)"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&health_score=lt.40&status=in.(active,lead,vip)&order=health_score.asc&limit=5&select=id,name,health_score"),
@@ -281,9 +281,14 @@ async def _gather_morning_data(client, biz_id: str) -> Dict:
         # customers is reporting the wrong day.
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&status=eq.lead&created_at=gte.{day_ago}&order=created_at.desc&select=id,name,lead_score,source&limit=10"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&status=eq.lead&lead_score=gte.70&order=lead_score.desc&select=id,name,lead_score,last_interaction&limit=5"),
+        # Chief's own proposals waiting on one tap (proposal_life). A
+        # brief that never says "two things need your hand" leaves the
+        # queue as a screen to remember.
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&channel=eq.action&select=id,subject,expires_at&order=created_at.asc&limit=10"),
     )
     return {
         "pending": pending or [],
+        "needs_your_hand": needs_hand or [],
         "sessions_today": sessions or [],
         "at_risk": at_risk or [],
         "urgent": urgent or [],
@@ -416,7 +421,7 @@ async def _generate_morning_brief(client, biz_id: str) -> Dict:
     system = f"""You are the Chief of Staff for {biz_name}. Write a brief, warm morning notification for {practitioner} in their voice.
 Voice profile: {json.dumps(voice)[:400]}
 
-Cover (in this order): (1) ONE specific thing to prioritize today, (2) anything urgent, (3) sessions today if any, (4) one quick stat. Keep under 80 words. End with a clear next step or question.
+Cover (in this order): (1) ONE specific thing to prioritize today, (2) anything urgent, and anything in NEEDS_YOUR_HAND (Chief's proposals waiting on one tap in the Approval Queue — say how many, name the first), (3) sessions today if any, (4) one quick stat. Keep under 80 words. End with a clear next step or question.
 
 Set priority='high' if there's anything urgent, otherwise 'normal'. Suggest an action only if there's something obvious to do (run an agent, open a contact, triage queue)."""
 
@@ -607,13 +612,22 @@ async def _check_urgent(client, biz_id: str) -> Dict:
             "contact_form_submitted": "used the contact form on your site",
             "concierge_lead_captured": "left their details with the site concierge",
         }.get(ev.get("event_type") or "", "reached out")
+        # If the standing agent already drafted the reply (proposal_life),
+        # the alert hands them the reply, not the contact — one thing to
+        # read, one tap, never the alert AND the draft as two items.
+        import proposal_life
+        draft = await asyncio.to_thread(proposal_life.waiting_for_contact, biz_id, cid)
+        body = f"{contact.get('name', 'New contact')} just {arrived} — lead score {score}. Worth a same-day reply."
+        if draft:
+            body += " Chief drafted the reply — it is waiting in your Approval Queue."
         alert = await create_urgent_alert(
             client, biz_id,
             title=f"Hot lead: {contact.get('name', 'unknown')}",
-            body=f"{contact.get('name', 'New contact')} just {arrived} — lead score {score}. Worth a same-day reply.",
+            body=body,
             dedup_key=dedup,
-            suggested_action=f"Open {contact.get('name', 'this contact')}",
-            action_payload={"type": "navigate", "tab": "operate", "sub": "contacts", "contact_id": cid},
+            suggested_action=("Open the reply" if draft else f"Open {contact.get('name', 'this contact')}"),
+            action_payload=({"type": "navigate", "tab": "operate", "sub": "queue"} if draft else
+                            {"type": "navigate", "tab": "operate", "sub": "contacts", "contact_id": cid}),
             related_contact_id=cid,
         )
         if alert:
@@ -801,15 +815,23 @@ async def unanswered_lead_sweep(now: Optional[datetime] = None) -> Dict:
                 if isinstance(score, int) and score >= 70:
                     body += f" Their lead score is {score}."
 
+                # A reply Chief already drafted for the longest-waiting
+                # lead turns "nobody has replied" into "one tap sends it".
+                import proposal_life
+                draft = await asyncio.to_thread(
+                    proposal_life.waiting_for_contact, bid, worst.get("id"))
+                if draft:
+                    body += " Chief has a reply drafted — one tap in your Approval Queue sends it."
                 alert = await create_urgent_alert(
                     client, bid, title=title, body=body,
                     dedup_key=f"leads_waiting:{bid}",
                     dedup_hours=LEAD_WAIT_DEDUP_HOURS,
                     priority="high",
-                    suggested_action=f"Open {name}",
-                    action_payload={"type": "navigate", "tab": "operate",
-                                    "sub": "contacts",
-                                    "contact_id": worst.get("id")},
+                    suggested_action=("Open the reply" if draft else f"Open {name}"),
+                    action_payload=({"type": "navigate", "tab": "operate", "sub": "queue"} if draft else
+                                    {"type": "navigate", "tab": "operate",
+                                     "sub": "contacts",
+                                     "contact_id": worst.get("id")}),
                     related_contact_id=worst.get("id"),
                 )
                 if alert:

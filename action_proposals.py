@@ -227,12 +227,20 @@ def file(business_id: str, action: Dict[str, Any], *, actor: str,
         "ai_reasoning": (why or "").strip() or
                         f"Proposed by {actor}: this needs your approval before it runs.",
     }
+    # A proposal has a life (proposal_life, 2026-09-04): it expires,
+    # it reminds, and it reaches the phone with a button. The columns
+    # ride only when the table has them; the push is best-effort.
+    import proposal_life
+    row.update(proposal_life.filing_extras())
     res = sb_clients.sb_post_as_service("/agent_queue", row)
+    qid: Optional[str] = None
     if isinstance(res, list) and res:
-        return str(res[0].get("id") or "") or None
-    if isinstance(res, dict):
-        return str(res.get("id") or "") or None
-    return None
+        qid = str(res[0].get("id") or "") or None
+    elif isinstance(res, dict):
+        qid = str(res.get("id") or "") or None
+    if qid:
+        proposal_life.announce_filed(business_id, qid, describe(action))
+    return qid
 
 
 async def execute(client, biz: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:

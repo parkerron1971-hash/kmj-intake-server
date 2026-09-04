@@ -156,18 +156,32 @@ def _send_one(sub_row: Dict[str, Any], payload: Dict[str, Any]) -> bool:
         return False
 
 
-def _payload(title: str, body: str, nav: str, tag: Optional[str] = None) -> Dict[str, Any]:
-    return {"title": title, "body": body, "nav": nav, "tag": tag or "solutionist"}
+def _payload(title: str, body: str, nav: str, tag: Optional[str] = None,
+             actions: Optional[List[Dict[str, str]]] = None,
+             data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The wire shape the service worker reads. `actions` become the
+    notification's buttons (sw.js shows them; a tap carries `data` into
+    the app). Nothing executes from a notification — the app does the
+    work through its usual authenticated doors."""
+    out: Dict[str, Any] = {"title": title, "body": body, "nav": nav, "tag": tag or "solutionist"}
+    if actions:
+        out["actions"] = [{"action": str(a.get("action")), "title": str(a.get("title"))}
+                          for a in actions if a.get("action") and a.get("title")][:2]
+    if data:
+        out["data"] = {k: v for k, v in data.items() if isinstance(v, (str, int, float, bool))}
+    return out
 
 
 def send_to_user(user_id: str, *, title: str, body: str, nav: str = "home",
-                 tag: Optional[str] = None) -> int:
+                 tag: Optional[str] = None,
+                 actions: Optional[List[Dict[str, str]]] = None,
+                 data: Optional[Dict[str, Any]] = None) -> int:
     if not push_enabled():
         return 0
     rows = sb_clients.sb_get_as_service(
         f"/push_subscriptions?user_id=eq.{user_id}&select=endpoint,subscription&limit=10"
     ) or []
-    return sum(1 for r in rows if _send_one(r, _payload(title, body, nav, tag)))
+    return sum(1 for r in rows if _send_one(r, _payload(title, body, nav, tag, actions, data)))
 
 
 def send_to_business(business_id: str, *, title: str, body: str, nav: str = "home",

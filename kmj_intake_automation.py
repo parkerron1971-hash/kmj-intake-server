@@ -1417,6 +1417,16 @@ async def startup():
                           "interval", minutes=15, id="chief_assignments")
     except Exception as e:
         print(f"   [warn] chief assignments tick not scheduled: {e}")
+    # Proposals with a life (2026-09-04): hourly, expire the drafts
+    # nobody approved in time (any hour) and remind about the ones
+    # waiting (waking hours, once per proposal, once per business per
+    # twelve hours). Fail-soft until the agent_queue columns exist.
+    try:
+        import proposal_life as _proposal_life
+        scheduler.add_job(g("proposal_life", _proposal_life.proposals_tick),
+                          "interval", hours=1, id="proposal_life")
+    except Exception as e:
+        print(f"   [warn] proposal life tick not scheduled: {e}")
     # Shared rate windows (2026-09-04): drop rows nobody touched in a
     # day, and re-arm the shared path so a migration applied after boot
     # is picked up without a restart.
