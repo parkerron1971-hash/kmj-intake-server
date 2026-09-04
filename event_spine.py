@@ -241,7 +241,15 @@ def emit(event_type: str, business_id: Optional[str],
         row["contact_id"] = contact_id
     try:
         sb_clients.sb_post_as_service("/events", row, prefer=None)
-        return True
     except Exception as e:
         logger.error(f"[spine] emit({event_type}) failed: {e}")
         return False
+    # The standing agent's fast lane (2026-09-04): a lead or a booking
+    # wakes it within a minute instead of waiting for the sweep. After
+    # the row is safely written, best-effort, never able to fail the emit.
+    try:
+        import chief_agent
+        chief_agent.nudge(business_id, event_type)
+    except Exception as e:  # pragma: no cover
+        logger.debug(f"[spine] nudge skipped: {e}")
+    return True
