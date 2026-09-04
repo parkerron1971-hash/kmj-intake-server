@@ -183,3 +183,29 @@ Ship **Tier 1 only** first. Instrument: % of active practitioners with ≥1 enab
 - **Validation instrumentation:** adoption = businesses with ≥1 enabled
   rule (practitioner_rules), volume = rule_runs/week — both queryable for
   the 60-day ≥20% gate.
+
+# Appendix B — The standing agent and assignments (2026-09-04, shipped)
+
+- **§2.2's first slice shipped as `chief_agent.py`:** a leader-gated tick
+  (every 2 minutes, plus a fast lane for leads and bookings) that acts on
+  the events nobody has handled, through the same tool loop and the same
+  door as a chat turn, marked `surface="agent", prompted=False`. Class C
+  has no tool on that surface; the reviewed `propose_*` tools file into
+  the Approval Queue instead. Per-business switch:
+  `settings.autonomy.agent_enabled`, off by default.
+- **Assignments shipped as `chief_assignments.py`** — the "Chief to
+  Eight" plan's phase one. An assignment is an OUTCOME the practitioner
+  hands Chief in chat with a target the code can measure (sessions in a
+  range, new contacts, money collected, one invoice paid, or manual) and
+  a deadline. Distinct from a mission: no step list. The tick measures
+  every open assignment with a plain read (every 15 minutes, or sooner
+  when an event reaches the business) and THINKS — a model turn — only
+  when progress moved or hours have passed, inside waking hours, at most
+  six times a day. Each think writes its reasoning to the row BEFORE the
+  act turn runs, which is §2.2's pre-action-reasoning rule made real;
+  the event runs still write theirs after. Open assignments are capped
+  by plan (1 / 3 / 10). Same switch as the standing agent.
+- **Still owed from §2.2 / §2.4:** permission scopes finer than the one
+  boolean; the class-B recall window; proposals that expire and remind;
+  outcome tracking on `agent_runs` and the learning loop that reads it
+  (phases two and three of the same plan).

@@ -369,6 +369,15 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "Read-only; a mission waiting on approval can only be advanced by "
         "the practitioner in the app.",
         _NO_ARGS),
+    # Deliberately exposed (tripwire bump 30 -> 31, 9/4). assignment_status
+    # is the same class: operational state of the outcomes the standing
+    # agent is working, with progress and the moves log. Creating and
+    # stopping one are writes and stay OFF this surface.
+    "assignment_status": (
+        "The outcomes Chief is working on its own between conversations "
+        "(assignments): target, progress, deadline and the moves made so "
+        "far. Read-only; the practitioner gives and stops them in chat.",
+        _NO_ARGS),
     "show_view": (
         "A bounded list (max 25 rows) of one view of this business's "
         "records, as typed columns and rows. Read-only.",

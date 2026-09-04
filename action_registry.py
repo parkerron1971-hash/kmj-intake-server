@@ -170,6 +170,15 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                  "carries the step's own class"),
     "abandon_mission":        _w("A", "flips an open mission to abandoned; steps already "
                                  "run stay run, nothing new executes"),
+    "create_assignment":      _w("A", "one chief_assignments row: an outcome, a measurable "
+                                 "target and a deadline for the standing agent to work. "
+                                 "Executes nothing itself; stop_assignment undoes it "
+                                 "completely, and moves the agent makes toward it each "
+                                 "go through the door under their own class"),
+    "stop_assignment":        _w("A", "flips an open assignment to stopped; moves already "
+                                 "made stay made, nothing new happens"),
+    "assignment_status":   _r("reads open and recent assignments with progress and the "
+                              "moves log — operational state, same class as mission_status"),
     "mission_status":      _r("reads open missions with per-step status — operational "
                               "state, same class as list_scheduled"),
     "show_view":           _r("fetches a bounded read-only list (invoices / contacts / "

@@ -214,7 +214,16 @@ async def handle_business(business_id: str, events: List[Dict[str, Any]]) -> Opt
     events = [e for e in events if str(e.get("id")) in mine]
     if not events:
         return None   # another replica got there first
-    return await run(biz, events)
+    record = await run(biz, events)
+    # An event changes the picture: have this business's open
+    # assignments measured on the next assignments tick rather than
+    # in half an hour. One cheap PATCH; never a model call here.
+    try:
+        import chief_assignments
+        await asyncio.to_thread(chief_assignments.touch, business_id)
+    except Exception as e:  # pragma: no cover
+        logger.debug(f"[agent] assignments touch failed: {e}")
+    return record
 
 
 # ─── The fast lane ──────────────────────────────────────────────────────

@@ -235,6 +235,9 @@ app.include_router(chief_jobs_router)
 # The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.
 from chief_agent import router as chief_agent_router
 app.include_router(chief_agent_router)
+# Assignments (2026-09-04): the outcomes the standing agent works over days.
+from chief_assignments import router as chief_assignments_router
+app.include_router(chief_assignments_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
 app.include_router(email_router)
@@ -1404,6 +1407,16 @@ async def startup():
                           "interval", minutes=2, id="chief_agent")
     except Exception as e:
         print(f"   [warn] chief agent tick not scheduled: {e}")
+    # Assignments (2026-09-04): every fifteen minutes, measure each
+    # open assignment with a plain read and think — a model turn —
+    # only on the ones where progress moved or hours have passed.
+    # Same switch as the standing agent. Kill switch: CHIEF_ASSIGNMENTS=off.
+    try:
+        import chief_assignments as _chief_assignments
+        scheduler.add_job(g("chief_assignments", _chief_assignments.assignments_tick),
+                          "interval", minutes=15, id="chief_assignments")
+    except Exception as e:
+        print(f"   [warn] chief assignments tick not scheduled: {e}")
     # Shared rate windows (2026-09-04): drop rows nobody touched in a
     # day, and re-arm the shared path so a migration applied after boot
     # is picked up without a restart.

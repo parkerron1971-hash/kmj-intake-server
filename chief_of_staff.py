@@ -259,6 +259,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 # conversational tier) is preserved as the draft-lane default.
 import chief_models
 import chief_missions
+import chief_assignments
 import chief_prewarm
 import chief_tool_loop
 import fallback_brain
@@ -1608,8 +1609,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&status=in.(draft,sent,viewed,overdue)"
             f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
             f"&order=due_date.asc.nullslast&limit=40"),
+        # Open assignments (2026-09-04) — the outcomes the standing
+        # agent is working between conversations. Chief must know
+        # what it is already on, so it never takes the same one twice
+        # and can answer "how is Thursday looking?" from the row.
+        chief_assignments.open_for_context(biz_id),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -1788,6 +1794,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
              "steps": m.get("steps") or []}
             for m in (open_missions or [])
         ],
+        "open_assignments": list(open_assignments or []),
         "open_invoices": [
             {
                 "id": r.get("id"),
@@ -2921,6 +2928,8 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         line += f" [id={p.get('id')}]"
         project_lines.append(line)
 
+    assignment_lines = chief_assignments.context_lines(ctx.get("open_assignments") or [])
+
     mission_lines = []
     for m in (ctx.get("open_missions") or [])[:5]:
         steps = m.get("steps") or []
@@ -2975,6 +2984,9 @@ PROJECTS (this IS the full list — never search or "pull" for it):
 
 ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner; never re-propose one that already exists):
 {chr(10).join(mission_lines) if mission_lines else '  (none)'}
+
+ASSIGNMENTS CHIEF IS WORKING BETWEEN CONVERSATIONS (answer "how is it going?" from these; never create_assignment one that already exists; stop_assignment ends one):
+{chr(10).join(assignment_lines) if assignment_lines else '  (none)'}
 
 OPEN INVOICES (this IS the itemized list — answer "who owes what" from these rows; never search for them, never say you don't have the breakdown; to DISPLAY them as a table use show_view):
 {chr(10).join(invoice_lines) if invoice_lines else '  (none open)'}
@@ -10116,6 +10128,9 @@ ACTION_HANDLERS = {
     "advance_mission":        chief_missions.handle_advance_mission,
     "abandon_mission":        chief_missions.handle_abandon_mission,
     "mission_status":         chief_missions.handle_mission_status,
+    "create_assignment":      chief_assignments.handle_create_assignment,
+    "stop_assignment":        chief_assignments.handle_stop_assignment,
+    "assignment_status":      chief_assignments.handle_assignment_status,
     "close_view":             handle_close_view,
     "create_goal":            handle_create_goal,
     "add_reminder":           handle_add_reminder,

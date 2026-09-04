@@ -145,7 +145,11 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # state incl. drift, inbox + sync freshness, last test, next step.
     # Configuration and counts, never a message body. Same class as
     # sms_status; explicitly silent (see SILENT_TOOLS).
-    assert len(tools) == 30, (
+    # 31 (9/4): assignment_status joined - the outcomes the standing agent
+    # is working between conversations: target, progress, deadline, the
+    # moves log. Operational state in the mission_status class; giving
+    # and stopping one are writes and stay off this surface.
+    assert len(tools) == 31, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -564,6 +568,10 @@ SILENT_TOOLS = {
     # practitioner's registrar, which no Chief verb can do for them -
     # the result names the step in words instead.
     "email_setup_status",
+    # assignment_status (9/4): the next step is a word in chat ("stop
+    # working on Thursday"); giving and stopping are writes off this
+    # surface, so the result carries the progress and no verb.
+    "assignment_status",
 }
 
 

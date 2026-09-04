@@ -112,13 +112,16 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
     return {
         "starter":      {"max_businesses": 1,
                          "chief_messages_monthly": credits["starter"],
-                         "max_seats": 1, "plaid_connections": 2},
+                         "max_seats": 1, "plaid_connections": 2,
+                         "open_assignments": 1},
         "professional": {"max_businesses": 1,
                          "chief_messages_monthly": credits["professional"],
-                         "max_seats": 1, "plaid_connections": 5},
+                         "max_seats": 1, "plaid_connections": 5,
+                         "open_assignments": 3},
         "practice":     {"max_businesses": 3,
                          "chief_messages_monthly": credits["practice"],
-                         "max_seats": 5, "plaid_connections": None},
+                         "max_seats": 5, "plaid_connections": None,
+                         "open_assignments": 10},
     }
 
 
