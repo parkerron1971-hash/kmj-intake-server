@@ -5483,7 +5483,8 @@ MARKETING_HTML = """<!DOCTYPE html>
 
 async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str,
                         custom_domain: Optional[str] = None,
-                        page_path: str = "") -> str:
+                        page_path: str = "",
+                        manual: bool = False) -> str:
     """Inject canonical + live products + gallery into served HTML.
 
     `custom_domain` (2026-08-02): this function used to call
@@ -5491,6 +5492,14 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     already accepted. Every custom-domain page therefore declared the
     platform subdomain as its canonical, handing the ranking value of
     the domain the practitioner PAID FOR to a subdomain they don't own.
+
+    `manual` (2026-09-04): a hand-built site's serve-time fills (text
+    overrides + the verified sending address). #805 wired them into the
+    /public/site/{slug} preview handlers only; the subdomain and
+    custom-domain paths — the addresses visitors actually use — come
+    through here, and kmjcreate.com went live printing {{BUSINESS_EMAIL}}
+    in its footer. Every path that serves a stored page runs through
+    this function, so this is where the fill belongs.
     """
     products: List[Dict[str, Any]] = []
     gallery: List[Dict[str, Any]] = []
@@ -5512,6 +5521,8 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
             bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
             if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                 brand_color = bc
+    if manual:
+        html = _apply_manual_source(html, biz_id, biz_settings)
     html = _inject_canonical(html, slug, custom_domain, page_path)
     # Pass 3: activate the Pass 2.5a `_brand_head_meta_tags` helper for
     # legacy sites too — favicons + OG + Twitter Cards now render for
@@ -6519,6 +6530,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # /public/site/{slug}/about — so slug.mysolutionist.app/about
         # served the home page instead (soft-404), and the site's own
         # nav pointed visitors at the /public/... preview URL.
+        _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
         _page_id = _SITE_PAGE_PATHS.get(normalized_path)
         if _page_id and isinstance(_pages, dict):
@@ -6526,10 +6538,11 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             if _page_html:
                 _page_html = await _augment_html(
                     client, biz_id, slug, _page_html,
-                    custom_domain=_cd, page_path=normalized_path)
+                    custom_domain=_cd, page_path=normalized_path, manual=_manual)
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
-                    headers={"X-Solutionist-Source": "module-composer-multipage",
+                    headers={"X-Solutionist-Source": "manual-site" if _manual
+                             else "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         # ─── Real 404 for anything else ────────────────────────────
@@ -6538,10 +6551,11 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             return await _render_not_found(client, slug, biz_id, _cd)
 
         html = await _augment_html(client, biz_id, slug, site["html_content"],
-                                   custom_domain=_cd, page_path="")
+                                   custom_domain=_cd, page_path="", manual=_manual)
         return HTMLResponse(
             content=html, media_type="text/html",
-            headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS},
+            headers={**({"X-Solutionist-Source": "manual-site"} if _manual else {}),
+                     **_PUBLIC_SITE_EDGE_CACHE_HEADERS},
         )
 
 
@@ -6638,6 +6652,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
             return None  # type: ignore
 
         # Secondary pages at clean paths, on the practitioner's own domain.
+        _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
         _page_id = _SITE_PAGE_PATHS.get(_norm)
         if _page_id and isinstance(_pages, dict):
@@ -6645,10 +6660,11 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
             if _page_html:
                 _page_html = await _augment_html(
                     client, biz_id, slug, _page_html,
-                    custom_domain=domain, page_path=_norm)
+                    custom_domain=domain, page_path=_norm, manual=_manual)
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
-                    headers={"X-Solutionist-Source": "module-composer-multipage",
+                    headers={"X-Solutionist-Source": "manual-site" if _manual
+                             else "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _norm != "/":
@@ -6657,10 +6673,11 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # custom_domain=domain is THE fix for the canonical bug: without
         # it every page here declared the platform subdomain canonical.
         html = await _augment_html(client, biz_id, slug, site["html_content"],
-                                   custom_domain=domain, page_path="")
+                                   custom_domain=domain, page_path="", manual=_manual)
         return HTMLResponse(
             content=html, media_type="text/html",
-            headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS},
+            headers={**({"X-Solutionist-Source": "manual-site"} if _manual else {}),
+                     **_PUBLIC_SITE_EDGE_CACHE_HEADERS},
         )
 
 

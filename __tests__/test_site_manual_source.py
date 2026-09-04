@@ -146,6 +146,33 @@ def test_home_keeps_the_live_injection_placeholders_and_wires_the_form(built_pag
     assert 'href="/book"' in home and 'href="/book"' in contact
 
 
+def test_the_public_domain_path_fills_a_manual_page_too(monkeypatch):
+    """#805 hooked the /public/site preview handlers; kmjcreate.com went
+    live through _augment_html printing {{BUSINESS_EMAIL}}. The fill now
+    lives in the one function every public path runs through."""
+    import asyncio
+
+    async def fake_sb(client, path):
+        if path.startswith("/businesses?"):
+            return [{"settings": VERIFIED}]
+        return []
+    monkeypatch.setattr(public_site, "_sb", fake_sb)
+    monkeypatch.setattr(
+        "agents.override_system.override_resolver.resolve_html_overrides",
+        lambda html, biz: html.replace(">old lead<", ">edited<"))
+    page = "<html><head></head><body>" + PAGE + "</body></html>"
+    out = asyncio.run(public_site._augment_html(
+        None, "biz-1", "kmj-creative-solutions", page,
+        custom_domain="kmjcreate.com", page_path="/contact", manual=True))
+    assert "kevin@kmjcreate.com" in out
+    assert "{{BUSINESS_EMAIL}}" not in out
+    assert ">edited<" in out
+    untouched = asyncio.run(public_site._augment_html(
+        None, "biz-1", "kmj-creative-solutions", page,
+        custom_domain="kmjcreate.com", page_path="/contact"))
+    assert "{{BUSINESS_EMAIL}}" in untouched      # a composed site is left alone
+
+
 def test_site_assets_resolve_only_inside_the_assets_folder():
     ok = public_site._site_asset_path("kmj-creative-solutions", "logo.webp")
     assert ok is not None and ok.name == "logo.webp"
