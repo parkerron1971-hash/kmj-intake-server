@@ -84,6 +84,53 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 #   mcp_oauth_* / referrals / waitlist / scheduler_lease / fx_rates /
 #   platform_* / inference_cache — platform- or user-keyed, not
 #                             business children.
+#
+# The list above used to be prose only, and prose does not fail a
+# test. Every table a migration creates WITH a business_id column now
+# has to appear in exactly one of BUSINESS_CHILD_TABLES or
+# EXPORT_EXCLUDED (test_export_import pins it, scanning the migrations),
+# so the next table someone adds is a decision, not an omission. On
+# 2026-09-04 the scan found nine practitioner tables the export had
+# never carried — concierge conversations, consent records, the
+# business's own document templates, auditor links, push
+# subscriptions, the Stripe disputes cache, support-ticket messages,
+# and the texting number itself — and sixteen platform-side ones that
+# belong here with a reason.
+
+EXPORT_EXCLUDED: Dict[str, str] = {
+    # Platform books and metering — the platform must keep these for its
+    # own accounts, whatever a business does with theirs.
+    "usage_grants":            "platform credit grants; platform billing record",
+    "usage_notifications":     "platform allowance notices; platform record",
+    "usage_stripe_reports":    "platform usage reports to Stripe; platform record",
+    "api_usage":               "platform metering",
+    "product_events":          "platform product analytics",
+    "stripe_webhook_events":   "platform-global Stripe dedup log",
+    # Cross-account learning, k-anonymous by design.
+    "vertical_knowledge":      "Feed 2 cross-account learning; no per-business rows on purpose",
+    "library_gap_log":         "module-library learning; SET NULL on business delete, kept for the platform",
+    "inference_cache":         "Arc 20 inference cache; platform-side, regenerable",
+    "inference_gate_decisions": "Arc 20 gate decisions; platform-side learning about the gate, not practitioner records",
+    # Keyed to a person or to the platform, not to a business.
+    "email_suppressions":      "recipient-keyed deliverability protection; deleting it re-mails bounces",
+    "entity_groups":           "owner-keyed consolidation groups; die with the auth user",
+    "mcp_oauth_codes":         "user-keyed OAuth codes; short-lived",
+    "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
+    "site_events":             "anonymous marketing-site traffic; no business_id by design",
+    # The tamper-evident ledger has its own door. audit_log is exported
+    # under its own name and erased through the tombstone RPC; the chain
+    # state, anchors, tombstones, redactions and their tickets are the
+    # evidence that erasure happened, and bulk-deleting evidence of an
+    # erasure defeats the ledger. They stay, and ledger_verify reads them.
+    "ledger_chain_state":      "tamper-evident ledger: per-business chain head; erased through the ledger's own RPC",
+    "ledger_tombstones":       "tamper-evident ledger: proof rows were erased; must outlive the business",
+    "ledger_anchors":          "tamper-evident ledger: external anchors; evidence, outlives the business",
+    "ledger_anchor_failures":  "tamper-evident ledger: anchor attempts; evidence",
+    "ledger_anchor_upgrades":  "tamper-evident ledger: anchor provider upgrades; evidence",
+    "ledger_redactions":       "tamper-evident ledger: what was redacted and why; evidence",
+    "ledger_redaction_tickets": "tamper-evident ledger: redaction requests; evidence",
+    "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
+}
 BUSINESS_CHILD_TABLES: List[str] = [
     "events",
     "agent_queue",
@@ -123,6 +170,16 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "sms_bindings",
     "sms_opt_outs",
     "email_replies",
+    # The texting number itself. Exported so the record says which line
+    # was theirs; on delete the line is handed back to the provider FIRST
+    # (_release_sms_lines) — a cascade would drop the row and leave the
+    # number billing the platform forever.
+    "sms_numbers",
+    # Conversations the site concierge had with visitors (references
+    # contacts), and the consent a client gave (the record a dispute
+    # turns on — it goes with the business that holds it).
+    "concierge_conversations",
+    "consent_records",
     # Money ABOUT the business — ledgers before the rows they cite.
     "customer_ledger",        # references contacts, invoices, offerings
     "time_entries",           # references contacts
@@ -176,6 +233,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # The day-one arc. Cascades on business delete already; listing it is
     # what makes it EXPORTABLE, which is the half a cascade cannot do.
     "first_run_arc",
+    # Ticket messages reference their ticket.
+    "support_ticket_messages",
     "support_tickets",
     "workflows",
     "workflow_definitions",
@@ -211,6 +270,13 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "contractors",
     "email_threads",
     "sms_threads",
+    # The business's own document templates, the auditor links it
+    # issued, the devices it pushes to, and Stripe's disputes as cached
+    # for it — each keyed to the business and each part of its record.
+    "business_doc_templates",
+    "auditor_links",
+    "push_subscriptions",
+    "stripe_disputes_cache",
     # Team seats + invites die with the business.
     "business_users",
     "business_collaborators",
@@ -453,7 +519,14 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # Storage FILES are not covered either — the export is JSON and the
 # documents live in S3. Stated here rather than discovered later.
 
-_IMPORT_SKIP = {"audit_log", "agent_runs", "chief_jobs", "mcp_tokens"}
+_IMPORT_SKIP = {
+    "audit_log", "agent_runs", "chief_jobs", "mcp_tokens",
+    # A texting number belongs to the provider account that bought it;
+    # a restored business provisions its own. Auditor links and push
+    # subscriptions are credentials and devices, not records. The
+    # disputes cache is Stripe's, re-fetched on demand.
+    "sms_numbers", "auditor_links", "push_subscriptions", "stripe_disputes_cache",
+}
 
 # Columns the platform owns. Carrying them across would let an import
 # assert its own billing state, or claim rows the hash chain wrote.
@@ -624,8 +697,45 @@ async def _delete_storage_objects(client: httpx.AsyncClient, business_id: str) -
     return removed
 
 
+async def _release_sms_lines(client: httpx.AsyncClient, business_id: str) -> int:
+    """Hand the business's texting number(s) back to the provider before
+    the row that remembers them is deleted. The normal path is a grace
+    window and a sweep (sms_numbers_router.release_sweep); a deleted
+    business has no later, so this releases now. Each line is its own
+    try: a provider error must not stop the deletion, but it is logged
+    loudly because the alternative is a number billing the platform
+    for a business that no longer exists."""
+    released = 0
+    try:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/sms_numbers", headers=_service_headers(),
+            params={"business_id": f"eq.{business_id}",
+                    "status": "in.(active,suspended,releasing)",
+                    "select": "id,phone_number,provider_sid"})
+        rows = r.json() if r.status_code < 400 else []
+    except Exception as e:
+        logger.warning(f"[lifecycle] could not list sms lines for {business_id}: {e}")
+        return 0
+    for row in rows or []:
+        sid = row.get("provider_sid")
+        try:
+            if sid:
+                import twilio_sms
+                from starlette.concurrency import run_in_threadpool
+                await run_in_threadpool(twilio_sms.detach_from_service, sid)
+                await run_in_threadpool(twilio_sms.release_number, sid)
+            released += 1
+        except Exception as e:
+            logger.error(f"[lifecycle] release of {row.get('phone_number')} (sid={sid}) "
+                         f"failed during business delete: {e} — release it by hand")
+    return released
+
+
 async def _delete_business(client: httpx.AsyncClient, biz: Dict[str, Any]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
+    lines = await _release_sms_lines(client, biz["id"])
+    if lines:
+        counts["_sms_lines_released"] = lines
     for table in BUSINESS_CHILD_TABLES:
         n = await _delete_table_rows(client, table, biz["id"])
         if n:

@@ -177,3 +177,111 @@ class TestTheContractBetweenThem:
         for table in al._IMPORT_SKIP:
             assert table in al.BUSINESS_CHILD_TABLES, (
                 f"{table} is skipped on import but no longer exported at all")
+
+
+# ─── The list cannot rot (2026-09-04) ───────────────────────────────────
+
+import glob
+import os
+import re
+
+
+def _tables_with_business_id():
+    """Every table a migration creates with a business_id column."""
+    root = pathlib.Path(al.__file__).resolve().parent
+    found = {}
+    for f in glob.glob(str(root / "supabase" / "*.sql")) + glob.glob(str(root / "__migrations__" / "*.sql")):
+        src = open(f, encoding="utf-8", errors="ignore").read()
+        for m in re.finditer(r"create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?(\w+)\s*\((.*?)\);",
+                             src, re.I | re.S):
+            if re.search(r"\bbusiness_id\b", m.group(2), re.I):
+                found.setdefault(m.group(1), os.path.basename(f))
+    return found
+
+
+class TestTheListCannotRot:
+    def test_every_business_scoped_table_is_a_decision(self):
+        """A table with a business_id column is either exported (and
+        deleted) with the business, or excluded here WITH A REASON. A
+        third state — nobody thought about it — is what the 2026-07-31
+        reconciliation found forty tables in, and what this scan found
+        nine practitioner tables in on 2026-09-04."""
+        found = _tables_with_business_id()
+        assert len(found) > 50, "the migration scan stopped seeing tables"
+        listed = set(al.BUSINESS_CHILD_TABLES)
+        excluded = set(al.EXPORT_EXCLUDED)
+        undecided = sorted(t for t in found if t not in listed and t not in excluded)
+        assert not undecided, (
+            "business-scoped tables that are neither exported nor excluded with a reason: "
+            + ", ".join(f"{t} ({found[t]})" for t in undecided))
+
+    def test_nothing_is_both_exported_and_excluded(self):
+        both = set(al.BUSINESS_CHILD_TABLES) & set(al.EXPORT_EXCLUDED)
+        assert not both, both
+
+    def test_every_exclusion_says_why(self):
+        for table, why in al.EXPORT_EXCLUDED.items():
+            assert isinstance(why, str) and len(why) > 15, table
+
+    def test_the_september_tables_are_carried(self):
+        for t in ("sms_numbers", "concierge_conversations", "consent_records",
+                  "support_ticket_messages", "business_doc_templates",
+                  "auditor_links", "push_subscriptions", "stripe_disputes_cache"):
+            assert t in al.BUSINESS_CHILD_TABLES, t
+
+    def test_children_precede_their_parents(self):
+        order = {t: i for i, t in enumerate(al.BUSINESS_CHILD_TABLES)}
+        assert order["support_ticket_messages"] < order["support_tickets"]
+        assert order["concierge_conversations"] < order["contacts"]
+        assert order["consent_records"] < order["contacts"]
+
+    def test_what_cannot_be_restored_is_still_exported(self):
+        """Skipped on import is not the same as dropped from export."""
+        for t in ("sms_numbers", "auditor_links", "push_subscriptions", "stripe_disputes_cache"):
+            assert t in al._IMPORT_SKIP and t in al.BUSINESS_CHILD_TABLES, t
+
+
+class TestDeletingABusinessHandsBackItsNumber:
+    def test_the_line_is_released_at_the_provider_before_the_rows_go(self, monkeypatch):
+        import asyncio
+        import twilio_sms
+        calls = []
+        monkeypatch.setattr(twilio_sms, "detach_from_service", lambda sid: calls.append(("detach", sid)))
+        monkeypatch.setattr(twilio_sms, "release_number", lambda sid: calls.append(("release", sid)))
+
+        class _Resp:
+            status_code = 200
+            def json(self):
+                return [{"id": "n1", "phone_number": "+12165550100", "provider_sid": "PN123"},
+                        {"id": "n2", "phone_number": "+12165550101", "provider_sid": None}]
+
+        class _Client:
+            async def get(self, url, headers=None, params=None):
+                assert url.endswith("/rest/v1/sms_numbers")
+                assert params["status"] == "in.(active,suspended,releasing)"
+                return _Resp()
+
+        n = asyncio.run(al._release_sms_lines(_Client(), "biz-1"))
+        assert n == 2
+        assert calls == [("detach", "PN123"), ("release", "PN123")], "detach, then release; the sid-less row is just counted"
+
+    def test_a_provider_error_is_logged_and_deletion_continues(self, monkeypatch):
+        import asyncio
+        import twilio_sms
+        monkeypatch.setattr(twilio_sms, "detach_from_service", lambda sid: (_ for _ in ()).throw(RuntimeError("twilio down")))
+        monkeypatch.setattr(twilio_sms, "release_number", lambda sid: None)
+
+        class _Resp:
+            status_code = 200
+            def json(self):
+                return [{"id": "n1", "phone_number": "+1", "provider_sid": "PN1"}]
+
+        class _Client:
+            async def get(self, url, headers=None, params=None):
+                return _Resp()
+
+        assert asyncio.run(al._release_sms_lines(_Client(), "biz-1")) == 0
+
+    def test_delete_business_releases_before_it_deletes(self):
+        src = inspect.getsource(al._delete_business)
+        assert src.index("_release_sms_lines") < src.index("for table in BUSINESS_CHILD_TABLES")
