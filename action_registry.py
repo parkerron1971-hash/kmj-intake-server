@@ -576,6 +576,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "complete_strategy_track": _w("C", "composite finaliser: creates a products module and entries, "
                                        "seeds an intake form, GENERATES THE SITE, and flips the "
                                        "business to launched. Site generation alone earns the C"),
+    "use_browser_hand":     _w("C", "proposes a bounded browser task for approval; the run "
+                               "acts on third-party sites the practitioner named, so the "
+                               "proposal itself is held to the run's class"),
     "queue_build_request":  _w("C", "the builder bridge — files a GitHub issue for the owner, a "
                                     "support ticket for everyone else. Leaves the system"),
     "schedule_action":      _w("C", "meta-verb: schedules ANY toolkit action for later. Its own "
