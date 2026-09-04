@@ -8,8 +8,8 @@ self-contained family still inside the 19,000-line file: eighteen
 verbs, their own constants and private helpers, and no shared turn
 state — it reached back into chief_of_staff for exactly four things
 (_sb, _fail, _nav, _call_claude) plus the handler registry, all of
-which it now reaches at call time through the delegators below, the
-way chief_time_actions and chief_sms_actions already do. Nothing about
+which it reaches at call time through chief_host, the way
+chief_time_actions and chief_sms_actions already do. Nothing about
 any verb's behaviour changed; the bodies are byte-identical.
 
 WHY DELEGATE INSTEAD OF COPY. chief_time_actions carries its own
@@ -51,31 +51,8 @@ import business_profile_agent
 logger = logging.getLogger("chief_of_staff")
 
 
-# ─── Delegators (runtime imports; chief_of_staff imports this module) ──
-
-async def _sb(client, method, path, body=None):
-    from chief_of_staff import _sb as _real
-    return await _real(client, method, path, body)
-
-
-def _fail(action_type: str, msg: str) -> Dict:
-    from chief_of_staff import _fail as _real
-    return _real(action_type, msg)
-
-
-def _nav(*args, **kwargs):
-    from chief_of_staff import _nav as _real
-    return _real(*args, **kwargs)
-
-
-async def _call_claude(*args, **kwargs):
-    from chief_of_staff import _call_claude as _real
-    return await _real(*args, **kwargs)
-
-
-def _handlers() -> Dict[str, Any]:
-    from chief_of_staff import ACTION_HANDLERS
-    return ACTION_HANDLERS
+# The host helpers resolve into chief_of_staff at call time — see chief_host.
+from chief_host import _sb, _fail, _nav, _call_claude, _handlers
 
 
 # ═══════════════════════════════════════════════════════════════════════
