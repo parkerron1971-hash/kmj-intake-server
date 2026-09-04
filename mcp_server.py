@@ -260,8 +260,10 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
                              "description": "Optional. Narrow to one "
                                             "contact's unbilled time."}})),
     "contact_deep_dive": (
-        "Everything on file for ONE person: history, sessions, invoices, "
-        "notes. Requires the contact's id.",
+        "Everything on file for ONE person as one dated timeline: bookings, "
+        "forms, invoices and payments, contracts, email and SMS, notes, "
+        "time, balances, records — plus a summary (last touch, next "
+        "booking, open invoices, unbilled time). Requires the contact's id.",
         _obj({"contact_id": {"type": "string",
                              "description": "The contact's uuid."}},
              ["contact_id"])),
