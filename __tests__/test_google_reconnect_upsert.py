@@ -9,21 +9,19 @@ it. The first connect always worked; every reconnect failed.
 """
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import sys
 
 _here = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_here.parent))
 
-import pytest  # noqa: E402
-
 import google_oauth  # noqa: E402
 import oauth_connect_ticket  # noqa: E402
 import sb_clients  # noqa: E402
 
 
-@pytest.mark.asyncio
-async def test_reconnect_upsert_names_the_unique_columns(monkeypatch):
+def test_reconnect_upsert_names_the_unique_columns(monkeypatch):
     posted = {}
 
     monkeypatch.setattr(oauth_connect_ticket, "verify",
@@ -45,7 +43,7 @@ async def test_reconnect_upsert_names_the_unique_columns(monkeypatch):
     monkeypatch.setattr(google_oauth, "_fetch_gmail_address", _profile)
     monkeypatch.setattr(sb_clients, "sb_post_as_service", _post)
 
-    resp = await google_oauth.google_callback(code="code", state="state")
+    resp = asyncio.run(google_oauth.google_callback(code="code", state="state"))
 
     assert resp.status_code == 200
     assert posted["path"].startswith("/google_mailboxes?")
