@@ -10647,6 +10647,155 @@ async def handle_set_site_capability(client, biz, action) -> Dict:
             "label": label, "nav": _nav("build")}
 
 
+# ─── Site copy, live (2026-09-04) ──────────────────────────────────────
+# Chief's first site-copy verb. It writes a TEXT OVERRIDE — the same row
+# Studio Edit Mode writes — against one data-override-target on the stored
+# page, so it works on every site that carries targets: composed pages are
+# re-rendered in the background (no model call), hand-built ones
+# (site_config.html_source == "manual") are served with overrides applied,
+# so the edit is live on the next request. Never a rebuild, never a cost.
+
+_SITE_TEXT_MAX = 600
+
+
+def _site_text_plain(fragment: str) -> str:
+    import html as _htmlmod
+    s = re.sub(r"<[^>]+>", " ", str(fragment or ""))
+    return " ".join(_htmlmod.unescape(s).split())
+
+
+def _site_text_targets(business_id: str) -> Tuple[List[Dict[str, Any]], bool]:
+    """Every editable text on the business's site with its CURRENT wording
+    (overrides applied), plus whether the site is hand-built. Sync; call
+    in a thread. [] when the site has no targets."""
+    import sb_clients
+    from agents.override_system.override_resolver import (
+        find_override_targets, resolve_html_overrides)
+    rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        "&select=html_content,site_config&order=updated_at.desc&limit=1") or []
+    if not rows:
+        return [], False
+    row = rows[0]
+    cfg = row.get("site_config") if isinstance(row.get("site_config"), dict) else {}
+    manual = cfg.get("html_source") == "manual"
+    pages: Dict[str, str] = {"home": row.get("html_content") or ""}
+    gp = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
+    for pid, html in gp.items():
+        if isinstance(html, str) and html:
+            pages[str(pid)] = html
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for pid, html in pages.items():
+        try:
+            html = resolve_html_overrides(html, business_id)
+        except Exception:
+            pass
+        for t in find_override_targets(html):
+            key = (pid, t["target_path"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"page": pid, "target_path": t["target_path"],
+                        "current": _site_text_plain(t["current_value"])})
+    return out, manual
+
+
+def _site_text_refresh_if_composed(business_id: str) -> None:
+    try:
+        from site_composer import refresh_if_composed_async
+        refresh_if_composed_async(business_id)
+    except Exception as e:
+        logger.info(f"[site-text] re-render not started: {e}")
+
+
+async def handle_edit_site_text(client, biz, action) -> Dict:
+    """Change ONE piece of text on the public website. action: {text,
+    find | target}. `find` is a few words quoted from the site; the one
+    editable spot containing them is edited — several matches is a
+    refusal that names them, never a guess. `target` is the spot's id
+    (e.g. home.hero.lead) when known. Plain text only; HTML is escaped."""
+    import html as _htmlmod
+    text = " ".join(str(action.get("text") or "").split())
+    if not text:
+        return _fail("edit_site_text", "tell me the new wording first")
+    if len(text) > _SITE_TEXT_MAX:
+        return _fail("edit_site_text",
+                     "that's longer than one spot on the site can hold — "
+                     f"keep it under {_SITE_TEXT_MAX} characters")
+    target = str(action.get("target") or action.get("target_path") or "").strip()
+    find = " ".join(str(action.get("find") or "").split())
+    if not target and not find:
+        return _fail("edit_site_text",
+                     "tell me which text to change — quote a few words of it "
+                     "exactly as they appear on the site")
+    biz_id = str(biz["id"])
+    targets, manual = await asyncio.to_thread(_site_text_targets, biz_id)
+    if not targets:
+        return _fail("edit_site_text",
+                     "this site doesn't carry editable text spots yet — "
+                     "it needs a site pass first")
+    if target:
+        hits = [t for t in targets if t["target_path"] == target]
+    else:
+        needle = find.lower()
+        hits = [t for t in targets if needle in t["current"].lower()]
+    if not hits:
+        return _fail("edit_site_text",
+                     "I couldn't find that wording on the site — quote a few "
+                     "words exactly as they appear there")
+    if len(hits) > 1:
+        opts = "; ".join(f"{h['page']}: “{h['current'][:60]}”" for h in hits[:4])
+        return _fail("edit_site_text",
+                     f"that matches more than one spot ({opts}) — quote a "
+                     "longer piece so I change the right one")
+    hit = hits[0]
+    from agents.override_system import override_storage
+    saved = await asyncio.to_thread(
+        override_storage.upsert_override, biz_id, "text", hit["target_path"],
+        _htmlmod.escape(text), None, hit["current"], "chief_command")
+    if saved is None:
+        return _fail("edit_site_text",
+                     "I couldn't save that edit just now — try again in a moment")
+    if not manual:
+        _site_text_refresh_if_composed(biz_id)
+    when = "Live now." if manual else "Re-rendering now — live in a moment."
+    label = (f"✏️ Site updated ({hit['page']} page): “{hit['current'][:80]}” → "
+             f"“{text[:80]}”. {when} Say 'undo' to put it back.")
+    return {"type": "edit_site_text", "result": "saved",
+            "target_path": hit["target_path"], "page": hit["page"],
+            "previous_text": hit["current"], "text": text,
+            "label": label, "nav": _nav("build")}
+
+
+async def handle_revert_site_text(client, biz, action) -> Dict:
+    """Put one edited site text back to the stored copy: removes the
+    override for `target`. The inverse of edit_site_text."""
+    target = str(action.get("target") or action.get("target_path") or "").strip()
+    if not target:
+        return _fail("revert_site_text", "tell me which spot to put back")
+    biz_id = str(biz["id"])
+    from agents.override_system import override_storage
+    existing = await asyncio.to_thread(
+        override_storage.get_override, biz_id, "text", target)
+    if not existing:
+        return _fail("revert_site_text", "there's no edit on that spot to put back")
+    ok = await asyncio.to_thread(
+        override_storage.delete_override_by_path, biz_id, "text", target)
+    if not ok:
+        return _fail("revert_site_text",
+                     "I couldn't put that back just now — try again in a moment")
+    _targets, manual = await asyncio.to_thread(_site_text_targets, biz_id)
+    if not manual:
+        _site_text_refresh_if_composed(biz_id)
+    prev = _site_text_plain(existing.get("override_value") or "")
+    return {"type": "revert_site_text", "result": "reverted",
+            "target_path": target, "previous_text": prev,
+            "label": "↩ Site text put back to the stored copy."
+                     + ("" if manual else " Re-rendering now."),
+            "nav": _nav("build")}
+
+
 async def handle_offering_readiness(client, biz, action) -> Dict:
     """Arc 28 — per-offering functional readiness via the behavior-
     profile engine (offering_profiles.py). The label carries concrete
@@ -13366,6 +13515,9 @@ ACTION_HANDLERS = {
     "setup_store":                handle_setup_store,
     # THE WIRED-SITE CONTRACT — which doors the website carries
     "set_site_capability":        handle_set_site_capability,
+    # Site copy, live — one text spot at a time, via the override system
+    "edit_site_text":             handle_edit_site_text,
+    "revert_site_text":           handle_revert_site_text,
     # Arc 28 — behavior-profile readiness report
     "offering_readiness":         handle_offering_readiness,
     # Phase D.1.2 — availability CRUD
@@ -16809,6 +16961,8 @@ ACTIONS — OFFERINGS (Phase C.1.2 — canonical pricing for service-based arche
   [ACTION:{{"type":"list_offerings"}}]
   [ACTION:{{"type":"list_offerings","category":"service"}}]
     — `category` is a closed enum: {module_vocabulary.offering_categories_sentence()}. 'donation' is NOT a valid category — donations live in the restricted-modules surface.
+  [ACTION:{{"type":"edit_site_text","find":"Book a Discovery Call","text":"Book a Call"}}]  — SITE COPY, LIVE: changes ONE piece of text on their public website, at no cost and without a rebuild. `find` = a few words quoted EXACTLY as they appear on the site (the action edits the one spot containing them; if several match it refuses and names them — ask for a longer quote); `target` = the spot's id when you know it (e.g. "home.hero.lead"). `text` = the complete new wording, plain text, no HTML. Use when they say "change the headline to…", "on my website make it say…", "update the about paragraph to…". Never invent wording they didn't give — for anything longer than a phrase, confirm the exact new text before emitting. The label says whether it's live now or re-rendering.
+  [ACTION:{{"type":"revert_site_text","target":"home.hero.lead"}}]  — puts one edited site text back to the stored copy ('undo' after an edit_site_text does this for you).
   [ACTION:{{"type":"set_site_capability","capability":"booking","on":true}}]  — THE WIRED-SITE CONTRACT: records whether the WEBSITE carries a connected door (capability: booking | store). Use when they say "put booking on my site", "wire booking into my website", "add a book button", "put my shop on the site", or answer yes to your wiring nudge. It saves the decision into the site plan; the label tells them a refine/rebuild applies it — after emitting it, offer the refine ("want me to refine the site now so the button appears?"). "on":false takes a door OFF the site plan. It does NOT create booking or the store — those must already be live (the action refuses otherwise, and the label says what to set up first).
     — ROUTING — OFFERINGS vs PRODUCTS (read carefully — they are SEPARATE catalogs):
        • OFFERINGS are the canonical pricing for archetype-referenced things — services a barber books, sessions a coach takes, courses a creator sells (when consumed by an archetype like booking_calendar). When the practitioner says "haircut", "session", "lesson", "massage", "appointment", "service" — DEFAULT to offerings.

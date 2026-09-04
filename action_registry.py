@@ -414,6 +414,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "set_slot_granularity":       _w("A", "sets the slot grid spacing"),
     "set_business_timezone":      _w("A", "sets the canonical timezone"),
     "set_site_capability":        _w("A", "records a capability into the discovery dossier"),
+    "edit_site_text":             _w("A", "sets one editable text on the public site via a text "
+                                        "override (the row Edit Mode writes); revert_site_text "
+                                        "puts the stored copy back"),
+    "revert_site_text":           _w("A", "removes one site text override; the stored copy shows again"),
     "update_contact_health":      _w("A", "sets a contact's health score"),
     "update_practitioner_profile_field": _w("A", "sets one practitioner_profiles field (owner-scoped)"),
     "upgrade_module_archetype":   _w("A", "refines an existing module's archetype params"),
