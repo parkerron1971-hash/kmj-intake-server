@@ -595,11 +595,35 @@ def rubric_select(ctx: Dict[str, Any]) -> Tuple[Optional[str], str]:
     return None, "rubric: no language fits better than neutral"
 
 
+def owner_pick(ctx: Dict[str, Any]) -> Optional[str]:
+    """THE PICK BINDS (2026-09-04). The Design Coach shows real pages
+    and the owner taps one; that tap used to arrive as a chat line and
+    bind nothing, because this resolver read only the rationale and
+    the rubric. A practitioner-sourced taste.look in the dossier is
+    the owner's decision and it wins."""
+    try:
+        cfg = ((ctx.get("site") or {}).get("site_config") or {}) \
+            if isinstance(ctx.get("site"), dict) else {}
+        leaf = (((cfg.get("discovery_dossier") or {}).get("taste") or {})
+                .get("look"))
+        if not isinstance(leaf, dict):
+            return None
+        if str(leaf.get("source") or "") not in ("asked", "flipped", "inferred-confirmed"):
+            return None
+        key = str(leaf.get("value") or "").strip().lower()
+        return key if key in LANGUAGES else None
+    except Exception:
+        return None
+
+
 def resolve(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Tuple[Optional[str], str, str]:
     """(key|None, because, chooser). NEVER raises."""
     if not enabled():
         return None, "", "disabled"
     try:
+        picked = owner_pick(ctx)
+        if picked:
+            return picked, "the owner chose it in the Design Coach", "owner"
         d = (dro or {}).get("decisions") or (dro or {}) or {}
         key, because = validate_choice(d.get("language"))
         if key:

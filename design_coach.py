@@ -78,7 +78,7 @@ Every turn, extract anything learned into "saves". Use these dossier sections/fi
 - identity: one_liner, primary_action, brand_persona (list of up to 3 words), first_3s_feel
 - world: room, materials, light, sounds (free text, their words)
 - story: origin, craft, proof, voice, atmosphere
-- taste: each answered pair saved as its OWN field (field is one of ground/density/carrier/edges/era/tone/motion, value is the chosen word); plus admired (what and why, one string) and bans (the cringe answers, one string or list)
+- taste: each answered pair saved as its OWN field (field is one of ground/density/carrier/edges/era/tone/motion, value is the chosen word); plus admired (what and why, one string) and bans (the cringe answers, one string or list); plus THE GALLERY PICKS: look (the look KEY they tapped, e.g. "neon"), hero_shape (the layout key), motion (the motion key). THE PICK BINDS: a tapped card arrives as a message like "Neon, that's the one." Save it that same turn as {"section": "taste", "field": "look", "value": "neon"}; the build reads this field and speaks that language, so a pick that is not saved is a pick that is lost.
 - signature: moment (their words), sharpened (your one-line phrasing of it)
 - truth: proven_stats (value is a list of {label, value, proof} objects)
 - capabilities: booking, store (value "on" or "off" — the owner's answer to whether the SITE carries that door)
@@ -337,6 +337,36 @@ def build_turn_prompt(business_id: str,
 _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.MULTILINE)
 
 
+# THE PICK BINDS (2026-09-04): a tapped gallery card is saved as the
+# owner's own answer, by KEY, so design_languages.resolve can read it.
+_PICK_FIELDS = {"look": "looks", "hero_shape": "layouts", "motion": "motion"}
+_PICK_KEYS = {
+    "layouts": {"split-stage", "poster", "editorial", "exhibition",
+                "monument", "corridor", "letter"},
+    "motion": {"kinetic-hero", "the-thread", "depth", "quiet",
+               "marquee", "unfold"},
+}
+
+
+def _normalize_pick(field: str, raw: Any) -> Optional[str]:
+    """'Neon, that's the one.' / 'The Poster' / 'neon' → the key, or None."""
+    kind = _PICK_FIELDS.get(field)
+    if not kind:
+        return None
+    keys = _look_keys() if kind == "looks" else _PICK_KEYS[kind]
+    text = str(raw or "").strip().lower()
+    text = re.sub(r"[,.!'’].*$", "", text).strip()          # drop the sentence tail
+    bare = re.sub(r"^(the|a)\s+", "", text)
+    for t in (text, bare):                                   # "the thread" is a key; "the poster" is not
+        cand = t.replace(" ", "-")
+        if cand in keys:
+            return cand
+        for k in keys:
+            if k.replace("-", " ") == t:
+                return k
+    return None
+
+
 def _look_keys() -> set:
     try:
         import design_languages
@@ -417,6 +447,11 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
                 s = {"section": sec, "field": fld, "value": "off"}
             else:
                 continue
+        if sec == "taste" and fld in _PICK_FIELDS:
+            key = _normalize_pick(fld, s["value"])
+            if not key:
+                continue
+            s = {"section": sec, "field": fld, "value": key}
         clean.append({"section": sec, "field": fld, "value": s["value"]})
     out["saves"] = clean[:10]
     return out
