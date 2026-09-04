@@ -303,13 +303,44 @@ def analyze_ops(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str,
 GRADUATION_MIN_RESOLVED = 20
 GRADUATION_MIN_RATIO = 0.8
 
-# Proposal types _execute_proposal knows how to run. Trust grants are
-# limited to this set — bookkeeping proposals have their own approval
-# machinery and are NOT grantable here (v1).
+# Proposal types _execute_proposal knows how to run.
 EXECUTABLE_PROPOSAL_TYPES = {
     "propose_followup_email", "propose_task",
     "propose_schedule_followup", "propose_contact_tag",
     "propose_content_draft",
+}
+
+# THE BOOKKEEPER GRADUATES TOO (2026-09-04 — "one face, many hands,
+# each graduating on its own"). Bookkeeping proposals live in their own
+# table with their own approve path (chief_bookkeeping.approve_proposal);
+# v1 left them out of trust grants entirely, so the hand with the most
+# decisions to learn from could never earn autonomy. These three are
+# edits to a transaction's OWN flags — its category, its payout match,
+# whether it is in the books — each undone by the next edit, and each
+# already tallied by _trust_stats. Period closes, journal entries and
+# account reconciliation post to the ledger or close it; they stay
+# approve-only and are not in this set.
+EXECUTABLE_BOOKKEEPING_TYPES = {
+    "propose_categorize", "propose_match", "propose_exclude",
+}
+GRANTABLE_TYPES = EXECUTABLE_PROPOSAL_TYPES | EXECUTABLE_BOOKKEEPING_TYPES
+
+# Which hand each category belongs to, so the Trust Track can show that
+# each specialist earns trust on its own: the front desk may be trusted
+# with follow-ups while the bookkeeper is still learning, or the other
+# way round. Chief stays the one named intelligence over all of them.
+HAND_OF = {
+    "propose_followup_email":        "front desk",
+    "propose_contact_tag":           "front desk",
+    "propose_task":                  "chief",
+    "propose_schedule_followup":     "chief",
+    "propose_content_draft":         "marketer",
+    "propose_categorize":            "bookkeeper",
+    "propose_match":                 "bookkeeper",
+    "propose_exclude":               "bookkeeper",
+    "propose_period_close":          "bookkeeper",
+    "propose_journal_entry":         "bookkeeper",
+    "propose_account_reconciliation": "bookkeeper",
 }
 
 # What each proposal type ACTUALLY DOES, named as the Chief verb that does
@@ -349,6 +380,15 @@ _PROPOSAL_EQUIVALENT_VERB = {
     # _exec_apply_tag PATCHes contacts.tags — an edit to a contact row,
     # with the prior value re-enterable. update_contact, class A.
     "propose_contact_tag":       "update_contact",
+    # chief_bookkeeping.approve_proposal is what approve_bookkeeping_proposal
+    # runs — class C in the registry because the books are "exactly the
+    # action a practitioner cannot un-see". A standing grant is the
+    # practitioner's explicit decision that this hand has earned it; the
+    # policy engine records every unattended C, as it does for
+    # draft_and_send above.
+    "propose_categorize":        "approve_bookkeeping_proposal",
+    "propose_match":             "approve_bookkeeping_proposal",
+    "propose_exclude":           "approve_bookkeeping_proposal",
 }
 
 
@@ -404,8 +444,9 @@ def trust_track(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str,
     trusted = set(_trusted_types(biz_row))
     stats = _trust_stats(biz)
     out = [{"proposal_type": t, **s, "trusted": t in trusted,
+            "hand": HAND_OF.get(t, "chief"),
             "grantable": bool(s["graduation_candidate"]
-                              and t in EXECUTABLE_PROPOSAL_TYPES)}
+                              and t in GRANTABLE_TYPES)}
            for t, s in sorted(stats.items())]
     return {"ok": True, "categories": out,
             "graduation_rule": (f">={int(GRADUATION_MIN_RATIO * 100)}% approval "
@@ -432,7 +473,7 @@ def trust_grant(body: TrustGrantBody,
     audited (chief_activity), and instantly revocable."""
     biz_row = _owner(body.business_id, user)
     ptype = (body.proposal_type or "").strip()
-    if ptype not in EXECUTABLE_PROPOSAL_TYPES:
+    if ptype not in GRANTABLE_TYPES:
         raise HTTPException(400, f"'{ptype}' cannot be granted — no autonomous executor")
     stats = _trust_stats(body.business_id).get(ptype)
     if not stats or not stats["graduation_candidate"]:
@@ -555,14 +596,20 @@ def _run_trusted_sweep_sync() -> None:
         for ptype in trusted:
             if budget <= 0:
                 break
-            if ptype not in EXECUTABLE_PROPOSAL_TYPES:
+            if ptype not in GRANTABLE_TYPES:
                 continue
+            # The bookkeeper's proposals live in their own table and are
+            # executed by their own approve path; everything else about
+            # the sweep — the bar, the live re-check, the policy engine,
+            # the cap, the audit — is the same for every hand.
+            bookkeeping = ptype in EXECUTABLE_BOOKKEEPING_TYPES
+            table = "chief_bookkeeping_proposals" if bookkeeping else "chief_proposals"
             s = stats.get(ptype)
             if not s or (s["approval_ratio"] or 0) < GRADUATION_MIN_RATIO:
                 logger.info(f"[trusted] {biz} {ptype}: ratio below bar — standing down")
                 continue
             pending = sb_clients.sb_get_as_service(
-                f"/chief_proposals?business_id=eq.{biz}&status=eq.pending"
+                f"/{table}?business_id=eq.{biz}&status=eq.pending"
                 f"&proposal_type=eq.{ptype}&order=created_at.asc"
                 f"&select=*&limit={budget}") or []
             # THE SHARED EVALUATOR, on the last acting path that never
@@ -615,7 +662,15 @@ def _run_trusted_sweep_sync() -> None:
 
             for p in pending:
                 try:
-                    _execute_proposal(biz, p)
+                    if bookkeeping:
+                        import chief_bookkeeping
+                        # marks the row approved and captures the learning
+                        # signal itself — the same call the approve endpoint
+                        # makes when a person clicks.
+                        chief_bookkeeping.approve_proposal(
+                            biz, p["id"], approved_by="chief:trusted-autonomy")
+                    else:
+                        _execute_proposal(biz, p)
                 except Exception as e:
                     # Leaves the proposal pending for manual review —
                     # autonomy never force-fails work through.
@@ -632,14 +687,19 @@ def _run_trusted_sweep_sync() -> None:
                                  "proposal_type": ptype},
                         source="system", authorized_by=verdict.rule)
                     continue
-                sb_clients.sb_patch_as_service(
-                    f"/chief_proposals?id=eq.{p['id']}",
-                    {"status": "approved", "resolved_at": _now_iso(),
-                     "approved_by": "chief:trusted-autonomy"})
-                _capture_signal(biz, ptype, p.get("proposed") or {}, None, "approved")
+                if not bookkeeping:
+                    sb_clients.sb_patch_as_service(
+                        f"/chief_proposals?id=eq.{p['id']}",
+                        {"status": "approved", "resolved_at": _now_iso(),
+                         "approved_by": "chief:trusted-autonomy"})
+                    _capture_signal(biz, ptype, p.get("proposed") or {}, None, "approved")
                 budget -= 1
-                label = ((p.get("proposed") or {}).get("subject")
-                         or (p.get("proposed") or {}).get("title") or ptype)
+                proposed = p.get("proposed") or {}
+                if bookkeeping:
+                    label = (f"{ptype.replace('propose_', '')}: "
+                             f"{proposed.get('business_category') or proposed.get('merchant') or proposed.get('stripe_payout_id') or p.get('plaid_transaction_id') or ''}").strip(": ")
+                else:
+                    label = proposed.get("subject") or proposed.get("title") or ptype
                 executed_labels.append(str(label)[:80])
                 # S11 audit coverage — one row PER executed proposal,
                 # regardless of whether an owner_id was resolvable (the
