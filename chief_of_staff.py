@@ -6665,31 +6665,29 @@ async def handle_bulk_dismiss(client, biz, action) -> Dict:
 # ═══════════════════════════════════════════════════════════════════════
 
 async def handle_contact_deep_dive(client, biz, action) -> Dict:
+    """One person's whole record: the merged, dated timeline from
+    client_timeline (bookings, forms, invoices and payments, contracts,
+    email and SMS, notes, time, balances, records) plus the typed arrays
+    the contact card already renders. Same assembler as
+    GET /contacts/{id}/timeline, so the two surfaces cannot disagree."""
     contact_id = action.get("contact_id")
     contact = await _validate_contact(client, biz["id"], contact_id)
     if not contact:
         return _fail("contact_deep_dive", f"Contact {contact_id} not found")
 
-    # Parallel data pull
-    ev_task = _sb(client, "GET",
-        f"/events?contact_id=eq.{contact_id}&business_id=eq.{biz['id']}"
-        f"&order=created_at.desc&limit=50&select=event_type,data,source,created_at")
-    q_task = _sb(client, "GET",
-        f"/agent_queue?contact_id=eq.{contact_id}&business_id=eq.{biz['id']}"
-        f"&order=created_at.desc&limit=20"
-        f"&select=id,agent,action_type,subject,body,status,priority,created_at")
-    s_task = _sb(client, "GET",
-        f"/sessions?contact_id=eq.{contact_id}&business_id=eq.{biz['id']}"
-        f"&order=scheduled_for.desc&limit=10"
-        f"&select=id,title,session_type,status,scheduled_for,duration_minutes,notes")
-    me_task = _sb(client, "GET",
-        f"/module_entries?business_id=eq.{biz['id']}&status=eq.active"
-        f"&data->>contact_id=eq.{contact_id}&order=created_at.desc&limit=10"
-        f"&select=id,module_id,data,created_at")
-
-    events, queue_history, sessions, module_entries = await asyncio.gather(
-        ev_task, q_task, s_task, me_task
+    import client_timeline
+    record, queue_history = await asyncio.gather(
+        client_timeline.assemble(biz["id"], contact_id, limit=60, contact=contact),
+        # Every queue row, drafts included — the card shows what was proposed
+        # and what was sent; the timeline only carries what went out.
+        _sb(client, "GET",
+            f"/agent_queue?contact_id=eq.{contact_id}&business_id=eq.{biz['id']}"
+            f"&order=created_at.desc&limit=20"
+            f"&select=id,agent,action_type,subject,body,status,priority,created_at"),
     )
+    if not record:
+        return _fail("contact_deep_dive", f"Contact {contact_id} not found")
+    raw = record["raw"]
 
     return {
         "type": "contact_deep_dive",
@@ -6697,10 +6695,14 @@ async def handle_contact_deep_dive(client, biz, action) -> Dict:
         "label": f"Deep dive: {contact.get('name')}",
         "nav": _nav("operate", "contacts", contact_id),
         "contact": contact,
-        "events": (events or [])[:50],
+        "timeline": record["entries"],
+        "summary": record["summary"],
+        "timeline_text": client_timeline.narrate(record),
+        "partial": record["partial"],
+        "events": (raw.get("events") or [])[:50],
         "queue_history": (queue_history or [])[:20],
-        "sessions": (sessions or [])[:10],
-        "module_entries": (module_entries or [])[:10],
+        "sessions": (raw.get("sessions") or [])[:10],
+        "module_entries": (raw.get("module_entries") or [])[:10],
     }
 
 
