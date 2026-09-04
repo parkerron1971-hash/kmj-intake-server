@@ -49,12 +49,13 @@ def test_the_strip_reads_the_live_count(monkeypatch):
     import sb_clients
     import stripe_billing
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: ["price_f", "price_fa"])
+    monkeypatch.setattr(stripe_billing, "FOUNDER_LEGACY_PRICE_IDS", ["price_old"])
     monkeypatch.setattr(stripe_billing, "_founder_seat_limit", lambda: 50)
     seen = []
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: seen.append(p) or [{"id": i} for i in range(7)])
     seg = _pricing(mp.render_home())
     assert 'id="founderStrip"' in seg and 'data-left="43"' in seg and "43 of 50 seats left" in seg
-    assert "subscription_plan=in.(price_f,price_fa)" in seen[0] and "active,trialing,past_due" in seen[0]
+    assert "subscription_plan=in.(price_f,price_fa,price_old)" in seen[0] and "active,trialing,past_due" in seen[0], \n        "seats sold at the retired founder price still count"
     price = pricing_config.tier_price_cents()["founder"] // 100
     assert f"50 founding seats at ${price} a month" in seg
     assert f"{pricing_config.founder_credits():,} AI actions a month" in seg
@@ -149,3 +150,20 @@ def test_the_grabber_and_the_headline(monkeypatch):
     assert "A chief of staff who never clocks out" in seg
     assert "Priced for one person running the whole thing" not in seg
     assert "Connect your own AI, read-only" in seg and seg.count("Your own AI can keep records here") == 2
+
+
+def test_legacy_founder_seats_count_but_do_not_route_or_grant(monkeypatch):
+    """A seat sold at the pre-ladder $149 founder price is still a seat:
+    the cap and the public count see it. Checkout routes new seats with
+    the current ids only, and feature_gates keeps the legacy holder on
+    the Professional grant they were promised, never the 6,000 tank."""
+    import feature_gates
+    import stripe_billing
+    monkeypatch.setenv("STRIPE_PRICE_ID_FOUNDER", "price_new")
+    monkeypatch.delenv("STRIPE_PRICE_ID_FOUNDER_ANNUAL", raising=False)
+    monkeypatch.setattr(stripe_billing, "FOUNDER_LEGACY_PRICE_IDS", ["price_old", "price_old_annual"])
+    assert stripe_billing._founder_seat_price_ids() == ["price_new", "price_old", "price_old_annual"]
+    assert stripe_billing._founder_price_ids() == ["price_new"]
+    assert not feature_gates.is_founder_price({"subscription_plan": "price_old"})
+    assert feature_gates.is_founder_price({"subscription_plan": "price_new"})
+    assert stripe_billing.FOUNDER_LEGACY_PRICE_IDS  # the default pair is on record
