@@ -317,19 +317,44 @@ def director_block() -> str:
     return "\n".join(lines)
 
 
-def builder_block(scope_hint: str = "your root class") -> str:
+def builder_block(scope_hint: str = "your root class",
+                  color_law: str = "tokens") -> str:
     """The primitives, for an authoring prompt.
+
+    color_law names who owns the palette on the surface being taught:
+      "tokens" — the atelier and the canvas. The page shell owns the
+                 --sx-* tokens; the fragment validator rejects any hex,
+                 so the header bans literals outright.
+      "hexes"  — builder_v2. There is no shell: the spec's hexes ARE the
+                 law (its hard rule 7) and the author writes them into
+                 :root itself. The barbershop bench (2026-09-04) found
+                 this block telling the same author "NEVER a hex
+                 literal" two paragraphs after rule 7 said write them;
+                 a model resolves a contradiction by hedging, and a
+                 hedged page is a generic one. One voice on color now.
 
     This is the half that never existed. The author was asked for "a warm
     radial glow" in adjectives, given no technique, and forbidden from the
     obvious one — so it produced flat grounds and the judge marked it down
     for the absence."""
+    if color_law == "hexes":
+        color_line = (
+            "These primitives reference the --sx-* tokens. On this page YOU "
+            "define those tokens: write the spec's hexes ONCE, in :root, under "
+            "the names the spec gives them (that is hard rule 7), and from "
+            "then on every color is a var() reference or a color-mix() "
+            "against those tokens. No second hex anywhere below :root, no "
+            "rgb()/hsl(), rgba() only as rgba(0,0,0,x)/rgba(255,255,255,x), "
+            "no url().")
+    else:
+        color_line = (
+            "These are validator-legal: they tint with color-mix() against the "
+            "--sx-* tokens (NEVER a hex literal, NEVER rgb()/hsl(), rgba() only "
+            "as rgba(0,0,0,x)/rgba(255,255,255,x), NEVER url()).")
     head = [
         "== THE MOVES — WORKING PRIMITIVES ==",
         "When the spec names a move, you build it with the primitive below. "
-        "These are validator-legal: they tint with color-mix() against the "
-        f"--sx-* tokens (NEVER a hex literal, NEVER rgb()/hsl(), rgba() only "
-        f"as rgba(0,0,0,x)/rgba(255,255,255,x), NEVER url()). Replace "
+        + color_line + " Replace "
         f"`.scope` with {scope_hint}. Adapt geometry to the composition; keep "
         "the technique.",
         "",
