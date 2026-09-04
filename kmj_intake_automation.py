@@ -1388,14 +1388,17 @@ async def startup():
                           "interval", minutes=5, id="chief_jobs_recover")
     except Exception as e:
         print(f"   [warn] chief jobs recovery tick not scheduled: {e}")
-    # The standing agent (2026-09-04): every ten minutes, for businesses
+    # The standing agent (2026-09-04): every two minutes, for businesses
     # that opted in, act on the events that arrived since the last look
     # — through the same tools and the same door as a chat turn, marked
-    # unattended. Kill switch: CHIEF_AGENT=off.
+    # unattended. Leads and bookings do not wait for this: event_spine
+    # nudges the agent within a minute (chief_agent.FAST_EVENT_TYPES);
+    # this sweep is the net under that. Quiet ticks cost one indexed
+    # read. Kill switch: CHIEF_AGENT=off.
     try:
         import chief_agent as _chief_agent
         scheduler.add_job(g("chief_agent", _chief_agent.agent_tick),
-                          "interval", minutes=10, id="chief_agent")
+                          "interval", minutes=2, id="chief_agent")
     except Exception as e:
         print(f"   [warn] chief agent tick not scheduled: {e}")
     # Shared rate windows (2026-09-04): drop rows nobody touched in a

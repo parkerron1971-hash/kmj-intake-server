@@ -71,6 +71,21 @@ AGENT_EVENT_TYPES = (
     "order_paid",
     "concierge_lead_captured",
 )
+# THE FAST LANE (2026-09-04). A lead is worth most in its first minutes
+# — lead_response.py exists because first-response time decides whether
+# an enquiry becomes a customer — and a booking confirmation that lands
+# ten minutes after the booking reads as an afterthought. These event
+# types wake the agent within a minute of arriving (event_spine.emit
+# calls nudge()); everything else waits for the sweep, which itself
+# runs every two minutes now. Payments and contracts are bookkeeping;
+# nobody is waiting on the other end of them.
+FAST_EVENT_TYPES = frozenset({
+    "booking_created",
+    "contact_form_submitted",
+    "concierge_lead_captured",
+})
+NUDGE_DELAY_S = 20   # let the writer finish its own row (contact, session) first
+
 # Events older than this are never picked up: an agent enabled today
 # must not walk back through last month.
 LOOKBACK_HOURS = 24
@@ -123,15 +138,24 @@ def group_by_business(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, An
     return out
 
 
-def stamp_handled(event_ids: List[str]) -> None:
+def stamp_handled(event_ids: List[str]) -> List[str]:
     """Idempotence. Stamped BEFORE anything is planned: a crash costs one
-    run, never a second booking note."""
+    run, never a second booking note.
+
+    Returns the ids this call actually stamped. The PATCH only touches
+    rows still unstamped, and PostgREST returns the rows it touched, so
+    when a nudge on one replica and the sweep on another read the same
+    unhandled row, exactly one of them gets it back here and the other
+    gets an empty list — and acts on nothing."""
     if not event_ids:
-        return
+        return []
     ids = ",".join(str(i) for i in event_ids)
-    sb_clients.sb_patch_as_service(
+    rows = sb_clients.sb_patch_as_service(
         f"/events?id=in.({ids})&agent_handled_at=is.null",
         {"agent_handled_at": _z(_now())})
+    if isinstance(rows, list):
+        return [str(r.get("id")) for r in rows if r.get("id")]
+    return list(event_ids)   # a helper that returned nothing: assume ours, as before
 
 
 def _business(business_id: str) -> Optional[Dict[str, Any]]:
@@ -143,7 +167,7 @@ def _business(business_id: str) -> Optional[Dict[str, Any]]:
 
 
 async def agent_tick() -> None:
-    """Leader-gated, every 10 minutes."""
+    """Leader-gated, every 2 minutes — the sweep behind the fast lane."""
     if not enabled():
         return
     rows = await asyncio.to_thread(unhandled_events)
@@ -183,8 +207,57 @@ async def handle_business(business_id: str, events: List[Dict[str, Any]]) -> Opt
         logger.info(f"[agent] {business_id[:8]} over budget — leaving events")
         return None
 
-    await asyncio.to_thread(stamp_handled, ids)
+    stamped = await asyncio.to_thread(stamp_handled, ids)
+    if stamped is None:   # a helper that says nothing (older contract, test doubles): assume ours
+        stamped = ids
+    mine = set(str(i) for i in stamped)
+    events = [e for e in events if str(e.get("id")) in mine]
+    if not events:
+        return None   # another replica got there first
     return await run(biz, events)
+
+
+# ─── The fast lane ──────────────────────────────────────────────────────
+
+_pending_nudges: Dict[str, "asyncio.Task[None]"] = {}
+
+
+def nudge(business_id: Optional[str], event_type: str) -> bool:
+    """Called by event_spine.emit for every event. For a fast-lane type,
+    schedule a run for that business in NUDGE_DELAY_S, debounced per
+    business, on the running loop. Where there is no running loop (a
+    worker thread, a script) this is a no-op and the sweep picks the
+    event up within two minutes. Never raises. Returns whether a run
+    was scheduled."""
+    if not business_id or event_type not in FAST_EVENT_TYPES or not enabled():
+        return False
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    bid = str(business_id)
+    existing = _pending_nudges.get(bid)
+    if existing and not existing.done():
+        return False   # one already on its way; it will see this event too
+    try:
+        _pending_nudges[bid] = loop.create_task(_run_soon(bid))
+        return True
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[agent] nudge for {bid[:8]} failed: {e}")
+        return False
+
+
+async def _run_soon(business_id: str) -> None:
+    try:
+        await asyncio.sleep(NUDGE_DELAY_S)
+        rows = await asyncio.to_thread(unhandled_events)
+        events = [r for r in rows if str(r.get("business_id")) == business_id]
+        if events:
+            await handle_business(business_id, events[:MAX_EVENTS_PER_RUN])
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"[agent] fast-lane run for {business_id[:8]} failed: {e}")
+    finally:
+        _pending_nudges.pop(business_id, None)
 
 
 # ─── One run ──────────────────────────────────────────────────────────
