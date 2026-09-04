@@ -739,7 +739,63 @@ def _use_smart_sites(site_row: Dict[str, Any]) -> bool:
     cfg = (site_row or {}).get("site_config") or {}
     if cfg.get("html_source") == "module-composer":
         return False
+    if cfg.get("html_source") == "manual":
+        return False
     return bool(cfg.get("use_smart_sites"))
+
+
+# ─── Hand-built sites (site_config.html_source == "manual") ───────────
+# 2026-09-03: KMJ's redesign is authored by hand in
+# sites/kmj-creative-solutions/ and installed by SQL. Neither builder
+# engine touches such a row — refresh_if_composed no-ops on an html_source
+# it doesn't own and _use_smart_sites is False — so the stored page is
+# served as-is with two serve-time fills: the override system's text edits
+# (Studio Edit Mode / POST /chief/override, keyed on data-override-target)
+# and the business's verified sending address in place of
+# {{BUSINESS_EMAIL}}. No verified sender → the whole mailto element goes,
+# never a platform address on a practitioner's site.
+_MANUAL_EMAIL_TOKEN = "{{BUSINESS_EMAIL}}"
+_MANUAL_EMAIL_BLOCK_RE = re.compile(
+    r"<a\b[^>]*\bdata-needs-email\b[^>]*>.*?</a>", re.S | re.I)
+
+
+def _is_manual_source(site_config: Any) -> bool:
+    return isinstance(site_config, dict) and site_config.get("html_source") == "manual"
+
+
+def _business_public_email(biz_settings: Optional[Dict[str, Any]]) -> str:
+    """The business's verified custom sender (settings.email_domain), else
+    "". Deliberately never the platform default."""
+    try:
+        from email_sender import resolve_from_address
+        sentinel = "__unresolved__"
+        addr, _name = resolve_from_address(
+            {"settings": biz_settings or {}}, default_email=sentinel)
+        return "" if (addr or sentinel) == sentinel else str(addr)
+    except Exception as e:
+        logger.info(f"[manual-site] email resolution skipped: {e}")
+        return ""
+
+
+def _apply_manual_source(html: str, business_id: Optional[str],
+                         biz_settings: Optional[Dict[str, Any]]) -> str:
+    """Serve-time fills for a hand-built page. Soft-fails to the stored
+    HTML at every step — a fill bug must never blank the site."""
+    if not html:
+        return html
+    if business_id:
+        try:
+            from agents.override_system.override_resolver import resolve_html_overrides
+            html = resolve_html_overrides(html, business_id)
+        except Exception as e:
+            logger.info(f"[manual-site] overrides skipped: {e}")
+    if _MANUAL_EMAIL_TOKEN in html:
+        email = _business_public_email(biz_settings)
+        if email:
+            html = html.replace(_MANUAL_EMAIL_TOKEN, _html.escape(email))
+        else:
+            html = _MANUAL_EMAIL_BLOCK_RE.sub("", html).replace(_MANUAL_EMAIL_TOKEN, "")
+    return html
 
 
 def _esc(text: Any) -> str:
@@ -1492,6 +1548,9 @@ async def get_site_html(slug: str):
                 if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                     brand_color = bc
 
+        manual = _is_manual_source(site.get("site_config"))
+        if manual:
+            html = _apply_manual_source(html, biz_id, biz_settings)
         html = _inject_canonical(html, slug, (site.get("site_config") or {}).get("custom_domain"))
         # Pass 3: activate the dormant Pass 2.5a meta-tag helper.
         html = _inject_brand_meta(html, biz_id)
@@ -1508,7 +1567,7 @@ async def get_site_html(slug: str):
             content=html,
             status_code=200,
             media_type="text/html",
-            headers={"X-Solutionist-Source": "public-site"},
+            headers={"X-Solutionist-Source": "manual-site" if manual else "public-site"},
         )
 
 
@@ -1701,6 +1760,14 @@ async def get_site_page_html(slug: str, page_path: str):
         if not html:
             # Home, unknown page, or a single-page site → serve the main page.
             return await get_site_html(slug)
+        manual = _is_manual_source(cfg)
+        if manual:
+            biz_id = sites[0].get("business_id")
+            biz_rows = (await _sb(
+                client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1")
+                if biz_id else []) or []
+            html = _apply_manual_source(
+                html, biz_id, (biz_rows[0].get("settings") if biz_rows else {}) or {})
         # page_path makes this page canonical to ITSELF. Without it every
         # secondary page claimed to be the home page, telling Google the
         # site has one page and three duplicates. The clean-path handlers
@@ -1711,7 +1778,8 @@ async def get_site_page_html(slug: str, page_path: str):
         html = _inject_brand_meta(html, sites[0].get("business_id"))
         html = _rewrite_nav_for_preview(html, slug)
         return HTMLResponse(content=html, status_code=200, media_type="text/html",
-                            headers={"X-Solutionist-Source": "module-composer-multipage"})
+                            headers={"X-Solutionist-Source": "manual-site" if manual
+                                     else "module-composer-multipage"})
 
 
 @router.get("/public/{slug}/thank-you")
@@ -6661,6 +6729,42 @@ def _brand_file(name: str, media_type: str):
     fp = _STATIC_BRAND / name
     if not fp.exists():
         raise HTTPException(404, f"asset not found: {name}")
+    return _FileResponse(str(fp), media_type=media_type, headers=_BRAND_CACHE_HEADERS)
+
+
+# ─── Hand-built site assets ───────────────────────────────────────────
+# 2026-09-03: a manual site (html_source == "manual") keeps its images in
+# the repo under sites/{slug}/assets/ and references them by URL, so a
+# logo used on every page ships once and caches, instead of riding along
+# as base64 in each stored page. Slug and filename are pattern-checked
+# before touching the filesystem — no dots in the slug, one extension on
+# the name — so the path can never leave the assets folder.
+_SITES_DIR = _pathlib.Path(__file__).resolve().parent / "sites"
+_SITE_ASSET_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+_SITE_ASSET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.(webp|png|jpg|jpeg|svg|ico)$")
+_SITE_ASSET_TYPES = {"webp": "image/webp", "png": "image/png", "jpg": "image/jpeg",
+                     "jpeg": "image/jpeg", "svg": "image/svg+xml", "ico": "image/x-icon"}
+
+
+def _site_asset_path(slug: str, name: str) -> Optional[_pathlib.Path]:
+    """The on-disk file for a site asset request, or None when the request
+    is malformed or the file isn't there. Pure; the route wraps it."""
+    if not _SITE_ASSET_SLUG_RE.match(slug or "") or not _SITE_ASSET_NAME_RE.match(name or ""):
+        return None
+    fp = (_SITES_DIR / slug / "assets" / name)
+    try:
+        fp.resolve().relative_to(_SITES_DIR.resolve())
+    except ValueError:
+        return None
+    return fp if fp.is_file() else None
+
+
+@router.get("/public/site-assets/{slug}/{name}", include_in_schema=False)
+def site_asset(slug: str, name: str):
+    fp = _site_asset_path(slug, name)
+    if fp is None:
+        raise HTTPException(404, "asset not found")
+    media_type = _SITE_ASSET_TYPES[fp.suffix.lstrip(".").lower()]
     return _FileResponse(str(fp), media_type=media_type, headers=_BRAND_CACHE_HEADERS)
 
 
