@@ -35,10 +35,34 @@ WHAT EXECUTION MEANS — reads only, enforced at dispatch and not by
   async context by chief_chat), so RLS stays the authority — this loop
   adds reach to the MODEL, never to the ACCOUNT.
 
-Writes are deliberately absent. Operations still travel as [ACTION:]
-tags after the reply, through the action registry, the policy engine,
-step-up auth and the ledger. The loop makes Chief better informed, not
-more powerful.
+WRITES, THE SAME DOOR (2026-09-04). Until now every operation travelled
+as an [ACTION:] tag parsed out of prose after the reply — and three
+patches existed only because of that: a tolerant JSON repairer for
+truncated tags, a second model call to rewrite the reply around real
+outcomes (the words were written before anything ran), and a retry with
+a SYSTEM CORRECTION when prose claimed an action no tag was emitted
+for. The comments on those say the prompt rules are "empirically
+ignored". That is the model saying the mechanism is wrong, not the
+prompt.
+
+So the reversible verbs an outside agent may already call
+(mcp_server.WRITE_TOOL_SCHEMAS — class A, reviewed, never bulk) are
+tools on the practitioner's own turn too. What does NOT change is the
+door: a write tool call is dispatched through chief_of_staff.
+_execute_actions, one action at a time, so reference resolution, the
+class-C gate, the policy engine, the undo log and `_authorized_by`
+all run exactly as they do for a tag. This module never calls a write
+handler directly.
+
+Bounded on purpose: MAX_WRITE_CALLS per turn, separate from the read
+budget, and a held verdict (a spoken-confirmation hold, a tainted
+turn) spends the whole budget — the model gets one HELD and must ask,
+not retry. Class C has no tool today (no schema exists for it) and
+still travels as a tag, single-shot, exactly as before.
+
+A turn that acted through tools skips the recompose call and the
+correction retry: the model already saw every result before it wrote
+its last sentence, and a tool_use block is unambiguous.
 """
 from __future__ import annotations
 
@@ -65,18 +89,61 @@ MAX_RESULT_CHARS = 6000
 # Display actions stay actions — one way to put data on the screen.
 _EXCLUDED = {"show_view"}
 
+# Writes per turn. Three is a task — "add Ada, put Thursday on the
+# calendar, remind me" — and not a loop. Separate from MAX_TOOL_CALLS so
+# a model that reads five things can still act.
+MAX_WRITE_CALLS = 3
+
 # How many tools the current turn actually called — read by the
 # [Chief timing] line so production can see the loop working.
 _calls_this_turn: contextvars.ContextVar[int] = contextvars.ContextVar(
     "chief_tool_loop.calls", default=0)
+# Whether THIS turn may write through tools. Off by default so every
+# caller that never asked (drafts, the fallback brain, tests) keeps
+# the read-only loop it had.
+_writes_allowed: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "chief_tool_loop.writes_allowed", default=False)
+# The full handler results of every write this turn — nav,
+# frontend_event and all — so chief_chat can put them in actions_taken
+# exactly as a tag action would be. The model only ever sees _shrink().
+_writes_this_turn: contextvars.ContextVar[List[Dict[str, Any]]] = contextvars.ContextVar(
+    "chief_tool_loop.writes", default=[])
+_write_calls: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "chief_tool_loop.write_calls", default=0)
+# Set when the budget is spent OR a write came back held: one HELD per
+# turn, then the model asks instead of retrying.
+_writes_closed: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "chief_tool_loop.writes_closed", default=False)
 
 
-def reset_turn() -> None:
+def reset_turn(writes_allowed: bool = False) -> None:
     _calls_this_turn.set(0)
+    _writes_allowed.set(bool(writes_allowed))
+    _writes_this_turn.set([])
+    _write_calls.set(0)
+    _writes_closed.set(False)
 
 
 def calls_this_turn() -> int:
     return _calls_this_turn.get()
+
+
+def writes_this_turn() -> List[Dict[str, Any]]:
+    """The write results of this turn, in order, as chief_chat's
+    `taken` list expects them."""
+    return list(_writes_this_turn.get())
+
+
+def writes_allowed() -> bool:
+    return bool(_writes_allowed.get())
+
+
+def _anthropic_shape(t: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": t.get("name"),
+        "description": t.get("description") or "",
+        "input_schema": t.get("inputSchema") or {"type": "object", "properties": {}},
+    }
 
 
 def read_tool_definitions() -> List[Dict[str, Any]]:
@@ -88,12 +155,39 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
         name = t.get("name")
         if not name or name in _EXCLUDED:
             continue
-        out.append({
-            "name": name,
-            "description": t.get("description") or "",
-            "input_schema": t.get("inputSchema") or {"type": "object", "properties": {}},
-        })
+        out.append(_anthropic_shape(t))
     return out
+
+
+def _write_verb_offered(name: str) -> bool:
+    """May THIS verb be a write tool? The same two gates the agent
+    surface applies — the registry is the ceiling (class A, not
+    sensitive, not bulk), the reviewed schema table is the floor."""
+    return (name in mcp_server.WRITE_TOOL_SCHEMAS
+            and action_registry.may_expose_to_agent(name, allow_writes=True)
+            and action_registry.effect(name) == action_registry.WRITE
+            and not action_registry.is_bulk(name))
+
+
+def write_tool_definitions() -> List[Dict[str, Any]]:
+    """The reviewed class-A write verbs, Anthropic-shaped. Derived from
+    the agent surface's own schema table, not a second list."""
+    out: List[Dict[str, Any]] = []
+    for name in sorted(mcp_server.WRITE_TOOL_SCHEMAS):
+        if not _write_verb_offered(name):
+            continue
+        description, schema = mcp_server.WRITE_TOOL_SCHEMAS[name]
+        out.append(_anthropic_shape(
+            {"name": name, "description": description, "inputSchema": schema}))
+    return out
+
+
+def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
+    """Reads always; writes when the turn allows them."""
+    tools = read_tool_definitions()
+    if writes:
+        tools += write_tool_definitions()
+    return tools
 
 
 def _shrink(result: Any) -> str:
@@ -126,12 +220,16 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     """
     import chief_of_staff  # runtime import — this module loads first
 
+    effect = action_registry.effect(name)
+    if effect == action_registry.WRITE and name not in _EXCLUDED:
+        return await _execute_write(client, biz, name, args)
+
     if name in _EXCLUDED or not action_registry.may_expose_to_agent(name):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
-    if action_registry.effect(name) != action_registry.READ:
+    if effect != action_registry.READ:
         # Belt over may_expose_to_agent's braces: even if exposure rules
-        # ever widen, this loop stays reads-only.
+        # ever widen, the READ path stays reads-only.
         return True, f"'{name}' is not a read — not available mid-turn."
     handler = chief_of_staff.ACTION_HANDLERS.get(name)
     if handler is None:
@@ -146,6 +244,82 @@ async def execute_tool_use(client, biz: Dict[str, Any],
         logger.warning(f"[tool-loop] {name} raised: {e}")
         return True, f"'{name}' failed: {type(e).__name__}. Answer from what you have."
     if isinstance(result, dict) and chief_of_staff._action_failed(result):
+        return True, _shrink(result)
+    return False, _shrink(result)
+
+
+def _looks_held(result: Any) -> bool:
+    """A gate verdict rather than a handler outcome: the class-C hold for
+    a spoken yes, the taint hold, a safety check that could not run.
+    All of them come back `failed` with a sentence that says held."""
+    if not isinstance(result, dict) or not result.get("failed"):
+        return False
+    blob = f"{result.get('result') or ''} {result.get('label') or ''}".lower()
+    return "held" in blob
+
+
+async def _execute_write(client, biz: Dict[str, Any],
+                         name: str, args: Dict[str, Any]) -> Tuple[bool, str]:
+    """One write, THROUGH THE DOOR.
+
+    Never a handler call. `_execute_actions` with a list of one gives
+    the write everything a tag gets: `_resolve_action_references`,
+    `_gate_class_c`, the policy engine, `_record_undoable`, the
+    `_authorized_by` stamp. The full result is kept for chief_chat's
+    `actions_taken`; the model sees the shrunk form, same as a read.
+    """
+    import chief_of_staff
+
+    if not _writes_allowed.get():
+        return True, (f"'{name}' changes records and is not a mid-turn tool on "
+                      f"this turn. Operations go through [ACTION:] tags in your reply.")
+    if not _write_verb_offered(name):
+        # Class C, bulk, unreviewed, or sensitive. The same flat sentence
+        # the agent surface uses, so a refusal is never a hint that a
+        # scope or a retry would help.
+        return True, (f"'{name}' is not a tool. If it is an operation, emit its "
+                      f"[ACTION:] tag in your reply; the usual rules apply.")
+    if _writes_closed.get():
+        return True, ("The write budget for this turn is spent (or an earlier write "
+                      "is HELD). Say what happened so far and what is still to do; "
+                      "do not retry.")
+    handler = chief_of_staff.ACTION_HANDLERS.get(name)
+    if handler is None:
+        return True, f"'{name}' has no handler."
+
+    _calls_this_turn.set(_calls_this_turn.get() + 1)
+    _write_calls.set(_write_calls.get() + 1)
+    if _write_calls.get() >= MAX_WRITE_CALLS:
+        _writes_closed.set(True)
+
+    action = dict(args or {})
+    action["type"] = name
+    user_id = None
+    try:
+        user_id = chief_of_staff._TURN_USER_ID.get() or None
+    except Exception:
+        user_id = None
+    try:
+        results = await chief_of_staff._execute_actions(
+            client, biz, [action], user_id=user_id)
+    except Exception as e:
+        logger.warning(f"[tool-loop] write {name} raised: {e}")
+        return True, f"'{name}' failed: {type(e).__name__}. Tell the practitioner it did not go through."
+    result = results[0] if results else chief_of_staff._fail(name, "nothing was returned")
+    if not isinstance(result, dict):
+        result = {"type": name, "result": str(result), "label": name}
+
+    # Kept in full — nav and frontend_event are how the app reacts to
+    # what just happened, and they must reach actions_taken.
+    _writes_this_turn.set(_writes_this_turn.get() + [result])
+
+    if _looks_held(result):
+        # One HELD per turn. The model reads why, asks the practitioner,
+        # and the NEXT turn re-issues the same action. Retrying inside
+        # this turn would be exactly the door the hold exists to close.
+        _writes_closed.set(True)
+        return True, _shrink(result)
+    if chief_of_staff._action_failed(result):
         return True, _shrink(result)
     return False, _shrink(result)
 

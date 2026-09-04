@@ -20,6 +20,17 @@ brand" and be listened to. What it removes is the SYNTAX that turns
 suggestion into execution — the tag the action parser acts on. Taking
 the capability away beats asking a model nicely not to use it.
 
+HONESTY NOTE (2026-09-04). Since native writes, a reversible operation
+can also run as a TOOL CALL the model makes, and no stripper can remove
+that capability from text — a tool_use block is the model's own
+decision, not a string in someone's email. So for class A verbs the tag
+stripper is an ATTEMPT DETECTOR, not a capability removal: it still
+raises the per-turn taint, and the taint still holds every class-C
+send, which is the consequence that matters. The seven prose shapes
+below carry the rest. Class C itself has no tool and still travels as
+a tag, so for the actions that leave the building the original claim
+still holds in full.
+
 PROSE, SECOND LAYER (2026-09-03). The tag stripper takes the capability
 away; it cannot take away persuasion. So a second, deliberately narrow
 detector looks for the SHAPES a prose attack takes — "ignore your
