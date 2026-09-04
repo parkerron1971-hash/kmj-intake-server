@@ -2270,6 +2270,12 @@ _COMPARE_GROUPS = (
          "One action is a message, a piece of analysis, or a build. Top up any time; credits never expire."),
         ("Depth of analysis", lambda t: t["analysis"],
          "How hard the system is allowed to think on the slow, careful work."),
+        ("Give Chief an assignment &mdash; &ldquo;fill Thursday&rdquo;", _ALL,
+         "Say it once. Chief works it between conversations, checks the numbers, and closes it when it lands. One open on Starter, three on Professional, ten on Solutionist."),
+        ("Chief asks before it spends &mdash; on your phone", _ALL,
+         "A text, an invoice, a payment link: the exact words reach your phone with Yes, do that. Nothing goes out until you tap, and a draft you ignore is let go."),
+        ("Chief&rsquo;s week, every Monday", _ALL,
+         "What it did on its own, what came of it, what is waiting on you, and the minutes you did not spend. Counted, not guessed."),
         ("Autopilot &mdash; the overnight run", _ALL,
          "Chief works the list while you sleep, and logs a line for everything it did."),
         ("Memory, standing instructions &amp; weekly briefing", _ALL,
@@ -5103,9 +5109,9 @@ def render_faq() -> str:
 <section>
   <div class="container-narrow">
     <div class="faq-filter reveal" id="faqFilter" role="group" aria-label="Filter questions">
-      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>10</span></button>
+      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>11</span></button>
       <button type="button" class="faq-f" data-f="fit"   aria-pressed="false">Is it for me<span>3</span></button>
-      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>3</span></button>
+      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>4</span></button>
       <button type="button" class="faq-f" data-f="money" aria-pressed="false">Money<span>2</span></button>
       <button type="button" class="faq-f" data-f="data"  aria-pressed="false">Your data<span>2</span></button>
     </div>
@@ -5147,6 +5153,10 @@ def render_faq() -> str:
       <details class="faq-item" data-g="fit">
         <summary>Does it work for churches and ministries?</summary>
         <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first: one person runs the workspace. The Solutionist plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
+      </details>
+      <details class="faq-item" data-g="how">
+        <summary>What does Chief do while I&rsquo;m not logged in?</summary>
+        <div class="faq-body"><p>It works. Turn on &ldquo;Chief works between conversations&rdquo; and a new booking, lead, or payment gets the bookkeeping you would have asked for within a minute or two: logged on the client, a task set, a note left, and for a new lead the first reply drafted. Hand it an outcome in chat &mdash; &ldquo;fill Thursday&rdquo; &mdash; and it keeps working that until the calendar says so. Anything that sends, charges, or publishes reaches your phone as one tap, and nothing goes out until you tap it. Every move is on the record, and every Monday it tells you what it did, what landed, and what is waiting on you.</p></div>
       </details>
       <details class="faq-item" data-g="how">
         <summary>Can the AI publish to my social accounts?</summary>
