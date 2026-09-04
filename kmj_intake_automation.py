@@ -1091,6 +1091,21 @@ async def startup():
     except Exception as _e:
         print(f"   [warn] initial lease acquire failed (defaulting leader): {_e}")
 
+    # Chief jobs orphaned by THIS restart (2026-09-04): rows still
+    # queued/running belong to a process that no longer exists. Mark
+    # them failed with the retryable reason now, on the leader, rather
+    # than leaving the practitioner's "working on it" chip spinning
+    # until somebody happens to enqueue the same kind again. Never
+    # retried automatically — every kind is a paid build.
+    try:
+        if scheduler_lock.is_leader():
+            import chief_jobs as _chief_jobs
+            _swept = _chief_jobs.sweep_orphans("boot")
+            if _swept:
+                print(f"   [jobs] {_swept} orphaned job(s) marked failed, retryable")
+    except Exception as _e:
+        print(f"   [warn] chief_jobs boot sweep failed: {_e}")
+
     # Action Ledger: publish the controlled vocabulary. Idempotent upsert
     # from action_registry + the event catalog, so a verb added in code is
     # registered by the next boot and its rows stop being stamped
@@ -1361,6 +1376,15 @@ async def startup():
                           "interval", minutes=1, id="chief_scheduled")
     except Exception as e:
         print(f"   [warn] chief scheduled-actions job not scheduled: {e}")
+    # Chief jobs recovery (2026-09-04): the boot sweep's twin, for the
+    # deploy that happens on another replica or mid-build. Reads the
+    # heartbeat; marks dead rows failed-retryable; never retries.
+    try:
+        import chief_jobs as _chief_jobs_mod
+        scheduler.add_job(g("chief_jobs_recover", _chief_jobs_mod.recover_tick),
+                          "interval", minutes=5, id="chief_jobs_recover")
+    except Exception as e:
+        print(f"   [warn] chief jobs recovery tick not scheduled: {e}")
     # Campaigns Phase 1 (2026-07-21) — execute due campaign touches
     # through the shared email/SMS rails (suppression + consent + quiet
     # hours inside). Kill switch: CAMPAIGNS=off.

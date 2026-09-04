@@ -147,6 +147,55 @@ _PROGRESS_MIN_INTERVAL_S = 1.5   # throttle: skip pings closer than this…
 _PROGRESS_MIN_JUMP = 15          # …unless the pct jumped at least this much
 
 
+# ─── Heartbeat + recovery (2026-09-04) ────────────────────────────────
+#
+# The only recovery for a job orphaned by a deploy was LAZY: the next
+# enqueue of the same kind for the same business swept it (see
+# enqueue). Until that happened the practitioner's "Chief is working
+# on…" chip spun forever on a corpse, and nothing else ever looked.
+#
+# Two pieces close it. A HEARTBEAT: the progress callback already
+# PATCHes the row every ~1.5s while the build is alive; it now stamps
+# heartbeat_at too, which is what lets a sweep tell "slow on another
+# replica" from "dead" — the thing age alone cannot (a full Opus build
+# approaches ten minutes) and process identity (_INFLIGHT) cannot across
+# processes. And two SWEEPS that share one rule: at boot, and every few
+# minutes on the scheduler leader.
+#
+# NO AUTO-RETRY, deliberately. Every job kind is a paid model build
+# (rebuild_site writes a 600-credit marker; author_spec is the largest
+# single call the product makes, and the reason it became a job was a
+# timeout that charged twice). A swept row is marked failed with the
+# retryable reason the retry button already understands; the human
+# presses it. An automatic retry here re-creates the double-build money
+# bug the 2026-08-13 audit closed.
+
+# A `running` row whose last heartbeat is older than this is dead.
+HEARTBEAT_STALE_MIN = 5
+# Without the heartbeat column (migration not applied yet), fall back to
+# started_at with the older, longer threshold enqueue already uses.
+STARTED_STALE_MIN = 10
+INTERRUPTED_REASON = "interrupted by a server restart — safe to retry"
+
+# Flips to False after the first refused heartbeat PATCH (column not
+# migrated yet), so a missing column costs one warning, not one failed
+# request per progress ping.
+_HEARTBEAT_OK = True
+
+
+def _stamp_heartbeat(job_id: str) -> None:
+    global _HEARTBEAT_OK
+    if not _HEARTBEAT_OK:
+        return
+    try:
+        sb_clients.sb_patch_as_service(
+            f"/chief_jobs?id=eq.{job_id}", {"heartbeat_at": _now()})
+    except Exception as e:
+        _HEARTBEAT_OK = False
+        logger.warning(f"[chief_jobs] heartbeat disabled — column missing? "
+                       f"apply APPLY-2026-09-04-chief-jobs-heartbeat.sql ({e})")
+
+
 def _make_progress_cb(job_id: str):
     """Build the synchronous progress(pct, stage) reporter for one job.
 
@@ -171,10 +220,98 @@ def _make_progress_cb(job_id: str):
             sb_clients.sb_patch_as_service(
                 f"/chief_jobs?id=eq.{job_id}",
                 {"result": {"progress": {"pct": p, "stage": str(stage)[:140]}}})
+            # A SEPARATE patch so a not-yet-migrated column can never
+            # take the progress bar down with it.
+            _stamp_heartbeat(job_id)
         except Exception as e:
             logger.debug(f"[chief_jobs] progress ping skipped for {job_id}: {e}")
 
     return progress
+
+
+def _age_min(stamp: Any, now: datetime) -> Optional[float]:
+    if not stamp:
+        return None
+    try:
+        return (now - datetime.fromisoformat(
+            str(stamp).replace("Z", "+00:00"))).total_seconds() / 60
+    except Exception:
+        return None
+
+
+def is_orphaned(row: Dict[str, Any], now: datetime, inflight: set) -> bool:
+    """THE RULE, shared by the boot sweep and the tick. Pure.
+
+    A live row is orphaned when nobody can vouch for it: not in THIS
+    process's _INFLIGHT (that is the only kind of slow-but-alive we can
+    see), and its heartbeat is stale — or, with no heartbeat on file,
+    it started long enough ago that enqueue's own sweep would already
+    have called it dead. A queued row that was never picked up gets the
+    started_at rule on created_at.
+    """
+    if str(row.get("id")) in inflight:
+        return False
+    status = row.get("status")
+    if status not in ("queued", "running"):
+        return False
+    hb = _age_min(row.get("heartbeat_at"), now)
+    if hb is not None:
+        return hb > HEARTBEAT_STALE_MIN
+    started = _age_min(row.get("started_at") or row.get("created_at"), now)
+    if started is None:
+        return True          # unparseable → nobody can vouch for it
+    return started > STARTED_STALE_MIN
+
+
+def sweep_orphans(reason: str = "boot") -> int:
+    """Mark every orphaned live row failed-with-a-retryable-reason.
+    Sync (it runs from startup and from a scheduler thread), service
+    role, never raises. Returns how many rows it swept."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            "/chief_jobs?status=in.(queued,running)"
+            "&select=id,status,started_at,created_at,heartbeat_at,kind,business_id"
+            "&order=created_at.asc&limit=200") or []
+    except Exception as e:
+        # The heartbeat column may not exist yet; ask again without it.
+        try:
+            rows = sb_clients.sb_get_as_service(
+                "/chief_jobs?status=in.(queued,running)"
+                "&select=id,status,started_at,created_at,kind,business_id"
+                "&order=created_at.asc&limit=200") or []
+        except Exception as e2:
+            logger.warning(f"[chief_jobs] orphan sweep ({reason}) could not read: {e2}")
+            return 0
+        logger.info(f"[chief_jobs] orphan sweep reading without heartbeat_at: {e}")
+    if not isinstance(rows, list):
+        return 0
+    now = datetime.now(timezone.utc)
+    swept = 0
+    for row in rows:
+        if not is_orphaned(row, now, _INFLIGHT):
+            continue
+        try:
+            sb_clients.sb_patch_as_service(
+                f"/chief_jobs?id=eq.{row['id']}&status=in.(queued,running)",
+                {"status": "failed", "error": INTERRUPTED_REASON,
+                 "finished_at": now.isoformat()})
+            swept += 1
+            logger.warning(f"[chief_jobs] {reason} sweep: {row.get('kind')} job "
+                           f"{row.get('id')} for {str(row.get('business_id'))[:8]} "
+                           f"was {row.get('status')} with nobody running it — "
+                           f"marked failed, retryable")
+        except Exception as e:
+            logger.warning(f"[chief_jobs] {reason} sweep could not mark {row.get('id')}: {e}")
+    return swept
+
+
+async def recover_tick() -> None:
+    """Scheduler tick (leader-gated by the caller): the same sweep,
+    every few minutes, for the deploy that happened while nobody was
+    enqueuing."""
+    n = await asyncio.to_thread(sweep_orphans, "tick")
+    if n:
+        logger.info(f"[chief_jobs] recovery tick swept {n} orphaned job(s)")
 
 
 def _execute_kind(kind: str, business_id: str, params: dict,
