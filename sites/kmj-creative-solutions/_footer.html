@@ -20,6 +20,46 @@
 </footer>
 <script>
 (function () {
+  // One motion language for the whole site: sections arrive once as they
+  // enter the viewport, and the hero's background layers drift apart a
+  // little on scroll. Neither runs when the visitor prefers reduced
+  // motion, and without script everything simply shows.
+  var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!still && 'IntersectionObserver' in window) {
+    var sel = '.section-head, .card, .move, .manifesto .wrap > *, .proof-copy, .proof-mock, .chips, ' +
+      '.about-art, .about-copy, .cta-band .wrap > *, .offer, .value, .stat, .story-copy > *, ' +
+      '.who-head, .who-body, .question .wrap > *, .form-card, .contact-copy > *, .values-head';
+    var els = Array.prototype.slice.call(document.querySelectorAll(sel));
+    var k = 0;
+    els.forEach(function (el) {
+      if (el.closest('.hero') || el.closest('.page-hero')) return;
+      el.classList.add('reveal');
+      el.style.setProperty('--i', String(k++ % 5));
+    });
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.1 });
+    els.forEach(function (el) { if (el.classList.contains('reveal')) io.observe(el); });
+  }
+  var layers = Array.prototype.slice.call(document.querySelectorAll('[data-depth]'));
+  if (!still && layers.length) {
+    var ticking = false;
+    var frame = function () {
+      var y = window.scrollY || window.pageYOffset || 0;
+      if (y < 1600) {
+        layers.forEach(function (el) {
+          var d = parseFloat(el.getAttribute('data-depth')) || 0;
+          el.style.transform = 'translate3d(0,' + Math.round(y * d) + 'px,0)';
+        });
+      }
+      ticking = false;
+    };
+    window.addEventListener('scroll', function () {
+      if (!ticking) { ticking = true; window.requestAnimationFrame(frame); }
+    }, { passive: true });
+  }
   var t = document.querySelector('[data-nav-toggle]');
   var l = document.querySelector('[data-nav-links]');
   if (t && l) {
