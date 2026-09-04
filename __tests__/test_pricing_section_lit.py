@@ -57,6 +57,7 @@ def test_the_strip_reads_the_live_count(monkeypatch):
     assert 'id="founderStrip"' in seg and 'data-left="43"' in seg and "43 of 50 seats left" in seg
     assert "subscription_plan=in.(price_f,price_fa,price_old)" in seen[0] and "active,trialing,past_due" in seen[0], (
         "seats sold at the retired founder price still count")
+    price = pricing_config.tier_price_cents()["founder"] // 100
     assert f"50 founding seats at ${price} a month" in seg
     assert f"{pricing_config.founder_credits():,} AI actions a month" in seg
     assert 'href="/start?plan=founder"' in seg
