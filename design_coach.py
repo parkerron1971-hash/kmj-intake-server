@@ -89,7 +89,7 @@ OUTPUT — STRICT JSON, nothing else:
   "reply": "your next message to them (plain text, no markdown headers)",
   "chips": ["up to 4 short tap-to-answer suggestions", "..."],        // optional
   "pair": {"key": "ground", "a": "Dark and moody", "b": "Light and airy"},  // optional, when asking a this-or-that
-  "gallery": {"kind": "looks", "options": ["mural", "monograph", "ledger"]},  // optional, see THE GALLERIES
+  "gallery": {"kind": "looks", "options": ["<3 to 6 look keys, chosen for THIS business>"]},  // optional, see THE GALLERIES
   "ask": "photos",   // optional — the platform shows an upload card; ONLY when the context says NO PHOTOS YET, and only once
   "saves": [{"section": "story", "field": "voice", "value": "..."}],
   "stage": "world|story|taste|signature|truth|brief",
@@ -97,14 +97,96 @@ OUTPUT — STRICT JSON, nothing else:
   "reflect_back": ["6-10 short vivid lines summarizing the session"]   // ONLY with stage "brief"
 }
 THE GALLERIES (show, then ask — the Claude Design pattern): when the conversation reaches a LOOK, LAYOUT, or MOTION choice, set "gallery" instead of "pair" — the platform renders each option as a small designed card in the option's own style, tinted with their brand color, and their tap arrives as an ordinary message. Use ONLY these kinds and keys:
-- kind "looks" (the design language — the platform shows each as a full page design): mural (loud street energy: paint texture, hand-made brush-stroke headlines, bold color that leaves a mark), ledger (light corporate clarity: serif confidence, clean structured calm, credibility), monograph (dark luxury: gold-embossed detail, monogram elegance, private-label feel), broadsheet (a page you read: paper ground, columns, one printer's red), signal (one grid, one flat colour, everything numbered), atelier (a quiet gallery: bone ground, wide mats, thin serif), neon (night ground, one colour that glows, condensed caps, a marquee), hearth (deep warm ground, soft corners, people in the light), glass (near-black, the product screenshot in a glowing frame, one blue button), runway (black and white only: the owner walks in first, the work in device frames, arc-cut seams), arena (two grounds, wide heavy caps with ghost watermarks, one orange, diagonal seams, the calendar up front).
+- kind "looks" (the design language — the platform shows each as a real full-page design the system can build). The keys, what each is, and who it sings for:
+{LOOKS_CATALOG}
 - kind "layouts" (the hero's shape): split-stage (copy one side, portrait the other), poster (one full-bleed statement), editorial (a magazine column with a lead image), exhibition (the work itself leads, gallery-first), monument (the name at monumental scale, the work small beneath), corridor (a short headline over a filmstrip of the work), letter (a typed letter to the visitor — no image, the voice is the hero).
 - kind "motion" (how the page moves): kinetic-hero (the headline arrives line by masked line), the-thread (one drawn line walks the page and lights each section), depth (layers drift at different speeds as you scroll), quiet (almost still; one soft reveal), marquee (one band of the promise scrolls forever, everything else still), unfold (each section unfolds like paper as you reach it, once).
-Offer 2-4 keys per gallery, chosen for THIS business — never all of them.
-Set gallery as {"kind": "looks", "options": ["mural", "monograph", "ledger"]} (2-4 keys), keep the reply ONE short question ("Which of these feels like walking into your shop?"), and never describe the options in words — the cards do that. Use each kind at most once per session.
+Offer 3 to 6 looks (2 to 4 for layouts and motion), chosen for THIS business — never all eleven, never a default trio.
+CHOOSING THE LOOKS: the KNOWN CONTEXT carries LOOKS THAT FIT THIS BUSINESS, ranked by the platform from their trade, their photos and their words. Offer from the top of that list, best fit first, and include one that is a real alternative (a different ground or a different temperature), never six shades of the same thing. Keep the reply ONE short question ("Which of these feels like walking into your shop?") and never describe the options in words: the cards do that. If they say none of them fit, show "looks" ONE more time with the keys you have not shown yet; layouts and motion are shown at most once per session.
 
 Rules: chips are answers THEY might tap, not questions. Use "pair" at most every third turn. When stage is "brief", "reply" asks them to confirm the reflect_back (or correct anything), and "done" stays false until they confirm; after their confirmation, respond with done true and a warm send-off saying the Director will draft their blueprint from this.
 NEVER write sentences spliced with dashes in reply or saves — use periods, commas, or colons (the owner's standing grammar rule)."""
+
+
+def _looks_catalog() -> str:
+    """The coach's menu of looks, generated from design_languages so the
+    coach can never offer a look the builder cannot build (the moves
+    lesson of 2026-08-09, applied to the gallery). One line per look:
+    key, what it is, who it sings for."""
+    try:
+        import design_languages
+        lines = []
+        for key, v in design_languages.LANGUAGES.items():
+            lines.append(f"  {key}: {v.get('believes', '').rstrip('.')}. "
+                         f"Sings for {v.get('sings', '')}.")
+        return "\n".join(lines)
+    except Exception:
+        return "  mural, ledger, monograph, broadsheet, signal, atelier, neon, hearth, glass, runway, arena"
+
+
+_SYSTEM = _SYSTEM.replace("{LOOKS_CATALOG}", _looks_catalog())
+
+
+def suggest_looks(business_type: str, photos: int = 0,
+                  prefs: Optional[Dict[str, Any]] = None,
+                  words: str = "") -> List[Dict[str, str]]:
+    """LOOKS THAT FIT THIS BUSINESS (2026-09-04): a ranked shortlist for
+    the coach to offer from, so the gallery is chosen for the trade in
+    front of it rather than copied from a worked example. Evidence:
+    the rubric's own pick (the same one the build would make), then
+    each look's 'sings for' and 'fails' notes scored against the
+    business type, the boldness and type answers, and the owner's own
+    words. Deterministic, no model call."""
+    try:
+        import design_languages as dl
+    except Exception:
+        return []
+    prefs = prefs if isinstance(prefs, dict) else {}
+    btype = (business_type or "").lower()
+    text = " ".join([btype, str(prefs.get("boldness") or ""),
+                     str(prefs.get("type_personality") or ""),
+                     (words or "").lower()])
+    tokens = {t for t in re.findall(r"[a-z]{3,}", text)}
+    ctx = {"business": {"type": btype}, "site_prefs": prefs,
+           "gallery": [{}] * max(0, int(photos or 0)), "offerings": [],
+           "testimonials": []}
+    try:
+        rubric_key, _ = dl.rubric_select(ctx)
+    except Exception:
+        rubric_key = None
+    scored = []
+    for key, v in dl.LANGUAGES.items():
+        sings = set(re.findall(r"[a-z]{3,}", str(v.get("sings") or "").lower()))
+        fails = set(re.findall(r"[a-z]{3,}", str(v.get("fails") or "").lower()))
+        score = 0.0
+        score += 2.0 * len(tokens & sings)
+        score -= 2.0 * len(tokens & fails)
+        if key == rubric_key:
+            score += 4.0
+        # photo evidence the sheets name in words
+        if photos >= 4 and key in ("atelier", "monograph", "runway", "arena", "mural"):
+            score += 1.0
+        if photos == 0 and key in ("broadsheet", "ledger", "signal"):
+            score += 1.0
+        scored.append((score, key))
+    scored.sort(key=lambda x: (-x[0], list(dl.LANGUAGES).index(x[1])))
+    out = []
+    for score, key in scored[:6]:
+        why = "the build's own pick for this evidence" if key == rubric_key else               f"sings for {str(dl.LANGUAGES[key].get('sings') or '')[:70]}"
+        out.append({"key": key, "why": why})
+    return out
+
+
+def looks_that_fit_block(business_type: str, photos: int = 0,
+                         prefs: Optional[Dict[str, Any]] = None,
+                         words: str = "") -> str:
+    ranked = suggest_looks(business_type, photos, prefs, words)
+    if not ranked:
+        return ""
+    return ("LOOKS THAT FIT THIS BUSINESS (ranked by the platform from their "
+            "trade, photos and words; offer from the top, best fit first; the "
+            "tail is the second round if none fit):\n"
+            + "\n".join(f"- {r['key']}: {r['why']}" for r in ranked))
 
 
 # ─── context assembly (what is already KNOWN — never re-ask) ─────────
@@ -165,6 +247,16 @@ def _known_context(business_id: str) -> str:
                 parts.append("EARLIER STYLE ANSWERS (do not re-ask; "
                              "build on them): "
                              + json.dumps(prefs, ensure_ascii=False)[:900])
+            try:
+                gal = ((st.get("media_library") or {}).get("gallery")) or []
+                fit = looks_that_fit_block(
+                    str(b.get("business_type") or ""), len(gal),
+                    prefs if isinstance(prefs, dict) else {},
+                    json.dumps(st.get("brand_kit") or {})[:300])
+                if fit:
+                    parts.append(fit)
+            except Exception as e:
+                logger.info(f"[coach] looks-that-fit skipped: {e}")
     except Exception as e:
         logger.info(f"[coach] business context skipped: {e}")
     try:
@@ -243,6 +335,15 @@ def build_turn_prompt(business_id: str,
 # ─── the turn contract ───────────────────────────────────────────────
 
 _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.MULTILINE)
+
+
+def _look_keys() -> set:
+    try:
+        import design_languages
+        return set(design_languages.LANGUAGES.keys())
+    except Exception:
+        return {"mural", "monograph", "ledger", "broadsheet", "signal",
+                "atelier", "neon", "hearth", "glass", "runway", "arena"}
 _ALLOWED_SECTIONS = {"identity", "world", "story", "taste", "signature",
                      "truth", "capabilities"}
 
@@ -278,9 +379,7 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
                            and pair.get("b")) else None
     g = out.get("gallery")
     _G_KINDS = {
-        "looks": {"mural", "monograph", "ledger",
-                  "broadsheet", "signal", "atelier", "neon", "hearth",
-                  "glass", "runway", "arena"},
+        "looks": _look_keys(),
         "layouts": {"split-stage", "poster", "editorial", "exhibition",
                     "monument", "corridor", "letter"},
         "motion": {"kinetic-hero", "the-thread", "depth", "quiet",
@@ -291,7 +390,8 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
         opts = [str(o) for o in (g.get("options") or [])
                 if str(o) in _G_KINDS[g["kind"]]]
         if len(opts) >= 2:
-            out["gallery"] = {"kind": g["kind"], "options": opts[:4]}
+            cap = 6 if g["kind"] == "looks" else 4
+            out["gallery"] = {"kind": g["kind"], "options": opts[:cap]}
     rb = out.get("reflect_back")
     out["reflect_back"] = [str(x)[:200] for x in rb[:12]] \
         if isinstance(rb, list) else []
