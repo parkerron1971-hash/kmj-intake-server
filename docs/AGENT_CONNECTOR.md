@@ -74,6 +74,31 @@ Revoke in Agent Access; it stops working on the next call, and kills the refresh
   `__tests__/test_mcp_writes.py`. The registry must already say class A, non-bulk,
   non-sensitive; if it does not, the schema alone does nothing.
 
+## Proposals: class C with a person in the loop
+
+No class C verb — a text that leaves at once, an invoice sent, a payment
+recorded, a link that touches Stripe, a post published — is ever a tool
+an agent can run. A write key can **propose** a reviewed few of them:
+
+| tool | proposes | arguments |
+|---|---|---|
+| `propose_send_sms` | `send_sms` | `contact_id` or `contact_name`, `message` (≤320) |
+| `propose_send_invoice` | `send_invoice` | `invoice_id` |
+| `propose_mark_invoice_paid` | `mark_invoice_paid` | `invoice_id`, `payment_method` |
+| `propose_generate_payment_link` | `generate_payment_link` | `product_id` or `name` |
+| `propose_publish_to_site` | `publish_to_site` | `post_id` or `post_title` |
+
+A proposal is an Approval Queue row on channel `action`: the
+practitioner sees the exact action in plain words beside every other
+draft. **Approve** runs it through `_execute_actions` with
+`prompted=True` (a person just asked) on surface `approval`; **Dismiss**
+throws it away. Nothing happens in between. A recipient is always a
+contact on file — `to`, `phone`, `email` are refused — so an outside
+agent cannot aim a text at a stranger. The standing agent gets the same
+tools between conversations; on the practitioner's own chat turn they
+are not offered, because the tag path already runs the verb under the
+class-C gate.
+
 ## What is deliberately not here yet
 
 - **Class B.** The registry defines it as a send with a recall window and there is no
