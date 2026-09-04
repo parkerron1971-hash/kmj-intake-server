@@ -12,7 +12,9 @@ STRIPE_PRICE_ID_{STARTER,PROFESSIONAL,PRACTICE} env vars.
 """
 from __future__ import annotations
 
+import contextvars
 import os
+from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 import pricing_config
@@ -227,7 +229,28 @@ def access_state(business_row: Optional[Dict[str, Any]],
             "reason": "canceled" if status == "canceled" else "no_subscription"}
 
 
+# THE REHEARSAL (2026-09-04). Every gate short-circuits on enforcement_on(),
+# which made "what would the flip do?" unanswerable without flipping.
+# Inside rehearsal(), enforcement_on() answers True for THIS task only —
+# a contextvar, so a concurrent request on the same process keeps the
+# real value. billing_rehearsal uses it to ask every decision
+# hypothetically; nothing else should.
+_REHEARSAL: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "billing.rehearsal", default=False)
+
+
+@contextmanager
+def rehearsal():
+    token = _REHEARSAL.set(True)
+    try:
+        yield
+    finally:
+        _REHEARSAL.reset(token)
+
+
 def enforcement_on() -> bool:
+    if _REHEARSAL.get():
+        return True
     return (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on"
 
 

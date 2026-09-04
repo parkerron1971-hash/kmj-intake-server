@@ -491,6 +491,9 @@ app.include_router(lead_admin_diag_router)
 # Tauri app.
 from platform_console import router as platform_console_router
 app.include_router(platform_console_router)
+# What BILLING_ENFORCE=on would do today, without flipping it (2026-09-04). Owner-only.
+from billing_rehearsal import router as billing_rehearsal_router
+app.include_router(billing_rehearsal_router)
 # Dev Bridge (2026-08-19) — Mission Control's Dev Desk dispatches dev
 # tasks: the cloud lane fires @claude build issues, the local lane is
 # polled by Solution Space on Kevin's machine. /platform/dev-desk/*
