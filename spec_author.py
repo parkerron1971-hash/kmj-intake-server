@@ -126,7 +126,7 @@ Every real asset in the dossier gets a home on the page. Omitting real material 
 - A FOOTER. Always.
 - Real stats/proof points if provided (never invented — mark a confirm-then-publish placeholder only when the owner has signaled a number exists).
 
-THE DENSITY SKELETON — the default shape of a complete business site (deviate creatively in STYLE, never by omission of FUNCTION). Aim for 8-11 sections:
+THE DENSITY SKELETON — the default shape of a complete business site (deviate creatively in STYLE, never by omission of FUNCTION; where the WHAT A SITE OF THIS KIND MUST DECIDE block below names a different shape or a feature, that block wins). Aim for 8-11 sections:
 nav → full-viewport hero (display headline + real proof stats) → a brand moment (ticker/marquee/band) → services grid (all of them) → a second-family strip (method/studio/values) → portfolio with the real work (filters if 5+ pieces) → process steps → about with portrait → contact with form → footer.
 
 STRUCTURE — output the document in exactly this anatomy, plain text with section rules (=====) and numbered sections:
@@ -237,7 +237,7 @@ def _inventory_digest(ctx: Dict[str, Any],
 def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
                       prior_spec: str = "", feedback: str = "",
                       inventory: str = "", discovery: str = "",
-                      facts: str = "") -> str:
+                      facts: str = "", vertical: str = "") -> str:
     """Pure prompt assembly (testable, no IO). `dossier` is the canvas
     brief — everything the system knows, already compiled; `inventory`
     is the itemized asset list the coverage law binds to; `discovery`
@@ -274,6 +274,12 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
             facts.strip(),
             "",
         ]
+    if vertical.strip():
+        # WHAT A SITE OF THIS KIND MUST DECIDE (2026-09-04, the barbershop
+        # bench): the decisions a visitor to this kind of business comes
+        # for, which the density skeleton never named. See
+        # site_vertical_features.
+        parts += [vertical.strip(), ""]
     parts += [
         "== THE CURRENT SECTION PLAN (the page's chapters, in order) ==",
         _digest_plan(spec_plan),
@@ -514,9 +520,16 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
         facts_text = site_facts.facts_block(site_facts.build_facts(ctx, business_id))
     except Exception as e:
         logger.info(f"[spec] facts block skipped: {e}")
+    vertical_block = ""
+    try:
+        import site_vertical_features
+        vertical_block = site_vertical_features.block_for(
+            str((ctx.get("business") or {}).get("type") or ""))
+    except Exception as e:
+        logger.info(f"[spec] vertical features skipped: {e}")
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
                              inventory=inventory, discovery=disc,
-                             facts=facts_text)
+                             facts=facts_text, vertical=vertical_block)
     marks = _brand_mark_urls(ctx, business_id)
     work = [u for u in _image_urls(ctx) if u not in marks]
     text = (_call_llm(_SYSTEM, user, business_id,
