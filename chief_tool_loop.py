@@ -378,6 +378,15 @@ async def _file_proposal(client, biz: Dict[str, Any],
     except ValueError as e:
         return True, f"'{name}': {e}"
 
+    # The retire rule (outcome_ledger): a proposal verb this practitioner
+    # dismissed the last three times is off the table for two weeks. No
+    # model judgement involved; the ledger decides, the loop obeys.
+    import outcome_ledger
+    if action.get("type") in await asyncio.to_thread(outcome_ledger.retired_for, str(biz.get("id") or "")):
+        return True, (f"'{name}' is retired for this business for two weeks: they dismissed the "
+                      f"last {outcome_ledger.RETIRE_AFTER} in a row. Do not propose it; if it "
+                      f"matters, say so in your recap instead.")
+
     _calls_this_turn.set(_calls_this_turn.get() + 1)
     _write_calls.set(_write_calls.get() + 1)
     if _write_calls.get() >= MAX_WRITE_CALLS:

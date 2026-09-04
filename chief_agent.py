@@ -271,6 +271,8 @@ async def _run_soon(business_id: str) -> None:
 
 # ─── One run ──────────────────────────────────────────────────────────
 
+_PLAN_SYSTEM = """You are Chief, the chief of staff for {name}{kind}. Nobody is talking to you now: something happened in the business and you are about to act on it, between conversations. Before you touch anything, write your plan for THIS look in two or three plain sentences: what came in, what you will do about it and why, and what you will leave alone (a lead who already has a reply waiting, a move that would repeat one you made). If nothing is worth doing, your whole answer is one sentence that begins with the word Nothing and says why. No lists, no markdown, no tool calls here — this is the note that goes on record before you act."""
+
 _SYSTEM = """You are Chief, the chief of staff for {name}{kind}. Nobody is talking to you right now: you are acting on your own, between conversations, because something happened in the business. The practitioner will read what you did the next time they open the app.
 
 WHAT YOU MAY DO
@@ -316,8 +318,7 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
     business_id = str(biz["id"])
     kind = f", a {biz.get('type')} business" if biz.get("type") else ""
     system = _SYSTEM.format(name=biz.get("name") or "this business", kind=kind)
-    user = ("New since you last looked:\n" + _event_lines(events)
-            + "\n\nLook, act where it helps, then write the recap.")
+    user = "New since you last looked:\n" + _event_lines(events)
     # _event_lines ran the defuser; its taint (if any) belongs to this
     # run and is read by the gate. It is reset at the top of the NEXT run.
 
@@ -336,23 +337,46 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
         cos._UNTRUSTED_TAINT.set(0)
     except Exception:
         pass
-    ctl.reset_turn(writes_allowed=True, surface="agent", prompted=False)
-    tools = ctl.tool_definitions_for_turn(True)
     started = _now()
+    # What came of the last thirty days of moves (outcome_ledger): the
+    # next move is shaped by what landed, not by nothing.
+    import outcome_ledger
+    digest = await outcome_ledger.digest_async(business_id)
+    if digest:
+        user += "\n\n" + "\n".join(digest)
+    model = chief_models.model_for("chat", plan)
+    name = biz.get("name") or "this business"
     async with httpx.AsyncClient() as client:
         with billing_context.bill_to(business_id):
-            raw = await cos._call_claude(
-                client, system, [{"role": "user", "content": user}],
-                max_tokens=chief_models.max_tokens_for("chat", default=900),
-                enable_web_search=False, business_id=business_id,
-                model=chief_models.model_for("chat", plan),
-                read_tools=tools, tool_biz=biz)
-        taken = ctl.writes_this_turn()
+            # 1. The plan, BEFORE anything is touched — the autonomy
+            #    spec's §2.2 rule. No tools on this call: it cannot act,
+            #    and it is cheap. A plan that begins "Nothing" ends here.
+            ctl.reset_turn(writes_allowed=False, surface="agent", prompted=False)
+            raw_plan = await cos._call_claude(
+                client, _PLAN_SYSTEM.format(name=name, kind=kind),
+                [{"role": "user", "content": user + "\n\nWrite your plan for this look."}],
+                max_tokens=220, enable_web_search=False, business_id=business_id, model=model)
+            _, reasoning = cos._extract_actions_and_clean(raw_plan or "")
+            reasoning = (reasoning or "").strip()[:600] or "No plan written."
+            idle = reasoning.lower().startswith("nothing")
+            raw = ""
+            if not idle:
+                ctl.reset_turn(writes_allowed=True, surface="agent", prompted=False)
+                tools = ctl.tool_definitions_for_turn(True)
+                raw = await cos._call_claude(
+                    client, system,
+                    [{"role": "user", "content": user + "\n\nYOUR PLAN FOR THIS LOOK:\n" + reasoning
+                      + "\n\nLook, act where it helps, then write the recap."}],
+                    max_tokens=chief_models.max_tokens_for("chat", default=900),
+                    enable_web_search=False, business_id=business_id,
+                    model=model, read_tools=tools, tool_biz=biz)
+        taken = ctl.writes_this_turn() if not idle else []
         # Tags do nothing on this surface. If the model emitted any, they
         # are stripped from the recap and COUNTED, never executed — the
         # count is the signal that the prompt above is not landing.
         tag_actions, recap = cos._extract_actions_and_clean(raw or "")
-        recap = (recap or "").strip() or "I looked at what came in and nothing needed doing."
+        recap = (recap or "").strip() or (reasoning if idle else
+                                          "I looked at what came in and nothing needed doing.")
         if tag_actions:
             logger.warning(f"[agent] {business_id[:8]} emitted {len(tag_actions)} "
                            f"[ACTION:] tag(s) on the agent surface — ignored")
@@ -364,6 +388,8 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
             "failed": [str(t.get("type")) for t in taken
                        if isinstance(t, dict) and cos._action_failed(t)],
             "recap": recap[:600],
+            "reasoning": reasoning,
+            "idle": idle,
             "tags_ignored": len(tag_actions),
             "duration_ms": int((_now() - started).total_seconds() * 1000),
         }
@@ -407,8 +433,9 @@ async def _leave_trace(client, biz: Dict[str, Any], taken: List[Dict[str, Any]],
             audit_log.record, business_id, actor_type="chief", actor_id="agent",
             verb="agent_run", ok=not record["failed"],
             error=(", ".join(record["failed"])[:500] or None),
-            summary=record["recap"][:240],
+            summary=(record.get("reasoning") or record["recap"])[:240],
             payload={"events": record["events"], "actions": record["actions"],
+                     "idle": bool(record.get("idle")),
                      "tags_ignored": record["tags_ignored"]},
             source="agent", authorized_by="agent:unattended")
     except Exception as e:
@@ -422,10 +449,20 @@ async def _leave_trace(client, biz: Dict[str, Any], taken: List[Dict[str, Any]],
             "duration_ms": record["duration_ms"],
             "error": (", ".join(record["failed"])[:300] or None),
             "arg_keys": sorted(set(record["events"])),
-            "detail": {"actions": record["actions"], "tags_ignored": record["tags_ignored"]},
+            "detail": {"actions": record["actions"], "tags_ignored": record["tags_ignored"],
+                       "reasoning": (record.get("reasoning") or "")[:300],
+                       "idle": bool(record.get("idle"))},
         }, prefer="return=minimal")
     except Exception as e:
         logger.warning(f"[agent] agent_runs row failed: {e}")
+
+    # 5. The outcome ledger: one row per move, filled in later by the
+    #    reconciler with what came of it.
+    try:
+        import outcome_ledger
+        await asyncio.to_thread(outcome_ledger.record_moves, business_id, "agent", taken)
+    except Exception as e:
+        logger.warning(f"[agent] outcome rows failed: {e}")
 
 
 # ─── The switch ───────────────────────────────────────────────────────

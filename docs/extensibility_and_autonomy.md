@@ -205,7 +205,20 @@ Ship **Tier 1 only** first. Instrument: % of active practitioners with ≥1 enab
   act turn runs, which is §2.2's pre-action-reasoning rule made real;
   the event runs still write theirs after. Open assignments are capped
   by plan (1 / 3 / 10). Same switch as the standing agent.
+- **Proposals with a life (`proposal_life.py`, phase two):** a filed
+  proposal expires after 48 hours, reminds once after 6, and reaches the
+  owner's phone the moment it is filed with Yes, do that / Not now — the
+  tap opens the app, which approves through the audited /approvals door.
+- **The outcome ledger (`outcome_ledger.py`, phase three):** one
+  `chief_moves` row per move the agent or an assignment makes; a
+  six-hourly reconciler fills in approved / dismissed / expired / replied
+  / completed / ignored / met / missed from plain reads. A digest of the
+  last thirty days rides every prompt (chat, event runs, assignment
+  thinks). The retire rule: a proposal verb dismissed three times running
+  is refused by the tool loop for two weeks, and the practitioner is told
+  once. Event runs now write their plan BEFORE the act call too, so §2.2's
+  pre-action reasoning holds on both surfaces.
 - **Still owed from §2.2 / §2.4:** permission scopes finer than the one
-  boolean; the class-B recall window; proposals that expire and remind;
-  outcome tracking on `agent_runs` and the learning loop that reads it
-  (phases two and three of the same plan).
+  boolean, and the class-B recall window. Trust Track graduation stays a
+  per-category grant the practitioner makes; the ledger's ratios feed the
+  weekly report rather than a switch.

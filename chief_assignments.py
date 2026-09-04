@@ -661,6 +661,10 @@ async def work(biz: Dict[str, Any], row: Dict[str, Any], now: Optional[datetime]
     moves = list(row.get("moves") or []) if isinstance(row.get("moves"), list) else []
     pending = await asyncio.to_thread(_pending_proposals, moves)
     the_brief = brief(row, now, pending)
+    import outcome_ledger
+    digest = await outcome_ledger.digest_async(bid)
+    if digest:
+        the_brief += "\n\n" + "\n".join(digest)
     try:
         import feature_gates
         plan = feature_gates.plan_of(biz)
@@ -797,6 +801,12 @@ async def _leave_trace(client, biz: Dict[str, Any], taken: List[Dict[str, Any]],
         }, prefer="return=minimal")
     except Exception as e:
         logger.warning(f"[assignments] agent_runs row failed: {e}")
+    try:
+        import outcome_ledger
+        await asyncio.to_thread(outcome_ledger.record_moves, bid, SURFACE, taken,
+                                assignment_id=record.get("assignment_id"))
+    except Exception as e:
+        logger.warning(f"[assignments] outcome rows failed: {e}")
 
 
 # ─── Chief's context ─────────────────────────────────────────────────
