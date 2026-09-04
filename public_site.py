@@ -7276,7 +7276,10 @@ async def public_start(request: Request):
     # `plan` lets a price card say which tier was clicked. Whitelisted to
     # the real tier keys so the URL can't be used to smuggle anything.
     plan = (request.query_params.get("plan") or "").strip().lower()
-    if plan in ("starter", "professional", "practice"):
+    # founder (2026-09-04): the founding-seat strip on the home page links
+    # here; checkout already knows the key (stripe_billing: plan_key
+    # startswith "founder") and enforces the seat cap.
+    if plan in ("starter", "professional", "practice", "founder"):
         carried["plan"] = plan
     url = MARKETING_APP_URL + (f"/?{urlencode(carried)}" if carried else "/")
     return RedirectResponse(url=url, status_code=302)

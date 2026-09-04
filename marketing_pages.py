@@ -2136,24 +2136,132 @@ def _tier_dials() -> dict:
     return out
 
 
-def _price_cards_html() -> str:
-    """The home page's three price cards, numbers from the dials."""
-    d = _tier_dials()
+# Annual prices are ten months for twelve (the Stripe annual price
+# objects are exactly that). The per-month figure the switch shows is
+# the annual total over twelve, rounded down — never a made-up number.
+ANNUAL_MONTHS = 10
 
-    def card(plan: str, name: str, blurb: str, mid: bool = False) -> str:
+
+def _about(n: int) -> int:
+    """'about' means rounded down to a round number, never up."""
+    return (n // 25) * 25 if n >= 100 else n
+
+
+def _credits_in_words(credits: int, *, chief_works: bool, builds: int = 1) -> str:
+    """The line under the credit number: what a month looks like. A
+    conversation is one chat turn at the chat price; a site build is
+    the base build price. Kevin's framing (2026-09-04): a plan that
+    says "3,000 credits" invites the arithmetic; one that says "about
+    250 conversations, and Chief works between them" does not."""
+    import pricing_config
+    per_turn = max(1, pricing_config.chat_price())
+    build = max(1, pricing_config.build_base())
+    conversations = _about(credits // per_turn)
+    after = _about(max(0, (credits - builds * build) // per_turn))
+    noun = "a site build" if builds == 1 else f"{ {2: 'two', 3: 'three'}.get(builds, builds)} site builds"
+    out = f"about {conversations:,} conversations, or {noun} and {after:,}"
+    return out + (" &mdash; and Chief works between them" if chief_works else "")
+
+
+_FOUNDER_CACHE: dict = {"taken": None, "at": 0.0}
+FOUNDER_CACHE_S = 300
+
+
+def _founder_seats_taken_sync() -> int:
+    """The same count checkout enforces (stripe_billing), read here with
+    the service role and cached five minutes. A page that said "43 left"
+    for three weeks would read as a trick; this one reads the seats."""
+    import time
+    import sb_clients
+    import stripe_billing
+    now = time.monotonic()
+    if _FOUNDER_CACHE["taken"] is not None and now - _FOUNDER_CACHE["at"] < FOUNDER_CACHE_S:
+        return int(_FOUNDER_CACHE["taken"])
+    ids = stripe_billing._founder_price_ids()
+    taken = 0
+    if ids:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?subscription_plan=in.({','.join(ids)})"
+            "&subscription_status=in.(active,trialing,past_due)&select=id&limit=500") or []
+        taken = len(rows) if isinstance(rows, list) else 0
+    _FOUNDER_CACHE.update(taken=taken, at=now)
+    return taken
+
+
+def _founder_strip_html() -> str:
+    """The founding seat, above the cards: fifty at the founder price,
+    locked while the seat is held, with the LIVE count. Gone at zero —
+    the strip stays as one quiet line saying so, because that tells the
+    next visitor the offer was real. Absent entirely when no founder
+    price exists (fail-soft: the section is the three cards as before)."""
+    import pricing_config
+    import stripe_billing
+    try:
+        if not stripe_billing._founder_price_ids():
+            return ""
+        limit = stripe_billing._founder_seat_limit()
+        taken = _founder_seats_taken_sync()
+        left = max(0, limit - taken)
+        price = pricing_config.tier_price_cents().get("founder", 0) // 100
+        credits = pricing_config.founder_credits()
+    except Exception:
+        return ""
+    pct = 0 if limit <= 0 else min(100, int(round(100 * taken / limit)))
+    if left <= 0:
+        return f"""
+    <div class="founder is-gone reveal reveal-delay-1" id="founderStrip" data-left="0">
+      <div class="seal">Founding seats</div>
+      <div class="copy"><b>The {limit} founding seats are gone.</b> The price on this page is the price.
+        <div class="meter" aria-hidden><i style="width:100%"></i></div>
+        <div class="left">0 of {limit} seats left</div>
+      </div>
+    </div>"""
+    return f"""
+    <div class="founder reveal reveal-delay-1" id="founderStrip" data-left="{left}">
+      <div class="seal">Founding seat</div>
+      <div class="copy"><b>{limit} founding seats at ${price} a month, locked for as long as you keep it.</b>
+        Professional with {credits:,} AI actions a month. When the last seat goes, the price on this page is the price.
+        <div class="meter" aria-hidden><i style="width:{pct}%"></i></div>
+        <div class="left">{left} of {limit} seats left</div>
+      </div>
+      <a href="/start?plan=founder">Take a founding seat &rarr;</a>
+    </div>"""
+
+
+def _price_cards_html() -> str:
+    """The home page's three price cards, numbers from the dials. One
+    card is lit (Professional — the one Kevin wants people to reach),
+    the other two stand quiet; the credit number carries its translation;
+    the figure carries its annual twin for the switch."""
+    d = _tier_dials()
+    import pricing_config
+    credits_n = pricing_config.tier_credits()
+
+    def card(plan: str, name: str, blurb: str, connector: str, mid: bool = False) -> str:
         t = d[plan]
         seats = "1 seat" if t["seats"] == 1 else f"{t['seats']} team seats"
         biz = "1 business" if t["businesses"] == 1 else f"{t['businesses']} businesses"
         banks = ("Unlimited bank connections" if t["banks"] == "Unlimited"
                  else f"{t['banks']} bank connections")
         model_li = f"<li>{t['analysis']} deep analysis</li>" if t["analysis"] else ""
+        monthly = t["price_num"]
+        annual_total = monthly * ANNUAL_MONTHS
+        annual_month = annual_total // 12
+        words = _credits_in_words(credits_n[plan], chief_works=(plan != "starter"),
+                                  builds=(3 if plan == "practice" else 1))
+        if plan == "practice":
+            words = words.replace(" &mdash; and Chief works between them", "")
+        ribbon = '<div class="ribbon">Most people land here</div>' if mid else ""
         return f"""
       <div class="price-card{' is-mid' if mid else ''}">
+        {ribbon}
         <div class="price-name">{name}</div>
-        <div class="price-fig"><b class="pc-num" data-to="{t['price_num']}" data-prefix="$">{t['price']}</b><span>/month</span></div>
+        <div class="price-fig"><b class="pc-num" data-monthly="{monthly}" data-annual="{annual_month}" data-to="{monthly}" data-prefix="$">{t['price']}</b><span>/month</span></div>
+        <div class="price-billed" data-annual="${annual_total:,} a year, billed once">&nbsp;</div>
         <p>{blurb}</p>
         <ul class="price-facts">
-          <li>{t['credits']} AI actions a month</li>
+          <li class="credits">{t['credits']} AI actions a month<small>{words}</small></li>
+          <li>{connector}</li>
           {model_li}
           <li>{seats} &middot; {biz}</li>
           <li>{banks}</li>
@@ -2163,7 +2271,8 @@ def _price_cards_html() -> str:
 
     return (
         card("starter", "Starter",
-             "The full workspace. Contacts, invoicing, scheduling, content, goals, your site, and Chief.")
+             "The full workspace. Contacts, invoicing, scheduling, content, goals, your site, and Chief.",
+             "Connect your own AI, read-only")
         # 9/02: this card sold "Autopilot running overnight" as the
         # Professional difference. Autopilot has no gate — it is in
         # neither FEATURE_MIN_PLAN nor any has_feature() call — so it
@@ -2173,12 +2282,13 @@ def _price_cards_html() -> str:
         # block, so that is what it says now.
         + card("professional", "Professional",
                "Everything in Starter, plus the full accounting layer &mdash; closing, "
-               "1099s, the year-end package &mdash; and Chief on your books, your site "
-               "and your sourcing.",
+               "1099s, year-end &mdash; and Chief on your books, your site and your sourcing.",
+               "Your own AI can keep records here",
                mid=True)
         + card("practice", "Solutionist",
                "For the operator running everything through the system: "
-               "everything in Professional, plus room for a team and more than one business.")
+               "Professional, plus room for a team and more than one business.",
+               "Your own AI can keep records here")
     )
 
 
@@ -2878,6 +2988,61 @@ def render_home() -> str:
         transform:translateY(-1px);}
       .price-cta.is-mid{background:var(--accent);color:var(--ink-on-accent);border-color:transparent;
         box-shadow:0 6px 22px color-mix(in srgb, var(--accent) 30%, transparent);}
+      /* ── the section, lit (2026-09-04, Kevin: "make the tiers glow") ──
+         One card glows, not three: light only means something next to
+         dark. Professional lifts, glows, and carries a slow light along
+         its edge; the other two stand at 82% and come forward on hover. */
+      .grabber{display:inline-flex;align-items:center;gap:10px;margin-top:16px;font-family:var(--font-heading);
+        font-weight:600;font-size:13px;color:color-mix(in srgb, var(--accent) 70%, #fff);
+        border:1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        background:color-mix(in srgb, var(--accent) 10%, transparent);border-radius:999px;padding:6px 14px 6px 8px;}
+      .grabber .dot{width:8px;height:8px;border-radius:50%;background:color-mix(in srgb, var(--accent) 70%, #fff);
+        animation:pcPing 1.8s infinite;}
+      @keyframes pcPing{0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);}
+        70%{box-shadow:0 0 0 9px transparent;}100%{box-shadow:0 0 0 0 transparent;}}
+      .price-sub{color:var(--text-secondary);max-width:52ch;margin:12px auto 0;font-size:15.5px;}
+      .billing{display:inline-flex;border:1px solid var(--border-strong);border-radius:999px;padding:3px;
+        margin:16px auto 0;background:var(--surface);}
+      .billing button{font:600 12.5px var(--font-body);border:0;background:transparent;color:var(--text-secondary);
+        border-radius:999px;padding:6px 14px;cursor:pointer;}
+      .billing button[aria-pressed="true"]{background:var(--text-primary);color:var(--bg);}
+      .billing .save{font-size:11px;color:#F3C56B;margin-left:6px;}
+      .founder{max-width:1000px;margin:0 auto 18px;border:1px solid color-mix(in srgb, #F3C56B 45%, transparent);
+        background:linear-gradient(90deg, color-mix(in srgb, #F3C56B 10%, transparent), transparent 60%);
+        border-radius:14px;padding:14px 18px;display:grid;grid-template-columns:auto 1fr auto;gap:16px;align-items:center;}
+      @media (max-width:720px){.founder{grid-template-columns:1fr;}}
+      .founder .seal{font-family:var(--font-mono, monospace);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+        color:#F3C56B;border:1px solid color-mix(in srgb, #F3C56B 50%, transparent);border-radius:6px;padding:6px 8px;white-space:nowrap;}
+      .founder .copy{font-size:14px;color:var(--text-secondary);}
+      .founder .copy b{color:var(--text-primary);font-family:var(--font-heading);}
+      .founder .meter{height:4px;background:rgba(255,255,255,.08);border-radius:2px;margin-top:8px;overflow:hidden;max-width:320px;}
+      .founder .meter i{display:block;height:100%;background:#F3C56B;}
+      .founder .left{font-family:var(--font-mono, monospace);font-size:11px;color:#F3C56B;margin-top:6px;}
+      .founder a{font:700 13px var(--font-body);color:#0B0D12;background:#F3C56B;border-radius:10px;padding:11px 16px;
+        text-decoration:none;white-space:nowrap;}
+      .founder.is-gone{border-color:var(--border);background:transparent;}
+      .founder.is-gone .seal,.founder.is-gone .left{color:var(--text-muted);border-color:var(--border-strong);}
+      .founder.is-gone .meter i{background:var(--text-muted);}
+      .price-card{position:relative;}
+      .price-billed{font-size:11.5px;color:var(--text-muted);margin:-6px 0 10px;min-height:16px;font-variant-numeric:tabular-nums;}
+      .price-facts li.credits{color:var(--text-primary);font-weight:600;}
+      .price-facts li.credits small{display:block;font-weight:400;color:var(--text-muted);font-size:12px;margin-top:2px;}
+      .ribbon{position:absolute;top:-13px;left:50%;transform:translateX(-50%);font:700 11px var(--font-body);
+        letter-spacing:.06em;text-transform:uppercase;color:var(--ink-on-accent);background:var(--accent);
+        border-radius:999px;padding:6px 12px;white-space:nowrap;box-shadow:0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent);}
+      .is-lit-grid .price-card.is-mid{transform:translateY(-8px);border-color:transparent;
+        background:color-mix(in srgb, var(--accent) 9%, var(--surface));
+        box-shadow:0 30px 80px color-mix(in srgb, var(--accent) 22%, transparent),0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);}
+      @property --pcA{syntax:'<angle>';inherits:false;initial-value:0deg;}
+      .is-lit-grid .price-card.is-mid::before{content:"";position:absolute;inset:-1px;border-radius:17px;padding:1px;
+        background:conic-gradient(from var(--pcA), transparent 0 40%, color-mix(in srgb, var(--accent) 60%, #fff) 50%, transparent 60% 100%);
+        -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+        animation:pcSpin 6s linear infinite;pointer-events:none;}
+      @keyframes pcSpin{to{--pcA:360deg;}}
+      .is-lit-grid .price-card:not(.is-mid){opacity:.82;transition:opacity .2s,border-color .2s;}
+      .is-lit-grid .price-card:not(.is-mid):hover{opacity:1;border-color:var(--border-strong);}
+      @media (max-width:860px){.is-lit-grid .price-card.is-mid{transform:none;}}
+      @media (prefers-reduced-motion:reduce){.is-lit-grid .price-card.is-mid::before,.grabber .dot{animation:none;}}
       .price-cta.is-mid:hover{background:var(--accent-2);}
       @media (prefers-reduced-motion: reduce){.price-cta:hover{transform:none;}}
       .price-note{max-width:620px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--text-muted);}
@@ -3776,14 +3941,16 @@ def render_home() -> str:
   <div class="container">
     <div class="section-head reveal">
             <span data-spine class="eyebrow">What it costs</span>
-      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Priced for one person running the whole thing.</h2>
-    </div>
-    <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
+      <div class="grabber reveal reveal-delay-1"><span class="dot" aria-hidden></span> Chief works while you work &mdash; every plan, from day one</div>
+      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">One price. The whole business. A chief of staff who never clocks out.</h2>
+      <div class="billing reveal reveal-delay-2" role="group" aria-label="Billing period"><button type="button" data-period="monthly" aria-pressed="true">Monthly</button><button type="button" data-period="annual" aria-pressed="false">Annual <span class="save">2 months free</span></button></div>
+    </div>""" + _founder_strip_html() + """
+    <div class="price-grid is-lit-grid reveal reveal-delay-2">""" + _price_cards_html() + """
     </div>
     <div class="price-doors reveal reveal-delay-3">
       <a class="price-compare" href="/compare">Compare every plan &rarr;</a>
     </div>
-    <p class="price-note reveal">Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom. <a href="/get-started" style="color:var(--accent);">Talk to us</a>. Every plan starts with __TRIAL_FREE__, and you can change tier or cancel yourself at any time.</p>
+    <p class="price-note reveal">Every plan starts with __TRIAL_FREE__, and you can change tier or cancel yourself at any time. Bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>.</p>
   </div>
 </section>
 
@@ -4177,6 +4344,30 @@ def render_home() -> str:
       if (p < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
+  }
+
+  /* Monthly / annual (2026-09-04). The figure carries both numbers;
+     the switch swaps the text and the count-up target together, so a
+     card that has not arrived yet still counts up to the right price. */
+  var billing = document.querySelector('.pricing .billing');
+  if (billing) {
+    billing.addEventListener('click', function (ev) {
+      var btn = ev.target.closest('button[data-period]');
+      if (!btn) return;
+      var annual = btn.getAttribute('data-period') === 'annual';
+      billing.querySelectorAll('button[data-period]').forEach(function (b) {
+        b.setAttribute('aria-pressed', (b.getAttribute('data-period') === 'annual') === annual ? 'true' : 'false');
+      });
+      cards.forEach(function (card) {
+        var b = card.querySelector('.pc-num');
+        var billed = card.querySelector('.price-billed');
+        if (!b) return;
+        var v = annual ? b.getAttribute('data-annual') : b.getAttribute('data-monthly');
+        b.setAttribute('data-to', v);
+        b.textContent = '$' + v;
+        if (billed) billed.innerHTML = annual ? billed.getAttribute('data-annual') : '&nbsp;';
+      });
+    });
   }
 
   function arrive(card, i) {

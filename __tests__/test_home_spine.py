@@ -103,7 +103,11 @@ def test_the_page_holds_its_shape():
     assert sections <= 9, f"{sections} sections — the page is growing back"
     prose = re.sub(r"<style.*?</style>|<script.*?</script>", " ", body, flags=re.S)
     words = len(re.sub(r"<[^>]+>", " ", prose).split())
-    assert words <= 2400, f"{words} words on the home page"
+    # 2400 → 2450 on 2026-09-04: the pricing section gained the line under
+    # each credit number ("about 250 conversations, or a site build and
+    # 200") and the monthly/annual switch — information, not prose — and
+    # the redundant plan-note sentences were cut to pay for most of it.
+    assert words <= 2450, f"{words} words on the home page"
 
 def test_the_page_offers_a_door_before_the_price():
     """The rooms section is the only stop between the fold and pricing.
