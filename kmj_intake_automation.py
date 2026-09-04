@@ -241,6 +241,9 @@ app.include_router(chief_assignments_router)
 # Outcomes (2026-09-04): what came of Chief's moves, per business.
 from outcome_ledger import router as outcome_ledger_router
 app.include_router(outcome_ledger_router)
+# Chief's week (2026-09-04): the report the Home card and Monday read.
+from chief_week import router as chief_week_router
+app.include_router(chief_week_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
 app.include_router(email_router)
@@ -1439,6 +1442,15 @@ async def startup():
                           "interval", hours=6, id="outcome_ledger")
     except Exception as e:
         print(f"   [warn] outcome ledger tick not scheduled: {e}")
+    # Chief's week (2026-09-04): Monday, after the morning brief — what
+    # Chief did on its own, what came of it, what is waiting. Counted
+    # from the ledger; no model. Kill switch: CHIEF_WEEK=off.
+    try:
+        import chief_week as _chief_week
+        scheduler.add_job(g("chief_week", _chief_week.weekly_tick),
+                          "cron", day_of_week="mon", hour=13, minute=30, id="chief_week")
+    except Exception as e:
+        print(f"   [warn] chief week job not scheduled: {e}")
     # Shared rate windows (2026-09-04): drop rows nobody touched in a
     # day, and re-arm the shared path so a migration applied after boot
     # is picked up without a restart.
