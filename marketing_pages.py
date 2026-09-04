@@ -5538,7 +5538,7 @@ def render_about() -> str:
     return _render_shell(
         title="About",
         description=("Why the Solutionist System exists: one workspace for the person who runs the "
-                     "whole business, instead of eight tools that never speak to each other."),
+                     "whole business, instead of seven tools that never speak to each other."),
         content_html=body, path="/about", active="about", extra_css=extra_css,
     )
 
