@@ -1522,8 +1522,9 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
   [ACTION:{{"type":"update_module_entry","entry_id":"<uuid>","data":{{"status":"done"}}}}]  — patches the entry's data; existing fields are preserved.
   [ACTION:{{"type":"delete_module_entry","entry_id":"<uuid>"}}]  — soft-deletes (sets status='deleted').
   [ACTION:{{"type":"navigate","tab":"build","page":"module:<uuid>"}}]  — opens a specific module in BUILD.
-  [ACTION:{{"type":"upgrade_module_archetype","module_name":"Bookings"}}]
-    — Phase C.1.1 — refine an existing module to apply the latest discipline (currently: customer-facing field flags + service catalog for booking_calendar). Renders as an "Upgrade" proposal card in the dock with the same accept/reject/revise loop. The practitioner sees BOTH views (their internal calendar AND the customer form) before accepting. On accept, the existing module is UPDATED in place — entries preserved, schema refined. Use module_id when known; module_slug or module_name as fallbacks.
+  [ACTION:{{"type":"upgrade_module_archetype","module_name":"Credit Profiles"}}]
+    — Re-reads an existing module against the CURRENT surfaces in WHAT YOU BUILD WELL and proposes the refined version. Two things it does: (a) a module sitting on the plain list (its banner says "a purpose-built version may fit") whose shape now matches one of those surfaces — a score tracked toward a goal, staged work, an occasion with people, paperwork to sign — comes back ON that surface with its rows intact; (b) a Bookings module gets the customer-facing form and canonical service catalog. Renders as an "Upgrade" proposal card in the dock with the same accept/reject/revise loop. On accept, the existing module is UPDATED in place — entries preserved. Use module_id when known; module_slug or module_name as fallbacks.
+    — NEVER tell the practitioner a shape listed in WHAT YOU BUILD WELL "isn't supported yet", and never offer queue_build_request for one — emit this action and let the card show them. queue_build_request is for shapes that are on NO surface in that list.
     — ROUTING (read in order — first match wins):
        1. INTAKE PHRASING — practitioner DESCRIBES what they want to track in their own words, often names 2+ things, may or may not give exact field names:
           "I need a way to track X" / "I want to track Y" / "build me something for Z" /
@@ -1536,8 +1537,10 @@ ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MOD
           IMPORTANT: even if the intake names 3 things (e.g. "booking + rewards + birthday discounts"), emit ONE propose_module_from_intake — the generator handles decomposition itself (G13). Do NOT loop ensure_module per item. Do NOT split the intake into a separate follow-up question for one of the items.
        2. UPGRADE PHRASING — practitioner asks to refresh an existing module to the latest architecture:
           "upgrade my [module name]" / "refine my [module name]" / "apply the latest stuff to my [module name]" /
-          "make my [module name] customer-facing" / "add the customer form to [module name]"
-          → upgrade_module_archetype with module_name (or module_slug / module_id if known). One action, one upgrade card.
+          "make my [module name] customer-facing" / "add the customer form to [module name]" /
+          "upgrade my [module name] to the purpose-built version" / "it says a purpose-built version may fit" /
+          "give [module name] the chart / the board / the goal line"
+          → upgrade_module_archetype with module_name (or module_slug / module_id if known). One action, one upgrade card. Do NOT run inspect_module first to decide whether to — inspect says whether it DISPLAYS, not whether a better surface exists; the upgrade card answers that.
        3. DIRECT COMMAND with explicit name + explicit field list — e.g. "create a module called Client Progress with fields client, status, notes" → ensure_module.
        4. "add to my [module name]" → create_module_entry.
        5. "show / list / what's in my [module name]" → list_module_entries.

@@ -241,3 +241,22 @@ def test_chief_prompt_source_carries_the_palette():
 def test_every_metadata_entry_has_a_pitch():
     for name, meta in msg.ARCHETYPE_METADATA.items():
         assert (meta.get("pitch") or "").strip(), f"{name} has no pitch for Chief"
+
+
+# ─── the sentence that made Chief refuse (2026-09-05, live) ──────────
+
+def test_chief_prompt_does_not_describe_upgrade_as_booking_only():
+    """Live: Kevin pressed 'Ask Chief to upgrade it' on Credit Profiles and
+    Chief answered that the upgrade 'currently only refines one archetype —
+    booking_calendar' and offered a build request instead. The handler had
+    no such guard; Chief was reading its own action description, which
+    still said so. The prompt must describe the upgrade as re-reading the
+    module against the current palette, and must forbid offering a build
+    request for a shape the palette already has."""
+    import chief_of_staff  # noqa: F401 — import order (circular)
+    import chief_prompt
+    import inspect
+    src = inspect.getsource(chief_prompt)
+    assert "service catalog for booking_calendar). Renders" not in src
+    assert "WHAT YOU BUILD WELL" in src.split("upgrade_module_archetype", 1)[1][:1500]
+    assert "never offer queue_build_request for one" in src
