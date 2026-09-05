@@ -6529,7 +6529,12 @@ async def handle_lead_intake(req: LeadIntakeRequest,
 
     # 1. Insert into Supabase
     supabase_url = os.environ.get("SUPABASE_URL", "")
-    supabase_key = os.environ.get("SUPABASE_ANON", "")
+    # SERVICE ROLE (2026-09-01, RLS_MODEL.md Rule 1). This wrote
+    # marketing_leads — the table lead_admin.py reads, holding real
+    # acquisition leads — with the key that ships in the browser
+    # bundle. Service-role can do everything anon could, so the swap
+    # cannot break a working insert.
+    supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     inserted_id = None
     if supabase_url and supabase_key:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
