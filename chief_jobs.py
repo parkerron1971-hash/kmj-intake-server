@@ -681,6 +681,12 @@ async def rebuild_site_endpoint(req: _RebuildReq,
                           f"/businesses?id=eq.{req.business_id}&owner_id=eq.{uid}&select=id&limit=1")
         if not owned:
             raise HTTPException(403, "not your business")
+        # A hand-built site is code (site_adopt.py): composing over it
+        # would be undone by the next deploy. The Studio hides its build
+        # door for such a site; this is the same refusal at the endpoint.
+        block = await asyncio.to_thread(_hand_built_block, req.business_id)
+        if block:
+            raise HTTPException(409, f"This site is hand-built: {block}")
         params: Dict[str, Any] = {}
         if req.refine:
             params["refine"] = True
@@ -700,6 +706,14 @@ async def rebuild_site_endpoint(req: _RebuildReq,
     if (job or {}).get("deduped"):
         out["deduped"] = True
     return out
+
+
+def _hand_built_block(business_id: str) -> Optional[str]:
+    try:
+        import site_adopt
+        return site_adopt.hand_built_block_for(business_id)
+    except Exception:
+        return None
 
 
 class _SpecJobReq(BaseModel):

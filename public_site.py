@@ -815,6 +815,16 @@ def _apply_manual_source(html: str, business_id: Optional[str],
             html = resolve_html_overrides(html, business_id)
         except Exception as e:
             logger.info(f"[manual-site] overrides skipped: {e}")
+        # Studio Edit Mode (2026-09-05): the page carries data-override-
+        # target attributes, so it can answer the Studio's click-to-edit
+        # bridge exactly like a composed page — but only the composer path
+        # injected the listener, so Edit on a hand-built site stayed dark.
+        # Idempotent, inert outside the Studio frame, soft-fails.
+        try:
+            from agents.edit_mode.injector import inject_edit_mode_script
+            html = inject_edit_mode_script(html)
+        except Exception as e:
+            logger.info(f"[manual-site] edit-mode script skipped: {e}")
     if _MANUAL_EMAIL_TOKEN in html:
         email = _business_public_email(biz_settings)
         if email:

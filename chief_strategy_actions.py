@@ -375,13 +375,29 @@ async def handle_site_health(client, biz, action) -> Dict:
     issues: List[str] = []
     healthy: List[str] = []
 
-    for c in ((cfg.get("quality_report") or {}).get("checks") or []):
-        if not c.get("ok"):
-            issues.append(f"gate '{c.get('name')}': {str(c.get('detail'))[:110]}")
-    if not any(i.startswith("gate") for i in issues):
-        healthy.append("quality gate clean")
+    # A hand-built site (site_adopt.py): the quality gate, the design
+    # brief and the banked design all describe the composed page this one
+    # REPLACED — reading them here reported the old build's troubles as
+    # today's. Its own lines instead; the live checks below still apply.
+    hand_built = False
+    try:
+        import site_adopt
+        hand_built = site_adopt.is_hand_built(cfg)
+        if hand_built:
+            _h, _i = site_adopt.health_lines(cfg)
+            healthy.extend(_h)
+            issues.extend(_i)
+    except Exception:
+        hand_built = False
 
-    if cfg.get("dro_failure"):
+    if not hand_built:
+        for c in ((cfg.get("quality_report") or {}).get("checks") or []):
+            if not c.get("ok"):
+                issues.append(f"gate '{c.get('name')}': {str(c.get('detail'))[:110]}")
+        if not any(i.startswith("gate") for i in issues):
+            healthy.append("quality gate clean")
+
+    if cfg.get("dro_failure") and not hand_built:
         issues.append("last compose ran WITHOUT its design brief "
                       f"({str((cfg.get('dro_failure') or {}).get('detail'))[:80]}) "
                       "— fix: run a recompose (refine keeps the current look)")
@@ -398,7 +414,7 @@ async def handle_site_health(client, biz, action) -> Dict:
                           "shifted times) — fix: open Availability and Save once")
     except Exception:
         pass
-    if cfg.get("previous_compose"):
+    if cfg.get("previous_compose") and not hand_built:
         healthy.append("a previous design is banked (\"go back\" works)")
     if site.get("status") != "published":
         issues.append(f"site status is '{site.get('status')}' — not published")
