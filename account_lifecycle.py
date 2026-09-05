@@ -110,6 +110,11 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "vertical_knowledge":      "Feed 2 cross-account learning; no per-business rows on purpose",
     "library_gap_log":         "module-library learning; SET NULL on business delete, kept for the platform",
     "inference_cache":         "Arc 20 inference cache; platform-side, regenerable",
+    # An employee's SSN is Fernet ciphertext keyed to the platform's
+    # TIN_ENCRYPTION_KEY: unreadable outside this deployment, and an
+    # SSN must never travel in an export ZIP anyway. Deleting the
+    # business cascades employees → this table, so nothing lingers.
+    "employee_tax_profiles":   "W-4 + encrypted SSN; never exported, cascades from employees on delete",
     "inference_gate_decisions": "Arc 20 gate decisions; platform-side learning about the gate, not practitioner records",
     # Keyed to a person or to the platform, not to a business.
     "email_suppressions":      "recipient-keyed deliverability protection; deleting it re-mails bounces",
@@ -266,6 +271,13 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "coa_external_mappings",  # references chart_of_accounts rows
     "chart_of_accounts",
     "quickbooks_connections",
+    # Pay your team (2026-09-05): line items reference runs and
+    # employees; runs reference employees through the items. The W-4
+    # profile (SSN ciphertext) is NOT exported — see EXPORT_EXCLUDED —
+    # and cascades from employees on delete.
+    "pay_run_items",
+    "pay_runs",
+    "employees",
     # Payroll/contractors — transfers reference contractors.
     "outbound_transfers",
     "payroll_interest",

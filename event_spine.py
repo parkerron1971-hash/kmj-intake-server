@@ -217,6 +217,18 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
                   "ask on a visitor conversation)",
         "payload": ["conversation_id", "reason"],
     },
+    # ── Pay your team (payroll data layer, 2026-09-05) ────────────
+    # Approval freezes a pay run's numbers; it moves no money. `paid`
+    # is the owner saying they paid from their own bank (or, later, a
+    # payout rail confirming). Bookkeeping reads these off the spine.
+    "pay_run_approved": {
+        "source": "payroll_router /payroll/runs/{id}/approve",
+        "payload": ["pay_run_id", "pay_date", "employees", "net", "federal_941"],
+    },
+    "pay_run_paid": {
+        "source": "payroll_router /payroll/runs/{id}/mark-paid",
+        "payload": ["pay_run_id", "pay_date", "net", "rail"],
+    },
 }
 
 
