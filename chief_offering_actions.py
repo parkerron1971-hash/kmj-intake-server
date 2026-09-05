@@ -424,6 +424,14 @@ async def handle_edit_site_text(client, biz, action) -> Dict:
                      "I couldn't save that edit just now — try again in a moment")
     if not manual:
         _site_text_refresh_if_composed(biz_id)
+    else:
+        # A hand-built page is live at once, so look at it at once: the
+        # free geometry pass only (no vision call for a one-line edit).
+        try:
+            import site_check
+            site_check.run_in_background(biz_id, reason="edit", vision=False)
+        except Exception:
+            pass
     when = "Live now." if manual else "Re-rendering now — live in a moment."
     label = (f"✏️ Site updated ({hit['page']} page): “{hit['current'][:80]}” → "
              f"“{text[:80]}”. {when} Say 'undo' to put it back.")
@@ -431,6 +439,38 @@ async def handle_edit_site_text(client, biz, action) -> Dict:
             "target_path": hit["target_path"], "page": hit["page"],
             "previous_text": hit["current"], "text": text,
             "label": label, "nav": _nav("build")}
+
+
+async def handle_check_site(client, biz, action) -> Dict:
+    """Look at the live website the way a person does (site_check.py):
+    open every public page at a phone and a desktop width, measure
+    overlaps, overflow, broken images, empty headings and leftover
+    placeholders, then have a vision judge review the screenshots for
+    alignment. Runs as a background job (a minute or two); the report is
+    filed on the site row and read back through site_health. action:
+    {vision: true|false} — vision defaults on."""
+    import chief_jobs
+    vision = action.get("vision")
+    vision = True if vision is None else bool(vision)
+    try:
+        job = await chief_jobs.enqueue(
+            client, user_id=str(biz.get("owner_id") or ""), business_id=str(biz["id"]),
+            kind="site_check", params={"vision": vision, "reason": "chief"},
+            source="chief")
+    except Exception as e:
+        logger.info(f"[check_site] enqueue failed: {e}")
+        job = None
+    if not job:
+        return _fail("check_site", "I couldn't start the site check just now — try again in a moment")
+    if job.get("deduped"):
+        return {"type": "check_site", "result": "already running",
+                "label": "🔎 A site check is already running — I'll have the report in a minute.",
+                "nav": _nav("build"), "job_id": job.get("id")}
+    return {"type": "check_site", "result": "queued",
+            "label": ("🔎 Looking at the live site now — every page at phone and desktop "
+                      "size. Give me a minute or two, then ask for site health to read "
+                      "what I found."),
+            "nav": _nav("build"), "job_id": job.get("id")}
 
 async def handle_revert_site_text(client, biz, action) -> Dict:
     """Put one edited site text back to the stored copy: removes the

@@ -403,15 +403,38 @@ async def handle_site_health(client, biz, action) -> Dict:
     if site.get("status") != "published":
         issues.append(f"site status is '{site.get('status')}' — not published")
 
+    # The last visual check (site_check.py): what the system SAW on the
+    # live pages — alignment, overlap, broken images — in plain words.
+    # Its findings count as issues; its clean bill counts as health.
+    last = cfg.get("last_site_check") if isinstance(cfg.get("last_site_check"), dict) else None
+    if last:
+        try:
+            import site_check
+            looked = site_check.describe(last)
+        except Exception:
+            looked = ""
+        if last.get("ok") and not last.get("findings"):
+            healthy.append("last visual check found nothing out of place")
+        elif last.get("ok"):
+            for f in (last.get("findings") or [])[:5]:
+                issues.append(f"seen on the live site: {f.get('what')} ({f.get('where')})"
+                              " — fix: say 'check my site' after any change to re-check")
+        elif last.get("error") and last.get("error") not in ("no_site",):
+            healthy.append(f"last visual check could not run ({last.get('summary')})")
+    else:
+        looked = ""
+
     if not issues:
         return {"type": "site_health",
-                "result": "site healthy — " + "; ".join(healthy or ["no known issues"]),
+                "result": "site healthy — " + "; ".join(healthy or ["no known issues"])
+                          + (f"\n{looked}" if looked else ""),
                 "label": "✅ Site health: clean", "nav": _nav("build"),
                 "signal": {"issues": 0}}
     listing = " | ".join(issues[:6]) + (f" (+{len(issues) - 6} more)"
                                         if len(issues) > 6 else "")
     return {"type": "site_health",
-            "result": f"{len(issues)} issue(s) found: {listing}",
+            "result": f"{len(issues)} issue(s) found: {listing}"
+                      + (f"\n{looked}" if looked else ""),
             "label": f"🩺 Site health: {len(issues)} issue(s)",
             "nav": _nav("build"),
             "signal": {"issues": len(issues)}}

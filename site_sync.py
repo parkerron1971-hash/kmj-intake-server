@@ -125,6 +125,18 @@ def sync_site(mod: Any) -> str:
          "status": "published", "updated_at": now})
     outcome = "updated" if was_manual else "installed"
     logger.info(f"[site-sync] {slug}: {outcome} ({digest}, {len(pages)} pages)")
+    # Every deploy that changed the site gets looked at (site_check.py):
+    # the pages are live within seconds; the check opens them from the
+    # public address, so it waits a beat before starting.
+    try:
+        import site_check
+        if site_check.enabled():
+            t = threading.Timer(45.0, lambda: site_check.run(
+                str(mod.BUSINESS_ID), reason="deploy", vision=True))
+            t.daemon = True   # never holds a shutdown or a test run open
+            t.start()
+    except Exception as e:
+        logger.info(f"[site-sync] post-deploy check not scheduled: {e}")
     return outcome
 
 

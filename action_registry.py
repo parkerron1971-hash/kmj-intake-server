@@ -433,6 +433,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                         "override (the row Edit Mode writes); revert_site_text "
                                         "puts the stored copy back"),
     "revert_site_text":           _w("A", "removes one site text override; the stored copy shows again"),
+    "check_site":                 _w("A", "queues a visual check of the live site (screenshots + "
+                                        "findings filed on the site row); changes nothing on the site"),
     "update_contact_health":      _w("A", "sets a contact's health score"),
     "update_practitioner_profile_field": _w("A", "sets one practitioner_profiles field (owner-scoped)"),
     "upgrade_module_archetype":   _w("A", "refines an existing module's archetype params"),
