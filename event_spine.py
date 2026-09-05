@@ -210,12 +210,21 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "source": "site_concierge /public/concierge/{slug}/lead "
                   "(widget lead-capture form)",
         "payload": ["name", "email", "message_preview", "conversation_id",
-                    "new_contact"],
+                    "new_contact", "tier", "score", "signals", "answers"],
     },
     "concierge_escalated": {
         "source": "site_concierge guardrail deflection (crisis/clinical "
                   "ask on a visitor conversation)",
         "payload": ["conversation_id", "reason"],
+    },
+    # A booking made INSIDE the website chat (2026-09-05). The walk-in
+    # flow also emits booking_created for the appointment itself; this
+    # one says the chat closed it, with the lead tier alongside.
+    "concierge_booking_made": {
+        "source": "site_concierge /public/concierge/{slug}/booking/book "
+                  "(in-chat picker → booking_widget_router.book_anon)",
+        "payload": ["name", "email", "offering", "offering_id", "start",
+                    "appointment_id", "conversation_id", "tier"],
     },
     # ── Pay your team (payroll data layer, 2026-09-05) ────────────
     # Approval freezes a pay run's numbers; it moves no money. `paid`
