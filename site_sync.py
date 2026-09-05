@@ -98,6 +98,10 @@ def sync_site(mod: Any) -> str:
     cfg = dict(row.get("site_config") or {}) if isinstance(row.get("site_config"), dict) else {}
     was_manual = cfg.get("html_source") == "manual"
     if was_manual and cfg.get("manual_hash") == digest:
+        # The pages are current; the design record may not be (a site
+        # installed before site_adopt existed, or a record that failed
+        # to save). Cheap: skipped without a thread when it is current.
+        _schedule_adopt(str(mod.BUSINESS_ID), cfg)
         return "current"
 
     now = datetime.now(timezone.utc).isoformat()
@@ -137,7 +141,19 @@ def sync_site(mod: Any) -> str:
             t.start()
     except Exception as e:
         logger.info(f"[site-sync] post-deploy check not scheduled: {e}")
+    # And the design record (site_adopt.py): the Blueprint Chief and the
+    # Studio show is written FROM these pages, so the system's account of
+    # the site is the site. One model call, only when the words changed.
+    _schedule_adopt(str(mod.BUSINESS_ID), new_cfg)
     return outcome
+
+
+def _schedule_adopt(business_id: str, cfg: Dict[str, Any]) -> None:
+    try:
+        import site_adopt
+        site_adopt.schedule(business_id, cfg)
+    except Exception as e:
+        logger.info(f"[site-sync] design record not scheduled: {e}")
 
 
 def sync_all() -> Dict[str, str]:

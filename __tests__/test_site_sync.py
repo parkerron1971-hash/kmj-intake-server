@@ -26,6 +26,7 @@ def _no_post_deploy_check(monkeypatch):
     """An install schedules a real site check 45s later; tests never
     want a browser or the network."""
     monkeypatch.setenv("SITE_CHECK", "off")
+    monkeypatch.setenv("SITE_ADOPT", "off")
 
 
 def _mod(pages=None, slug="kmj-creative-solutions", biz="biz-1"):

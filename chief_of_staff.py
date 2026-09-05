@@ -2696,6 +2696,13 @@ def _format_site_info(ctx: Dict[str, Any]) -> str:
     if custom:
         lines.append(f"  Custom domain: {custom}")
     lines.append(f"  Direct link: /public/site/{slug}")
+    # A hand-built site (site_adopt.py) is the system's own: say who
+    # built it, its pages, the design record, and which verbs apply.
+    try:
+        import site_adopt
+        lines.extend(site_adopt.describe_for_chief(site))
+    except Exception as e:
+        logger.info(f"[chief] hand-built site lines skipped: {e}")
     return "\n".join(lines)
 
 
@@ -10088,6 +10095,20 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
     if not owner:
         return {"type": "enqueue_job", "result": "Failed: no business owner on record",
                 "label": "Job", "nav": None}
+    # A hand-built site (site_adopt.py) is code: a builder job would
+    # compose over it and be reinstalled on the next deploy. Refuse the
+    # build with the reason, and name the verbs that DO apply.
+    if kind in ("rebuild_site", "compose_directions", "refine_section"):
+        try:
+            import site_adopt
+            block = await asyncio.to_thread(site_adopt.hand_built_block_for, biz["id"])
+        except Exception:
+            block = None
+        if block:
+            return {"type": "enqueue_job",
+                    "result": f"Not started — {block}. Use edit_site_text for copy, "
+                              "check_site to look at it",
+                    "label": "Site is hand-built — no rebuild", "nav": None}
     try:
         job = await chief_jobs.enqueue(
             client, user_id=owner, business_id=biz["id"], kind=kind,
