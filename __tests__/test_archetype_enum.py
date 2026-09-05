@@ -192,7 +192,7 @@ from typing import get_args
 
 EXPECTED_ARCHETYPES = {
     "fallback_generic", "booking_calendar", "work_pipeline", "event_roster",
-    "agreement_ledger",
+    "agreement_ledger", "progress_tracker",
 }
 
 
