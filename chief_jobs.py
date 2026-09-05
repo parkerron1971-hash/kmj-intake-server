@@ -145,6 +145,15 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "done": "the hand finished — see what it found",
         "nav": "operate:queue",
     },
+    # THE SITE CHECK (2026-09-04, site_check.py). Chief's check_site verb
+    # and the post-deploy hook both land here. Screenshots + findings are
+    # filed on the site row; site_health reads them back.
+    "site_check": {
+        "label": "Site check",
+        "working": "looking over the live site",
+        "done": "site check finished — ask for site health to read it",
+        "nav": "build",
+    },
 }
 
 
@@ -397,6 +406,19 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             "stopped": result.get("stopped"), "summary": result.get("summary"),
             "frames": result.get("frames"), "steps": len(result.get("steps") or []),
         }, source="browser_hand")
+        return result
+    if kind == "site_check":
+        import site_check
+        p = params or {}
+        result = site_check.run(
+            business_id, reason=str(p.get("reason") or "chief"),
+            vision=(p.get("vision") is None or bool(p.get("vision"))),
+            progress_cb=progress)
+        if not result.get("ok"):
+            result.setdefault("error", result.get("summary"))
+        else:
+            # the recap line carries the count, not a generic "done"
+            result["summary"] = result.get("summary")
         return result
     raise ValueError(f"unknown job kind: {kind}")
 

@@ -191,6 +191,7 @@ from chief_offering_actions import (
     _site_text_plain,
     handle_add_block_range,
     handle_archive_offering,
+    handle_check_site,
     handle_create_offering,
     handle_edit_site_text,
     handle_list_availability,
@@ -10240,6 +10241,8 @@ ACTION_HANDLERS = {
     "set_site_capability":        handle_set_site_capability,
     # Site copy, live — one text spot at a time, via the override system
     "edit_site_text":             handle_edit_site_text,
+    # The system looks at the live site (site_check.py) — a background job
+    "check_site":                 handle_check_site,
     "revert_site_text":           handle_revert_site_text,
     # Arc 28 — behavior-profile readiness report
     "offering_readiness":         handle_offering_readiness,

@@ -21,6 +21,13 @@ if ROOT not in sys.path:
 import site_sync  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_post_deploy_check(monkeypatch):
+    """An install schedules a real site check 45s later; tests never
+    want a browser or the network."""
+    monkeypatch.setenv("SITE_CHECK", "off")
+
+
 def _mod(pages=None, slug="kmj-creative-solutions", biz="biz-1"):
     m = types.SimpleNamespace()
     m.SLUG = slug
