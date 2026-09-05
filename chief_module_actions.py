@@ -683,8 +683,12 @@ async def handle_reject_module_spec(client, biz, action):
 
 
 async def handle_upgrade_module_archetype(client, biz, action):
-    """Phase C.1.1 — refine an existing materialized module to apply the
-    current discipline (today: customer_facing flags + service catalog).
+    """Refine an existing materialized module against the CURRENT archetype
+    palette: a fallback_generic module whose shape now has an archetype
+    (progress_tracker, work_pipeline, …) comes back on it with its rows
+    intact; a booking_calendar gets customer_facing flags + the canonical
+    service catalog (the original C.1.1 purpose). There is deliberately no
+    archetype guard here — the generator decides, the practitioner accepts.
     Returns the same envelope shape as propose_module_from_intake so the
     dock renders it through the existing ModuleSpecProposalCard, but with
     is_upgrade=true so the card UI can show "Upgrade [Bookings]" instead
