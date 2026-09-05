@@ -471,6 +471,11 @@ class CheckoutBody(BaseModel):
     business_id: str
     price_id: Optional[str] = None  # explicit price override
     plan: Optional[str] = None      # 'starter' | 'professional' | 'practice'
+    # Skip the free trial and pay today (2026-09-04, Kevin: "if a person
+    # wants to bypass the 7 days trial"). The first charge lands at
+    # checkout and the full monthly tank is theirs at once, instead of
+    # the trial's smaller one. Off by default; the trial stays the door.
+    skip_trial: bool = False
 
 
 def _price_for_plan(plan):
@@ -542,7 +547,7 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         "cancel_url":  _cancel_url(),
         # Echo business_id in metadata so the webhook can resolve back
         # even if the customer object's metadata is missing it.
-        "subscription_data": _subscription_data(biz, user),
+        "subscription_data": _subscription_data(biz, user, skip_trial=bool(body.skip_trial)),
         "metadata": {
             "business_id":  biz["id"],
             "auth_user_id": user.id,
@@ -648,9 +653,10 @@ async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> D
     return s
 
 
-def _subscription_data(biz, user):
+def _subscription_data(biz, user, skip_trial: bool = False):
     """Checkout subscription_data: metadata + a free trial for FIRST
-    subscriptions only (re-subscribers do not get a second trial)."""
+    subscriptions only (re-subscribers do not get a second trial), and
+    none at all when the person chose to pay today."""
     data = {
         "metadata": {"business_id": biz["id"], "auth_user_id": user.id},
     }
@@ -661,8 +667,10 @@ def _subscription_data(biz, user):
         trial_days = int(os.environ.get("BILLING_TRIAL_DAYS") or "7")
     except ValueError:
         trial_days = 7
-    if trial_days > 0 and not biz.get("stripe_subscription_id"):
+    if trial_days > 0 and not biz.get("stripe_subscription_id") and not skip_trial:
         data["trial_period_days"] = trial_days
+    if skip_trial:
+        data["metadata"]["skipped_trial"] = "true"
     return data
 
 
