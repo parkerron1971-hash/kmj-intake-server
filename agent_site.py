@@ -658,6 +658,22 @@ async def availability(slug: str, request: Request,
     if not public_offering(off)["bookable"]:
         raise HTTPException(status_code=400, detail="that offering is not booked by the slot")
 
+    start, end = parse_window(from_, to)
+    slots = slots_for(b, off, start, end)
+
+    return {
+        "offering_id": offering_id,
+        "timezone": b["facts"].get("timezone") or "UTC",
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "slots": slots,
+        "quoted_at": int(time.time()),
+    }
+
+
+def parse_window(from_: Optional[str], to: Optional[str]) -> Tuple[date, date]:
+    """A bounded run of days: from (default today) to (default +6),
+    never more than MAX_AVAILABILITY_DAYS. Raises 400 on nonsense."""
     today = date.today()
     start = _parse_day(from_, today)
     end = _parse_day(to, start + timedelta(days=6))
@@ -666,7 +682,15 @@ async def availability(slug: str, request: Request,
     if (end - start).days >= MAX_AVAILABILITY_DAYS:
         raise HTTPException(status_code=400,
                             detail=f"ask for at most {MAX_AVAILABILITY_DAYS} days at a time")
+    return start, end
 
+
+def slots_for(b: Dict[str, Any], off: Dict[str, Any],
+              start: date, end: date) -> List[Dict[str, Any]]:
+    """Open slots for ONE offering in [start, end] — the one slot
+    computation every client surface shares (this agent surface and the
+    Site Concierge's in-chat picker), so two surfaces can never quote
+    two different truths. Raises 503 when the engine is unavailable."""
     try:
         from availability import BusinessAvailability
         from availability_engine import compute_slots
@@ -677,7 +701,7 @@ async def availability(slug: str, request: Request,
             f"/module_entries?business_id=eq.{b['facts']['id']}"
             f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}&status=eq.active"
             "&select=appointment_at,duration_min_at_booking,duration_min&limit=2000") or []
-        slots = compute_slots(
+        return compute_slots(
             availability=av,
             practitioner_tz=b["facts"].get("timezone") or None,
             existing_bookings=bookings if isinstance(bookings, list) else [],
@@ -689,14 +713,34 @@ async def availability(slug: str, request: Request,
         logger.warning("[agent_site] slot compute failed: %s", e)
         raise HTTPException(status_code=503, detail="availability is unavailable right now")
 
-    return {
-        "offering_id": offering_id,
-        "timezone": b["facts"].get("timezone") or "UTC",
-        "from": start.isoformat(),
-        "to": end.isoformat(),
-        "slots": slots,
-        "quoted_at": int(time.time()),
+
+async def walkin_book(b: Dict[str, Any], off: Dict[str, Any], request: Request, *,
+                      name: str, email: str, start: str, booked_via: str,
+                      notes: Optional[str] = None, sms_consent: bool = False,
+                      phone: Optional[str] = None) -> Dict[str, Any]:
+    """Ride the walk-in booking flow (booking_widget_router.book_anon):
+    contact dedupe, offering denormalization, the double-book guard
+    (409), confirmation email, SMS consent record. `booked_via` is the
+    calendar's authorship stamp ("agent:<name>" / "concierge"). Returns
+    the raw book_anon result; the caller shapes the reply."""
+    import booking_widget_router as bw
+    module = bw._bookings_module(b["facts"]["id"])
+    if not module:
+        raise HTTPException(status_code=404, detail="online booking is not open for this business")
+    pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
+    data: Dict[str, Any] = {
+        pdf: start,
+        "appointment_at": start,
+        "booked_via": booked_via,
     }
+    if notes:
+        data["notes"] = str(notes).strip()
+    if phone:
+        data["phone"] = str(phone).strip()[:40]
+    anon = bw.BookAnonBody(name=name, email=email, data=data,
+                           sms_consent=sms_consent,
+                           offering_id=str(off.get("id") or ""), quoted_price=None)
+    return await bw.book_anon(b["facts"]["id"], anon, request)
 
 
 class AgentBookBody(BaseModel):
@@ -742,24 +786,10 @@ async def book(slug: str, body: AgentBookBody, request: Request) -> Dict[str, An
     if not off or not public_offering(off)["bookable"]:
         raise HTTPException(status_code=404, detail="offering not found or not bookable")
 
-    import booking_widget_router as bw
-    module = bw._bookings_module(b["facts"]["id"])
-    if not module:
-        raise HTTPException(status_code=404, detail="online booking is not open for this business")
-    pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     agent_label = " ".join(body.agent.split())[:80]
-    data: Dict[str, Any] = {
-        pdf: body.start,
-        "appointment_at": body.start,
-        "booked_via": f"agent:{agent_label}",
-    }
-    if body.notes:
-        data["notes"] = body.notes.strip()
-
-    anon = bw.BookAnonBody(name=body.name, email=body.email, data=data,
-                           sms_consent=body.sms_consent,
-                           offering_id=body.offering_id, quoted_price=None)
-    result = await bw.book_anon(b["facts"]["id"], anon, request)
+    result = await walkin_book(b, off, request, name=body.name, email=body.email,
+                               start=body.start, booked_via=f"agent:{agent_label}",
+                               notes=body.notes, sms_consent=body.sms_consent)
 
     # The ledger says an agent typed, for a client, and which rule
     # allowed it. Never fatal — the booking exists either way.

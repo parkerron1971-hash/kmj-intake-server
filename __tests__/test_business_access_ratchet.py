@@ -68,7 +68,14 @@ RESIDUAL = [h for h in UNGUARDED
 # and the module had been parked on PUBLIC_BY_DESIGN to quieten it.
 # Both blind spots are fixed, so the entry is gone and the two
 # handlers now resolve as what they are: guarded.
-MAX_UNGUARDED_TOTAL = 44
+# 44 -> 45 (2026-09-05, in-chat booking): site_concierge gained a
+# third anonymous WRITE, /public/concierge/{slug}/booking/book — a
+# website visitor booking a time inside the chat, no account by
+# design (the same person, the same walk-in flow, as the booking
+# widget's book_anon). It sits behind the IP cap, the client policy
+# verdict, and book_anon's own guards. The residual stays at ZERO;
+# this raise records one deliberate public door, not slack.
+MAX_UNGUARDED_TOTAL = 45
 MAX_UNGUARDED_RESIDUAL = 0
 
 
