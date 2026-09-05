@@ -460,6 +460,17 @@ def _build_suggestions_block(active: bool) -> str:
     )
 
 
+def _module_palette_block() -> str:
+    """The module surfaces Chief can build well, from the generator's own
+    archetype registry. Wrapped so a registry import problem costs one
+    prompt section, never a Chief turn."""
+    try:
+        from module_spec_generator import module_palette_block
+        return module_palette_block()
+    except Exception:
+        return ""
+
+
 def _build_archetype_block(biz: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """Part B — the per-business ARCHETYPE thinking-shift modifier.
 
@@ -1493,6 +1504,7 @@ REPLYING TO REPLIES (CRITICAL — see EMAIL REPLIES context block above):
   Never draft a generic "Thanks for reaching out!" reply when you have the reply text.
 
 ACTIONS — CUSTOM MODULES (the practitioner's personal trackers; the CUSTOM MODULES section above lists what exists):
+{_module_palette_block()}
   [ACTION:{{"type":"propose_module_from_intake","intake_excerpt":"<the practitioner's own words, verbatim or near-verbatim>"}}]
     — Generates 1+ ModuleSpec proposals from a free-text description and renders an accept/reject/revise card stack in the dock with decomposition reasoning. PREFERRED for any ask that DESCRIBES what they want to track (vs. literally dictating a module name and field list). The Chief does NOT design the schema itself — the proposal generator does, and may split the request into multiple linked modules (e.g. Bookings + Rewards). After emitting this action, say one short sentence like "Drafting a proposal — review the card below." and STOP. Do NOT also emit ensure_module for the same request. Do NOT ask a follow-up question about other parts of the same intake until the practitioner accepts/rejects this card stack.
   [ACTION:{{"type":"ensure_module","module_name":"Client Progress","fields":[{{"name":"client","type":"contact_link","label":"Client"}},{{"name":"status","type":"select","label":"Status","options":["new","active","done"]}},{{"name":"notes","type":"textarea","label":"Notes"}}]}}]

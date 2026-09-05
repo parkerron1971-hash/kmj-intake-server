@@ -296,6 +296,7 @@ ArchetypeEnum = Literal[
     "work_pipeline",      # staged work moving toward done — Matters/Jobs/Engagements
     "event_roster",       # one occasion, many people — RSVP headcount + named roles
     "agreement_ledger",   # a document somebody signs — signed / expiring / expired
+    "progress_tracker",   # a number moving toward a target — score / weight / visits / savings
 ]
 
 
@@ -348,6 +349,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": None,
         "chief_can_suggest": False,    # NEVER suggest the fallback
         "label": "Generic Module",
+        "pitch": "a plain list or board for anything else",
         "operate_group": None,
     },
     "event_roster": {
@@ -364,6 +366,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",
         "chief_can_suggest": True,
         "label": "Roster",
+        "pitch": "one occasion and the people attached to it — RSVP headcounts and named volunteer roles",
         "operate_group": "schedule",
     },
     "work_pipeline": {
@@ -381,6 +384,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",
         "chief_can_suggest": True,
         "label": "Pipeline",
+        "pitch": "work moving through stages on a board — matters, jobs, projects, leads, applications",
         # G03 — operate_group was None, which the sidebar's bucketer
         # skips entirely (`if (!bucket) continue`): a materialized
         # pipeline would have been invisible in OPERATE (dead-weight
@@ -393,6 +397,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",  # the BookingCalendar week-grid hero
         "chief_can_suggest": True,
         "label": "Bookings",
+        "pitch": "appointments on a calendar with a booking form customers use themselves",
         # C.1.3.1b — Bookings lives inside the existing OPERATE → Schedule
         # group alongside Calendar + Tasks (sidebar's append-into-existing
         # merge step picks this up).
@@ -403,11 +408,32 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",
         "chief_can_suggest": True,
         "label": "Agreements",
+        "pitch": "documents somebody has to sign, led by who has not — waivers, engagement letters, contracts",
         # 'work', not 'schedule'. An unsigned engagement letter is
         # outstanding WORK, not an occasion on a calendar — and the
         # whole point of the archetype is that the unsigned ones are
         # a thing to act on rather than a date to keep.
         "operate_group": "work",
+    },
+    "progress_tracker": {
+        # A NUMBER MOVING TOWARD A TARGET, read over time. The live gap
+        # log (well — the modules that would have filled it) held exactly
+        # two shapes on the generic fallback: a credit-repair consultant's
+        # score climbing toward 720, and three barber reward trackers
+        # counting visits toward a free cut. Same archetype: a subject, a
+        # series of dated readings, a target, and the question "how close
+        # are they, and did anyone just cross the line". Weight, savings,
+        # attendance streaks, fundraising thermometers and grades are the
+        # same shape with different units.
+        "config_surface": "build",
+        "daily_use_surface": "operate",
+        "chief_can_suggest": True,
+        "label": "Progress",
+        "pitch": "a number tracked over time toward a goal, per person, with a chart, milestones and an alert when the goal is reached — credit scores, weight, savings, visits toward a reward",
+        # The subject is almost always a person the practitioner serves
+        # (a client's score, a member's visits), so it buckets with them.
+        # This is the bucket the C.1.3 note reserved for RewardProgress.
+        "operate_group": "customers",
     },
 }
 
@@ -422,6 +448,37 @@ def suggestable_archetypes() -> List[str]:
     """NT8e — returns the closed set of archetypes Chief may proactively
     suggest. Single source of truth for the proactive-suggestion gate."""
     return [name for name, meta in ARCHETYPE_METADATA.items() if meta.get("chief_can_suggest") is True]
+
+
+def module_palette_block() -> str:
+    """What Chief can build WELL, in practitioner words, for Chief's own
+    conversational prompt.
+
+    Chief's prompt used to describe the build verbs and never the
+    surfaces those verbs produce, so Chief could route "track my clients'
+    credit scores" to the generator without knowing a purpose-built
+    tracker existed — and could not tell a practitioner "yes, I can build
+    that with a chart and a goal line" before proposing. Derived from
+    ARCHETYPE_METADATA so a new archetype reaches Chief's awareness the
+    day it is registered, not when somebody remembers to edit the prompt.
+    fallback_generic is deliberately left out: it is an outcome, not an
+    offer."""
+    lines = []
+    for name in suggestable_archetypes():
+        meta = ARCHETYPE_METADATA[name]
+        pitch = (meta.get("pitch") or "").strip()
+        if not pitch:
+            continue
+        lines.append(f"    • {meta.get('label', name)} — {pitch}")
+    if not lines:
+        return ""
+    return (
+        "  WHAT YOU BUILD WELL (each is a purpose-built surface, not a plain "
+        "table — say so when they describe one of these shapes, then propose):\n"
+        + "\n".join(lines)
+        + "\n    Anything else still gets built as a plain list or board; say that "
+        "honestly rather than promising a chart or a calendar it will not have."
+    )
 
 
 # C.1.5 Plan A (M3-δ) — archetypes that are single-instance per business
@@ -541,6 +598,48 @@ class AgreementLedgerParams(BaseModel):
     item_noun: Optional[str] = None        # "Waiver", "Engagement Letter", "Disclosure"
 
 
+class ProgressTrackerParams(BaseModel):
+    """Parameters for the ProgressTracker archetype — a number moving
+    toward a target.
+
+    Two modes, one shape:
+      reading — each row is a dated READING of the number (a credit score
+                on the 1st of the month, a weigh-in, a savings balance).
+                Progress = the latest reading against the target; the
+                chart is the series.
+      count   — each row IS one unit (a visit, a session, a donation).
+                Progress = how many rows the subject has toward the
+                target. This is the reward-card shape: 5 of 7 haircuts.
+
+    subject_field points at who or what is being tracked — usually a
+    contact_link — so one module holds every client's series and the
+    surface groups by them. Omit it and the module tracks one thing
+    (the business's own revenue goal), which is still valid.
+
+    direction says which way is better. 'up' for a score, a balance, a
+    count; 'down' for weight, debt, days-to-close. The target line and
+    the "reached" state both read it, so a weight tracker with direction
+    'up' would congratulate the wrong movement — hence it is a closed
+    Literal rather than free text.
+
+    milestones are the intermediate marks worth naming (620 / 680 / 720
+    for a score). The FE draws them on the bar and the module agent's
+    target_reached trigger fires when the target itself is crossed.
+
+    Field refs are checked against schema.fields like every archetype's."""
+    mode: Literal["reading", "count"] = "reading"
+    subject_field: Optional[str] = None    # contact_link (or text/select) — who/what is tracked
+    value_field: Optional[str] = None      # number/currency holding the reading (REQUIRED in reading mode)
+    date_field: Optional[str] = None       # date of the reading; defaults to the row's created_at
+    target_field: Optional[str] = None     # per-subject target, a number/currency field
+    target: Optional[float] = None         # one target for everyone when there is no target_field
+    direction: Literal["up", "down"] = "up"
+    milestones: Optional[List[float]] = None
+    unit: Optional[str] = None             # "pts", "lbs", "$", "visits" — display only
+    item_noun: Optional[str] = None        # what one row is called ("Reading", "Visit")
+    subject_noun: Optional[str] = None     # what one subject is called ("Client", "Member")
+
+
 # Validators dispatched by archetype value.
 _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "booking_calendar": BookingCalendarParams,
@@ -548,6 +647,7 @@ _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "work_pipeline": WorkPipelineParams,
     "event_roster": EventRosterParams,
     "agreement_ledger": AgreementLedgerParams,
+    "progress_tracker": ProgressTrackerParams,
 }
 
 
@@ -665,6 +765,48 @@ class ModuleSpec(BaseModel):
                     "'fallback_generic' — every fallback is a marker that a "
                     "new archetype is owed"
                 )
+
+        # progress_tracker: every named field must exist and be the right
+        # kind. A value_field pointing at a text column would chart NaN;
+        # a subject_field pointing at a date would group readings by day
+        # and call each day a client. Refused here, not repaired.
+        if self.archetype == "progress_tracker":
+            by_name = {f.name: f for f in self.schema_.fields}
+            p = self.archetype_params
+            numeric = {"number", "currency", "rating"}
+
+            def _ref(key: str, allowed: set, required: bool = False) -> None:
+                name = p.get(key)
+                if not name:
+                    if required:
+                        raise ValueError(
+                            f"progress_tracker {key} is required in "
+                            f"'{p.get('mode', 'reading')}' mode — nothing "
+                            f"says which field holds the number")
+                    return
+                if name not in by_name:
+                    raise ValueError(
+                        f"progress_tracker {key} '{name}' is not in "
+                        f"schema.fields (have: {sorted(by_name)})")
+                if by_name[name].type not in allowed:
+                    raise ValueError(
+                        f"progress_tracker {key} '{name}' must be one of "
+                        f"{sorted(allowed)} (got '{by_name[name].type}')")
+
+            _ref("value_field", numeric, required=(p.get("mode", "reading") == "reading"))
+            _ref("target_field", numeric)
+            _ref("date_field", {"date"})
+            _ref("subject_field", {"contact_link", "text", "select", "module_ref"})
+            if p.get("target") is None and not p.get("target_field"):
+                raise ValueError(
+                    "progress_tracker needs a target: set `target` (one "
+                    "number for everyone) or `target_field` (a per-subject "
+                    "number field) — without one there is nothing to "
+                    "measure progress toward")
+            if p.get("target") is not None and p.get("target_field"):
+                raise ValueError(
+                    "progress_tracker: set `target` OR `target_field`, not "
+                    "both — two targets disagree")
 
         # booking_calendar-specific: primary_date_field MUST exist in the schema.
         if self.archetype == "booking_calendar":
@@ -1256,24 +1398,127 @@ Available archetypes:
         item_noun — what one is called ("Waiver", "Engagement Letter")
       Any *_field you set MUST name a field in schema.fields.
 
+  progress_tracker
+    purpose: A NUMBER MOVING TOWARD A TARGET, read over time — a credit
+      score climbing to 720, a client's weight, a savings balance, visits
+      toward a free service, a fundraising total, attendance streaks,
+      grades, reps, days sober. The daily question is "how close are they,
+      which way is it moving, and did anyone just cross the line".
+    when to pick: intake describes measuring something repeatedly and
+      comparing it to a goal — "track their score over time", "see their
+      progress", "count visits toward a reward", "milestones", "hit the
+      target", "progress bar", "trend", "before and after".
+    when NOT to pick: one-off records with no series (fallback_generic);
+      staged work with named stages (work_pipeline — a stage is a word, a
+      reading is a number); a rating someone gives you (that is feedback,
+      generic, using the `rating` type).
+    TWO MODES — pick one:
+      reading — each row is a dated reading of the number. Schema MUST
+        contain a number (or currency) field for the value and SHOULD
+        contain a date field for when it was read. Credit score, weight,
+        balance, blood pressure, revenue.
+      count — each row IS one unit: a visit, a session, a class attended.
+        No value field needed; the surface counts rows per subject. This
+        is the reward card: 5 of 7 haircuts. Add a checkbox like
+        `redeemed` when a reward resets the count.
+    schema requirement: a contact_link for WHO is being tracked when the
+      practitioner tracks other people (almost always — put it first);
+      omit it only when the business tracks one thing of its own. In
+      reading mode a number/currency value field and a date field. A
+      textarea for notes is usual ("disputed two collections this month").
+      Do NOT add a `status` or `progress` select — the state is computed
+      from the numbers and a stored copy goes stale against them.
+    views: ['list'] is enough — the archetype draws its own chart and
+      bars; a board has nothing to group by. Add 'calendar' only for
+      count mode where the visits are appointments (they usually are a
+      booking_calendar's rows already — then link with module_ref rather
+      than logging twice).
+    archetype_params (keys marked * are required):
+      * mode — "reading" | "count"
+      * target — ONE number everyone aims at (720, 7 visits, 10000), OR
+        target_field — name of a number field holding a per-subject
+        target (each client has their own goal). Set exactly one.
+        value_field — name of the number/currency field holding the
+                      reading. REQUIRED in reading mode.
+        subject_field — name of the contact_link (or text/select) field
+                        for who is tracked. Set it whenever there is one.
+        date_field — name of the date field for when the reading was
+                     taken; defaults to when the row was created.
+        direction — "up" (score, balance, count: higher is better) or
+                    "down" (weight, debt, days-to-close: lower is
+                    better). Default "up". Get this right — it decides
+                    what "reached" means.
+        milestones — intermediate marks worth celebrating, in order
+                     ([620, 680, 720]). Optional.
+        unit — display unit ("pts", "lbs", "$", "visits"). Optional.
+        item_noun — what one row is called ("Reading", "Visit", "Weigh-in")
+        subject_noun — what one subject is called ("Client", "Member")
+      Any *_field you set MUST name a field in schema.fields.
+    MILESTONE ALERTS: add a trigger of type "target_reached" with action
+      "draft_notification" so the practitioner is told the day a subject
+      crosses the target. It needs no field — it reads the archetype
+      params. The template is a short subject line; the person's name and
+      the value are filled in when it fires. Shape:
+        {"type":"target_reached","action":"draft_notification",
+         "template":"Goal reached"}
+    example intake → spec (reading mode):
+      "I help clients repair their credit and want to see each person's
+       score climb month by month toward 720"
+      → {"archetype":"progress_tracker",
+         "archetype_params":{"mode":"reading","subject_field":"client",
+           "value_field":"score","date_field":"pulled_on","target":720,
+           "direction":"up","milestones":[620,680,720],"unit":"pts",
+           "item_noun":"Reading","subject_noun":"Client"},
+         "schema":{"fields":[
+           {"name":"client","type":"contact_link","label":"Client","required":true},
+           {"name":"score","type":"number","label":"Score","required":true},
+           {"name":"pulled_on","type":"date","label":"Pulled on","required":true},
+           {"name":"bureau","type":"select","label":"Bureau",
+            "options":["Experian","Equifax","TransUnion"]},
+           {"name":"notes","type":"textarea","label":"What changed"}],
+           "views":["list"],"default_view":"list","default_sort":"pulled_on"},
+         "agent_config":{"enabled":true,"triggers":[
+           {"type":"target_reached","action":"draft_notification",
+            "template":"Credit goal reached"} ] }
+        }
+    example intake → spec (count mode):
+      "every seventh haircut is free"
+      → archetype_params {"mode":"count","subject_field":"client",
+         "target":7,"direction":"up","unit":"visits","item_noun":"Visit"}
+        with fields client (contact_link), visited_on (date),
+        redeemed (checkbox).
+
   fallback_generic
     purpose: explicit "no archetype fits yet" — renders through the generic
       DynamicModule (list/board)
     when to pick: ANY module whose shape doesn't fit booking_calendar, \
-work_pipeline or event_roster (e.g. a reference list, a form, a log of \
-receipts — things with no time slots, no stage progression, no attached crowd)
+work_pipeline, event_roster, agreement_ledger or progress_tracker (e.g. a \
+reference list, a form, a log of receipts — things with no time slots, no \
+stage progression, no attached crowd, no signature, no number chasing a goal)
     schema requirement: none
     archetype_params: {}  (empty)
     archetype_fallback_reason REQUIRED: one sentence describing what \
-      archetype would have fit (e.g. "needs a RewardProgress archetype for \
-      counting visits toward a free service")
+      archetype would have fit (e.g. "needs a StockLevel archetype for \
+      reorder points across many products")
 
 Picking discipline: read the intake, then ask in order — is it time slots \
 someone books? (booking_calendar) — is it staged work moving toward done? \
 (work_pipeline) — is it an occasion with people to count or roles to fill? \
-(event_roster). Pick the first that fits and fill archetype_params from the \
-schema fields you already designed. If none fit, pick fallback_generic and \
-write the archetype_fallback_reason.
+(event_roster) — is it paperwork somebody signs? (agreement_ledger) — is it a \
+number measured over time against a goal? (progress_tracker). Pick the first \
+that fits and fill archetype_params from the schema fields you already \
+designed. If none fit, pick fallback_generic and write the \
+archetype_fallback_reason.
+
+A GREAT module, not a plain one: a tracker the practitioner opens every day \
+has a purpose-built surface (the archetype), the fields that make that \
+surface work (a real date, a real number, a real person link — never text \
+standing in for them), a trigger that tells them when something crossed a \
+line, and closed_statuses so finished things stop being chased. Before you \
+emit fallback_generic, re-read the palette once: "tracker", "progress", \
+"over time", "toward", "goal", "milestone", "streak" are progress_tracker; \
+"where is it", "stage", "pipeline" are work_pipeline; "who is coming" is \
+event_roster; "signed" is agreement_ledger; "book" is booking_calendar.
 
 confidence: 'high' if intake is specific, 'medium' if inferred, 'low' if vague.
 
@@ -1614,7 +1859,14 @@ Discipline to apply (all current passes, cumulative):
         no need to list specific offering ids in the spec.
 
   - Keep slug, name, icon, the OTHER schema fields, and archetype
-    unchanged unless the existing spec is structurally broken.
+    unchanged unless the existing spec is structurally broken — WITH ONE
+    EXCEPTION: if the current archetype is fallback_generic and an
+    archetype in the palette now fits (read the archetype_fallback_reason
+    in the current state — it names the shape that was owed), pick that
+    archetype and fill its archetype_params from the existing fields.
+    That is the whole point of upgrading a fallback module. Keep every
+    existing field name so the rows already in the module still render;
+    add fields only when the archetype cannot work without them.
   - The envelope MUST contain exactly ONE ModuleSpec.
   - The envelope MUST contain ONE ProposedOffering per inline service
     in the current module (if any).

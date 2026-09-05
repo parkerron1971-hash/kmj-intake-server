@@ -488,7 +488,8 @@ async def handle_add_module_field(client, biz, action) -> Dict:
     # screen. Inspect the candidate first and refuse rather than repair:
     # the practitioner asked for a specific field, and quietly writing a
     # different one is worse than saying no.
-    report = module_inspect.inspect_module_schema(candidate, module.get("agent_config"))
+    report = module_inspect.inspect_module_schema(
+        candidate, module.get("agent_config"), module.get("archetype"))
     if not report["renderable"]:
         return _fail("add_module_field",
                      "that field would stop the module displaying: "

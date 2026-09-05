@@ -120,6 +120,23 @@ CASES: List[Dict[str, Any]] = [
         "expect_skill": "payments-module",
     },
     {
+        # The first live gap the fallback banner ever recorded that a
+        # practitioner actually used: a credit-repair consultant's
+        # "Credit Profiles" landed on fallback_generic with the reason
+        # "needs a CreditScoreTracker archetype with time-series
+        # visualization ... and milestone alerts". progress_tracker is that
+        # archetype; this case is that intake.
+        "id": "tracker",
+        "business": {"name": "Clear Path Credit", "type": "consultant"},
+        "intake": ("I help clients repair their credit. I want to log each "
+                   "person's score every month and watch it climb toward 720, "
+                   "and be told the day someone gets there."),
+        "expect_field_types": ["number", "date", "contact_link"],
+        "expect_trigger_kinds": ["target_reached"],
+        "expect_archetype": "progress_tracker",
+        "expect_skill": "tracker-module",
+    },
+    {
         "id": "vague",
         "business": {"name": "Harbour Co", "type": "custom"},
         "intake": "I need to stay on top of things.",
@@ -198,7 +215,8 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
         for t in ((sp.get("agent_config") or {}).get("triggers") or []):
             if isinstance(t, dict):
                 trigger_kinds.add(t.get("type"))
-        rep = module_inspect.inspect_module_schema(sch, sp.get("agent_config"))
+        rep = module_inspect.inspect_module_schema(
+            sch, sp.get("agent_config"), sp.get("archetype"))
         if not rep["renderable"]:
             unrenderable.append(f"{sp.get('slug') or sp.get('name')}: "
                                 + "; ".join(rep["problems"][:2]))
@@ -223,6 +241,15 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
 
     for k in case.get("expect_trigger_kinds", []):
         check(f"trigger:{k}", k in trigger_kinds, f"got {sorted(trigger_kinds)}")
+
+    # WHICH ARCHETYPE — the surface the practitioner actually gets. A
+    # tracker that validates, renders and attaches the right skill but
+    # lands on fallback_generic is a plain table with a banner, which is
+    # the exact outcome the archetype exists to replace.
+    want_arch = case.get("expect_archetype")
+    if want_arch:
+        got_archs = sorted({sp.get("archetype") for sp in specs})
+        check(f"archetype:{want_arch}", want_arch in got_archs, f"got {got_archs}")
 
     # Every field type used must be one the vocabulary allows. A spec that
     # invents a type validates nowhere and renders nowhere.
