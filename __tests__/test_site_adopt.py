@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 import sys
 import types
@@ -30,6 +31,12 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import site_adopt  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_claim_settle(monkeypatch):
+    """The claim re-reads after a beat in production; tests never wait."""
+    monkeypatch.setattr(site_adopt, "CLAIM_SETTLE_S", 0)
 
 HOME = """<!doctype html><html><head><title>KMJ</title>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700&amp;family=Work+Sans:wght@400" rel="stylesheet">
@@ -147,6 +154,7 @@ def test_adopt_writes_the_record_from_the_live_pages(monkeypatch):
     assert spec["source"] == "adopted" and spec["text"].startswith("1. OVERVIEW")
     assert cfg["adopted"]["hash"] == "h1" and cfg["adopted"]["pages"] == ["home", "about"]
     assert cfg["adopted"]["text_hash"] == out["text_hash"]
+    assert "adopting" not in cfg          # the claim is cleared by the record
     # the path's "Built <date>" is the install, not the moment of writing
     assert cfg["html_generated_at"] == "2026-09-03T14:00:00+00:00"
     # the second pass is free
@@ -167,9 +175,13 @@ def test_adopt_is_fail_soft(monkeypatch):
     db = _wire(monkeypatch, _DB(_row()))
     monkeypatch.setattr(spec_author, "_call_llm", lambda *a, **k: None)
     assert site_adopt.adopt("biz-1") == {"ok": False, "error": "author_unavailable"}
-    assert db.patches == []
-    # a lost save is reported, never claimed
+    # only the claim stamp landed — no record, nothing that reads as adopted
+    assert not [p for p in db.patches if "adopted" in p[1]["site_config"]]
+    # …and that claim holds for the TTL, so a retry a moment later yields
     monkeypatch.setattr(spec_author, "_call_llm", lambda *a, **k: "1. OVERVIEW")
+    assert site_adopt.adopt("biz-1")["status"] == "claimed_elsewhere"
+    # a lost save is reported, never claimed
+    db = _wire(monkeypatch, _DB(_row()))
     monkeypatch.setattr(spec_author, "_patch_site_config",
                         lambda *a, **k: (_ for _ in ()).throw(spec_author.SpecSaveFailed("lost")))
     assert site_adopt.adopt("biz-1") == {"ok": False, "error": "save_failed"}
@@ -177,6 +189,52 @@ def test_adopt_is_fail_soft(monkeypatch):
     monkeypatch.setattr(site_adopt, "pages_of", lambda row: (_ for _ in ()).throw(RuntimeError("boom")))
     out = site_adopt.adopt("biz-1")
     assert out["ok"] is False and "RuntimeError" in out["error"]
+
+
+def test_one_replica_writes_the_record(monkeypatch):
+    """Two replicas boot together and both schedule a pass; the first live
+    deploy paid twice. A claim stamp lets exactly one proceed."""
+    import spec_author
+    from datetime import datetime, timedelta, timezone
+    paid = []
+    monkeypatch.setattr(spec_author, "_call_llm",
+                        lambda *a, **k: paid.append(1) or "1. OVERVIEW\n=====\nrecord")
+    # A fresh claim by ANOTHER replica for the same words → skip, no call
+    db = _wire(monkeypatch, _DB(_row()))
+    digest = site_adopt.text_digest(site_adopt.pages_of(db.row))
+    db.row["site_config"]["adopting"] = {
+        "at": datetime.now(timezone.utc).isoformat(), "text_hash": digest, "token": "other"}
+    out = site_adopt.adopt("biz-1")
+    assert out == {"ok": True, "status": "claimed_elsewhere", "text_hash": digest}
+    assert paid == [] and db.patches == []
+    # A stale claim (older than the TTL) is ignored: this replica claims and writes
+    db.row["site_config"]["adopting"] = {
+        "at": (datetime.now(timezone.utc) - timedelta(seconds=site_adopt.CLAIM_TTL_S + 5)).isoformat(),
+        "text_hash": digest, "token": "other"}
+    out = site_adopt.adopt("biz-1")
+    assert out["ok"] and out["status"] == "adopted" and paid == [1]
+    assert db.patches[0][1]["site_config"]["adopting"]["text_hash"] == digest   # the claim
+    assert "adopting" not in db.patches[-1][1]["site_config"]                   # cleared
+    # The re-read after the beat sees another replica's token → yield
+    db2 = _wire(monkeypatch, _DB(_row()))
+    real_read = site_adopt._read_row
+
+    def usurped(biz):
+        r = real_read(biz)
+        if r and (r["site_config"].get("adopting") or {}).get("token"):
+            r["site_config"]["adopting"]["token"] = "someone-else"
+        return r
+    monkeypatch.setattr(site_adopt, "_read_row", usurped)
+    out = site_adopt.adopt("biz-1")
+    assert out["status"] == "claimed_elsewhere" and paid == [1]
+    # A claim that cannot be written never blocks the record (fail-open)
+    import sb_clients
+    db3 = _wire(monkeypatch, _DB(_row()))
+    monkeypatch.setattr(site_adopt, "_read_row", real_read)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda p, b: (_ for _ in ()).throw(RuntimeError("down")) if "adopting" in json.dumps(b) and "adopted" not in json.dumps(b) else db3.patch(p, b))
+    out = site_adopt.adopt("biz-1")
+    assert out["status"] == "adopted" and paid == [1, 1]
 
 
 def test_schedule_skips_a_current_record_and_the_off_switch(monkeypatch):

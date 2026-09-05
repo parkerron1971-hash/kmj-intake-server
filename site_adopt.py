@@ -38,6 +38,8 @@ import logging
 import os
 import re
 import threading
+import time
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -215,6 +217,44 @@ def _read_business(business_id: str) -> Dict[str, Any]:
     return rows[0] if rows else {"id": business_id}
 
 
+# ONE REPLICA WRITES THE RECORD (2026-09-05, the first live pass): every
+# Railway replica boots, syncs, and schedules its own pass within
+# milliseconds of the others — the first deploy paid for two 18c
+# records and kept one. A claim stamp with a per-process token, written
+# and re-read after a beat, lets exactly one proceed. Fail-open: a read
+# or write problem lets the pass run — paying twice beats never writing.
+CLAIM_TTL_S = 600.0
+CLAIM_SETTLE_S = 2.0
+
+
+def _claim(business_id: str, row_id: str, cfg: Dict[str, Any], digest: str) -> bool:
+    prior = cfg.get("adopting") if isinstance(cfg.get("adopting"), dict) else None
+    if prior and prior.get("text_hash") == digest:
+        try:
+            age = time.time() - datetime.fromisoformat(str(prior.get("at"))).timestamp()
+        except Exception:
+            age = CLAIM_TTL_S + 1
+        if age < CLAIM_TTL_S:
+            return False
+    token = uuid.uuid4().hex
+    try:
+        import sb_clients
+        new_cfg = dict(cfg)
+        new_cfg["adopting"] = {"at": datetime.now(timezone.utc).isoformat(),
+                               "text_hash": digest, "token": token}
+        sb_clients.sb_patch_as_service(f"/business_sites?id=eq.{row_id}",
+                                       {"site_config": new_cfg})
+        if CLAIM_SETTLE_S:
+            time.sleep(CLAIM_SETTLE_S)
+        fresh = _read_row(business_id) or {}
+        stored = (fresh.get("site_config") or {}).get("adopting")
+        stored = stored if isinstance(stored, dict) else {}
+        return stored.get("token") in (token, None)
+    except Exception as e:
+        logger.info(f"[site-adopt] claim skipped ({e}); proceeding")
+        return True
+
+
 def adopt(business_id: str, *, row: Optional[Dict[str, Any]] = None,
           force: bool = False) -> Dict[str, Any]:
     """Write the design record for a hand-built site from its live pages.
@@ -233,6 +273,8 @@ def adopt(business_id: str, *, row: Optional[Dict[str, Any]] = None,
         digest = text_digest(pages)
         if not force and is_current(cfg, pages):
             return {"ok": True, "status": "current", "text_hash": digest}
+        if not force and not _claim(business_id, str(row.get("id")), cfg, digest):
+            return {"ok": True, "status": "claimed_elsewhere", "text_hash": digest}
 
         business = _read_business(business_id)
         import spec_author
@@ -259,6 +301,7 @@ def adopt(business_id: str, *, row: Optional[Dict[str, Any]] = None,
             "model": model, "revision": revision,
             "source": "adopted", "edition": EDITION,
         }
+        cfg.pop("adopting", None)
         cfg["adopted"] = {
             "at": now, "edition": EDITION,
             "hash": cfg.get("manual_hash"), "text_hash": digest,
