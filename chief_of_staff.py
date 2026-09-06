@@ -302,6 +302,78 @@ MAX_HISTORY = 30
 _STREAM_SINK: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
     "chief_stream_sink", default=None)
 
+# ─── the turn says what it is doing (2026-09-06) ──────────────────────
+# The stream carried the reply's words and nothing else: while the
+# server read the business, waited on the model, ran the actions and
+# wrote the second pass, the chat showed three dots for up to a minute
+# and the practitioner could not tell working from frozen. Kevin: "fix
+# chief letting us know it's thinking." A status piece rides the same
+# sink as the deltas, prefixed so the stream turns it into a `status`
+# event instead of text; the plain endpoint simply never sees it.
+STATUS_PREFIX = "\x00status:"
+
+_ACTION_PHRASES = {
+    "propose_business_from_idea": "laying out the business",
+    "propose_module_from_intake": "drafting the proposal",
+    "upgrade_module_archetype": "drafting the upgrade",
+    "accept_module_spec": "building the module",
+    "ensure_module": "building the module",
+    "create_client_form": "creating the form",
+    "create_invoice": "writing the invoice",
+    "send_invoice": "sending the invoice",
+    "show_view": "pulling up the numbers",
+    "summarize_module": "adding it up",
+    "inspect_module": "checking the module",
+    "check_module": "starting the design check",
+    "check_site": "starting the site check",
+    "enqueue_job": "starting the job",
+    "navigate": "opening the room",
+    "remember": "saving that",
+    "create_contact": "adding the contact",
+    "create_booking": "booking it",
+    "draft_email": "writing the email",
+}
+
+
+def _turn_status(text: str) -> None:
+    """One short phrase for the practitioner while the turn works."""
+    try:
+        sink = _STREAM_SINK.get()
+    except LookupError:
+        sink = None
+    if not sink or not text:
+        return
+    try:
+        sink(STATUS_PREFIX + str(text)[:80])
+    except Exception:
+        pass
+
+
+def _humanize_actions(actions: List[Dict[str, Any]]) -> str:
+    phrases: List[str] = []
+    for a in actions or []:
+        t = str((a or {}).get("type") or "").strip() if isinstance(a, dict) else ""
+        if not t:
+            continue
+        p = _ACTION_PHRASES.get(t) or (t.replace("_", " "))
+        if p not in phrases:
+            phrases.append(p)
+        if len(phrases) == 2:
+            break
+    if not phrases:
+        return "working on it"
+    return " and ".join(phrases)
+
+
+def _stream_piece_events(piece: str, filt: "_ActionTagFilter") -> List[Dict[str, Any]]:
+    """What one sink piece becomes on the wire: a status event, or the
+    text the tag filter lets through as a delta (possibly nothing yet)."""
+    if isinstance(piece, str) and piece.startswith(STATUS_PREFIX):
+        return [{"type": "status", "text": piece[len(STATUS_PREFIX):]}]
+    txt = filt.feed(piece)
+    return [{"type": "delta", "text": txt}] if txt else []
+
+
 OPENING_SENTINEL_PREFIX = "[SYSTEM:opening_greeting"  # may have :morning/:afternoon/:evening suffix
 COACH_OPEN_SENTINEL = "[SYSTEM:strategy_coach_open]"
 COACH_PAUSE_SENTINEL = "[SYSTEM:strategy_coach_pause]"
@@ -12669,6 +12741,7 @@ async def chief_chat(
             _t.mark("sweeps")
 
             # Gather global context + view-specific detail in parallel
+            _turn_status("reading your business")
             ctx_task = _gather_context(client, req.business_id, query_text=req.message)
             view_task = _fetch_view_detail(client, req.business_id, req.current_context)
             ctx, view_detail = await asyncio.gather(ctx_task, view_task)
@@ -13043,6 +13116,7 @@ async def chief_chat(
             chief_tool_loop.reset_turn(writes_allowed=_native_writes)
             _read_tools = (None if is_coach_mode
                            else chief_tool_loop.tool_definitions_for_turn(_native_writes))
+            _turn_status("thinking")
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
@@ -13194,6 +13268,8 @@ async def chief_chat(
             # reply still carried as tags. Both lists are real results
             # from the same door; nothing is deduped because nothing ran
             # twice.
+            if actions:
+                _turn_status(_humanize_actions(actions))
             taken = tool_taken + (await _execute_actions(
                 client, biz, actions, user_id=str(user_session.user.id)) if actions else [])
 
@@ -13235,6 +13311,7 @@ async def chief_chat(
             # still recomposes, because the tag half was narrated blind.
             if taken and actions:
                 try:
+                    _turn_status("finishing the reply")
                     composed = await _compose_post_action_reply(
                         client,
                         original_message=effective_message or req.message,
@@ -13504,16 +13581,15 @@ async def chief_chat_stream(
                 done, _ = await asyncio.wait(
                     {getter, turn}, return_when=asyncio.FIRST_COMPLETED)
                 if getter in done:
-                    txt = filt.feed(getter.result())
-                    if txt:
-                        yield _evt({"type": "delta", "text": txt})
+                    for ev in _stream_piece_events(getter.result(), filt):
+                        yield _evt(ev)
                     continue
                 getter.cancel()
                 # Turn finished — drain any deltas that raced the finish.
                 while not q.empty():
-                    txt = filt.feed(q.get_nowait())
-                    if txt:
-                        yield _evt({"type": "delta", "text": txt})
+                    for ev in _stream_piece_events(q.get_nowait(), filt):
+                        if ev["type"] == "delta":
+                            yield _evt(ev)
                 tail = filt.flush()
                 if tail:
                     yield _evt({"type": "delta", "text": tail})
