@@ -88,6 +88,13 @@ CASES: List[Dict[str, Any]] = [
         "expect_field_types": ["rating", "textarea"],
         "expect_trigger_kinds": [],
         "expect_skill": "feedback-module",
+        # The first live run put this on booking_calendar because the
+        # intake said "session". A feedback log is a dashboard (average,
+        # trend, the words); it is never the one-per-business booking
+        # archetype with its customer form.
+        "expect_archetype": "composed_dashboard",
+        "expect_not_archetype": ["booking_calendar"],
+        "expect_presentation": ["empty_line"],
     },
     {
         "id": "equipment",
@@ -268,6 +275,11 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
     if want_arch:
         got_archs = sorted({sp.get("archetype") for sp in specs})
         check(f"archetype:{want_arch}", want_arch in got_archs, f"got {got_archs}")
+    # The archetypes a case must NOT land on — the costly misreads (a
+    # single-instance booking calendar for a log that mentioned "session").
+    for bad in case.get("expect_not_archetype", []):
+        got_archs = sorted({sp.get("archetype") for sp in specs})
+        check(f"archetype:not:{bad}", bad not in got_archs, f"got {got_archs}")
 
     # HOW IT FEELS — the presentation keys the case expects, present and
     # non-empty on at least one spec; and, for a case that expects any

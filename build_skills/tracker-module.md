@@ -1,7 +1,7 @@
 ---
 name: tracker-module
 description: designing a progress tracker — a number measured over time against a goal
-triggers: [tracker, track, progress, score, scores, credit, weight, weigh, savings, balance, goal, goals, target, milestone, milestones, streak, streaks, over time, month by month, week by week, toward, towards, reward, rewards, loyalty, punch card, visits, attendance, improve, improvement, trend, chart, graph]
+triggers: [tracker, progress, score, scores, credit, weight, weigh, savings, balance, goal, goals, target, milestone, milestones, streak, streaks, over time, month by month, week by week, toward, towards, reward, rewards, loyalty, punch card, visits, attendance, improve, improvement, trend, chart, graph]
 ---
 A progress tracker answers three questions the moment it opens: how close
 is each person to the goal, which way are they moving, and who just

@@ -6,6 +6,17 @@ triggers: [feedback, review, reviews, rating, ratings, rated, rate them, out of 
 A feedback module exists to be acted on, not archived. Every field should
 help decide what to do next.
 
+THE ARCHETYPE
+- Use archetype "composed_dashboard": the front page is the average
+  rating this month ("stat" agg avg on the rating field), the trend by
+  month ("series" agg avg), a "breakdown" by the handling select, and the
+  latest words ("notes" on the textarea). That is what "spot a bad trend"
+  means on screen.
+- NEVER booking_calendar, even when the intake says "session" or
+  "appointment". Feedback is about a session that already happened; the
+  booking archetype is for time slots a customer reserves, it is one per
+  business, and it ships a customer-facing form nobody asked for here.
+
 REQUIRED SHAPE
 - A `rating` field for the score. It stores an integer 1-5 and renders as
   stars, so it sorts and filters properly — a text field holding "4/5" or

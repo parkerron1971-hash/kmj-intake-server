@@ -1397,7 +1397,14 @@ Available archetypes:
   booking_calendar
     purpose: a tracker for appointments / time-slot reservations / sessions
     when to pick: intake describes booking, scheduling, appointments,
-      reservations, sessions, slot-based time tracking
+      reservations, sessions, slot-based time tracking — a TIME SLOT a
+      customer reserves for the future
+    when NOT to pick: a record of how a session WENT (feedback, ratings,
+      notes after the fact) — that is composed_dashboard; a log of
+      sessions delivered for hours or billing — composed_dashboard. The
+      word "session" alone is not a booking. This archetype is one per
+      business and ships a customer-facing form, so picking it for a
+      non-booking costs the practitioner both.
     schema requirement: schema.fields MUST contain at least one date or
       datetime field that holds the slot start time
     archetype_params (required keys marked *):
