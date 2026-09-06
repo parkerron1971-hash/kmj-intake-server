@@ -42,6 +42,10 @@ SKILL_ARCHETYPE: Dict[str, str] = {
     "pipeline-module": "work_pipeline",
     "booking-module": "booking_calendar",
     "dashboard-module": "composed_dashboard",
+    # A feedback log is rows with a rating and words, and its question is
+    # the average and the trend — a dashboard. The first live eval put it
+    # on booking_calendar because the intake said "session".
+    "feedback-module": "composed_dashboard",
 }
 
 # Words in an intake that mean the practitioner wants to be TOLD.
@@ -138,6 +142,20 @@ def assess(specs: List[Dict[str, Any]], intake: str, business_type: str = "",
                 f"the intake describes the shape {arch} is built for, but this spec "
                 f"is on fallback_generic — pick archetype '{arch}' and fill its "
                 f"archetype_params from the fields you already designed"))
+        # A booking calendar chosen for something that is not a booking is
+        # the costly mistake: it is single-instance (a practitioner who has
+        # Bookings would see the proposal filtered as a duplicate) and it
+        # ships a customer-facing widget nobody asked for. The first live
+        # eval put a session-feedback log there because the intake said
+        # "session".
+        elif arch not in used and "booking_calendar" in used and arch != "booking_calendar":
+            bc = next(s for s in specs if s.get("archetype") == "booking_calendar")
+            rep.findings.append(Finding(
+                "not_a_booking", "revise", bc.get("slug"),
+                f"this is not a booking calendar — the intake describes the shape "
+                f"{arch} is built for. booking_calendar is for time slots a customer "
+                f"reserves; pick archetype '{arch}' and fill its archetype_params "
+                f"from the fields you already designed"))
 
     # ─── The alert they asked for ───────────────────────────────────────
     wants_alert = bool(_ALERT_WORDS.search(intake))

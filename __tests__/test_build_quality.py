@@ -248,3 +248,60 @@ def test_the_generator_no_longer_sends_a_temperature(monkeypatch):
     msg.generate_module_proposal({"name": "Clear Path", "type": "consultant"}, INTAKE)
     assert "temperature" not in fake.calls[0]
     assert fake.calls[0]["model"] == msg.GENERATOR_MODEL
+
+
+# ─── the first live eval's miss (2026-09-06) ──────────────────────────
+
+def test_a_feedback_log_on_the_booking_calendar_is_revised():
+    """72/72 on the harness, and the feedback case had landed on
+    booking_calendar — single-instance, with a customer form — because
+    the intake said "session". The harness could not score it; now the
+    rubric can, and the eval asserts it."""
+    spec = {
+        "slug": "session-feedback", "name": "Session Feedback",
+        "archetype": "booking_calendar",
+        "archetype_params": {"primary_date_field": "session_date"},
+        "schema": {"fields": [
+            {"name": "session_date", "type": "date", "label": "When", "customer_facing": True},
+            {"name": "contact_id", "type": "contact_link", "label": "Client"},
+            {"name": "rating", "type": "rating", "label": "Rating"},
+            {"name": "what_they_said", "type": "textarea", "label": "Words"},
+        ], "views": ["list"]},
+        "agent_config": {"enabled": True, "triggers": []},
+        "presentation": {"empty_line": "Log the first session's rating."},
+    }
+    intake = ("After each session I want to record how the client rated it out "
+              "of five and what they said, so I can spot a bad trend.")
+    rep = bq.assess([spec], intake, "coach")
+    codes = [f.code for f in rep.findings]
+    assert "not_a_booking" in codes, codes
+    assert "composed_dashboard" in next(f.message for f in rep.findings if f.code == "not_a_booking")
+    assert rep.needs_revision
+
+
+def test_a_real_booking_is_not_flagged():
+    spec = {
+        "slug": "bookings", "name": "Bookings", "archetype": "booking_calendar",
+        "archetype_params": {"primary_date_field": "appointment_at"},
+        "schema": {"fields": [
+            {"name": "appointment_at", "type": "date", "label": "When", "customer_facing": True},
+            {"name": "contact_id", "type": "contact_link", "label": "Customer"},
+        ], "views": ["list", "calendar"], "calendar_field": "appointment_at"},
+        "agent_config": {"enabled": True, "triggers": [{"type": "overdue", "field": "appointment_at", "action": "draft_reminder"}]},
+        "presentation": {"empty_line": "Book the first head and the day starts filling up."},
+    }
+    rep = bq.assess([spec], "I need to keep track of my appointments and who showed up", "barber")
+    assert "not_a_booking" not in {f.code for f in rep.findings}
+
+
+def test_keep_track_of_does_not_pull_the_tracker_skill():
+    """'track' fired the tracker skill on 'keep track of my appointments'
+    and on 'track the gear I lend out' — two of six live cases got a
+    playbook for a shape they were not."""
+    import build_skills as bs
+    for text in ("I need to keep track of my appointments and who showed up",
+                 "Track the gear I lend out: what it is, who has it, when it's due back"):
+        names = [s["name"] for s in bs.select_skills(text, "custom")]
+        assert "tracker-module" not in names, (text, names)
+    names = [s["name"] for s in bs.select_skills("a credit score tracker toward 720", "consultant")]
+    assert names[0] == "tracker-module"
