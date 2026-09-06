@@ -8,7 +8,7 @@ What must hold:
   2. IT IS GONE WHEN THE DEAL IS GONE: zero seats, no founder price, or
      a database error — no dialog, and the page still renders.
   3. IT STAYS OFF THE PAGES WHERE IT WOULD BE IN THE WAY: the contact
-     form and the news carry nothing; the reading pages carry it.
+     form carries nothing; the reading pages and the news carry it.
   4. THE SCRIPT REMEMBERS: it keys storage, waits before showing, and
      honours the preview switch.
   5. NO STRAY WORDS: nothing in the flyer names a vendor model, and the
@@ -107,9 +107,22 @@ def test_the_reading_pages_carry_it_and_the_rest_do_not(seats):
                    mp.render_compare, mp.render_faq, mp.render_download):
         assert 'id="founderAd"' in render(), f"{render.__name__} should carry the flyer"
     assert 'id="founderAd"' not in mp.render_get_started(), "not on top of the contact form"
-    assert 'id="founderAd"' not in mp.render_news_index([]), "not on the news"
     css, markup = fad.founder_ad_bundle("/privacy")
     assert css == "" and markup == ""
+
+
+def test_the_news_carries_it_too(seats):
+    """Kevin, 2026-09-06: 'add it to the news pages too' — the index and
+    every post, whose addresses are /news/{slug}."""
+    import site_news
+    posts = site_news.normalize_posts([
+        {"id": "a", "title": "Publish to your own site", "body": "The first paragraph.",
+         "published_at": "2026-08-29T12:00:00Z"}])
+    assert 'id="founderAd"' in mp.render_news_index(posts)
+    assert 'id="founderAd"' in mp.render_news_index([])
+    assert 'id="founderAd"' in mp.render_news_post(posts[0])
+    assert fad.carries_the_flyer("/news/publish-to-your-own-site")
+    assert not fad.carries_the_flyer("/newsletter")
 
 
 # ─── 4. the script remembers ─────────────────────────────────────────

@@ -6,7 +6,7 @@ popup ad."
 
 What it is: a single dialog that rises once per visitor on the reading
 pages of mysolutionist.app (home, about, features, compare, faq,
-download) with the founding-seat deal on it — Professional at the
+download, the news index and every post) with the founding-seat deal on it — Professional at the
 founding price, locked for the life of the seat, with the LIVE seat
 count the pricing strip already reads. One button takes the seat
 (`/start?plan=founder`); everything else closes it.
@@ -21,7 +21,7 @@ What keeps it from being the popup everyone hates:
     price configured, or the seat count unreadable — no dialog at all,
     the page is exactly what it was;
   - it stays off the pages where it would be in the way: /start, the
-    legal pages, the contact form, the news.
+    legal pages, the contact form.
 
 `?ad=founder` on any carrying page shows it at once, storage or not —
 so Kevin can look at it, and so a shared link can lead with it.
@@ -33,8 +33,15 @@ never disagree.
 from __future__ import annotations
 
 # The pages that carry the flyer. Everything else in the shell — the
-# start flow, legal, the contact form, the news — is left alone.
-FOUNDER_AD_PATHS = frozenset({"/", "/about", "/features", "/compare", "/faq", "/download"})
+# start flow, legal, the contact form — is left alone. The news came in
+# on Kevin's ask (2026-09-06, same day): the index and every post, which
+# live at /news/{slug} and so match by prefix.
+FOUNDER_AD_PATHS = frozenset({"/", "/about", "/features", "/compare", "/faq", "/download", "/news"})
+FOUNDER_AD_PREFIXES = ("/news/",)
+
+
+def carries_the_flyer(path: str) -> bool:
+    return path in FOUNDER_AD_PATHS or path.startswith(FOUNDER_AD_PREFIXES)
 
 STORAGE_KEY = "sol_founder_ad"
 QUIET_DAYS = 14
@@ -322,7 +329,7 @@ FOUNDER_AD_SCRIPT = """
 def founder_ad_bundle(path: str) -> tuple[str, str]:
     """(extra_css, extra_markup) for the shell: both empty when this
     page does not carry the flyer or there is no offer to show."""
-    if path not in FOUNDER_AD_PATHS:
+    if not carries_the_flyer(path):
         return "", ""
     html = founder_ad_html()
     if not html:
