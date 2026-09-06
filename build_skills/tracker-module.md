@@ -64,6 +64,17 @@ THE ALERT
   count restarts after the row where it is ticked. Do NOT add a workflow
   to "reset the count" — the archetype does that.
 
+HOW IT FEELS (presentation — the surface draws these)
+- reached_line names the achievement in the trade's words ("Prime
+  territory — 720 and climbing", "Seventh cut — this one is on the house").
+- milestone_labels gives each milestone the name the domain already uses
+  (credit: Fair / Good / Prime; fundraising: Halfway / Funded). Skip
+  numbers nobody names.
+- empty_line is one sentence with a verb, in their voice, about the first
+  reading — never "No data yet".
+- tone: "bold" when the number is the pride (a score, revenue, a record);
+  "warm" when it is a person's habit (visits, attendance, care).
+
 EXAMPLE (reading mode, a credit-repair consultant)
   archetype_params: {"mode":"reading","subject_field":"client",
     "value_field":"score","date_field":"pulled_on","target":720,
@@ -71,3 +82,6 @@ EXAMPLE (reading mode, a credit-repair consultant)
     "item_noun":"Reading","subject_noun":"Client"}
   fields: client (contact_link, required), score (number, required),
     pulled_on (date, required), bureau (select), notes (textarea)
+  presentation: {"empty_line":"Pull the first report and the climb starts here.",
+    "reached_line":"Prime territory — 720 and climbing.",
+    "milestone_labels":{"620":"Fair","680":"Good","720":"Prime"},"tone":"bold"}

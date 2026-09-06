@@ -651,6 +651,81 @@ _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
 }
 
 
+Tone = Literal["calm", "bold", "warm", "precise"]
+TONES: tuple = ("calm", "bold", "warm", "precise")
+
+# A line the practitioner reads on the surface. Long enough for a
+# sentence with a number in it, short enough that it stays one line on a
+# phone card.
+_LINE_MAX = 140
+
+
+class Presentation(BaseModel):
+    """How the module FEELS — decided by the model from the practitioner's
+    own words, rendered deterministically by the archetype component.
+
+    This is the generalization pattern applied to feel: the model reasons
+    freely (a credit-repair consultant's milestones are 'Fair / Good /
+    Prime'; a barber's seventh cut is 'on the house'), the output is a
+    closed, validated shape, and the surface does the drawing. Nothing
+    here can break a theme, a layout or a phone — the worst a bad value
+    can do is read oddly, and the practitioner sees every line on the
+    proposal card before accepting.
+
+    All optional. An empty presentation renders the archetype's honest
+    defaults; every archetype must work with {}."""
+    # The sentence the empty state says under the icon.
+    empty_line: Optional[str] = Field(default=None, max_length=_LINE_MAX)
+    # progress_tracker: what the celebration and the badge say when a
+    # subject reaches the goal.
+    reached_line: Optional[str] = Field(default=None, max_length=_LINE_MAX)
+    # progress_tracker: a name for each milestone, keyed by its number as
+    # a string ("620": "Fair"). The FE draws them under the ticks.
+    milestone_labels: Dict[str, str] = Field(default_factory=dict)
+    # The surface's register. calm is the default; bold leads with the
+    # number; warm rounds and softens; precise tightens and tabulates.
+    tone: Optional[Tone] = None
+
+    @model_validator(mode="after")
+    def _keys_are_numbers(self):
+        cleaned: Dict[str, str] = {}
+        for k, v in (self.milestone_labels or {}).items():
+            try:
+                float(str(k))
+            except ValueError:
+                raise ValueError(
+                    f"presentation.milestone_labels key '{k}' is not a number — "
+                    f"keys are the milestone values as strings ('620')")
+            label = (v or "").strip()
+            if not label:
+                continue
+            if len(label) > 40:
+                raise ValueError(
+                    f"presentation.milestone_labels['{k}'] is longer than 40 "
+                    f"characters — it sits under a tick mark")
+            cleaned[str(k).strip()] = label
+        object.__setattr__(self, "milestone_labels", cleaned)
+        for attr in ("empty_line", "reached_line"):
+            val = getattr(self, attr)
+            if val is not None and not val.strip():
+                object.__setattr__(self, attr, None)
+        return self
+
+
+def presentation_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """The presentation a custom_modules row gets from a draft spec:
+    validated through the model, empties dropped, never raises on a bad
+    blob (a malformed feel must not block a build — it renders default)."""
+    raw = spec.get("presentation")
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        return Presentation(**raw).model_dump(exclude_none=True)
+    except ValidationError as e:
+        logger.warning(f"presentation ignored (invalid): {e}")
+        return {}
+
+
 class ModuleSpec(BaseModel):
     slug: str = Field(..., description="kebab-case slug, e.g. 'bookings'")
     name: str
@@ -660,6 +735,8 @@ class ModuleSpec(BaseModel):
     schema_: ModuleSchema = Field(..., alias="schema")
     agent_config: ModuleAgentConfig = Field(default_factory=ModuleAgentConfig)
     public_display: Optional[PublicDisplaySlot] = None
+    # How it feels (2026-09-05). Optional and validated; see Presentation.
+    presentation: Presentation = Field(default_factory=Presentation)
     workflows: List[WorkflowSpec] = Field(default_factory=list)
     voice_hints: List[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
@@ -1479,7 +1556,11 @@ Available archetypes:
            "views":["list"],"default_view":"list","default_sort":"pulled_on"},
          "agent_config":{"enabled":true,"triggers":[
            {"type":"target_reached","action":"draft_notification",
-            "template":"Credit goal reached"} ] }
+            "template":"Credit goal reached"} ] },
+         "presentation":{"empty_line":"Pull the first report and the climb starts here.",
+           "reached_line":"Prime territory — 720 and climbing.",
+           "milestone_labels":{"620":"Fair","680":"Good","720":"Prime"},
+           "tone":"bold"}
         }
     example intake → spec (count mode):
       "every seventh haircut is free"
@@ -1519,6 +1600,33 @@ emit fallback_generic, re-read the palette once: "tracker", "progress", \
 "over time", "toward", "goal", "milestone", "streak" are progress_tracker; \
 "where is it", "stage", "pipeline" are work_pipeline; "who is coming" is \
 event_roster; "signed" is agreement_ledger; "book" is booking_calendar.
+
+PRESENTATION — how the module FEELS (every ModuleSpec carries one):
+The practitioner opens this surface every day; the words on it should \
+sound like their trade, not like software. You decide the feel; the \
+surface draws it. Four keys, all optional, all short:
+  empty_line — the one sentence the empty state says before the first row. \
+    In their voice, about their work, with a verb: a credit consultant's \
+    "Pull the first report and the climb starts here", a barber's \
+    "First cut goes on the card", a lawyer's "The first matter opens the \
+    board". Never "No data yet" or "Nothing here".
+  reached_line — (progress_tracker only) what the celebration says when a \
+    subject reaches the goal. Name the achievement in the trade's words: \
+    "Prime territory — 720 and climbing", "Seventh cut — this one is on \
+    the house", "Goal weight. Time to set the next one."
+  milestone_labels — (progress_tracker only) a NAME for each number in \
+    archetype_params.milestones, keyed by the number as a string, taken \
+    from the domain when it has one: credit scores {"620":"Fair", \
+    "680":"Good", "720":"Prime"}; a fundraising thermometer \
+    {"5000":"Halfway","10000":"Funded"}. Skip milestones no one names.
+  tone — the register: "calm" (default, most modules), "bold" (a number \
+    the practitioner is proud of leads big — scores, revenue, records), \
+    "warm" (people-first: members, clients, rewards, care), "precise" \
+    (money, legal, compliance — tight, tabular). Pick from the vertical \
+    and the intake; do not pick "bold" for a waiver ledger.
+Each line is at most 140 characters and reads as ONE sentence. Write \
+these for every module, not only trackers — the empty_line is the first \
+thing a practitioner sees on any surface they just built.
 
 confidence: 'high' if intake is specific, 'medium' if inferred, 'low' if vague.
 
@@ -1867,6 +1975,10 @@ Discipline to apply (all current passes, cumulative):
     That is the whole point of upgrading a fallback module. Keep every
     existing field name so the rows already in the module still render;
     add fields only when the archetype cannot work without them.
+  - PRESENTATION: if the current presentation is empty, write it now
+    (empty_line, reached_line and milestone_labels for a tracker, a
+    tone) in the practitioner's vertical voice — an upgrade should
+    feel like an upgrade. If it already has lines, keep them.
   - The envelope MUST contain exactly ONE ModuleSpec.
   - The envelope MUST contain ONE ProposedOffering per inline service
     in the current module (if any).
@@ -1926,6 +2038,7 @@ def regenerate_for_upgrade(business_id: str, module_id: str) -> Dict[str, Any]:
         "agent_config": module.get("agent_config") or {},
         "archetype": module.get("archetype"),
         "archetype_params": module.get("archetype_params") or {},
+        "presentation": module.get("presentation") or {},
     }, indent=2)
     guidance = _UPGRADE_GUIDANCE.format(current_state=current_state)
 
@@ -2171,6 +2284,9 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
         "archetype": spec.get("archetype") or "fallback_generic",
         "archetype_params": spec.get("archetype_params") or {},
         "archetype_fallback_reason": spec.get("archetype_fallback_reason"),
+        # How it feels — the lines and the register the model chose from
+        # the practitioner's words (APPLY-2026-09-05-custom-modules-presentation).
+        "presentation": presentation_from_spec(spec),
         # Phase C, finally materialized (2026-08-13, post-audit gap list).
         # public_display was a CAPTURED SLOT ONLY — the spec model carried
         # it, this file's own docstring said so, and this payload dropped

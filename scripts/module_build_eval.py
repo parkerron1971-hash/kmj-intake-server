@@ -135,6 +135,9 @@ CASES: List[Dict[str, Any]] = [
         "expect_trigger_kinds": ["target_reached"],
         "expect_archetype": "progress_tracker",
         "expect_skill": "tracker-module",
+        # The feel: a tracker without a reached_line and milestone names
+        # is the plain table with a chart on it.
+        "expect_presentation": ["empty_line", "reached_line", "milestone_labels"],
     },
     {
         "id": "vague",
@@ -251,6 +254,17 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
         got_archs = sorted({sp.get("archetype") for sp in specs})
         check(f"archetype:{want_arch}", want_arch in got_archs, f"got {got_archs}")
 
+    # HOW IT FEELS — the presentation keys the case expects, present and
+    # non-empty on at least one spec. Every module should carry an
+    # empty_line; the harness only asserts what the case names.
+    for key in case.get("expect_presentation", []):
+        got = [(sp.get("presentation") or {}).get(key) for sp in specs]
+        ok = any(bool(g) for g in got)
+        check(f"presentation:{key}", ok, f"got {got}")
+    empties = [sp.get("slug") for sp in specs
+               if not ((sp.get("presentation") or {}).get("empty_line") or "").strip()]
+    check("presentation:empty_line_on_every_spec", not empties, f"missing on {empties}")
+
     # Every field type used must be one the vocabulary allows. A spec that
     # invents a type validates nowhere and renders nowhere.
     import module_vocabulary
@@ -282,6 +296,7 @@ def _summarise(spec: Dict[str, Any]) -> Dict[str, Any]:
         "triggers": [t.get("type") for t in
                      ((spec.get("agent_config") or {}).get("triggers") or [])],
         "confidence": spec.get("confidence"),
+        "presentation": spec.get("presentation") or {},
     }
 
 
