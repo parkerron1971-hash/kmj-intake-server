@@ -76,6 +76,14 @@ def enabled() -> bool:
     return (os.environ.get("MODULE_CHECK") or "on").strip().lower() not in ("off", "0", "false", "no")
 
 
+def revise_enabled() -> bool:
+    """The builder may act on the verdict (module_revise). MODULE_REVISE=off keeps checks read-only."""
+    return (os.environ.get("MODULE_REVISE") or "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+REVISE_BELOW = 4                        # a 4/5 or better is left alone
+
+
 # ─── the preview token ────────────────────────────────────────────────
 
 def _secret() -> bytes:
@@ -390,16 +398,82 @@ def _rank(f: Dict[str, Any]) -> int:
     return {"high": 0, "medium": 1, "low": 2}.get(f.get("severity"), 3)
 
 
-def run(business_id: str, module_id: str, *, reason: str = "manual", vision: bool = True,
-        progress_cb=None) -> Dict[str, Any]:
-    """Look at one module. Returns the report; never raises."""
-    import sb_clients
+def _look(business_id: str, module: Dict[str, Any], *, vision: bool,
+          progress_cb=None, pct: Tuple[int, int] = (10, 90)) -> Dict[str, Any]:
+    """One look at a module: open, measure, judge. Returns
+    {ok, page, findings, verdict, screenshots, error?}."""
     import site_check
+    lo, hi = pct
+    span = max(1, hi - lo)
+    module_id = str(module.get("id"))
+    if progress_cb:
+        progress_cb(lo, f"opening {module.get('name')}")
+    url = preview_url(business_id, module_id, sample=True)
+    pages = site_check.inspect_pages([url], widths=WIDTHS, screenshots=True)
+    if pages is None:
+        return {"ok": False, "error": "no_browser"}
+    page = pages[0]
+    if progress_cb:
+        progress_cb(lo + int(span * 0.45), "measuring the layout")
+    token = url.rsplit("/", 1)[1]
+
+    def _scrub(v: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        return (v.replace(url, module.get("name") or "module")
+                 .replace(token, "<preview>")
+                 .replace("/preview/module/" + "<preview>", module.get("name") or "module"))
+
+    findings = site_check.findings_from_geometry(page)
+    for f in findings:
+        for k in ("where", "what", "detail"):
+            if k in f:
+                f[k] = _scrub(f[k])
+    page["console_errors"] = [_scrub(c) for c in (page.get("console_errors") or [])]
+    page["failed_requests"] = [_scrub(c) for c in (page.get("failed_requests") or [])]
+    verdict = {"findings": [], "design_score": None, "first_impression": "", "next": []}
+    if vision:
+        if progress_cb:
+            progress_cb(lo + int(span * 0.6), "a designer's look at both widths")
+        verdict = judge(page, business_id, module)
+        findings.extend(verdict["findings"])
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    shots = site_check._store_shots(business_id, f"mod-{run_id}", [page])
+    findings.sort(key=_rank)
+    seen, deduped = set(), []
+    for f in findings:
+        k = (f.get("what"), f.get("where"))
+        if k in seen:
+            continue
+        seen.add(k)
+        deduped.append(f)
+    return {"ok": True, "page": page, "findings": deduped[:MAX_FINDINGS], "verdict": verdict,
+            "screenshots": shots, "url": url}
+
+
+def _summary(name: str, findings: List[Dict[str, Any]], score: Optional[int]) -> str:
+    high = sum(1 for f in findings if f.get("severity") == "high")
+    n = len(findings)
+    score_txt = f"design {score}/5" if score else "no design score"
+    if n == 0:
+        return f"{name}: nothing out of place, {score_txt}."
+    return (f"{name}: {n} thing{'s' if n != 1 else ''} to look at"
+            + (f", {high} that matter{'s' if high == 1 else ''}" if high else "")
+            + f"; {score_txt}.")
+
+
+def run(business_id: str, module_id: str, *, reason: str = "manual", vision: bool = True,
+        revise: bool = True, progress_cb=None) -> Dict[str, Any]:
+    """Look at one module — and, when the designer scores it below 4 and
+    names next moves, let the builder act on them (module_revise), look
+    again, and keep the change only if the score went up. Returns the
+    report; never raises."""
+    import sb_clients
     started = time.time()
     report: Dict[str, Any] = {"ok": False, "reason": reason, "checked_at": _now(),
                               "module_id": module_id, "module": None, "findings": [],
                               "design_score": None, "first_impression": "", "next": [],
-                              "summary": "", "screenshots": [], "url": None}
+                              "summary": "", "screenshots": [], "url": None, "revision": None}
     try:
         if not enabled():
             report["summary"] = "Module checks are switched off."
@@ -413,73 +487,74 @@ def run(business_id: str, module_id: str, *, reason: str = "manual", vision: boo
             return report
         module = rows[0]
         report["module"] = module.get("name")
-        if progress_cb:
-            progress_cb(10, f"opening {module.get('name')}")
-        url = preview_url(business_id, module_id, sample=True)
-        report["url"] = url.split("/preview/module/")[0] + "/preview/module/…"
-        pages = site_check.inspect_pages([url], widths=WIDTHS, screenshots=True)
-        if pages is None:
+        will_revise = bool(revise and vision and revise_enabled())
+        first = _look(business_id, module, vision=vision, progress_cb=progress_cb,
+                      pct=(10, 45) if will_revise else (10, 90))
+        if not first.get("ok"):
             report["summary"] = "The check could not open a browser on the server."
-            report["error"] = "no_browser"
+            report["error"] = first.get("error") or "no_browser"
             return report
-        page = pages[0]
-        if progress_cb:
-            progress_cb(45, "measuring the layout")
-        token = url.rsplit("/", 1)[1]
-
-        def _scrub(s: Any) -> Any:
-            if not isinstance(s, str):
-                return s
-            return (s.replace(url, module.get("name") or "module")
-                     .replace(token, "<preview>")
-                     .replace("/preview/module/" + "<preview>", module.get("name") or "module"))
-
-        findings = site_check.findings_from_geometry(page)
-        for f in findings:
-            for k in ("where", "what", "detail"):
-                if k in f:
-                    f[k] = _scrub(f[k])
-        page["console_errors"] = [_scrub(c) for c in (page.get("console_errors") or [])]
-        page["failed_requests"] = [_scrub(c) for c in (page.get("failed_requests") or [])]
-        verdict = {"findings": [], "design_score": None, "first_impression": "", "next": []}
-        if vision:
-            if progress_cb:
-                progress_cb(60, "a designer's look at both widths")
-            verdict = judge(page, business_id, module)
-            findings.extend(verdict["findings"])
-        if progress_cb:
-            progress_cb(90, "filing the report")
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        report["screenshots"] = site_check._store_shots(business_id, f"mod-{run_id}", [page])
-        findings.sort(key=_rank)
-        seen, deduped = set(), []
-        for f in findings:
-            k = (f.get("what"), f.get("where"))
-            if k in seen:
-                continue
-            seen.add(k)
-            deduped.append(f)
-        report["findings"] = deduped[:MAX_FINDINGS]
+        report["url"] = first["url"].split("/preview/module/")[0] + "/preview/module/…"
+        verdict = first["verdict"]
+        report["findings"] = first["findings"]
         report["design_score"] = verdict.get("design_score")
         report["first_impression"] = verdict.get("first_impression") or ""
         report["next"] = verdict.get("next") or []
-        report["console_errors"] = page.get("console_errors") or []
-        high = sum(1 for f in report["findings"] if f["severity"] == "high")
-        n = len(report["findings"])
+        report["console_errors"] = first["page"].get("console_errors") or []
+        report["screenshots"] = first["screenshots"]
+
+        # ─── the loop closes: act on the verdict, look again ────────────
         score = report["design_score"]
-        score_txt = f"design {score}/5" if score else "no design score"
-        report["summary"] = (
-            f"{module.get('name')}: nothing out of place, {score_txt}." if n == 0 else
-            f"{module.get('name')}: {n} thing{'s' if n != 1 else ''} to look at"
-            + (f", {high} that matter{'s' if high == 1 else ''}" if high else "")
-            + f"; {score_txt}.")
+        if will_revise and score is not None and score < REVISE_BELOW and report["next"]:
+            import module_revise
+            if progress_cb:
+                progress_cb(50, "revising the design from the verdict")
+            prop = module_revise.propose(module, report)
+            rev: Dict[str, Any] = {"attempted": True, "applied": False, "kept": False,
+                                   "before_score": score, "after_score": None,
+                                   "why": prop.get("why") or prop.get("error") or "", "changes": []}
+            if prop.get("ok") and not prop.get("unchanged"):
+                if module_revise.apply(module_id, prop["archetype_params"], prop["presentation"]):
+                    rev["applied"] = True
+                    rev["changes"] = prop.get("changes") or []
+                    revised = dict(module)
+                    revised["archetype_params"] = prop["archetype_params"]
+                    revised["presentation"] = prop["presentation"]
+                    second = _look(business_id, revised, vision=True, progress_cb=progress_cb, pct=(60, 90))
+                    if second.get("ok"):
+                        new_score = second["verdict"].get("design_score")
+                        rev["after_score"] = new_score
+                        if new_score is not None and new_score > score:
+                            rev["kept"] = True
+                            report["findings"] = second["findings"]
+                            report["design_score"] = new_score
+                            report["first_impression"] = second["verdict"].get("first_impression") or ""
+                            report["next"] = second["verdict"].get("next") or []
+                            report["screenshots"] = first["screenshots"] + second["screenshots"]
+                    if not rev["kept"]:
+                        # put it back exactly as it was
+                        b = prop.get("before") or {}
+                        module_revise.apply(module_id, b.get("archetype_params") or {},
+                                            b.get("presentation") or {})
+            report["revision"] = rev
+        if progress_cb:
+            progress_cb(92, "filing the report")
+        report["summary"] = _summary(module.get("name") or "module", report["findings"], report["design_score"])
+        rv = report.get("revision") or {}
+        if rv.get("kept"):
+            report["summary"] += (f" Chief revised the design ({rv['before_score']}→{rv['after_score']}): "
+                                  + "; ".join(rv.get("changes") or [rv.get("why") or "presentation"]) + ".")
+        elif rv.get("applied"):
+            report["summary"] += " A revision was tried and put back — it did not score higher."
         report["ok"] = True
         report["seconds"] = round(time.time() - started, 1)
+        n = len(report["findings"])
+        high = sum(1 for f in report["findings"] if f["severity"] == "high")
         try:
             import event_spine
             event_spine.emit("module_check_completed", business_id, data={
                 "module_id": module_id, "module": module.get("name"), "reason": reason,
-                "findings": n, "high": high, "design_score": score,
+                "findings": n, "high": high, "design_score": report["design_score"],
                 "summary": report["summary"]}, source="module_check")
         except Exception:
             pass
@@ -523,4 +598,8 @@ def describe(report: Dict[str, Any]) -> str:
             f"{f.get('what')} ({f.get('where')}, {f.get('width')}px)" for f in top))
     if report.get("next"):
         bits.append("Next moves: " + "; ".join(report["next"]))
+    rv = report.get("revision") or {}
+    if rv.get("kept"):
+        bits.append(f"Revised by Chief ({rv.get('before_score')}→{rv.get('after_score')}): "
+                    + "; ".join(rv.get("changes") or []) + ".")
     return " ".join(b for b in bits if b)
