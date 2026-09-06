@@ -524,7 +524,8 @@ def _archetype_params(archetype: str, cols: List[Dict[str, Any]], fields: List[D
 
 _ICONS = {"work_pipeline": "Briefcase", "booking_calendar": "CalendarDays",
           "event_roster": "Users", "agreement_ledger": "FileSignature",
-          "progress_tracker": "TrendingUp", "fallback_generic": "Table"}
+          "progress_tracker": "TrendingUp", "composed_dashboard": "LayoutDashboard",
+          "fallback_generic": "Table"}
 
 
 def _module_spec(sheet_name: str, archetype: str, fields: List[Dict[str, Any]],

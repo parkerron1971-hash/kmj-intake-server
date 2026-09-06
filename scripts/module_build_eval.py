@@ -140,6 +140,21 @@ CASES: List[Dict[str, Any]] = [
         "expect_presentation": ["empty_line", "reached_line", "milestone_labels"],
     },
     {
+        # The everything-else shape, done properly: a log whose question is
+        # what it adds up to. Before composed_dashboard every one of these
+        # was a generic table.
+        "id": "expenses",
+        "business": {"name": "Northgate Studio", "type": "creative"},
+        "intake": ("I want to log my business expenses — what I bought, how much, "
+                   "what kind of thing it was — and see where the money goes "
+                   "each month."),
+        "expect_field_types": ["currency", "date", "select"],
+        "expect_trigger_kinds": [],
+        "expect_archetype": "composed_dashboard",
+        "expect_skill": "dashboard-module",
+        "expect_presentation": ["empty_line"],
+    },
+    {
         "id": "vague",
         "business": {"name": "Harbour Co", "type": "custom"},
         "intake": "I need to stay on top of things.",
