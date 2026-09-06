@@ -186,7 +186,10 @@ def _sample_value(field: Dict[str, Any], i: int, rnd, contacts: List[Dict[str, A
     # text: a title reads like a real one ("Reyes lead"), never "Lead / business name 2" —
     # the judge flagged the stranded trailing number on every card
     noun = str(params.get("item_noun") or params.get("_noun") or "item").strip().lower()
-    if name in ("title", "name", "subject") or i == 0 and t == "text":
+    # The title is whatever the surface treats as the title: the archetype's
+    # title_field, a title-ish name, or the first text field (Leads names
+    # its title "lead_name" — the judge saw "Lead / business name 2" again).
+    if name == params.get("_title_field") or name in ("title", "name", "subject"):
         return f"{_LAST[(i * 3) % len(_LAST)]} {noun}"
     return f"{label} {i + 1}"
 
@@ -202,6 +205,8 @@ def sample_rows(module: Dict[str, Any], contacts: List[Dict[str, Any]],
     fields = [f for f in ((module.get("schema") or {}).get("fields") or []) if isinstance(f, dict)]
     params = dict(module.get("archetype_params") or {})
     params.setdefault("_noun", str(module.get("name") or "item").rstrip("s").lower() or "item")
+    first_text = next((f.get("name") for f in fields if f.get("type", "text") == "text" and f.get("name")), None)
+    params.setdefault("_title_field", params.get("title_field") or first_text)
     rows = []
     for i in range(n):
         data = {}
