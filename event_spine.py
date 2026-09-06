@@ -53,6 +53,11 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
                   "(Chief's check_site job, the post-deploy hook, or a post-edit pass)",
         "payload": ["reason", "findings", "high", "pages", "summary"],
     },
+    "module_check_completed": {
+        "source": "module_check.run — after the system looked at one module at phone "
+                  "and desktop size (every accept, or Chief's check_module job)",
+        "payload": ["module_id", "module", "reason", "findings", "high", "design_score", "summary"],
+    },
     "booking_paid": {
         "source": "stripe_connect_router checkout/payment_intent",
         "payload": ["booking_id", "payment_intent_id"],

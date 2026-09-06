@@ -715,14 +715,31 @@ async def handle_inspect_module(client, biz, action):
         rep = module_inspect.inspect_module_row(row)
         if not rep["renderable"]:
             broken += 1
-        reports.append({
+        entry = {
             "module_id": row.get("id"),
             "name": row.get("name") or row.get("slug"),
             "renderable": rep["renderable"],
             "summary": rep["summary"],
             "problems": rep["problems"],
             "warnings": rep["warnings"],
-        })
+        }
+        # The last time the system LOOKED at it (module_check) — what a
+        # designer saw, not just whether it renders.
+        try:
+            import asyncio as _aio
+            import module_check
+            last = await _aio.to_thread(module_check.latest_report, biz["id"], str(row.get("id")))
+            if last:
+                entry["design_check"] = {
+                    "checked_at": last.get("finished_at") or last.get("checked_at"),
+                    "design_score": last.get("design_score"),
+                    "summary": last.get("summary"), "next": last.get("next") or [],
+                    "findings": (last.get("findings") or [])[:5],
+                    "said": module_check.describe(last),
+                }
+        except Exception:
+            pass
+        reports.append(entry)
 
     if len(reports) == 1:
         r = reports[0]
@@ -732,6 +749,13 @@ async def handle_inspect_module(client, biz, action):
         elif r["warnings"]:
             detail += " — " + "; ".join(r["warnings"][:2])
         label = ("✅ " if r["renderable"] else "⚠️ ") + f"{r['name']}: {r['summary']}"
+        dc = r.get("design_check")
+        if dc:
+            detail += " · Last look: " + (dc.get("said") or dc.get("summary") or "")
+            if dc.get("design_score"):
+                label += f" · design {dc['design_score']}/5"
+        else:
+            detail += " · Not yet looked at — check_module gives it a designer's look."
         return {"type": "inspect_module", "result": detail, "label": label,
                 "reports": reports, "nav": None}
 
@@ -744,6 +768,51 @@ async def handle_inspect_module(client, biz, action):
         "reports": reports,
         "nav": None,
     }
+
+
+async def handle_check_module(client, biz, action):
+    """Look at a module the way a person does (module_check.py): open it
+    at phone and desktop size on the server, measure overlaps and
+    overflow, have a designer's eye review the screenshots for what is
+    wrong AND how it reads — a score out of five and the next moves.
+    Runs as a background job (a minute or two); inspect_module reads
+    the verdict back. action: {module_id | slug | module, vision?}"""
+    import chief_jobs
+    import module_check
+    module_id = (action.get("module_id") or "").strip()
+    slug = (action.get("slug") or action.get("module") or action.get("module_name") or "").strip()
+    q = f"/custom_modules?business_id=eq.{biz['id']}&is_active=eq.true&select=id,name,slug"
+    if module_id:
+        q += f"&id=eq.{module_id}"
+    elif slug:
+        q += f"&or=(slug.eq.{slug},name.ilike.*{slug}*)"
+    else:
+        return _fail("check_module", "tell me which module to look at")
+    rows = await _sb(client, "GET", q + "&limit=1") or []
+    if not rows:
+        return _fail("check_module", f"no module found for {module_id or slug}")
+    row = rows[0]
+    vision = action.get("vision")
+    vision = True if vision is None else bool(vision)
+    try:
+        job = await chief_jobs.enqueue(
+            client, user_id=str(biz.get("owner_id") or ""), business_id=str(biz["id"]),
+            kind=module_check.JOB_KIND,
+            params={"module_id": str(row["id"]), "vision": vision, "reason": "chief"}, source="chief")
+    except Exception as e:
+        logger.info(f"[check_module] enqueue failed: {e}")
+        job = None
+    if not job:
+        return _fail("check_module", "I couldn't start the module check just now — try again in a moment")
+    if job.get("deduped"):
+        return {"type": "check_module", "result": "already running",
+                "label": f"🔎 Already looking at {row.get('name')} — the verdict lands in a minute.",
+                "nav": _nav("build"), "job_id": job.get("id"), "module_id": row["id"]}
+    return {"type": "check_module", "result": "queued",
+            "label": (f"🔎 Looking at {row.get('name')} now — phone and desktop size, then a "
+                      f"designer's verdict. Give me a minute or two, then ask how it looks "
+                      f"(inspect_module reads it back)."),
+            "nav": _nav("build"), "job_id": job.get("id"), "module_id": row["id"]}
 
 
 async def handle_accept_module_spec(client, biz, action):
@@ -813,6 +882,16 @@ async def handle_accept_module_spec(client, biz, action):
             "module_id": mod.get("id"),
             "nav": _nav("build"),
         }
+
+    # The second pair of eyes (module_check): the module gets looked at
+    # at phone and desktop size in the background; inspect_module reads
+    # the verdict back. Best effort, never blocks the accept.
+    try:
+        import module_check_router
+        await module_check_router.enqueue_after_accept(
+            str(biz.get("owner_id") or ""), str(biz["id"]), mod.get("id"))
+    except Exception:
+        pass
 
     label = f"✅ {name} is live in Build"
     if repairs:
