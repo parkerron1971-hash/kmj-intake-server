@@ -51,6 +51,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Literal, Optional
+from urllib.parse import quote
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -297,6 +298,7 @@ def generate_business_blueprint(business: Dict[str, Any], idea: str) -> Dict[str
 
 JOB_KIND = "lay_out_business"           # chief_jobs kind — the door is a LONG TASK
 MAX_MODULES = 6                         # cards a business opens to on day one
+MAX_OFFERINGS = 5                       # the builder's come first, the map fills the rest
 REPLAY_WINDOW_HOURS = 24                # how long finished cards can be re-shown
 
 # One intake, ONE module. The map already decided how many pieces the
@@ -367,7 +369,7 @@ def _owned_since(row: Dict[str, Any]) -> str:
 def _drafts_since(business_id: str, created_at: str) -> List[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/module_specs?business_id=eq.{business_id}&status=eq.draft"
-        f"&created_at=gte.{created_at}&select=id,draft_json,created_at"
+        f"&created_at=gte.{quote(created_at, safe='')}&select=id,draft_json,created_at"
         f"&order=created_at.asc&limit=40") or []
     return [r for r in rows if isinstance(r, dict)]
 
@@ -398,6 +400,13 @@ def _narrate(bp: Dict[str, Any]) -> str:
     if rail_lines:
         reasoning += "\n\nHow it runs: " + "; ".join(rail_lines) + "."
     return reasoning
+
+
+def latest_job(business_id: str) -> Optional[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/chief_jobs?business_id=eq.{business_id}&kind=eq.{JOB_KIND}"
+        f"&select=id,status,error,result,created_at,finished_at&order=created_at.desc&limit=1") or []
+    return rows[0] if isinstance(rows, list) and rows else None
 
 
 def active_job(business_id: str) -> Optional[Dict[str, Any]]:
@@ -445,6 +454,33 @@ def _form_line(f: Dict[str, Any]) -> str:
     return f"    - {f.get('name')} [{f.get('form_type', 'intake')}{link}]: {fields}{conf}"
 
 
+def _job_record(business_id: str, row: Optional[Dict[str, Any]]) -> str:
+    """The last layout job, when it is not in flight: FAILED (offer to run
+    it again) or FINISHED with nothing left to replay (its cards were
+    accepted, rejected or aged out). Empty when the cards are still
+    waiting — the CARDS READY line covers that — or there was no job."""
+    job = latest_job(business_id)
+    if not job or job.get("status") in ("queued", "running"):
+        return ""
+    when = _parse_ts(job.get("finished_at") or job.get("created_at"))
+    if when and datetime.now(timezone.utc) - when > timedelta(hours=REPLAY_WINDOW_HOURS):
+        return ""
+    stamp = when.strftime("%H:%M UTC") if when else "recently"
+    if job.get("status") == "failed":
+        return (f"BUSINESS LAYOUT FAILED at {stamp}: {str(job.get('error') or 'no reason recorded')[:160]} "
+                f"— say so plainly and offer to run it again (emit propose_business_from_idea with their idea).")
+    res = job.get("result") if isinstance(job.get("result"), dict) else {}
+    if res.get("ok") is False:
+        return (f"BUSINESS LAYOUT FAILED at {stamp}: {str(res.get('error') or 'no reason recorded')[:160]} "
+                f"— say so plainly and offer to run it again (emit propose_business_from_idea with their idea).")
+    if replay(business_id):
+        return ""
+    names = ", ".join(str(n) for n in (res.get("modules") or [])[:6]) or "the pieces it mapped"
+    return (f"BUSINESS LAYOUT FINISHED at {stamp} ({names}). Its cards are no longer waiting — "
+            f"each was accepted (see CUSTOM MODULES), rejected, or is older than a day. Never say "
+            f"nothing ran; offer to lay it out again if they want more.")
+
+
 def context_block(business_id: str) -> str:
     """BUSINESS BLUEPRINT ON FILE — the map behind the cards, for the turns
     after the practitioner accepts them, and the two states around the
@@ -454,7 +490,10 @@ def context_block(business_id: str) -> str:
     and no job."""
     job = active_job(business_id)
     row = latest_blueprint(business_id)
+    record = "" if job else _job_record(business_id, row)
     if not row:
+        if record:
+            return record
         if job:
             return (f"BUSINESS LAYOUT IN PROGRESS ({JOB_KIND} job {job.get('status')}): the map "
                     f"and the cards are being built right now — say it is in progress "
@@ -465,6 +504,8 @@ def context_block(business_id: str) -> str:
         return ""
     bp = row.get("draft_json") or {}
     lines: List[str] = []
+    if record:
+        lines.append(record)
     if job:
         lines.append(f"BUSINESS LAYOUT IN PROGRESS ({JOB_KIND} job {job.get('status')}): a new "
                      f"layout is being built right now — say so; do NOT emit "
@@ -600,8 +641,11 @@ def propose_business_from_idea(business_id: str, idea: str,
             if d:
                 proposals.append({"spec_id": d["id"], "kind": "offering", "offering": off})
 
-    # The map's own offerings, minus any the module builder already produced.
+    # The map's own offerings, minus any the module builder already produced,
+    # up to the cap — eleven cards is a wall, not a business.
     for off in bp.get("offerings") or []:
+        if sum(1 for p in proposals if p.get("kind") == "offering") >= MAX_OFFERINGS:
+            break
         if not off.get("slug") or off.get("slug") in built_slugs:
             continue
         built_slugs.add(off.get("slug"))
