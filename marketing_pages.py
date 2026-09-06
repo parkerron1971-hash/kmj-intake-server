@@ -885,18 +885,22 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         "ax_download":    "is-active" if active == "download"    else "",
         "ax_get_started": "is-active" if active == "get_started" else "",
     }
+    # The founding-seat flyer rides on the reading pages only, and only
+    # while there are seats to take (marketing_founder_ad.py).
+    import marketing_founder_ad
+    ad_css, ad_markup = marketing_founder_ad.founder_ad_bundle(path)
     return _fill_trial(_fill_contact(SHELL_TEMPLATE.format(
         title=_html.escape(title),
         description=_html.escape(description),
         og_title=_html.escape(f"{title} · {SITE_NAME}"),
         path=path,
         shared_css=SHARED_CSS,
-        extra_css=extra_css,
+        extra_css=extra_css + ad_css,
         contact_email=_html.escape(_public_contact_email()),
         business_name=_html.escape(BUSINESS_NAME),
         year=datetime.date.today().year,
         content=content_html,
-        extra_scripts=extra_scripts,
+        extra_scripts=extra_scripts + ad_markup,
         app_url=APP_URL,
         pixel_script=_pixel_script(),
         head_extra=head_extra,
