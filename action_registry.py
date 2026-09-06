@@ -386,6 +386,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "device, but never reaches a client, so it is not the "
                                       "client-facing send class B exists for"),
     "plan_content":           _w("A", "adds a planned post to settings.content_calendar"),
+    "propose_business_from_idea": _w("A", "lays a whole business out from an idea: the map row "
+                                          "(status=blueprint, never accepted) plus module and "
+                                          "offering DRAFTS — nothing live until each card is accepted"),
     "propose_module_from_intake": _w("A", "writes ModuleSpec DRAFTS that accept_module_spec later "
                                           "materializes — the draft itself changes nothing live"),
     "record_edit_pattern":    _w("A", "silent observation row in edit_observations"),

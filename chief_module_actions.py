@@ -288,6 +288,98 @@ async def handle_propose_module_from_intake(client, biz, action):
 
 
 
+async def handle_propose_business_from_idea(client, biz, action):
+    """The idea-to-business door (2026-09-06). One action turns a
+    description of a business into the map (business_blueprint) and then
+    a card per module and offering — built through the same generator,
+    skills and second look as a single intake, so every card is exactly
+    as good as one asked for on its own. Returns the dock's existing
+    proposal card stack (type reused like the upgrade handler) plus the
+    forms and site brief the map wrote, which the BUSINESS BLUEPRINT ON
+    FILE context block keeps alive for the turns after they accept.
+
+    action: {idea}  (intake_excerpt accepted as an alias)"""
+    idea = (action.get("idea") or action.get("intake_excerpt") or "").strip()
+    if not idea:
+        return _fail("propose_business_from_idea", "idea required")
+    try:
+        import asyncio as _aio
+        import business_blueprint as bb
+        import module_spec_generator as msg
+    except Exception as e:
+        return _fail("propose_business_from_idea", f"generator unavailable: {e}")
+
+    res = await _aio.to_thread(bb.propose_business_from_idea, biz["id"], idea)
+    if not res.get("ok"):
+        return _fail("propose_business_from_idea", res.get("error", "generation failed"))
+    proposals = res.get("proposals") or []
+
+    # A business that already has its single-instance module (Bookings)
+    # keeps it: the map may propose one again, and a second copy is what
+    # the accept guard refuses. Drop it here and say so, same as intake.
+    existing_si = await _aio.to_thread(msg._existing_single_instance_modules, biz["id"])
+    existing_archs = {(r.get("archetype") or "") for r in existing_si}
+    kept_existing: List[str] = []
+    if existing_archs:
+        survivors: List[Dict[str, Any]] = []
+        for p in proposals:
+            spec_arch = ((p.get("spec") or {}).get("archetype") or "").strip()
+            if (p.get("kind") or "module") == "module" and spec_arch in existing_archs:
+                kept_existing.append((p.get("spec") or {}).get("name") or spec_arch)
+                continue
+            survivors.append(p)
+        proposals = survivors
+    if not proposals:
+        return _fail("propose_business_from_idea",
+                     "everything the map proposed is already on file — tell me what is missing")
+
+    def _name_of(p):
+        if (p.get("kind") or "module") == "offering":
+            return (p.get("offering") or {}).get("name") or "offering"
+        sp = p.get("spec") or {}
+        return sp.get("name") or sp.get("slug") or "module"
+
+    n_modules = sum(1 for p in proposals if (p.get("kind") or "module") == "module")
+    n_offerings = sum(1 for p in proposals if p.get("kind") == "offering")
+    forms = res.get("forms") or []
+    site = res.get("site") or {}
+    parts = []
+    if n_modules:
+        parts.append(f"{n_modules} module{'s' if n_modules != 1 else ''}")
+    if n_offerings:
+        parts.append(f"{n_offerings} offering{'s' if n_offerings != 1 else ''}")
+    names = ", ".join(_name_of(p) for p in proposals)
+    label = (f"🏗️ Laid out {biz.get('name') or 'the business'}: "
+             f"{' + '.join(parts)} — {names}")
+    after = []
+    if forms:
+        after.append(f"{len(forms)} form{'s' if len(forms) != 1 else ''}")
+    if site.get("headline"):
+        after.append("the site brief")
+    if after:
+        label += f"; {' and '.join(after)} follow once the cards are accepted"
+    if kept_existing:
+        label += f"  (kept your existing {' and '.join(kept_existing)})"
+    q = res.get("quality") or {}
+    if q.get("used") == "revised":
+        fixed = [f.get("code") for f in (q.get("first") or {}).get("findings") or []
+                 if f.get("severity") == "revise"]
+        label += f" · the map was reviewed and revised once ({', '.join(fixed[:3]) or 'quality'})"
+
+    return {
+        "type": "propose_module_from_intake",   # reuse the dock's card stack
+        "result": "business blueprint proposed",
+        "origin": "business_blueprint",
+        "label": label,
+        "decomposition_reasoning": res.get("decomposition_reasoning"),
+        "proposals": proposals,
+        "forms": forms,
+        "site": site,
+        "rails": res.get("rails") or {},
+        "business_type": res.get("business_type"),
+        "nav": _nav("build"),
+    }
+
 
 async def handle_summarize_module(client, biz, action) -> Dict:
     """Turn a module's rows into an answer. Pure read, no LLM.
