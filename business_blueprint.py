@@ -63,7 +63,36 @@ BLUEPRINT_SLUG = "business-blueprint"
 CONTEXT_WINDOW_DAYS = 30                # how long the map stays in Chief's context
 
 
-class BlueprintModule(BaseModel):
+class _Clipped(BaseModel):
+    """Prose fields are CLIPPED to their max_length, never refused.
+
+    The first live run (KMJ, 2026-09-06) came back with a good map and
+    was thrown away because four sentences ran past a 160-character cap:
+    a closed shape is for the STRUCTURE (which fields, which form types,
+    how many modules), not for how long the model's sentence is. A cap on
+    prose is a display budget, so it trims; only list lengths and enums
+    still reject."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _clip_prose(cls, data):
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for name, info in cls.model_fields.items():
+            v = out.get(name)
+            if not isinstance(v, str):
+                continue
+            cap = None
+            for m in info.metadata:
+                cap = getattr(m, "max_length", None) or cap
+            if cap and len(v) > cap:
+                out[name] = v[:cap].rstrip()
+        return out
+
+
+
+class BlueprintModule(_Clipped):
     name: str = Field(..., max_length=60)
     # Fed to the module builder verbatim — the practitioner's own voice,
     # a paragraph, with the amounts, dates, people and nudges it needs.
@@ -71,14 +100,14 @@ class BlueprintModule(BaseModel):
     why: Optional[str] = Field(default=None, max_length=300)
 
 
-class FormField(BaseModel):
+class FormField(_Clipped):
     label: str = Field(..., max_length=80)
     type: FormFieldType = "text"
     required: bool = False
     options: Optional[List[str]] = None
 
 
-class BlueprintForm(BaseModel):
+class BlueprintForm(_Clipped):
     name: str = Field(..., max_length=80)
     form_type: FormType = "intake"
     fields: List[FormField] = Field(..., min_length=1, max_length=12)
@@ -86,20 +115,20 @@ class BlueprintForm(BaseModel):
     confirmation_message: Optional[str] = Field(default=None, max_length=300)
 
 
-class SiteBrief(BaseModel):
+class SiteBrief(_Clipped):
     headline: str = Field(..., max_length=120)
-    tagline: Optional[str] = Field(default=None, max_length=160)
+    tagline: Optional[str] = Field(default=None, max_length=200)
     pages: List[str] = Field(default_factory=list, max_length=8)
     primary_cta: Optional[str] = Field(default=None, max_length=60)
-    voice: Optional[str] = Field(default=None, max_length=160)
+    voice: Optional[str] = Field(default=None, max_length=240)
 
 
-class RailCoverage(BaseModel):
-    covered_by: Optional[str] = Field(default=None, max_length=160)
-    gap: Optional[str] = Field(default=None, max_length=200)
+class RailCoverage(_Clipped):
+    covered_by: Optional[str] = Field(default=None, max_length=240)
+    gap: Optional[str] = Field(default=None, max_length=300)
 
 
-class BusinessBlueprint(BaseModel):
+class BusinessBlueprint(_Clipped):
     summary: str = Field(..., min_length=20, max_length=1200)
     business_type: str = "custom"
     modules: List[BlueprintModule] = Field(..., min_length=1, max_length=6)

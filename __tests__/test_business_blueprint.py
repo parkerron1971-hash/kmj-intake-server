@@ -165,6 +165,22 @@ def test_seven_modules_is_refused_by_the_shape():
         bb.BusinessBlueprint.model_validate(_map(modules=[_map()["modules"][0]] * 7))
 
 
+def test_long_prose_is_clipped_not_refused():
+    """The first live run: a good map, four sentences over a cap, the whole
+    thing thrown away. Prose trims to its budget; structure still rejects."""
+    m = _map()
+    m["site"]["voice"] = "plain " * 100
+    m["rails"]["get_found"]["covered_by"] = "the site, " * 60
+    m["modules"][0]["why"] = "because " * 80
+    bp = bb.BusinessBlueprint.model_validate(m)
+    assert len(bp.site.voice) <= 240 and bp.site.voice.startswith("plain")
+    assert len(bp.rails["get_found"].covered_by) <= 240
+    assert len(bp.modules[0].why) <= 300
+    # structure is still refused: a seventh module, an unknown form type
+    with pytest.raises(Exception):
+        bb.BusinessBlueprint.model_validate(_map(modules=[_map()["modules"][0]] * 7))
+
+
 def test_the_prompt_lists_the_real_verticals_and_no_mustache():
     s = bb._system_prompt()
     assert "consultant" in s and "__VERTICALS__" not in s
