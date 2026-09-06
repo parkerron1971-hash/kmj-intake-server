@@ -83,6 +83,20 @@ def test_sample_rows_are_shaped_from_the_fields_and_deterministic():
     assert all(r["preview"] and r["status"] == "active" and r["module_id"] == MOD for r in rows)
 
 
+def test_sample_titles_follow_the_title_field_or_the_first_text_field():
+    # Leads: title_field is lead_name, and a second text field is not the title
+    rows = mc.sample_rows(_module(schema={"fields": [
+        {"name": "lead_name", "type": "text", "label": "Lead / business name"},
+        {"name": "source", "type": "text", "label": "Source"}]},
+        name="Leads", archetype_params={"title_field": "lead_name"}), mc.sample_contacts(BIZ))
+    assert all(r["data"]["lead_name"].endswith(" lead") for r in rows)
+    assert rows[1]["data"]["source"] == "Source 2"
+    # no title_field: the first text field is the title
+    rows = mc.sample_rows(_module(schema={"fields": [{"name": "job", "type": "text", "label": "Job"}]},
+                                  name="Jobs", archetype_params={}), mc.sample_contacts(BIZ))
+    assert all(r["data"]["job"].endswith(" job") for r in rows)
+
+
 def test_sample_titles_read_like_real_ones():
     rows = mc.sample_rows(_module(schema={"fields": [{"name": "title", "type": "text", "label": "Lead / business name"},
                                                     {"name": "notes", "type": "textarea", "label": "Notes"}]},
