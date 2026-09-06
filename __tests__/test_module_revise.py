@@ -62,6 +62,49 @@ def test_an_invented_field_or_bad_tone_is_refused():
     assert not ok
 
 
+def test_tracker_only_presentation_keys_are_dropped_for_other_surfaces():
+    out = mr.sanitize_presentation("work_pipeline", {"empty_line": "x", "tone": "warm",
+                                                     "milestone_labels": {"discovery_call": "Call"}, "reached_line": "y"})
+    assert out == {"empty_line": "x", "tone": "warm"}
+    out = mr.sanitize_presentation("progress_tracker", {"milestone_labels": {"620": "Fair", "prime": "Prime"}, "reached_line": "y"})
+    assert out == {"milestone_labels": {"620": "Fair"}, "reached_line": "y"}
+
+
+class _Seq:
+    """A client that answers a sequence of texts."""
+    def __init__(self, texts):
+        self.texts = list(texts); self.calls = []
+
+    @property
+    def messages(self):
+        outer = self
+
+        class _M:
+            def create(self, **kw):
+                outer.calls.append(kw)
+                return SimpleNamespace(content=[SimpleNamespace(type="text", text=outer.texts.pop(0))])
+        return _M()
+
+
+def test_a_refused_revision_gets_one_retry_with_the_reason(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    import llm_call
+    bad = json.dumps({"archetype_params": {"value_field": "ghost"}, "presentation": {}, "why": "w", "changes": ["x"]})
+    good = json.dumps({"archetype_params": {"stage_field": "stage", "title_field": "title", "value_field": "value",
+                                            "stages": [{"id": "new", "label": "Discovery call"}, {"id": "won", "label": "Signed", "done": True}]},
+                       "presentation": {"tone": "warm", "milestone_labels": {"new": "Call"}}, "why": "fixed", "changes": ["value is the hero"]})
+    client = _Seq([bad, good])
+    monkeypatch.setattr(llm_call, "sdk_client", lambda **kw: client)
+    p = mr.propose(_pipeline(), REPORT)
+    assert p["ok"] and not p["unchanged"] and p["archetype_params"]["value_field"] == "value"
+    assert "milestone_labels" not in p["presentation"]          # dropped for a pipeline, not refused
+    assert len(client.calls) == 2 and "REFUSED" in client.calls[1]["messages"][0]["content"]
+    client = _Seq([bad, bad])
+    monkeypatch.setattr(llm_call, "sdk_client", lambda **kw: client)
+    p = mr.propose(_pipeline(), REPORT)
+    assert not p["ok"] and "revision_invalid" in p["error"] and len(client.calls) == 2
+
+
 # ─── the proposal ─────────────────────────────────────────────────────
 
 class _FakeClient:

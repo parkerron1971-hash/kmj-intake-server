@@ -63,6 +63,8 @@ HARD RULES
   on. Keep every value that already works.
 - Presentation lines are for the practitioner, in their trade's words, one
   sentence, no software words. tone is one of: calm, bold, warm, precise.
+  milestone_labels and reached_line belong to progress_tracker ONLY (keys are
+  the milestone NUMBERS as strings); every other surface has empty_line and tone.
 - Return the COMPLETE archetype_params and COMPLETE presentation objects
   (not a diff), plus `why` (one sentence) and `changes` (a short list of
   what you changed, in plain words). If nothing you may change would help,
@@ -123,36 +125,87 @@ def validate(module: Dict[str, Any], params: Dict[str, Any],
         )
     except Exception as e:
         return False, str(e)[:300], {}, {}
-    return True, "", spec.archetype_params, spec.presentation.model_dump(exclude_none=True)
+    pres = spec.presentation.model_dump(exclude_none=True)
+    if not pres.get("milestone_labels"):
+        pres.pop("milestone_labels", None)          # the model's empty default is not a change
+    return True, "", spec.archetype_params, pres
+
+
+# Presentation keys that only one surface draws. A reviser that writes
+# milestone labels for a pipeline (first live loop: stage names as keys)
+# has misread the lever, not broken a rule — the key is dropped, not the
+# whole revision.
+_TRACKER_ONLY = ("milestone_labels", "reached_line")
+
+
+def _is_number(k: Any) -> bool:
+    try:
+        float(str(k))
+        return True
+    except ValueError:
+        return False
+
+
+def sanitize_presentation(archetype: str, pres: Dict[str, Any]) -> Dict[str, Any]:
+    out = {k: v for k, v in (pres or {}).items()
+           if k in ("empty_line", "reached_line", "milestone_labels", "tone")}
+    if archetype != "progress_tracker":
+        for k in _TRACKER_ONLY:
+            out.pop(k, None)
+    if isinstance(out.get("milestone_labels"), dict):
+        out["milestone_labels"] = {k: v for k, v in out["milestone_labels"].items() if _is_number(k)}
+    return out
+
+
+def _ask(client, model: str, user: str) -> Dict[str, Any]:
+    import module_spec_generator as msg
+    m = client.messages.create(model=model, max_tokens=4000, system=_SYSTEM,
+                               messages=[{"role": "user", "content": user}])
+    raw = "".join(b.text for b in m.content if getattr(b, "type", None) == "text")
+    data = json.loads(msg._strip_code_fence(raw))
+    if not isinstance(data, dict):
+        raise ValueError("reviser returned no object")
+    return data
 
 
 def propose(module: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
-    """One model call → a validated revision, or an honest no."""
+    """One model call (two if the first was refused) → a validated
+    revision, or an honest no."""
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         return {"ok": False, "error": "ANTHROPIC_API_KEY not set"}
+    arch = str(module.get("archetype") or "fallback_generic")
     try:
         import llm_call
         import module_spec_generator as msg
         client = llm_call.sdk_client(key=key)
-        m = client.messages.create(
-            model=msg.GENERATOR_MODEL, max_tokens=4000, system=_SYSTEM,
-            messages=[{"role": "user", "content": _user(module, report)}])
-        raw = "".join(b.text for b in m.content if getattr(b, "type", None) == "text")
-        data = json.loads(msg._strip_code_fence(raw))
+        user = _user(module, report)
+        data = _ask(client, msg.GENERATOR_MODEL, user)
     except Exception as e:
         return {"ok": False, "error": f"reviser_failed: {type(e).__name__}: {str(e)[:160]}"}
-    if not isinstance(data, dict):
-        return {"ok": False, "error": "reviser returned no object"}
     if data.get("unchanged"):
         return {"ok": True, "unchanged": True, "why": str(data.get("why") or "")[:200]}
     params = data.get("archetype_params")
     pres = data.get("presentation")
     if not isinstance(params, dict) or not isinstance(pres, dict):
         return {"ok": False, "error": "reviser returned no params/presentation"}
-    ok, err, nparams, npres = validate(module, params, pres)
+    ok, err, nparams, npres = validate(module, params, sanitize_presentation(arch, pres))
     if not ok:
-        return {"ok": False, "error": f"revision_invalid: {err}"}
+        # One more try, with the validator's reason in front of it.
+        try:
+            data = _ask(client, msg.GENERATOR_MODEL,
+                        user + f"\n\nYOUR PREVIOUS ANSWER WAS REFUSED: {err}\nFix exactly that and return the JSON again.")
+        except Exception as e:
+            return {"ok": False, "error": f"revision_invalid: {err} (retry failed: {type(e).__name__})"}
+        if data.get("unchanged"):
+            return {"ok": True, "unchanged": True, "why": str(data.get("why") or "")[:200]}
+        params = data.get("archetype_params")
+        pres = data.get("presentation")
+        if not isinstance(params, dict) or not isinstance(pres, dict):
+            return {"ok": False, "error": f"revision_invalid: {err}"}
+        ok, err, nparams, npres = validate(module, params, sanitize_presentation(arch, pres))
+        if not ok:
+            return {"ok": False, "error": f"revision_invalid: {err}"}
     before = {"archetype_params": module.get("archetype_params") or {},
               "presentation": module.get("presentation") or {}}
     if nparams == before["archetype_params"] and npres == before["presentation"]:
