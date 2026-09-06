@@ -7,6 +7,22 @@ A payments module answers one question the practitioner asks constantly:
 what am I owed, and by whom. Build it so that question is answerable
 without a spreadsheet.
 
+THE ARCHETYPE
+- Use archetype "composed_dashboard" and put the answer on the front page:
+      {"kind":"stat","agg":"sum","field":"amount","label":"Still owed",
+       "where":{"field":"status","not_in":["paid"]}}
+      {"kind":"stat","agg":"sum","field":"amount","window":"month",
+       "where":{"field":"status","is_in":["paid"]},"label":"Paid this month"}
+      {"kind":"breakdown","field":"status","agg":"sum","fields":["amount"]}
+      {"kind":"upcoming","date_field":"due_date","limit":5,"label":"Due next"}
+      {"kind":"recent","limit":6,"fields":["due_date","contact_id","amount","status"]}
+  with date_field the due date and title_field the reference. Views
+  ["list","summary"] and a board on status are fine alongside; the front
+  page is the dashboard.
+- Not work_pipeline: an invoice has a state, but nobody drags invoices
+  across columns; they want the total. Not fallback_generic, ever, for
+  money.
+
 REQUIRED SHAPE
 - The amount is a `currency` field, never `text` and never `number`.
   Currency stores a real number and renders formatted, so a column of

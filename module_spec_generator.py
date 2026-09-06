@@ -693,6 +693,28 @@ class DashboardBlock(BaseModel):
     direction: Literal["up", "down"] = "up"
     limit: Optional[int] = Field(default=None, ge=1, le=20)
     fields: Optional[List[str]] = None
+    # Narrow the rows the block reads: "unbilled" is the sum of amount
+    # WHERE status is not in [paid]. One of is_in / not_in.
+    where: Optional["BlockFilter"] = None
+
+
+class BlockFilter(BaseModel):
+    """Rows a block counts: those whose `field` is (or is not) one of the
+    listed values. The field is a select, checkbox, contact_link, text or
+    module_ref — something with discrete values; filtering a number is a
+    threshold, which is the progress block's job."""
+    field: str
+    is_in: Optional[List[str]] = None
+    not_in: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def _one_side(self):
+        if not (self.is_in or self.not_in):
+            raise ValueError("where needs is_in or not_in")
+        return self
+
+
+DashboardBlock.model_rebuild()
 
 
 class ComposedDashboardParams(BaseModel):
@@ -986,6 +1008,10 @@ class ModuleSpec(BaseModel):
             for i, b in enumerate(p.get("blocks") or []):
                 kind = b.get("kind")
                 date_ref = b.get("date_field") or p.get("date_field")
+                w = b.get("where")
+                if w:
+                    _need(w.get("field"), {"select", "checkbox", "contact_link", "text", "module_ref"},
+                          "where field", i)
                 if kind == "stat":
                     agg = b.get("agg") or ("count" if not b.get("field") else "sum")
                     if agg in ("sum", "avg", "min", "max"):
@@ -1747,6 +1773,13 @@ Available archetypes:
           {"kind":"recent","limit":5,"fields":["date","category","amount"]}
           {"kind":"upcoming","date_field":"due","limit":5,"label":"Coming up"}
           {"kind":"notes","field":"notes","limit":3}
+          {"kind":"stat","agg":"sum","field":"amount","label":"Still owed",
+           "where":{"field":"status","not_in":["paid","written_off"]} }
+        where — any block may carry {"field", "is_in" | "not_in": [...]}
+          to read only the rows whose select / checkbox / contact matches:
+          "unbilled" is amount summed where status is not paid; "Software
+          this year" is amount where category is in ["Software"]. This is
+          how a payments or invoice log answers "what am I owed".
         kinds: stat (agg count|sum|avg|latest|min|max; window all|7d|30d|month),
         series (number field + date, bucket day|week|month), breakdown (a
         select; agg count or sum with fields[0] the amount), progress (sum of

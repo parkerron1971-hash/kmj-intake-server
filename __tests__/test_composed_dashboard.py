@@ -204,3 +204,40 @@ def test_a_log_on_the_plain_list_is_revised():
 def test_a_good_dashboard_is_clean():
     rep = bq.assess([_dash()], "log my expenses and see where the money goes each month", "creative")
     assert not rep.needs_revision, rep.as_dict()
+
+
+# ─── where: the rows a block reads (2026-09-06) ───────────────────────
+
+def test_a_where_on_a_select_validates():
+    msg.ModuleSpec.model_validate(_dash(blocks=[
+        {"kind": "stat", "agg": "sum", "field": "amount", "label": "Software",
+         "where": {"field": "category", "is_in": ["Software"]}}]))
+
+
+def test_a_where_needs_a_side():
+    with pytest.raises(ValueError, match="where needs is_in or not_in"):
+        msg.ModuleSpec.model_validate(_dash(blocks=[
+            {"kind": "stat", "agg": "sum", "field": "amount", "where": {"field": "category"}}]))
+
+
+def test_a_where_on_a_number_is_refused():
+    with pytest.raises(ValueError, match="where field 'amount' must be one of"):
+        msg.ModuleSpec.model_validate(_dash(blocks=[
+            {"kind": "stat", "agg": "count", "where": {"field": "amount", "is_in": ["1"]}}]))
+
+
+def test_a_where_on_a_ghost_field_is_refused():
+    with pytest.raises(ValueError, match="where field 'status' is not in"):
+        msg.ModuleSpec.model_validate(_dash(blocks=[
+            {"kind": "stat", "agg": "count", "where": {"field": "status", "not_in": ["paid"]}}]))
+
+
+def test_prompt_teaches_where():
+    block = msg._SYSTEM_PROMPT.split("composed_dashboard", 1)[1]
+    assert '"where":{"field":"status","not_in":' in block
+
+
+def test_payments_maps_to_the_dashboard():
+    assert bq.SKILL_ARCHETYPE["payments-module"] == "composed_dashboard"
+    skill = next(s for s in bs.load_skills() if s["name"] == "payments-module")
+    assert '"where"' in skill["body"] and "composed_dashboard" in skill["body"]

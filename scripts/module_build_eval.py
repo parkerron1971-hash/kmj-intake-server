@@ -125,6 +125,10 @@ CASES: List[Dict[str, Any]] = [
         "expect_field_types": ["module_ref", "currency"],
         "expect_trigger_kinds": [],
         "expect_skill": "payments-module",
+        # The first live run left Invoices on fallback_generic. "What is
+        # still unbilled" is a stat with a where on status — a dashboard.
+        "expect_archetype": "composed_dashboard",
+        "expect_presentation": ["empty_line"],
     },
     {
         # The first live gap the fallback banner ever recorded that a
