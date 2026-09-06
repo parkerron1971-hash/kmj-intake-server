@@ -141,7 +141,7 @@ KIND_META: Dict[str, Dict[str, Any]] = {
     # are two checks.
     "module_check": {
         "label": "Module check",
-        "working": "looking at the module at phone and desktop size",
+        "working": "looking at the module at phone and desktop size — and tightening it if it can",
         "done": "the module check is in — ask Chief how it looks",
         "nav": "build",
         "dedupe_key": "module_id",
@@ -405,7 +405,8 @@ def _execute_kind(kind: str, business_id: str, params: dict,
         p = params or {}
         return module_check.run(
             business_id, str(p.get("module_id") or ""), reason=str(p.get("reason") or "manual"),
-            vision=(p.get("vision") is None or bool(p.get("vision"))), progress_cb=progress)
+            vision=(p.get("vision") is None or bool(p.get("vision"))),
+            revise=(p.get("revise") is None or bool(p.get("revise"))), progress_cb=progress)
     if kind == "lay_out_business":
         import business_blueprint
         return business_blueprint.run_job(business_id, params or {}, progress_cb=progress)

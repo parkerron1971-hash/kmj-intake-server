@@ -241,7 +241,7 @@ def test_run_measures_judges_and_files_a_report(db, monkeypatch):
     assert any("no hero" in w for w in whats)
     assert rep["screenshots"] == ["shots/a.jpg", "shots/b.jpg"]
     assert "2 things to look at, 1 that matters; design 3/5" in rep["summary"]
-    assert said[0][0] == 10 and said[-1][0] == 90
+    assert said[0][0] == 10 and said[-1][0] == 92
 
 
 def test_run_is_honest_without_a_browser_or_module(db, monkeypatch):
