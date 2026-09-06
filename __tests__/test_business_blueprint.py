@@ -10,6 +10,7 @@ context block that carries the forms and site brief to later turns.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
 import sys
@@ -352,8 +353,8 @@ def test_the_verb_is_wired_and_classified():
     assert "BUSINESS BLUEPRINT ON FILE" in src
 
 
-@pytest.mark.asyncio
-async def test_the_handler_reuses_the_dock_card_stack_and_keeps_an_existing_bookings(monkeypatch):
+def test_the_handler_reuses_the_dock_card_stack_and_keeps_an_existing_bookings(monkeypatch):
+    # asyncio.run, not pytest.mark.asyncio: CI has no pytest-asyncio plugin.
     import chief_module_actions as cma
 
     def fake_door(business_id, idea):
@@ -371,8 +372,8 @@ async def test_the_handler_reuses_the_dock_card_stack_and_keeps_an_existing_book
     monkeypatch.setattr(msg, "_existing_single_instance_modules",
                         lambda bid: [{"archetype": "booking_calendar", "name": "Bookings"}])
 
-    out = await cma.handle_propose_business_from_idea(
-        None, {"id": "b1", "name": "Score Up"}, {"type": "propose_business_from_idea", "idea": "I repair credit"})
+    out = asyncio.run(cma.handle_propose_business_from_idea(
+        None, {"id": "b1", "name": "Score Up"}, {"type": "propose_business_from_idea", "idea": "I repair credit"}))
     assert out["type"] == "propose_module_from_intake"       # the dock's card stack
     assert out["origin"] == "business_blueprint"
     assert [p["spec_id"] for p in out["proposals"]] == ["s2", "s3"]
@@ -383,8 +384,7 @@ async def test_the_handler_reuses_the_dock_card_stack_and_keeps_an_existing_book
     assert out["forms"] and out["site"]["headline"] == "h"
 
 
-@pytest.mark.asyncio
-async def test_the_handler_needs_an_idea():
+def test_the_handler_needs_an_idea():
     import chief_module_actions as cma
-    out = await cma.handle_propose_business_from_idea(None, {"id": "b1"}, {"type": "propose_business_from_idea"})
+    out = asyncio.run(cma.handle_propose_business_from_idea(None, {"id": "b1"}, {"type": "propose_business_from_idea"}))
     assert out.get("result", "").startswith("Failed") or out.get("error") or "idea" in json.dumps(out).lower()
