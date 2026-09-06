@@ -134,6 +134,18 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "done": "your business is laid out — the cards are ready to review",
         "nav": "build",
     },
+    # 2026-09-06 — a MODULE gets the second pair of eyes the site has
+    # (module_check.py): headless Chromium on the preview page at phone
+    # and desktop width, geometry measured, a designer's verdict on the
+    # shots. Deduped PER MODULE, not per business — two accepts in a row
+    # are two checks.
+    "module_check": {
+        "label": "Module check",
+        "working": "looking at the module at phone and desktop size",
+        "done": "the module check is in — ask Chief how it looks",
+        "nav": "build",
+        "dedupe_key": "module_id",
+    },
     "author_spec": {
         "label": "Blueprint",
         "working": "drafting your design blueprint",
@@ -388,6 +400,12 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             instruction=str((params or {}).get("instruction") or ""),
             progress_cb=progress)
         return result if isinstance(result, dict) else {}
+    if kind == "module_check":
+        import module_check
+        p = params or {}
+        return module_check.run(
+            business_id, str(p.get("module_id") or ""), reason=str(p.get("reason") or "manual"),
+            vision=(p.get("vision") is None or bool(p.get("vision"))), progress_cb=progress)
     if kind == "lay_out_business":
         import business_blueprint
         return business_blueprint.run_job(business_id, params or {}, progress_cb=progress)
@@ -522,7 +540,10 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
         "&status=in.(queued,running)&select=*&order=created_at.desc&limit=5")
     now = datetime.now(timezone.utc)
     fresh: Optional[dict] = None
+    dedupe_key = KIND_META[kind].get("dedupe_key")
     for row in (existing if isinstance(existing, list) else []):
+        if dedupe_key and (row.get("params") or {}).get(dedupe_key) != (params or {}).get(dedupe_key):
+            continue        # a live job for a DIFFERENT target of this kind — not ours to dedupe or sweep
         started = row.get("started_at") or row.get("created_at") or ""
         try:
             age_min = (now - datetime.fromisoformat(

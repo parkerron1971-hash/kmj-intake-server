@@ -436,6 +436,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                         "override (the row Edit Mode writes); revert_site_text "
                                         "puts the stored copy back"),
     "revert_site_text":           _w("A", "removes one site text override; the stored copy shows again"),
+    "check_module":               _w("A", "queues a visual check of one module — screenshots at two "
+                                          "widths + a vision verdict; writes only a job row and its "
+                                          "report, never the module"),
     "check_site":                 _w("A", "queues a visual check of the live site (screenshots + "
                                         "findings filed on the site row); changes nothing on the site"),
     "update_contact_health":      _w("A", "sets a contact's health score"),
