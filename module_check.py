@@ -63,7 +63,9 @@ TOKEN_TTL_MIN = 20
 SAMPLE_MIN_ROWS = 3
 SAMPLE_ROWS = 6
 MAX_FINDINGS = 10
-PREVIEW_TABLES = ("businesses", "custom_modules", "module_entries", "contacts")
+# intake_forms: the pipeline and booking surfaces ask which public forms
+# feed the module (a chip, read-only). First live run: two 403s per page.
+PREVIEW_TABLES = ("businesses", "custom_modules", "module_entries", "contacts", "intake_forms")
 
 
 def _now() -> str:
@@ -236,6 +238,9 @@ def answer_rest(token_data: Dict[str, Any], path: str) -> Tuple[int, Any]:
     if table == "custom_modules":
         rows = sb_clients.sb_get_as_service(f"/custom_modules?{urlencode(q)}") or []
         return 200, rows
+    if table == "intake_forms":
+        rows = sb_clients.sb_get_as_service(f"/intake_forms?{urlencode(q)}") or []
+        return 200, rows if isinstance(rows, list) else []
     if table == "contacts":
         rows = sb_clients.sb_get_as_service(f"/contacts?{urlencode(q)}") or []
         rows = rows if isinstance(rows, list) else []
@@ -420,9 +425,22 @@ def run(business_id: str, module_id: str, *, reason: str = "manual", vision: boo
         page = pages[0]
         if progress_cb:
             progress_cb(45, "measuring the layout")
+        token = url.rsplit("/", 1)[1]
+
+        def _scrub(s: Any) -> Any:
+            if not isinstance(s, str):
+                return s
+            return (s.replace(url, module.get("name") or "module")
+                     .replace(token, "<preview>")
+                     .replace("/preview/module/" + "<preview>", module.get("name") or "module"))
+
         findings = site_check.findings_from_geometry(page)
         for f in findings:
-            f["where"] = (f.get("where") or "").replace(page.get("url", ""), module.get("name") or "module")
+            for k in ("where", "what", "detail"):
+                if k in f:
+                    f[k] = _scrub(f[k])
+        page["console_errors"] = [_scrub(c) for c in (page.get("console_errors") or [])]
+        page["failed_requests"] = [_scrub(c) for c in (page.get("failed_requests") or [])]
         verdict = {"findings": [], "design_score": None, "first_impression": "", "next": []}
         if vision:
             if progress_cb:

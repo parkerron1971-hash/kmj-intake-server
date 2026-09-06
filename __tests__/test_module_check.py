@@ -159,6 +159,41 @@ def test_preview_url_carries_a_readable_token(monkeypatch):
     assert mc.read_token(url.rsplit("/", 1)[1])["m"] == MOD
 
 
+def test_the_pipeline_surface_may_read_its_linked_forms(db, monkeypatch):
+    import sb_clients
+    seen = []
+    real = db.get
+
+    def spy(path):
+        seen.append(path)
+        if path.startswith("/intake_forms?"):
+            return [{"id": "f1", "name": "Project Inquiry"}]
+        return real(path)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", spy)
+    status, rows = mc.answer_rest(TOKEN, f"/intake_forms?business_id=eq.OTHER&is_active=eq.true&select=id,name&limit=5")
+    assert status == 200 and rows[0]["name"] == "Project Inquiry"
+    assert f"business_id=eq.{BIZ}" in seen[-1] and "OTHER" not in seen[-1]
+
+
+def test_the_token_never_lands_in_the_report(db, monkeypatch):
+    import site_check
+    monkeypatch.setenv("PREVIEW_SECRET", "s3cret")
+
+    def fake_inspect(urls, widths=(), screenshots=True):
+        p = _fake_page(urls[0])
+        p["failed_requests"] = [f"403 {urls[0]}/rest?path=%2Fsomething"]
+        p["console_errors"] = [f"Failed to load resource {urls[0]}"]
+        return [p]
+    monkeypatch.setattr(site_check, "inspect_pages", fake_inspect)
+    monkeypatch.setattr(site_check, "_store_shots", lambda b, r, pages: [])
+    monkeypatch.setattr(mc, "judge", lambda page, b, m: {"findings": [], "design_score": 4, "first_impression": "", "next": []})
+    rep = mc.run(BIZ, MOD)
+    blob = json.dumps(rep)
+    assert "eyJ" not in blob and "<preview>" not in rep["url"]
+    assert any("Credit Profiles" in (f.get("where") or "") for f in rep["findings"])
+    assert all("eyJ" not in c for c in rep["console_errors"])
+
+
 # ─── the judge's answer ───────────────────────────────────────────────
 
 def test_parse_judge_is_tolerant_and_bounded():
