@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+import build_quality
 import build_skills
 import module_inspect
 import module_vocabulary
@@ -1680,8 +1681,19 @@ class ProposalEnvelope(BaseModel):
 # Generation
 # ──────────────────────────────────────────────────────────────
 
-GENERATOR_MODEL = "claude-sonnet-4-5"
-GENERATOR_MAX_TOKENS = 4000
+# The model that designs modules. Opus 5 (2026-09-05): the site builder
+# has run Opus since the builder bench ruled it, and a module the
+# practitioner opens every day deserves the same judgment as their home
+# page. Thinking is on by default on this model and sampling parameters
+# are rejected, so the call sends neither. MODULE_SPEC_MODEL overrides
+# (Railway) — the cost dial stays Kevin's. Roughly 20-25¢ a build at
+# this prompt size; a build the critique revises costs two calls.
+GENERATOR_MODEL = (os.environ.get("MODULE_SPEC_MODEL") or "").strip() or "claude-opus-5"
+# Thinking tokens count against max_tokens; 4000 was the whole answer.
+GENERATOR_MAX_TOKENS = 12000
+# The second look (build_quality). MODULE_BUILD_CRITIQUE=off disables the
+# revision call; the rubric still runs and its findings still return.
+CRITIQUE_ENABLED = (os.environ.get("MODULE_BUILD_CRITIQUE") or "on").strip().lower() != "off"
 
 
 def _strip_code_fence(text: str) -> str:
@@ -1736,10 +1748,59 @@ def generate_module_proposal(
 
     try:
         client = llm_call.sdk_client(key=api_key)
+    except Exception as e:
+        logger.warning(f"LLM client unavailable: {e}")
+        return {"ok": False, "error": f"llm_call_failed: {e}"}
+
+    first = _call_and_parse(client, system_prompt, user)
+    if not first.get("ok"):
+        return first
+    env: ProposalEnvelope = first["env"]
+    specs = _dump_specs(env, intake_excerpt)
+
+    # ─── The second look ───────────────────────────────────────────────
+    # A deterministic rubric over what came back (build_quality.assess).
+    # When it finds something worth fixing — a tracker on the plain list,
+    # the alert they asked for missing, a generic empty state — the model
+    # is asked ONCE to revise with the findings spelled out, and the
+    # revision is kept only if it validates and scores no worse. One
+    # extra call on the builds that need it; none on the ones that don't.
+    btype = business.get("type", "") or ""
+    skill_names = [s["name"] for s in selected_skills]
+    report = build_quality.assess(specs, intake_excerpt, btype, skills=skill_names)
+    quality: Dict[str, Any] = {"first": report.as_dict(), "revised": None, "used": "first"}
+    if CRITIQUE_ENABLED and report.needs_revision:
+        logger.info("[quality] revising: " + ", ".join(
+            f.code for f in report.findings if f.severity == "revise"))
+        second = _call_and_parse(client, system_prompt,
+                                 user + "\n\n" + report.revision_block())
+        if second.get("ok"):
+            specs2 = _dump_specs(second["env"], intake_excerpt)
+            report2 = build_quality.assess(specs2, intake_excerpt, btype, skills=skill_names)
+            quality["revised"] = report2.as_dict()
+            if report2.score <= report.score:
+                env, specs = second["env"], specs2
+                quality["used"] = "revised"
+        else:
+            logger.info(f"[quality] revision discarded: {second.get('error')}")
+
+    offerings = [o.model_dump(exclude_none=False) for o in env.offerings]
+    return {
+        "ok": True,
+        "decomposition_reasoning": env.decomposition_reasoning,
+        "specs": specs,
+        "offerings": offerings,
+        "quality": quality,
+    }
+
+
+def _call_and_parse(client, system_prompt: str, user: str) -> Dict[str, Any]:
+    """One generator call → a validated ProposalEnvelope, or {ok: False}.
+    Soft-fails at every step; the caller decides what a failure costs."""
+    try:
         msg = client.messages.create(
             model=GENERATOR_MODEL,
             max_tokens=GENERATOR_MAX_TOKENS,
-            temperature=0.4,
             system=system_prompt,
             messages=[{"role": "user", "content": user}],
         )
@@ -1759,20 +1820,17 @@ def generate_module_proposal(
     except ValidationError as ve:
         logger.warning(f"envelope validation failed: {ve}")
         return {"ok": False, "error": f"validation_failed: {ve}", "raw": data}
+    return {"ok": True, "env": env}
 
-    # Anchor the intake excerpt on each spec.
-    specs = []
+
+def _dump_specs(env: "ProposalEnvelope", intake_excerpt: str) -> List[Dict[str, Any]]:
+    """Specs as dicts, each anchored on the intake that produced it."""
+    out = []
     for s in env.specs:
         sd = s.model_dump(by_alias=True, exclude_none=False)
         sd["intake_excerpt"] = intake_excerpt.strip()
-        specs.append(sd)
-    offerings = [o.model_dump(exclude_none=False) for o in env.offerings]
-    return {
-        "ok": True,
-        "decomposition_reasoning": env.decomposition_reasoning,
-        "specs": specs,
-        "offerings": offerings,
-    }
+        out.append(sd)
+    return out
 
 
 # Back-compat: single-spec helper still callable for tests.
@@ -1939,6 +1997,9 @@ def propose_module_from_intake(
         "ok": True,
         "decomposition_reasoning": gen["decomposition_reasoning"],
         "proposals": proposals,
+        # The second look, so Chief can say it took one (and the eval can
+        # see it). {first, revised, used}; absent on the upgrade path.
+        "quality": gen.get("quality"),
     }
 
 

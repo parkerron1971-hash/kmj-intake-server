@@ -218,6 +218,16 @@ async def handle_propose_module_from_intake(client, biz, action):
             f"Say 'add another one anyway' to include.)"
         )
 
+    # The second look (build_quality). When the builder revised its own
+    # first answer, say so in the label — Chief's reply reads it, and an
+    # honest "I took a second pass at this one" is worth more than a
+    # proposal that pretends it came out right the first time.
+    q = res.get("quality") or {}
+    if q.get("used") == "revised":
+        fixed = [f.get("code") for f in (q.get("first") or {}).get("findings") or []
+                 if f.get("severity") == "revise"]
+        label = f"{label} · reviewed and revised once ({', '.join(fixed[:3]) or 'quality'})"
+
     # ─── C.1.5.1 L1 — M9-C deflection breadcrumb ────────────────────────
     # When the business has single-instance modules, the LLM produced
     # zero module-kind proposals, AND the practitioner didn't override,

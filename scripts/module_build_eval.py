@@ -269,6 +269,22 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
                    if not ((sp.get("presentation") or {}).get("empty_line") or "").strip()]
         check("presentation:empty_line_on_every_spec", not empties, f"missing on {empties}")
 
+    # THE SECOND LOOK — the same rubric the generator revises against.
+    # Scored only for cases that expect a feel (the fixtures predate it);
+    # reported for every case, so a run shows what the critique would say.
+    if want_feel:
+        import build_quality
+        rep = build_quality.assess(specs, case.get("intake", ""),
+                                   case.get("business", {}).get("type", ""), skills=skills or [])
+        revise = [f.code for f in rep.findings if f.severity == "revise"]
+        check("quality:clean", not revise, "; ".join(revise) or
+              "; ".join(f.code for f in rep.findings) or "-")
+        q = result.get("quality") or {}
+        if q:
+            check("quality:used", True,
+                  f"{q.get('used')} (first score {q.get('first', {}).get('score')}"
+                  + (f", revised {q['revised']['score']}" if q.get("revised") else "") + ")")
+
     # Every field type used must be one the vocabulary allows. A spec that
     # invents a type validates nowhere and renders nowhere.
     import module_vocabulary
