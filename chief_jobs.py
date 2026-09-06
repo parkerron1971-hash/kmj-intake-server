@@ -123,6 +123,17 @@ KIND_META: Dict[str, Dict[str, Any]] = {
     # synchronous request, so the browser gave up while the server happily
     # finished and charged for it. Same road as rebuild_site now: the job
     # outlives the tab, and the desktop recap announces it.
+    # 2026-09-06 — THE WHOLE BUSINESS FROM AN IDEA (business_blueprint).
+    # One map call + a build per piece, two to four minutes: the first
+    # live run sat on a chat turn and the connection gave up while the
+    # server built it twice. The cards land in module_specs; Chief shows
+    # them through replay() and the chat can fetch them itself.
+    "lay_out_business": {
+        "label": "Business layout",
+        "working": "laying out your business — the map first, then a card for each piece",
+        "done": "your business is laid out — the cards are ready to review",
+        "nav": "build",
+    },
     "author_spec": {
         "label": "Blueprint",
         "working": "drafting your design blueprint",
@@ -377,6 +388,9 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             instruction=str((params or {}).get("instruction") or ""),
             progress_cb=progress)
         return result if isinstance(result, dict) else {}
+    if kind == "lay_out_business":
+        import business_blueprint
+        return business_blueprint.run_job(business_id, params or {}, progress_cb=progress)
     if kind in ("author_spec", "revise_spec"):
         # THE BLUEPRINT (2026-08-09). Text-only — never triggers a build,
         # never touches the composed page. author_spec_work returns
@@ -664,6 +678,48 @@ class _RebuildReq(BaseModel):
     # Refine mode: reuse the stored design rationale (keep the current
     # direction, redo the execution) instead of rolling a new one.
     refine: bool = False
+
+
+@router.get("/business-layout")
+async def business_layout_endpoint(business_id: str,
+                                   user_session: UserSession = Depends(require_user_session)):
+    """The cards a finished lay_out_business job left behind, in the shape
+    the dock's proposal card renders — so the chat can show them the
+    moment the job pill says done, without another Chief turn. Also
+    reports the job in flight (with its progress) so the same card can
+    show the steps. Ownership verified; marks the cards shown."""
+    uid = getattr(getattr(user_session, "user", None), "id", None)
+    if not uid:
+        raise HTTPException(401, "auth required")
+    async with httpx.AsyncClient() as client:
+        owned = await _sb(client, "GET",
+                          f"/businesses?id=eq.{business_id}&owner_id=eq.{uid}&select=id&limit=1")
+        if not owned:
+            raise HTTPException(403, "not your business")
+        jobs = await _sb(client, "GET",
+                         f"/chief_jobs?business_id=eq.{business_id}&kind=eq.lay_out_business"
+                         "&select=id,status,error,result,created_at&order=created_at.desc&limit=1")
+    import business_blueprint
+    job = (jobs or [None])[0] if isinstance(jobs, list) else None
+    out: Dict[str, Any] = {"ok": True, "job": None, "cards": None}
+    if job:
+        prog = ((job.get("result") or {}).get("progress") or {}) if isinstance(job.get("result"), dict) else {}
+        out["job"] = {"id": job.get("id"), "status": job.get("status"),
+                      "error": job.get("error"), "progress": prog}
+    ready = await asyncio.to_thread(business_blueprint.replay, business_id)
+    if ready and not (job and job.get("status") in ("queued", "running")):
+        out["cards"] = {
+            "decomposition_reasoning": ready.get("decomposition_reasoning"),
+            "proposals": ready.get("proposals") or [],
+            "forms": ready.get("forms") or [],
+            "site": ready.get("site") or {},
+            "business_type": ready.get("business_type"),
+        }
+        try:
+            await asyncio.to_thread(business_blueprint.mark_shown, ready["blueprint_row"])
+        except Exception:
+            pass
+    return out
 
 
 @router.post("/jobs/rebuild")

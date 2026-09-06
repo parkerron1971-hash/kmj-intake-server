@@ -26,10 +26,17 @@ TWO STAGES, ONE DESIGN
      own. Nothing new to trust: the same validators, the same drafts,
      the same cards.
 
-The map itself is kept (module_specs, status='blueprint' — never a card,
-never accepted) so the forms and the site brief survive the turn: once
-the module cards are accepted, Chief reads BUSINESS BLUEPRINT ON FILE
-from its context and finishes the forms and offers the site.
+IT IS A LONG TASK. The first live run (KMJ, 2026-09-06) took four and a
+half minutes inside a chat turn; the stream went silent, the connection
+dropped, the app re-sent the message and the business was built twice.
+So the door is a chief_jobs kind (`lay_out_business`): Chief enqueues
+it and answers at once, the job pill shows each step, and when it lands
+the cards come back through replay() — the BUSINESS BLUEPRINT ON FILE
+context block tells Chief they are READY, and the frontend can fetch
+them straight into the chat. The map itself is kept (module_specs,
+status='blueprint' — never a card, never accepted) so the forms and the
+site brief survive: once the cards are accepted, Chief finishes the
+forms and offers the site.
 
 Cost: one map call plus one build call per module (two when revised).
 A whole business is roughly a dollar. Nothing materializes until the
@@ -42,7 +49,8 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -61,6 +69,7 @@ FormType = Literal["general", "intake", "discovery", "consultation", "connect_ca
 BLUEPRINT_STATUS = "blueprint"          # module_specs.status for the map row
 BLUEPRINT_SLUG = "business-blueprint"
 CONTEXT_WINDOW_DAYS = 30                # how long the map stays in Chief's context
+BUILD_WORKERS = 3                       # module builds in flight at once
 
 
 class _Clipped(BaseModel):
@@ -286,11 +295,29 @@ def generate_business_blueprint(business: Dict[str, Any], idea: str) -> Dict[str
 
 # ─── the map on file ────────────────────────────────────────────────────
 
-def _store_blueprint(business_id: str, idea: str, bp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+JOB_KIND = "lay_out_business"           # chief_jobs kind — the door is a LONG TASK
+MAX_MODULES = 6                         # cards a business opens to on day one
+REPLAY_WINDOW_HOURS = 24                # how long finished cards can be re-shown
+
+# One intake, ONE module. The map already decided how many pieces the
+# business has; without this the builder decomposes each intake again
+# (the first KMJ run: 4 map entries became 7 modules).
+_ONE_MODULE_GUIDANCE = (
+    "This intake is ONE piece of a larger plan whose other pieces are being "
+    "built alongside it. Propose exactly ONE module spec for it — do not split "
+    "it into several modules and do not add modules for things it mentions in "
+    "passing. Offerings for the services it names are welcome.")
+
+
+def _store_blueprint(business_id: str, idea: str, bp: Dict[str, Any],
+                     started_at: str) -> Optional[Dict[str, Any]]:
     """Keep the map. status='blueprint', not 'draft': it is never a card
-    and the accept path never sees it."""
+    and the accept path never sees it. Written LAST, so it carries the
+    run's start time — the drafts it owns are the ones created since."""
     keep = dict(bp)
     keep["__kind"] = "business"
+    keep["__shown"] = False
+    keep["__started_at"] = started_at
     row = sb_clients.sb_post_as_service("/module_specs", {
         "business_id": business_id,
         "slug": BLUEPRINT_SLUG,
@@ -306,8 +333,16 @@ def _store_blueprint(business_id: str, idea: str, bp: Dict[str, Any]) -> Optiona
 def latest_blueprint(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/module_specs?business_id=eq.{business_id}&status=eq.{BLUEPRINT_STATUS}"
-        f"&select=id,draft_json,created_at&order=created_at.desc&limit=1") or []
+        f"&select=id,draft_json,intake_excerpt,created_at&order=created_at.desc&limit=1") or []
     return rows[0] if isinstance(rows, list) and rows else None
+
+
+def mark_shown(blueprint_row: Dict[str, Any]) -> None:
+    """The cards went to the dock: the context block stops saying READY."""
+    bp = dict(blueprint_row.get("draft_json") or {})
+    bp["__shown"] = True
+    sb_clients.sb_patch_as_service(
+        f"/module_specs?id=eq.{blueprint_row['id']}", {"draft_json": bp})
 
 
 def _parse_ts(s: Optional[str]) -> Optional[datetime]:
@@ -317,6 +352,87 @@ def _parse_ts(s: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def _age(row: Dict[str, Any]) -> Optional[timedelta]:
+    when = _parse_ts(row.get("created_at"))
+    return (datetime.now(timezone.utc) - when) if when else None
+
+
+def _owned_since(row: Dict[str, Any]) -> str:
+    """The drafts a map row owns: everything since its run started."""
+    return str((row.get("draft_json") or {}).get("__started_at") or row.get("created_at") or "")
+
+
+def _drafts_since(business_id: str, created_at: str) -> List[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/module_specs?business_id=eq.{business_id}&status=eq.draft"
+        f"&created_at=gte.{created_at}&select=id,draft_json,created_at"
+        f"&order=created_at.asc&limit=40") or []
+    return [r for r in rows if isinstance(r, dict)]
+
+
+def _proposals_from_drafts(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out = []
+    for r in rows:
+        dj = dict(r.get("draft_json") or {})
+        kind = dj.pop("__kind", "module") or "module"
+        if kind == "business":
+            continue
+        out.append({"spec_id": r["id"], "kind": kind,
+                    ("offering" if kind == "offering" else "spec"): dj})
+    return out
+
+
+def _narrate(bp: Dict[str, Any]) -> str:
+    rails = bp.get("rails") or {}
+    rail_lines = []
+    for key in RAILS:
+        r = rails.get(key) or {}
+        label = key.replace("_", " ")
+        if r.get("gap"):
+            rail_lines.append(f"{label}: NOT YET — {r['gap']}")
+        elif r.get("covered_by"):
+            rail_lines.append(f"{label}: {r['covered_by']}")
+    reasoning = (bp.get("summary") or "").strip()
+    if rail_lines:
+        reasoning += "\n\nHow it runs: " + "; ".join(rail_lines) + "."
+    return reasoning
+
+
+def active_job(business_id: str) -> Optional[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/chief_jobs?business_id=eq.{business_id}&kind=eq.{JOB_KIND}"
+        f"&status=in.(queued,running)&select=id,status,created_at&limit=1") or []
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def replay(business_id: str) -> Optional[Dict[str, Any]]:
+    """The cards a finished job left behind, as the handler returns them.
+    None when there is no recent map or its cards are gone (accepted,
+    rejected, or older than the replay window)."""
+    row = latest_blueprint(business_id)
+    if not row:
+        return None
+    age = _age(row)
+    if age is not None and age > timedelta(hours=REPLAY_WINDOW_HOURS):
+        return None
+    proposals = _proposals_from_drafts(_drafts_since(business_id, _owned_since(row)))
+    if not proposals:
+        return None
+    bp = row.get("draft_json") or {}
+    return {
+        "ok": True,
+        "blueprint_row": row,
+        "idea": row.get("intake_excerpt") or "",
+        "shown": bool(bp.get("__shown")),
+        "decomposition_reasoning": _narrate(bp),
+        "proposals": proposals,
+        "forms": bp.get("forms") or [],
+        "site": bp.get("site") or {},
+        "rails": bp.get("rails") or {},
+        "business_type": bp.get("business_type"),
+    }
 
 
 def _form_line(f: Dict[str, Any]) -> str:
@@ -331,27 +447,49 @@ def _form_line(f: Dict[str, Any]) -> str:
 
 def context_block(business_id: str) -> str:
     """BUSINESS BLUEPRINT ON FILE — the map behind the cards, for the turns
-    after the practitioner accepts them. Lists the forms not yet created
-    (by name, against live intake_forms) and the site brief, so Chief
-    can finish the business without being told twice. Empty when there
-    is no recent map."""
+    after the practitioner accepts them, and the two states around the
+    job: STILL LAYING OUT (a job is running — do not start another) and
+    CARDS READY (the job finished, the cards were never shown — emit the
+    action and they render instantly). Empty when there is no recent map
+    and no job."""
+    job = active_job(business_id)
     row = latest_blueprint(business_id)
     if not row:
+        if job:
+            return (f"BUSINESS LAYOUT IN PROGRESS ({JOB_KIND} job {job.get('status')}): the map "
+                    f"and the cards are being built right now — say it is in progress "
+                    f"and will be a few minutes; do NOT emit propose_business_from_idea again.")
         return ""
-    when = _parse_ts(row.get("created_at"))
-    if when and datetime.now(timezone.utc) - when > timedelta(days=CONTEXT_WINDOW_DAYS):
+    age = _age(row)
+    if age is not None and age > timedelta(days=CONTEXT_WINDOW_DAYS):
         return ""
     bp = row.get("draft_json") or {}
+    lines: List[str] = []
+    if job:
+        lines.append(f"BUSINESS LAYOUT IN PROGRESS ({JOB_KIND} job {job.get('status')}): a new "
+                     f"layout is being built right now — say so; do NOT emit "
+                     f"propose_business_from_idea again.")
+    elif not bp.get("__shown") and age is not None and age <= timedelta(hours=REPLAY_WINDOW_HOURS):
+        drafts = _drafts_since(business_id, _owned_since(row))
+        if any((d.get("draft_json") or {}).get("__kind") != "business" for d in drafts):
+            idea = (row.get("intake_excerpt") or "").replace('"', "'")[:400]
+            lines.append(
+                f'CARDS READY, NOT YET SHOWN: the layout job finished. On their next message '
+                f'— whatever it says — emit [ACTION:{{"type":"propose_business_from_idea",'
+                f'"idea":"{idea}"}}] and the cards render instantly (no rebuild, no cost). '
+                f'Say the layout is ready and the cards are below.')
+
     forms = [f for f in (bp.get("forms") or []) if isinstance(f, dict)]
     live = sb_clients.sb_get_as_service(
         f"/intake_forms?business_id=eq.{business_id}&is_active=eq.true&select=name&limit=100") or []
     live_names = {(r.get("name") or "").strip().lower() for r in live if isinstance(r, dict)}
     missing = [f for f in forms if (f.get("name") or "").strip().lower() not in live_names]
 
+    when = _parse_ts(row.get("created_at"))
     day = when.strftime("%Y-%m-%d") if when else "recently"
-    lines = [f"BUSINESS BLUEPRINT ON FILE (laid out from their idea on {day} — the map behind the "
-             f"module cards; the forms and the site are YOURS to finish once the cards are accepted, "
-             f"one create_client_form per form below, exactly as written, then offer the site):"]
+    lines.append(f"BUSINESS BLUEPRINT ON FILE (laid out from their idea on {day} — the map behind the "
+                 f"module cards; the forms and the site are YOURS to finish once the cards are accepted, "
+                 f"one create_client_form per form below, exactly as written, then offer the site):")
     if bp.get("business_type") and bp["business_type"] != "custom":
         lines.append(f"  Closest trade: {bp['business_type']}")
     if forms:
@@ -381,43 +519,78 @@ def context_block(business_id: str) -> str:
     return "\n".join(lines)
 
 
-# ─── the whole door ─────────────────────────────────────────────────────
+# ─── the whole door (runs INSIDE a chief_jobs worker) ───────────────────
 
-def propose_business_from_idea(business_id: str, idea: str) -> Dict[str, Any]:
-    """map → build each module through the module generator → store every
-    draft → return the card stack the dock already knows how to render,
-    plus the forms, site brief and rails for Chief to narrate."""
+def propose_business_from_idea(business_id: str, idea: str,
+                               progress_cb: Optional[Callable[[int, str], None]] = None) -> Dict[str, Any]:
+    """map → build each module (in parallel, ONE module per intake) → store
+    every draft → keep the map. Returns the card stack plus the forms,
+    site brief and rails. Four to five minutes serial on the first live
+    run; the parallel build brings a four-module business to about two.
+    This is the body of the `lay_out_business` job, never a chat turn."""
+    def _say(pct: int, msg: str) -> None:
+        """progress(pct, stage) — the job pill shows the stage live, so the
+        practitioner watches the map land and each piece get built."""
+        if progress_cb:
+            try:
+                progress_cb(pct, msg)
+            except Exception:
+                pass
+
+    started_at = datetime.now(timezone.utc).isoformat()
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&select=id,name,type&limit=1") or []
     if not rows:
         return {"ok": False, "error": "business not found"}
     biz = rows[0]
 
+    _say(5, "drawing the map of the business")
     mapped = generate_business_blueprint(biz, idea)
     if not mapped.get("ok"):
         return mapped
     bp = mapped["blueprint"]
+    modules = (bp.get("modules") or [])[:MAX_MODULES]
+    _say(15, f"map ready: {len(modules)} pieces — building each one")
 
-    proposals: List[Dict[str, Any]] = []
-    built_slugs: set = set()
-    module_reports: List[Dict[str, Any]] = []
     build_biz = dict(biz)
     if bp.get("business_type") and bp["business_type"] != "custom":
         build_biz["type"] = bp["business_type"]      # the builder's vertical lens
 
-    for m in bp.get("modules") or []:
-        gen = msg.generate_module_proposal(build_biz, m["intake"])
+    def _build(m: Dict[str, Any]) -> Dict[str, Any]:
+        gen = msg.generate_module_proposal(build_biz, m["intake"], _ONE_MODULE_GUIDANCE)
+        return {"module": m, "gen": gen}
+
+    results: List[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=BUILD_WORKERS) as pool:
+        for r in pool.map(_build, modules):
+            results.append(r)
+            _say(15 + int(80 * len(results) / max(1, len(modules))),
+                 f"built {r['module']['name']} ({len(results)} of {len(modules)})")
+
+    proposals: List[Dict[str, Any]] = []
+    built_slugs: set = set()
+    module_reports: List[Dict[str, Any]] = []
+    n_modules = 0
+    for r in results:
+        m, gen = r["module"], r["gen"]
         if not gen.get("ok"):
             module_reports.append({"module": m["name"], "ok": False, "error": gen.get("error")})
             continue
         module_reports.append({"module": m["name"], "ok": True, "quality": gen.get("quality")})
-        for spec in gen.get("specs") or []:
-            slug = spec.get("slug")
-            if not slug or slug in built_slugs:
-                continue                          # two intakes that decomposed into the same thing
+        # ONE module per intake: the first spec is the one asked for; any
+        # extra the builder produced anyway is dropped and reported.
+        specs = [s for s in (gen.get("specs") or []) if s.get("slug")]
+        for spec in specs[1:]:
+            module_reports.append({"module": m["name"], "ok": True,
+                                   "dropped": spec.get("slug"), "why": "one module per piece"})
+        for spec in specs[:1]:
+            slug = spec["slug"]
+            if slug in built_slugs or n_modules >= MAX_MODULES:
+                continue
             built_slugs.add(slug)
             draft = msg.store_draft(business_id, m["intake"], spec, kind="module")
             if draft:
+                n_modules += 1
                 proposals.append({"spec_id": draft["id"], "kind": "module", "spec": spec})
         for off in gen.get("offerings") or []:
             if not off.get("slug") or off.get("slug") in built_slugs:
@@ -440,29 +613,34 @@ def propose_business_from_idea(business_id: str, idea: str) -> Dict[str, Any]:
         return {"ok": False, "error": "the map came back but no module could be built from it",
                 "blueprint": bp, "module_reports": module_reports}
 
-    _store_blueprint(business_id, idea, bp)
-
-    rails = bp.get("rails") or {}
-    rail_lines = []
-    for key in RAILS:
-        r = rails.get(key) or {}
-        label = key.replace("_", " ")
-        if r.get("gap"):
-            rail_lines.append(f"{label}: NOT YET — {r['gap']}")
-        elif r.get("covered_by"):
-            rail_lines.append(f"{label}: {r['covered_by']}")
-    reasoning = (bp.get("summary") or "").strip()
-    if rail_lines:
-        reasoning += "\n\nHow it runs: " + "; ".join(rail_lines) + "."
+    # The map row is written LAST so replay() only ever sees a finished set.
+    _store_blueprint(business_id, idea, bp, started_at)
+    _say(100, "done — the cards are ready")
 
     return {
         "ok": True,
-        "decomposition_reasoning": reasoning,
+        "decomposition_reasoning": _narrate(bp),
         "proposals": proposals,
         "forms": bp.get("forms") or [],
         "site": bp.get("site") or {},
-        "rails": rails,
+        "rails": bp.get("rails") or {},
         "business_type": bp.get("business_type"),
         "quality": mapped.get("quality"),
         "module_reports": module_reports,
     }
+
+
+def run_job(business_id: str, params: Dict[str, Any],
+            progress_cb: Optional[Callable[[int, str], None]] = None) -> Dict[str, Any]:
+    """chief_jobs._execute_kind body. The job row keeps a SUMMARY (names,
+    counts); the cards themselves live in module_specs and come back
+    through replay() when Chief shows them."""
+    idea = str((params or {}).get("idea") or "").strip()
+    res = propose_business_from_idea(business_id, idea, progress_cb=progress_cb)
+    if not res.get("ok"):
+        return {"ok": False, "error": str(res.get("error") or "couldn't lay it out")[:300]}
+    mods = [(p.get("spec") or {}).get("name") for p in res["proposals"] if p.get("kind") == "module"]
+    offs = [(p.get("offering") or {}).get("name") for p in res["proposals"] if p.get("kind") == "offering"]
+    return {"ok": True, "modules": mods, "offerings": offs,
+            "forms": len(res.get("forms") or []), "business_type": res.get("business_type"),
+            "quality_used": (res.get("quality") or {}).get("used")}
