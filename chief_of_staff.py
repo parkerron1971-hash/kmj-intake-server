@@ -179,6 +179,7 @@ from chief_module_actions import (
     handle_accept_module_spec,
     handle_add_module_field,
     handle_inspect_module,
+    handle_propose_business_from_idea,
     handle_propose_module_from_intake,
     handle_reject_module_spec,
     handle_summarize_module,
@@ -1665,7 +1666,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
 
     (foundation_block, business_profile_block, _mat_block, _growth_block,
      business_profile_raw, practitioner_block, practitioner_profile_raw,
-     brand_block, voice_block, playbook_block, _semantic_hits) = await asyncio.gather(
+     brand_block, voice_block, playbook_block, _semantic_hits,
+     blueprint_block) = await asyncio.gather(
         _soft(foundation_agent.chief_context_block(biz_id), ""),
         _soft(asyncio.to_thread(bp_chief_context_block, biz_id), ""),
         # LGS Phase 2/4 — maturity + growth objectives fold into the
@@ -1692,6 +1694,11 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _soft(asyncio.to_thread(_lazy_sync, "chief_memory_semantic",
                                 "match", biz_id, query_text)
               if query_text else _const([]), []),
+        # The map behind a business built from an idea (2026-09-06) —
+        # forms still to create + the site brief, for the turns after
+        # the practitioner accepts the module cards.
+        _soft(asyncio.to_thread(_lazy_sync, "business_blueprint",
+                                "context_block", biz_id), ""),
     )
     if _mat_block:
         business_profile_block = (business_profile_block + "\n\n" + _mat_block).strip()
@@ -1822,6 +1829,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "brand_block": brand_block or "",
         "voice_block": voice_block or "",
         "playbook_block": playbook_block or "",
+        "blueprint_block": blueprint_block or "",
         # Keep the full contact list (IDs + names) so the AI can reference real UUIDs
         "contacts_lookup": [
             {"id": c["id"], "name": c.get("name"), "status": c.get("status"), "health_score": c.get("health_score")}
@@ -1836,6 +1844,14 @@ def _format_foundation_block(ctx: Dict[str, Any]) -> str:
     nothing to show."""
     block = (ctx.get("foundation_block") or "").strip()
     return block + "\n" if block else ""
+
+
+def _format_blueprint_block(ctx: Dict[str, Any]) -> str:
+    """BUSINESS BLUEPRINT ON FILE (business_blueprint.context_block) —
+    empty string when the business was not laid out from an idea in the
+    last month."""
+    block = (ctx.get("blueprint_block") or "").strip()
+    return block + "\n\n" if block else ""
 
 
 def _format_playbook_block(ctx: Dict[str, Any]) -> str:
@@ -3021,7 +3037,7 @@ CUSTOM MODULES:
 RECENT EVENTS:
 {chr(10).join(event_lines) if event_lines else '  (none)'}
 
-{_format_playbook_block(ctx)}PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
+{_format_playbook_block(ctx)}{_format_blueprint_block(ctx)}PRACTITIONER MEMORIES (ALWAYS honor these — they override defaults):
 {chr(10).join(memory_lines) if memory_lines else '  (none stored yet)'}
 
 LONGITUDINAL INSIGHTS (your own weekly analysis of this business's trends — bring these up proactively when relevant, cite the pattern, and propose the move; a generic assistant could not know these):
@@ -10140,6 +10156,7 @@ ACTION_HANDLERS = {
     "summarize_module":           handle_summarize_module,
     "reject_module_spec":         handle_reject_module_spec,
     "upgrade_module_archetype":   handle_upgrade_module_archetype,
+    "propose_business_from_idea": handle_propose_business_from_idea,
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
     "draft_and_send":        handle_draft_and_send,
