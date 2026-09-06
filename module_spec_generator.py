@@ -659,8 +659,10 @@ class ProgressTrackerParams(BaseModel):
     subject_noun: Optional[str] = None     # what one subject is called ("Client", "Member")
 
 
-BlockKind = Literal["stat", "series", "breakdown", "progress", "recent", "upcoming", "notes"]
-BLOCK_KINDS: tuple = ("stat", "series", "breakdown", "progress", "recent", "upcoming", "notes")
+BlockKind = Literal["stat", "series", "breakdown", "progress", "recent", "upcoming", "notes",
+                    "list", "board", "calendar"]
+BLOCK_KINDS: tuple = ("stat", "series", "breakdown", "progress", "recent", "upcoming", "notes",
+                      "list", "board", "calendar")
 StatAgg = Literal["count", "sum", "avg", "latest", "min", "max"]
 Bucket = Literal["day", "week", "month"]
 Window = Literal["all", "7d", "30d", "month"]
@@ -681,8 +683,16 @@ class DashboardBlock(BaseModel):
                  window, or the row count when field is absent.
       recent     the latest rows, showing fields[].
       upcoming   the next rows by date_field, from today forward.
-      notes      the latest textarea/text values from field."""
+      notes      the latest textarea/text values from field.
+
+    The structural three (2026-09-06) — the generic module's views as
+    blocks, so ANY module can be composed rather than falling back:
+      list       every row (or those matching where), showing fields[],
+                 sorted by sort (a field name; newest first by default)
+      board      columns by a select field, cards move between them
+      calendar   the month grid on date_field"""
     kind: BlockKind
+    sort: Optional[str] = None
     label: Optional[str] = Field(default=None, max_length=60)
     field: Optional[str] = None
     date_field: Optional[str] = None
@@ -1042,12 +1052,27 @@ class ModuleSpec(BaseModel):
                     _need(date_ref, {"date"}, "upcoming date_field", i)
                 elif kind == "notes":
                     _need(b.get("field"), {"textarea", "text"}, "notes field", i)
-                elif kind == "recent":
+                elif kind in ("recent", "list"):
                     for fname in b.get("fields") or []:
                         if fname not in by_name:
                             raise ValueError(
-                                f"composed_dashboard blocks[{i}] recent fields '{fname}' "
+                                f"composed_dashboard blocks[{i}] {kind} fields '{fname}' "
                                 f"is not in schema.fields")
+                    if b.get("sort") and b["sort"] not in by_name:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] sort '{b['sort']}' is not in "
+                            f"schema.fields")
+                elif kind == "board":
+                    _need(b.get("field"), {"select"}, "board field", i)
+                    if not by_name[b["field"]].options:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] board field '{b['field']}' has "
+                            f"no options — a board needs columns")
+                elif kind == "calendar":
+                    if not date_ref:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] calendar needs a date_field")
+                    _need(date_ref, {"date"}, "calendar date_field", i)
 
         # booking_calendar-specific: primary_date_field MUST exist in the schema.
         if self.archetype == "booking_calendar":
@@ -1775,6 +1800,14 @@ Available archetypes:
           {"kind":"notes","field":"notes","limit":3}
           {"kind":"stat","agg":"sum","field":"amount","label":"Still owed",
            "where":{"field":"status","not_in":["paid","written_off"]} }
+          {"kind":"list","fields":["spent_on","vendor","category","amount"],"sort":"spent_on"}
+          {"kind":"board","field":"status","label":"By status"}
+          {"kind":"calendar","date_field":"due_on","label":"Due dates"}
+        list / board / calendar are the STRUCTURAL blocks — the whole table,
+          the kanban, the month grid — so a module that needs one of those
+          is still a composed_dashboard with that block on the page. Put a
+          "list" last when the practitioner will scan rows; a "board" when
+          rows move between states; a "calendar" when rows happen on days.
         where — any block may carry {"field", "is_in" | "not_in": [...]}
           to read only the rows whose select / checkbox / contact matches:
           "unbilled" is amount summed where status is not paid; "Software
@@ -1784,7 +1817,9 @@ Available archetypes:
         series (number field + date, bucket day|week|month), breakdown (a
         select; agg count or sum with fields[0] the amount), progress (sum of
         field — or row count without one — toward target; direction "down"
-        for a budget), recent, upcoming (a date field, from today on), notes.
+        for a budget), recent, upcoming (a date field, from today on), notes,
+        list (every row; fields[] + sort), board (a select with options),
+        calendar (a date field).
         date_field — the module's "when"; series and upcoming default to it
         title_field — what names a row in the recent list
         item_noun — what one row is called ("Expense", "Workout", "Sale")

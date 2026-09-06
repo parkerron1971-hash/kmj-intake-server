@@ -241,3 +241,39 @@ def test_payments_maps_to_the_dashboard():
     assert bq.SKILL_ARCHETYPE["payments-module"] == "composed_dashboard"
     skill = next(s for s in bs.load_skills() if s["name"] == "payments-module")
     assert '"where"' in skill["body"] and "composed_dashboard" in skill["body"]
+
+
+# ─── the structural blocks: list / board / calendar (2026-09-06) ──────
+
+def test_structural_blocks_validate():
+    msg.ModuleSpec.model_validate(_dash(blocks=[
+        {"kind": "stat", "agg": "count"},
+        {"kind": "list", "fields": ["spent_on", "vendor", "amount"], "sort": "spent_on"},
+        {"kind": "board", "field": "category", "label": "By category"},
+        {"kind": "calendar", "label": "When"},
+    ]))
+
+
+def test_board_needs_a_select_with_options():
+    with pytest.raises(ValueError, match="board field 'amount' must be one of"):
+        msg.ModuleSpec.model_validate(_dash(blocks=[{"kind": "board", "field": "amount"}]))
+    spec = _dash(blocks=[{"kind": "board", "field": "category"}])
+    spec["schema"]["fields"][3]["options"] = []
+    with pytest.raises(ValueError, match="has no options"):
+        msg.ModuleSpec.model_validate(spec)
+
+
+def test_calendar_needs_a_date():
+    with pytest.raises(ValueError, match="calendar needs a date_field"):
+        msg.ModuleSpec.model_validate(_dash(blocks=[{"kind": "calendar"}], date_field=None))
+
+
+def test_list_sort_must_exist():
+    with pytest.raises(ValueError, match="sort 'ghost' is not in"):
+        msg.ModuleSpec.model_validate(_dash(blocks=[{"kind": "list", "sort": "ghost"}]))
+
+
+@pytest.mark.parametrize("kind", ["list", "board", "calendar"])
+def test_prompt_teaches_the_structural_blocks(kind):
+    block = msg._SYSTEM_PROMPT.split("composed_dashboard", 1)[1]
+    assert f'"kind":"{kind}"' in block

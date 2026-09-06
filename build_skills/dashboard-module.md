@@ -40,6 +40,11 @@ THE FRONT PAGE (archetype_params.blocks, 2 to 8, in order)
   only when rows have a future date that matters (renewals, due dates).
 - "notes" only when the notes are the point (a journal), not on an expense
   log.
+- The structural blocks when the rows themselves are the work: "list"
+  (every row, with fields[] and a sort) when they scan; "board" (a select
+  with options) when rows move between states; "calendar" (a date) when
+  rows happen on days. These replace the generic table — a module that
+  is "just a list" is a composed_dashboard with one stat and a list.
 - Every block's field must exist in schema.fields and be the type the block
   draws. Give each block a short label in the practitioner's words.
 
