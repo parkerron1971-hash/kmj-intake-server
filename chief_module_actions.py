@@ -289,14 +289,24 @@ async def handle_propose_module_from_intake(client, biz, action):
 
 
 async def handle_propose_business_from_idea(client, biz, action):
-    """The idea-to-business door (2026-09-06). One action turns a
-    description of a business into the map (business_blueprint) and then
-    a card per module and offering — built through the same generator,
-    skills and second look as a single intake, so every card is exactly
-    as good as one asked for on its own. Returns the dock's existing
-    proposal card stack (type reused like the upgrade handler) plus the
-    forms and site brief the map wrote, which the BUSINESS BLUEPRINT ON
-    FILE context block keeps alive for the turns after they accept.
+    """The idea-to-business door (2026-09-06). A description of a business
+    becomes the map (business_blueprint) and then a card per module and
+    offering — built through the same generator, skills and second look
+    as a single intake.
+
+    It is a LONG TASK. The first live run (KMJ) took four and a half
+    minutes inside a chat turn: the stream went silent, the connection
+    dropped, the app fell back to the plain endpoint and re-sent the
+    message, and the server built the whole business twice while the
+    practitioner saw Chief's reply vanish. Same road as rebuild_site now:
+
+      1. cards already built and waiting (a finished job, or "show me
+         again")  → return the dock's card stack at once (replay, no cost)
+      2. a job is queued/running                → say so, no second build
+      3. otherwise                              → enqueue lay_out_business
+         and return immediately; the BUSINESS BLUEPRINT ON FILE context
+         block says CARDS READY when it lands, and Chief re-emits this
+         action to show them.
 
     action: {idea}  (intake_excerpt accepted as an alias)"""
     idea = (action.get("idea") or action.get("intake_excerpt") or "").strip()
@@ -305,13 +315,58 @@ async def handle_propose_business_from_idea(client, biz, action):
     try:
         import asyncio as _aio
         import business_blueprint as bb
+        import chief_jobs
         import module_spec_generator as msg
     except Exception as e:
         return _fail("propose_business_from_idea", f"generator unavailable: {e}")
 
-    res = await _aio.to_thread(bb.propose_business_from_idea, biz["id"], idea)
-    if not res.get("ok"):
-        return _fail("propose_business_from_idea", res.get("error", "generation failed"))
+    # ── 1. cards waiting ─────────────────────────────────────────────
+    ready = await _aio.to_thread(bb.replay, biz["id"])
+    if ready and (not ready.get("shown") or _same_idea(ready.get("idea"), idea)):
+        return await _business_card_stack(biz, ready, bb, msg, _aio)
+
+    # ── 2. already building ──────────────────────────────────────────
+    job = await _aio.to_thread(bb.active_job, biz["id"])
+    if job:
+        return {
+            "type": "propose_business_from_idea",
+            "result": "business layout already in progress",
+            "label": (f"🏗️ Already laying out {biz.get('name') or 'the business'} — "
+                      f"the cards land in a few minutes"),
+            "job_id": job.get("id"),
+            "nav": None,
+        }
+
+    # ── 3. start the job ─────────────────────────────────────────────
+    owner = biz.get("owner_id")
+    if not owner:
+        return _fail("propose_business_from_idea", "no business owner on record")
+    try:
+        job = await chief_jobs.enqueue(
+            client, user_id=owner, business_id=biz["id"], kind=bb.JOB_KIND,
+            params={"idea": idea}, source="chief")
+    except Exception as e:
+        return _fail("propose_business_from_idea", f"couldn't start the layout: {e}")
+    return {
+        "type": "propose_business_from_idea",
+        "result": "business layout started — the cards come back when it's done",
+        "label": (f"🏗️ Laying out {biz.get('name') or 'the business'} — the map first, "
+                  f"then a card for each piece; two to four minutes"),
+        "job_id": (job or {}).get("id"),
+        "nav": None,
+    }
+
+
+def _same_idea(a: str, b: str) -> bool:
+    na = " ".join((a or "").lower().split())[:200]
+    nb = " ".join((b or "").lower().split())[:200]
+    return bool(na) and na == nb
+
+
+async def _business_card_stack(biz, res, bb, msg, _aio):
+    """The card stack from a finished layout: the dock's existing
+    proposal card (type reused like the upgrade handler) plus the forms
+    and site brief for Chief to narrate. Marks the map shown."""
     proposals = res.get("proposals") or []
 
     # A business that already has its single-instance module (Bookings)
@@ -349,7 +404,7 @@ async def handle_propose_business_from_idea(client, biz, action):
     if n_offerings:
         parts.append(f"{n_offerings} offering{'s' if n_offerings != 1 else ''}")
     names = ", ".join(_name_of(p) for p in proposals)
-    label = (f"🏗️ Laid out {biz.get('name') or 'the business'}: "
+    label = (f"\U0001f3d7️ Laid out {biz.get('name') or 'the business'}: "
              f"{' + '.join(parts)} — {names}")
     after = []
     if forms:
@@ -365,6 +420,12 @@ async def handle_propose_business_from_idea(client, biz, action):
         fixed = [f.get("code") for f in (q.get("first") or {}).get("findings") or []
                  if f.get("severity") == "revise"]
         label += f" · the map was reviewed and revised once ({', '.join(fixed[:3]) or 'quality'})"
+
+    if res.get("blueprint_row"):
+        try:
+            await _aio.to_thread(bb.mark_shown, res["blueprint_row"])
+        except Exception:
+            pass
 
     return {
         "type": "propose_module_from_intake",   # reuse the dock's card stack

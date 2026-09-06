@@ -14,6 +14,7 @@ import asyncio
 import json
 import pathlib
 import sys
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -211,31 +212,46 @@ class _FakeClient:
 
 
 class _FakeDB:
-    """sb_get/sb_post as the door uses them."""
+    """sb_get/sb_post/sb_patch as the door uses them."""
     def __init__(self):
         self.specs = []
         self.forms = []
+        self.jobs = []
         self.n = 0
 
     def get(self, path):
         if path.startswith("/businesses?"):
             return [{"id": "b1", "name": "Score Up", "type": "custom"}]
         if path.startswith("/module_specs?"):
-            rows = [r for r in self.specs if r["status"] == "blueprint"]
-            return sorted(rows, key=lambda r: r["created_at"], reverse=True)[:1]
+            if "status=eq.blueprint" in path:
+                rows = [r for r in self.specs if r["status"] == "blueprint"]
+                return sorted(rows, key=lambda r: r["created_at"], reverse=True)[:1]
+            if "status=eq.draft" in path:
+                since = path.split("created_at=gte.")[1].split("&")[0]
+                return [r for r in self.specs if r["status"] == "draft" and r["created_at"] >= since]
+            raise AssertionError(path)
         if path.startswith("/intake_forms?"):
             return self.forms
         if path.startswith("/custom_modules?"):
             return []
+        if path.startswith("/chief_jobs?"):
+            return self.jobs
         raise AssertionError(path)
 
     def post(self, path, body):
         assert path == "/module_specs"
         self.n += 1
         row = dict(body); row["id"] = f"spec-{self.n}"
-        row["created_at"] = "2026-09-06T12:00:00+00:00"
+        row["created_at"] = (datetime.now(timezone.utc) + timedelta(seconds=self.n)).isoformat()
         self.specs.append(row)
         return [row]
+
+    def patch(self, path, body):
+        sid = path.split("id=eq.")[1]
+        for r in self.specs:
+            if r["id"] == sid:
+                r.update(body)
+        return [body]
 
 
 def _spec(slug, name, archetype="progress_tracker"):
@@ -248,16 +264,18 @@ def _spec(slug, name, archetype="progress_tracker"):
 def door(monkeypatch):
     db = _FakeDB()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
-    monkeypatch.setattr(bb.sb_clients, "sb_get_as_service", db.get)
-    monkeypatch.setattr(bb.sb_clients, "sb_post_as_service", db.post)
-    monkeypatch.setattr(msg.sb_clients, "sb_get_as_service", db.get)
-    monkeypatch.setattr(msg.sb_clients, "sb_post_as_service", db.post)
+    for mod in (bb.sb_clients, msg.sb_clients):
+        monkeypatch.setattr(mod, "sb_get_as_service", db.get)
+        monkeypatch.setattr(mod, "sb_post_as_service", db.post)
+        monkeypatch.setattr(mod, "sb_patch_as_service", db.patch)
     built = []
 
     def fake_generate(business, intake, extra_guidance=None):
-        built.append((business.get("type"), intake))
+        built.append((business.get("type"), intake, extra_guidance))
         if "score" in intake:
-            return {"ok": True, "specs": [_spec("credit-profiles", "Credit Profiles")],
+            # the builder split this one anyway — only the first survives
+            return {"ok": True, "specs": [_spec("credit-profiles", "Credit Profiles"),
+                                          _spec("report-pulls", "Report Pulls")],
                     "offerings": [], "quality": {"used": "first"}}
         return {"ok": True, "specs": [_spec("invoices", "Invoices", "composed_dashboard")],
                 "offerings": [{"name": "Monthly Credit Repair", "slug": "monthly-credit-repair",
@@ -267,27 +285,67 @@ def door(monkeypatch):
     return db, built
 
 
-def test_the_door_maps_then_builds_each_module(door, monkeypatch):
+IDEA = "I repair credit for clients, $99 a month, and want a site."
+
+
+def test_the_door_maps_then_builds_one_module_per_piece(door, monkeypatch):
     db, built = door
     client = _FakeClient([json.dumps(_map())])
     monkeypatch.setattr(bb.llm_call, "sdk_client", lambda **kw: client)
+    said = []
 
-    res = bb.propose_business_from_idea("b1", "I repair credit for clients, $99 a month, and want a site.")
+    res = bb.propose_business_from_idea("b1", IDEA, progress_cb=lambda p, m: said.append((p, m)))
     assert res["ok"], res
-    # one map call; the builder saw the map's vertical, once per module
+    # one map call; the builder saw the map's vertical and the ONE-module rule, once per piece
     assert len(client.calls) == 1
-    assert [t for t, _ in built] == ["consultant", "consultant"]
+    assert sorted(t for t, _, _ in built) == ["consultant", "consultant"]
+    assert all("ONE module" in g for _, _, g in built)
     kinds = [(p["kind"], p.get("spec", p.get("offering", {})).get("slug")) for p in res["proposals"]]
     assert ("module", "credit-profiles") in kinds and ("module", "invoices") in kinds
+    assert ("module", "report-pulls") not in kinds          # the split was dropped
+    assert any(r.get("dropped") == "report-pulls" for r in res["module_reports"])
     # the offering the builder produced is not stored twice from the map's own list
     assert kinds.count(("offering", "monthly-credit-repair")) == 1
-    # the map is kept as a blueprint row, never a draft card
-    statuses = sorted(r["status"] for r in db.specs)
+    # the map is kept LAST as a blueprint row, never a draft card
+    statuses = [r["status"] for r in db.specs]
     assert statuses.count("blueprint") == 1 and statuses.count("draft") == 3
-    bp_row = next(r for r in db.specs if r["status"] == "blueprint")
-    assert bp_row["draft_json"]["__kind"] == "business"
+    assert statuses[-1] == "blueprint"
+    bp_row = db.specs[-1]
+    assert bp_row["draft_json"]["__kind"] == "business" and bp_row["draft_json"]["__shown"] is False
+    assert bp_row["draft_json"]["__started_at"] <= db.specs[0]["created_at"]   # owns every draft of the run
     assert res["forms"][0]["name"] == "New Client Intake"
     assert "How it runs:" in res["decomposition_reasoning"]
+    assert said[0][1].startswith("drawing the map") and said[-1] == (100, "done — the cards are ready")
+    assert [p for p, _ in said] == sorted(p for p, _ in said)          # monotonic
+
+
+def test_the_job_body_keeps_a_summary_not_the_cards(door, monkeypatch):
+    client = _FakeClient([json.dumps(_map())])
+    monkeypatch.setattr(bb.llm_call, "sdk_client", lambda **kw: client)
+    out = bb.run_job("b1", {"idea": IDEA})
+    assert out["ok"] and out["modules"] == ["Credit Profiles", "Invoices"]
+    assert out["offerings"] == ["Monthly Credit Repair"] and out["forms"] == 1
+    assert "proposals" not in out
+    bad = bb.run_job("b1", {"idea": "credit"})
+    assert bad["ok"] is False and "more" in bad["error"]
+
+
+def test_replay_returns_the_finished_cards_until_shown_or_stale(door, monkeypatch):
+    db, _ = door
+    assert bb.replay("b1") is None
+    client = _FakeClient([json.dumps(_map())])
+    monkeypatch.setattr(bb.llm_call, "sdk_client", lambda **kw: client)
+    bb.propose_business_from_idea("b1", IDEA)
+    rep = bb.replay("b1")
+    assert rep and rep["shown"] is False and rep["idea"] == IDEA
+    assert len(rep["proposals"]) == 3 and rep["forms"] and rep["site"]["headline"]
+    bb.mark_shown(rep["blueprint_row"])
+    assert bb.replay("b1")["shown"] is True
+    # cards accepted or rejected → nothing to replay
+    for r in db.specs:
+        if r["status"] == "draft":
+            r["status"] = "accepted"
+    assert bb.replay("b1") is None
 
 
 def test_a_map_that_fails_the_rubric_is_revised_once(door, monkeypatch):
@@ -328,23 +386,73 @@ def test_a_one_word_idea_is_asked_to_say_more(door):
     assert not res["ok"] and "more" in res["error"]
 
 
-# ─── the block that carries the map into later turns ─────────────────
+def test_the_status_check_knows_the_blueprint_row():
+    """The first live run lost its map to module_specs_status_check. The
+    migration that widens it must name every status this module writes."""
+    sql = (pathlib.Path(__file__).resolve().parent.parent
+           / "supabase" / "APPLY-2026-09-06-module-specs-status-blueprint.sql").read_text(encoding="utf-8")
+    assert f"'{bb.BLUEPRINT_STATUS}'::text" in sql
+    assert "'superseded'::text" in sql and "'draft'::text" in sql
 
-def test_context_block_lists_forms_not_yet_created_and_the_site_brief(door, monkeypatch):
+
+def test_a_refused_map_row_is_a_failed_run(door, monkeypatch):
     db, _ = door
     client = _FakeClient([json.dumps(_map())])
     monkeypatch.setattr(bb.llm_call, "sdk_client", lambda **kw: client)
-    bb.propose_business_from_idea("b1", "I repair credit for clients, $99 a month, and want a site.")
+    real_post = db.post
 
+    def refuse_blueprint(path, body):
+        if body.get("status") == bb.BLUEPRINT_STATUS:
+            return None                     # what PostgREST's 400 looks like to sb_post_as_service
+        return real_post(path, body)
+    monkeypatch.setattr(bb.sb_clients, "sb_post_as_service", refuse_blueprint)
+    monkeypatch.setattr(msg.sb_clients, "sb_post_as_service", refuse_blueprint)
+    res = bb.propose_business_from_idea("b1", IDEA)
+    assert res["ok"] is False and "keep the map" in res["error"]
+    assert bb.replay("b1") is None
+
+
+# ─── the block that carries the map into later turns ─────────────────
+
+def _lay_out(db, monkeypatch, now=True):
+    client = _FakeClient([json.dumps(_map())])
+    monkeypatch.setattr(bb.llm_call, "sdk_client", lambda **kw: client)
+    bb.propose_business_from_idea("b1", IDEA)
+
+
+def test_context_block_says_cards_ready_until_they_are_shown(door, monkeypatch):
+    db, _ = door
+    _lay_out(db, monkeypatch)
     block = bb.context_block("b1")
-    assert block.startswith("BUSINESS BLUEPRINT ON FILE")
+    assert block.startswith("CARDS READY, NOT YET SHOWN")
+    assert '"type":"propose_business_from_idea"' in block and IDEA[:30] in block
+    assert "BUSINESS BLUEPRINT ON FILE" in block
+    bb.mark_shown(bb.replay("b1")["blueprint_row"])
+    block = bb.context_block("b1")
+    assert "CARDS READY" not in block and block.startswith("BUSINESS BLUEPRINT ON FILE")
+
+
+def test_context_block_lists_forms_not_yet_created_and_the_site_brief(door, monkeypatch):
+    db, _ = door
+    _lay_out(db, monkeypatch)
+    bb.mark_shown(bb.replay("b1")["blueprint_row"])
+    block = bb.context_block("b1")
     assert "Forms still to create:" in block
     assert "New Client Intake [intake → Credit Profiles]: Email*(email), What is your score today?(number)" in block
     assert 'headline "Your score, repaired."' in block and "Book a free review" in block
-
     # once the form exists by name, the block says so instead of asking again
     db.forms = [{"name": "new client intake"}]
     assert "Forms: all created." in bb.context_block("b1")
+
+
+def test_context_block_reports_a_running_job_and_never_asks_for_a_second(door, monkeypatch):
+    db, _ = door
+    db.jobs = [{"id": "j1", "status": "running", "created_at": "2026-09-06T12:00:00+00:00"}]
+    block = bb.context_block("b1")
+    assert block.startswith("BUSINESS LAYOUT IN PROGRESS") and "do NOT emit" in block
+    _lay_out(db, monkeypatch)
+    block = bb.context_block("b1")
+    assert block.startswith("BUSINESS LAYOUT IN PROGRESS") and "CARDS READY" not in block
 
 
 def test_context_block_is_empty_without_a_map_or_after_the_window(door, monkeypatch):
@@ -355,49 +463,87 @@ def test_context_block_is_empty_without_a_map_or_after_the_window(door, monkeypa
     assert bb.context_block("b1") == ""
 
 
-# ─── the handler, registry and prompt ────────────────────────────────
+# ─── the handler, the job kind, the registry and the prompt ──────────
 
-def test_the_verb_is_wired_and_classified():
+def test_the_verb_is_wired_classified_and_a_job_kind():
     import chief_of_staff as cos
     import chief_prompt
     import action_registry as reg
+    import chief_jobs
     assert "propose_business_from_idea" in cos.ACTION_HANDLERS
     assert reg.REGISTRY["propose_business_from_idea"]["reversibility"] == "A"
+    meta = chief_jobs.KIND_META[bb.JOB_KIND]
+    assert meta["label"] and meta["working"] and meta["done"]
     src = pathlib.Path(chief_prompt.__file__).read_text(encoding="utf-8")
     assert '"type":"propose_business_from_idea"' in src
     assert "0. A WHOLE BUSINESS" in src
-    assert "BUSINESS BLUEPRINT ON FILE" in src
+    assert "CARDS READY" in src and "BUSINESS BLUEPRINT ON FILE" in src
 
 
-def test_the_handler_reuses_the_dock_card_stack_and_keeps_an_existing_bookings(monkeypatch):
+def _ready(shown=False, idea=IDEA):
+    return {"ok": True, "shown": shown, "idea": idea,
+            "blueprint_row": {"id": "bp1", "draft_json": {}},
+            "decomposition_reasoning": "r",
+            "proposals": [
+                {"spec_id": "s1", "kind": "module", "spec": _spec("bookings", "Bookings", "booking_calendar")},
+                {"spec_id": "s2", "kind": "module", "spec": _spec("credit-profiles", "Credit Profiles")},
+                {"spec_id": "s3", "kind": "offering", "offering": {"name": "Monthly Credit Repair", "slug": "m"}},
+            ],
+            "forms": [{"name": "New Client Intake"}], "site": {"headline": "h"},
+            "rails": {}, "business_type": "consultant"}
+
+
+def test_the_handler_shows_waiting_cards_and_keeps_an_existing_bookings(monkeypatch):
     # asyncio.run, not pytest.mark.asyncio: CI has no pytest-asyncio plugin.
     import chief_module_actions as cma
-
-    def fake_door(business_id, idea):
-        return {"ok": True, "decomposition_reasoning": "r",
-                "proposals": [
-                    {"spec_id": "s1", "kind": "module", "spec": _spec("bookings", "Bookings", "booking_calendar")},
-                    {"spec_id": "s2", "kind": "module", "spec": _spec("credit-profiles", "Credit Profiles")},
-                    {"spec_id": "s3", "kind": "offering", "offering": {"name": "Monthly Credit Repair", "slug": "m"}},
-                ],
-                "forms": [{"name": "New Client Intake"}], "site": {"headline": "h"},
-                "rails": {}, "business_type": "consultant",
-                "quality": {"used": "revised", "first": {"findings": [
-                    {"code": "site_without_a_cta", "severity": "revise"}]}}}
-    monkeypatch.setattr(bb, "propose_business_from_idea", fake_door)
+    shown = []
+    monkeypatch.setattr(bb, "replay", lambda bid: _ready())
+    monkeypatch.setattr(bb, "mark_shown", lambda row: shown.append(row["id"]))
     monkeypatch.setattr(msg, "_existing_single_instance_modules",
                         lambda bid: [{"archetype": "booking_calendar", "name": "Bookings"}])
-
     out = asyncio.run(cma.handle_propose_business_from_idea(
-        None, {"id": "b1", "name": "Score Up"}, {"type": "propose_business_from_idea", "idea": "I repair credit"}))
+        None, {"id": "b1", "name": "Score Up"}, {"type": "propose_business_from_idea", "idea": "anything"}))
     assert out["type"] == "propose_module_from_intake"       # the dock's card stack
     assert out["origin"] == "business_blueprint"
     assert [p["spec_id"] for p in out["proposals"]] == ["s2", "s3"]
     assert "kept your existing Bookings" in out["label"]
     assert "1 module + 1 offering" in out["label"]
     assert "1 form and the site brief follow" in out["label"]
-    assert "revised once (site_without_a_cta)" in out["label"]
-    assert out["forms"] and out["site"]["headline"] == "h"
+    assert shown == ["bp1"]
+
+
+def test_the_handler_replays_shown_cards_only_for_the_same_idea(monkeypatch):
+    import chief_module_actions as cma
+    monkeypatch.setattr(bb, "replay", lambda bid: _ready(shown=True))
+    monkeypatch.setattr(bb, "mark_shown", lambda row: None)
+    monkeypatch.setattr(bb, "active_job", lambda bid: None)
+    monkeypatch.setattr(msg, "_existing_single_instance_modules", lambda bid: [])
+    enq = []
+
+    async def fake_enqueue(client, **kw):
+        enq.append(kw); return {"id": "job-1"}
+    import chief_jobs
+    monkeypatch.setattr(chief_jobs, "enqueue", fake_enqueue)
+    # same idea again → the cards, no job
+    out = asyncio.run(cma.handle_propose_business_from_idea(
+        None, {"id": "b1", "name": "Score Up", "owner_id": "u1"}, {"type": "propose_business_from_idea", "idea": IDEA}))
+    assert out["type"] == "propose_module_from_intake" and not enq
+    # a different idea → a new job
+    out = asyncio.run(cma.handle_propose_business_from_idea(
+        None, {"id": "b1", "name": "Score Up", "owner_id": "u1"},
+        {"type": "propose_business_from_idea", "idea": "I run a bakery with wholesale accounts and a storefront"}))
+    assert out["type"] == "propose_business_from_idea" and out["job_id"] == "job-1"
+    assert enq[0]["kind"] == bb.JOB_KIND and enq[0]["params"]["idea"].startswith("I run a bakery")
+    assert "two to four minutes" in out["label"]
+
+
+def test_the_handler_never_starts_a_second_job(monkeypatch):
+    import chief_module_actions as cma
+    monkeypatch.setattr(bb, "replay", lambda bid: None)
+    monkeypatch.setattr(bb, "active_job", lambda bid: {"id": "j9", "status": "running"})
+    out = asyncio.run(cma.handle_propose_business_from_idea(
+        None, {"id": "b1", "name": "Score Up", "owner_id": "u1"}, {"type": "propose_business_from_idea", "idea": IDEA}))
+    assert out["result"] == "business layout already in progress" and out["job_id"] == "j9"
 
 
 def test_the_handler_needs_an_idea():
