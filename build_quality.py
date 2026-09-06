@@ -41,6 +41,7 @@ SKILL_ARCHETYPE: Dict[str, str] = {
     "tracker-module": "progress_tracker",
     "pipeline-module": "work_pipeline",
     "booking-module": "booking_calendar",
+    "dashboard-module": "composed_dashboard",
 }
 
 # Words in an intake that mean the practitioner wants to be TOLD.

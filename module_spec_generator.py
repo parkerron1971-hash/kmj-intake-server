@@ -298,6 +298,7 @@ ArchetypeEnum = Literal[
     "event_roster",       # one occasion, many people — RSVP headcount + named roles
     "agreement_ledger",   # a document somebody signs — signed / expiring / expired
     "progress_tracker",   # a number moving toward a target — score / weight / visits / savings
+    "composed_dashboard", # a log with a front page assembled from blocks — expenses / workouts / sales
 ]
 
 
@@ -435,6 +436,23 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         # (a client's score, a member's visits), so it buckets with them.
         # This is the bucket the C.1.3 note reserved for RewardProgress.
         "operate_group": "customers",
+    },
+    "composed_dashboard": {
+        # THE EVERYTHING-ELSE SHAPE, done properly. An expense log, a
+        # workout log, a sales log, a mileage log, a maintenance log — a
+        # module that is a LOG of rows and whose real question is "what
+        # does it add up to". Before this, every one of them landed on
+        # the generic table. Now the model assembles a front page from a
+        # closed catalog of blocks bound to the module's own fields:
+        # stat tiles, a series over time, a breakdown by a choice, a
+        # progress bar, recent rows, upcoming dates, notes. Freedom in
+        # what to show; determinism in how it is drawn.
+        "config_surface": "build",
+        "daily_use_surface": "operate",
+        "chief_can_suggest": True,
+        "label": "Dashboard",
+        "pitch": "a log with a front page built from blocks — totals, a trend over time, a breakdown by category, recent entries — for expenses, sales, workouts, hours, anything you log and want to see add up",
+        "operate_group": "work",
     },
 }
 
@@ -641,6 +659,57 @@ class ProgressTrackerParams(BaseModel):
     subject_noun: Optional[str] = None     # what one subject is called ("Client", "Member")
 
 
+BlockKind = Literal["stat", "series", "breakdown", "progress", "recent", "upcoming", "notes"]
+BLOCK_KINDS: tuple = ("stat", "series", "breakdown", "progress", "recent", "upcoming", "notes")
+StatAgg = Literal["count", "sum", "avg", "latest", "min", "max"]
+Bucket = Literal["day", "week", "month"]
+Window = Literal["all", "7d", "30d", "month"]
+
+
+class DashboardBlock(BaseModel):
+    """One block on a composed_dashboard front page. `kind` is closed; the
+    other keys are read per kind (the ModuleSpec validator checks the
+    field refs and types for each kind):
+
+      stat       a hero number: agg over field (count needs no field;
+                 sum/avg/min/max need a number or currency; latest takes
+                 any field). window narrows it (this month, last 30 days).
+      series     a number over time: field (number/currency) bucketed by
+                 date_field, agg sum|avg|latest per bucket.
+      breakdown  bars by a select field; measure count, or sum of field.
+      progress   a bar toward target: field (number/currency) summed over
+                 window, or the row count when field is absent.
+      recent     the latest rows, showing fields[].
+      upcoming   the next rows by date_field, from today forward.
+      notes      the latest textarea/text values from field."""
+    kind: BlockKind
+    label: Optional[str] = Field(default=None, max_length=60)
+    field: Optional[str] = None
+    date_field: Optional[str] = None
+    agg: Optional[StatAgg] = None
+    bucket: Optional[Bucket] = None
+    window: Optional[Window] = None
+    target: Optional[float] = None
+    direction: Literal["up", "down"] = "up"
+    limit: Optional[int] = Field(default=None, ge=1, le=20)
+    fields: Optional[List[str]] = None
+
+
+class ComposedDashboardParams(BaseModel):
+    """Parameters for the ComposedDashboard archetype — a log whose front
+    page is assembled from blocks over its own rows.
+
+    blocks is the whole design: what the practitioner sees first, in
+    order. Between two and eight; one block is a stat tile on a table,
+    nine is a wall. date_field is the module's "when" (the series and
+    upcoming blocks default to it); title_field names a row in the
+    recent list. Field refs are checked against schema.fields."""
+    blocks: List[DashboardBlock] = Field(..., min_length=1, max_length=8)
+    title_field: Optional[str] = None
+    date_field: Optional[str] = None
+    item_noun: Optional[str] = None
+
+
 # Validators dispatched by archetype value.
 _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "booking_calendar": BookingCalendarParams,
@@ -649,6 +718,7 @@ _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "event_roster": EventRosterParams,
     "agreement_ledger": AgreementLedgerParams,
     "progress_tracker": ProgressTrackerParams,
+    "composed_dashboard": ComposedDashboardParams,
 }
 
 
@@ -885,6 +955,73 @@ class ModuleSpec(BaseModel):
                 raise ValueError(
                     "progress_tracker: set `target` OR `target_field`, not "
                     "both — two targets disagree")
+
+        # composed_dashboard: every block's refs must exist and be the kind
+        # of field the block can draw. A series over a text field is a
+        # blank chart; a breakdown by a number is one bar per row.
+        if self.archetype == "composed_dashboard":
+            by_name = {f.name: f for f in self.schema_.fields}
+            p = self.archetype_params
+            numeric = {"number", "currency", "rating"}
+
+            def _need(name: Optional[str], allowed: set, what: str, i: int) -> None:
+                if not name:
+                    raise ValueError(f"composed_dashboard blocks[{i}] ({what}) needs a field")
+                if name not in by_name:
+                    raise ValueError(
+                        f"composed_dashboard blocks[{i}] {what} '{name}' is not in "
+                        f"schema.fields (have: {sorted(by_name)})")
+                if by_name[name].type not in allowed:
+                    raise ValueError(
+                        f"composed_dashboard blocks[{i}] {what} '{name}' must be one of "
+                        f"{sorted(allowed)} (got '{by_name[name].type}')")
+
+            for key in ("title_field", "date_field"):
+                v = p.get(key)
+                if v and v not in by_name:
+                    raise ValueError(f"composed_dashboard {key} '{v}' is not in schema.fields")
+            if p.get("date_field") and by_name[p["date_field"]].type != "date":
+                raise ValueError("composed_dashboard date_field must be a date field")
+
+            for i, b in enumerate(p.get("blocks") or []):
+                kind = b.get("kind")
+                date_ref = b.get("date_field") or p.get("date_field")
+                if kind == "stat":
+                    agg = b.get("agg") or ("count" if not b.get("field") else "sum")
+                    if agg in ("sum", "avg", "min", "max"):
+                        _need(b.get("field"), numeric, f"stat {agg} field", i)
+                    elif agg == "latest":
+                        _need(b.get("field"), set(module_vocabulary.FIELD_TYPES), "stat latest field", i)
+                elif kind == "series":
+                    _need(b.get("field"), numeric, "series field", i)
+                    if not date_ref:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] series needs a date_field "
+                            f"(on the block or on archetype_params)")
+                    _need(date_ref, {"date"}, "series date_field", i)
+                elif kind == "breakdown":
+                    _need(b.get("field"), {"select", "checkbox", "contact_link"}, "breakdown field", i)
+                    if b.get("agg") == "sum":
+                        _need(b.get("fields", [None])[0] if b.get("fields") else None,
+                              numeric, "breakdown sum field (fields[0])", i)
+                elif kind == "progress":
+                    if b.get("field"):
+                        _need(b.get("field"), numeric, "progress field", i)
+                    if b.get("target") is None:
+                        raise ValueError(f"composed_dashboard blocks[{i}] progress needs a target")
+                elif kind == "upcoming":
+                    if not date_ref:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] upcoming needs a date_field")
+                    _need(date_ref, {"date"}, "upcoming date_field", i)
+                elif kind == "notes":
+                    _need(b.get("field"), {"textarea", "text"}, "notes field", i)
+                elif kind == "recent":
+                    for fname in b.get("fields") or []:
+                        if fname not in by_name:
+                            raise ValueError(
+                                f"composed_dashboard blocks[{i}] recent fields '{fname}' "
+                                f"is not in schema.fields")
 
         # booking_calendar-specific: primary_date_field MUST exist in the schema.
         if self.archetype == "booking_calendar":
@@ -1570,13 +1707,78 @@ Available archetypes:
         with fields client (contact_link), visited_on (date),
         redeemed (checkbox).
 
+  composed_dashboard
+    purpose: A LOG WITH A FRONT PAGE. Rows the practitioner adds as things
+      happen — expenses, sales, workouts, hours, mileage, meals, maintenance,
+      donations received, calls made — and whose real question is "what does
+      it add up to": how much this month, where it goes, is it trending up,
+      what is coming. You design the front page from a closed catalog of
+      BLOCKS bound to the module's own fields; the surface draws them.
+    when to pick: the intake describes logging something repeatedly and
+      wanting to SEE totals, a trend, a breakdown, or an overview — "track my
+      expenses and see where the money goes", "log my workouts", "a sales log
+      with monthly totals", "hours per client", "at a glance".
+    when NOT to pick: one number per person chasing a goal (progress_tracker
+      — a series with a target and milestones); staged work (work_pipeline);
+      an occasion with people (event_roster); a reference list nobody
+      totals (fallback_generic).
+    schema requirement: a `date` field for when it happened (put it first
+      after the title), a `currency` or `number` for the amount when there is
+      one, a `select` for the category when things come in kinds, a
+      `contact_link` when rows belong to a person, a `textarea` for notes.
+    archetype_params (keys marked * are required):
+      * blocks — 2 to 8 blocks, in the order they appear. Lead with the
+        number they open the page to see. Each block:
+          {"kind":"stat","agg":"sum","field":"amount","window":"month","label":"This month"}
+          {"kind":"stat","agg":"count","window":"7d","label":"This week"}
+          {"kind":"stat","agg":"avg","field":"amount","label":"Average"}
+          {"kind":"stat","agg":"latest","field":"weight","label":"Last weigh-in"}
+          {"kind":"series","field":"amount","agg":"sum","bucket":"month","label":"By month"}
+          {"kind":"breakdown","field":"category","agg":"sum","fields":["amount"],"label":"Where it goes"}
+          {"kind":"breakdown","field":"category","agg":"count"}
+          {"kind":"progress","field":"amount","target":2000,"window":"month","direction":"down","label":"Budget"}
+          {"kind":"recent","limit":5,"fields":["date","category","amount"]}
+          {"kind":"upcoming","date_field":"due","limit":5,"label":"Coming up"}
+          {"kind":"notes","field":"notes","limit":3}
+        kinds: stat (agg count|sum|avg|latest|min|max; window all|7d|30d|month),
+        series (number field + date, bucket day|week|month), breakdown (a
+        select; agg count or sum with fields[0] the amount), progress (sum of
+        field — or row count without one — toward target; direction "down"
+        for a budget), recent, upcoming (a date field, from today on), notes.
+        date_field — the module's "when"; series and upcoming default to it
+        title_field — what names a row in the recent list
+        item_noun — what one row is called ("Expense", "Workout", "Sale")
+      Every field a block names MUST be in schema.fields and be the type the
+      block can draw (series/sum/avg need a number or currency; breakdown
+      needs a select; notes needs a textarea).
+    A good front page: one or two stats that answer the daily question, one
+      series OR one breakdown (both when the intake asks for both), recent
+      rows, and notes only when the notes are the point. Do not put eight
+      stats on a page.
+    example intake → spec:
+      "I want to log my business expenses and see where the money goes each
+       month"
+      → archetype_params {"blocks":[
+           {"kind":"stat","agg":"sum","field":"amount","window":"month","label":"Spent this month"},
+           {"kind":"stat","agg":"sum","field":"amount","window":"30d","label":"Last 30 days"},
+           {"kind":"series","field":"amount","agg":"sum","bucket":"month","label":"By month"},
+           {"kind":"breakdown","field":"category","agg":"sum","fields":["amount"],"label":"Where it goes"},
+           {"kind":"recent","limit":6,"fields":["spent_on","category","amount"]}],
+         "date_field":"spent_on","title_field":"vendor","item_noun":"Expense"}
+        with fields vendor (text, required), amount (currency, required),
+        spent_on (date, required), category (select: Software, Travel,
+        Supplies, Marketing, Fees, Other), receipt (file), notes (textarea);
+        views ["list","summary"]; presentation empty_line "Log the first
+        expense and the month starts adding up."
+
   fallback_generic
     purpose: explicit "no archetype fits yet" — renders through the generic
       DynamicModule (list/board)
     when to pick: ANY module whose shape doesn't fit booking_calendar, \
-work_pipeline, event_roster, agreement_ledger or progress_tracker (e.g. a \
-reference list, a form, a log of receipts — things with no time slots, no \
-stage progression, no attached crowd, no signature, no number chasing a goal)
+work_pipeline, event_roster, agreement_ledger, progress_tracker or \
+composed_dashboard (e.g. a reference list, a form, a directory — things with \
+no time slots, no stage progression, no attached crowd, no signature, no \
+number chasing a goal, and nothing worth totalling)
     schema requirement: none
     archetype_params: {}  (empty)
     archetype_fallback_reason REQUIRED: one sentence describing what \
@@ -1587,10 +1789,11 @@ Picking discipline: read the intake, then ask in order — is it time slots \
 someone books? (booking_calendar) — is it staged work moving toward done? \
 (work_pipeline) — is it an occasion with people to count or roles to fill? \
 (event_roster) — is it paperwork somebody signs? (agreement_ledger) — is it a \
-number measured over time against a goal? (progress_tracker). Pick the first \
-that fits and fill archetype_params from the schema fields you already \
-designed. If none fit, pick fallback_generic and write the \
-archetype_fallback_reason.
+number measured over time against a goal? (progress_tracker) — is it a log \
+of things that happen whose question is what they add up to? \
+(composed_dashboard). Pick the first that fits and fill archetype_params from \
+the schema fields you already designed. If none fit, pick fallback_generic and \
+write the archetype_fallback_reason.
 
 A GREAT module, not a plain one: a tracker the practitioner opens every day \
 has a purpose-built surface (the archetype), the fields that make that \
@@ -1599,8 +1802,10 @@ standing in for them), a trigger that tells them when something crossed a \
 line, and closed_statuses so finished things stop being chased. Before you \
 emit fallback_generic, re-read the palette once: "tracker", "progress", \
 "over time", "toward", "goal", "milestone", "streak" are progress_tracker; \
-"where is it", "stage", "pipeline" are work_pipeline; "who is coming" is \
-event_roster; "signed" is agreement_ledger; "book" is booking_calendar.
+"log", "expenses", "sales", "hours", "how much", "where it goes", "per \
+month", "overview" are composed_dashboard; "where is it", "stage", \
+"pipeline" are work_pipeline; "who is coming" is event_roster; "signed" is \
+agreement_ledger; "book" is booking_calendar.
 
 PRESENTATION — how the module FEELS (every ModuleSpec carries one):
 The practitioner opens this surface every day; the words on it should \
