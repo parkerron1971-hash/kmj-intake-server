@@ -456,6 +456,31 @@ def test_context_block_records_a_finished_or_failed_job_when_nothing_is_left(doo
     assert bb.context_block("b1").startswith("CARDS READY")
 
 
+# ─── the server shows waiting cards, whatever the model decided ───────
+
+def test_ready_cards_are_injected_and_a_single_build_is_dropped():
+    import chief_of_staff as cos
+    ready = {"ok": True, "shown": False, "idea": IDEA}
+    # the model "checked" and started a single-intake build instead
+    actions = [{"type": "mission_status"},
+               {"type": "propose_module_from_intake", "intake_excerpt": "track my leads"}]
+    out = cos._inject_ready_layout(actions, ready, "show me the cards")
+    assert [a["type"] for a in out] == ["mission_status", "propose_business_from_idea"]
+    assert out[-1]["idea"] == IDEA and out[-1]["replay"] is True
+    # ensure_module in its place is dropped too
+    out = cos._inject_ready_layout([{"type": "ensure_module", "module_name": "Leads"}], ready, "x")
+    assert [a["type"] for a in out] == ["propose_business_from_idea"]
+
+
+def test_ready_cards_leave_a_turn_alone_when_shown_or_already_emitted():
+    import chief_of_staff as cos
+    acts = [{"type": "propose_module_from_intake", "intake_excerpt": "x"}]
+    assert cos._inject_ready_layout(acts, None, "m") == acts
+    assert cos._inject_ready_layout(acts, {"shown": True, "idea": IDEA}, "m") == acts
+    already = [{"type": "propose_business_from_idea", "idea": "theirs"}]
+    assert cos._inject_ready_layout(already, {"shown": False, "idea": IDEA}, "m") == already
+
+
 # ─── the block that carries the map into later turns ─────────────────
 
 def _lay_out(db, monkeypatch, now=True):
