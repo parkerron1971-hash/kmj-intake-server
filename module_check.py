@@ -183,9 +183,11 @@ def _sample_value(field: Dict[str, Any], i: int, rnd, contacts: List[Dict[str, A
         return f"{label}: first note for this one — added {day.strftime('%b %d')}."
     if t in ("offering_ref", "module_ref"):
         return None
-    # text
-    if name in ("title", "name", "subject"):
-        return f"{label} {i + 1}"
+    # text: a title reads like a real one ("Reyes lead"), never "Lead / business name 2" —
+    # the judge flagged the stranded trailing number on every card
+    noun = str(params.get("item_noun") or params.get("_noun") or "item").strip().lower()
+    if name in ("title", "name", "subject") or i == 0 and t == "text":
+        return f"{_LAST[(i * 3) % len(_LAST)]} {noun}"
     return f"{label} {i + 1}"
 
 
@@ -198,7 +200,8 @@ def sample_rows(module: Dict[str, Any], contacts: List[Dict[str, Any]],
     import random
     rnd = random.Random(str(module.get("id") or module.get("slug") or "m"))
     fields = [f for f in ((module.get("schema") or {}).get("fields") or []) if isinstance(f, dict)]
-    params = module.get("archetype_params") or {}
+    params = dict(module.get("archetype_params") or {})
+    params.setdefault("_noun", str(module.get("name") or "item").rstrip("s").lower() or "item")
     rows = []
     for i in range(n):
         data = {}

@@ -83,6 +83,15 @@ def test_sample_rows_are_shaped_from_the_fields_and_deterministic():
     assert all(r["preview"] and r["status"] == "active" and r["module_id"] == MOD for r in rows)
 
 
+def test_sample_titles_read_like_real_ones():
+    rows = mc.sample_rows(_module(schema={"fields": [{"name": "title", "type": "text", "label": "Lead / business name"},
+                                                    {"name": "notes", "type": "textarea", "label": "Notes"}]},
+                                  name="Leads", archetype_params={}), mc.sample_contacts(BIZ))
+    titles = [r["data"]["title"] for r in rows]
+    assert titles[0].endswith(" lead") and all(len(t.split()) == 2 for t in titles)
+    assert not any(t[-1].isdigit() for t in titles)
+
+
 # ─── the preview read ─────────────────────────────────────────────────
 
 class _DB:
