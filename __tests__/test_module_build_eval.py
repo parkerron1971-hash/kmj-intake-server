@@ -286,16 +286,23 @@ def _two_specs():
     """What a correct decomposition looks like: a parent and a child that
     references it. The reference is on the CHILD."""
     parent = {"name": "Jobs", "slug": "jobs", "confidence": "high",
+              "archetype": "work_pipeline",
               "schema": {"fields": [{"name": "title", "type": "text", "label": "T"}],
                          "views": ["list"]},
-              "agent_config": {}}
+              "agent_config": {},
+              "presentation": {"empty_line": "Take the first estimate and the board starts filling."}}
+    # The child is the money log: a dashboard whose front page is what is
+    # still owed (the case asserts the archetype since the first live run
+    # left it on the plain list).
     child = {"name": "Invoices", "slug": "invoices", "confidence": "high",
+             "archetype": "composed_dashboard",
              "schema": {"fields": [
                  {"name": "job", "type": "module_ref", "label": "Job",
                   "module_slug": "jobs"},
                  {"name": "amount", "type": "currency", "label": "Amount"}],
                  "views": ["list"]},
-             "agent_config": {}}
+             "agent_config": {},
+             "presentation": {"empty_line": "Raise the first invoice and the ledger starts here."}}
     return [parent, child]
 
 

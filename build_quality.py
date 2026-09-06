@@ -46,6 +46,9 @@ SKILL_ARCHETYPE: Dict[str, str] = {
     # the average and the trend — a dashboard. The first live eval put it
     # on booking_calendar because the intake said "session".
     "feedback-module": "composed_dashboard",
+    # Money is a log whose front page is "what am I owed" — a stat with a
+    # where on status. The first live eval left Invoices on the plain list.
+    "payments-module": "composed_dashboard",
 }
 
 # Words in an intake that mean the practitioner wants to be TOLD.
