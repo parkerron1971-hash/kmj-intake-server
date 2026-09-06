@@ -3145,6 +3145,34 @@ _REMINDER_ECHO_RES = (
 )
 
 
+_REPLACED_BY_REPLAY = ("propose_module_from_intake", "ensure_module")
+
+
+def _inject_ready_layout(actions: List[Dict[str, Any]], ready: Optional[Dict[str, Any]],
+                         message: str) -> List[Dict[str, Any]]:
+    """CARDS READY is deterministic (2026-09-06).
+
+    A finished lay_out_business job leaves its cards waiting. The prompt
+    told the model to re-emit propose_business_from_idea on the next
+    message; live, the model "checked" with two read tools, emitted the
+    single-intake door instead (a second paid build) and told Kevin that
+    nothing had run and no such tool existed. Same class as the framing
+    rewrite and the goodbye tag: when prompt compliance is unreliable the
+    server does it. While unshown cards wait, the replay action is added
+    to the turn and any single-module build the model started in its
+    place is dropped, so nothing is built twice. A turn that already
+    carries the action is left alone."""
+    if not ready or ready.get("shown"):
+        return actions
+    if any(isinstance(a, dict) and a.get("type") == "propose_business_from_idea" for a in actions):
+        return actions
+    kept = [a for a in actions
+            if not (isinstance(a, dict) and a.get("type") in _REPLACED_BY_REPLAY)]
+    kept.append({"type": "propose_business_from_idea",
+                 "idea": ready.get("idea") or message or "", "replay": True})
+    return kept
+
+
 def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
     """Scan the AI's response for [ACTION:{...}] tags. Returns (actions, cleaned_text)."""
     for _pat in _REMINDER_ECHO_RES:
@@ -13146,6 +13174,19 @@ async def chief_chat(
                     for a in actions:
                         if isinstance(a, dict) and a.get("type") == "propose_module_from_intake":
                             a["override"] = True
+
+            # Finished business-layout cards waiting? Then this turn shows
+            # them, whatever the model decided (see _inject_ready_layout).
+            try:
+                import business_blueprint as _bb
+                _ready = await asyncio.to_thread(_bb.replay, biz["id"])
+            except Exception:
+                _ready = None
+            if _ready and not _ready.get("shown"):
+                before = len(actions)
+                actions = _inject_ready_layout(actions, _ready, effective_message or "")
+                logger.info(f"[business_blueprint] cards ready — replay injected "
+                            f"(model emitted {before} action(s))")
 
             # Tool writes first (they happened first), then whatever the
             # reply still carried as tags. Both lists are real results
