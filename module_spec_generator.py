@@ -497,6 +497,10 @@ def module_palette_block() -> str:
         + "\n".join(lines)
         + "\n    Anything else still gets built as a plain list or board; say that "
         "honestly rather than promising a chart or a calendar it will not have."
+        + "\n    Every one of these already MOVES — cards rise in, numbers count up, bars fill, "
+        "a reached goal celebrates. There is no per-module animation switch to add; what "
+        "changes is the FEEL: a tone (calm · bold · warm · precise) and the empty line — "
+        "set_module_feel. Never say a module cannot have animation or feeling."
     )
 
 

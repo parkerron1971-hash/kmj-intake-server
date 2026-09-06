@@ -755,7 +755,23 @@ async def handle_inspect_module(client, biz, action):
             if dc.get("design_score"):
                 label += f" · design {dc['design_score']}/5"
         else:
-            detail += " · Not yet looked at — check_module gives it a designer's look."
+            # No verdict on file: start the look NOW rather than telling the
+            # practitioner about a verb. Live, 9/06: "how does my Leads
+            # module look?" → Chief said it had no tool for that and offered
+            # to queue a build request for a capability it already had.
+            started = False
+            try:
+                import module_check_router
+                await module_check_router.enqueue_after_accept(
+                    str(biz.get("owner_id") or ""), str(biz["id"]), str(r.get("module_id") or ""),
+                    reason="asked")
+                started = True
+            except Exception:
+                started = False
+            detail += (" · Not yet looked at — I've started the design look now (phone and desktop, "
+                       "a designer's verdict, a minute or two); ask again for the score and what "
+                       "would make it better." if started else
+                       " · Not yet looked at — say 'check the design' and I will.")
         return {"type": "inspect_module", "result": detail, "label": label,
                 "reports": reports, "nav": None}
 
@@ -813,6 +829,75 @@ async def handle_check_module(client, biz, action):
                       f"designer's verdict. Give me a minute or two, then ask how it looks "
                       f"(inspect_module reads it back)."),
             "nav": _nav("build"), "job_id": job.get("id"), "module_id": row["id"]}
+
+
+_TONE_LINES = {
+    "calm": "quiet hairlines, an even hand — nothing shouts",
+    "bold": "the number leads, cards land harder, headings weigh more",
+    "warm": "rounder, softer, friendlier edges and lines",
+    "precise": "tighter spacing, tabular numbers, a ledger's discipline",
+}
+
+
+async def handle_set_module_feel(client, biz, action):
+    """Change how a module FEELS — its tone (calm · bold · warm · precise)
+    and its empty line — without touching a field or a row. The one
+    lever for "make it pop", "add some feeling", "calmer", "more
+    animation": every surface already moves; the tone decides how much
+    it leans on that. Validated through the same Presentation model a
+    proposal uses; the module gets looked at again afterwards.
+
+    action: {module|module_id|slug, tone?, empty_line?}"""
+    import module_spec_generator as msg
+    module_id = (action.get("module_id") or "").strip()
+    slug = (action.get("slug") or action.get("module") or action.get("module_name") or "").strip()
+    tone = (action.get("tone") or "").strip().lower() or None
+    empty_line = action.get("empty_line")
+    if tone and tone not in msg.TONES:
+        return _fail("set_module_feel", f"tone must be one of {', '.join(msg.TONES)}")
+    if not tone and not (isinstance(empty_line, str) and empty_line.strip()):
+        return _fail("set_module_feel", "say a tone (calm, bold, warm, precise) or an empty line")
+    q = f"/custom_modules?business_id=eq.{biz['id']}&is_active=eq.true&select=id,name,slug,presentation"
+    if module_id:
+        q += f"&id=eq.{module_id}"
+    elif slug:
+        q += f"&or=(slug.eq.{slug},name.ilike.*{slug}*)"
+    else:
+        return _fail("set_module_feel", "tell me which module")
+    rows = await _sb(client, "GET", q + "&limit=1") or []
+    if not rows:
+        return _fail("set_module_feel", f"no module found for {module_id or slug}")
+    row = rows[0]
+    pres = dict(row.get("presentation") or {})
+    if tone:
+        pres["tone"] = tone
+    if isinstance(empty_line, str) and empty_line.strip():
+        pres["empty_line"] = empty_line.strip()
+    try:
+        pres = msg.Presentation(**pres).model_dump(exclude_none=True)
+        if not pres.get("milestone_labels"):
+            pres.pop("milestone_labels", None)
+    except Exception as e:
+        return _fail("set_module_feel", f"that line does not fit: {str(e)[:120]}")
+    import asyncio as _aio
+    ok = await _aio.to_thread(sb_clients.sb_patch_as_service,
+                              f"/custom_modules?id=eq.{row['id']}", {"presentation": pres})
+    if not ok:
+        return _fail("set_module_feel", "couldn't save the feel just now — try again in a moment")
+    try:
+        import module_check_router
+        await module_check_router.enqueue_after_accept(
+            str(biz.get("owner_id") or ""), str(biz["id"]), str(row["id"]), reason="feel")
+    except Exception:
+        pass
+    what = []
+    if tone:
+        what.append(f"now reads {tone} — {_TONE_LINES[tone]}")
+    if isinstance(empty_line, str) and empty_line.strip():
+        what.append(f"its empty line says \"{empty_line.strip()}\"")
+    return {"type": "set_module_feel", "result": "feel updated",
+            "label": f"🎨 {row.get('name')} {'; '.join(what)}. I'm looking at it again now.",
+            "module_id": row["id"], "presentation": pres, "nav": _nav("build")}
 
 
 async def handle_accept_module_spec(client, biz, action):

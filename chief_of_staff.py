@@ -179,6 +179,7 @@ from chief_module_actions import (
     handle_accept_module_spec,
     handle_add_module_field,
     handle_check_module,
+    handle_set_module_feel,
     handle_inspect_module,
     handle_propose_business_from_idea,
     handle_propose_module_from_intake,
@@ -2491,6 +2492,13 @@ _OWN_DATA_TERMS = (
     "my contacts", "my clients", "my invoices", "my calendar", "my sessions",
     "my bookings", "my schedule", "my projects", "my books", "my revenue",
     "catch me up", "handle my", "did anyone", "what did", "unread",
+    # The product's own surfaces (2026-09-06): "how does my Leads module
+    # look?" and "can you add animation to the design?" had web_search on,
+    # the model reached for it, and spent its reply disowning the search.
+    " module", "modules", " the design", "my design", "animation", "dashboard",
+    " tracker", "pipeline", " the board", "my board", "my site", "my website",
+    "my form", "my page", "my leads", "my builds", "the app", "chief,",
+    "look?", "looks like", "how does", "how do you", "make it pop", "more feel",
 )
 
 
@@ -10259,6 +10267,7 @@ ACTION_HANDLERS = {
     "upgrade_module_archetype":   handle_upgrade_module_archetype,
     "propose_business_from_idea": handle_propose_business_from_idea,
     "check_module":               handle_check_module,
+    "set_module_feel":            handle_set_module_feel,
     "draft_nurture":         handle_draft_nurture,
     "draft_email":           handle_draft_email,
     "draft_and_send":        handle_draft_and_send,
