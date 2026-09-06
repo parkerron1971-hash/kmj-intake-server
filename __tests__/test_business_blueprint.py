@@ -16,6 +16,7 @@ import pathlib
 import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import unquote
 
 import pytest
 
@@ -227,7 +228,7 @@ class _FakeDB:
                 rows = [r for r in self.specs if r["status"] == "blueprint"]
                 return sorted(rows, key=lambda r: r["created_at"], reverse=True)[:1]
             if "status=eq.draft" in path:
-                since = path.split("created_at=gte.")[1].split("&")[0]
+                since = unquote(path.split("created_at=gte.")[1].split("&")[0])
                 return [r for r in self.specs if r["status"] == "draft" and r["created_at"] >= since]
             raise AssertionError(path)
         if path.startswith("/intake_forms?"):
@@ -235,6 +236,8 @@ class _FakeDB:
         if path.startswith("/custom_modules?"):
             return []
         if path.startswith("/chief_jobs?"):
+            if "status=in.(queued,running)" in path:
+                return [j for j in self.jobs if j.get("status") in ("queued", "running")]
             return self.jobs
         raise AssertionError(path)
 
@@ -410,6 +413,47 @@ def test_a_refused_map_row_is_a_failed_run(door, monkeypatch):
     res = bb.propose_business_from_idea("b1", IDEA)
     assert res["ok"] is False and "keep the map" in res["error"]
     assert bb.replay("b1") is None
+
+
+def test_drafts_since_encodes_the_plus_in_the_offset(door, monkeypatch):
+    """The second live run built everything and could not find it: '+00:00'
+    in a query string is ' 00:00' to PostgREST, an invalid timestamp."""
+    seen = []
+    db, _ = door
+    real = db.get
+
+    def spy(path):
+        seen.append(path); return real(path)
+    monkeypatch.setattr(bb.sb_clients, "sb_get_as_service", spy)
+    bb._drafts_since("b1", "2026-09-06T19:45:12.919083+00:00")
+    assert any("created_at=gte.2026-09-06T19%3A45%3A12.919083%2B00%3A00" in p for p in seen), seen
+
+
+def test_the_map_caps_offerings(door, monkeypatch):
+    m = _map(offerings=[{"name": f"Offer {i}", "slug": f"offer-{i}", "category": "service",
+                         "currency": "usd", "show_price_to_customer": True, "reasoning": "r"} for i in range(9)])
+    client = _FakeClient([json.dumps(m)])
+    monkeypatch.setattr(bb.llm_call, "sdk_client", lambda **kw: client)
+    res = bb.propose_business_from_idea("b1", IDEA)
+    offs = [p for p in res["proposals"] if p["kind"] == "offering"]
+    assert len(offs) == bb.MAX_OFFERINGS
+    assert offs[0]["offering"]["slug"] == "monthly-credit-repair"      # the builder's first
+
+
+def test_context_block_records_a_finished_or_failed_job_when_nothing_is_left(door, monkeypatch):
+    db, _ = door
+    now = datetime.now(timezone.utc).isoformat()
+    db.jobs = [{"id": "j1", "status": "failed", "error": "the map came back empty", "result": None,
+                "created_at": now, "finished_at": now}]
+    block = bb.context_block("b1")
+    assert block.startswith("BUSINESS LAYOUT FAILED") and "the map came back empty" in block
+    db.jobs = [{"id": "j2", "status": "done", "error": None, "created_at": now, "finished_at": now,
+                "result": {"ok": True, "modules": ["Leads", "Builds"]}}]
+    block = bb.context_block("b1")
+    assert block.startswith("BUSINESS LAYOUT FINISHED") and "Leads, Builds" in block and "Never say" in block
+    # cards still waiting → the READY line, not the record
+    _lay_out(db, monkeypatch)
+    assert bb.context_block("b1").startswith("CARDS READY")
 
 
 # ─── the block that carries the map into later turns ─────────────────
