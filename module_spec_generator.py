@@ -1997,6 +1997,9 @@ def propose_module_from_intake(
         "ok": True,
         "decomposition_reasoning": gen["decomposition_reasoning"],
         "proposals": proposals,
+        # The second look, so Chief can say it took one (and the eval can
+        # see it). {first, revised, used}; absent on the upgrade path.
+        "quality": gen.get("quality"),
     }
 
 
