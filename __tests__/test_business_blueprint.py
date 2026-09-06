@@ -386,6 +386,32 @@ def test_a_one_word_idea_is_asked_to_say_more(door):
     assert not res["ok"] and "more" in res["error"]
 
 
+def test_the_status_check_knows_the_blueprint_row():
+    """The first live run lost its map to module_specs_status_check. The
+    migration that widens it must name every status this module writes."""
+    sql = (pathlib.Path(__file__).resolve().parent.parent
+           / "supabase" / "APPLY-2026-09-06-module-specs-status-blueprint.sql").read_text(encoding="utf-8")
+    assert f"'{bb.BLUEPRINT_STATUS}'::text" in sql
+    assert "'superseded'::text" in sql and "'draft'::text" in sql
+
+
+def test_a_refused_map_row_is_a_failed_run(door, monkeypatch):
+    db, _ = door
+    client = _FakeClient([json.dumps(_map())])
+    monkeypatch.setattr(bb.llm_call, "sdk_client", lambda **kw: client)
+    real_post = db.post
+
+    def refuse_blueprint(path, body):
+        if body.get("status") == bb.BLUEPRINT_STATUS:
+            return None                     # what PostgREST's 400 looks like to sb_post_as_service
+        return real_post(path, body)
+    monkeypatch.setattr(bb.sb_clients, "sb_post_as_service", refuse_blueprint)
+    monkeypatch.setattr(msg.sb_clients, "sb_post_as_service", refuse_blueprint)
+    res = bb.propose_business_from_idea("b1", IDEA)
+    assert res["ok"] is False and "keep the map" in res["error"]
+    assert bb.replay("b1") is None
+
+
 # ─── the block that carries the map into later turns ─────────────────
 
 def _lay_out(db, monkeypatch, now=True):

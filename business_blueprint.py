@@ -614,7 +614,15 @@ def propose_business_from_idea(business_id: str, idea: str,
                 "blueprint": bp, "module_reports": module_reports}
 
     # The map row is written LAST so replay() only ever sees a finished set.
-    _store_blueprint(business_id, idea, bp, started_at)
+    # Without it the cards are orphans (nothing can show them), so a
+    # refused insert is a failed run, said plainly — the first live run
+    # lost its map to a status CHECK that did not know 'blueprint'
+    # (supabase/APPLY-2026-09-06-module-specs-status-blueprint.sql).
+    if not _store_blueprint(business_id, idea, bp, started_at):
+        logger.error("[business_blueprint] map row refused — is module_specs.status "
+                     "allowed to be 'blueprint'? (APPLY-2026-09-06-module-specs-status-blueprint.sql)")
+        return {"ok": False, "error": "built the cards but couldn't keep the map — try again",
+                "module_reports": module_reports}
     _say(100, "done — the cards are ready")
 
     return {
