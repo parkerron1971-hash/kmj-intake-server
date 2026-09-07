@@ -97,12 +97,12 @@ def normalize_bookings(sessions, entries):
 
 
 def report(data, prefs, period="mtd", comparison="previous", now=None, start=None, end=None):
+    from retention_metrics import eligible_paid_invoices, retention_health
     now = now or datetime.now(timezone.utc)
     tz = prefs.get("timezone", "UTC")
     lo, hi, prev_lo, prev_hi = periods(period, comparison, now, tz, start, end)
     currency = prefs.get("currency", "USD")
-    invoices = [i for i in data.get("invoices", []) if i.get("status") == "paid" and stamp(i.get("paid_at")) and stamp(i["paid_at"]) < now
-                and (i.get("currency") or "USD").upper() == currency]
+    invoices = eligible_paid_invoices(data.get("invoices", []), currency, now)
     invoices.sort(key=lambda i: (stamp(i["paid_at"]), i["id"]))
     first = {}
     payment_dates = defaultdict(list)
@@ -275,11 +275,14 @@ def report(data, prefs, period="mtd", comparison="previous", now=None, start=Non
             "period": {"key": period, "comparison": comparison, "start": lo.isoformat(), "end": hi.isoformat(), "previous_start": prev_lo.isoformat(), "previous_end": prev_hi.isoformat()},
             "current": cur, "previous": prev, "change": delta, "change_pct": percentage(delta, prev["collected"]),
             "drivers": drivers, "daily": daily, "cohorts": cohorts,
+            "retention_health": retention_health(data.get("contacts", []), invoices, now),
             "channels": sorted(channel_rows, key=lambda r: -r["revenue"]), "campaigns": campaign_rows,
             "profitability": sorted(profit, key=lambda r: -r["revenue"]), "costs": costs,
             "overhead": total([c for c in costs if c["kind"] == "overhead"], "amount"), "capacity": capacity,
             "actions": action_rows, "attributions": data.get("attributions", []),
-            "engagement": {"current": touched(lo, hi), "previous": touched(prev_lo, prev_hi), "history_since": prefs.get("history_since")},
+            "engagement": {"current": touched(lo, hi), "previous": touched(prev_lo, prev_hi), "history_since": prefs.get("history_since"),
+                           "current_complete": bool(stamp(prefs.get("history_since")) and stamp(prefs["history_since"]) <= lo),
+                           "previous_complete": bool(stamp(prefs.get("history_since")) and stamp(prefs["history_since"]) <= prev_lo)},
             "conversion": {"average_days_to_first_payment": round(sum(conversion_days)/len(conversion_days), 1) if conversion_days else None, "samples": len(conversion_days)},
             "quality": {"missing_payment_dates": missing_paid_dates, "other_currency_invoices": other_currency,
                         "unlinked_collections": cur["unlinked_revenue"], "warnings": data.get("warnings", [])},

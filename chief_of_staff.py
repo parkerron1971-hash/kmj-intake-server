@@ -1568,7 +1568,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             # deliberately NOT copied into contacts_lookup, so it never
             # reaches the prompt. Gating costs one column, not a PII dump.
             f"/contacts?business_id=eq.{biz_id}"
-            f"&select=id,name,email,status,health_score,lead_score,role,last_interaction&limit=500"),
+            f"&select=id,name,email,status,health_score,lead_score,role,last_interaction,created_at&limit=500"),
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
             f"&select=id,agent,action_type,subject,priority,contact_id,created_at"
@@ -1800,8 +1800,10 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             by_status[s] += 1
     scores = [c.get("health_score") or 0 for c in contacts]
     avg_health = round(sum(scores) / len(scores), 1) if scores else 0.0
-    at_risk = [c for c in contacts if (c.get("health_score") or 0) < 40 and c.get("status") in ("active", "lead", "vip")]
-    at_risk.sort(key=lambda c: c.get("health_score") or 0)
+    from retention_metrics import classify_contact, risk_sort
+    risk_rows = [(c, classify_contact(c, now)) for c in contacts]
+    at_risk = [c for c, row in sorted(risk_rows, key=lambda pair: risk_sort(pair[1]))
+               if row["classification"] == "at_risk"]
 
     # Recent autopilot auto-actions (chief_auto_approved events) — used
     # by the Chief to give the practitioner a "while you were away" recap.
@@ -3083,8 +3085,9 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
 CONTACTS: {ctx['contacts_total']} total
   by_status: {json.dumps(ctx['contacts_by_status'])}
   avg_health: {ctx['avg_health']}
-  at_risk (health < 40):
-{chr(10).join(at_risk_lines) if at_risk_lines else '  (none)'}
+  at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed):
+{chr(10).join(at_risk_lines) if at_risk_lines else '  (none in this context sample)'}
+  For complete Retention counts, names, repeat-payment rates and follow-up decisions, call growth_report section=client_health or section=retention. Do not treat this context sample as a complete report.
 
 QUEUE ({len(ctx['queue'])} drafts pending):
 {chr(10).join(queue_lines) if queue_lines else '  (empty)'}
