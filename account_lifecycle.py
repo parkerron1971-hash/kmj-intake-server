@@ -137,6 +137,8 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    "growth_events",          # references contacts; export history before erasure
+    "growth_records",         # reporting settings, actions, costs and invoice credit
     "events",
     "agent_queue",
     "agent_runs",             # MCP agent access trail (business-scoped)
@@ -535,6 +537,11 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 
 _IMPORT_SKIP = {
     "audit_log", "agent_runs", "chief_jobs", "mcp_tokens",
+    # Growth history and JSON records cite original contact/invoice/campaign
+    # IDs. The generic importer mints new IDs without a reference map; copying
+    # these would attach evidence to another business's records. Preserve the
+    # full export, report the skipped restore, and keep fresh history coverage.
+    "growth_events", "growth_records",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
