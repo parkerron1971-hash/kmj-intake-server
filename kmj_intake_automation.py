@@ -477,6 +477,8 @@ app.include_router(terminology_overrides_router)
 app.include_router(workspace_composer_router)
 app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
+from business_learning_router import router as business_learning_router
+app.include_router(business_learning_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)
 # Pass 4.0a — Director Agent foundations

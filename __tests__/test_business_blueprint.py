@@ -265,6 +265,12 @@ def _spec(slug, name, archetype="progress_tracker"):
 
 @pytest.fixture
 def door(monkeypatch):
+    # This fixture tests the map/build/replay pipeline after discovery. The
+    # real discovery gate, persistence and corrections have integration tests.
+    import business_learning
+    monkeypatch.setattr(business_learning, "load", lambda _: {
+        "status": "ready_to_build", "revision": 1,
+        "profile": {"trade_label": "Credit repair", "summary": "Credit repair", "facts": [], "gaps": []}})
     db = _FakeDB()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     for mod in (bb.sb_clients, msg.sb_clients):

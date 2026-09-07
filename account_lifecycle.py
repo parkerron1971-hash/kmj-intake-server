@@ -144,6 +144,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "agent_runs",             # MCP agent access trail (business-scoped)
     "mcp_tokens",             # business-scoped agent tokens
     "chief_memories",
+    "business_operating_profile_history",
+    "business_operating_profiles",
     "chief_conversations",
     "chief_activity",
     "chief_assignments",      # the outcomes they handed Chief + its moves log (9/4)

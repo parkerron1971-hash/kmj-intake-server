@@ -153,7 +153,10 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # contact/source aggregates and saved analytical records. Same scoped
     # financial/operational class as show_revenue and assignment_status;
     # no message bodies or new external source. Schema + handoff reviewed.
-    assert len(tools) == 32, (
+    # 33 (9/7): recall_business_knowledge reads the token-scoped business's
+    # private operating profile. Same authorized private-data class as
+    # recall_conversation; no cross-business lookup and no profile writes.
+    assert len(tools) == 33, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -561,6 +564,7 @@ def test_migration_revokes_the_table_grants():
 # derived: a newly exposed verb should make a human decide whether it can
 # end in work, and a derived list would quietly answer "no" forever.
 SILENT_TOOLS = {
+    "recall_business_knowledge",  # pure recall; no navigation or external handoff
     "catch_up", "check_balance", "check_goals", "check_inventory",
     "inspect_module", "list_availability", "list_expenses",
     "list_module_entries", "list_offerings", "list_products",

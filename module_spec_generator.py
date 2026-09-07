@@ -2011,6 +2011,12 @@ def generate_module_proposal(
     if extra_guidance:
         user += ("\n\nAdditional practitioner guidance (use to revise the design "
                  "and update decomposition_reasoning):\n" + extra_guidance.strip())
+    import business_learning
+    try:
+        operating_profile = business_learning.load(business['id']) if business.get('id') else None
+    except (ValueError, RuntimeError) as e:
+        return {"ok": False, "error": f"Could not read business knowledge before building: {e}"}
+    user += "\n\n" + business_learning.context_block(business, intake_excerpt, profile_row=operating_profile)
     # Build skills — the guidance for THIS kind of module, selected
     # deterministically (no model call) and appended only when it applies.
     # Empty string when nothing matches, which is the common case and costs
@@ -2069,6 +2075,9 @@ def generate_module_proposal(
             logger.info(f"[quality] revision discarded: {second.get('error')}")
 
     offerings = [o.model_dump(exclude_none=False) for o in env.offerings]
+    if operating_profile:
+        for item in specs + offerings:
+            item['__operating_revision'] = operating_profile['revision']
     return {
         "ok": True,
         "decomposition_reasoning": env.decomposition_reasoning,
@@ -2483,6 +2492,10 @@ def materialize_offering(spec_id: str) -> Dict[str, Any]:
 
     business_id = row["business_id"]
     payload = row["draft_json"] or {}
+    import business_learning
+    stale = business_learning.check_draft_revision(business_id, payload)
+    if stale:
+        return stale
     if (payload.get("__kind") or "module") != "offering":
         return {"ok": False, "error": "not an offering draft"}
 
@@ -2595,6 +2608,10 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
 
     business_id = spec_row["business_id"]
     spec = spec_row["draft_json"] or {}
+    import business_learning
+    stale = business_learning.check_draft_revision(business_id, spec)
+    if stale:
+        return stale
     slug = spec.get("slug")
     if not slug:
         return {"ok": False, "error": "spec missing slug"}

@@ -1157,6 +1157,9 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     except Exception:
         vertical_block = ""
 
+    import business_learning
+    vertical_block += "\n" + business_learning.PROMPT
+
     # Intelligence blocks — supplied by chief_chat. Each is empty string
     # when there's nothing useful to inject so the prompt stays clean.
     name_block = _build_assistant_name_block(biz)
@@ -2222,6 +2225,9 @@ def _build_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
     voice = biz.get("voice_profile") or {}
     track = ctx.get("strategy_track") or {}
+    import business_learning
+    knowledge_block = business_learning.context_block(biz)
+    learning_instructions = business_learning.PROMPT
 
     current_phase = track.get("current_phase") or "discovery"
     status = track.get("status") or "in_progress"
@@ -2291,6 +2297,7 @@ def _build_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
                 f"Warm, grounded welcome. Introduce yourself as {practitioner}'s Strategy Coach. "
                 "Tell them the goal: turn their idea into a real, running business, together. "
                 "Then open Discovery with ONE real question — something like 'What's the idea you're sitting with?' "
+                "If their idea is already in shared business knowledge, acknowledge it and ask one unresolved question instead. "
                 "Keep it to 3-4 sentences total. Don't emit actions in the opening."
             )
 
@@ -2307,13 +2314,33 @@ Your name and role: Strategy Coach for {practitioner}, who is launching {biz_nam
 
 {CHIEF_SHARED_CORE}
 
+SHARED PRIVATE BUSINESS KNOWLEDGE:
+{knowledge_block}
+{learning_instructions}
+
+SESSION LEARNING:
+- Use the knowledge above to choose useful questions. Do not ask again for an answer
+  already on file unless the owner is revising it or it needs clarification.
+- When an answer reveals customers, delivery, capacity, payment, constraints or a
+  settled decision, capture it during this turn with capture_business_knowledge.
+  Do not wait for save_phase, session_summary or complete_strategy_track.
+- Continue saving the strategy deliverables through their existing save_* actions;
+  those deliverables and forecasts are not automatically established business facts.
+- Your suggestions and generated projections are not owner evidence. Capture an
+  owner's uncertain plan only as tentative, preserving their exact wording.
+- Let an unresolved knowledge gap guide one natural follow-up question. For industry
+  evidence use learn_business with a trade-level research_question; keep coaching
+  while that background job runs and capture the next owner answer immediately.
+- Learning actions are allowed here. Capturing knowledge does not launch the business,
+  change live operations, or replace the owner's existing launch confirmation.
+
 YOUR STYLE:
 - Exploratory and thoughtful — ask deeper questions, challenge assumptions gently.
 - Encouraging but honest — if something won't work, say so constructively with alternatives.
 - Conversational — this feels like sitting with a business mentor, not filling out a form.
 - Build on previous answers — reference what they've said to show you're listening.
 - Never robotic — no "Great! Now let's move to Phase 2." The phases are INVISIBLE to the practitioner. You flow naturally.
-- Use real numbers when discussing pricing and projections — never vague.
+- Use owner-supplied or sourced numbers for pricing; label hypothetical numbers and projection assumptions explicitly.
 
 YOUR JOB across the conversation (8 phases, hidden from the practitioner):
 1. DISCOVERY — idea, audience, unique value, background, motivation
@@ -2327,7 +2354,7 @@ YOUR JOB across the conversation (8 phases, hidden from the practitioner):
 
 RULES:
 - Flow naturally between phases. NEVER announce phase transitions to the practitioner.
-- Ask 4-6 questions per phase before you have enough — adapt to the conversation.
+- Ask enough focused questions to fill the gaps in each phase; use answers already on file rather than repeating a question quota.
 - When you have enough for a phase deliverable, emit the corresponding save_* action SILENTLY (inside the response). Don't narrate saving.
 - Advance the phase silently too via advance_phase — don't announce it.
 - Offer to pause when it feels natural: "We've covered a lot. Want to keep going or pick this up next time?"

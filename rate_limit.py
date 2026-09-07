@@ -22,6 +22,7 @@ from typing import Dict, Optional, Tuple
 
 # bucket name → (max_requests, window_seconds), env-overridable.
 _LIMITS: Dict[str, Tuple[int, int]] = {
+    "business_learning": (int(os.environ.get("RL_BUSINESS_LEARNING_PER_HOUR", "24")), 3600),
     "chief":  (int(os.environ.get("RL_CHIEF_PER_MIN", "30")), 60),
     "voice":  (int(os.environ.get("RL_VOICE_PER_MIN", "40")), 60),
     "proxy":  (int(os.environ.get("RL_PROXY_PER_MIN", "60")), 60),

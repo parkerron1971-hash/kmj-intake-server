@@ -343,7 +343,8 @@ def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
     _stub_turn(monkeypatch, BIZ)
     dispatched: List[str] = []
 
-    async def _door(client, biz, actions, user_id=None, prior_results=None):
+    async def _door(client, biz, actions, user_id=None, prior_results=None,
+                    owner_text=None):
         out = []
         for a in actions:
             dispatched.append(a.get("type"))
@@ -402,7 +403,8 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
             mp.delattr(cos, "_build_system_prompt", raising=False)
             dispatched: List[str] = []
 
-            async def _door(client, biz, actions, user_id=None, prior_results=None):
+            async def _door(client, biz, actions, user_id=None, prior_results=None,
+                            owner_text=None):
                 out = []
                 for a in actions:
                     dispatched.append(a.get("type"))

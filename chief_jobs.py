@@ -94,6 +94,12 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
 # Extensible registry — add monthly_report / reconcile_month here later;
 # the runner + endpoints + frontend are kind-agnostic.
 KIND_META: Dict[str, Dict[str, Any]] = {
+    "learn_business": {
+        "label": "Business discovery",
+        "working": "learning how your business works and checking what is missing",
+        "done": "your business knowledge has been updated — ask Chief what it learned",
+        "nav": "build",
+    },
     "rebuild_site": {
         "label": "Site rebuild",
         "working": "rebuilding your site",
@@ -407,6 +413,9 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             business_id, str(p.get("module_id") or ""), reason=str(p.get("reason") or "manual"),
             vision=(p.get("vision") is None or bool(p.get("vision"))),
             revise=(p.get("revise") is None or bool(p.get("revise"))), progress_cb=progress)
+    if kind == "learn_business":
+        import business_learning
+        return business_learning.run_job(business_id, params or {}, progress_cb=progress)
     if kind == "lay_out_business":
         import business_blueprint
         return business_blueprint.run_job(business_id, params or {}, progress_cb=progress)
@@ -457,6 +466,20 @@ def _execute_kind(kind: str, business_id: str, params: dict,
 
 
 # ─── Runner ────────────────────────────────────────────────────────────
+async def _learning_followup(client, user_id, business_id, params, result):
+    """A discovered workspace uses the SAME layout job/dedupe as a chat request."""
+    if not (params.get("build_workspace") and result.get("ok")
+            and result.get("status") == "ready_to_build"):
+        return result
+    job = await enqueue(client, user_id=user_id, business_id=business_id,
+                        kind="lay_out_business", params={"idea": params.get("description") or ""},
+                        source="discovery")
+    if not job:
+        return {**result, "ok": False,
+                "error": "Your business profile was saved, but the workspace build could not be queued. Ask Chief to lay it out."}
+    return {**result, "workspace_job_id": job["id"]}
+
+
 async def _run(job_id: str, user_id: str, business_id: str, kind: str, params: dict) -> None:
     # Background task: it inherited the request's JWT contextvar via
     # create_task's context copy — neutralize it so DB access is service role.
@@ -479,6 +502,8 @@ async def _run_inner(job_id: str, user_id: str, business_id: str, kind: str,
         try:
             result = await asyncio.to_thread(_execute_kind, kind, business_id,
                                              params, job_id)
+            if kind == "learn_business":
+                result = await _learning_followup(client, user_id, business_id, params, result)
             await _sb(client, "PATCH", f"/chief_jobs?id=eq.{job_id}",
                       {"status": "done", "result": result, "finished_at": _now()})
             # Honest recap (Site Arc 11): a job that COMPLETED with an

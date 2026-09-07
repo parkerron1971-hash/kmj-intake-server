@@ -223,6 +223,10 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
 from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
 
 TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "recall_business_knowledge": (
+        "Read this business's private operating profile, its revision, owner corrections, "
+        "assumptions, open questions and dated source evidence. The business comes from "
+        "the authenticated session, never a caller-supplied id.", _obj({})),
     "growth_report": GROWTH_READ_SCHEMA,
     "catch_up": (
         "What has happened in this business recently — new activity, drafts "
