@@ -96,22 +96,6 @@ SCHEMA:
         'p_composition':result.composition.model_dump(mode='json') if result.composition else None,'p_message':result.message})
 def duration(path):
     return float(json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-of','json',str(path)],timeout=30))['format']['duration'])
-def narration(job,spec,folder):
-    voices={}
-    if spec.voice=='none':return voices
-    from api_usage_logger import log_api_usage_sync
-    for i,scene in enumerate(spec.scenes):
-        if not scene.narration:continue
-        progress(job,'recording_narration')
-        response=httpx.post('https://api.openai.com/v1/audio/speech',headers={'Authorization':'Bearer '+os.environ['OPENAI_API_KEY']},
-            json={'model':'tts-1','voice':spec.voice,'input':scene.narration,'response_format':'wav'},timeout=90)
-        response.raise_for_status()
-        log_api_usage_sync(endpoint='/ai/tts',model='tts-1',input_tokens=len(scene.narration),output_tokens=0,business_id=job['business_id'],task_type='video_narration',units=0)
-        path=folder/'assets'/f'voice-{i}.wav';path.write_bytes(response.content)
-        seconds=duration(path)
-        if seconds>scene.seconds-.5:raise RuntimeError(f'Narration in scene {i+1} needs {seconds+.5:.1f} seconds. Shorten its narration or extend the scene and render again.')
-        voices[scene.id]={'path':'assets/'+path.name,'duration':seconds}
-    return voices
 def child_env():
     names=['PATH','HOME','USERPROFILE','SYSTEMROOT','WINDIR','TEMP','TMP','TMPDIR','LOCALAPPDATA','FONTCONFIG_PATH']
     return {k:v for k,v in os.environ.items() if k in names}|{'HYPERFRAMES_NO_TELEMETRY':'1','HYPERFRAMES_SKIP_SKILLS':'1','NO_COLOR':'1','PRODUCER_ENABLE_STREAMING_ENCODE':'false'}
@@ -150,7 +134,8 @@ def render(job,folder):
     selected={str(s.asset_id) for s in spec.scenes if s.asset_id}
     if spec.music_asset_id:selected.add(str(spec.music_asset_id))
     rows,prepared=asset_inputs(job,folder,selected);validate_assets(spec,rows)
-    voices=narration(job,spec,folder);total=compile_project(spec,folder,prepared,voices)
+    from video_narration import narration
+    voices=narration(job,spec,folder,progress);total=compile_project(spec,folder,prepared,voices)
     if os.getenv('VIDEO_RENDER_URL'):
         from video_remote_client import render as remote_render
         remote_render(job,folder,progress)

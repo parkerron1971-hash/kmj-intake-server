@@ -31,7 +31,9 @@ def rpc(name,data):
     if result.get('conflict'): raise HTTPException(409,'Your project changed. Refresh before continuing.')
     if result.get('refused'): raise HTTPException(409,result['refused'])
     return result
-def access(b,user): media.access(b,user)
+def access(b,user):
+    from business_access import assert_access
+    return assert_access(key(b),user,'manager')
 def project(b,p,user):
     access(b,user)
     found=rows(f'/video_projects?id=eq.{key(p)}&business_id=eq.{key(b)}&select=*&limit=1')
