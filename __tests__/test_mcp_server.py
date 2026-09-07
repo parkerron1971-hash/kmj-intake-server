@@ -149,7 +149,11 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # is working between conversations: target, progress, deadline, the
     # moves log. Operational state in the mission_status class; giving
     # and stopping one are writes and stay off this surface.
-    assert len(tools) == 31, (
+    # 32 (9/6): growth_report combines the business's own invoice totals,
+    # contact/source aggregates and saved analytical records. Same scoped
+    # financial/operational class as show_revenue and assignment_status;
+    # no message bodies or new external source. Schema + handoff reviewed.
+    assert len(tools) == 32, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
