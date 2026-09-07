@@ -47,7 +47,7 @@ def extract_bundle(archive:Path,folder:Path):
     if not (folder/'index.html').is_file():raise ValueError('Missing composition')
 
 def clean_env():
-    return {k:v for k,v in os.environ.items() if k in ('PATH','HOME','TMPDIR','TEMP','TMP','SYSTEMROOT','WINDIR','USERPROFILE','LOCALAPPDATA')}|{'HYPERFRAMES_NO_TELEMETRY':'1','HYPERFRAMES_SKIP_SKILLS':'1','NO_COLOR':'1','PRODUCER_ENABLE_STREAMING_ENCODE':'false'}
+    return {k:v for k,v in os.environ.items() if k in ('PATH','HOME','TMPDIR','TEMP','TMP','SYSTEMROOT','WINDIR','USERPROFILE','LOCALAPPDATA','HYPERFRAMES_BROWSER_PATH')}|{'HYPERFRAMES_NO_TELEMETRY':'1','HYPERFRAMES_SKIP_SKILLS':'1','NO_COLOR':'1','PRODUCER_ENABLE_STREAMING_ENCODE':'false'}
 
 def child(state,args,folder,stage,limit):
     state.update(stage=stage,progress=None)

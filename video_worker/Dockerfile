@@ -11,8 +11,9 @@ RUN pip install --no-cache-dir -r video_worker/requirements.txt
 COPY video_worker/package.json video_worker/package-lock.json /app/video_worker/
 RUN cd video_worker && npm ci --omit=dev
 COPY video_cloud_renderer.py /app/video_cloud_renderer.py
-ENV HYPERFRAMES_NO_TELEMETRY=1 HYPERFRAMES_SKIP_SKILLS=1 HOME=/home/renderer PYTHONUNBUFFERED=1
+RUN python -c "import urllib.request,zipfile,os; urllib.request.urlretrieve('https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.30/linux64/chrome-headless-shell-linux64.zip','/tmp/chrome.zip'); zipfile.ZipFile('/tmp/chrome.zip').extractall('/opt/chrome'); os.chmod('/opt/chrome/chrome-headless-shell-linux64/chrome-headless-shell',0o755); os.unlink('/tmp/chrome.zip')"
+ENV HYPERFRAMES_NO_TELEMETRY=1 HYPERFRAMES_SKIP_SKILLS=1 HOME=/home/renderer PYTHONUNBUFFERED=1 HYPERFRAMES_BROWSER_PATH=/opt/chrome/chrome-headless-shell-linux64/chrome-headless-shell
 RUN chown -R renderer:renderer /app /home/renderer
 USER renderer
-RUN cd video_worker && npx hyperframes browser ensure
+RUN /opt/chrome/chrome-headless-shell-linux64/chrome-headless-shell --version
 CMD ["python","video_cloud_renderer.py"]
