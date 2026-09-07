@@ -483,6 +483,8 @@ from program_outcomes_router import router as program_outcomes_router
 app.include_router(program_outcomes_router)
 from financial_policy_router import router as financial_policy_router
 app.include_router(financial_policy_router)
+from media_library_router import router as media_library_router
+app.include_router(media_library_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)
 # Pass 4.0a — Director Agent foundations
@@ -1404,6 +1406,12 @@ async def startup():
                           "interval", minutes=1, id="chief_scheduled")
     except Exception as e:
         print(f"   [warn] chief scheduled-actions job not scheduled: {e}")
+    try:
+        import media_library as _media_library
+        scheduler.add_job(g("media_library", _media_library.tick),
+                          "interval", seconds=30, id="media_library", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] media processing not scheduled: {e}")
     # Chief jobs recovery (2026-09-04): the boot sweep's twin, for the
     # deploy that happens on another replica or mid-build. Reads the
     # heartbeat; marks dead rows failed-retryable; never retries.
