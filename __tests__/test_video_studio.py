@@ -84,3 +84,18 @@ def test_library_import_checks_source_tenant_before_downloading(monkeypatch):
     monkeypatch.setattr(service.media,'asset',denied)
     monkeypatch.setattr(service.storage_links,'signed_url_sync',lambda *a,**k:pytest.fail('foreign source signed'))
     with pytest.raises(HTTPException):service.import_library(uuid4(),uuid4(),uuid4(),SimpleNamespace(id=uuid4()))
+
+def test_chief_reply_accepts_prose_and_fences_without_weakening_schema():
+    import json
+    data={'message':'I made a two-scene story.','composition':composition().model_dump(mode='json')}
+    for reply in (json.dumps(data),'A warm opening.\n```json\n'+json.dumps(data)+'\n```'):
+        result=worker.parse_plan_reply(reply,[])
+        assert result.composition.title==data['composition']['title']
+    with pytest.raises(RuntimeError):worker.parse_plan_reply('I have no scene plan yet.',[])
+    data['composition']['html']='<script>evil()</script>'
+    with pytest.raises(ValidationError):worker.parse_plan_reply(json.dumps(data),[])
+
+def test_chief_reply_still_excludes_reference_assets():
+    import json
+    asset=str(uuid4());spec=composition().model_dump(mode='json');spec['scenes'][0]['asset_id']=asset
+    with pytest.raises(ValueError):worker.parse_plan_reply('Here is the plan: '+json.dumps({'message':'Ready','composition':spec}),[{'id':asset,'purpose':'reference','mime_type':'image/png'}])
