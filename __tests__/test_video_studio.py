@@ -84,3 +84,28 @@ def test_library_import_checks_source_tenant_before_downloading(monkeypatch):
     monkeypatch.setattr(service.media,'asset',denied)
     monkeypatch.setattr(service.storage_links,'signed_url_sync',lambda *a,**k:pytest.fail('foreign source signed'))
     with pytest.raises(HTTPException):service.import_library(uuid4(),uuid4(),uuid4(),SimpleNamespace(id=uuid4()))
+
+def test_chief_reply_accepts_prose_and_fences_without_weakening_schema():
+    import json
+    data={'message':'I made a two-scene story.','composition':composition().model_dump(mode='json')}
+    for reply in (json.dumps(data),'A warm opening.\n```json\n'+json.dumps(data)+'\n```'):
+        result=worker.parse_plan_reply(reply,[])
+        assert result.composition.title==data['composition']['title']
+    with pytest.raises(RuntimeError):worker.parse_plan_reply('I have no scene plan yet.',[])
+    data['composition']['html']='<script>evil()</script>'
+    with pytest.raises(ValidationError):worker.parse_plan_reply(json.dumps(data),[])
+
+def test_chief_reply_still_excludes_reference_assets():
+    import json
+    asset=str(uuid4());spec=composition().model_dump(mode='json');spec['scenes'][0]['asset_id']=asset
+    with pytest.raises(ValueError):worker.parse_plan_reply('Here is the plan: '+json.dumps({'message':'Ready','composition':spec}),[{'id':asset,'purpose':'reference','mime_type':'image/png'}])
+
+def test_source_video_has_one_absolute_timing_owner(tmp_path):
+    import re
+    aid=str(uuid4())
+    spec=Composition(title='Video timing',scenes=[Scene(id='intro',title='Intro',seconds=5),Scene(id='footage',title='Footage',layout='split',seconds=6,asset_id=aid,source_start=10)])
+    compile_project(spec,tmp_path,{aid:{'path':'assets/source.mp4','mime_type':'video/mp4'}},{})
+    html=(tmp_path/'index.html').read_text()
+    assert all('data-start' not in tag for tag in re.findall(r'<section[^>]+>',html))
+    assert 'id="video-1" class="clip" data-start="5.0" data-duration="6.0" data-media-start="10.0"' in html
+    assert "tl.set('#scene-1',{opacity:1},5.0)" in html

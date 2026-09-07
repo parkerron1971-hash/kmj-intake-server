@@ -24,7 +24,7 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict):
     css=''.join(f"@font-face{{font-family:'Video Sans';src:url('assets/font-{x}.woff2');font-weight:{x};font-display:block}}" for x in (400,600,700))
     css+=f'''*{{box-sizing:border-box}}html,body{{margin:0;width:{w}px;height:{h}px;overflow:hidden;background:{bg}}}
     #root{{position:relative;width:{w}px;height:{h}px;overflow:hidden;color:{fg};font-family:'Video Sans',Arial,sans-serif}}
-    .scene{{position:absolute;inset:0;padding:{100 if landscape else 80}px;background:{bg};overflow:hidden}}
+    .scene{{position:absolute;inset:0;padding:{100 if landscape else 80}px;background:{bg};overflow:hidden;opacity:0}}
     .ambient{{position:absolute;inset:0;background:radial-gradient(ellipse at 80% 20%,{spec.accent}22,transparent 65%);pointer-events:none}}
     .copy{{position:absolute;left:8%;top:{'15%' if portrait else '24%'};width:84%;z-index:2}}
     .eyebrow{{font-size:24px;font-weight:600;letter-spacing:5px;color:{muted};margin-bottom:32px}}
@@ -60,8 +60,11 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict):
             art=f'<div class="media">{art}</div>'
         points='<div class="points">'+''.join(f'<div class="point">{escape(t)}</div>' for t in scene.points)+'</div>' if scene.points else ''
         stat=f'<div class="statistic"><span id="counter-{i}">0</span>{escape(scene.suffix)}</div>' if scene.layout=='stat' else ''
-        parts.append(f'''<section id="{sid}" class="clip scene {scene.layout}" data-start="{start}" data-duration="{scene.seconds}"><div class="ambient" data-layout-ignore></div>{art}<div class="copy"><div class="rule"></div><div class="eyebrow">{escape(scene.eyebrow)}</div>{stat}<h1>{escape(scene.title)}</h1><div class="subtitle">{escape(scene.subtitle)}</div>{points}</div><div class="scene-count">{i+1:02d} / {len(spec.scenes):02d}</div></section>''')
+        # Media owns its absolute clip time. Timing its parent as well makes
+        # HyperFrames apply a second offset to source-video extraction.
+        parts.append(f'''<section id="{sid}" class="scene {scene.layout}"><div class="ambient" data-layout-ignore></div>{art}<div class="copy"><div class="rule"></div><div class="eyebrow">{escape(scene.eyebrow)}</div>{stat}<h1>{escape(scene.title)}</h1><div class="subtitle">{escape(scene.subtitle)}</div>{points}</div><div class="scene-count">{i+1:02d} / {len(spec.scenes):02d}</div></section>''')
         prefix=f'#{sid}'
+        animations.append(f"tl.set('{prefix}',{{opacity:1}},{start});tl.set('{prefix}',{{opacity:0}},{total});")
         if scene.motion!='still': animations.append(f"tl.fromTo('{prefix} .copy',{{opacity:0,y:26}},{{opacity:1,y:0,duration:.75,ease:'power3.out'}},{start+.15});")
         if scene.motion!='still': animations.append(f"tl.fromTo('{prefix} .rule',{{scaleX:0}},{{scaleX:1,duration:.9,ease:'power2.out'}},{start+.25});")
         if art:

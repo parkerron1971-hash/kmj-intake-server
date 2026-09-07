@@ -1,6 +1,6 @@
 # Video Studio renderer
 
-The existing API hosts the durable job supervisor, Chief calls, narration, tenant checks and private storage. The separate Railway renderer receives a frozen composition bundle and returns MP4 bytes. It has **no Supabase, Anthropic or OpenAI credentials**. Its only secret is `VIDEO_RENDER_TOKEN`, generated separately from provider credentials. The child Node/Chrome process does not inherit that token.
+The existing application scheduler worker runs the durable job supervisor, Chief calls and narration. The API handles user requests, tenant checks and private storage. The separate Railway renderer receives a frozen composition bundle and returns MP4 bytes. It has **no Supabase, Anthropic or OpenAI credentials**. Its only secret is `VIDEO_RENDER_TOKEN`, generated separately from provider credentials. The child Node/Chrome process does not inherit that token.
 
 The supervisor polls every eight seconds. Database claims serialize jobs across API replicas, renew a two-minute lease, fence stale completion, and retry an interrupted render at most once. Planning interruptions fail visibly instead of repeating paid model calls. Cancelling terminates the renderer subprocess. All outputs are checked for duration and FFmpeg decoding before private storage.
 
@@ -8,7 +8,7 @@ The supervisor polls every eight seconds. Database claims serialize jobs across 
 
 Create a dedicated service. Assemble a temporary deployment directory containing `video_cloud_renderer.py`, `.dockerignore`, `video_worker/{Dockerfile,railway.toml,requirements.txt,package.json,package-lock.json}`. Also copy `video_worker/railway.toml` and `video_worker/Dockerfile` to that directory's root as `railway.toml` and `Dockerfile`. Set the renderer service variable `RAILWAY_DOCKERFILE_PATH=Dockerfile`. Upload that directory with `railway up --path-as-root --service solutionist-video-renderer`. Do not change the API service's build configuration.
 
-Set a new random `VIDEO_RENDER_TOKEN` on the existing API and isolated renderer, without printing it. Set API `VIDEO_RENDER_URL` to the renderer HTTPS origin. Apply `supabase/APPLY-2026-09-07-video-studio.sql` once. After worker verification set API `VIDEO_STUDIO_ENABLED=on` and `VIDEO_RENDER_ENABLED=on`. The renderer health route is `/health`; all job routes require the rendering-only token. Roll back availability by switching the two API flags off; existing project data remains intact.
+Set a new random `VIDEO_RENDER_TOKEN` on the existing API, existing scheduler worker, and isolated renderer without printing it. Set `VIDEO_RENDER_URL` on the API and existing scheduler worker to the renderer HTTPS origin. Apply `supabase/APPLY-2026-09-07-video-studio.sql` once. After worker verification set `VIDEO_STUDIO_ENABLED=on` and `VIDEO_RENDER_ENABLED=on` on both the API and existing scheduler worker. The web-role API does not start scheduled jobs; enabling only the API leaves jobs queued. The renderer health route is `/health`; all job routes require the rendering-only token. Roll back availability by switching the two API flags off; existing project data remains intact.
 
 ## Scope and limits
 

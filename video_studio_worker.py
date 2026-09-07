@@ -28,6 +28,22 @@ from video_hyperframes import compile_project,RUNTIME
 
 log=logging.getLogger('video-worker')
 class Cancelled(Exception):pass
+
+def parse_plan_reply(text,assets):
+    """Accept a validated JSON object even when a model adds conversational prose.
+
+    Decode data only. Never execute code, accept arbitrary fields, or bypass
+    scene/reference validation to recover a model formatting mistake.
+    """
+    decoder=json.JSONDecoder()
+    for match in re.finditer(r'\{',text):
+        try:value,_=decoder.raw_decode(text,match.start())
+        except json.JSONDecodeError:continue
+        if not isinstance(value,dict) or 'message' not in value:continue
+        result=ChiefPlan.model_validate(value)
+        if result.composition:validate_assets(result.composition,assets)
+        return result
+    raise RuntimeError('Chief could not save this scene plan. Your brief is safe; try again.')
 def identity(job):return AuthedUser(id=job['created_by'],email='',role='authenticated')
 def fence(job):return f'/video_jobs?id=eq.{job["id"]}&lease_id=eq.{job["lease_id"]}&status=eq.working'
 def progress(job,stage,percent=None):
@@ -89,8 +105,7 @@ SCHEMA:
     if data.get('stop_reason')=='max_tokens':raise RuntimeError('Chief’s plan was cut short. Ask for a shorter video.')
     text=''.join(x.get('text','') for x in data.get('content',[]) if x.get('type')=='text').strip()
     if text.startswith('```'):text=re.sub(r'^```(?:json)?\s*|\s*```$','',text)
-    result=ChiefPlan.model_validate_json(text)
-    if result.composition:validate_assets(result.composition,rows)
+    result=parse_plan_reply(text,rows)
     progress(job,'saving_plan')
     studio.rpc('finish_video_plan',{'p_job_id':job['id'],'p_lease':job['lease_id'],
         'p_composition':result.composition.model_dump(mode='json') if result.composition else None,'p_message':result.message})
@@ -179,7 +194,7 @@ def work_once():
             else:render(job,folder)
     except Cancelled:log.info('Video job cancelled: %s',job['id'])
     except Exception as e:
-        log.exception('Video job failed: %s',job['id'])
+        logging.getLogger('uvicorn.error').exception('Video job failed: %s',job['id'])
         message=str(e) if isinstance(e,RuntimeError) else 'Chief could not finish this job. Your saved project is safe. Try again.'
         sb_clients.sb_patch_as_service(fence(job),{'status':'failed','stage':'failed','error':message[:600],
             'finished_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())})
