@@ -20,8 +20,8 @@ Runtime prerequisites: `GOOGLE_CLIENT_ID`, a browser/referrer-restricted
 production JavaScript origin on the OAuth client. Google console configuration
 and the customer's consent must be completed before describing Drive as connected.
 
-Install FFmpeg and FFprobe in the runtime image (`RAILPACK_DEPLOY_APT_PACKAGES`
-includes `ffmpeg`) and set `MEDIA_PROCESSING=on` on server and worker. Work runs
+The checked-in `nixpacks.toml` installs FFmpeg and FFprobe through the setup
+phase Apt packages. Set `MEDIA_PROCESSING=on` on server and worker. Work runs
 through the existing leader-gated scheduler, at most one processor globally and
 one pending job per business. Interrupted jobs fail visibly and require a new
 selection or clip. There are no silent retries or automatic provider sends.
