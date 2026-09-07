@@ -485,6 +485,8 @@ from financial_policy_router import router as financial_policy_router
 app.include_router(financial_policy_router)
 from media_library_router import router as media_library_router
 app.include_router(media_library_router)
+from video_studio_router import router as video_studio_router
+app.include_router(video_studio_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)
 # Pass 4.0a — Director Agent foundations
@@ -1412,6 +1414,11 @@ async def startup():
                           "interval", seconds=30, id="media_library", max_instances=1)
     except Exception as e:
         print(f"   [warn] media processing not scheduled: {e}")
+    try:
+        import video_studio_worker as _video_studio_worker
+        scheduler.add_job(_video_studio_worker.tick, 'interval', seconds=8, id='video_studio', max_instances=1)
+    except Exception as e:
+        print(f'   [warn] video studio processing not scheduled: {e}')
     # Chief jobs recovery (2026-09-04): the boot sweep's twin, for the
     # deploy that happens on another replica or mid-build. Reads the
     # heartbeat; marks dead rows failed-retryable; never retries.

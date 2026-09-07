@@ -21,4 +21,6 @@ layout_previews/
 node_modules/
 package.json
 package-lock.json
+!video_worker/package.json
+!video_worker/package-lock.json
 output/
