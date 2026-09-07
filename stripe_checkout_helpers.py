@@ -25,6 +25,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import httpx
+from financial_policy import require_stripe_write
 
 logger = logging.getLogger("stripe_checkout_helpers")
 
@@ -190,6 +191,7 @@ async def create_checkout_session(
         setup_future_usage=setup_future_usage,
     )
 
+    require_stripe_write(stripe_account_id)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(
             f"{STRIPE_API_BASE}/checkout/sessions",
@@ -421,6 +423,7 @@ async def create_giving_checkout(
         giver_email=giver_email,
         currency=currency,
     )
+    require_stripe_write(stripe_account_id)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(
             f"{STRIPE_API_BASE}/checkout/sessions",
@@ -498,6 +501,7 @@ async def create_invoice_checkout(
 
     name = f"Invoice {invoice_number}".strip() if invoice_number else "Invoice Payment"
     headers = {"Stripe-Account": stripe_account_id}
+    require_stripe_write(stripe_account_id)
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         # Step 1 — a one-off Price on the connected account.
@@ -576,6 +580,7 @@ async def charge_saved_payment_method(
         raise ValueError("amount_cents must be positive")
 
     headers: Dict[str, str] = {"Stripe-Account": stripe_account_id}
+    require_stripe_write(stripe_account_id)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         pm_id = payment_method_id
         if not pm_id:
@@ -653,6 +658,8 @@ async def create_refund(
         form["amount"] = int(amount_cents)
     if reason:
         form["reason"] = reason
+
+    require_stripe_write(stripe_account_id)
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(

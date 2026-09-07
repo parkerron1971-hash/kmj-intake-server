@@ -276,6 +276,8 @@ async def invoice_checkout(
 
     from business_users_router import require_role
     require_role(business_id, str(user.id), "member")
+    from financial_policy import require_operational_write
+    require_operational_write(business_id)
 
     status = (inv.get("status") or "").lower()
     if status == "paid":
@@ -355,6 +357,7 @@ class ChargeNoShowBody(BaseModel):
 @router.post("/charge-no-show")
 async def charge_no_show(
     body: ChargeNoShowBody,
+    request: Request,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Charge the disclosed no-show fee against the card stored at
@@ -387,6 +390,10 @@ async def charge_no_show(
 
     from business_users_router import require_role
     require_role(business_id, str(user.id), "manager")
+    from financial_policy import require_operational_write
+    require_operational_write(business_id)
+    import ledger_unlock
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
 
     data = entry.get("data") or {}
     try:
@@ -492,9 +499,14 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
 async def refund_charge(
     charge_id: str,
     body: RefundBody,
+    request: Request,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     biz = _require_owner(body.business_id, user)
+    from financial_policy import require_operational_write
+    require_operational_write(body.business_id)
+    import ledger_unlock
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
     try:
         refund = await payments_core.provider_for(biz).create_refund(
             biz,

@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 import sb_clients
@@ -84,6 +84,9 @@ def _owner_for_contractor(contractor_id: str, user: AuthedUser,
 
 
 async def _stripe_post(path: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    if path == '/transfers':
+        from financial_policy import require_operational_write
+        require_operational_write(data.get('metadata[business_id]'))
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         r = await client.post(f"{STRIPE_API_BASE}{path}", auth=(_secret_key(), ""), data=data)
     body = r.json() if r.content else {}
@@ -262,7 +265,7 @@ class PayBody(BaseModel):
 
 
 @router.post("/{contractor_id}/pay")
-async def pay(contractor_id: str, body: PayBody,
+async def pay(contractor_id: str, body: PayBody, request: Request,
               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """Send a Stripe Transfer (platform balance → contractor Express) and
     record it: outbound_transfers row + auto-created PAID AP bill
@@ -270,6 +273,10 @@ async def pay(contractor_id: str, body: PayBody,
     c = _owner_for_contractor(contractor_id, user, min_role="admin")  # moves money
     if str(c["business_id"]) != body.business_id:
         raise HTTPException(403, "contractor belongs to a different business")
+    from financial_policy import require_operational_write
+    require_operational_write(body.business_id)
+    import ledger_unlock
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
     billing_limits.require_feature(body.business_id, "contractor_payments")
     if body.amount <= 0:
         raise HTTPException(400, "amount must be positive")

@@ -479,6 +479,10 @@ app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
 from business_learning_router import router as business_learning_router
 app.include_router(business_learning_router)
+from program_outcomes_router import router as program_outcomes_router
+app.include_router(program_outcomes_router)
+from financial_policy_router import router as financial_policy_router
+app.include_router(financial_policy_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)
 # Pass 4.0a — Director Agent foundations

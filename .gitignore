@@ -21,3 +21,4 @@ layout_previews/
 node_modules/
 package.json
 package-lock.json
+output/

@@ -123,6 +123,13 @@ async def _create_stripe_payment_link(
     metadata so webhook handlers can resolve back to the originating
     Solutionist row even when querying cross-account.
     """
+    from financial_policy import require_operational_write, require_stripe_write
+    if business_id:
+        require_operational_write(business_id)
+    if connected_account_id:
+        require_stripe_write(connected_account_id)
+    if not business_id and not connected_account_id:
+        raise HTTPException(409, 'A business is required for a payment link.')
     key = os.environ.get("STRIPE_SECRET_KEY")
     if not key:
         raise HTTPException(500, "Stripe not configured on server — set STRIPE_SECRET_KEY")
