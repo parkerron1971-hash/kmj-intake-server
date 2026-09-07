@@ -220,7 +220,10 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
     return schema
 
 
+from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
+
 TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "growth_report": GROWTH_READ_SCHEMA,
     "catch_up": (
         "What has happened in this business recently — new activity, drafts "
         "waiting, anything that moved since last time. Start here when you "
@@ -511,6 +514,7 @@ _HOURS = {"type": "array",
                                            "description": "HH:MM, 24-hour"}}}}
 
 WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "save_growth_record": GROWTH_WRITE_SCHEMA,
     # ── people ───────────────────────────────────────────────────────
     "create_contact": (
         "Add a person to this business's contacts. Nothing is sent to "
@@ -1206,6 +1210,11 @@ def _contact_name(payload: Dict[str, Any]) -> str:
 # A handoff to a verb that does not exist is a promise the app then
 # breaks — the dead-weight rule, at the wire.
 HANDOFFS: Dict[str, _Handoff] = {
+    "growth_report": _Handoff(
+        verb="save_growth_record",
+        text="Chief can turn this reading into a tracked growth action, or update its costs and capacity assumptions.",
+        where="Grow › Dashboard › Growth intelligence",
+        when=lambda p: not p.get("failed")),
     "unbilled_time": _Handoff(
         verb="create_invoice",
         text="Chief can turn these hours into an invoice.",

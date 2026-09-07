@@ -227,8 +227,11 @@ def _shrink(result: Any) -> str:
     # prompt-time neutraliser ran. Same two layers, same taint.
     import untrusted_text
     text = untrusted_text.defuse(text)
-    if len(text) > MAX_RESULT_CHARS:
-        text = text[:MAX_RESULT_CHARS] + '… [truncated — ask a narrower question]"}'
+    # A single Growth action can contain 200 audience IDs and result notes.
+    # Its handler pages lists; retain the complete explicitly recalled record.
+    limit = 32000 if isinstance(result, dict) and result.get('type') in ('growth_report', 'save_growth_record') else MAX_RESULT_CHARS
+    if len(text) > limit:
+        text = text[:limit] + '… [truncated — ask a narrower question]"}'
     return text
 
 

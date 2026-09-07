@@ -49,6 +49,7 @@ from strategy_router import router as strategy_router
 from restricted_modules import router as restricted_router
 from workflow_router import router as workflow_router
 from growth_objective_router import router as growth_objective_router
+from growth_intelligence_router import router as growth_intelligence_router
 from module_spec_router import router as module_spec_router
 from module_check_router import router as module_check_router
 # Phase C.1 — Bookings archetype: customer-facing widget endpoints +
@@ -276,6 +277,7 @@ app.include_router(strategy_router)
 app.include_router(restricted_router)
 app.include_router(workflow_router)
 app.include_router(growth_objective_router)
+app.include_router(growth_intelligence_router)
 app.include_router(module_spec_router)
 app.include_router(module_check_router)
 # Phase C.1 — Bookings archetype

@@ -117,9 +117,11 @@ def test_the_write_surface_count_is_a_tripwire():
     56 (2026-09-04, missions from a non-chat trigger): propose_mission
     (1) — drafts a plan row and runs nothing; start_mission stays class
     C and off every surface.
+    57 (2026-09-06, Growth intelligence): save_growth_record (1) saves
+    one reversible reporting record through the same validated core as UI.
     """
     offered = set(mcp.exposed_tools(allow_writes=True)) - set(mcp.exposed_tools())
-    assert len(offered) == 56, (
+    assert len(offered) == 57, (
         f"write surface changed: {sorted(offered)}. If a verb was added, "
         "decide whether an outside agent should change it, write its "
         "schema from the handler, and update this count on purpose.")

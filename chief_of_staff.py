@@ -10251,7 +10251,11 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
     }
 
 
+from chief_growth_intelligence_actions import handle_growth_report, handle_save_growth_record
+
 ACTION_HANDLERS = {
+    "growth_report": handle_growth_report,
+    "save_growth_record": handle_save_growth_record,
     "choose_workspace":       handle_choose_workspace,
     "switch_workspace":       handle_switch_workspace,
     "switch_layout":          handle_switch_layout,
@@ -12924,11 +12928,12 @@ async def chief_chat(
             # injector ends up inside personas that should never see it —
             # and because ~700 tokens on every bookkeeping question is
             # rent nobody is paying for.
-            growth_block = ""
+            from chief_growth_intelligence_actions import PROMPT as _growth_intelligence_prompt
+            growth_block = _growth_intelligence_prompt
             try:
                 import growth_doctrine as _growth
                 _view = req.current_context
-                growth_block = _growth.context_block(
+                growth_block += "\n" + _growth.context_block(
                     req.message or "",
                     mode=req.mode,
                     tab=(_view.tab if _view else None),
