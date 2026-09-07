@@ -156,6 +156,9 @@ def stripe_connect_start(
         raise HTTPException(400, "business_id required")
     biz = _require_owner(str(business_id), user)
 
+    from financial_policy import require_operational_write
+    require_operational_write(str(business_id))
+
     if biz.get("stripe_account_id"):
         # Already connected. Frontend should send to status, not start.
         raise HTTPException(409, "stripe account already connected")
@@ -213,6 +216,8 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
         )
 
     try:
+        from financial_policy import require_operational_write
+        require_operational_write(business_id)
         oauth_resp = await exchange_oauth_code(code)
     except Exception as e:
         logger.warning(f"oauth exchange failed for biz={business_id}: {e}")

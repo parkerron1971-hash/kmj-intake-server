@@ -145,6 +145,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "mcp_tokens",             # business-scoped agent tokens
     "chief_memories",
     "business_operating_profile_history",
+    "program_outcome_reports",
+    "business_financial_policies",
+    "business_financial_account_locks",
+    "business_financial_policy_history",
     "business_operating_profiles",
     "chief_conversations",
     "chief_activity",
@@ -538,6 +542,11 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # documents live in S3. Stated here rather than discovered later.
 
 _IMPORT_SKIP = {
+    # Derived snapshots and security decisions cannot be recreated from an
+    # untrusted uploaded bundle. Export preserves them for reference; reports
+    # must be recalculated and approved against the restored source records.
+    "program_outcome_reports", "business_financial_policies",
+    "business_financial_account_locks", "business_financial_policy_history",
     "audit_log", "agent_runs", "chief_jobs", "mcp_tokens",
     # Growth history and JSON records cite original contact/invoice/campaign
     # IDs. The generic importer mints new IDs without a reference map; copying
