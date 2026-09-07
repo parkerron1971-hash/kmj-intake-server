@@ -15,6 +15,11 @@
 [variables]
 PLAYWRIGHT_BROWSERS_PATH = "/app/.ms-playwright"
 
+# Private clip jobs need both ffmpeg and ffprobe on the runtime PATH.
+# Playwright's bundled helper is not a general-purpose media processor.
+[phases.setup]
+aptPkgs = ["...", "ffmpeg"]
+
 [phases.playwright]
 dependsOn = ["install"]
 cmds = ["python -m playwright install --with-deps chromium"]
