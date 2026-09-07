@@ -125,6 +125,9 @@ def _w(rev: str, why: str, bulk: bool = False) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────
 
 REGISTRY: Dict[str, Dict[str, Any]] = {
+    "get_dashboard_layout": _r("reads only the signed-in person's dashboard and landing preferences", sensitive=True),
+    "set_dashboard_focus": _w("A", "changes the signed-in person's featured dashboard page; clear restores the default"),
+    "set_start_page": _w("A", "changes the signed-in person's opening page; clear restores Home"),
     "growth_report": _r("business-scoped growth metrics and saved growth records"),
     "save_growth_record": _w("A", "creates or revises one analytical growth record; no payment, posting or sending; archive is reversible"),
 
