@@ -391,6 +391,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "device, but never reaches a client, so it is not the "
                                       "client-facing send class B exists for"),
     "plan_content":           _w("A", "adds a planned post to settings.content_calendar"),
+    "learn_business": _w("A", "saves private business operating knowledge with source evidence"),
+    "recall_business_knowledge": _r("reads the current business's private operating profile"),
+    "correct_business_knowledge": _w("A", "versions an owner correction to private operating knowledge"),
+    "capture_business_knowledge": _w("A", "immediately saves quoted owner answers and labels tentative plans"),
     "propose_business_from_idea": _w("A", "lays a whole business out from an idea: the map row "
                                           "(status=blueprint, never accepted) plus module and "
                                           "offering DRAFTS — nothing live until each card is accepted"),

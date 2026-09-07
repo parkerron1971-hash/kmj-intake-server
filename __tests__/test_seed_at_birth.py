@@ -92,7 +92,7 @@ class TestSeedNewBusiness:
             calls["modules"] = (biz_id, btype)
             if "modules" in fail:
                 raise RuntimeError("blueprint down")
-            return []
+            return {"created": ["clients"], "skipped": [], "failed": []}
 
         def _autopilot(**kw):
             calls["autopilot"] = kw

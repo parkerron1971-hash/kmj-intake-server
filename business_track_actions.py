@@ -834,6 +834,8 @@ def build_business_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          "natural; otherwise keep rolling.")
 
     vertical_questions = _vertical_question_block(biz)
+    import business_learning
+    vertical_questions += "\n" + business_learning.context_block(biz) + "\n" + business_learning.PROMPT
     plugin_menu = _plugin_menu_for_prompt(biz_type)
 
     return f"""You are the Business Coach in The Solutionist System. You sit down with people who ALREADY run a business and learn it properly — so that everything the system does for them afterwards fits the business they actually have.

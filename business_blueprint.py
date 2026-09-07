@@ -274,6 +274,8 @@ def generate_business_blueprint(business: Dict[str, Any], idea: str) -> Dict[str
         return {"ok": False, "error": f"llm_call_failed: {e}"}
     system = _system_prompt()
     user = _USER.format(name=business.get("name", ""), btype=business.get("type", "custom"), idea=idea)
+    import business_learning
+    user += "\n\n" + business_learning.context_block(business, idea)
 
     first = _call(client, system, user)
     if not first.get("ok"):
@@ -427,6 +429,18 @@ def replay(business_id: str) -> Optional[Dict[str, Any]]:
     if age is not None and age > timedelta(hours=REPLAY_WINDOW_HOURS):
         return None
     proposals = _proposals_from_drafts(_drafts_since(business_id, _owned_since(row)))
+    # A correction can invalidate waiting cards. Do not replay those forever:
+    # returning no cards lets the ordinary action queue a fresh layout.
+    if any((p.get('spec') or p.get('offering') or {}).get('__operating_revision') is not None
+           for p in proposals):
+        import business_learning
+        try:
+            knowledge = business_learning.load(business_id)
+        except (ValueError, RuntimeError):
+            return None
+        revision = (knowledge or {}).get('revision')
+        proposals = [p for p in proposals
+                     if (p.get('spec') or p.get('offering') or {}).get('__operating_revision', revision) == revision]
     if not proposals:
         return None
     bp = row.get("draft_json") or {}
@@ -580,10 +594,25 @@ def propose_business_from_idea(business_id: str, idea: str,
 
     started_at = datetime.now(timezone.utc).isoformat()
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,name,type&limit=1") or []
+        f"/businesses?id=eq.{business_id}&select=id,name,type,settings&limit=1") or []
     if not rows:
         return {"ok": False, "error": "business not found"}
     biz = rows[0]
+
+    import business_learning
+    import vertical_registry
+    knowledge = None
+    if vertical_registry.resolve(biz.get("type")) == "custom":
+        try:
+            knowledge = business_learning.load(business_id)
+            if not knowledge:
+                _say(3, "learning the business before drawing its map")
+                knowledge = business_learning.learn(business_id, idea)
+            if knowledge['status'] != 'ready_to_build':
+                return {"ok": False, "error": "Business discovery needs answers before the workspace can be built.",
+                        "discovery_status": knowledge['status'], "gaps": knowledge['profile']['gaps']}
+        except Exception as e:
+            return {"ok": False, "error": f"Business knowledge could not be prepared: {e}"}
 
     _say(5, "drawing the map of the business")
     mapped = generate_business_blueprint(biz, idea)
@@ -649,6 +678,8 @@ def propose_business_from_idea(business_id: str, idea: str,
         if not off.get("slug") or off.get("slug") in built_slugs:
             continue
         built_slugs.add(off.get("slug"))
+        if knowledge:
+            off['__operating_revision'] = knowledge['revision']
         d = msg.store_draft(business_id, idea, off, kind="offering")
         if d:
             proposals.append({"spec_id": d["id"], "kind": "offering", "offering": off})

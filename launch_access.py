@@ -265,8 +265,8 @@ def _seed_new_business(row: Dict[str, Any], business_type: str,
         logger.warning(f"[access] seed profile failed for {biz_id}: {e}")
     try:
         import module_blueprint_agent
-        module_blueprint_agent.provision_modules(biz_id, business_type)
-        out["modules"] = True
+        provision = module_blueprint_agent.provision_modules(biz_id, business_type)
+        out["modules"] = bool(provision.get("created") or provision.get("skipped"))
     except Exception as e:
         logger.warning(f"[access] blueprint provision failed for {biz_id}: {e}")
     try:
@@ -356,6 +356,8 @@ def create_business(body: CreateBusinessBody,
         if background_tasks is not None:
             background_tasks.add_task(_seed_new_business, row, btype,
                                       body.voice_profile or None, uid)
+            from chief_business_learning_actions import seed_custom_business
+            background_tasks.add_task(seed_custom_business, row)
     except Exception as e:
         logger.warning(f"[access] seed schedule failed: {e}")
     # Day one for everyone who never reaches Stripe. Comped, invited and

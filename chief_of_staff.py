@@ -10262,7 +10262,16 @@ from chief_growth_intelligence_actions import handle_growth_report, handle_save_
 
 from chief_dashboard_actions import handle_get_dashboard_layout, handle_set_dashboard_focus, handle_set_start_page
 
+from chief_business_learning_actions import (
+    handle_learn_business, handle_recall_business_knowledge, handle_correct_business_knowledge,
+    handle_capture_business_knowledge,
+)
+
 ACTION_HANDLERS = {
+    "learn_business": handle_learn_business,
+    "recall_business_knowledge": handle_recall_business_knowledge,
+    "correct_business_knowledge": handle_correct_business_knowledge,
+    "capture_business_knowledge": handle_capture_business_knowledge,
     "get_dashboard_layout": handle_get_dashboard_layout,
     "set_dashboard_focus": handle_set_dashboard_focus,
     "set_start_page": handle_set_start_page,
@@ -11237,7 +11246,8 @@ async def _execute_actions(client, biz, actions: List[Dict],
                            user_id: Optional[str] = None,
                            prior_results: Optional[List[Dict]] = None,
                            surface: str = "chat",
-                           prompted: bool = True) -> List[Dict]:
+                           prompted: bool = True,
+                           owner_text: Optional[str] = None) -> List[Dict]:
     """THE DOOR. Every action Chief takes — from a tag, a tool call, a
     mission step, an undo — comes through here.
 
@@ -11300,6 +11310,12 @@ async def _execute_actions(client, biz, actions: List[Dict],
         # create_invoice → send_invoice in one turn without knowing the
         # freshly-minted UUID.
         resolved = _resolve_action_references(action, _reference_pool())
+        if atype in ("learn_business", "correct_business_knowledge", "capture_business_knowledge"):
+            # Never trust a model-supplied provenance field. Only an actual
+            # current owner message can establish an owner fact.
+            resolved = dict(resolved)
+            resolved["_owner_text"] = (owner_text or "") if (
+                prompted and str(user_id) == str(biz.get("owner_id"))) else ""
         # ── Class-C trust gate (see _gate_class_c above) ──
         try:
             verdict, gate_res = await _gate_class_c(client, biz, atype, resolved,
@@ -13303,7 +13319,8 @@ async def chief_chat(
             if actions:
                 _turn_status(_humanize_actions(actions))
             taken = tool_taken + (await _execute_actions(
-                client, biz, actions, user_id=str(user_session.user.id)) if actions else [])
+                client, biz, actions, user_id=str(user_session.user.id),
+                owner_text=req.message) if actions else [])
 
             # Deterministic goodbye enforcement (8/15). The GOODBYES CLOSE
             # THE ROOM prompt rule (#592) is real but advisory, and Kevin's
