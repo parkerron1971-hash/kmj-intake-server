@@ -35,6 +35,7 @@ test_module_inspect and test_chat_trust_gate drive.
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 from typing import Any, Dict, List
 
 import module_vocabulary
@@ -920,8 +921,10 @@ async def handle_accept_module_spec(client, biz, action):
         import vertical_scope
         rows = await _aio.to_thread(
             sb_clients.sb_get_as_service,
-            f"/module_specs?id=eq.{spec_id}&business_id=eq.{biz['id']}"
+            f"/module_specs?id=eq.{quote(str(spec_id), safe='')}&business_id=eq.{biz['id']}"
             "&select=draft_json&limit=1") or []
+        if not rows:
+            return _fail("accept_module_spec", "That proposal is not available in this business.")
         draft = (rows[0].get("draft_json") or {}) if rows else {}
         fields = draft.get("fields") or []
         labels = " ".join(
@@ -964,6 +967,7 @@ async def handle_accept_module_spec(client, biz, action):
             "result": ("saved, but it will not display correctly: "
                        + "; ".join(problems[:3])),
             "label": f"⚠️ {name} saved — but it won't display yet",
+            "failed": True,
             "module_id": mod.get("id"),
             "nav": _nav("build"),
         }
@@ -978,7 +982,9 @@ async def handle_accept_module_spec(client, biz, action):
     except Exception:
         pass
 
-    label = f"✅ {name} is live in Build"
+    from system_destinations import module_destination
+    module_nav = module_destination(mod)
+    label = f"✅ {name} is live in {module_nav['tab'].title()}"
     if repairs:
         label += f" — {repairs[0]}"
     result = "module accepted"
@@ -990,7 +996,8 @@ async def handle_accept_module_spec(client, biz, action):
         "result": result,
         "label": label,
         "module_id": mod.get("id"),
-        "nav": _nav("build"),
+        "nav": module_nav,
+        "frontend_event": {"name": "solutionist-modules-changed", "detail": {"business_id": str(biz['id'])}},
     }
 
 
@@ -1004,6 +1011,9 @@ async def handle_reject_module_spec(client, biz, action):
         import module_spec_generator as msg
     except Exception as e:
         return _fail("reject_module_spec", f"generator unavailable: {e}")
+    rows = await _sb(client, "GET", f"/module_specs?id=eq.{quote(str(spec_id), safe='')}&business_id=eq.{biz['id']}&select=id&limit=1")
+    if not rows:
+        return _fail("reject_module_spec", "That proposal is not available in this business.")
     await _aio.to_thread(msg.reject_spec, spec_id, action.get("reason"))
     return {"type": "reject_module_spec", "result": "spec rejected",
             "label": "🗑️ Spec rejected"}

@@ -5129,9 +5129,11 @@ async def handle_navigate(client, biz, action) -> Dict:
     page = action.get("page")
     contact_id = action.get("contact_id")
 
-    nav = {"tab": tab}
-    if sub: nav["sub"] = sub
-    if page: nav["page"] = page
+    from system_destinations import destination
+    try:
+        nav = destination(tab, page or sub)
+    except ValueError as exc:
+        return _fail("navigate", str(exc))
     if contact_id: nav["contactId"] = contact_id
 
     # Build a human label
@@ -6939,15 +6941,17 @@ async def handle_ensure_module(client, biz, action) -> Dict:
                            "didn't create the module. Try again in a moment."),
                 "label": "Module creation held", "nav": None, "failed": True}
 
+    from system_destinations import module_destination
+    from urllib.parse import quote
     existing = await _sb(client, "GET",
-        f"/custom_modules?business_id=eq.{biz['id']}&name=eq.{name}&is_active=eq.true&limit=1&select=id,name")
+        f"/custom_modules?business_id=eq.{biz['id']}&name=eq.{quote(name, safe='')}&is_active=eq.true&limit=1&select=id,name,archetype")
     if existing:
         return {
             "type": "ensure_module",
             "result": "already exists",
             "label": f"Module: {name}",
             "module_id": existing[0]["id"],
-            "nav": None,
+            "nav": module_destination(existing[0]),
         }
 
     # Build a minimal schema
@@ -6996,7 +7000,7 @@ async def handle_ensure_module(client, biz, action) -> Dict:
         "result": "created",
         "label": f"Created module: {name}",
         "module_id": inserted[0]["id"],
-        "nav": None,
+        "nav": module_destination(inserted[0]),
         # Tell the frontend to refetch useCustomModules so the Build sidebar
         # picks up the new module without a page reload.
         "frontend_event": {"name": "solutionist-modules-changed"},
@@ -10256,7 +10260,12 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
 
 from chief_growth_intelligence_actions import handle_growth_report, handle_save_growth_record
 
+from chief_dashboard_actions import handle_get_dashboard_layout, handle_set_dashboard_focus, handle_set_start_page
+
 ACTION_HANDLERS = {
+    "get_dashboard_layout": handle_get_dashboard_layout,
+    "set_dashboard_focus": handle_set_dashboard_focus,
+    "set_start_page": handle_set_start_page,
     "growth_report": handle_growth_report,
     "save_growth_record": handle_save_growth_record,
     "choose_workspace":       handle_choose_workspace,
@@ -11342,6 +11351,12 @@ async def _execute_actions(client, biz, actions: List[Dict],
             res = await handler(client, biz, resolved)
             if isinstance(res, dict):
                 res["_authorized_by"] = policy_rule
+                # One refresh contract for chat, voice and future write verbs.
+                # The registry classifies the effect; individual UIs need not
+                # remember every spelling of a successful mutation.
+                import action_registry
+                if action_registry.effect(atype) == 'write' and not _action_failed(res):
+                    res['data_changed'] = {'business_id': str(biz['id'])}
             results.append(res)
             # Record it if it can be taken back. Both halves are needed: the
             # payload says what was asked for, the result carries the ids of
