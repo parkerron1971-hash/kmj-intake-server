@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import json
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from auth_supabase import AuthedUser, require_user
 import growth_intelligence_router as api
@@ -63,11 +63,12 @@ async def fake_db(client,method,path,body=None):
     raise AssertionError(method)
 api.db=fake_db
 app=FastAPI()
-app.add_middleware(CORSMiddleware,allow_origins=['http://127.0.0.1:5192'],allow_methods=['GET','POST'],allow_headers=['Content-Type'])
+app.add_middleware(CORSMiddleware,allow_origins=['http://127.0.0.1:5192','http://127.0.0.1:5196'],allow_methods=['GET','POST'],allow_headers=['Content-Type'])
 app.dependency_overrides[require_user]=lambda:AuthedUser(id='fixture-owner',email=None,role='authenticated')
 app.include_router(api.router)
 @app.post('/fixture/chief')
-async def recall():
+async def recall(request: Request):
+    body = await request.json()
     async with httpx.AsyncClient() as client:
-        return await chief.handle_growth_report(client,{'id':BID},{'period':'mtd'})
-if __name__=='__main__': uvicorn.run(app,host='127.0.0.1',port=5193,log_level='warning')
+        return await chief.handle_growth_report(client,{'id':BID},{'period':'mtd', 'section':body.get('section','overview')})
+if __name__=='__main__': uvicorn.run(app,host='127.0.0.1',port=5197,log_level='warning')
