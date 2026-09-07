@@ -126,6 +126,7 @@ def _w(rev: str, why: str, bulk: bool = False) -> Dict[str, Any]:
 
 REGISTRY: Dict[str, Dict[str, Any]] = {
     "get_dashboard_layout": _r("reads only the signed-in person's dashboard and landing preferences", sensitive=True),
+    "inspect_video": _r("reads private video projects and exact revision hashes", sensitive=True),
     "set_dashboard_focus": _w("A", "changes the signed-in person's featured dashboard page; clear restores the default"),
     "set_start_page": _w("A", "changes the signed-in person's opening page; clear restores Home"),
     "growth_report": _r("business-scoped growth metrics and saved growth records"),
@@ -392,6 +393,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "client-facing send class B exists for"),
     "plan_content":           _w("A", "adds a planned post to settings.content_calendar"),
     "learn_business": _w("A", "saves private business operating knowledge with source evidence"),
+    "create_video": _w("A", "creates a private editable video project and scene plan"),
+    "revise_video": _w("A", "saves a new private video revision without replacing earlier work"),
+    "render_video": _w("C", "consumes rendering and narration resources for an explicitly approved revision; never publishes"),
     "recall_business_knowledge": _r("reads the current business's private operating profile"),
     "correct_business_knowledge": _w("A", "versions an owner correction to private operating knowledge"),
     "capture_business_knowledge": _w("A", "immediately saves quoted owner answers and labels tentative plans"),

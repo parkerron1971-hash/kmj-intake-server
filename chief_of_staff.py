@@ -10268,6 +10268,10 @@ from chief_business_learning_actions import (
 )
 
 ACTION_HANDLERS = {
+    "create_video": __import__('chief_video_actions').handle_create_video,
+    "inspect_video": __import__('chief_video_actions').handle_inspect_video,
+    "revise_video": __import__('chief_video_actions').handle_revise_video,
+    "render_video": __import__('chief_video_actions').handle_render_video,
     "learn_business": handle_learn_business,
     "recall_business_knowledge": handle_recall_business_knowledge,
     "correct_business_knowledge": handle_correct_business_knowledge,
@@ -12964,6 +12968,8 @@ async def chief_chat(
             # rent nobody is paying for.
             from chief_growth_intelligence_actions import PROMPT as _growth_intelligence_prompt
             growth_block = _growth_intelligence_prompt
+            from chief_video_actions import PROMPT as _video_creation_prompt
+            growth_block += "\n" + _video_creation_prompt
             try:
                 import growth_doctrine as _growth
                 _view = req.current_context
