@@ -20,6 +20,14 @@ verify against the live DB (below) before assuming.
 
 ## Standing rule
 
+2026-09-07 media follow-up: `APPLY-2026-09-07-ledger-after-erasure.sql` is
+**APPLIED**, explicitly approved and rollback-tested. It includes documented
+erased sequence ranges when bounding the ledger tip, without permitting
+backward or unsupported forward changes. Live staff rehearsal and cleanup passed.
+`APPLY-2026-09-07-media-library.sql` is **APPLIED**; rollback tests passed for
+private storage, queue concurrency and immutable media review, and production
+RLS/browser revocations were verified. Drive configuration remains a prerequisite.
+
 Every new schema change gets:
 1. An `APPLY-YYYY-MM-DD-<name>.sql` file (idempotent: `IF EXISTS` /
    `IF NOT EXISTS` / `DROP POLICY IF EXISTS`).
