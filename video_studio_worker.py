@@ -29,7 +29,7 @@ from video_audio import prepare_music
 from video_materials import analyze,transparent_copy,grid_reference
 from video_check import look_pass
 
-log=logging.getLogger('video-worker')
+log=logging.getLogger('uvicorn.error')  # the logger Railway shows for the scheduler process
 class Cancelled(Exception):pass
 
 def parse_plan_reply(text,assets):
