@@ -27,7 +27,8 @@ from PIL import Image
 from video_studio_models import Composition, Callout, validate_assets
 from video_hyperframes import compile_project
 
-log = logging.getLogger('video-check')
+# uvicorn.error is the one logger Railway shows for the scheduler process.
+log = logging.getLogger('uvicorn.error')
 ALLOWED = {'fit', 'motion', 'layout', 'callouts', 'title'}
 LAYOUT_SWAPS = {'image': {'split'}, 'split': {'image'}}
 KEEP_SCORE = 5  # any proposed change gets one revision pass; the revision ships only if the score rises
@@ -85,7 +86,14 @@ def proof_stills(folder, spec, out_dir, width=960):
     return stills
 
 
+def score_of(value):
+    """1-5 from whatever shape the judge wrote: 4, "4", "4/5", "4.5 out of 5"."""
+    m = re.search(r'\d+(?:\.\d+)?', str(value or ''))
+    return max(1, min(5, round(float(m.group())))) if m else 3
+
+
 def parse_verdict(text):
+    text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text.strip())
     decoder = json.JSONDecoder()
     for m in re.finditer(r'\{', text):
         try:
@@ -134,8 +142,11 @@ def judge(stills, spec, business_id):
     response = llm_call.post({'model': chief_models.model_for('chat'), 'max_tokens': 1800, 'messages': [{'role': 'user', 'content': content}]}, timeout=120, business_id=business_id, task='video_look')
     response.raise_for_status(); data = response.json()
     text = ''.join(x.get('text', '') for x in data.get('content', []) if x.get('type') == 'text')
-    verdict = parse_verdict(text)
-    verdict['score'] = max(1, min(5, int(verdict.get('score') or 3)))
+    try:
+        verdict = parse_verdict(text)
+    except ValueError:
+        log.error('Video look judge returned no verdict: %s', text[:400]); raise
+    verdict['score'] = score_of(verdict.get('score'))
     return verdict
 
 
