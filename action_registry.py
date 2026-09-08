@@ -358,7 +358,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "Worth noting separately that a silently-cancelled client "
                                       "appointment is a product question, not a classification one"),
     "reschedule_booking":     _w("A", "moves an appointment; sends nothing, same as cancel"),
-    "create_course":          _w("A", "scaffolds academy_courses + academy_lessons rows"),
+    "inspect_course": _r("owner-scoped course and lesson content; includes private answer keys"),
+    "save_course_content": _w("A", "atomically authors course lessons, workbooks, quizzes and live details; published course edits are student-visible"),
+    "create_course":          _w("A", "atomically creates a draft course and complete lessons"),
     "create_growth_objective": _w("A", "materializes an objective plus its modules/workflows/"
                                        "milestones — a lot of rows, all ordinary records"),
     "enroll_student":         _w("A", "inserts an academy_enrollments row"),

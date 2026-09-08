@@ -6329,6 +6329,11 @@ async def _serve_learner(path: str) -> HTMLResponse:
     parts = [p for p in path.split("/") if p]  # ['learn', token, lesson?]
     token = parts[1] if len(parts) >= 2 else ""
     lesson_id = parts[2] if len(parts) >= 3 else ""
+    if os.environ.get("ACADEMY_CLASSROOM_V2", "off").lower() == "on":
+        if not _academy_valid_id(token):
+            raise HTTPException(404, "Link not active")
+        return RedirectResponse(url=f"https://system.mysolutionist.app/classroom/{token}", status_code=303,
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
     async with httpx.AsyncClient() as client:
         loaded = await _learn_load(client, token)
         if not loaded:
@@ -7424,6 +7429,12 @@ async def learner_mark(token: str, request: Request):
     done from their portal. The portal token IS the authorization; the
     write feeds the same enrollments.progress/homework the teaching
     view reads. Drip locks are enforced server-side."""
+    # Retire the legacy completion shortcut when the graded classroom goes live.
+    if os.environ.get("ACADEMY_CLASSROOM_V2", "off").lower() == "on":
+        if not _academy_valid_id(token):
+            raise HTTPException(404, "Link not active")
+        return RedirectResponse(url=f"https://system.mysolutionist.app/classroom/{token}", status_code=303,
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
     form = await request.form()
     lesson_id = str(form.get("lesson_id") or "")
     kind = str(form.get("kind") or "lesson")

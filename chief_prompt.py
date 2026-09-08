@@ -31,6 +31,7 @@ prompt literals. They read __tests__/_chief_source.chief_source() now,
 which is the two files joined — the same text, in two places.
 """
 from __future__ import annotations
+from chief_academy_actions import PROMPT as ACADEMY_AUTHORING_PROMPT
 
 import logging
 import json
@@ -1649,7 +1650,9 @@ ACTIONS — PRODUCTS & SERVICES:
   [ACTION:{{"type":"generate_payment_link","product_id":"<uuid>"}}]  — generates a Stripe payment link for a digital/physical/package product (services use the booking flow). Pass force_regenerate=true to rotate an existing link. The link is saved to products.stripe_payment_url and appears as a Buy Now button on the practitioner's website automatically.
 
 ACTIONS — ACADEMY (BUILD → Course Studio; the practitioner teaches, students are their contacts):
-  [ACTION:{{"type":"create_course","title":"90-Day Business Foundations","description":"...","lessons":["Week 1: Your Foundation","Week 2: Your Offer"]}}]  — scaffold a course; lessons optional (titles only, the practitioner fills content in Course Studio). Tells: "create a course", "set up my course", or after you've outlined a curriculum together and they say yes.
+  {ACADEMY_AUTHORING_PROMPT}
+  [ACTION:{{"type":"save_course_content","request_key":"<unique-save-key>","course_id":"<uuid-from-inspect_course>","lessons":[{{"title":"Your Next Lesson","content":"Complete teaching content in Markdown","learning_design":{{"version":1,"objective":"What students will learn"}}}}]}}] — action-tag transport for the same course-authoring schema. Prefer the native tool when available. Inspect first, use real course IDs, and omit course_id only when creating a new draft with a title. Never use this example's placeholder IDs or prose as finished lesson content.
+  [ACTION:{{"type":"create_course","title":"90-Day Business Foundations","description":"...","lessons":["Week 1: Your Foundation","Week 2: Your Offer"]}}]  — scaffold a course; legacy format; prefer save_course_content for complete lessons, workbooks and quizzes. Tells: "create a course", "set up my course", or after you've outlined a curriculum together and they say yes.
   [ACTION:{{"type":"enroll_student","contact_id":"<uuid>","course_title":"Foundations"}}]  — enroll an existing contact in a course (partial title match; course_id also accepted). Tells: "enroll Sarah in my foundations course", "add her to the course".
   [ACTION:{{"type":"generate_payment_link","name":"Leadership Course"}}]  — fuzzy match by name when you don't have the id.
     — product_type values: service | digital | physical | package. pricing_type: fixed | hourly | per_session | subscription | custom.
@@ -2395,7 +2398,7 @@ ACTIONS (all emitted silently during conversation):
   [ACTION:{{"type":"complete_strategy_track"}}]
   [ACTION:{{"type":"navigate","tab":"build","page":"booking"}}]   — for quick-win navigation
   [ACTION:{{"type":"ensure_module","module_name":"Services","icon":"💼"}}]
-  [ACTION:{{"type":"create_course","title":"...","description":"...","lessons":["Week 1: ...","Week 2: ..."]}}]  — when you've designed a curriculum together (a group cohort, a program, a course), offer to scaffold it into their Course Studio; emit ONLY after they say yes. This is how a strategy session becomes a real, teachable course.
+  [ACTION:{{"type":"create_course","title":"...","description":"...","lessons":["Week 1: ...","Week 2: ..."]}}]  — when you've designed a curriculum together (a group cohort, a program, a course), save it into Course Studio with save_course_content when requested; a direct request already authorizes authoring. This is how a strategy session becomes a real, teachable course.
 
 VISUAL TEACHING — you can draw. When numbers would land better as a picture
 (revenue scenarios, capacity math, break-even, price comparisons, a path to

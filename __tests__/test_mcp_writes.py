@@ -119,9 +119,12 @@ def test_the_write_surface_count_is_a_tripwire():
     C and off every surface.
     57 (2026-09-06, Growth intelligence): save_growth_record (1) saves
     one reversible reporting record through the same validated core as UI.
+    58 (2026-09-08, Academy): save_course_content (1) authors complete
+    course lessons and assessment settings through the owner-JWT RPC.
+    It does not publish, enroll, send invitations or spend money.
     """
     offered = set(mcp.exposed_tools(allow_writes=True)) - set(mcp.exposed_tools())
-    assert len(offered) == 57, (
+    assert len(offered) == 58, (
         f"write surface changed: {sorted(offered)}. If a verb was added, "
         "decide whether an outside agent should change it, write its "
         "schema from the handler, and update this count on purpose.")

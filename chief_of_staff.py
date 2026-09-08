@@ -5230,42 +5230,18 @@ async def handle_set_chat_window(client, biz, action) -> Dict:
 #     contacts are verified to belong to the business before writes. ───
 
 async def handle_create_course(client, biz, action) -> Dict:
-    """Scaffold a course (optionally with lesson titles) into the
-    Course Studio. Emitted only after the practitioner asks or agrees —
-    the coach uses it to turn a designed curriculum into a real course."""
-    title = (action.get("title") or "").strip()
-    if not title:
-        return _fail("create_course", "title is required")
-    inserted = await _sb(client, "POST", "/academy_courses", {
-        "business_id": biz["id"],
-        "title": title,
-        "description": (action.get("description") or "").strip(),
-    })
-    if not inserted:
-        return _fail("create_course", "insert failed")
-    course = inserted[0] if isinstance(inserted, list) else inserted
-    course_id = course.get("id") if isinstance(course, dict) else None
-    lesson_titles = [str(t).strip() for t in (action.get("lessons") or []) if str(t).strip()][:24]
-    made = 0
-    for i, lt in enumerate(lesson_titles):
-        try:
-            ok = await _sb(client, "POST", "/academy_lessons", {
-                "course_id": course_id, "business_id": biz["id"],
-                "title": lt, "sort_order": i,
-            })
-            if ok:
-                made += 1
-        except Exception as e:
-            logger.warning(f"create_course lesson insert failed: {e}")
-    label = f"🎓 Course created: {title}"
-    if made:
-        label += f" — {made} lesson{'s' if made != 1 else ''} scaffolded"
-    return {
-        "type": "create_course",
-        "result": "created",
-        "label": label,
-        "nav": {"tab": "build", "page": "course-studio"},
-    }
+    from chief_academy_actions import handle_save_course_content
+    return await handle_save_course_content(client, biz, {**action, "type": "create_course"})
+
+
+async def handle_inspect_course(client, biz, action) -> Dict:
+    from chief_academy_actions import handle_inspect_course as handler
+    return await handler(client, biz, action)
+
+
+async def handle_save_course_content(client, biz, action) -> Dict:
+    from chief_academy_actions import handle_save_course_content as handler
+    return await handler(client, biz, action)
 
 
 async def handle_enroll_student(client, biz, action) -> Dict:
@@ -5281,13 +5257,23 @@ async def handle_enroll_student(client, biz, action) -> Dict:
         safe = _up.quote(course_title, safe="")
         rows = await _sb(
             client, "GET",
-            f"/academy_courses?business_id=eq.{biz['id']}&title=ilike.*{safe}*&limit=1&select=id,title",
+            f"/academy_courses?business_id=eq.{biz['id']}&title=ilike.*{safe}*&limit=2&select=id,title",
         ) or []
+        if len(rows) > 1:
+            return _fail("enroll_student", "Several courses match. Choose a course ID.")
         if rows:
             course_id = rows[0]["id"]
             course_title = rows[0].get("title") or course_title
     if not course_id:
         return _fail("enroll_student", f"course not found: {course_title or '(no course named)'}")
+    from uuid import UUID
+    try:
+        course_id, contact_id = str(UUID(course_id)), str(UUID(contact_id))
+    except ValueError:
+        return _fail("enroll_student", "Invalid course or contact ID")
+    owned = await _sb(client, "GET", f"/academy_courses?id=eq.{course_id}&business_id=eq.{biz['id']}&select=id")
+    if not owned:
+        return _fail("enroll_student", "course not found for this business")
     crows = await _sb(
         client, "GET",
         f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=id,name",
@@ -10345,6 +10331,8 @@ ACTION_HANDLERS = {
     "search_ledger":         handle_search_ledger,
     "set_chat_window":       handle_set_chat_window,
     "create_course":         handle_create_course,
+    "inspect_course":        handle_inspect_course,
+    "save_course_content":   handle_save_course_content,
     "enroll_student":        handle_enroll_student,
     "remember":              handle_remember,
     "save_note":             handle_save_note,
