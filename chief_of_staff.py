@@ -12382,6 +12382,26 @@ class ChatRequest(BaseModel):
     # Originating device, so the desktop can surface a "while you were
     # away, from your phone I did X" recap. 'mobile' | 'desktop' | 'voice'.
     client_surface: Optional[str] = None
+    # What the call already said aloud while this turn was thinking
+    # ("Let me take a look.") — the reply continues from it instead of
+    # opening with a second acknowledgement. Voice surface only.
+    spoken_opener: Optional[str] = None
+
+
+def _spoken_opener_block(opener: Optional[str]) -> str:
+    """The prompt tail for a turn the call has already opened aloud.
+    Empty when there is nothing to continue from. Whitespace-collapsed
+    and capped so a client cannot smuggle a paragraph into the prompt."""
+    o = " ".join((opener or "").split())[:80]
+    if not o:
+        return ""
+    return (
+        "\n\nALREADY SAID ALOUD: while you were thinking, the call spoke "
+        f"\"{o}\" to the practitioner. Continue from there — do not repeat "
+        "it, and do not open with another acknowledgement (\"sure\", \"let me "
+        "check\", \"one moment\", \"good question\"). Your first sentence is "
+        "the substance."
+    )
 
 
 def _is_greeting(msg: str) -> bool:
@@ -13123,6 +13143,8 @@ async def chief_chat(
             lane = chief_models.lane_for_chat(req.mode or "", req.client_surface or "")
             if lane == "voice":
                 system = system + chief_models.VOICE_DELIVERY_BLOCK
+                # After the delivery block, in the uncached tail with it.
+                system = system + _spoken_opener_block(req.spoken_opener)
             # The voice confirmation grammar. Set from the SURFACE, not
             # the lane, so a coach turn spoken aloud is still treated as
             # spoken (coaches ride the deep lane and would otherwise slip
