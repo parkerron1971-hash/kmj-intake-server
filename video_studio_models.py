@@ -8,9 +8,43 @@ from program_outcomes import StrictModel
 
 Color = str
 
+class Callout(StrictModel):
+    """A label that lights up one feature on a screenshot. x/y are percent
+    positions inside the picture; `at` is seconds into the scene."""
+    label: str = Field(min_length=1, max_length=40)
+    x: float = Field(ge=4, le=96, allow_inf_nan=False)
+    y: float = Field(ge=4, le=96, allow_inf_nan=False)
+    at: float = Field(default=1, ge=0, le=28, allow_inf_nan=False)
+
+class DemoTile(StrictModel):
+    label: str = Field(min_length=1, max_length=24)
+    value: str = Field(min_length=1, max_length=14)
+
+class Demo(StrictModel):
+    """An animated product demonstration built from DATA, never from code.
+    chat: the owner types a prompt, the assistant replies, a result card lands.
+    dashboard: a greeting, tiles that count up, quick-action chips."""
+    kind: Literal['chat', 'dashboard']
+    app_name: str = Field(default='', max_length=40)
+    assistant: str = Field(default='Chief', max_length=24)
+    prompt: str = Field(default='', max_length=90)
+    reply: str = Field(default='', max_length=160)
+    card_title: str = Field(default='', max_length=40)
+    card_value: str = Field(default='', max_length=20)
+    card_note: str = Field(default='', max_length=60)
+    greeting: str = Field(default='', max_length=60)
+    tiles: list[DemoTile] = Field(default_factory=list, max_length=4)
+    actions: list[str] = Field(default_factory=list, max_length=6)
+    @model_validator(mode='after')
+    def limits(self):
+        if self.kind=='chat' and not (self.prompt and self.reply): raise ValueError('A chat demo needs a prompt and a reply.')
+        if self.kind=='dashboard' and len(self.tiles)<2: raise ValueError('A dashboard demo needs at least two tiles.')
+        if any(len(x)>24 for x in self.actions): raise ValueError('Keep each quick action under 24 characters.')
+        return self
+
 class Scene(StrictModel):
     id: str = Field(pattern=r'^[a-z][a-z0-9_-]{0,39}$')
-    layout: Literal['title', 'split', 'image', 'quote', 'features', 'stat', 'closing'] = 'title'
+    layout: Literal['title', 'split', 'image', 'quote', 'features', 'stat', 'closing', 'logo', 'demo'] = 'title'
     title: str = Field(min_length=1, max_length=100)
     subtitle: str = Field(default='', max_length=200)
     eyebrow: str = Field(default='', max_length=45)
@@ -23,9 +57,14 @@ class Scene(StrictModel):
     points: list[str] = Field(default_factory=list, max_length=3)
     statistic: int | None = Field(default=None, ge=-1000000, le=1000000)
     suffix: str = Field(default='', max_length=12)
+    callouts: list[Callout] = Field(default_factory=list, max_length=4)
+    demo: Demo | None = None
     @model_validator(mode='after')
     def limits(self):
         if any(len(x)>80 for x in self.points): raise ValueError('Keep each point under 80 characters.')
+        if self.layout=='demo' and not self.demo: raise ValueError('A demo scene needs its demo details.')
+        if self.layout=='demo' and self.seconds<6: raise ValueError('A demo scene needs at least six seconds.')
+        if self.callouts and not self.asset_id: raise ValueError('Callouts point at a picture; choose media for this scene.')
         if self.layout=='stat' and self.statistic is None: raise ValueError('A stat needs a verified value.')
         if self.layout in ('image','split') and not self.asset_id: raise ValueError('Choose media for this layout.')
         return self
