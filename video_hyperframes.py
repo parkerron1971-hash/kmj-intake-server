@@ -90,7 +90,7 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
     .statistic{{font-family:{display};font-size:{210 if landscape else 170}px;line-height:1;font-weight:700;color:{accent};letter-spacing:-8px;margin-bottom:26px}}
     .stat h1{{font-size:{66 if landscape else 62}px;letter-spacing:-2px}}.stat .rule{{display:none}}
     .closing.scene{{align-items:center;text-align:center}}.closing .rule{{margin:0 auto 34px}}.closing h1{{font-size:{104 if landscape else 88}px}}
-    .closing .subtitle{{display:inline-block;margin-top:44px;padding:22px 40px;border-radius:999px;background:{accent};color:{'#0B1020' if spec.theme!='paper' else '#FFFFFF'};font-weight:600;font-size:{36 if landscape else 34}px}}
+    .closing .subtitle:empty{{display:none}}.closing .subtitle{{display:inline-block;margin-top:44px;padding:22px 40px;border-radius:999px;background:{accent};color:{'#0B1020' if spec.theme!='paper' else '#FFFFFF'};font-weight:600;font-size:{36 if landscape else 34}px}}
     .caption{{position:absolute;left:8%;right:8%;bottom:{'14%' if portrait else '7%'};text-align:center;z-index:50;font-size:{34 if landscape else 40}px;line-height:1.45;font-weight:600;color:#fff}}
     .caption span{{background:#0B1020E0;padding:10px 22px;box-decoration-break:clone;-webkit-box-decoration-break:clone;border-radius:10px}}
     .progress{{position:absolute;left:0;bottom:0;height:6px;width:100%;background:{accent};transform-origin:left;transform:scaleX(0);z-index:60;opacity:.9}}
