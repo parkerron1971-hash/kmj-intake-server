@@ -108,4 +108,33 @@ def test_source_video_has_one_absolute_timing_owner(tmp_path):
     html=(tmp_path/'index.html').read_text()
     assert all('data-start' not in tag for tag in re.findall(r'<section[^>]+>',html))
     assert 'id="video-1" class="clip" data-start="5.0" data-duration="6.0" data-media-start="10.0"' in html
-    assert "tl.set('#scene-1',{opacity:1},5.0)" in html
+    assert "tl.fromTo('#scene-1',{opacity:0},{opacity:1,duration:0.6,ease:'power2.inOut'},5.0)" in html
+
+
+def test_captions_follow_spoken_phrases_and_scenes_grow_to_fit(tmp_path):
+    from video_narration import split_phrases,time_phrases,fit_scenes
+    from video_audio import duck_expression
+    text='Welcome to the shop. We cut hair, trim beards and talk football, every single day of the week.'
+    phrases=split_phrases(text)
+    assert [p[0] for p in phrases][:2]==['Welcome to the shop.','We cut hair,'] and all(p[2]-p[1]<=7 for p in phrases)
+    words=[{'word':w,'start':i*.4,'end':i*.4+.35} for i,w in enumerate(text.split())]
+    timed=time_phrases(text,words,10)
+    assert timed[0][1]==0 and timed[1][1]>=timed[0][2] and timed[-1][2]<=10
+    spec=Composition(title='Fit',voice='nova',scenes=[Scene(id='a',title='A',seconds=4,narration=text),Scene(id='b',title='B',seconds=5)])
+    grown=fit_scenes(spec,{'a':{'path':'assets/voice-0.wav','duration':6.2}})
+    assert grown.scenes[0].seconds==7.5 and grown.scenes[1].seconds==5 and spec.scenes[0].seconds==4
+    with pytest.raises(RuntimeError):fit_scenes(spec,{'a':{'path':'x','duration':31}})
+    expression=duck_expression([(2,5)])
+    assert expression.startswith('0.24*') and 'clip((abs(t-3.50)-1.50)/0.45,0,1)' in expression
+    compile_project(grown,tmp_path,{},{'a':{'path':'assets/voice-0.wav','duration':6.2,'phrases':timed}})
+    html=(tmp_path/'index.html').read_text()
+    assert 'id="caption-0-0" class="clip caption" data-start="0.25"' in html and '<img class="backdrop"' not in html
+    assert 'class="progress"' in html and "tl.fromTo('#scene-0 .line-in'" in html
+
+def test_contained_photo_gets_a_blurred_fill_not_a_black_box(tmp_path):
+    aid=str(uuid4())
+    spec=Composition(title='Photo',scenes=[Scene(id='p',title='P',layout='split',seconds=5,asset_id=aid,fit='contain'),Scene(id='q',title='Q',layout='split',seconds=5,asset_id=aid,fit='cover')])
+    compile_project(spec,tmp_path,{aid:{'path':'assets/photo.png','mime_type':'image/png'}},{})
+    html=(tmp_path/'index.html').read_text()
+    assert html.count('<img class="backdrop" src="assets/photo.png"')==1
+    assert 'id="image-0" class="clip" data-start="0" data-duration="5.6"' in html and 'id="image-1" class="clip" data-start="5.0" data-duration="5.0"' in html
