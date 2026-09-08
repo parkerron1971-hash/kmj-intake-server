@@ -67,10 +67,55 @@ OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech"
 # accurate than whisper-1 on the same /audio/transcriptions endpoint
 # (default json response = same {"text": ...} shape the client reads).
 WHISPER_MODEL = "gpt-4o-mini-transcribe"
-TTS_MODEL_DEFAULT = "tts-1"           # faster, good quality
-TTS_MODEL_HD = "tts-1-hd"             # slower, best quality
+# Voice latency arc 2026-09-08: gpt-4o-mini-tts replaces tts-1 as the
+# standard voice — cheaper per character, more natural prosody, and the
+# same /audio/speech endpoint. Clients that saved "tts-1" in their
+# settings keep working: the name is an alias for the default, so nobody
+# has to touch a preference to get the upgrade.
+TTS_MODEL_DEFAULT = "gpt-4o-mini-tts"  # fast, natural — the standard voice
+TTS_MODEL_HD = "tts-1-hd"              # slower, richest sample quality
+TTS_MODEL_ALIASES = {"tts-1": TTS_MODEL_DEFAULT}
 TTS_VOICES = {"nova", "alloy", "echo", "fable", "onyx", "shimmer"}
 TTS_MAX_CHARS = 4096                  # OpenAI's hard limit
+# Wire formats. "mp3" is the historical contract (KAI, mobile, the voice
+# preview) and stays the default. "pcm" is raw signed 16-bit little-endian
+# mono at 24 kHz — the web app asks for it so it can schedule audio on the
+# Web Audio clock as the bytes land, instead of waiting for a whole mp3 to
+# download and decode before the first word. Same bytes OpenAI emits;
+# nothing is transcoded here.
+TTS_FORMATS = {"mp3", "pcm"}
+TTS_PCM_SAMPLE_RATE = 24000
+TTS_MEDIA_TYPES = {"mp3": "audio/mpeg", "pcm": "audio/pcm"}
+
+
+def resolve_tts_model(requested: Optional[str]) -> str:
+    """Map a client's model name onto what we actually send OpenAI.
+    Unknown names (and the legacy "tts-1") become the default; only the
+    HD tier is honoured as a distinct choice."""
+    name = (requested or "").strip()
+    name = TTS_MODEL_ALIASES.get(name, name)
+    if name not in (TTS_MODEL_DEFAULT, TTS_MODEL_HD):
+        return TTS_MODEL_DEFAULT
+    return name
+
+
+def resolve_tts_format(requested: Optional[str]) -> str:
+    fmt = (requested or "mp3").strip().lower()
+    return fmt if fmt in TTS_FORMATS else "mp3"
+
+
+def tts_response_headers(fmt: str) -> dict:
+    """Cache-Control plus, for PCM, the parameters a decoder needs. The
+    Content-Type alone is what the web client branches on; the X- headers
+    document the stream for anyone else reading it."""
+    headers = {"Cache-Control": "no-store"}
+    if fmt == "pcm":
+        headers.update({
+            "X-Audio-Sample-Rate": str(TTS_PCM_SAMPLE_RATE),
+            "X-Audio-Channels": "1",
+            "X-Audio-Encoding": "s16le",
+        })
+    return headers
 
 # ── ElevenLabs (optional second TTS provider) ────────────────────────
 # Voice ids arrive from the client prefixed "el:<voice_id>" — the speak
@@ -270,6 +315,9 @@ class TTSRequest(BaseModel):
     # metering. Optional: anonymous/unattributed requests still speak
     # (OpenAI voices only).
     business_id: Optional[str] = None
+    # Wire format — "mp3" (default, the historical contract) or "pcm"
+    # (raw s16le mono 24 kHz, for clients that play as the bytes land).
+    format: Optional[str] = "mp3"
 
 
 @router.post("/ai/tts/speak")
@@ -306,6 +354,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
     # OpenAI path below so a stale saved voice choice, a signed-out
     # session, or an exhausted allowance never silences the Chief.
     raw_voice = (req.voice or "nova").strip()
+    fmt = resolve_tts_format(req.format)
     if raw_voice.startswith("el:"):
         el_key = _elevenlabs_key()
         el_voice_id = raw_voice[3:].strip()
@@ -318,15 +367,14 @@ async def text_to_speech(req: TTSRequest, request: Request,
         else:
             return await _elevenlabs_speak(text, el_voice_id, el_key,
                                            business_id=metered_biz,
-                                           user_id=user.id if user else None)
+                                           user_id=user.id if user else None,
+                                           fmt=fmt)
 
     voice = raw_voice.lower()
     if voice not in TTS_VOICES:
         voice = "nova"
 
-    model = req.model or TTS_MODEL_DEFAULT
-    if model not in (TTS_MODEL_DEFAULT, TTS_MODEL_HD):
-        model = TTS_MODEL_DEFAULT
+    model = resolve_tts_model(req.model)
 
     # Symbols become words at the wire, so "$1,234.56" is spoken the same
     # way no matter which client called us — the web app normalizes for
@@ -351,7 +399,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
                     "model": model,
                     "input": spoken,
                     "voice": voice,
-                    "response_format": "mp3",
+                    "response_format": fmt,
                 },
             ),
             stream=True,
@@ -374,7 +422,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
 
     logger.info(
         f"TTS streaming: chars={len(text)} spoken={len(spoken)} "
-        f"voice={voice} model={model}")
+        f"voice={voice} model={model} format={fmt}")
     # Metering (beta-readiness audit): every spoken reply was dark. TTS is
     # priced per character — pass the char count as input_tokens; the
     # tts-1 / tts-1-hd table entries are per-1M-char so the cost is exact.
@@ -403,19 +451,28 @@ async def text_to_speech(req: TTSRequest, request: Request,
 
     return StreamingResponse(
         _stream(),
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
+        media_type=TTS_MEDIA_TYPES[fmt],
+        headers=tts_response_headers(fmt),
     )
+
+
+# ElevenLabs' name for each wire format. pcm_24000 is on every tier
+# (only pcm_44100 is gated), and matches OpenAI's PCM rate so the client
+# decodes both providers the same way.
+_EL_OUTPUT_FORMATS = {"mp3": "mp3_44100_128", "pcm": "pcm_24000"}
 
 
 async def _elevenlabs_speak(text: str, voice_id: str, key: str,
                             business_id: Optional[str] = None,
-                            user_id: Optional[str] = None) -> StreamingResponse:
-    """Stream ElevenLabs TTS back to the client — same mp3-over-HTTP
-    contract as the OpenAI path, so the frontend audio pipeline doesn't
-    know or care which provider spoke."""
+                            user_id: Optional[str] = None,
+                            fmt: str = "mp3") -> StreamingResponse:
+    """Stream ElevenLabs TTS back to the client — same audio-over-HTTP
+    contract as the OpenAI path (mp3 or raw PCM, chosen by `fmt`), so
+    the frontend audio pipeline doesn't know or care which provider
+    spoke."""
     if len(text) > ELEVENLABS_MAX_CHARS:
         text = text[:ELEVENLABS_MAX_CHARS]
+    fmt = fmt if fmt in _EL_OUTPUT_FORMATS else "mp3"
 
     # Symbols become words at the wire. turbo_v2_5 does NOT normalize on
     # its own — apply_text_normalization is Enterprise-only on the v2.5
@@ -429,7 +486,7 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
         upstream = await client.send(
             client.build_request(
                 "POST",
-                f"{ELEVENLABS_TTS_URL}/{voice_id}/stream?output_format=mp3_44100_128",
+                f"{ELEVENLABS_TTS_URL}/{voice_id}/stream?output_format={_EL_OUTPUT_FORMATS[fmt]}",
                 headers={"xi-api-key": key, "Content-Type": "application/json"},
                 json={"text": spoken, "model_id": ELEVENLABS_MODEL},
             ),
@@ -453,7 +510,7 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
 
     logger.info(
         f"ElevenLabs TTS streaming: chars={len(text)} spoken={len(spoken)} "
-        f"voice={voice_id} biz={business_id}")
+        f"voice={voice_id} biz={business_id} format={fmt}")
     # Metering — per character (input_tokens), attributed to the business.
     # Endpoint /ai/tts-el is DISTINCT from /ai/tts on purpose: it bills
     # 1 unit per chunk on the plan-allowance rails (usage_metering
@@ -487,8 +544,8 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
 
     return StreamingResponse(
         _stream(),
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
+        media_type=TTS_MEDIA_TYPES[fmt],
+        headers=tts_response_headers(fmt),
     )
 
 

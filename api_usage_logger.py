@@ -106,6 +106,7 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "text-embedding-3-large": (13.0, 0.0),   # $0.13/MTok input
     "tts-1":             (1500.0, 0.0),      # $15 / 1M characters
     "tts-1-hd":          (3000.0, 0.0),      # $30 / 1M characters
+    "gpt-4o-mini-tts":   (1500.0, 0.0),      # $12 / 1M audio tokens ≈ $0.015/min ≈ $15 / 1M chars (voice latency arc 9/08)
     "eleven_turbo_v2_5": (2500.0, 0.0),      # ElevenLabs Turbo ≈ $25 / 1M chars (0.5 credits/char @ $0.05/1k credits)
     "whisper-1":         (0.0, 0.0),         # $0.006/min — via cost_cents_override
     "gpt-4o-mini-transcribe": (0.0, 0.0),    # per-minute — via cost_cents_override
