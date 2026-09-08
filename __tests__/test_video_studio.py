@@ -157,3 +157,10 @@ def test_logo_callouts_and_demo_layouts_compile_from_data(tmp_path):
     with pytest.raises(ValueError):Scene(id='x',layout='demo',title='No demo',seconds=8)
     with pytest.raises(ValueError):Demo(kind='chat',prompt='only a prompt')
     with pytest.raises(ValueError):Scene(id='x',layout='title',title='No picture',seconds=5,callouts=[Callout(label='a',x=10,y=10)])
+
+
+def test_closing_pill_hides_when_chief_leaves_the_subtitle_blank(tmp_path):
+    spec=Composition(title='Close',scenes=[Scene(id='end',layout='closing',title='Start free',seconds=5)])
+    compile_project(spec,tmp_path,{},{})
+    html=(tmp_path/'index.html').read_text()
+    assert '.closing .subtitle:empty{display:none}' in html and '<div class="subtitle"></div>' in html
