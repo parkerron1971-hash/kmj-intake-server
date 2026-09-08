@@ -30,7 +30,7 @@ THEMES={
 }
 
 def lines(text):
-    return ''.join(f'<span class="line"><span class="line-in">{escape(part) or "&nbsp;"}</span></span>' for part in text.split('\n'))
+    return ''.join(f'<span class="line" data-layout-allow-overflow><span class="line-in" data-layout-allow-overflow>{escape(part) or "&nbsp;"}</span></span>' for part in text.split('\n'))
 
 def caption_phrases(scene,voice,start):
     """Timed caption phrases. Word timings from the narrator win; otherwise
@@ -148,13 +148,13 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
                 info=analysis.get(str(scene.asset_id)) or {}
                 pos=f';object-position:{info["focus"][0]}% {info["focus"][1]}%' if scene.fit=='cover' and info.get('focus') else ''
                 art=f'<img id="image-{i}" class="clip" data-start="{start}" data-duration="{scene.seconds+hold}" src="{src}" alt="" style="object-fit:{scene.fit}{pos}">'
-                backdrop=f'<img class="backdrop" src="{src}" alt="">' if scene.fit=='contain' else ''
-            callouts=''.join(f'<div class="callout{" flip" if c.x>58 else ""}" data-callout="{j}" style="left:{c.x}%;top:{c.y}%"><span class="cring"></span><span class="ctag">{escape(c.label)}</span></div>' for j,c in enumerate(scene.callouts))
+                backdrop=f'<img class="backdrop" src="{src}" alt="" data-layout-allow-occlusion data-layout-allow-overflow>' if scene.fit=='contain' else ''
+            callouts=''.join(f'<div class="callout{" flip" if c.x>58 else ""}" data-callout="{j}" data-layout-allow-occlusion data-layout-allow-overflow style="left:{c.x}%;top:{c.y}%"><span class="cring"></span><span class="ctag">{escape(c.label)}</span></div>' for j,c in enumerate(scene.callouts))
             if scene.layout=='logo':
-                art=f'<div class="media"><div class="glow"></div><div class="ring"></div>{art}</div>'
+                art=f'<div class="media" data-layout-allow-overflow><div class="glow" data-layout-allow-occlusion></div><div class="ring" data-layout-allow-occlusion></div>{art}</div>'
             else:
                 device=scene.layout=='split' and scene.fit=='contain' and not item['mime_type'].startswith('video/')
-                art=('<div class="device-glow" data-layout-ignore></div>' if device else '')+f'<div class="media{" device" if device else ""}">{backdrop}{art}<div class="shade"></div>{callouts}</div>'
+                art=('<div class="device-glow" data-layout-ignore data-layout-allow-occlusion></div>' if device else '')+f'<div class="media{" device" if device else ""}" data-layout-allow-overflow>{backdrop}{art}<div class="shade" data-layout-allow-occlusion></div>{callouts}</div>'
         points='<div class="points">'+''.join(f'<div class="point">{escape(t)}</div>' for t in scene.points)+'</div>' if scene.points else ''
         stat=f'<div class="statistic"><span id="counter-{i}">0</span>{escape(scene.suffix)}</div>' if scene.layout=='stat' else ''
         if scene.layout=='demo' and scene.demo:
@@ -167,13 +167,13 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
                 tiles=''.join(f'<div class="tile"><div class="tl">{escape(t.label)}</div><div class="tv">{escape(t.value)}</div></div>' for t in d.tiles)
                 acts=('<div class="acts">'+''.join(f'<span class="act">{escape(a)}</span>' for a in d.actions)+'</div>') if d.actions else ''
                 body=(f'<div class="greet">{escape(d.greeting)}</div>' if d.greeting else '')+f'<div class="tiles">{tiles}</div>{acts}'
-            art=f'<div class="app-glow" data-layout-ignore></div><div class="app">{bar}<div class="app-body">{body}</div></div>'
+            art=f'<div class="app-glow" data-layout-ignore data-layout-allow-occlusion></div><div class="app" data-layout-allow-occlusion data-layout-allow-overflow>{bar}<div class="app-body" data-layout-allow-occlusion data-layout-allow-overflow>{body}</div></div>'
         # Media owns its absolute clip time. Timing its parent as well makes
         # HyperFrames apply a second offset to source-video extraction.
         info=analysis.get(str(scene.asset_id)) if scene.asset_id else None
         place=''
         if scene.layout=='image' and info and info.get('quiet') in ('left','right','top'):place=' place-'+info['quiet']
-        parts.append(f'''<section id="{sid}" class="scene {scene.layout}{place}"><div class="ambient" data-layout-ignore></div>{art}<div class="vignette" data-layout-ignore></div><div class="copy"><div class="rule"></div><div class="eyebrow">{escape(scene.eyebrow)}</div>{stat}<h1>{lines(scene.title)}</h1><div class="subtitle">{escape(scene.subtitle)}</div>{points}</div></section>''')
+        parts.append(f'''<section id="{sid}" class="scene {scene.layout}{place}"><div class="ambient" data-layout-ignore data-layout-allow-occlusion></div>{art}<div class="vignette" data-layout-ignore data-layout-allow-occlusion></div><div class="copy" data-layout-allow-occlusion data-layout-allow-overflow><div class="rule"></div><div class="eyebrow">{escape(scene.eyebrow)}</div>{stat}<h1>{lines(scene.title)}</h1><div class="subtitle">{escape(scene.subtitle)}</div>{points}</div></section>''')
         prefix=f'#{sid}'
         if i==0:animations.append(f"tl.set('{prefix}',{{opacity:1}},{start});")
         else:animations.append(f"tl.fromTo('{prefix}',{{opacity:0}},{{opacity:1,duration:{CROSSFADE},ease:'power2.inOut'}},{start});")
@@ -231,13 +231,13 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
         if spec.captions and scene.narration and voice:
             for j,(chunk,at,dur) in enumerate(caption_phrases(scene,voice,start)):
                 top=' caption-top' if scene.layout=='image' and not place else ''
-                parts.append(f'<div id="caption-{i}-{j}" class="clip caption{top}" data-start="{at:.2f}" data-duration="{dur:.2f}" data-track-index="20"><span>{escape(chunk)}</span></div>')
+                parts.append(f'<div id="caption-{i}-{j}" class="clip caption{top}" data-layout-allow-occlusion data-layout-allow-overflow data-start="{at:.2f}" data-duration="{dur:.2f}" data-track-index="20"><span>{escape(chunk)}</span></div>')
     if music:
         audio.append(f'<audio id="music" src="{escape(music["path"])}" data-start="0" data-duration="{min(total,music["duration"])}" data-volume="{music.get("volume",1)}"></audio>')
     elif spec.music_asset_id:
         item=media[str(spec.music_asset_id)];duration=min(total,item.get('duration_seconds') or total)
         audio.append(f'<audio id="music" src="{escape(item["path"])}" data-start="0" data-duration="{duration}" data-volume=".12"></audio>')
-    parts.append('<div class="grain" data-layout-ignore></div><div class="progress"></div>')
+    parts.append('<div class="grain" data-layout-ignore data-layout-allow-occlusion></div><div class="progress" data-layout-ignore data-layout-allow-occlusion></div>')
     animations.append(f"tl.fromTo('.progress',{{scaleX:0}},{{scaleX:1,duration:{total},ease:'none'}},0);")
     html=f'''<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>{escape(spec.title)}</title><script src="assets/gsap.min.js"></script><style>{css}</style></head><body><div id="root" data-composition-id="main" data-start="0" data-duration="{total}" data-width="{w}" data-height="{h}">{''.join(parts)}{''.join(audio)}</div><script>window.__timelines=window.__timelines||{{}};const tl=gsap.timeline({{paused:true}});{''.join(animations)}window.__timelines.main=tl;</script></body></html>'''
     (folder/'index.html').write_text(html,encoding='utf-8')
