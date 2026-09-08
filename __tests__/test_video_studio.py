@@ -128,7 +128,7 @@ def test_captions_follow_spoken_phrases_and_scenes_grow_to_fit(tmp_path):
     assert expression.startswith('0.24*') and 'clip((abs(t-3.50)-1.50)/0.45,0,1)' in expression
     compile_project(grown,tmp_path,{},{'a':{'path':'assets/voice-0.wav','duration':6.2,'phrases':timed}})
     html=(tmp_path/'index.html').read_text()
-    assert 'id="caption-0-0" class="clip caption" data-start="0.25"' in html and '<img class="backdrop"' not in html
+    assert 'id="caption-0-0" class="clip caption" data-layout-allow-occlusion data-layout-allow-overflow data-start="0.25"' in html and '<img class="backdrop"' not in html
     assert 'class="progress"' in html and "tl.fromTo('#scene-0 .line-in'" in html
 
 def test_contained_photo_gets_a_blurred_fill_not_a_black_box(tmp_path):
@@ -150,7 +150,7 @@ def test_logo_callouts_and_demo_layouts_compile_from_data(tmp_path):
         Scene(id='dash',layout='demo',title='Run it',seconds=7,demo=Demo(kind='dashboard',greeting='Morning',tiles=[DemoTile(label='Clients',value='86'),DemoTile(label='Revenue',value='$12,480')],actions=['Draft email']))])
     compile_project(spec,tmp_path,{shot:{'path':'assets/shot.png','mime_type':'image/png'},mark:{'path':'assets/mark.png','mime_type':'image/png'}},{})
     html=(tmp_path/'index.html').read_text()
-    assert 'class="scene logo"' in html and '<div class="glow"></div>' in html
+    assert 'class="scene logo"' in html and '<div class="glow" data-layout-allow-occlusion></div>' in html
     assert 'class="media device"' in html and html.count('class="callout')==2 and 'Clients &lt;b&gt;' in html and 'callout flip' in html
     assert '<span class="ch">I</span>' in html and '<Hartwell>' not in html and '<span class="ch">&lt;</span>' in html
     assert "toLocaleString('en-US')+''" in html and "'$'+Math.round" in html
