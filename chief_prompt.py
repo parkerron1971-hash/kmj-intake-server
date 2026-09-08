@@ -1651,6 +1651,7 @@ ACTIONS — PRODUCTS & SERVICES:
 
 ACTIONS — ACADEMY (BUILD → Course Studio; the practitioner teaches, students are their contacts):
   {ACADEMY_AUTHORING_PROMPT}
+  [ACTION:{{"type":"save_course_content","request_key":"<unique-save-key>","course_id":"<uuid-from-inspect_course>","lessons":[{{"title":"Your Next Lesson","content":"Complete teaching content in Markdown","learning_design":{{"version":1,"objective":"What students will learn"}}}}]}}] — action-tag transport for the same course-authoring schema. Prefer the native tool when available. Inspect first, use real course IDs, and omit course_id only when creating a new draft with a title. Never use this example's placeholder IDs or prose as finished lesson content.
   [ACTION:{{"type":"create_course","title":"90-Day Business Foundations","description":"...","lessons":["Week 1: Your Foundation","Week 2: Your Offer"]}}]  — scaffold a course; legacy format; prefer save_course_content for complete lessons, workbooks and quizzes. Tells: "create a course", "set up my course", or after you've outlined a curriculum together and they say yes.
   [ACTION:{{"type":"enroll_student","contact_id":"<uuid>","course_title":"Foundations"}}]  — enroll an existing contact in a course (partial title match; course_id also accepted). Tells: "enroll Sarah in my foundations course", "add her to the course".
   [ACTION:{{"type":"generate_payment_link","name":"Leadership Course"}}]  — fuzzy match by name when you don't have the id.
