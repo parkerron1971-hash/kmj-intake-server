@@ -33,6 +33,7 @@ from module_agent import router as module_router
 from chief_of_staff import router as chief_router
 from notification_engine import router as notification_router
 from whisper_proxy import router as whisper_router
+from voice_stream import router as voice_stream_router
 from public_site import router as public_site_router
 from email_sender import router as email_router
 from meta_oauth import router as meta_router
@@ -251,6 +252,7 @@ app.include_router(standing_router)
 app.include_router(chief_week_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
+app.include_router(voice_stream_router)
 app.include_router(email_router)
 app.include_router(meta_router)
 app.include_router(google_router)
