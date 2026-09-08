@@ -26,6 +26,8 @@ import video_studio as studio
 from video_studio_models import ChiefPlan,Composition,validate_assets
 from video_hyperframes import compile_project,RUNTIME
 from video_audio import prepare_music
+from video_materials import analyze,transparent_copy,grid_reference
+from video_check import look_pass
 
 log=logging.getLogger('video-worker')
 class Cancelled(Exception):pass
@@ -77,21 +79,34 @@ def plan(job,folder):
     businesses=studio.rows(f'/businesses?id=eq.{bid}&select=name,type,settings&limit=1')
     # Only select brand information; never send unrelated business settings/secrets.
     business=businesses[0] if businesses else {}; settings=business.get('settings') or {}
+    looks={};previews={}
+    for a in rows[:6]:
+        if not a['mime_type'].startswith('image/'):continue
+        path=folder/(a['id']+studio.MIMES[a['mime_type']]);download(a,path)
+        try:looks[a['id']]=analyze(path)
+        except Exception:log.exception('Material analysis skipped')
+        previews[a['id']]=path
     context={'business':{'name':business.get('name'),'type':business.get('type'),'brand':{k:settings.get(k) for k in ['brand_colors','brand_voice','tagline']}},
         'project':{k:project[k] for k in ('title','brief','format')},'current':revisions[0]['composition'] if revisions else None,
-        'conversation':messages,'materials':[studio.public_asset(a) for a in rows],
+        'conversation':messages,'materials':[studio.public_asset(a)|{'analysis':looks.get(a['id'])} for a in rows],
         'narration_available':bool(os.getenv('OPENAI_API_KEY'))}
     content=[{'type':'text','text':json.dumps(context,ensure_ascii=False)}]
     for a in rows[:6]:
         if not a['mime_type'].startswith(('image/','video/')):continue
-        path=folder/(a['id']+studio.MIMES[a['mime_type']]);download(a,path)
+        path=previews.get(a['id']) or folder/(a['id']+studio.MIMES[a['mime_type']])
+        if a['id'] not in previews:download(a,path)
         if a['mime_type'].startswith('video/'):
             frame=folder/(a['id']+'.jpg')
             subprocess.run(['ffmpeg','-v','error','-y','-protocol_whitelist','file,pipe','-ss',str(min(1,float(a.get('duration_seconds') or 0)/2)),'-i',str(path),'-frames:v','1','-vf','scale=960:-2',str(frame)],check=True,timeout=30,capture_output=True)
             path=frame
+        look=looks.get(a['id']) or {}
+        if look.get('kind') in ('screenshot','document'):
+            gridded=folder/(a['id']+'-grid.jpg');grid_reference(path,gridded);path=gridded
         with Image.open(path) as im:
-            im=im.convert('RGB');im.thumbnail((1200,1200));buf=io.BytesIO();im.save(buf,format='JPEG',quality=80)
-        content.extend([{'type':'text','text':f'Untrusted visual reference: asset {a["id"]}, purpose {a["purpose"]}. A video thumbnail is only one frame; do not claim to have watched or transcribed the recording.'},
+            im=im.convert('RGB');im.thumbnail((1400,1400));buf=io.BytesIO();im.save(buf,format='JPEG',quality=82)
+        note=f' Analysis: {look["kind"]}, flat background {look["flat_bg"]}, quiet side {look["quiet"]}.' if look else ''
+        grid=' A red 10 percent grid with x/y labels is drawn on this copy: read callout coordinates from it.' if look.get('kind') in ('screenshot','document') else ''
+        content.extend([{'type':'text','text':f'Untrusted visual reference: asset {a["id"]}, purpose {a["purpose"]}.{note}{grid} A video thumbnail is only one frame; do not claim to have watched or transcribed the recording.'},
             {'type':'image','source':{'type':'base64','media_type':'image/jpeg','data':base64.b64encode(buf.getvalue()).decode()}}])
     import llm_call,chief_models,spend_guard,usage_metering
     if spend_guard.over_budget(bid):raise RuntimeError(spend_guard.block_message())
@@ -104,6 +119,7 @@ DIRECTION (this is what separates a film from a slide deck):
 - One idea per scene. Story arc for a promo: hook -> what it is / who it is for -> proof (a real photo, a real included recording, a verified number) -> the offer -> closing with one concrete next step from the brief (call, book, visit, reply). Do not end on a slogan; end on the action.
 - Vary rhythm: never two scenes of the same layout in a row (two demo scenes may follow each other only if their kinds differ); put media and demo scenes between text scenes; a quote or stat is a beat change, use at most one of each.
 - Screen text: titles at most seven words, subtitles at most fourteen; use a line break in a title only to control the read (two lines maximum). Points are three to five words each. Screen text is not the narration transcript: it is the headline the narration explains. Write titles in sentence case ("Drowning in ten different apps?"), never Title Case; keep web addresses, product names and brand names exactly as the owner wrote them (mysolutionist.app stays lowercase).
+- Materials carry an analysis: kind (logo, screenshot, photo, document), flat_bg (a logo on a flat tile is made transparent for you), and quiet (the side of the picture with room for text, or null when the whole picture is busy: then use split, never image, for that picture). Trust the analysis over your impression of a thumbnail.
 - Logos and marks: when a logo or mark is included, OPEN with layout logo (asset_id = the mark, title = the brand name as the wordmark, subtitle = the tagline, 4-5 seconds). Never put a logo in the full-bleed image layout; that layout is for photographs and product screens.
 - Screenshots of software: use layout split with fit contain (the renderer floats the screen on a glowing device card) and add 2-3 callouts, each naming a feature the viewer should notice with x/y as the percent position of that feature INSIDE the picture (look at the picture; x from the left, y from the top; keep them 12+ points apart) and at = 1.2, 2.4, 3.6 seconds. Labels are 2-4 words.
 - Product in action: for software, a system, an app or a service with an assistant, use ONE or TWO demo scenes (layout demo, 7-9 seconds, title + subtitle beside the demo). kind chat = prompt (what the owner or a customer would type, under 60 characters), reply (what the product answers, one sentence) and an optional result card (card_title, card_value, card_note) for the thing it produced; kind dashboard = greeting plus 2-4 tiles (label + value) and 3-4 quick-action chips. Every demo line must describe a REAL capability from the brief or the screenshot; numbers only if the owner supplied them, otherwise use words (Ready, Sent, Booked) or leave the value out. Name the assistant as the owner does (default Chief) and app_name as the business or product name.
@@ -182,6 +198,19 @@ def run_child(job,args,folder,stage,timeout=1200):
             except subprocess.TimeoutExpired:
                 if os.name!='nt':os.killpg(process.pid,signal.SIGKILL)
                 else:process.kill()
+def place_scenes(spec,analysis):
+    """Presentation decisions from the analysis: a full-bleed picture with
+    no quiet side becomes a split so the title never fights the image;
+    a photo in a split keeps its subject by switching to cover."""
+    scenes=list(spec.scenes);changed=False
+    for i,scene in enumerate(scenes):
+        info=analysis.get(str(scene.asset_id)) if scene.asset_id else None
+        if not info:continue
+        patch={}
+        if scene.layout=='image' and info.get('quiet') is None:patch['layout']='split'
+        if scene.layout=='split' and info.get('kind')=='photo' and scene.fit=='contain' and not scene.callouts:patch['fit']='cover'
+        if patch:scenes[i]=scene.model_copy(update=patch);changed=True
+    return spec.model_copy(update={'scenes':scenes}) if changed else spec
 def render(job,folder):
     progress(job,'preparing_media')
     revisions=studio.rows(f'/video_revisions?id=eq.{job["revision_id"]}&business_id=eq.{job["business_id"]}&project_id=eq.{job["project_id"]}&select=*&limit=1')
@@ -190,11 +219,32 @@ def render(job,folder):
     selected={str(s.asset_id) for s in spec.scenes if s.asset_id}
     if spec.music_asset_id:selected.add(str(spec.music_asset_id))
     rows,prepared=asset_inputs(job,folder,selected);validate_assets(spec,rows)
+    progress(job,'reading_materials')
+    analysis={}
+    for aid,item in prepared.items():
+        if not item['mime_type'].startswith('image/'):continue
+        try:analysis[aid]=analyze(item['local'])
+        except Exception:log.exception('Material analysis skipped')
+    spec=place_scenes(spec,analysis)
+    # A flat-tile logo floats as a transparent mark in the opener.
+    for scene in spec.scenes:
+        aid=str(scene.asset_id) if scene.asset_id else None
+        if scene.layout=='logo' and aid in analysis and analysis[aid]['flat_bg'] and prepared[aid]['mime_type'].startswith('image/'):
+            try:
+                target=Path(prepared[aid]['local']).with_name(aid+'-mark.png');transparent_copy(prepared[aid]['local'],target)
+                prepared[aid]=prepared[aid]|{'path':'assets/'+target.name,'local':str(target),'mime_type':'image/png'}
+            except Exception:log.exception('Transparent mark skipped')
     from video_narration import narration
     voices,spec=narration(job,spec,folder,progress)
     if spec.music_asset_id:progress(job,'mixing_music')
     music=prepare_music(spec,folder,prepared,voices,sum(s.seconds for s in spec.scenes))
-    total=compile_project(spec,folder,prepared,voices,music)
+    compile_project(spec,folder,prepared,voices,music,analysis)
+    if os.getenv('VIDEO_LOOK_PASS','on')=='on':
+        spec,note=look_pass(job,spec,folder,prepared,voices,music,analysis,rows,progress)
+        if note:
+            try:sb_clients.sb_post_as_service('/video_messages',{'business_id':job['business_id'],'project_id':job['project_id'],'role':'assistant','content':note})
+            except Exception:log.exception('Look note not saved')
+    total=sum(s.seconds for s in spec.scenes)
     if os.getenv('VIDEO_RENDER_URL'):
         from video_remote_client import render as remote_render
         remote_render(job,folder,progress)
