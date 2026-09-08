@@ -41,7 +41,8 @@ def caption_phrases(scene,voice,start):
     words=scene.narration.split();chunks=[' '.join(words[j:j+7]) for j in range(0,len(words),7)]
     return [(chunk,start+.25+voice['duration']*j/len(chunks),voice['duration']/len(chunks)) for j,chunk in enumerate(chunks)]
 
-def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:dict|None=None):
+def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:dict|None=None,analysis:dict|None=None):
+    analysis=analysis or {}
     folder.mkdir(exist_ok=True,parents=True);(folder/'assets').mkdir(exist_ok=True)
     shutil.copy2(RUNTIME/'compiler_assets/gsap.min.js',folder/'assets/gsap.min.js')
     fonts=RUNTIME/'compiler_assets'
@@ -81,6 +82,13 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
     .image .media{{inset:0;border-radius:0}}.image .media .shade{{background:linear-gradient(180deg,{bg}00 35%,{bg}D9 100%)}}
     .image.scene{{justify-content:flex-end}}.image h1{{font-size:{64 if landscape else 66}px;letter-spacing:-2px}}
     .image .eyebrow,.image .rule{{display:none}}.image .subtitle{{margin-top:16px;color:{fg};opacity:.85}}
+    .image.place-left .copy,.image.place-right .copy{{max-width:{'100%' if portrait else '44%'}}}
+    .image.place-right.scene{{align-items:flex-end;text-align:right}}.image.place-right .copy{{text-align:right}}
+    .image.place-left.scene,.image.place-right.scene{{justify-content:center}}
+    .image.place-left .media .shade{{background:linear-gradient(90deg,{bg}E6 0%,{bg}99 40%,{bg}00 65%)}}
+    .image.place-right .media .shade{{background:linear-gradient(270deg,{bg}E6 0%,{bg}99 40%,{bg}00 65%)}}
+    .image.place-top.scene{{justify-content:flex-start}}.image.place-top .media .shade{{background:linear-gradient(0deg,{bg}00 35%,{bg}D9 100%)}}
+    .caption.caption-top{{bottom:auto;top:{'12%' if portrait else '7%'}}}
     .title h1{{font-size:{136 if landscape else 104}px}}.title .copy{{max-width:{1440 if landscape else 940}px}}
     .quote h1{{font-size:{92 if landscape else 76}px;font-weight:600;font-style:{'italic' if family=='serif' else 'normal'}}}.quote .copy{{max-width:{1380 if landscape else 940}px}}
     .quote .rule{{display:none}}.quote .subtitle{{font-size:30px;letter-spacing:2px;text-transform:uppercase;color:{accent}}}
@@ -137,7 +145,9 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
                 # Source audio is deliberately muted in the composed video. User can supply a soundtrack separately.
                 backdrop=''
             else:
-                art=f'<img id="image-{i}" class="clip" data-start="{start}" data-duration="{scene.seconds+hold}" src="{src}" alt="" style="object-fit:{scene.fit}">'
+                info=analysis.get(str(scene.asset_id)) or {}
+                pos=f';object-position:{info["focus"][0]}% {info["focus"][1]}%' if scene.fit=='cover' and info.get('focus') else ''
+                art=f'<img id="image-{i}" class="clip" data-start="{start}" data-duration="{scene.seconds+hold}" src="{src}" alt="" style="object-fit:{scene.fit}{pos}">'
                 backdrop=f'<img class="backdrop" src="{src}" alt="">' if scene.fit=='contain' else ''
             callouts=''.join(f'<div class="callout{" flip" if c.x>58 else ""}" data-callout="{j}" style="left:{c.x}%;top:{c.y}%"><span class="cring"></span><span class="ctag">{escape(c.label)}</span></div>' for j,c in enumerate(scene.callouts))
             if scene.layout=='logo':
@@ -160,7 +170,10 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
             art=f'<div class="app-glow" data-layout-ignore></div><div class="app">{bar}<div class="app-body">{body}</div></div>'
         # Media owns its absolute clip time. Timing its parent as well makes
         # HyperFrames apply a second offset to source-video extraction.
-        parts.append(f'''<section id="{sid}" class="scene {scene.layout}"><div class="ambient" data-layout-ignore></div>{art}<div class="vignette" data-layout-ignore></div><div class="copy"><div class="rule"></div><div class="eyebrow">{escape(scene.eyebrow)}</div>{stat}<h1>{lines(scene.title)}</h1><div class="subtitle">{escape(scene.subtitle)}</div>{points}</div></section>''')
+        info=analysis.get(str(scene.asset_id)) if scene.asset_id else None
+        place=''
+        if scene.layout=='image' and info and info.get('quiet') in ('left','right','top'):place=' place-'+info['quiet']
+        parts.append(f'''<section id="{sid}" class="scene {scene.layout}{place}"><div class="ambient" data-layout-ignore></div>{art}<div class="vignette" data-layout-ignore></div><div class="copy"><div class="rule"></div><div class="eyebrow">{escape(scene.eyebrow)}</div>{stat}<h1>{lines(scene.title)}</h1><div class="subtitle">{escape(scene.subtitle)}</div>{points}</div></section>''')
         prefix=f'#{sid}'
         if i==0:animations.append(f"tl.set('{prefix}',{{opacity:1}},{start});")
         else:animations.append(f"tl.fromTo('{prefix}',{{opacity:0}},{{opacity:1,duration:{CROSSFADE},ease:'power2.inOut'}},{start});")
@@ -217,7 +230,8 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
             audio.append(f'<audio id="voice-{i}" src="{escape(voice["path"])}" data-start="{start+.25}" data-duration="{voice["duration"]}" data-volume=".9"></audio>')
         if spec.captions and scene.narration and voice:
             for j,(chunk,at,dur) in enumerate(caption_phrases(scene,voice,start)):
-                parts.append(f'<div id="caption-{i}-{j}" class="clip caption" data-start="{at:.2f}" data-duration="{dur:.2f}" data-track-index="20"><span>{escape(chunk)}</span></div>')
+                top=' caption-top' if scene.layout=='image' and not place else ''
+                parts.append(f'<div id="caption-{i}-{j}" class="clip caption{top}" data-start="{at:.2f}" data-duration="{dur:.2f}" data-track-index="20"><span>{escape(chunk)}</span></div>')
     if music:
         audio.append(f'<audio id="music" src="{escape(music["path"])}" data-start="0" data-duration="{min(total,music["duration"])}" data-volume="{music.get("volume",1)}"></audio>')
     elif spec.music_asset_id:
