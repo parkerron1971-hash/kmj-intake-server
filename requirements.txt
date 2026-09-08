@@ -1,5 +1,10 @@
 fastapi==0.115.0
 uvicorn==0.30.6
+# WebSockets both ways (voice latency arc 9/08): uvicorn serves
+# /ai/voice/stream with it, and voice_stream.py dials OpenAI with it.
+# Plain uvicorn ships neither — without this line the route is refused
+# and the module fails to import.
+websockets>=13,<17
 anthropic==0.34.2
 python-dotenv==1.0.1
 apscheduler==3.10.4
