@@ -70,6 +70,5 @@ def test_look_pass_never_breaks_a_render(monkeypatch, tmp_path):
 
 def test_judge_score_and_fences_are_tolerated():
     assert video_check.score_of('4/5') == 4 and video_check.score_of(3.6) == 4 and video_check.score_of(None) == 3 and video_check.score_of('9') == 5
-    assert video_check.parse_verdict('```json
-{"score": "4/5", "changes": []}
-```')['score'] == '4/5'
+    fenced = '```json' + chr(10) + '{"score": "4/5", "changes": []}' + chr(10) + '```'
+    assert video_check.parse_verdict(fenced)['score'] == '4/5'
