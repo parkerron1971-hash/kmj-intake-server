@@ -156,7 +156,10 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # 33 (9/7): recall_business_knowledge reads the token-scoped business's
     # private operating profile. Same authorized private-data class as
     # recall_conversation; no cross-business lookup and no profile writes.
-    assert len(tools) == 33, (
+    # 34 (9/8): inspect_course reads the owner's teaching content and keys,
+    # never student responses. SQL checks auth.uid and business ownership;
+    # missing creator JWT fails closed. Authoring has its own write scope.
+    assert len(tools) == 34, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")

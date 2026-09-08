@@ -220,9 +220,11 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
     return schema
 
 
+from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA
 from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
 
 TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "inspect_course": ACADEMY_READ_SCHEMA,
     "recall_business_knowledge": (
         "Read this business's private operating profile, its revision, owner corrections, "
         "assumptions, open questions and dated source evidence. The business comes from "
@@ -518,6 +520,7 @@ _HOURS = {"type": "array",
                                            "description": "HH:MM, 24-hour"}}}}
 
 WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "save_course_content": ACADEMY_WRITE_SCHEMA,
     "save_growth_record": GROWTH_WRITE_SCHEMA,
     # ── people ───────────────────────────────────────────────────────
     "create_contact": (
@@ -1214,6 +1217,11 @@ def _contact_name(payload: Dict[str, Any]) -> str:
 # A handoff to a verb that does not exist is a promise the app then
 # breaks — the dead-weight rule, at the wire.
 HANDOFFS: Dict[str, _Handoff] = {
+    "inspect_course": _Handoff(
+        verb="save_course_content",
+        text="Chief can prepare the next lesson, workbook and quiz in Course Studio.",
+        where="Build > Course Studio",
+        when=lambda p: not p.get("failed")),
     "growth_report": _Handoff(
         verb="save_growth_record",
         text="Chief can turn this reading into a tracked growth action, or update its costs and capacity assumptions.",
