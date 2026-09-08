@@ -138,3 +138,22 @@ def test_contained_photo_gets_a_blurred_fill_not_a_black_box(tmp_path):
     html=(tmp_path/'index.html').read_text()
     assert html.count('<img class="backdrop" src="assets/photo.png"')==1
     assert 'id="image-0" class="clip" data-start="0" data-duration="5.6"' in html and 'id="image-1" class="clip" data-start="5.0" data-duration="5.0"' in html
+
+
+def test_logo_callouts_and_demo_layouts_compile_from_data(tmp_path):
+    from video_studio_models import Demo,DemoTile,Callout
+    shot=str(uuid4());mark=str(uuid4())
+    spec=Composition(title='Demo',scenes=[
+        Scene(id='open',layout='logo',title='Brand',subtitle='Tagline',seconds=4,asset_id=mark),
+        Scene(id='shot',layout='split',title='Home',seconds=6,asset_id=shot,fit='contain',callouts=[Callout(label='Clients <b>',x=20,y=20,at=1),Callout(label='Revenue',x=70,y=20,at=2)]),
+        Scene(id='chat',layout='demo',title='Say it',seconds=8,demo=Demo(kind='chat',app_name='KMJ',prompt='Invoice <Hartwell>',reply='Done.',card_title='Balance',card_value='$2,400')),
+        Scene(id='dash',layout='demo',title='Run it',seconds=7,demo=Demo(kind='dashboard',greeting='Morning',tiles=[DemoTile(label='Clients',value='86'),DemoTile(label='Revenue',value='$12,480')],actions=['Draft email']))])
+    compile_project(spec,tmp_path,{shot:{'path':'assets/shot.png','mime_type':'image/png'},mark:{'path':'assets/mark.png','mime_type':'image/png'}},{})
+    html=(tmp_path/'index.html').read_text()
+    assert 'class="scene logo"' in html and '<div class="glow"></div>' in html
+    assert 'class="media device"' in html and html.count('class="callout')==2 and 'Clients &lt;b&gt;' in html and 'callout flip' in html
+    assert '<span class="ch">I</span>' in html and '<Hartwell>' not in html and '<span class="ch">&lt;</span>' in html
+    assert "toLocaleString('en-US')+''" in html and "'$'+Math.round" in html
+    with pytest.raises(ValueError):Scene(id='x',layout='demo',title='No demo',seconds=8)
+    with pytest.raises(ValueError):Demo(kind='chat',prompt='only a prompt')
+    with pytest.raises(ValueError):Scene(id='x',layout='title',title='No picture',seconds=5,callouts=[Callout(label='a',x=10,y=10)])

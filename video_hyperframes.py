@@ -15,6 +15,7 @@ face so the three themes read as three different films.
 from pathlib import Path
 from html import escape
 import json
+import re
 import shutil
 from video_studio_models import Composition
 
@@ -93,6 +94,33 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
     .caption{{position:absolute;left:8%;right:8%;bottom:{'14%' if portrait else '7%'};text-align:center;z-index:50;font-size:{34 if landscape else 40}px;line-height:1.45;font-weight:600;color:#fff}}
     .caption span{{background:#0B1020E0;padding:10px 22px;box-decoration-break:clone;-webkit-box-decoration-break:clone;border-radius:10px}}
     .progress{{position:absolute;left:0;bottom:0;height:6px;width:100%;background:{accent};transform-origin:left;transform:scaleX(0);z-index:60;opacity:.9}}
+    .logo.scene{{align-items:center;text-align:center}}
+    .logo .media{{position:relative;width:{300 if landscape else 250}px;height:{300 if landscape else 250}px;background:transparent;overflow:visible;margin:0 auto 36px;z-index:2}}
+    .logo .media .shade,.logo .media .backdrop{{display:none}}
+    .logo .glow{{position:absolute;inset:-45%;border-radius:50%;background:radial-gradient(circle,{accent}77,transparent 62%);filter:blur(26px)}}
+    .logo .ring{{position:absolute;inset:-16%;border-radius:50%;border:1px solid {fg}26}}
+    .logo h1{{font-size:{100 if landscape else 80}px;letter-spacing:-3px}}.logo .rule{{display:none}}.logo .eyebrow{{margin-bottom:16px}}.logo .subtitle{{margin-top:20px}}
+    .device{{border:1px solid {fg}22;box-shadow:0 70px 140px -50px #000000CC;background:{bg}}}.device .backdrop{{opacity:.5}}
+    .device-glow{{position:absolute;left:{'8%' if portrait else '54%'};top:{'7%' if portrait else '10%'};width:{'84%' if portrait else '40%'};height:{'44%' if portrait else '80%'};border-radius:60px;background:radial-gradient(ellipse at 50% 55%,{accent}66,transparent 68%);filter:blur(60px);z-index:0}}
+    .callout{{position:absolute;z-index:4;width:0;height:0}}
+    .callout .cring{{position:absolute;left:-27px;top:-27px;width:54px;height:54px;border-radius:50%;border:3px solid {accent};box-shadow:0 0 0 9px {accent}33,0 0 30px {accent}88}}
+    .callout .ctag{{position:absolute;left:44px;top:-22px;white-space:nowrap;background:{accent};color:#0B1020;font-weight:600;font-size:24px;padding:9px 16px;border-radius:10px;box-shadow:0 10px 30px #00000066}}
+    .callout.flip .ctag{{left:auto;right:44px}}
+    .demo .copy{{width:{'100%' if portrait else '42%'}}}.demo.scene{{justify-content:{'flex-end' if portrait else 'center'}}}.demo h1{{font-size:{84 if landscape else 72}px}}
+    .app{{position:absolute;left:{'6%' if portrait else '50%'};top:{'8%' if portrait else '16%'};width:{'88%' if portrait else '46%'};height:auto;min-height:{'30%' if portrait else '36%'};max-height:{'47%' if portrait else '78%'};border-radius:22px;background:{'#0C1424' if spec.theme!='paper' else '#FFFFFF'};border:1px solid {fg}22;box-shadow:0 70px 140px -50px #000000CC;overflow:hidden;z-index:2;color:{fg}}}
+    .app-glow{{position:absolute;left:{'6%' if portrait else '50%'};top:{'6%' if portrait else '11%'};width:{'88%' if portrait else '46%'};height:{'47%' if portrait else '78%'};border-radius:60px;background:radial-gradient(ellipse at 50% 55%,{accent}66,transparent 68%);filter:blur(60px);z-index:0}}
+    .app-bar{{height:54px;display:flex;align-items:center;gap:9px;padding:0 22px;border-bottom:1px solid {fg}14;font-size:20px;color:{muted}}}.app-bar i{{width:12px;height:12px;border-radius:50%;background:{fg}33;display:inline-block}}.app-bar span{{margin-left:10px}}
+    .app-body{{padding:32px 34px;display:flex;flex-direction:column;gap:20px}}
+    .chat-head{{display:flex;align-items:center;gap:12px;font-size:22px;color:{muted}}}.chat-head b{{width:14px;height:14px;border-radius:50%;background:{accent};display:inline-block;box-shadow:0 0 16px {accent}}}
+    .bubble{{max-width:88%;padding:18px 24px;border-radius:18px;font-size:27px;line-height:1.4}}
+    .bubble.me{{align-self:flex-end;background:{accent};color:#0B1020;border-bottom-right-radius:6px}}.bubble.ai{{align-self:flex-start;background:{fg}12;border-bottom-left-radius:6px}}
+    .ch{{opacity:0}}.caret{{display:inline-block;width:3px;height:1em;background:currentColor;vertical-align:-.15em;margin-left:2px}}
+    .card{{align-self:stretch;border:1px solid {fg}1F;border-radius:16px;padding:22px 26px;display:flex;justify-content:space-between;align-items:center;gap:20px;background:{fg}08}}
+    .card .ct{{font-size:25px;font-weight:600}}.card .cn{{font-size:20px;color:{muted};margin-top:6px}}.card .cv{{font-size:40px;font-weight:700;color:{accent};white-space:nowrap}}
+    .chip{{display:inline-block;padding:6px 14px;border-radius:999px;background:#22C55E22;color:#22C55E;font-size:18px;font-weight:600;margin-top:10px}}
+    .greet{{font-size:34px;font-weight:700}}.tiles{{display:grid;grid-template-columns:1fr 1fr;gap:16px}}
+    .tile{{border:1px solid {fg}1F;border-radius:16px;padding:20px 22px;background:{fg}08}}.tile .tl{{font-size:17px;letter-spacing:2px;text-transform:uppercase;color:{muted}}}.tile .tv{{font-size:44px;font-weight:700;margin-top:6px}}
+    .acts{{display:flex;flex-wrap:wrap;gap:10px}}.act{{padding:10px 16px;border-radius:12px;border:1px solid {fg}1F;font-size:20px;background:{fg}08}}
     '''
     parts=[]; animations=[];audio=[];total=0;count=len(spec.scenes)
     for i,scene in enumerate(spec.scenes):
@@ -111,9 +139,25 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
             else:
                 art=f'<img id="image-{i}" class="clip" data-start="{start}" data-duration="{scene.seconds+hold}" src="{src}" alt="" style="object-fit:{scene.fit}">'
                 backdrop=f'<img class="backdrop" src="{src}" alt="">' if scene.fit=='contain' else ''
-            art=f'<div class="media">{backdrop}{art}<div class="shade"></div></div>'
+            callouts=''.join(f'<div class="callout{" flip" if c.x>58 else ""}" data-callout="{j}" style="left:{c.x}%;top:{c.y}%"><span class="cring"></span><span class="ctag">{escape(c.label)}</span></div>' for j,c in enumerate(scene.callouts))
+            if scene.layout=='logo':
+                art=f'<div class="media"><div class="glow"></div><div class="ring"></div>{art}</div>'
+            else:
+                device=scene.layout=='split' and scene.fit=='contain' and not item['mime_type'].startswith('video/')
+                art=('<div class="device-glow" data-layout-ignore></div>' if device else '')+f'<div class="media{" device" if device else ""}">{backdrop}{art}<div class="shade"></div>{callouts}</div>'
         points='<div class="points">'+''.join(f'<div class="point">{escape(t)}</div>' for t in scene.points)+'</div>' if scene.points else ''
         stat=f'<div class="statistic"><span id="counter-{i}">0</span>{escape(scene.suffix)}</div>' if scene.layout=='stat' else ''
+        if scene.layout=='demo' and scene.demo:
+            d=scene.demo;bar=f'<div class="app-bar"><i></i><i></i><i></i><span>{escape(d.app_name)}</span></div>'
+            if d.kind=='chat':
+                typed=''.join(f'<span class="ch">{escape(ch) if ch!=" " else "&nbsp;"}</span>' for ch in d.prompt)
+                card=f'<div class="card"><div><div class="ct">{escape(d.card_title)}</div><div class="cn">{escape(d.card_note)}</div><span class="chip">Ready</span></div><div class="cv">{escape(d.card_value)}</div></div>' if d.card_title else ''
+                body=f'<div class="chat-head"><b></b>{escape(d.assistant)}</div><div class="bubble me">{typed}<span class="caret"></span></div><div class="bubble ai">{escape(d.reply)}</div>{card}'
+            else:
+                tiles=''.join(f'<div class="tile"><div class="tl">{escape(t.label)}</div><div class="tv">{escape(t.value)}</div></div>' for t in d.tiles)
+                acts=('<div class="acts">'+''.join(f'<span class="act">{escape(a)}</span>' for a in d.actions)+'</div>') if d.actions else ''
+                body=(f'<div class="greet">{escape(d.greeting)}</div>' if d.greeting else '')+f'<div class="tiles">{tiles}</div>{acts}'
+            art=f'<div class="app-glow" data-layout-ignore></div><div class="app">{bar}<div class="app-body">{body}</div></div>'
         # Media owns its absolute clip time. Timing its parent as well makes
         # HyperFrames apply a second offset to source-video extraction.
         parts.append(f'''<section id="{sid}" class="scene {scene.layout}"><div class="ambient" data-layout-ignore></div>{art}<div class="vignette" data-layout-ignore></div><div class="copy"><div class="rule"></div><div class="eyebrow">{escape(scene.eyebrow)}</div>{stat}<h1>{lines(scene.title)}</h1><div class="subtitle">{escape(scene.subtitle)}</div>{points}</div></section>''')
@@ -133,6 +177,36 @@ def compile_project(spec:Composition,folder:Path,media:dict,voices:dict,music:di
             if scene.motion=='push':animations.append(f"tl.fromTo('{prefix} .media .clip',{{scale:1,yPercent:1.5}},{{scale:1.09,yPercent:-1.5,duration:{span},ease:'none'}},{start});")
             elif scene.motion=='pan':animations.append(f"tl.fromTo('{prefix} .media .clip',{{scale:1.12,xPercent:2.5}},{{scale:1.12,xPercent:-2.5,duration:{span},ease:'sine.inOut'}},{start});")
             elif scene.motion=='rise':animations.append(f"tl.fromTo('{prefix} .media .clip',{{scale:1.04}},{{scale:1,duration:{span},ease:'none'}},{start});")
+        if scene.layout=='logo':
+            animations.append(f"tl.fromTo('{prefix} .media',{{opacity:0,scale:.6}},{{opacity:1,scale:1,duration:1.1,ease:'back.out(1.6)'}},{start+.1});")
+            animations.append(f"tl.fromTo('{prefix} .ring',{{scale:.5,opacity:0}},{{scale:1,opacity:1,duration:1.4,ease:'power3.out'}},{start+.3});")
+            animations.append(f"tl.fromTo('{prefix} .glow',{{opacity:.4,scale:.8}},{{opacity:1,scale:1.15,duration:{max(1.5,scene.seconds-1)},ease:'sine.inOut'}},{start+.2});")
+        if art and 'media device' in art:
+            animations.append(f"tl.fromTo('{prefix} .media.device',{{rotationY:-14,rotationX:4,transformPerspective:2200}},{{rotationY:-5,rotationX:1,transformPerspective:2200,duration:{scene.seconds+hold},ease:'sine.out'}},{start});")
+        for j,c in enumerate(scene.callouts):
+            at=start+min(c.at,max(0,scene.seconds-1.2))
+            animations.append(f"tl.fromTo('{prefix} .callout[data-callout=\"{j}\"]',{{opacity:0,scale:.5}},{{opacity:1,scale:1,duration:.5,ease:'back.out(2)'}},{at});")
+            animations.append(f"tl.fromTo('{prefix} .callout[data-callout=\"{j}\"] .cring',{{scale:.7}},{{scale:1.2,duration:.8,repeat:3,yoyo:true,ease:'sine.inOut'}},{at});")
+        if scene.layout=='demo' and scene.demo:
+            d=scene.demo
+            animations.append(f"tl.fromTo('{prefix} .app',{{opacity:0,y:34,rotationY:-10,transformPerspective:2200}},{{opacity:1,y:0,rotationY:-4,transformPerspective:2200,duration:1,ease:'power3.out'}},{start+.15});")
+            animations.append(f"tl.to('{prefix} .app',{{rotationY:-1,transformPerspective:2200,duration:{max(1,scene.seconds+hold-1.15)},ease:'sine.out'}},{start+1.15});")
+            if d.kind=='chat':
+                n=max(1,len(d.prompt));typing=min(1.8,.06*n)
+                animations.append(f"tl.fromTo('{prefix} .ch',{{opacity:0}},{{opacity:1,duration:.02,stagger:{typing/n:.4f}}},{start+1});")
+                animations.append(f"tl.fromTo('{prefix} .caret',{{opacity:1}},{{opacity:0,duration:.35,repeat:{int((typing+.8)/.35)},yoyo:true}},{start+1});tl.set('{prefix} .caret',{{opacity:0}},{start+1+typing+.8});")
+                animations.append(f"tl.fromTo('{prefix} .bubble.ai',{{opacity:0,y:16}},{{opacity:1,y:0,duration:.6,ease:'power3.out'}},{start+1+typing+.9});")
+                animations.append(f"tl.fromTo('{prefix} .card',{{opacity:0,y:28}},{{opacity:1,y:0,duration:.7,ease:'back.out(1.4)'}},{start+1+typing+1.8});")
+                animations.append(f"tl.fromTo('{prefix} .chip',{{opacity:0,scale:.6}},{{opacity:1,scale:1,duration:.4,ease:'back.out(2)'}},{start+1+typing+2.5});")
+            else:
+                animations.append(f"tl.fromTo('{prefix} .greet',{{opacity:0,y:14}},{{opacity:1,y:0,duration:.6}},{start+.9});")
+                animations.append(f"tl.fromTo('{prefix} .tile',{{opacity:0,y:22}},{{opacity:1,y:0,duration:.6,ease:'power3.out',stagger:.16}},{start+1.2});")
+                for j,t in enumerate(d.tiles):
+                    m=re.fullmatch(r'([^\d]*)([\d,]+)([^\d]*)',t.value)
+                    if m and m.group(2).replace(',',''):
+                        num=int(m.group(2).replace(',',''));pre=escape(m.group(1));suf=escape(m.group(3))
+                        animations.append(f"const t{i}_{j}={{v:0}};tl.to(t{i}_{j},{{v:{num},duration:1.4,ease:'power3.out',onUpdate:()=>{{document.querySelectorAll('{prefix} .tile .tv')[{j}].textContent='{pre}'+Math.round(t{i}_{j}.v).toLocaleString('en-US')+'{suf}'}}}},{start+1.3+.16*j});")
+                animations.append(f"tl.fromTo('{prefix} .act',{{opacity:0,y:12}},{{opacity:1,y:0,duration:.45,stagger:.1}},{start+2.4});")
         if points and moving:animations.append(f"tl.fromTo('{prefix} .point',{{opacity:0,x:-28}},{{opacity:1,x:0,duration:.6,ease:'power3.out',stagger:.16}},{start+.9});")
         if scene.layout=='stat':
             animations.append(f"const c{i}={{v:0}};tl.to(c{i},{{v:{scene.statistic},duration:1.8,ease:'power3.out',onUpdate:()=>{{document.querySelector('#counter-{i}').textContent=Math.round(c{i}.v).toLocaleString('en-US')}}}},{start+.35});")
