@@ -235,12 +235,16 @@ class TestTheListCannotRot:
         assert order["concierge_conversations"] < order["contacts"]
         assert order["consent_records"] < order["contacts"]
         assert order["growth_events"] < order["contacts"]
+        assert order["image_publications"] < order["image_artworks"]
 
     def test_what_cannot_be_restored_is_still_exported(self):
         """Skipped on import is not the same as dropped from export."""
         for t in ("sms_numbers", "auditor_links", "push_subscriptions", "stripe_disputes_cache",
-                  "growth_records", "growth_events"):
+                  "growth_records", "growth_events", "image_artworks", "image_publications"):
             assert t in al._IMPORT_SKIP and t in al.BUSINESS_CHILD_TABLES, t
+
+    def test_private_image_originals_are_cleaned_up_with_the_business(self):
+        assert "image-originals" in al.STORAGE_BUCKETS
 
 
 class TestDeletingABusinessHandsBackItsNumber:

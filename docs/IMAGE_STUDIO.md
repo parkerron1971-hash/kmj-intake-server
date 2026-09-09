@@ -21,6 +21,8 @@ The database serializes reservations per business, limits generation to 20 jobs 
 
 Originals remain in the private `image-originals` bucket with expiring signed previews. Uploads accept PNG/JPEG/WebP, up to 20 MB and 25 megapixels, and are normalized before storage. All writes check the business owner. Clients cannot mark a generation complete or replace billing records.
 
+Account export includes image and publication records for the owner's archive. Generic import skips them because paid job state, publication claims and original private storage paths cannot be restored safely to a new business. Originals can be downloaded from the gallery; account deletion includes the private image bucket.
+
 Publishing prepares a public JPEG delivery copy, disclosed in the UI, and hands off to existing website News or connected Facebook/Instagram publishing. Other apps use native sharing or download. Saving artwork does not publish it. Publication request IDs prevent repeat submission; partial Facebook/Instagram results are shown as partial.
 
 ## Verification

@@ -137,6 +137,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    "image_publications", "image_artworks",  # publication records reference originals
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
     "media_assets",
     "growth_events",          # references contacts; export history before erasure
@@ -330,7 +331,7 @@ USER_CHILD_TABLES: List[str] = [
 # level deeper ("{business_id}/receipts/…") and product-files likewise
 # ("{business_id}/{offering_id}/…"), which _delete_storage_objects
 # handles by descending one folder level.
-STORAGE_BUCKETS: List[str] = ["business-assets", "business-documents",
+STORAGE_BUCKETS: List[str] = ["image-originals", "business-assets", "business-documents",
                               "product-files", "program-media", "video-studio"]
 
 
@@ -546,6 +547,9 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # documents live in S3. Stated here rather than discovered later.
 
 _IMPORT_SKIP = {
+    # Preserve the archive, but never restore paid job state, publication
+    # claims or private storage paths tied to the original business.
+    "image_publications", "image_artworks",
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
     "media_assets",  # media files and review proofs need an explicit restore
     # Derived snapshots and security decisions cannot be recreated from an
