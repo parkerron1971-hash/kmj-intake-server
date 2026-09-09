@@ -115,6 +115,13 @@ async def capture_website(url: str, *, include_logo=True):
             try:
                 context = await browser.new_context(viewport=VIEWPORT, device_scale_factor=1,
                     accept_downloads=False, service_workers='block')
+                # Keep page code on the intercepted HTTP surface; no peer/UDP transports
+                # or worker globals that could open a second, unguarded network path.
+                await context.add_init_script('''for (const name of [
+                    'RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport',
+                    'Worker', 'SharedWorker', 'WebSocket']) {
+                    Object.defineProperty(globalThis, name, {value: undefined, configurable: false, writable: false});
+                }''')
                 async def route_request(route):
                     request = route.request
                     if request.method != 'GET' or request.resource_type not in ('document', 'stylesheet', 'image', 'font', 'script'):
