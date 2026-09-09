@@ -393,6 +393,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "notify_practitioner":    _w("A", "in-app notification + push to the OWNER. It does leave the "
                                       "device, but never reaches a client, so it is not the "
                                       "client-facing send class B exists for"),
+    "generate_image":         _w("C", "pays for image generation and saves a private original; explicit requests only"),
+    "find_images":            _r("reads the authenticated business image gallery", sensitive=True),
     "plan_content":           _w("A", "adds a planned post to settings.content_calendar"),
     "learn_business": _w("A", "saves private business operating knowledge with source evidence"),
     "create_video": _w("A", "creates a private editable video project and scene plan"),
