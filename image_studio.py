@@ -9,6 +9,7 @@ import asyncio
 import base64
 import contextvars
 import io
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Literal
@@ -24,12 +25,49 @@ from auth_supabase import UserSession, require_user
 from api_usage_logger import log_api_usage
 
 router = APIRouter(prefix='/ai/images', tags=['Image Studio'])
-MODELS = ('gpt-image-2.5-sunburst', 'gpt-image-2.5-flare')
+MODELS = ('gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2')
+MODEL_LABELS = {'gpt-image-2.5-sunburst': 'GPT Image 2.5 Sunburst',
+    'gpt-image-2.5-flare': 'GPT Image 2.5 Flare', 'gpt-image-2': 'GPT Image 2'}
+logger = logging.getLogger(__name__)
 BUCKET = 'image-originals'
 MAX_BYTES = 20 * 1024 * 1024
 turn_id = contextvars.ContextVar('image_turn_id', default='')
 turn_image_index = contextvars.ContextVar('image_turn_index', default=0)
 _tasks: set[asyncio.Task] = set()
+
+
+def configured_model():
+    model = os.environ.get('OPENAI_IMAGE_MODEL', MODELS[0]).strip()
+    if model not in MODELS:
+        raise HTTPException(503, 'The configured image model is not supported. Check OPENAI_IMAGE_MODEL.')
+    return model
+
+
+def model_qualities(model):
+    return ('low', 'medium', 'high') if model == 'gpt-image-2' else ('low', 'medium', 'high', 'xhigh', 'max')
+
+
+def provider_error(response, model):
+    try:
+        code = (response.json().get('error') or {}).get('code', '')
+    except (ValueError, AttributeError):
+        code = ''
+    logger.warning('Image provider rejected request: model=%s status=%s request_id=%s',
+        model, response.status_code, response.headers.get('x-request-id', 'unavailable'))
+    if response.status_code == 401:
+        return HTTPException(503, 'The server OpenAI connection was rejected. Check the configured API key.')
+    if response.status_code in (403, 404):
+        return HTTPException(503, f'{MODEL_LABELS[model]} is not available to the configured OpenAI project. Enable access or select an available image model in the server configuration.')
+    if code in ('content_policy_violation', 'moderation_blocked'):
+        return HTTPException(422, 'This request could not be generated. Try a different description.')
+    return HTTPException(502, 'The image provider could not complete this request. Try again later.')
+
+
+async def ensure_model_access(client, model):
+    response = await client.get(f'https://api.openai.com/v1/models/{model}',
+        headers={'Authorization': f"Bearer {os.environ.get('OPENAI_API_KEY', '')}"})
+    if not response.is_success:
+        raise provider_error(response, model)
 
 
 def image_units(quality):
@@ -42,7 +80,10 @@ def image_units(quality):
 
 @router.get('/config')
 async def config(session: UserSession = Depends(sb_clients.authed_request)):
-    return {'credits': {q: image_units(q) for q in ('low', 'medium', 'high', 'xhigh', 'max')},
+    model = configured_model()
+    qualities = model_qualities(model)
+    return {'model': model, 'model_label': MODEL_LABELS[model], 'qualities': qualities,
+        'credits': {q: image_units(q) for q in qualities},
         'default_quality': 'high', 'pricing_date': '2026-09-08', 'daily_limit': 20}
 
 
@@ -50,7 +91,7 @@ class CreateImage(BaseModel):
     business_id: UUID
     request_id: UUID
     prompt: str = Field(min_length=3, max_length=12000)
-    model: Literal['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'] = MODELS[0]
+    model: Literal['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2'] = Field(default_factory=configured_model)
     quality: Literal['low', 'medium', 'high', 'xhigh', 'max'] = 'high'
     size: Literal['1024x1024', '1536x1024', '1024x1536'] = '1024x1536'
     reference_ids: list[UUID] = Field(default_factory=list, max_length=4)
@@ -191,12 +232,7 @@ async def generate_worker(row):
             else:
                 response = await client.post('https://api.openai.com/v1/images/generations', headers=headers, json=payload)
             if not response.is_success:
-                code = (response.json().get('error') or {}).get('code', '')
-                if response.status_code in (401, 403, 404):
-                    raise HTTPException(503, 'The image model is not available to this account. Check the server OpenAI project access.')
-                if code in ('content_policy_violation', 'moderation_blocked'):
-                    raise HTTPException(422, 'This request could not be generated. Try a different description.')
-                raise HTTPException(502, 'The image provider could not complete this request. Try again later.')
+                raise provider_error(response, row['model'])
             data = response.json()
             usage = data.get('usage') or {}
             # Persist usage BEFORE storage so a failed save does not erase a paid generation.
@@ -222,14 +258,23 @@ async def create(req: CreateImage, client):
     biz = await business(client, req.business_id)
     if not os.environ.get('OPENAI_API_KEY'):
         raise HTTPException(503, 'Image generation needs the server OpenAI connection used by voice.')
+    if req.quality not in model_qualities(req.model):
+        raise HTTPException(422, f'{MODEL_LABELS[req.model]} supports Draft, Standard, and High quality. Choose High for its best quality.')
+    record = {'id': str(req.request_id), 'business_id': str(req.business_id), 'prompt': req.prompt.strip(),
+        'model': req.model, 'quality': req.quality, 'size': req.size, 'reference_ids': [str(i) for i in req.reference_ids]}
+    existing = await db(client, 'GET', f'/image_artworks?id=eq.{req.request_id}&business_id=eq.{req.business_id}')
+    if existing:
+        if any(existing[0].get(k) != record.get(k) for k in ('business_id', 'prompt', 'model', 'quality', 'size', 'reference_ids')):
+            raise HTTPException(409, 'That request ID already belongs to a different image request.')
+        return await present(client, existing[0])
+    # Verify the actual project key before reserving a job or charging generation.
+    await ensure_model_access(client, req.model)
     for ref in req.reference_ids:
         row = await artwork(client, req.business_id, ref)
         if row['status'] != 'ready':
             raise HTTPException(409, 'Wait for the reference image to finish before editing.')
     import billing_limits
     billing_limits.require_units(str(req.business_id))
-    record = {'id': str(req.request_id), 'business_id': str(req.business_id), 'prompt': req.prompt.strip(),
-        'model': req.model, 'quality': req.quality, 'size': req.size, 'reference_ids': [str(i) for i in req.reference_ids]}
     rows = await db(client, 'POST', '/rpc/reserve_image_artwork', {'p_record': record, 'p_daily_limit': 20})
     row = rows[0]
     if any(row.get(k) != record.get(k) for k in ('business_id', 'prompt', 'model', 'quality', 'size', 'reference_ids')):
@@ -330,7 +375,7 @@ async def handle_generate_image(client, biz, action):
             'label': 'Your image', 'image': await present(client, existing[0]), 'nav': None}
     req = CreateImage(business_id=biz['id'], request_id=request_id, prompt=action.get('prompt', ''),
         quality=action.get('quality', 'high'), size=action.get('size', '1024x1536'),
-        reference_ids=action.get('reference_ids') or [], model=action.get('model', MODELS[0]))
+        reference_ids=action.get('reference_ids') or [], model=action.get('model') or configured_model())
     result = await create(req, client)
     return {'type': 'generate_image', 'result': 'Image queued. The image card shows progress and saves the finished original to Media Library.',
         'label': 'Creating your image', 'image': result, 'nav': None}
