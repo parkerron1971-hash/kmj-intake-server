@@ -10253,7 +10253,11 @@ from chief_business_learning_actions import (
     handle_capture_business_knowledge,
 )
 
+from image_studio import handle_generate_image, handle_find_images
+
 ACTION_HANDLERS = {
+    "generate_image": handle_generate_image,
+    "find_images": handle_find_images,
     "create_video": __import__('chief_video_actions').handle_create_video,
     "inspect_video": __import__('chief_video_actions').handle_inspect_video,
     "revise_video": __import__('chief_video_actions').handle_revise_video,
@@ -12372,6 +12376,8 @@ class ResumeNote(BaseModel):
 class ChatRequest(BaseModel):
     business_id: str
     message: str
+    request_id: Optional[str] = None
+    image_ids: List[str] = []
     conversation_history: Optional[List[ChatMessage]] = None
     current_context: Optional[CurrentContext] = None
     resume_note: Optional[ResumeNote] = None
@@ -12709,6 +12715,9 @@ async def chief_chat(
     # rejected upstream by require_user_session with 401.
     _jwt_token = sb_clients.set_user_jwt(user_session.token)
     _uid_token = _TURN_USER_ID.set(str(user_session.user.id))
+    import image_studio
+    _image_turn_token = image_studio.turn_id.set(req.request_id or str(__import__('uuid').uuid4()))
+    _image_index_token = image_studio.turn_image_index.set(0)
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -13045,6 +13054,8 @@ async def chief_chat(
             except Exception as _jit_err:
                 logger.warning(f"[jit] directive build failed (non-fatal): {_jit_err}")
             effective_message = req.message
+            if req.image_ids:
+                effective_message += await image_studio.describe_references(client, req.business_id, req.image_ids)
             if req.mode == "business_coach" and is_coach_pause:
                 effective_message = (
                     "The practitioner is pausing the session now. Write 1-2 warm parting sentences "
@@ -13499,6 +13510,8 @@ async def chief_chat(
         # even if set_user_jwt's prior call raised after binding (token
         # captured before the try block).
         sb_clients.reset_user_jwt(_jwt_token)
+        image_studio.turn_id.reset(_image_turn_token)
+        image_studio.turn_image_index.reset(_image_index_token)
         try:
             _TURN_USER_ID.reset(_uid_token)
             try:

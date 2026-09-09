@@ -279,6 +279,8 @@ app.include_router(strategy_router)
 app.include_router(restricted_router)
 app.include_router(workflow_router)
 app.include_router(growth_objective_router)
+from image_studio import router as image_studio_router
+app.include_router(image_studio_router)
 app.include_router(growth_intelligence_router)
 app.include_router(module_spec_router)
 app.include_router(module_check_router)
