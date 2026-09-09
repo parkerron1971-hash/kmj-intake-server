@@ -5,6 +5,7 @@ from uuid import UUID
 import sb_clients
 
 COURSE_AUTHORING_MAX_TOKENS = 16000
+COURSE_READ_MAX_CHARS = 96000
 COURSE_INCOMPLETE_REPLY = (
     "I couldn't finish this course-writing step, so that step was not saved. "
     "Any earlier saved lessons are still in Course Studio. "
@@ -47,8 +48,8 @@ LESSON = obj({"id": {**TEXT, "description": "Existing lesson ID for edits; omit 
               "video_url": TEXT, "resource_url": TEXT, "duration_minutes": {"type": "integer", "minimum": 0, "maximum": 1440},
               "drip_offset_days": {"type": "integer", "minimum": 0, "maximum": 3650},
               "learning_design": {**DESIGN, "description": "Complete learning design. On edits, preserve existing fields when changing only one section."}}, ["title"])
-READ_SCHEMA = ("Read this business's courses, or a course's complete lessons, materials, answer keys and edit revisions. Use before setting up the next lesson or changing existing work.",
-               obj({"course_id": TEXT}))
+READ_SCHEMA = ("Read this business's courses, or a course's complete lessons, materials, answer keys and edit revisions. Use before setting up the next lesson or changing existing work. For a focused edit, provide course_id and lesson_id to read that complete lesson. Large courses return a lesson index; read individual lessons by ID before editing.",
+               obj({"course_id": TEXT, "lesson_id": TEXT}))
 WRITE_SCHEMA = ("Save a complete course or append/update lessons in Course Studio. Creates real teaching content, downloadable workbook prompts, resources, written exercises, quizzes and live-class details atomically. New courses stay drafts. Does not publish, enroll or send anything. Existing published-course edits are immediately visible to students.",
                 obj({"request_key": {**TEXT, "description": "Unique key for this requested save. Reuse exactly when retrying the same payload."},
                      "course_id": {**TEXT, "description": "Existing course ID; omit to create a new draft course."},
@@ -66,12 +67,36 @@ async def rpc(client, path, body):
 async def handle_inspect_course(client, biz, action):
     try:
         cid = str(UUID(action["course_id"])) if action.get("course_id") else None
+        lid = str(UUID(action["lesson_id"])) if action.get("lesson_id") else None
+        if lid and not cid:
+            raise ValueError("course_id is required when reading a specific lesson.")
         data = await rpc(client, "academy_inspect", {"p_business": biz["id"], "p_course": cid})
         if not isinstance(data, dict):
             raise ValueError("Course records could not be loaded. Retry before authoring.")
+        if lid:
+            lessons = [lesson for lesson in data.get("lessons", []) if lesson.get("id") == lid]
+            if not lessons:
+                raise ValueError("This lesson was not found in the selected course.")
+            data = {**data, "lessons": lessons}
         return {"type": "inspect_course", "result": "Course records loaded", "label": "Course Studio", "data": data}
     except Exception as exc:
         return {"type": "inspect_course", "failed": True, "result": str(exc), "label": "Could not load course"}
+
+
+def course_read_index(result):
+    """Never give the model a cut-off lesson that it could overwrite as complete."""
+    data = result.get("data") or {}
+    lessons = data.get("lessons") or []
+    if len(lessons) <= 1:
+        return {"type": "inspect_course", "failed": True,
+                "result": "This course record exceeds the reading limit. No complete lesson was loaded; do not edit from partial data. Open the lesson in Course Studio."}
+    course = data.get("course") or {}
+    return {"type": "inspect_course", "result": "Lesson index loaded; teaching content omitted for size.",
+            "data": {"course": {key: course.get(key) for key in ("id", "title", "status", "grading_mode", "passing_grade")},
+                     "lesson_count": len(lessons), "content_omitted": True,
+                     "lessons": [{"id": lesson.get("id"), "title": str(lesson.get("title") or "")[:300]}
+                                 for lesson in lessons[:200]]},
+            "next_step": "Call inspect_course with course_id and the desired lesson_id to load its complete content and revision before editing. Never save from this index."}
 
 
 async def handle_save_course_content(client, biz, action):
@@ -106,3 +131,5 @@ async def handle_save_course_content(client, biz, action):
 PROMPT = '''COURSE STUDIO AUTHORING: When asked to set up the next class/lesson or build a course, do the saved work using inspect_course and save_course_content. Read courses to resolve a unique course; if ambiguous, ask which. Read the selected course's lessons to continue its sequence and preserve existing work. Generate complete useful teaching prose, an objective, practical workbook prompts (Course Studio renders the downloadable PDF automatically), written exercises and valid quiz options/zero-based correct answers when appropriate. Use stable distinct question IDs; preserve IDs for unchanged questions. All fields go into the native schema, not merely a chat outline. Append by omitting lesson id; update with id and exact revision. Preserve complete learning_design when editing a section. New courses stay draft. Tell the teacher if the target course is published and changes will be student-visible. Only claim saved after the tool succeeds; use returned course/lesson IDs and frontend navigation. Use one request_key per intended save and reuse on retry. Never fabricate a video URL, hosted PDF URL, meeting link, date, payment link, or email delivery. Reuse relevant verified existing/provided URLs. If a real meeting link or date is missing, leave blank, save everything else, and clearly name the remaining setup item. Authoring does not create a Zoom/Meet room. Drafts do not enroll students or send messages. The practitioner's direct request is authorization to author; do not ask them to copy content from chat or to reconfirm routine saves.'''
 
 PROMPT += " For course assessment, preserve the existing grading_mode and passing_grade unless the creator asks to change them. New courses default to completion pass/fail; explain this and ask the creator to choose completion, percentage or letter grading when they have not specified a preference, while still saving the requested lesson content. Percentage and letter modes use an equal average of lesson activity grades, with written work awaiting teacher grading. Letter bands are A 90+, B 80+, C 70+, D 60+, F below 60; passing_grade is configurable. Students submit all activities before completing a lesson; course passing is separate from lesson completion. An existing course assessment-only change may use an empty lessons array. Teacher logins and gradebook live in Course Studio; never claim teacher invitations or enrollment emails were sent by authoring."
+
+PROMPT += " For focused lesson edits, inspect_course accepts both course_id and lesson_id. If an inspection returns content_omitted, use its lesson index to fetch the specific complete lesson; never retry the same oversized read or reconstruct missing content. Before saving, check the requested quiz question count and remove accidental placeholder questions."

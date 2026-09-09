@@ -278,6 +278,15 @@ def _shrink(result: Any) -> str:
     # prompt-time neutraliser ran. Same two layers, same taint.
     import untrusted_text
     text = untrusted_text.defuse(text)
+    if isinstance(result, dict) and result.get('type') == 'inspect_course':
+        from chief_academy_actions import COURSE_READ_MAX_CHARS, course_read_index
+        if len(text) <= COURSE_READ_MAX_CHARS:
+            return text
+        index = untrusted_text.defuse(json.dumps(course_read_index(result), default=str))
+        if len(index) <= COURSE_READ_MAX_CHARS:
+            return index
+        return json.dumps({'type': 'inspect_course', 'failed': True,
+                           'result': 'The lesson index exceeds the reading limit. Request a specific course_id and lesson_id; do not edit from partial data.'})
     # A single Growth action can contain 200 audience IDs and result notes.
     # Its handler pages lists; retain the complete explicitly recalled record.
     limit = 32000 if isinstance(result, dict) and result.get('type') in ('growth_report', 'save_growth_record') else MAX_RESULT_CHARS
