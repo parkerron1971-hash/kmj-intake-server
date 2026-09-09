@@ -5,11 +5,58 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+import httpx
 from fastapi import HTTPException
 from PIL import Image
 from pydantic import ValidationError
 
 import image_studio as studio
+
+
+def test_configured_model_controls_new_requests_and_quality_choices():
+    with patch.dict(studio.os.environ, {'OPENAI_IMAGE_MODEL': 'gpt-image-2'}):
+        req = studio.CreateImage(business_id=uuid4(), request_id=uuid4(), prompt='A promotional image')
+        assert req.model == 'gpt-image-2'
+        config = asyncio.run(studio.config())
+        assert config['model'] == 'gpt-image-2'
+        assert tuple(config['credits']) == ('low', 'medium', 'high')
+        assert 'max' not in config['qualities']
+    with patch.dict(studio.os.environ, {'OPENAI_IMAGE_MODEL': 'unreviewed'}):
+        with pytest.raises(HTTPException):
+            studio.configured_model()
+
+
+def test_unavailable_model_is_rejected_before_reservation_or_worker():
+    req = studio.CreateImage(business_id=uuid4(), request_id=uuid4(), prompt='A promotional image', model='gpt-image-2.5-sunburst')
+    client = AsyncMock()
+    client.get.return_value = httpx.Response(404, json={'error': {'code': 'model_not_found'}})
+    with patch.object(studio, 'business', new_callable=AsyncMock), \
+         patch.object(studio, 'db', new_callable=AsyncMock, return_value=[]) as db, \
+         patch.dict(studio.os.environ, {'OPENAI_API_KEY': 'test-only-placeholder'}), \
+         patch.object(studio.asyncio, 'create_task') as worker:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(studio.create(req, client))
+        assert exc.value.status_code == 503
+        assert 'GPT Image 2.5 Sunburst' in exc.value.detail
+        assert all(call.args[1] == 'GET' for call in db.call_args_list)
+        worker.assert_not_called()
+
+
+def test_unsupported_quality_does_not_silently_downgrade_or_reserve():
+    req = studio.CreateImage(business_id=uuid4(), request_id=uuid4(), prompt='A promotional image', model='gpt-image-2', quality='max')
+    with patch.object(studio, 'business', new_callable=AsyncMock), \
+         patch.object(studio, 'db', new_callable=AsyncMock) as db, \
+         patch.dict(studio.os.environ, {'OPENAI_API_KEY': 'test-only-placeholder'}):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(studio.create(req, None))
+        assert exc.value.status_code == 422
+        db.assert_not_called()
+
+
+def test_invalid_credentials_are_distinct_from_model_access():
+    error = studio.provider_error(httpx.Response(401, json={'error': {'code': 'invalid_api_key'}}), 'gpt-image-2')
+    assert 'API key' in error.detail
+    assert 'not available' not in error.detail
 
 
 def test_business_owner_is_checked_even_if_rls_returns_another_owner():

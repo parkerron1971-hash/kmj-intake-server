@@ -6,12 +6,14 @@ Chief can create and refine business images through ordinary chat or the dedicat
 
 1. Merge the backend release.
 2. Apply `supabase/APPLY-2026-09-08-image-studio.sql` and `supabase/APPLY-2026-09-08-conversation-desk.sql` for a new installation. Existing installations use the repeatable `supabase/APPLY-2026-09-09-image-upload-policy.sql` correction. All three are applied in production as of 2026-09-09 UTC; owner storage insertion and gallery/conversation reads were verified in a rollback-only transaction. Do not rerun the original setup over an existing installation: its initial policies are created once.
-3. Confirm the deployed OpenAI project has access to `gpt-image-2.5-sunburst`. The API also allows `gpt-image-2.5-flare`; there is no silent model downgrade. Account access has not been tested with a paid generation.
+3. Set `OPENAI_IMAGE_MODEL` to an explicitly supported model: `gpt-image-2`, `gpt-image-2.5-sunburst`, or `gpt-image-2.5-flare`. The unset default remains Sunburst. The production key's model endpoint returned 404 for both 2.5 models and 200 for GPT Image 2 on 2026-09-09. Configure GPT Image 2 to use the available model; switch explicitly to 2.5 once the project gains access. New requests check project access before reserving a job, with no automatic model substitution or paid retry.
 4. Release the paired frontend, then smoke-test one requested image, a reference edit, gallery reload, and download under an authenticated business owner. Test publishing only to an explicitly chosen destination.
 
 ## Cost controls
 
 High quality is the default. The server exposes quality credits through authenticated `GET /ai/images/config`. Opening credit prices use the existing hero regeneration baseline: low 7, medium 15, high 30, xhigh 60, max 90 when `PRICE_HERO_REGEN` is 30. Override with `PRICE_IMAGE_LOW`, `PRICE_IMAGE_MEDIUM`, `PRICE_IMAGE_HIGH`, `PRICE_IMAGE_XHIGH`, and `PRICE_IMAGE_MAX`.
+
+The configuration response also exposes the active model name and supported qualities. GPT Image 2 supports low, medium and high; 2.5 adds xhigh and max. Unsupported quality requests fail before any job reservation. The frontend uses these capabilities for its quality menu and identifies the active model in the composer.
 
 Product credits are distinct from provider USD charges. Actual model usage is saved and logged using the published standard token rates recorded on 2026-09-08: text input $5, cached text $1.25, image input $8, cached image $2, image output $30 per million tokens. Costs vary with image size, quality and references; there is no fixed API-call price. Sources: [image generation guide](https://developers.openai.com/api/docs/guides/image-generation) and [API pricing](https://developers.openai.com/api/docs/pricing).
 
