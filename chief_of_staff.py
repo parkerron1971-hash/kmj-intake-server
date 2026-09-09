@@ -96,6 +96,7 @@ from chief_contract_actions import (
     handle_draft_contract,
     handle_generate_document,
 )
+from chief_invoice_actions import handle_delete_invoice, handle_void_invoice, handle_archive_invoice, handle_restore_invoice
 # Client Forms — the public questionnaire that captures a lead. The
 # intake pipeline existed end to end; only the verb that CREATES a form
 # was missing. See chief_form_actions module docstring.
@@ -8421,6 +8422,8 @@ async def handle_send_invoice(client, biz, action) -> Dict:
         return _fail("send_invoice", f"Invoice {invoice_id} not found")
 
     invoice = rows[0]
+    if invoice.get('status') in ('cancelled', 'void'):
+        return _fail('send_invoice', 'This invoice is voided and cannot be sent. Create a replacement invoice instead.')
     print(f"[Chief] send_invoice — invoice_number: {invoice.get('invoice_number')}, "
           f"status: {invoice.get('status')}, total: {invoice.get('total')}, "
           f"contact_id: {invoice.get('contact_id')}, "
@@ -10414,6 +10417,10 @@ ACTION_HANDLERS = {
     "send_invoice":               handle_send_invoice,
     "send_report":                handle_send_report,
     "mark_invoice_paid":          handle_mark_invoice_paid,
+    "delete_invoice":             handle_delete_invoice,
+    "void_invoice":               handle_void_invoice,
+    "archive_invoice":            handle_archive_invoice,
+    "restore_invoice":            handle_restore_invoice,
     "cancel_recurring_invoice":   handle_cancel_recurring_invoice,
     "batch_email":                handle_batch_email,
     # Products & Services

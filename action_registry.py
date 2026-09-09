@@ -605,6 +605,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "'A' recommendation made before reading the handler.)"),
     "send_invoice":         _w("C", "sends an invoice and touches Stripe"),
     "mark_invoice_paid":    _w("C", "records payment — a ledger fact with a compliance trail"),
+    "delete_invoice":       _w("C", "hard-deletes only an explicitly identified unsent unpaid draft"),
+    "void_invoice":         _w("C", "cancels an unpaid invoice and disables its verified payment link"),
+    "archive_invoice":      _w("A", "reversible archive timestamp; invoice status and financial records remain intact"),
+    "restore_invoice":      _w("A", "clears the archive timestamp without altering the invoice or payment"),
     "cancel_recurring_invoice": _w("C", "stops or cancels recurring billing; money-touching"),
     "approve_bookkeeping_proposal": _w("C", "executes a categorization/match against the books. The "
                                             "module's own header refuses to offer bulk approval "
