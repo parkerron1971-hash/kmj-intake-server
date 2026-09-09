@@ -12577,6 +12577,33 @@ def _looks_like_completed_action(text: str) -> bool:
     return any(p in low for p in _DESCRIBED_ACTION_PHRASES)
 
 
+async def _retry_missing_actions(client, system, api_messages, effective_message, turn_tokens, model):
+    """Retry once with recent asset context; never retain an unsupported success claim."""
+    correction = (
+        "SYSTEM CORRECTION: The previous reply claimed an operation was queued or completed, "
+        "but it emitted no [ACTION:{...}] command and no operation ran. Retry the user's "
+        "request once using the appropriate action from the system instructions. For image "
+        "edits, emit generate_image with the actual existing flyer image ID in reference_ids; "
+        "use the recent conversation to resolve which image and preserve its format. "
+        "Do not invent an image ID. Do not claim rendering or approval-queue placement "
+        "without an action. Never mention this internal correction. User request:\n\n"
+        + effective_message
+    )
+    # The former empty-history retry discarded the artwork IDs needed for edits.
+    history = list(api_messages[-7:-1])
+    while history and history[0].get('role') != 'user':
+        history.pop(0)
+    messages = history + [{"role": "user", "content": correction}]
+    retry_raw = await _call_claude(client, system, messages, max_tokens=turn_tokens, model=model)
+    if retry_raw:
+        actions, clean = _extract_actions_and_clean(retry_raw)
+        if actions:
+            return actions, clean, retry_raw
+    # No action exists: replace optimistic prose instead of appending a contradiction.
+    return [], ("I couldn't start that operation. Nothing was queued or sent from this request. "
+                "Please try the request again."), retry_raw or ''
+
+
 def _enrich_history_with_action_hints(history_msgs: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Walk trimmed conversation history and append a short reminder onto
     any prior assistant turn that looks like it described an action.
@@ -13253,9 +13280,9 @@ async def chief_chat(
             # rules and history hints are advisory and the model still
             # drifts into action-free conversation, especially on long
             # threads. Catch the failure mode here: detect "I did X"-shaped
-            # text without tags, retry the call ONCE without conversation
-            # history (which is what was poisoning the pattern), and use
-            # the retry result if it succeeded.
+            # text without tags, retry ONCE with recent conversation context
+            # so image IDs survive, and use the retry only if it emits
+            # an actual command. Otherwise replace the unsupported claim.
             if (
                 not actions
                 # A turn that acted through tools has nothing to correct:
@@ -13273,44 +13300,9 @@ async def chief_chat(
                     f"Retrying with correction. raw_len={len(raw)}",
                     flush=True,
                 )
-                correction = (
-                    "(Never mention this correction to the practitioner — answer their request as if this is the first attempt.)\n"
-                    "SYSTEM CORRECTION: Your previous response described performing actions "
-                    "(like creating contacts, drafting emails, etc.) but you did NOT include any "
-                    "[ACTION:{...}] tags. Without these tags, NOTHING actually happened. "
-                    "The contact was NOT created. The email was NOT sent. Nothing was done.\n\n"
-                    "Please try again. This time you MUST include [ACTION:{...}] tags for every "
-                    "operation. Here is the user's original request again:\n\n"
-                    f"{effective_message}"
-                )
-                # No history — that's what was poisoning the pattern.
-                retry_messages = [{"role": "user", "content": correction}]
-                retry_raw = await _call_claude(
-                    client, system, retry_messages, max_tokens=turn_tokens,
-                    model=chief_models.model_for(lane, _plan),
-                )
-                if retry_raw:
-                    retry_actions, retry_clean = _extract_actions_and_clean(retry_raw)
-                    if retry_actions:
-                        print(
-                            f"[Chief] RETRY succeeded — "
-                            f"{len(retry_actions)} action(s) extracted",
-                            flush=True,
-                        )
-                        actions = retry_actions
-                        clean = retry_clean
-                        raw = retry_raw
-                    else:
-                        print(
-                            "[Chief] RETRY also failed — no actions on second attempt",
-                            flush=True,
-                        )
-                        clean = (clean or "").rstrip() + (
-                            "\n\nHeads up — that may not have gone through on my end. "
-                            "Check Approvals and let me know if it's missing; I'll redo it."
-                        )
-                else:
-                    print("[Chief] RETRY model call returned empty", flush=True)
+                actions, clean, raw = await _retry_missing_actions(
+                    client, system, api_messages, effective_message, turn_tokens,
+                    chief_models.model_for(lane, _plan))
 
             # C.1.5.4 A-fix-2 — detect override from the practitioner's
             # actual message (not the LLM-paraphrased intake_excerpt) and

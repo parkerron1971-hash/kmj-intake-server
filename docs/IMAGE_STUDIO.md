@@ -45,3 +45,10 @@ Capture performs an owner check first, uses an isolated cookie-free browser, and
 No migration or frontend deployment is needed. Regression checks:
 
 `python -m pytest __tests__/test_website_image_references.py __tests__/test_image_studio.py __tests__/test_action_registry.py __tests__/test_native_writes.py __tests__/test_tool_loop.py __tests__/test_mcp_writes.py __tests__/test_mcp_server.py -q`
+
+
+## Edit command recovery
+
+If Chief claims an operation started but emits no command, the one correction retry retains up to six recent messages so the existing flyer ID survives. If that retry emits no command or returns empty, the optimistic reply is replaced with an explicit not-started message; no fictional Approvals instruction is appended. Image edit guidance requires the existing flyer ID and explains that an edit produces a new gallery version, leaving the source intact.
+
+`python -m pytest __tests__/test_chief_missing_image_action.py __tests__/test_native_writes.py -q` covers retained image context and commandless/empty retry replies.
