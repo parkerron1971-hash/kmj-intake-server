@@ -4,6 +4,27 @@ import json
 from uuid import UUID
 import sb_clients
 
+COURSE_AUTHORING_MAX_TOKENS = 16000
+COURSE_INCOMPLETE_REPLY = (
+    "I couldn't finish this course-writing step, so that step was not saved. "
+    "Any earlier saved lessons are still in Course Studio. "
+    "Please ask me to build one lesson at a time to finish the course."
+)
+
+
+def is_course_tool(content):
+    return any(isinstance(block, dict) and block.get('type') == 'tool_use'
+               and block.get('name') in ('inspect_course', 'save_course_content')
+               for block in content)
+
+
+def allow_course_output(payload, content):
+    """Expand only after an actual Academy tool choice, not ordinary chat."""
+    if is_course_tool(content) and payload.get('max_tokens', 0) < COURSE_AUTHORING_MAX_TOKENS:
+        payload['max_tokens'] = COURSE_AUTHORING_MAX_TOKENS
+        return True
+    return False
+
 
 def obj(properties, required=()):
     return {"type": "object", "properties": properties, "required": list(required), "additionalProperties": False}

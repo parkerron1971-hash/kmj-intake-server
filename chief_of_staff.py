@@ -1114,6 +1114,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         tool_calls_done = 0
         for _round in range(rounds_cap):
           round_done = False
+          mute_course_retry = False
           for attempt in range(3):
               if attempt:
                   await asyncio.sleep(1.5 * attempt)
@@ -1179,7 +1180,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   if b is not None and b.get("type") == "text":
                                       b["_text"].append(piece)
                                   try:
-                                      stream_sink(piece)
+                                      if not mute_course_retry:
+                                          stream_sink(piece)
                                   except Exception:  # sink must never kill the turn
                                       pass
                               elif d.get("type") == "input_json_delta":
@@ -1218,6 +1220,15 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
                       business_id=business_id, task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms)
+                  from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
+                  if stop_reason == 'max_tokens' and is_course_tool(blocks.values()):
+                      # No tool from this truncated round was executed. Retry only
+                      # this model round, retaining earlier tool results/IDs.
+                      if attempt < 2 and allow_course_output(payload, blocks.values()):
+                          mute_course_retry = True
+                          _turn_status('Preparing your course lessons')
+                          continue
+                      return COURSE_INCOMPLETE_REPLY
                   if (tool_rounds_on and stop_reason == "tool_use"
                           and _round < rounds_cap - 1):
                       content: List[Dict[str, Any]] = []
@@ -1238,6 +1249,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           client, tool_biz, content, tool_calls_done)
                       if step is not None:
                           assistant_msg, results_msg, n_calls = step
+                          allow_course_output(payload, content)
                           tool_calls_done += n_calls
                           messages.append(assistant_msg)
                           messages.append(results_msg)
@@ -1380,6 +1392,11 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
           duration_ms=int(time.time() * 1000) - started_ms,
       )
       content = data.get("content", []) if isinstance(data, dict) else []
+      from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
+      if isinstance(data, dict) and data.get('stop_reason') == 'max_tokens' and is_course_tool(content):
+          if _round < chief_tool_loop.MAX_TOOL_ROUNDS - 1 and allow_course_output(payload, content):
+              continue
+          return COURSE_INCOMPLETE_REPLY
       if (tool_rounds_on and isinstance(data, dict)
               and data.get("stop_reason") == "tool_use"
               and _round < chief_tool_loop.MAX_TOOL_ROUNDS - 1):
@@ -1387,6 +1404,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               client, tool_biz, content, _tool_calls_done)
           if step is not None:
               assistant_msg, results_msg, n_calls = step
+              allow_course_output(payload, content)
               _tool_calls_done += n_calls
               messages.append(assistant_msg)
               messages.append(results_msg)
@@ -13695,7 +13713,14 @@ async def chief_chat_stream(
             while True:
                 getter = asyncio.ensure_future(q.get())
                 done, _ = await asyncio.wait(
-                    {getter, turn}, return_when=asyncio.FIRST_COMPLETED)
+                    {getter, turn}, timeout=15, return_when=asyncio.FIRST_COMPLETED)
+                if not done:
+                    getter.cancel()
+                    await asyncio.gather(getter, return_exceptions=True)
+                    # Course/tool JSON can take a while without visible text.
+                    # Keep proxies from treating that silence as a dead stream.
+                    yield ": keep-alive\n\n"
+                    continue
                 if getter in done:
                     for ev in _stream_piece_events(getter.result(), filt):
                         yield _evt(ev)
