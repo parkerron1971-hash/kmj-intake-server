@@ -57,8 +57,9 @@ handler directly.
 Bounded on purpose: MAX_WRITE_CALLS per turn, separate from the read
 budget, and a held verdict (a spoken-confirmation hold, a tainted
 turn) spends the whole budget — the model gets one HELD and must ask,
-not retry. Class C has no tool today (no schema exists for it) and
-still travels as a tag, single-shot, exactly as before.
+not retry. Image generation is the one Chief-only class-C tool on a
+prompted chat turn. It uses the same authorization door, is limited to
+one attempt per turn, and is never exposed through external MCP.
 
 A turn that acted through tools skips the recompose call and the
 correction retry: the model already saw every result before it wrote
@@ -127,9 +128,14 @@ _turn_prompted: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "chief_tool_loop.prompted", default=True)
 
 
+_image_attempted: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "chief_tool_loop.image_attempted", default=False)
+
+
 def reset_turn(writes_allowed: bool = False, *, surface: str = "chat",
                prompted: bool = True) -> None:
     _calls_this_turn.set(0)
+    _image_attempted.set(False)
     _writes_allowed.set(bool(writes_allowed))
     _writes_this_turn.set([])
     _write_calls.set(0)
@@ -196,6 +202,49 @@ def write_tool_definitions() -> List[Dict[str, Any]]:
     return out
 
 
+def image_attempted() -> bool:
+    return _image_attempted.get()
+
+
+def image_tool_definition() -> Dict[str, Any]:
+    return {
+        "name": "generate_image",
+        "description": (
+            "Create or edit ONE image when the practitioner requests it. Call this tool "
+            "before saying an image is queued or rendering; prose alone does nothing. "
+            "For edits, put the existing artwork ID first in reference_ids and describe "
+            "only the requested changes plus details to preserve. Omit size to retain "
+            "that artwork's format; workspace defaults apply only to new images. "
+            "Use IDs from this conversation or find_images, never invented IDs. "
+            "The result supplies a new gallery image card and real job status. "
+            "This costs money; do not retry or emit a duplicate ACTION tag this turn."),
+        "input_schema": {
+            "type": "object", "required": ["prompt"], "additionalProperties": False,
+            "properties": {
+                "prompt": {"type": "string", "minLength": 3, "maxLength": 12000},
+                "reference_ids": {"type": "array", "maxItems": 4,
+                                  "items": {"type": "string", "format": "uuid"}},
+                "quality": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]},
+                "size": {"type": "string", "enum": ["1024x1024", "1536x1024", "1024x1536"]},
+                "website_url": {"type": "string"},
+                "include_website_logo": {"type": "boolean"},
+            },
+        },
+    }
+
+
+def _image_tool_offered() -> bool:
+    return (_writes_allowed.get() and _turn_surface.get() == "chat"
+            and _turn_prompted.get()
+            and action_registry.effect("generate_image") == action_registry.WRITE)
+
+
+def remaining_tag_actions(actions):
+    # Native execution already attempted the paid job, including a failed/held
+    # attempt. A prose tag must not retry it or incur a second charge.
+    return [a for a in actions if not (image_attempted() and a.get("type") == "generate_image")]
+
+
 def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
     """Reads always; writes when the turn allows them; PROPOSALS — the
     reviewed class C verbs, filed for the practitioner's approval rather
@@ -206,6 +255,8 @@ def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
     tools = read_tool_definitions()
     if writes:
         tools += write_tool_definitions()
+        if _image_tool_offered():
+            tools.append(image_tool_definition())
         if _turn_surface.get() != "chat" or not _turn_prompted.get():
             import action_proposals
             tools += [_anthropic_shape(t) for t in action_proposals.tool_definitions()]
@@ -302,7 +353,7 @@ async def _execute_write(client, biz: Dict[str, Any],
     if not _writes_allowed.get():
         return True, (f"'{name}' changes records and is not a mid-turn tool on "
                       f"this turn. Operations go through [ACTION:] tags in your reply.")
-    if not _write_verb_offered(name):
+    if not (_write_verb_offered(name) or (name == "generate_image" and _image_tool_offered())):
         # Class C, bulk, unreviewed, or sensitive. The same flat sentence
         # the agent surface uses, so a refusal is never a hint that a
         # scope or a retry would help.
@@ -316,6 +367,10 @@ async def _execute_write(client, biz: Dict[str, Any],
     if handler is None:
         return True, f"'{name}' has no handler."
 
+    if name == "generate_image":
+        if image_attempted():
+            return True, "An image request was already attempted this turn. Use its result; do not retry."
+        _image_attempted.set(True)
     _calls_this_turn.set(_calls_this_turn.get() + 1)
     _write_calls.set(_write_calls.get() + 1)
     if _write_calls.get() >= MAX_WRITE_CALLS:
@@ -339,7 +394,9 @@ async def _execute_write(client, biz: Dict[str, Any],
             client, biz, [action], user_id=user_id, **door_kwargs)
     except Exception as e:
         logger.warning(f"[tool-loop] write {name} raised: {e}")
-        return True, f"'{name}' failed: {type(e).__name__}. Tell the practitioner it did not go through."
+        result = chief_of_staff._fail(name, f"{type(e).__name__}: the operation did not go through")
+        _writes_this_turn.set(_writes_this_turn.get() + [result])
+        return True, _shrink(result)
     result = results[0] if results else chief_of_staff._fail(name, "nothing was returned")
     if not isinstance(result, dict):
         result = {"type": name, "result": str(result), "label": name}

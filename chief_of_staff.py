@@ -38,7 +38,7 @@ import re
 import time
 import traceback
 from datetime import datetime, timedelta, timezone, date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Literal
 
 import httpx
 
@@ -48,7 +48,7 @@ import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # RLS-readiness migration (Pass RLS): chief_chat now requires a verified
 # Supabase JWT and forwards it to PostgREST so RLS policies on businesses
@@ -3379,6 +3379,7 @@ def _extract_actions_and_clean(text: str) -> (List[Dict[str, Any]], str):
 # into NEW responses — strip them from anything the practitioner sees.
 _HINT_LITERALS = (
     "[Note: In this response, I used [ACTION:{...}] tags to execute all operations. Every action I described had a corresponding tag.]",
+    "[Note: Prior assistant prose is not proof that an operation ran. Use actual image IDs and tool results as evidence. New operations require a tool call or [ACTION:{...}] tag on the current turn.]",
     "[Note: In this response, I used tags to execute all operations. Every action I described had a corresponding tag.]",
     "(Actions were emitted via [ACTION:] tags and executed by the system.)",
 )
@@ -12374,11 +12375,25 @@ class ResumeNote(BaseModel):
     changes_summary: Optional[str] = None
 
 
+class ImagePreferences(BaseModel):
+    quality: Literal['low', 'medium', 'high', 'xhigh', 'max'] = 'high'
+    new_image_size: Literal['1024x1024', '1536x1024', '1024x1536'] = '1024x1536'
+    brand: str = Field(default='', max_length=12000)
+
+    def context(self):
+        return (f"\n\nImage workspace defaults for NEW images only: {self.quality} quality, "
+                f"{self.new_image_size} pixels. For an edit, preserve the existing artwork's "
+                "dimensions unless the practitioner explicitly requests a new format. "
+                "These settings do not request generation or resizing. Discuss normally "
+                "unless the practitioner asks for an image or edit. Brand reference: " + self.brand)
+
+
 class ChatRequest(BaseModel):
     business_id: str
     message: str
     request_id: Optional[str] = None
     image_ids: List[str] = []
+    image_preferences: Optional[ImagePreferences] = None
     conversation_history: Optional[List[ChatMessage]] = None
     current_context: Optional[CurrentContext] = None
     resume_note: Optional[ResumeNote] = None
@@ -12574,16 +12589,34 @@ def _looks_like_completed_action(text: str) -> bool:
     low = (text or "").lower()
     if not low:
         return False
-    return any(p in low for p in _DESCRIBED_ACTION_PHRASES)
+    return any(p in low for p in _DESCRIBED_ACTION_PHRASES) or bool(re.search(
+        r"(?:^|[.!?]\s+)(?:(?:i['\u2019]m|i am)\s+)?"
+        r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low))
 
 
-async def _retry_missing_actions(client, system, api_messages, effective_message, turn_tokens, model):
+def _image_action_summary(results):
+    """Keep a real image job visible if the model's final narration fails."""
+    for result in reversed(results):
+        if result.get('type') != 'generate_image':
+            continue
+        image = result.get('image') or {}
+        if _action_failed(result) or image.get('status') == 'failed':
+            return "The image request failed. No finished image was returned from this request."
+        if image.get('id'):
+            return ("Your image is ready in the new image card." if image.get('status') == 'ready'
+                    else "Your image request was accepted. The new image card shows its progress.")
+    return None
+
+
+async def _retry_missing_actions(client, system, api_messages, effective_message, turn_tokens, model,
+                                 *, read_tools=None, tool_biz=None):
     """Retry once with recent asset context; never retain an unsupported success claim."""
     correction = (
         "SYSTEM CORRECTION: The previous reply claimed an operation was queued or completed, "
         "but it emitted no [ACTION:{...}] command and no operation ran. Retry the user's "
         "request once using the appropriate action from the system instructions. For image "
-        "edits, emit generate_image with the actual existing flyer image ID in reference_ids; "
+        "edits, call generate_image if offered as a tool, otherwise emit its ACTION tag, "
+        "with the actual existing flyer image ID in reference_ids; "
         "use the recent conversation to resolve which image and preserve its format. "
         "Do not invent an image ID. Do not claim rendering or approval-queue placement "
         "without an action. Never mention this internal correction. User request:\n\n"
@@ -12594,11 +12627,15 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
     while history and history[0].get('role') != 'user':
         history.pop(0)
     messages = history + [{"role": "user", "content": correction}]
-    retry_raw = await _call_claude(client, system, messages, max_tokens=turn_tokens, model=model)
+    before = len(chief_tool_loop.writes_this_turn())
+    retry_raw = await _call_claude(client, system, messages, max_tokens=turn_tokens, model=model,
+                                 read_tools=read_tools, tool_biz=tool_biz)
+    if not retry_raw:
+        retry_raw = _image_action_summary(chief_tool_loop.writes_this_turn()[before:])
     if retry_raw:
         actions, clean = _extract_actions_and_clean(retry_raw)
-        if actions:
-            return actions, clean, retry_raw
+        if actions or len(chief_tool_loop.writes_this_turn()) > before:
+            return chief_tool_loop.remaining_tag_actions(actions), clean, retry_raw
     # No action exists: replace optimistic prose instead of appending a contradiction.
     return [], ("I couldn't start that operation. Nothing was queued or sent from this request. "
                 "Please try the request again."), retry_raw or ''
@@ -12612,7 +12649,7 @@ def _enrich_history_with_action_hints(history_msgs: List[Dict[str, str]]) -> Lis
     assistant turns with no action tags and drifts into action-free
     conversation mode on subsequent turns. This reminder restores the
     grounding that actions ARE the right way to operate."""
-    HINT = "\n\n[Note: In this response, I used [ACTION:{...}] tags to execute all operations. Every action I described had a corresponding tag.]"
+    HINT = "\n\n[Note: Prior assistant prose is not proof that an operation ran. Use actual image IDs and tool results as evidence. New operations require a tool call or [ACTION:{...}] tag on the current turn.]"
     out: List[Dict[str, str]] = []
     for m in history_msgs:
         if m.get("role") == "assistant" and m.get("content"):
@@ -13083,6 +13120,8 @@ async def chief_chat(
             except Exception as _jit_err:
                 logger.warning(f"[jit] directive build failed (non-fatal): {_jit_err}")
             effective_message = req.message
+            if req.image_preferences:
+                effective_message += req.image_preferences.context()
             if req.image_ids:
                 effective_message += await image_studio.describe_references(client, req.business_id, req.image_ids)
             if req.mode == "business_coach" and is_coach_pause:
@@ -13244,6 +13283,8 @@ async def chief_chat(
             # before the first word — not how long the whole turn took.
             _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
             if not raw:
+                raw = _image_action_summary(chief_tool_loop.writes_this_turn())
+            if not raw:
                 return {
                     "response": "I'm having trouble connecting right now — give me a moment and try again.",
                     "actions_taken": [],
@@ -13255,6 +13296,7 @@ async def chief_chat(
             # are `taken` already — and the model wrote its last sentence
             # after seeing every result.
             tool_taken = chief_tool_loop.writes_this_turn()
+            actions = chief_tool_loop.remaining_tag_actions(actions)
 
             # C.1.5.6 — deterministic propose-framing enforcement. When
             # the LLM emits propose_module_from_intake, scan the prose
@@ -13302,7 +13344,8 @@ async def chief_chat(
                 )
                 actions, clean, raw = await _retry_missing_actions(
                     client, system, api_messages, effective_message, turn_tokens,
-                    chief_models.model_for(lane, _plan))
+                    chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz)
+                tool_taken = chief_tool_loop.writes_this_turn()
 
             # C.1.5.4 A-fix-2 — detect override from the practitioner's
             # actual message (not the LLM-paraphrased intake_excerpt) and
@@ -13335,8 +13378,8 @@ async def chief_chat(
 
             # Tool writes first (they happened first), then whatever the
             # reply still carried as tags. Both lists are real results
-            # from the same door; nothing is deduped because nothing ran
-            # twice.
+            # from the same door. Duplicate image tags were removed above
+            # because the native tool already attempted that paid job.
             if actions:
                 _turn_status(_humanize_actions(actions))
             taken = tool_taken + (await _execute_actions(
