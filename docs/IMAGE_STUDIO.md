@@ -5,7 +5,7 @@ Chief can create and refine business images through ordinary chat or the dedicat
 ## Enable
 
 1. Merge the backend release.
-2. Kevin applies `supabase/APPLY-2026-09-08-image-studio.sql` and `supabase/APPLY-2026-09-08-conversation-desk.sql` in Supabase SQL Editor. Both are idempotent. These migrations have been tested locally, not applied to production.
+2. Apply `supabase/APPLY-2026-09-08-image-studio.sql` and `supabase/APPLY-2026-09-08-conversation-desk.sql` for a new installation. Existing installations use the repeatable `supabase/APPLY-2026-09-09-image-upload-policy.sql` correction. All three are applied in production as of 2026-09-09 UTC; owner storage insertion and gallery/conversation reads were verified in a rollback-only transaction. Do not rerun the original setup over an existing installation: its initial policies are created once.
 3. Confirm the deployed OpenAI project has access to `gpt-image-2.5-sunburst`. The API also allows `gpt-image-2.5-flare`; there is no silent model downgrade. Account access has not been tested with a paid generation.
 4. Release the paired frontend, then smoke-test one requested image, a reference edit, gallery reload, and download under an authenticated business owner. Test publishing only to an explicitly chosen destination.
 

@@ -17,8 +17,8 @@ grant all on public.image_artworks to service_role;
 insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
  values ('image-originals','image-originals',false,20971520,array['image/png','image/jpeg','image/webp']) on conflict(id) do nothing;
 create policy image_originals_owner on storage.objects for all to authenticated
- using(bucket_id='image-originals' and exists(select 1 from public.businesses b where b.id::text=(storage.foldername(name))[1] and b.owner_id=auth.uid()))
- with check(bucket_id='image-originals' and exists(select 1 from public.businesses b where b.id::text=(storage.foldername(name))[1] and b.owner_id=auth.uid()));
+ using(bucket_id='image-originals' and exists(select 1 from public.businesses b where b.id::text=(storage.foldername(storage.objects.name))[1] and b.owner_id=auth.uid()))
+ with check(bucket_id='image-originals' and exists(select 1 from public.businesses b where b.id::text=(storage.foldername(storage.objects.name))[1] and b.owner_id=auth.uid()));
 
 -- Serialize reservations so parallel tabs cannot bypass the daily spend backstop.
 create or replace function public.reserve_image_artwork(p_record jsonb, p_daily_limit integer default 20)

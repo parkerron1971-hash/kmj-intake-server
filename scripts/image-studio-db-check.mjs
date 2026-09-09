@@ -5,7 +5,8 @@ const db = new PGlite();
 await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
 create schema auth; create schema storage;
 create function auth.uid() returns uuid language sql as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
-create table businesses(id uuid primary key,owner_id uuid,settings jsonb default '{}');
+-- Keep the real name column: omitting it hides correlated-policy name shadowing.
+create table businesses(id uuid primary key,owner_id uuid,settings jsonb default '{}',name text default 'Example business');
 alter table businesses enable row level security;
 create policy own_business on businesses for all to authenticated using(owner_id=auth.uid()) with check(owner_id=auth.uid());
 create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
@@ -16,9 +17,12 @@ grant usage on schema public,auth,storage to authenticated,anon,service_role;
 grant select,update on businesses to authenticated;
 grant select,insert,update,delete on storage.objects to authenticated;`);
 await db.exec(readFileSync('supabase/APPLY-2026-09-08-image-studio.sql','utf8'));
+// Existing deployments must be repairable, and reapplying the repair is safe.
+await db.exec(readFileSync('supabase/APPLY-2026-09-09-image-upload-policy.sql','utf8'));
+await db.exec(readFileSync('supabase/APPLY-2026-09-09-image-upload-policy.sql','utf8'));
 const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const [owner,biz,otherOwner,otherBiz]=[1,2,3,4].map(id);
-await db.query('insert into businesses values($1,$2,$3),($4,$5,$3)',[biz,owner,{brand:'keep',content_calendar:{posted:[],strategy:'keep'}},otherBiz,otherOwner]);
+await db.query('insert into businesses(id,owner_id,settings) values($1,$2,$3),($4,$5,$3)',[biz,owner,{brand:'keep',content_calendar:{posted:[],strategy:'keep'}},otherBiz,otherOwner]);
 const as=async(uid,role='authenticated')=>{await db.exec('reset role');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[uid||'']);await db.exec(`set role ${role}`);};
 const reserve=(n,business_id=biz)=>db.query('select * from reserve_image_artwork($1,20)',[{id:id(n),business_id,prompt:'Approved flyer',model:'test-model',quality:'high',size:'1024x1536',reference_ids:[]}]);
 await as(owner);
