@@ -1,6 +1,6 @@
 # Image Studio release
 
-Chief can create and refine business images through ordinary chat or the dedicated creative workspace. Both use the same private originals and server `OPENAI_API_KEY` already used by voice. Reference inputs are owned artwork IDs, never arbitrary fetch URLs.
+Chief can create and refine business images through ordinary chat or the dedicated creative workspace. Both use the same private originals and server `OPENAI_API_KEY` already used by voice. Generation reference inputs are owned artwork IDs. Public website URLs are handled by a dedicated isolated capture tool, then saved as owned references.
 
 ## Enable
 
@@ -32,3 +32,23 @@ Publishing prepares a public JPEG delivery copy, disclosed in the UI, and hands 
 `python -m pytest __tests__/test_image_studio.py __tests__/test_action_registry.py -q`
 
 `node scripts/image-studio-db-check.mjs` exercises the migration in PGlite. Install `@electric-sql/pglite` in a disposable test directory and set `PGLITE_MODULE` to its absolute file URL, or make the package available to Node. It verifies ownership, private storage, server-only status, daily limits, idempotency, atomic drafts and publication claims without connecting to production.
+
+
+## Website references (2026-09-09)
+
+Chief has a native `capture_website_references` tool (`url`, optional `include_logo`, default true). It captures a 1600x1100 desktop viewport and downloads the best identifiable website logo, preserving raster originals after PNG normalization. Rendered SVG/data logos use an element screenshot and may include the website background. Supply a page path or fragment to target the relevant offer. No model API is called for capture.
+
+The saved images use the existing private gallery contract and appear in ordinary chat and Image Studio. They can be reused through `find_images`. `generate_image` also accepts `website_url` and optional `include_website_logo: false`: capture happens before generation, with role descriptions added to the prompt and real owned IDs supplied to the image API. Current-turn attachments are the fallback when the model omits IDs. There are still at most four generation references; overflow is rejected rather than silently dropping assets. Missing logos or capture failures stop the combined workflow before a paid generation.
+
+Capture performs an owner check first, uses an isolated cookie-free browser, and intercepts every HTTP resource through a DNS-pinned public-IP fetcher. Login pages, non-default ports, private addresses, credentials in URLs, WebSockets, service workers and non-GET requests are blocked. Only public document/style/image/font/script resources load. Some sites that require API-driven rendering or bot challenges will need manual references. TLS verification remains enabled. Limits: 45 seconds, 100 requests, 8 MB per resource, 32 MB total, two simultaneous captures per process, and 40 saved capture assets per business per hour. Same-turn deterministic asset IDs reuse completed captures. Capture assets record zero model-provider cost; hosting/storage and Chief's planning calls are separate.
+
+No migration or frontend deployment is needed. Regression checks:
+
+`python -m pytest __tests__/test_website_image_references.py __tests__/test_image_studio.py __tests__/test_action_registry.py __tests__/test_native_writes.py __tests__/test_tool_loop.py __tests__/test_mcp_writes.py __tests__/test_mcp_server.py -q`
+
+
+## Edit command recovery
+
+If Chief claims an operation started but emits no command, the one correction retry retains up to six recent messages so the existing flyer ID survives. If that retry emits no command or returns empty, the optimistic reply is replaced with an explicit not-started message; no fictional Approvals instruction is appended. Image edit guidance requires the existing flyer ID and explains that an edit produces a new gallery version, leaving the source intact.
+
+`python -m pytest __tests__/test_chief_missing_image_action.py __tests__/test_native_writes.py -q` covers retained image context and commandless/empty retry replies.

@@ -270,7 +270,7 @@ def test_chief_chat_wires_the_turn():
 
 def test_a_tool_turn_skips_the_correction_retry_and_the_recompose():
     src = inspect.getsource(cos.chief_chat)
-    retry = src[src.index("SYSTEM CORRECTION") - 1200: src.index("SYSTEM CORRECTION")]
+    retry = src[src.index("_retry_missing_actions(") - 1200: src.index("_retry_missing_actions(")]
     assert "and not tool_taken" in retry, "a tool_use block is the evidence; nothing to correct"
     recompose = src[src.index("Option D two-pass reply"): src.index("Option D two-pass reply") + 1500]
     assert "if taken and actions:" in recompose, (

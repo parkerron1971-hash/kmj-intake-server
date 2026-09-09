@@ -122,9 +122,13 @@ def test_the_write_surface_count_is_a_tripwire():
     58 (2026-09-08, Academy): save_course_content (1) authors complete
     course lessons and assessment settings through the owner-JWT RPC.
     It does not publish, enroll, send invitations or spend money.
+    59 (2026-09-09, website image references): capture_website_references
+    saves owner-scoped public website assets only; no paid generation,
+    authenticated browsing, or publishing. URLs and all subresources
+    are validated and DNS-pinned; gallery storage uses the owner JWT.
     """
     offered = set(mcp.exposed_tools(allow_writes=True)) - set(mcp.exposed_tools())
-    assert len(offered) == 58, (
+    assert len(offered) == 59, (
         f"write surface changed: {sorted(offered)}. If a verb was added, "
         "decide whether an outside agent should change it, write its "
         "schema from the handler, and update this count on purpose.")
