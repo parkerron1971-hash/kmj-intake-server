@@ -10253,11 +10253,12 @@ from chief_business_learning_actions import (
     handle_capture_business_knowledge,
 )
 
-from image_studio import handle_generate_image, handle_find_images
+from image_studio import handle_generate_image, handle_find_images, handle_capture_website_references
 
 ACTION_HANDLERS = {
     "generate_image": handle_generate_image,
     "find_images": handle_find_images,
+    "capture_website_references": handle_capture_website_references,
     "create_video": __import__('chief_video_actions').handle_create_video,
     "inspect_video": __import__('chief_video_actions').handle_inspect_video,
     "revise_video": __import__('chief_video_actions').handle_revise_video,
@@ -12718,6 +12719,7 @@ async def chief_chat(
     import image_studio
     _image_turn_token = image_studio.turn_id.set(req.request_id or str(__import__('uuid').uuid4()))
     _image_index_token = image_studio.turn_image_index.set(0)
+    _image_refs_token = image_studio.turn_references.set(tuple(req.image_ids))
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -13512,6 +13514,7 @@ async def chief_chat(
         sb_clients.reset_user_jwt(_jwt_token)
         image_studio.turn_id.reset(_image_turn_token)
         image_studio.turn_image_index.reset(_image_index_token)
+        image_studio.turn_references.reset(_image_refs_token)
         try:
             _TURN_USER_ID.reset(_uid_token)
             try:

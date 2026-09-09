@@ -520,6 +520,10 @@ _HOURS = {"type": "array",
                                            "description": "HH:MM, 24-hour"}}}}
 
 WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "capture_website_references": (
+        "Capture a public website screenshot and its original logo as private gallery images. Use for image design references when the user provides a website; no login, publishing, or image-generation charge. Returns image IDs and roles. You can then use the IDs in generate_image. Do not ask the user to upload assets that this public website can supply.",
+        _obj({"url": {"type": "string", "description": "Public website/page URL supplied by the user or their verified business site. A path or fragment can target the relevant page/section."},
+              "include_logo": {"type": "boolean", "description": "Defaults true. False for screenshot-only captures."}}, ["url"])),
     "save_course_content": ACADEMY_WRITE_SCHEMA,
     "save_growth_record": GROWTH_WRITE_SCHEMA,
     # ── people ───────────────────────────────────────────────────────
