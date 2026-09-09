@@ -85,9 +85,9 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "claude-opus-4-5":   (500.0, 2500.0),
     # Opus 4.0/4.1 (retired/deprecated) — $15/MTok in, $75/MTok out
     "claude-opus-4":     (1500.0, 7500.0),
-    # Sonnet 5 — intro $2/$10 through 2026-08-31, then $3/$15; we book
-    # at the standard rate so margins are computed conservatively.
-    "claude-sonnet-5":   (300.0, 1500.0),
+    # Sonnet 5 — $2/$10 is now permanent; the scheduled September increase
+    # was cancelled. Verified 2026-09-09 against the official pricing page.
+    "claude-sonnet-5":   (200.0, 1000.0),
     # Sonnet 4.x — $3/MTok in, $15/MTok out
     "claude-sonnet-4":   (300.0, 1500.0),
     # Haiku 4.5 — $1/MTok in, $5/MTok out

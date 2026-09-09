@@ -65,13 +65,6 @@ def provider_error(response, model):
     return HTTPException(502, 'The image provider could not complete this request. Try again later.')
 
 
-async def ensure_model_access(client, model):
-    response = await client.get(f'https://api.openai.com/v1/models/{model}',
-        headers={'Authorization': f"Bearer {os.environ.get('OPENAI_API_KEY', '')}"})
-    if not response.is_success:
-        raise provider_error(response, model)
-
-
 def image_units(quality):
     """Uses the existing image/hero price as the opening baseline; each tier is configurable."""
     import pricing_config
@@ -220,6 +213,9 @@ async def generate_worker(row):
     async with httpx.AsyncClient(timeout=240) as client:
         image_id = row['id']
         usage = None
+        booked_cost = None
+        completed = False
+        message = None
         try:
             claimed = await db(client, 'PATCH', f'/image_artworks?id=eq.{image_id}&status=eq.queued', {'status': 'working'}, server_write=True)
             if not claimed:
@@ -235,25 +231,33 @@ async def generate_worker(row):
                 response = await client.post('https://api.openai.com/v1/images/generations', headers=headers, json=payload)
             if not response.is_success:
                 raise provider_error(response, row['model'])
+            logger.info('Image provider completed request: model=%s request_id=%s',
+                row['model'], response.headers.get('x-request-id', 'unavailable'))
             data = response.json()
             usage = data.get('usage') or {}
             # Persist usage BEFORE storage so a failed save does not erase a paid generation.
             cost = image_cost(usage)
-            await db(client, 'PATCH', f'/image_artworks?id=eq.{image_id}', {'usage': usage, 'cost_usd': cost}, server_write=True)
             booked_cost = cost if cost is not None else (usage.get('input_tokens', 0) * 8 + usage.get('output_tokens', 0) * 30) / 1_000_000
-            await log_api_usage(endpoint='/ai/images/generate', model=row['model'], business_id=row['business_id'],
-                input_tokens=usage.get('input_tokens', 0), output_tokens=usage.get('output_tokens', 0),
-                task_type='image_generation', cost_cents_override=booked_cost * 100, units=image_units(row['quality']))
+            await db(client, 'PATCH', f'/image_artworks?id=eq.{image_id}', {'usage': usage, 'cost_usd': cost}, server_write=True)
             raw = normalize_image(base64.b64decode(data['data'][0]['b64_json'], validate=True))
             path = f"{row['business_id']}/{image_id}.png"
             await store(client, path, raw, 'image/png')
             await db(client, 'PATCH', f'/image_artworks?id=eq.{image_id}', {'status': 'ready', 'storage_path': path, 'updated_at': datetime.now(timezone.utc).isoformat()}, server_write=True)
+            completed = True
         except Exception as exc:
             message = exc.detail if isinstance(exc, HTTPException) else 'Image generation was interrupted. Please try a new request.'
             try:
                 await db(client, 'PATCH', f'/image_artworks?id=eq.{image_id}', {'status': 'failed', 'error': message, 'updated_at': datetime.now(timezone.utc).isoformat()}, server_write=True)
             except Exception:
                 pass  # Polling reports interrupted jobs after ten minutes; never regenerate invisibly.
+        finally:
+            if booked_cost is not None:
+                # Record paid provider work even if saving failed; only a delivered
+                # image consumes customer credits. No automatic paid retry.
+                await log_api_usage(endpoint='/ai/images/generate', model=row['model'], business_id=row['business_id'],
+                    input_tokens=usage.get('input_tokens', 0), output_tokens=usage.get('output_tokens', 0),
+                    task_type='image_generation', cost_cents_override=booked_cost * 100,
+                    units=image_units(row['quality']) if completed else 0, ok=completed, error=message)
 
 
 async def create(req: CreateImage, client):
@@ -269,8 +273,9 @@ async def create(req: CreateImage, client):
         if any(existing[0].get(k) != record.get(k) for k in ('business_id', 'prompt', 'model', 'quality', 'size', 'reference_ids')):
             raise HTTPException(409, 'That request ID already belongs to a different image request.')
         return await present(client, existing[0])
-    # Verify the actual project key before reserving a job or charging generation.
-    await ensure_model_access(client, req.model)
+    # The model catalog can return 404 for models the Images API accepts.
+    # Determine access from the actual generation/edit response in the worker.
+    # Ownership, reference readiness, quota and idempotency still gate the job.
     for ref in req.reference_ids:
         row = await artwork(client, req.business_id, ref)
         if row['status'] != 'ready':

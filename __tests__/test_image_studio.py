@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -26,20 +27,131 @@ def test_configured_model_controls_new_requests_and_quality_choices():
             studio.configured_model()
 
 
-def test_unavailable_model_is_rejected_before_reservation_or_worker():
-    req = studio.CreateImage(business_id=uuid4(), request_id=uuid4(), prompt='A promotional image', model='gpt-image-2.5-sunburst')
-    client = AsyncMock()
-    client.get.return_value = httpx.Response(404, json={'error': {'code': 'model_not_found'}})
-    with patch.object(studio, 'business', new_callable=AsyncMock), \
-         patch.object(studio, 'db', new_callable=AsyncMock, return_value=[]) as db, \
-         patch.dict(studio.os.environ, {'OPENAI_API_KEY': 'test-only-placeholder'}), \
-         patch.object(studio.asyncio, 'create_task') as worker:
-        with pytest.raises(HTTPException) as exc:
-            asyncio.run(studio.create(req, client))
-        assert exc.value.status_code == 503
-        assert 'GPT Image 2.5 Sunburst' in exc.value.detail
-        assert all(call.args[1] == 'GET' for call in db.call_args_list)
-        worker.assert_not_called()
+@pytest.mark.parametrize('model', studio.MODELS)
+@pytest.mark.parametrize('editing', [False, True])
+def test_catalog_404_does_not_block_generation_or_reference_edit(model, editing):
+    req = studio.CreateImage(business_id=uuid4(), request_id=uuid4(),
+        prompt='Add 90-Day Intensive beneath 50% OFF. Keep the same layout.',
+        model=model, size='1536x1024', reference_ids=[uuid4()] if editing else [])
+    row = {'id': str(req.request_id), 'business_id': str(req.business_id),
+        'prompt': req.prompt, 'model': model, 'quality': req.quality, 'size': req.size,
+        'reference_ids': [str(ref) for ref in req.reference_ids], 'status': 'queued'}
+    buffer = io.BytesIO()
+    Image.new('RGB', (8, 8), 'blue').save(buffer, 'PNG')
+    raw = buffer.getvalue()
+    requests = []
+
+    def provider(request):
+        requests.append(request)
+        if request.method == 'GET':
+            return httpx.Response(404, json={'error': {'code': 'model_not_found'}})
+        return httpx.Response(200, headers={'x-request-id': 'test-generation-receipt'},
+            json={'data': [{'b64_json': base64.b64encode(raw).decode()}],
+                  'usage': {'input_tokens': 15, 'output_tokens': 196,
+                            'input_tokens_details': {'text_tokens': 15, 'image_tokens': 0}}})
+
+    async def database(client, method, path, payload=None, **kwargs):
+        if method == 'GET':
+            return []
+        if method == 'PATCH':
+            row.update(payload)
+        return [dict(row)]
+
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+        with patch.object(studio.httpx, 'AsyncClient', return_value=client), \
+             patch.object(studio, 'business', new_callable=AsyncMock), \
+             patch.object(studio, 'db', side_effect=database), \
+             patch.object(studio, 'artwork', new_callable=AsyncMock, return_value={'status': 'ready'}), \
+             patch.object(studio, 'original', new_callable=AsyncMock, return_value=raw) as original, \
+             patch.object(studio, 'store', new_callable=AsyncMock) as store, \
+             patch.object(studio, 'present', new_callable=AsyncMock, side_effect=lambda c, r: r), \
+             patch.object(studio, 'log_api_usage', new_callable=AsyncMock) as meter, \
+             patch('billing_limits.require_units') as budget, \
+             patch.dict(studio.os.environ, {'OPENAI_API_KEY': 'test-only-placeholder'}):
+            await studio.create(req, client)
+            await asyncio.gather(*list(studio._tasks))
+            budget.assert_called_once_with(str(req.business_id))
+            store.assert_awaited_once()
+            assert original.await_count == int(editing)
+            meter.assert_awaited_once()
+            assert meter.call_args.kwargs['units'] == studio.image_units('high')
+            assert meter.call_args.kwargs['cost_cents_override'] == pytest.approx(.5955)
+            assert meter.call_args.kwargs['ok'] is True
+
+    asyncio.run(run())
+    assert row['status'] == 'ready'
+    assert row['size'] == '1536x1024'
+    assert len(requests) == 1
+    assert requests[0].url.path == ('/v1/images/edits' if editing else '/v1/images/generations')
+    assert b'1536x1024' in requests[0].content
+    assert model.encode() in requests[0].content
+    if editing:
+        assert b'name="image[]"' in requests[0].content
+
+
+@pytest.mark.parametrize('status', [401, 403, 404, 429, 500])
+def test_actual_provider_denial_fails_job_without_credits_or_retry(status, caplog):
+    row = {'id': str(uuid4()), 'business_id': str(uuid4()), 'model': studio.MODELS[0],
+           'prompt': 'A business flyer', 'quality': 'high', 'size': '1536x1024', 'reference_ids': []}
+    calls = []
+
+    def provider(request):
+        calls.append(request)
+        return httpx.Response(status, headers={'x-request-id': 'test-denial-receipt'},
+            json={'error': {'code': 'model_not_found' if status == 404 else 'provider_error'}})
+
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+        with patch.object(studio.httpx, 'AsyncClient', return_value=client), \
+             patch.object(studio, 'db', new_callable=AsyncMock, return_value=[row]) as db, \
+             patch.object(studio, 'store', new_callable=AsyncMock) as store, \
+             patch.object(studio, 'log_api_usage', new_callable=AsyncMock) as meter:
+            await studio.generate_worker(row)
+            store.assert_not_called()
+            meter.assert_not_called()
+            failure = db.call_args.args[3]
+            assert failure['status'] == 'failed'
+            if status in (403, 404):
+                assert 'GPT Image 2.5 Sunburst' in failure['error']
+            elif status == 401:
+                assert 'API key' in failure['error']
+    asyncio.run(run())
+    assert len(calls) == 1
+    assert 'test-denial-receipt' in caplog.text
+
+
+@pytest.mark.parametrize('failure_at', ['usage_save', 'storage', 'ready_save'])
+def test_paid_generation_save_failure_records_cost_without_customer_credits(failure_at):
+    row = {'id': str(uuid4()), 'business_id': str(uuid4()), 'model': studio.MODELS[0],
+           'prompt': 'A business flyer', 'quality': 'high', 'size': '1536x1024', 'reference_ids': []}
+    writes = []
+
+    async def database(client, method, path, payload, **kwargs):
+        writes.append(payload)
+        if (failure_at == 'usage_save' and 'usage' in payload or
+                failure_at == 'ready_save' and payload.get('status') == 'ready'):
+            raise HTTPException(502, 'Save unavailable')
+        return [row]
+
+    async def run():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
+            json={'data': [{'b64_json': base64.b64encode(b'normalized-test-image').decode()}],
+                  'usage': {'input_tokens': 15, 'output_tokens': 196,
+                            'input_tokens_details': {'text_tokens': 15, 'image_tokens': 0}}})))
+        with patch.object(studio.httpx, 'AsyncClient', return_value=client), \
+             patch.object(studio, 'db', side_effect=database), \
+             patch.object(studio, 'normalize_image', side_effect=lambda raw: raw), \
+             patch.object(studio, 'store', new_callable=AsyncMock,
+                          side_effect=HTTPException(502, 'Save unavailable') if failure_at == 'storage' else None), \
+             patch.object(studio, 'log_api_usage', new_callable=AsyncMock) as meter:
+            await studio.generate_worker(row)
+            meter.assert_awaited_once()
+            assert meter.call_args.kwargs['cost_cents_override'] == pytest.approx(.5955)
+            assert meter.call_args.kwargs['units'] == 0
+            assert meter.call_args.kwargs['ok'] is False
+    asyncio.run(run())
+    assert writes[-1]['status'] == 'failed'
 
 
 def test_unsupported_quality_does_not_silently_downgrade_or_reserve():
