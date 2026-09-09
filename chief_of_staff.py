@@ -12903,6 +12903,16 @@ async def chief_chat(
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
 
+            # The browser retries /chat when a stream's final event is lost.
+            # Reuse its completed result only after this session's RLS context
+            # read succeeded, so a saved task is not executed or narrated twice.
+            import chief_stream_replay
+            if _STREAM_SINK.get() is None:
+                recovered = chief_stream_replay.recover(req, user_session.user.id)
+                if recovered is not None:
+                    logger.info("Chief recovered completed stream result")
+                    return recovered
+
             is_greeting = _is_greeting(req.message)
             # Room orientation turns (first visit / the door / the walk)
             # get their own instructions instead of the day-read.
@@ -13546,10 +13556,13 @@ async def chief_chat(
             if not is_greeting:
                 await _archive_turn(client, biz, req.message, response_text, taken)
 
-            return {
+            result = {
                 "response": response_text,
                 "actions_taken": taken,
             }
+            if _STREAM_SINK.get() is not None:
+                chief_stream_replay.remember(req, user_session.user.id, result)
+            return result
     except HTTPException:
         raise
     except Exception as e:
