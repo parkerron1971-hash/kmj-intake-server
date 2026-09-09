@@ -75,7 +75,9 @@ class PublicFetcher:
             pinned = urlunsplit((p.scheme, authority + (f':{p.port}' if p.port else ''), p.path, p.query, ''))
             # Connect to the checked IP, retaining hostname TLS verification and HTTP routing.
             async with self.client.stream('GET', pinned,
-                    headers={'Host': p.netloc, 'Cookie': '', 'User-Agent': 'Mozilla/5.0 SolutionistWebsiteCapture/1.0'},
+                    # Do not reuse an IP-keyed TLS connection for a different hostname.
+                    headers={'Host': p.netloc, 'Cookie': '', 'Connection': 'close',
+                             'User-Agent': 'Mozilla/5.0 SolutionistWebsiteCapture/1.0'},
                     extensions={'sni_hostname': p.hostname}) as response:
                 data = bytearray()
                 async for chunk in response.aiter_bytes():

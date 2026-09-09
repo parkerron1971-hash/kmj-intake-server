@@ -54,6 +54,7 @@ def test_fetch_pins_checked_address_and_does_not_send_cookies():
     assert all(str(r.url).startswith('https://8.8.8.8/') for r in requests)
     assert requests[0].headers['host'] == 'example.com'
     assert requests[0].extensions['sni_hostname'] == 'example.com'
+    assert requests[0].headers['connection'] == 'close'
     assert requests[1].headers['cookie'] == ''
 
 
@@ -91,6 +92,8 @@ def test_capture_saves_private_assets_and_reuses_same_turn():
     Image.new('RGBA', (100, 50), 'gold').save(out, 'PNG')
     rows = {}
     async def db(client, method, path, body=None, **kwargs):
+        if 'created_at=gte.' in path:
+            assert '+' not in path
         if method == 'POST':
             rows[body['id']] = body
             return [body]
@@ -135,6 +138,7 @@ def test_generation_combines_attached_inspiration_and_website_assets():
                 assert [str(i) for i in req.reference_ids] == [inspiration, screenshot, logo]
                 assert req.size == '1536x1024'
                 assert 'Website screenshot' in req.prompt
+                assert 'Reference 2: Website screenshot' in req.prompt
                 browser.assert_awaited_once()
         finally:
             studio.turn_references.reset(refs)

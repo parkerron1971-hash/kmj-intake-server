@@ -410,7 +410,7 @@ async def handle_capture_website_references(client, biz, action):
     warning = ''
     if len(saved) != len(roles):
         from datetime import timedelta
-        since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace('+00:00', 'Z')
         recent = await db(client, 'GET', f"/image_artworks?business_id=eq.{owned['id']}&cost_usd=eq.0&created_at=gte.{since}&select=id&limit=40")
         if len(recent) >= 40:
             raise HTTPException(429, 'Website capture limit reached. Reuse the saved references or try again later.')
