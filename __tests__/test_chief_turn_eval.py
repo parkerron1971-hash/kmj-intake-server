@@ -81,11 +81,11 @@ def test_live_harness_keeps_real_prompt_available_without_live_io(monkeypatch):
 
 def test_live_fixtures_supply_referenced_people_without_precreating_new_contacts():
     people = cte._fixture_context(cte.BIZ, {'id': 'note_on_contact'})['contacts_lookup']
-    assert {p['id'] for p in people} == {'c-marcus', 'c-monica', 'c-ada'}
+    assert {p['id'] for p in people} == {cte.CONTACT_IDS['marcus'], cte.CONTACT_IDS['monica'], cte.CONTACT_IDS['ada']}
     new = cte._fixture_context(cte.BIZ, {'id': 'create_contact_lead'})
-    assert all(p['id'] != 'c-ada' for p in new['contacts_lookup'])
+    assert all(p['id'] != cte.CONTACT_IDS['ada'] for p in new['contacts_lookup'])
     invoices = cte._fixture_context(cte.BIZ, {'id': 'send_is_class_c_tag'})['open_invoices']
-    assert invoices[0]['contact_id'] == 'c-marcus'
+    assert invoices[0]['contact_id'] == cte.CONTACT_IDS['marcus']
 
 
 def test_live_scorer_counts_native_reads_that_do_not_create_action_cards(monkeypatch):
@@ -102,6 +102,16 @@ def test_live_scorer_counts_native_reads_that_do_not_create_action_cards(monkeyp
     report = cte.run_live([{'id': 'native-read', 'message': 'Check my goals',
                            'expect': ['check_goals'], 'must_not': ['create_goal']}])
     assert not report['failed_cases']
+
+
+def test_live_contact_deep_dive_returns_the_requested_fixture_contact(monkeypatch):
+    import asyncio
+    cte._stub_turn(monkeypatch, cte.BIZ, {'id': 'draft_email_not_send'})
+    result = asyncio.run(cos.handle_contact_deep_dive(None, cte.BIZ,
+                        {'contact_id': cte.CONTACT_IDS['ada']}))
+    assert not cos._action_failed(result)
+    assert result['contact']['name'] == 'Ada Lovelace'
+    assert 'program outline' in result['contact']['notes']
 
 
 # ─── the scorer cannot be vacuous ────────────────────────────────────

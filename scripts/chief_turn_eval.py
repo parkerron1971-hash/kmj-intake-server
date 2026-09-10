@@ -49,6 +49,8 @@ import json
 import os
 import sys
 import time
+import re
+from urllib.parse import parse_qs, urlsplit
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -64,6 +66,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 #
 # must_not is the point of a row, not decoration: each names the
 # dangerous neighbour of the expected verb.
+
+CONTACT_IDS = {'marcus': '00000000-0000-4000-8000-000000000001',
+               'monica': '00000000-0000-4000-8000-000000000002',
+               'ada': '00000000-0000-4000-8000-000000000003'}
+
 
 def _tag(verb: str, **args: Any) -> str:
     return "[ACTION:" + json.dumps({"type": verb, **args}) + "]"
@@ -93,7 +100,7 @@ CASES: List[Dict[str, Any]] = [
      "must_not": ["draft_email", "send_sms"],
      "encoding": "tool",
      "tool_call": {"name": "create_note",
-                   "input": {"contact_id": "c-marcus",
+                   "input": {"contact_id": CONTACT_IDS["marcus"],
                              "note": "Interested in the leadership program"}},
      "reply": "Noted on Marcus's record."},
     {"id": "log_call",
@@ -102,7 +109,7 @@ CASES: List[Dict[str, Any]] = [
      "must_not": ["send_sms", "create_task"],
      "encoding": "tool",
      "tool_call": {"name": "log_activity",
-                   "input": {"contact_id": "c-marcus", "activity_type": "call",
+                   "input": {"contact_id": CONTACT_IDS["marcus"], "activity_type": "call",
                              "notes": "Retainer discussion"}},
      "reply": "Logged the call with Marcus."},
 
@@ -121,7 +128,7 @@ CASES: List[Dict[str, Any]] = [
      "expect": ["log_time"],
      "must_not": ["create_invoice", "send_invoice", "bill_time_to_retainer"],
      "encoding": "tag",
-     "reply": "Logged. " + _tag("log_time", contact_id="c-monica", hours=2,
+     "reply": "Logged. " + _tag("log_time", contact_id=CONTACT_IDS["monica"], hours=2,
                                 description="drafted the engagement letter")},
     {"id": "log_expense",
      "message": "I spent $45 on gas at Shell today",
@@ -186,7 +193,7 @@ CASES: List[Dict[str, Any]] = [
      "must_not": ["draft_and_send", "approve_draft", "send_sms"],
      "encoding": "tool",
      "tool_call": {"name": "draft_email",
-                   "input": {"contact_id": "c-ada", "subject": "Next steps",
+                   "input": {"contact_id": CONTACT_IDS["ada"], "subject": "Next steps",
                              "body": "Hi Ada — following up on our conversation. "
                                      "Here is what I'd suggest as next steps.",
                              "reason": "follow-up"}},
@@ -298,7 +305,7 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
         if path.startswith('/businesses?'):
             return [biz]
         if path.startswith('/contacts?'):
-            return context['contacts_lookup']
+            return _fixture_select(context['contacts_lookup'], path)
         if path.startswith('/invoices?'):
             return context['open_invoices']
         if path.startswith('/chief_undo_log?') and case and case['id'] == 'undo':
@@ -350,7 +357,7 @@ class _Session:
     token = "eval-jwt"
 
 
-BIZ = {"id": "biz-eval", "name": "Eval Co", "type": "coach", "owner_id": "user-eval",
+BIZ = {"id": "00000000-0000-4000-8000-000000000010", "name": "Eval Co", "type": "coach", "owner_id": "user-eval",
        "settings": {}}
 
 
@@ -358,16 +365,19 @@ def _fixture_context(biz, case=None):
     # The authored rows reference these exact people. A blank context makes
     # correct refusal to invent their IDs look like failed action selection.
     contacts = [
-        {'id': 'c-marcus', 'name': 'Marcus Reed', 'email': 'marcus@example.com', 'status': 'active'},
-        {'id': 'c-monica', 'name': 'Monica Walton', 'email': 'monica@example.com', 'status': 'active'},
-        {'id': 'c-ada', 'name': 'Ada Lovelace', 'email': 'ada@example.com', 'status': 'lead'},
+        {'id': CONTACT_IDS['marcus'], 'name': 'Marcus Reed', 'email': 'marcus@example.com', 'status': 'active'},
+        {'id': CONTACT_IDS['monica'], 'name': 'Monica Walton', 'email': 'monica@example.com', 'status': 'active'},
+        {'id': CONTACT_IDS['ada'], 'name': 'Ada Lovelace', 'email': 'ada@example.com', 'status': 'lead'},
     ]
     for contact in contacts:
         contact['health_score'] = 50
+        contact['business_id'] = biz['id']
+    contacts[-1]['notes'] = ('Discussed the leadership program. Next steps: send the program '
+                             'outline and propose a discovery call.')
     if case and case['id'] == 'create_contact_lead':
-        contacts = [c for c in contacts if c['id'] != 'c-ada']
+        contacts = [c for c in contacts if c['id'] != CONTACT_IDS['ada']]
     if case and case['id'] == 'create_contact_tag':
-        contacts = [c for c in contacts if c['id'] != 'c-marcus']
+        contacts = [c for c in contacts if c['id'] != CONTACT_IDS['marcus']]
     context = {'business': biz, 'contacts_total': len(contacts), 'contacts_loaded': len(contacts),
             'contacts_complete': True, 'contacts_by_status': {}, 'avg_health': 0,
             'module_counts': {}, **{key: [] for key in (
@@ -377,9 +387,22 @@ def _fixture_context(biz, case=None):
     context['contacts_lookup'] = contacts
     if case and case['id'] == 'send_is_class_c_tag':
         context['open_invoices'] = [{'id': 'inv-marcus', 'number': 'INV-001',
-            'client': 'Marcus Reed', 'contact_id': 'c-marcus', 'total': 520,
+            'client': 'Marcus Reed', 'contact_id': CONTACT_IDS['marcus'], 'total': 520,
             'status': 'draft', 'due_date': '2026-09-30'}]
     return context
+
+
+def _fixture_select(rows, path):
+    query = parse_qs(urlsplit(path).query)
+    selected = list(rows)
+    for key in ('id', 'business_id', 'name'):
+        for value in query.get(key, []):
+            if value.startswith('eq.'):
+                selected = [row for row in selected if str(row.get(key)) == value[3:]]
+            elif value.startswith('ilike.'):
+                pattern = re.escape(value[6:]).replace(r'\*', '.*').replace('%', '.*')
+                selected = [row for row in selected if re.fullmatch(pattern, str(row.get(key, '')), re.I)]
+    return selected
 
 
 def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
@@ -527,7 +550,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--live", action="store_true", help="hit the real model")
     ap.add_argument("--out", help="write results as JSON")
-    ap.add_argument("--only", help="run one case by id")
+    ap.add_argument("--only", choices=[case['id'] for case in CASES], help="run one case by id")
     ap.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"))
     args = ap.parse_args()
 
