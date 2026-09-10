@@ -232,13 +232,11 @@ def test_open_invoices_render_itemized_into_the_prompt():
     block = cos._format_context_for_prompt(ctx)
     assert "OPEN INVOICES" in block
     assert "INV-2026-005 · Marcus Webb · $520.00" in block
-    assert "never say you don't have the breakdown" in block, (
-        "the sentence is the fix — the projects block earned the same one "
-        "on 8/01 for the same web_search reach"
-    )
+    assert "loaded itemized sample, not a complete total" in block
+    assert "use a lookup for additional rows" in block
 
 
-def test_no_open_invoices_says_none_open():
+def test_no_loaded_invoices_does_not_claim_no_open_invoices():
     ctx = {
         "business": _BIZ, "contacts_total": 0,
         "contacts_by_status": {}, "avg_health": 0, "at_risk": [],
@@ -249,7 +247,9 @@ def test_no_open_invoices_says_none_open():
         "business_track": None, "email_replies": [], "sms_messages": [],
         "open_invoices": [],
     }
-    assert "(none open)" in cos._format_context_for_prompt(ctx)
+    block = cos._format_context_for_prompt(ctx)
+    assert "(none in the loaded sample; check data availability)" in block
+    assert "(none open)" not in block
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -262,8 +262,7 @@ def test_the_prompt_documents_the_verb():
     src = chief_source()
     assert '"type":"show_view"' in src.replace(" ", "").replace("{{", "{"), \
         "show_view is not documented in the system prompt"
-    assert "never answer \"I don't have the breakdown\"" in src or \
-           "NEVER say \"I don't have the itemized breakdown\"" in src
+    assert "report a failed lookup as unavailable" in src
 
 
 # ─────────────────────────────────────────────────────────────────────

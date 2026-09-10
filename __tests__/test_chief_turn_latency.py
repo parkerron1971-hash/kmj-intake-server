@@ -84,6 +84,14 @@ def turn(monkeypatch):
     # do with what it is testing. Neutralised here, and only here.
     import rate_limit
     monkeypatch.setattr(rate_limit, "allow", lambda *a, **k: True)
+    # These unrelated profile/billing reads otherwise perform real DNS/HTTP
+    # in the latency fixture, making network jitter look like serial enrichment.
+    import sb_clients
+    import practitioner_profile_agent
+    import voice_depth_agent
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda *a, **k: [])
+    monkeypatch.setattr(practitioner_profile_agent, "_sb_get", lambda *a, **k: [])
+    monkeypatch.setattr(voice_depth_agent, "_sb_get", lambda *a, **k: [])
 
     called: set[str] = set()
 
