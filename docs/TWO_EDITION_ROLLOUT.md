@@ -63,8 +63,10 @@ This is a contract to build against, not independent edition enforcement yet.
 
 The user selected both Claude and ChatGPT on 2026-09-10. A local rehearsal now
 exists for both native runtimes; see [setup and release gates](CONNECTED_AI_SETUP.md).
-Automated fake-process tests pass, but neither real customer-account run has
-been verified. Record authentication, runtime, subscription entitlement, and
+Automated fake-process tests pass and the real ChatGPT fixture draft passed.
+Claude sign-in succeeded, but its real run was blocked by the account's weekly
+usage limit; its successful draft is still unverified. Record authentication,
+runtime, subscription entitlement, and
 automation limitations separately for each provider before launch.
 
 Deliver a development harness that starts a bounded task, streams progress,

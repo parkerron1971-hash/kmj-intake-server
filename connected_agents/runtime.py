@@ -177,17 +177,50 @@ async def run_process(args: list[str], env: dict[str, str], cwd: Path,
         await asyncio.gather(stdout, stderr, return_exceptions=True)
 
 
+def failure_reason(provider: Provider, stdout: bytes) -> str:
+    """Map known native errors to public codes without forwarding account text.
+
+    Used only after a failed execution, never to interpret a generated draft.
+    Reset times and account names stay out of the application contract.
+    """
+    try:
+        if provider == Provider.CLAUDE:
+            result = json.loads(stdout)
+            if not isinstance(result, dict) or not result.get("is_error"):
+                return "provider_failed"
+            message = str(result.get("result", "")).lower()
+        else:
+            events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+            errors = [event for event in events if isinstance(event, dict)
+                      and event.get("type") in {"error", "turn.failed"}]
+            message = json.dumps(errors).lower()
+    except (ValueError, TypeError, AttributeError):
+        return "provider_failed"
+    if any(marker in message for marker in (
+        "usage_limit_reached", "rate_limit_exceeded", "insufficient_quota",
+        "hit your weekly limit", "hit your limit", "usage limit reached",
+        "rate limit reached",
+    )):
+        return "provider_limit_reached"
+    if any(marker in message for marker in (
+        "authentication_error", "not logged in", "please run /login",
+        "invalid authentication", "login required",
+    )):
+        return "login_required"
+    return "provider_failed"
+
+
 def decode(provider: Provider, stdout: bytes, work: Path) -> Draft:
     try:
         if provider == Provider.CLAUDE:
             result = json.loads(stdout)
             if result.get("is_error") or result.get("subtype") != "success":
-                raise RehearsalError("provider_failed")
+                raise RehearsalError(failure_reason(provider, stdout))
             return Draft.parse(result.get("structured_output"))
         # Require a completed turn, not just a file created before an error.
         events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
         if any(e.get("type") in {"error", "turn.failed"} for e in events):
-            raise RehearsalError("provider_failed")
+            raise RehearsalError(failure_reason(provider, stdout))
         if not any(e.get("type") == "turn.completed" for e in events):
             raise RehearsalError("incomplete_output")
         path = work / "draft.json"
@@ -209,7 +242,7 @@ async def rehearse(provider: Provider, state: Path, binary: str,
         try:
             code, out, _ = await run_process(args, env, work, fixture_prompt(), timeout)
             if code:
-                raise RehearsalError("provider_failed")
+                raise RehearsalError(failure_reason(provider, out))
             draft = decode(provider, out, work)
         except asyncio.CancelledError:
             progress("cancelled")

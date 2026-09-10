@@ -93,16 +93,25 @@ subscription entitlement are not asserted from untrusted output.
 
 ## Verification and remaining release gates
 
-Validated locally against installation metadata for Codex CLI 0.153.4 and Claude
-Code 2.1.267. Both new, isolated sign-in homes correctly report unauthenticated.
-No real account/model run has been completed. `__tests__/test_connected_agents.py`
+Validated locally against Codex CLI 0.153.4 and Claude Code 2.1.267 on 2026-09-10:
+
+- Both native account sign-ins completed in separate provider-managed homes.
+- ChatGPT successfully drafted the built-in invoice through the real account.
+  The validated output used the supplied invoice number, amount and dates;
+  `sent` remained false and no Solutionist inference API was called.
+- Claude authentication succeeded, but real execution returned its weekly usage
+  limit. A successful Claude draft remains unverified until capacity is available.
+  The adapter now reports `provider_limit_reached`, without copying private
+  account diagnostics into application errors. It does not switch payer or retry.
+
+`__tests__/test_connected_agents.py`
 executes fake native processes through both adapters, covering draft results,
 failed/partial/invalid output, cancellation, timeouts, secret exclusion, and
 oversized responses. It uses no provider network or paid inference.
 
 Before live customer rollout:
 
-1. Complete native sign-in and a real synthetic draft with **each** provider.
+1. Complete the successful Claude synthetic draft after its account limit resets.
    Record successful execution, cancellation, quota exhaustion, and native
    account funding. Revalidate CLI flags when the supported versions change.
 2. Add authenticated device pairing and durable Chief job leases, tenant/owner

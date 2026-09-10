@@ -178,3 +178,31 @@ def test_missing_login_is_not_ready(tmp_path, monkeypatch, provider):
     monkeypatch.setattr(runtime, "run_process", status)
     assert asyncio.run(runtime.auth_status(provider, tmp_path, "unused")) == {
         "authenticated": False, "auth_method": "unknown"}
+
+
+@pytest.mark.parametrize("provider,payload", [
+    (Provider.CLAUDE, {"type": "result", "subtype": "success", "is_error": True,
+                      "result": "You've hit your weekly limit · resets 7pm (America/New_York)"}),
+    (Provider.CHATGPT, {"type": "turn.failed", "error": {"code": "usage_limit_reached"}}),
+])
+def test_real_limit_response_becomes_an_actionable_private_error(fake_cli, tmp_path, provider, payload):
+    fake_cli.write_text('import sys; sys.stdin.read(); print(' + repr(json.dumps(payload))
+                        + '); sys.exit(1)', encoding="utf-8")
+    with pytest.raises(RehearsalError, match="^provider_limit_reached$"):
+        asyncio.run(runtime.rehearse(provider, tmp_path / "state", "unused"))
+
+
+def test_failed_claude_result_is_not_success_even_with_zero_exit(tmp_path):
+    with pytest.raises(RehearsalError, match="^provider_limit_reached$"):
+        runtime.decode(Provider.CLAUDE, json.dumps({"subtype": "success", "is_error": True,
+                       "result": "You've hit your weekly limit"}).encode(), tmp_path)
+
+
+def test_provider_auth_expiry_requires_login():
+    assert runtime.failure_reason(Provider.CLAUDE, json.dumps({
+        "is_error": True, "result": "Not logged in. Please run /login"}).encode()) == "login_required"
+
+
+@pytest.mark.parametrize("payload", [b"not json", b"[]", b"null", b'{"result":"hit your weekly limit"}'])
+def test_unknown_errors_do_not_invent_a_quota_diagnosis(payload):
+    assert runtime.failure_reason(Provider.CLAUDE, payload) == "provider_failed"
