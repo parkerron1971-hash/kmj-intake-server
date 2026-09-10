@@ -1742,8 +1742,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # Counts use PostgREST's exact aggregate, independently of sampled rows.
     exact_contact_total = await _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id')
     contacts_available = contacts is not None
-    contact_total = (exact_contact_total if exact_contact_total is not None else
-                     len(contacts) if contacts_available and len(contacts) < 500 else None)
+    # A server-side row cap can be lower than our requested limit. Even a
+    # short page cannot establish the total when the exact count failed.
+    contact_total = exact_contact_total
     context_unavailable = []
 
     # ── Wave 2 (latency round 4, 2026-08-26) ─────────────────────────

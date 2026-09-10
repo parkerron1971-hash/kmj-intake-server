@@ -33,20 +33,21 @@ def test_failed_user_count_never_retries_with_service_credentials(monkeypatch):
 
 
 @pytest.mark.parametrize('exact', [725, None])
-def test_context_never_calls_a_capped_page_the_total(gather, monkeypatch, exact):
+@pytest.mark.parametrize('loaded', [250, 500])
+def test_context_never_calls_a_capped_page_the_total(gather, monkeypatch, exact, loaded):
     original = chief._sb
     async def rows(client, method, path, body=None):
         if path.startswith('/contacts?'):
-            return [{'id': str(i), 'name': f'Person {i}', 'status': 'active'} for i in range(500)]
+            return [{'id': str(i), 'name': f'Person {i}', 'status': 'active'} for i in range(loaded)]
         return await original(client, method, path, body)
     monkeypatch.setattr(chief, '_sb', rows)
     monkeypatch.setattr(chief, '_sb_count', AsyncMock(return_value=exact))
     _, ctx = gather(query_text=None)
     assert ctx['contacts_total'] == exact
-    assert ctx['contacts_loaded'] == 500
+    assert ctx['contacts_loaded'] == loaded
     assert ctx['contacts_complete'] is False
     prompt = chief._format_context_for_prompt(ctx)
-    assert 'CONTACTS: 500 total' not in prompt
+    assert f'CONTACTS: {loaded} total' not in prompt
     assert 'loaded sample only' in prompt
     assert f"CONTACTS: {exact if exact is not None else 'unknown'} total" in prompt
 
