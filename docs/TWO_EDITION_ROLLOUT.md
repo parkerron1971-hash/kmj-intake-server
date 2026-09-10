@@ -59,11 +59,13 @@ Implemented in this change:
 
 This is a contract to build against, not independent edition enforcement yet.
 
-### F2: prove one supported execution arrangement
+### F2: prove the Claude and ChatGPT execution arrangements
 
-Start here next. Select a provider only after proving its documented integration
-can serve this experience. Record the current official authentication, runtime,
-subscription entitlement, and automation limitations in a dated decision.
+The user selected both Claude and ChatGPT on 2026-09-10. A local rehearsal now
+exists for both native runtimes; see [setup and release gates](CONNECTED_AI_SETUP.md).
+Automated fake-process tests pass, but neither real customer-account run has
+been verified. Record authentication, runtime, subscription entitlement, and
+automation limitations separately for each provider before launch.
 
 Deliver a development harness that starts a bounded task, streams progress,
 cancels it, and identifies which account funds it. Establish whether it runs on
@@ -72,7 +74,7 @@ makes it unavailable; do not promise always-on work. Browser account connection
 alone does not create execution capacity. Do not collect subscription session
 tokens or assume a chat subscription is an unrestricted API budget.
 
-Acceptance: one real supported agent can read a fixture business through scoped
+Acceptance: each supported agent can read a fixture business through scoped
 tools and produce a draft. No production customer writes or messages are needed
 for this milestone. Document unsupported capabilities and connection loss.
 
@@ -129,7 +131,7 @@ provide the AI." Show supported providers, connection state, limits, and which
 services remain separately billed. Complete setup with a useful verified task.
 Support mobile and desktop; do not assume a local desktop runner exists on mobile.
 
-Launch one provider and the invoice workflow to a small pilot cohort. Publish
+Launch the verified Claude and ChatGPT paths and the invoice workflow to a small pilot cohort. Publish
 pricing and edition claims only when checkout, usage limits, switching, support,
 and failure recovery are verified. Add more providers and higher tiers based on
 pilot evidence. The $99/$199 Connect expansion discussed is not a launch promise.
@@ -157,7 +159,7 @@ resolution rather than inferring Connect from the existence of an MCP token.
 
 ## Work deliberately deferred
 
-Multiple agent providers, an agent marketplace, new industry modules, a second
+Providers beyond Claude and ChatGPT, an agent marketplace, new industry modules, a second
 codebase, six pricing cards, and broad marketing redesign are outside this pilot.
 The launch test is one customer's useful workflow completed correctly with known
 cost and recoverable failures, not the number of connectors exposed.
