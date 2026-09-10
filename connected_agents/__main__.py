@@ -31,8 +31,9 @@ def main() -> int:
                               "version": result.stdout.strip()[:120],
                               "connection_verified": False}))
         elif args.action == "status":
-            print(json.dumps({"provider": provider.value,
-                              **asyncio.run(auth_status(provider, args.state_dir, binary))}))
+            status = asyncio.run(auth_status(provider, args.state_dir, binary))
+            print(json.dumps({"provider": provider.value, **status}))
+            return 0 if status["authenticated"] else 1
         elif args.action == "login":
             # Native interactive sign-in. We do not intercept credentials or tokens.
             with TemporaryDirectory(prefix="solutionist-login-") as work:
