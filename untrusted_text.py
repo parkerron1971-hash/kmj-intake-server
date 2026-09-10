@@ -26,7 +26,7 @@ that capability from text — a tool_use block is the model's own
 decision, not a string in someone's email. So for class A verbs the tag
 stripper is an ATTEMPT DETECTOR, not a capability removal: it still
 raises the per-turn taint, and the taint still holds every class-C
-send, which is the consequence that matters. The seven prose shapes
+send, which is the consequence that matters. The detected prose shapes
 below carry the rest. Class C itself has no tool and still travels as
 a tag, so for the actions that leave the building the original claim
 still holds in full.
@@ -82,6 +82,11 @@ def as_str(v: Any) -> str:
 # Named so a log line says WHICH shape fired. Each is tight on purpose:
 # a guard that fires on real client messages gets switched off.
 INJECTION_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
+    ("fact_poisoning", re.compile(
+        r"\b(?:report|state|say|claim|present|describe|assert)\b[^.\n]{0,180}"
+        r"\b(?:regardless of|instead of|contrary to|even if|whether or not)\b[^.\n]{0,80}"
+        r"\b(?:ledger|records?|data|evidence|truth|actual|accurate|true)\b",
+        re.IGNORECASE)),
     ("override",  re.compile(
         r"\b(ignore|disregard|forget|override|bypass)\b[^.\n]{0,40}"
         r"\b(previous|prior|above|earlier|all|any|your|the|these|those)\b[^.\n]{0,30}"

@@ -369,7 +369,7 @@ def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
         # the loop, and the turn did NOT also execute it as a tag.
         extra["tool_went_through_the_door"] = case["tool_call"]["name"] in dispatched
         extra["not_double_executed"] = dispatched.count(case["tool_call"]["name"]) == 1
-        extra["reply_is_the_models_own"] = out.get("response") == case["reply"]
+        extra["reply_has_checked_outcome"] = (out.get('grounding') or {}).get('status') in ('supported', 'receipts')
     return score_case(case, taken, extra)
 
 

@@ -421,6 +421,31 @@ async def sb_as_user(
     )
 
 
+async def sb_count_as_current_context(client, path: str, *, allow_service_fallback=False):
+    """Exact filtered count without fetching/truncating rows. None is unavailable.
+
+    Shares the existing JWT boundary; never substitutes service credentials for
+    a supplied user's rejected token. Callers provide a filtered table path.
+    """
+    jwt = get_current_user_jwt()
+    try:
+        if jwt:
+            headers = sb_headers_user(jwt, prefer='count=exact')
+        elif allow_service_fallback:
+            headers = sb_headers_service(prefer='count=exact')
+        else:
+            return None
+        headers['Range'] = '0-0'
+        response = await client.request('HEAD', f'{sb_url()}/rest/v1{path}',
+                                        headers=headers, timeout=HTTP_TIMEOUT)
+        if response.status_code >= 400:
+            return None
+        total = response.headers.get('content-range', '').rsplit('/', 1)[-1]
+        return int(total) if total.isdigit() else None
+    except (httpx.HTTPError, RuntimeError, ValueError, TypeError, AttributeError):
+        return None
+
+
 async def sb_as_service(
     client: httpx.AsyncClient,
     method: str,

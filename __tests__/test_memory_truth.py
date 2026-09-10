@@ -73,7 +73,7 @@ def test_chief_chat_archives_every_non_greeting_turn():
     i = src.index("await _archive_turn(client, biz, req.message, response_text, taken)")
     assert "if not is_greeting:" in src[i - 200:i]
     # After the audit hook, before the return — same best-effort block.
-    assert src.index("audit hook failed") < i < src.index('"actions_taken": taken,\n            }')
+    assert src.index("audit hook failed") < i < src.index('"grounding": grounding,')
 
 
 # ─── 2. recall says what is on file, and nothing else ────────────────
