@@ -63,6 +63,22 @@ def test_ids_are_unique():
     assert len(ids) == len(set(ids))
 
 
+def test_live_harness_keeps_real_prompt_available_without_live_io(monkeypatch):
+    from unittest.mock import AsyncMock
+    import chief_truth
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'fixture-only-key')
+    model = AsyncMock(return_value='[ACTION:{"type":"log_expense","amount":45}]')
+    monkeypatch.setattr(cos, '_call_claude', model)
+    monkeypatch.setattr(chief_truth, 'review_reply', AsyncMock(return_value=''))
+    original = cos._build_system_prompt
+    case = {'id': 'live-harness', 'message': 'Log a $45 expense',
+            'expect': ['log_expense'], 'must_not': ['create_invoice']}
+    result = cte.run_live([case])
+    assert not result['failed_cases']
+    assert cos._build_system_prompt is original
+    assert 'Eval Co' in model.call_args.args[1]
+
+
 # ─── the scorer cannot be vacuous ────────────────────────────────────
 
 def test_scorer_rewards_the_expected_verb_and_punishes_the_neighbour():

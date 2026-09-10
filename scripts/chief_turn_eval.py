@@ -296,12 +296,18 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any]):
         return [biz]
 
     monkeypatch.setattr(rate_limit, "allow", lambda *a, **k: True)
+    import sb_clients
+    import practitioner_profile_agent
+    import voice_depth_agent
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda *a, **k: [])
+    monkeypatch.setattr(practitioner_profile_agent, "_sb_get", lambda *a, **k: [])
+    monkeypatch.setattr(voice_depth_agent, "_sb_get", lambda *a, **k: [])
     monkeypatch.setattr(cos, "_sb", _fake_sb)
     monkeypatch.setattr(cos, "_generate_missing_recurring_instances", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_autopilot_sweep", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_evaluate_escalations", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_gather_context",
-                        lambda *a, **k: _instant({"business": biz, "contacts": []}))
+                        lambda *a, **k: _instant(_fixture_context(biz)))
     monkeypatch.setattr(cos, "_fetch_view_detail", lambda *a, **k: _instant(""))
     for name in ["_get_voice_examples", "_get_session_context",
                  "_get_time_context", "_get_habit_insights"]:
@@ -334,6 +340,15 @@ class _Session:
 
 BIZ = {"id": "biz-eval", "name": "Eval Co", "type": "coach", "owner_id": "user-eval",
        "settings": {}}
+
+
+def _fixture_context(biz):
+    return {'business': biz, 'contacts_total': 0, 'contacts_loaded': 0,
+            'contacts_complete': True, 'contacts_by_status': {}, 'avg_health': 0,
+            'module_counts': {}, **{key: [] for key in (
+                'contacts', 'at_risk', 'queue', 'sessions', 'insights', 'modules',
+                'events', 'memories', 'notifications', 'recent_queue_24h', 'projects',
+                'products', 'contacts_lookup', 'open_invoices')}}
 
 
 def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
@@ -398,9 +413,10 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
     for case in cases:
         mp = pytest.MonkeyPatch()
         try:
+            real_prompt = cos._build_system_prompt
             _stub_turn(mp, BIZ)
             # The real prompt this time — that is what is being measured.
-            mp.delattr(cos, "_build_system_prompt", raising=False)
+            mp.setattr(cos, "_build_system_prompt", real_prompt)
             dispatched: List[str] = []
 
             async def _door(client, biz, actions, user_id=None, prior_results=None,
