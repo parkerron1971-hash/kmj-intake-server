@@ -12517,7 +12517,7 @@ def _is_coach_pause(msg: str) -> bool:
 # A farewell is a WHOLE message, not a word in one. "goodnight chief,
 # thanks for everything" ends the session; "when I did the goodbyes
 # Chief never closed out the chat" is a bug report that happens to
-# contain the word. The detector strips one recognized farewell core,
+# contain the word. The detector strips recognized farewell cores,
 # then requires everything left over to be pleasantries — so a sentence
 # with any other content never matches. Questions never match at all.
 _FAREWELL_CORES = (
@@ -12549,14 +12549,12 @@ def _is_farewell(msg: str) -> bool:
         return False
     text = re.sub(r"[^a-z\s']", " ", text).replace("'", "'")
     text = re.sub(r"\s+", " ", text).strip()
+    matched = False
     for core in _FAREWELL_CORES:
-        stripped, n = re.subn(r"\b" + re.escape(core) + r"\b", " ", text, count=1)
-        if not n:
-            continue
-        leftover = [w for w in re.split(r"[\s']+", stripped) if w]
-        if all(w in _FAREWELL_FILLER for w in leftover):
-            return True
-    return False
+        text, n = re.subn(r"\b" + re.escape(core) + r"\b", " ", text)
+        matched = matched or bool(n)
+    leftover = [w for w in re.split(r"[\s']+", text) if w]
+    return matched and all(w in _FAREWELL_FILLER for w in leftover)
 
 
 # Phrases that suggest a prior assistant turn described an action. When we

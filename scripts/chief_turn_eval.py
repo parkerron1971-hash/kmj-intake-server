@@ -285,15 +285,27 @@ def summarize(results: List[Dict[str, Any]], mode: str) -> Dict[str, Any]:
 # chief_tool_loop.execute_tool_use — the real loop, the real budget, the
 # real door — before answering.
 
-def _stub_turn(monkeypatch, biz: Dict[str, Any]):
+def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
     import chief_of_staff as cos
     import rate_limit
 
     async def _instant(value=None):
         return value
 
+    context = _fixture_context(biz, case)
+
     async def _fake_sb(client, method, path, body=None):
-        return [biz]
+        if path.startswith('/businesses?'):
+            return [biz]
+        if path.startswith('/contacts?'):
+            return context['contacts_lookup']
+        if path.startswith('/invoices?'):
+            return context['open_invoices']
+        if path.startswith('/chief_undo_log?') and case and case['id'] == 'undo':
+            return [{'id': 'undo-one', 'action_type': 'create_task', 'status': 'undoable',
+                     'action_json': {'title': 'Review draft'},
+                     'result_json': {'task_id': 'task-one'}}]
+        return []
 
     monkeypatch.setattr(rate_limit, "allow", lambda *a, **k: True)
     import sb_clients
@@ -307,7 +319,7 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any]):
     monkeypatch.setattr(cos, "_autopilot_sweep", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_evaluate_escalations", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_gather_context",
-                        lambda *a, **k: _instant(_fixture_context(biz)))
+                        lambda *a, **k: _instant(context))
     monkeypatch.setattr(cos, "_fetch_view_detail", lambda *a, **k: _instant(""))
     for name in ["_get_voice_examples", "_get_session_context",
                  "_get_time_context", "_get_habit_insights"]:
@@ -342,13 +354,32 @@ BIZ = {"id": "biz-eval", "name": "Eval Co", "type": "coach", "owner_id": "user-e
        "settings": {}}
 
 
-def _fixture_context(biz):
-    return {'business': biz, 'contacts_total': 0, 'contacts_loaded': 0,
+def _fixture_context(biz, case=None):
+    # The authored rows reference these exact people. A blank context makes
+    # correct refusal to invent their IDs look like failed action selection.
+    contacts = [
+        {'id': 'c-marcus', 'name': 'Marcus Reed', 'email': 'marcus@example.com', 'status': 'active'},
+        {'id': 'c-monica', 'name': 'Monica Walton', 'email': 'monica@example.com', 'status': 'active'},
+        {'id': 'c-ada', 'name': 'Ada Lovelace', 'email': 'ada@example.com', 'status': 'lead'},
+    ]
+    for contact in contacts:
+        contact['health_score'] = 50
+    if case and case['id'] == 'create_contact_lead':
+        contacts = [c for c in contacts if c['id'] != 'c-ada']
+    if case and case['id'] == 'create_contact_tag':
+        contacts = [c for c in contacts if c['id'] != 'c-marcus']
+    context = {'business': biz, 'contacts_total': len(contacts), 'contacts_loaded': len(contacts),
             'contacts_complete': True, 'contacts_by_status': {}, 'avg_health': 0,
             'module_counts': {}, **{key: [] for key in (
                 'contacts', 'at_risk', 'queue', 'sessions', 'insights', 'modules',
                 'events', 'memories', 'notifications', 'recent_queue_24h', 'projects',
                 'products', 'contacts_lookup', 'open_invoices')}}
+    context['contacts_lookup'] = contacts
+    if case and case['id'] == 'send_is_class_c_tag':
+        context['open_invoices'] = [{'id': 'inv-marcus', 'number': 'INV-001',
+            'client': 'Marcus Reed', 'contact_id': 'c-marcus', 'total': 520,
+            'status': 'draft', 'due_date': '2026-09-30'}]
+    return context
 
 
 def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
@@ -414,10 +445,21 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
         mp = pytest.MonkeyPatch()
         try:
             real_prompt = cos._build_system_prompt
-            _stub_turn(mp, BIZ)
+            _stub_turn(mp, BIZ, case)
             # The real prompt this time — that is what is being measured.
             mp.setattr(cos, "_build_system_prompt", real_prompt)
             dispatched: List[str] = []
+            import chief_tool_loop as ctl
+            native_reads: List[str] = []
+            execute_tool = ctl.execute_tool_use
+
+            async def _observe_tool(client, biz, name, args):
+                import action_registry
+                if action_registry.effect(name) == action_registry.READ:
+                    native_reads.append(name)
+                return await execute_tool(client, biz, name, args)
+
+            mp.setattr(ctl, 'execute_tool_use', _observe_tool)
 
             async def _door(client, biz, actions, user_id=None, prior_results=None,
                             owner_text=None):
@@ -430,11 +472,18 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
             mp.setattr(cos, "_execute_actions", _door)
             print(f"→ {case['id']} …", file=sys.stderr, flush=True)
             started = time.time()
+            history = ([{'role': 'user', 'content': 'Create a task to review the draft'},
+                        {'role': 'assistant', 'content': 'Created task: Review draft.'}]
+                       if case['id'] == 'undo' else None)
             out = asyncio.run(cos.chief_chat(
-                cos.ChatRequest(business_id=BIZ["id"], message=case["message"]),
+                cos.ChatRequest(business_id=BIZ["id"], message=case["message"],
+                                conversation_history=history),
                 _Session()))
             taken = [a.get("type") for a in out.get("actions_taken", [])
                      if isinstance(a, dict)]
+            # Native reads return into the model, not actions_taken. They
+            # still count as read selection in this verb-only evaluation.
+            taken = list(dict.fromkeys(taken + native_reads))
             scored = score_case(case, taken)
             scored["seconds"] = round(time.time() - started, 1)
             scored["reply"] = (out.get("response") or "")[:300]

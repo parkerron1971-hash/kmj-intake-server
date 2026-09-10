@@ -79,6 +79,31 @@ def test_live_harness_keeps_real_prompt_available_without_live_io(monkeypatch):
     assert 'Eval Co' in model.call_args.args[1]
 
 
+def test_live_fixtures_supply_referenced_people_without_precreating_new_contacts():
+    people = cte._fixture_context(cte.BIZ, {'id': 'note_on_contact'})['contacts_lookup']
+    assert {p['id'] for p in people} == {'c-marcus', 'c-monica', 'c-ada'}
+    new = cte._fixture_context(cte.BIZ, {'id': 'create_contact_lead'})
+    assert all(p['id'] != 'c-ada' for p in new['contacts_lookup'])
+    invoices = cte._fixture_context(cte.BIZ, {'id': 'send_is_class_c_tag'})['open_invoices']
+    assert invoices[0]['contact_id'] == 'c-marcus'
+
+
+def test_live_scorer_counts_native_reads_that_do_not_create_action_cards(monkeypatch):
+    from unittest.mock import AsyncMock
+    import chief_truth
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'fixture-only-key')
+    async def model(*args, **kwargs):
+        await ctl.execute_tool_use(None, cte.BIZ, 'check_goals', {})
+        return 'No goals were found.'
+    monkeypatch.setattr(cos, '_call_claude', model)
+    monkeypatch.setitem(cos.ACTION_HANDLERS, 'check_goals', AsyncMock(return_value={
+        'type': 'check_goals', 'result': 'No goals found', 'label': 'Goals'}))
+    monkeypatch.setattr(chief_truth, 'review_reply', AsyncMock(return_value=''))
+    report = cte.run_live([{'id': 'native-read', 'message': 'Check my goals',
+                           'expect': ['check_goals'], 'must_not': ['create_goal']}])
+    assert not report['failed_cases']
+
+
 # ─── the scorer cannot be vacuous ────────────────────────────────────
 
 def test_scorer_rewards_the_expected_verb_and_punishes_the_neighbour():
