@@ -101,6 +101,13 @@ def test_oversized_process_output_is_bounded(tmp_path):
             dict(os.environ), tmp_path, "fixture", 10))
 
 
+def test_timeout_reaps_a_process_with_busy_output_pipes(tmp_path):
+    with pytest.raises(RehearsalError, match="timed_out"):
+        asyncio.run(runtime.run_process(
+            [sys.executable, "-c", 'import os\nwhile True: os.write(1, b"x" * 16384)'],
+            dict(os.environ), tmp_path, "", .3))
+
+
 def test_timeout_terminates_the_actual_child(tmp_path, monkeypatch):
     created = []
     original = asyncio.create_subprocess_exec

@@ -109,10 +109,16 @@ def draft_command(provider: Provider, binary: str, work: Path) -> list[str]:
 
 async def _drain(reader: asyncio.StreamReader) -> bytes:
     data = bytearray()
+    oversized = False
     while chunk := await reader.read(16384):
-        data.extend(chunk)
-        if len(data) > MAX_OUTPUT:
-            raise RehearsalError("provider_output_too_large")
+        if len(data) + len(chunk) > MAX_OUTPUT:
+            oversized = True
+        if not oversized:
+            data.extend(chunk)
+        # Keep draining after the cap without retaining more bytes. Otherwise
+        # a full pipe can deadlock process.wait(), even after SIGKILL on POSIX.
+    if oversized:
+        raise RehearsalError("provider_output_too_large")
     return bytes(data)
 
 
@@ -156,7 +162,10 @@ async def run_process(args: list[str], env: dict[str, str], cwd: Path,
             proc.stdin.write(prompt.encode("utf-8"))
             await proc.stdin.drain()
             proc.stdin.close()
-            _, out, err = await asyncio.gather(proc.wait(), stdout, stderr)
+            # Drainers must survive timeout/cancellation until cleanup kills
+            # the process and reaches EOF; paused pipe readers prevent reaping.
+            _, out, err = await asyncio.gather(
+                proc.wait(), asyncio.shield(stdout), asyncio.shield(stderr))
         return proc.returncode, out, err
     except TimeoutError:
         raise RehearsalError("timed_out") from None
