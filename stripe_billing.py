@@ -443,7 +443,7 @@ async def billing_plans():
 
 @router.get("/entitlements")
 async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user)):
-    """Phase E gate-ready entitlements for a business (unenforced today)."""
+    """Owner-scoped entitlements plus the additive edition service profile."""
     import feature_gates
     business = await _load_business(biz)
     _require_owner_of(user, business)
@@ -462,6 +462,8 @@ async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user
     except Exception:
         out["grandfathered"] = False
     out["comp_tier"] = (business.get("comp_tier") or None)
+    import service_profile
+    out["service_profile"] = service_profile.describe(business, out)
     return out
 
 
