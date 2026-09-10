@@ -234,3 +234,38 @@ def test_evidence_budget_is_explicitly_incomplete():
     source = truth.evidence_for_review({}, {}, [])['huge']
     assert len(source['text']) == truth.MAX_SOURCE_CHARS
     assert source['complete'] is False
+
+
+@pytest.mark.parametrize('stop_reason,expected', [('end_turn', '{"verdict":"unsupported","claims":[]}'),
+                                                ('max_tokens', '')])
+def test_real_review_seam_is_bounded_metered_and_tool_free(monkeypatch, stop_reason, expected):
+    import httpx
+    import llm_call
+    import spend_guard
+    monkeypatch.setattr(llm_call, 'api_key', lambda: 'fixture-only-key')
+    monkeypatch.setattr(spend_guard, 'over_budget', lambda business_id: False)
+    post = AsyncMock(return_value=httpx.Response(200, json={
+        'stop_reason': stop_reason, 'content': [{'type': 'text',
+        'text': '{"verdict":"unsupported","claims":[]}'}]}))
+    monkeypatch.setattr(llm_call, 'apost', post)
+    result = asyncio.run(truth.review_reply(None, truth.REVIEW_SYSTEM, [],
+        max_tokens=2400, business_id='biz'))
+    assert result == expected
+    payload = post.call_args.args[1]
+    assert 'tools' not in payload
+    assert payload['max_tokens'] == 2400
+    assert post.call_args.kwargs['task'] == 'chief_answer_review'
+    assert post.call_args.kwargs['business_id'] == 'biz'
+    assert post.call_args.kwargs['timeout'].read == 25.0
+
+
+def test_review_budget_stop_never_calls_provider(monkeypatch):
+    import llm_call
+    import spend_guard
+    monkeypatch.setattr(llm_call, 'api_key', lambda: 'fixture-only-key')
+    monkeypatch.setattr(spend_guard, 'over_budget', lambda business_id: True)
+    post = AsyncMock()
+    monkeypatch.setattr(llm_call, 'apost', post)
+    assert asyncio.run(truth.review_reply(None, truth.REVIEW_SYSTEM, [],
+        max_tokens=2400, business_id='biz')) == ''
+    post.assert_not_called()
