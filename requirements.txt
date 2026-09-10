@@ -1,4 +1,5 @@
 fastapi==0.115.0
+livekit-api==1.1.0
 uvicorn==0.30.6
 # WebSockets both ways (voice latency arc 9/08): uvicorn serves
 # /ai/voice/stream with it, and voice_stream.py dials OpenAI with it.
