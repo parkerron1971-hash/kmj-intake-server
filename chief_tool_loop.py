@@ -291,7 +291,13 @@ def _shrink(result: Any) -> str:
     # Its handler pages lists; retain the complete explicitly recalled record.
     limit = 32000 if isinstance(result, dict) and result.get('type') in ('growth_report', 'save_growth_record') else MAX_RESULT_CHARS
     if len(text) > limit:
-        text = text[:limit] + '… [truncated — ask a narrower question]"}'
+        # Remain valid JSON even when the original contains escaped strings.
+        prefix = text[:limit // 2]
+        text = json.dumps({'truncated': True, 'partial_result': prefix,
+                           'instruction': 'Incomplete sample. Ask a narrower question; do not infer totals or absence.'})
+        while len(text) > limit and prefix:
+            prefix = prefix[:len(prefix) // 2]
+            text = json.dumps({'truncated': True, 'partial_result': prefix})
     return text
 
 
@@ -331,9 +337,17 @@ async def execute_tool_use(client, biz: Dict[str, Any],
         result = await handler(client, biz, action)
     except Exception as e:
         logger.warning(f"[tool-loop] {name} raised: {e}")
-        return True, f"'{name}' failed: {type(e).__name__}. Answer from what you have."
-    if isinstance(result, dict) and chief_of_staff._action_failed(result):
+        import chief_truth
+        chief_truth.record('tool:' + name, None)
+        return True, (f"'{name}' failed: {type(e).__name__}. This data is unavailable. "
+                      "Say you could not verify it; do not guess or report zero results.")
+    import chief_truth
+    if result is None or (isinstance(result, dict) and chief_of_staff._action_failed(result)):
+        chief_truth.record('tool:' + name, None)
+        if result is None:
+            return True, 'Lookup unavailable. Do not infer zero results or invent an answer.'
         return True, _shrink(result)
+    chief_truth.record('tool:' + name, result)
     return False, _shrink(result)
 
 

@@ -145,6 +145,7 @@ def test_silent_course_work_gets_stream_heartbeats(monkeypatch):
         assert (await anext(it)).startswith(':')
         assert await anext(it) == ': keep-alive\n\n'
         finish.set()
+        assert '"type": "delta"' in await anext(it)
         assert '"type": "final"' in await anext(it)
         await it.aclose()
     asyncio.run(check())

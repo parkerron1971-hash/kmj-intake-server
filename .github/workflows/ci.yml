@@ -30,6 +30,10 @@ on:
         description: "Optional CHIEF_MODEL_CHAT override for the eval run (e.g. a candidate model id)"
         required: false
         default: ""
+      chief_case:
+        description: "Optional authored action case ID for a targeted live retest; empty runs all action cases"
+        required: false
+        default: ""
 
 jobs:
   # Chief turn eval, LIVE (2026-09-04): the golden set in
@@ -58,12 +62,24 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CHIEF_MODEL_CHAT: ${{ inputs.chief_model_chat }}
-        run: python scripts/chief_turn_eval.py --live --out chief-eval-report.json
+          CHIEF_EVAL_CASE: ${{ inputs.chief_case }}
+        run: |
+          args=(--live --out chief-eval-report.json)
+          if [[ -n "$CHIEF_EVAL_CASE" ]]; then args+=(--only "$CHIEF_EVAL_CASE"); fi
+          python scripts/chief_turn_eval.py "${args[@]}"
+      - name: Measure factual answers and unsupported claims
+        if: always()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHIEF_MODEL_CHAT: ${{ inputs.chief_model_chat }}
+        run: python scripts/chief_factual_eval.py --live --out chief-factual-report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: chief-eval-report
-          path: chief-eval-report.json
+          path: |
+            chief-eval-report.json
+            chief-factual-report.json
 
   design-acceptance:
     if: github.event_name == 'workflow_dispatch' && inputs.fixture_business_id != ''

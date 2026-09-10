@@ -100,6 +100,8 @@ def run_turn(monkeypatch):
     monkeypatch.setattr(cos, "_analyze_relationships", lambda *a, **k: _instant([]))
     monkeypatch.setattr(cos, "_build_system_prompt", lambda *a, **k: "SYSTEM")
     monkeypatch.setattr(cos, "_call_claude", _staged("model", "All good."))
+    import chief_truth
+    monkeypatch.setattr(chief_truth, "review_reply", _staged("review", ""))
     monkeypatch.setattr(cos, "_log_chief_activity", lambda *a, **k: _instant(None))
     monkeypatch.setattr(cos, "_learn_patterns_async", lambda *a, **k: _instant(None))
 
@@ -147,7 +149,11 @@ def _fields(line):
 
 def test_every_turn_logs_its_timing(run_turn, caplog):
     out, lines = run_turn(caplog)
-    assert out["response"] == "All good."
+    # The fixture has no answer reviewer: unsupported business-health claims
+    # must be withheld while the timing instrument still runs normally.
+    import chief_truth
+    assert out["response"] == chief_truth.UNVERIFIED_REPLY
+    assert out['grounding']['status'] == 'withheld'
     assert len(lines) == 1, (
         "exactly one timing line per turn — none means the instrument is "
         "silent, more than one means it is double-counting"
@@ -158,7 +164,7 @@ def test_the_line_carries_every_stage(run_turn, caplog):
     _, lines = run_turn(caplog)
     f = _fields(lines[0])
     for stage in ("total", "recurrence", "sweeps", "context", "enrich",
-                  "prompt", "model", "warm"):
+                  "prompt", "model", "actions", "review", "warm"):
         assert stage in f, f"{stage} missing from: {lines[0]}"
     assert "lane=chat" in lines[0]
 
@@ -177,7 +183,7 @@ def test_the_numbers_are_real_not_zeroes(run_turn, caplog):
 # 2. The stages are attributed, not averaged
 # ─────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("stage", ["recurrence", "context", "model"])
+@pytest.mark.parametrize("stage", ["recurrence", "context", "model", "review"])
 def test_slowing_a_stage_moves_only_that_stage(run_turn, caplog, stage):
     """The whole point is aiming the next fix, so a slow stage has to show
     up as ITS OWN number. A total is exactly the number that cannot aim it.

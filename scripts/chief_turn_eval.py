@@ -49,6 +49,8 @@ import json
 import os
 import sys
 import time
+import re
+from urllib.parse import parse_qs, urlsplit
 from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -64,6 +66,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 #
 # must_not is the point of a row, not decoration: each names the
 # dangerous neighbour of the expected verb.
+
+CONTACT_IDS = {'marcus': '00000000-0000-4000-8000-000000000001',
+               'monica': '00000000-0000-4000-8000-000000000002',
+               'ada': '00000000-0000-4000-8000-000000000003'}
+
 
 def _tag(verb: str, **args: Any) -> str:
     return "[ACTION:" + json.dumps({"type": verb, **args}) + "]"
@@ -93,7 +100,7 @@ CASES: List[Dict[str, Any]] = [
      "must_not": ["draft_email", "send_sms"],
      "encoding": "tool",
      "tool_call": {"name": "create_note",
-                   "input": {"contact_id": "c-marcus",
+                   "input": {"contact_id": CONTACT_IDS["marcus"],
                              "note": "Interested in the leadership program"}},
      "reply": "Noted on Marcus's record."},
     {"id": "log_call",
@@ -102,7 +109,7 @@ CASES: List[Dict[str, Any]] = [
      "must_not": ["send_sms", "create_task"],
      "encoding": "tool",
      "tool_call": {"name": "log_activity",
-                   "input": {"contact_id": "c-marcus", "activity_type": "call",
+                   "input": {"contact_id": CONTACT_IDS["marcus"], "activity_type": "call",
                              "notes": "Retainer discussion"}},
      "reply": "Logged the call with Marcus."},
 
@@ -121,7 +128,7 @@ CASES: List[Dict[str, Any]] = [
      "expect": ["log_time"],
      "must_not": ["create_invoice", "send_invoice", "bill_time_to_retainer"],
      "encoding": "tag",
-     "reply": "Logged. " + _tag("log_time", contact_id="c-monica", hours=2,
+     "reply": "Logged. " + _tag("log_time", contact_id=CONTACT_IDS["monica"], hours=2,
                                 description="drafted the engagement letter")},
     {"id": "log_expense",
      "message": "I spent $45 on gas at Shell today",
@@ -186,7 +193,7 @@ CASES: List[Dict[str, Any]] = [
      "must_not": ["draft_and_send", "approve_draft", "send_sms"],
      "encoding": "tool",
      "tool_call": {"name": "draft_email",
-                   "input": {"contact_id": "c-ada", "subject": "Next steps",
+                   "input": {"contact_id": CONTACT_IDS["ada"], "subject": "Next steps",
                              "body": "Hi Ada — following up on our conversation. "
                                      "Here is what I'd suggest as next steps.",
                              "reason": "follow-up"}},
@@ -285,23 +292,41 @@ def summarize(results: List[Dict[str, Any]], mode: str) -> Dict[str, Any]:
 # chief_tool_loop.execute_tool_use — the real loop, the real budget, the
 # real door — before answering.
 
-def _stub_turn(monkeypatch, biz: Dict[str, Any]):
+def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
     import chief_of_staff as cos
     import rate_limit
 
     async def _instant(value=None):
         return value
 
+    context = _fixture_context(biz, case)
+
     async def _fake_sb(client, method, path, body=None):
-        return [biz]
+        if path.startswith('/businesses?'):
+            return [biz]
+        if path.startswith('/contacts?'):
+            return _fixture_select(context['contacts_lookup'], path)
+        if path.startswith('/invoices?'):
+            return context['open_invoices']
+        if path.startswith('/chief_undo_log?') and case and case['id'] == 'undo':
+            return [{'id': 'undo-one', 'action_type': 'create_task', 'status': 'undoable',
+                     'action_json': {'title': 'Review draft'},
+                     'result_json': {'task_id': 'task-one'}}]
+        return []
 
     monkeypatch.setattr(rate_limit, "allow", lambda *a, **k: True)
+    import sb_clients
+    import practitioner_profile_agent
+    import voice_depth_agent
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda *a, **k: [])
+    monkeypatch.setattr(practitioner_profile_agent, "_sb_get", lambda *a, **k: [])
+    monkeypatch.setattr(voice_depth_agent, "_sb_get", lambda *a, **k: [])
     monkeypatch.setattr(cos, "_sb", _fake_sb)
     monkeypatch.setattr(cos, "_generate_missing_recurring_instances", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_autopilot_sweep", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_evaluate_escalations", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_gather_context",
-                        lambda *a, **k: _instant({"business": biz, "contacts": []}))
+                        lambda *a, **k: _instant(context))
     monkeypatch.setattr(cos, "_fetch_view_detail", lambda *a, **k: _instant(""))
     for name in ["_get_voice_examples", "_get_session_context",
                  "_get_time_context", "_get_habit_insights"]:
@@ -332,8 +357,52 @@ class _Session:
     token = "eval-jwt"
 
 
-BIZ = {"id": "biz-eval", "name": "Eval Co", "type": "coach", "owner_id": "user-eval",
+BIZ = {"id": "00000000-0000-4000-8000-000000000010", "name": "Eval Co", "type": "coach", "owner_id": "user-eval",
        "settings": {}}
+
+
+def _fixture_context(biz, case=None):
+    # The authored rows reference these exact people. A blank context makes
+    # correct refusal to invent their IDs look like failed action selection.
+    contacts = [
+        {'id': CONTACT_IDS['marcus'], 'name': 'Marcus Reed', 'email': 'marcus@example.com', 'status': 'active'},
+        {'id': CONTACT_IDS['monica'], 'name': 'Monica Walton', 'email': 'monica@example.com', 'status': 'active'},
+        {'id': CONTACT_IDS['ada'], 'name': 'Ada Lovelace', 'email': 'ada@example.com', 'status': 'lead'},
+    ]
+    for contact in contacts:
+        contact['health_score'] = 50
+        contact['business_id'] = biz['id']
+    contacts[-1]['notes'] = ('Discussed the leadership program. Next steps: send the program '
+                             'outline and propose a discovery call.')
+    if case and case['id'] == 'create_contact_lead':
+        contacts = [c for c in contacts if c['id'] != CONTACT_IDS['ada']]
+    if case and case['id'] == 'create_contact_tag':
+        contacts = [c for c in contacts if c['id'] != CONTACT_IDS['marcus']]
+    context = {'business': biz, 'contacts_total': len(contacts), 'contacts_loaded': len(contacts),
+            'contacts_complete': True, 'contacts_by_status': {}, 'avg_health': 0,
+            'module_counts': {}, **{key: [] for key in (
+                'contacts', 'at_risk', 'queue', 'sessions', 'insights', 'modules',
+                'events', 'memories', 'notifications', 'recent_queue_24h', 'projects',
+                'products', 'contacts_lookup', 'open_invoices')}}
+    context['contacts_lookup'] = contacts
+    if case and case['id'] == 'send_is_class_c_tag':
+        context['open_invoices'] = [{'id': 'inv-marcus', 'number': 'INV-001',
+            'client': 'Marcus Reed', 'contact_id': CONTACT_IDS['marcus'], 'total': 520,
+            'status': 'draft', 'due_date': '2026-09-30'}]
+    return context
+
+
+def _fixture_select(rows, path):
+    query = parse_qs(urlsplit(path).query)
+    selected = list(rows)
+    for key in ('id', 'business_id', 'name'):
+        for value in query.get(key, []):
+            if value.startswith('eq.'):
+                selected = [row for row in selected if str(row.get(key)) == value[3:]]
+            elif value.startswith('ilike.'):
+                pattern = re.escape(value[6:]).replace(r'\*', '.*').replace('%', '.*')
+                selected = [row for row in selected if re.fullmatch(pattern, str(row.get(key, '')), re.I)]
+    return selected
 
 
 def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
@@ -369,7 +438,7 @@ def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
         # the loop, and the turn did NOT also execute it as a tag.
         extra["tool_went_through_the_door"] = case["tool_call"]["name"] in dispatched
         extra["not_double_executed"] = dispatched.count(case["tool_call"]["name"]) == 1
-        extra["reply_is_the_models_own"] = out.get("response") == case["reply"]
+        extra["reply_has_checked_outcome"] = (out.get('grounding') or {}).get('status') in ('supported', 'receipts')
     return score_case(case, taken, extra)
 
 
@@ -398,10 +467,22 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
     for case in cases:
         mp = pytest.MonkeyPatch()
         try:
-            _stub_turn(mp, BIZ)
+            real_prompt = cos._build_system_prompt
+            _stub_turn(mp, BIZ, case)
             # The real prompt this time — that is what is being measured.
-            mp.delattr(cos, "_build_system_prompt", raising=False)
+            mp.setattr(cos, "_build_system_prompt", real_prompt)
             dispatched: List[str] = []
+            import chief_tool_loop as ctl
+            native_reads: List[str] = []
+            execute_tool = ctl.execute_tool_use
+
+            async def _observe_tool(client, biz, name, args):
+                import action_registry
+                if action_registry.effect(name) == action_registry.READ:
+                    native_reads.append(name)
+                return await execute_tool(client, biz, name, args)
+
+            mp.setattr(ctl, 'execute_tool_use', _observe_tool)
 
             async def _door(client, biz, actions, user_id=None, prior_results=None,
                             owner_text=None):
@@ -414,11 +495,18 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
             mp.setattr(cos, "_execute_actions", _door)
             print(f"→ {case['id']} …", file=sys.stderr, flush=True)
             started = time.time()
+            history = ([{'role': 'user', 'content': 'Create a task to review the draft'},
+                        {'role': 'assistant', 'content': 'Created task: Review draft.'}]
+                       if case['id'] == 'undo' else None)
             out = asyncio.run(cos.chief_chat(
-                cos.ChatRequest(business_id=BIZ["id"], message=case["message"]),
+                cos.ChatRequest(business_id=BIZ["id"], message=case["message"],
+                                conversation_history=history),
                 _Session()))
             taken = [a.get("type") for a in out.get("actions_taken", [])
                      if isinstance(a, dict)]
+            # Native reads return into the model, not actions_taken. They
+            # still count as read selection in this verb-only evaluation.
+            taken = list(dict.fromkeys(taken + native_reads))
             scored = score_case(case, taken)
             scored["seconds"] = round(time.time() - started, 1)
             scored["reply"] = (out.get("response") or "")[:300]
@@ -462,7 +550,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--live", action="store_true", help="hit the real model")
     ap.add_argument("--out", help="write results as JSON")
-    ap.add_argument("--only", help="run one case by id")
+    ap.add_argument("--only", choices=[case['id'] for case in CASES], help="run one case by id")
     ap.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"))
     args = ap.parse_args()
 

@@ -55,6 +55,8 @@ _BIZ = {"id": "biz-1", "name": "KMJ Creative Solutions", "type": "coach",
     "talk tomorrow", "talk to you later", "see you tomorrow",
     "have a good night", "signing off", "i'm heading out",
     "alright thanks so much, talk soon",
+    "Thanks, that's all for today. Goodbye!",
+    "Goodnight Chief, talk tomorrow",
 ])
 def test_clear_farewells_match(msg):
     assert cos._is_farewell(msg), msg
@@ -72,6 +74,7 @@ def test_clear_farewells_match(msg):
     "draft the goodbye section of the newsletter and talk tomorrow's plan",
     "",
     "how's the business doing?",
+    "Goodbye, but first send Marcus the invoice",
 ])
 def test_sentences_about_goodbyes_do_not_match(msg):
     assert not cos._is_farewell(msg), msg

@@ -40,6 +40,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import pytest
 
 import chief_of_staff as cos
+import chief_truth
 
 
 DELAY = 0.10          # what each enrichment source costs when slowed
@@ -83,6 +84,14 @@ def turn(monkeypatch):
     # do with what it is testing. Neutralised here, and only here.
     import rate_limit
     monkeypatch.setattr(rate_limit, "allow", lambda *a, **k: True)
+    # These unrelated profile/billing reads otherwise perform real DNS/HTTP
+    # in the latency fixture, making network jitter look like serial enrichment.
+    import sb_clients
+    import practitioner_profile_agent
+    import voice_depth_agent
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda *a, **k: [])
+    monkeypatch.setattr(practitioner_profile_agent, "_sb_get", lambda *a, **k: [])
+    monkeypatch.setattr(voice_depth_agent, "_sb_get", lambda *a, **k: [])
 
     called: set[str] = set()
 
@@ -118,6 +127,8 @@ def turn(monkeypatch):
     monkeypatch.setattr(cos, "_fetch_view_detail", lambda *a, **k: _instant(""))
     monkeypatch.setattr(cos, "_build_system_prompt", lambda *a, **k: "SYSTEM")
     monkeypatch.setattr(cos, "_call_claude", lambda *a, **k: _instant("All good."))
+    # The separate reviewer is offline in this latency fixture.
+    monkeypatch.setattr(chief_truth, "review_reply", lambda *a, **k: _instant(""))
     monkeypatch.setattr(cos, "_log_chief_activity", lambda *a, **k: _instant(None))
     monkeypatch.setattr(cos, "_learn_patterns_async", lambda *a, **k: _instant(None))
 
@@ -156,7 +167,7 @@ def turn(monkeypatch):
 
 def test_the_enrichment_sources_do_not_wait_on_each_other(turn):
     baseline, out = turn(delay=0.0)
-    assert out["response"] == "All good."
+    assert out["response"] == chief_truth.UNVERIFIED_REPLY
     slowed, _ = turn(delay=DELAY)
     added = slowed - baseline
     assert added < BUDGET, (
@@ -199,7 +210,7 @@ def test_one_broken_source_never_takes_the_turn_down(turn, monkeypatch, broken):
         raise RuntimeError(f"{broken} is down")
     monkeypatch.setattr(cos, broken, _boom)
     _, out = turn()
-    assert out["response"] == "All good.", (
+    assert out["response"] == chief_truth.UNVERIFIED_REPLY, (
         f"{broken} raising must degrade its own block, not the turn — "
         "gathering context is not worth losing the conversation over"
     )
@@ -219,7 +230,7 @@ def test_a_broken_off_thread_module_never_takes_the_turn_down(
         raise RuntimeError(f"{module_name} is down")
     monkeypatch.setattr(mod, attr, _boom)
     _, out = turn()
-    assert out["response"] == "All good."
+    assert out["response"] == chief_truth.UNVERIFIED_REPLY
 
 
 def test_every_source_failing_at_once_still_answers(turn, monkeypatch):
@@ -233,7 +244,7 @@ def test_every_source_failing_at_once_still_answers(turn, monkeypatch):
                  "_get_habit_insights"]:
         monkeypatch.setattr(cos, name, _boom)
     _, out = turn()
-    assert out["response"] == "All good."
+    assert out["response"] == chief_truth.UNVERIFIED_REPLY
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -289,7 +300,7 @@ def test_a_prewarmed_turn_refetches_nothing(turn, monkeypatch):
     chief_prewarm.store("user-1", "biz-1", dict(_WARM_PAYLOAD))
     try:
         _, out = turn(delay=0.0)
-        assert out["response"] == "All good."
+        assert out["response"] == chief_truth.UNVERIFIED_REPLY
         assert hits == {}, (
             f"the turn re-fetched {sorted(hits)} after the mic-open prewarm "
             f"had already loaded it — the prewarm bought nothing"
@@ -305,7 +316,7 @@ def test_a_cold_turn_fetches_everything_itself(turn, monkeypatch):
     chief_prewarm.clear()
     hits = _count_sources(monkeypatch)
     _, out = turn(delay=0.0)
-    assert out["response"] == "All good."
+    assert out["response"] == chief_truth.UNVERIFIED_REPLY
     assert len(hits) == 8 and all(v == 1 for v in hits.values()), hits
 
 

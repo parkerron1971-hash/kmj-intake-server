@@ -63,6 +63,57 @@ def test_ids_are_unique():
     assert len(ids) == len(set(ids))
 
 
+def test_live_harness_keeps_real_prompt_available_without_live_io(monkeypatch):
+    from unittest.mock import AsyncMock
+    import chief_truth
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'fixture-only-key')
+    model = AsyncMock(return_value='[ACTION:{"type":"log_expense","amount":45}]')
+    monkeypatch.setattr(cos, '_call_claude', model)
+    monkeypatch.setattr(chief_truth, 'review_reply', AsyncMock(return_value=''))
+    original = cos._build_system_prompt
+    case = {'id': 'live-harness', 'message': 'Log a $45 expense',
+            'expect': ['log_expense'], 'must_not': ['create_invoice']}
+    result = cte.run_live([case])
+    assert not result['failed_cases']
+    assert cos._build_system_prompt is original
+    assert 'Eval Co' in model.call_args.args[1]
+
+
+def test_live_fixtures_supply_referenced_people_without_precreating_new_contacts():
+    people = cte._fixture_context(cte.BIZ, {'id': 'note_on_contact'})['contacts_lookup']
+    assert {p['id'] for p in people} == {cte.CONTACT_IDS['marcus'], cte.CONTACT_IDS['monica'], cte.CONTACT_IDS['ada']}
+    new = cte._fixture_context(cte.BIZ, {'id': 'create_contact_lead'})
+    assert all(p['id'] != cte.CONTACT_IDS['ada'] for p in new['contacts_lookup'])
+    invoices = cte._fixture_context(cte.BIZ, {'id': 'send_is_class_c_tag'})['open_invoices']
+    assert invoices[0]['contact_id'] == cte.CONTACT_IDS['marcus']
+
+
+def test_live_scorer_counts_native_reads_that_do_not_create_action_cards(monkeypatch):
+    from unittest.mock import AsyncMock
+    import chief_truth
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'fixture-only-key')
+    async def model(*args, **kwargs):
+        await ctl.execute_tool_use(None, cte.BIZ, 'check_goals', {})
+        return 'No goals were found.'
+    monkeypatch.setattr(cos, '_call_claude', model)
+    monkeypatch.setitem(cos.ACTION_HANDLERS, 'check_goals', AsyncMock(return_value={
+        'type': 'check_goals', 'result': 'No goals found', 'label': 'Goals'}))
+    monkeypatch.setattr(chief_truth, 'review_reply', AsyncMock(return_value=''))
+    report = cte.run_live([{'id': 'native-read', 'message': 'Check my goals',
+                           'expect': ['check_goals'], 'must_not': ['create_goal']}])
+    assert not report['failed_cases']
+
+
+def test_live_contact_deep_dive_returns_the_requested_fixture_contact(monkeypatch):
+    import asyncio
+    cte._stub_turn(monkeypatch, cte.BIZ, {'id': 'draft_email_not_send'})
+    result = asyncio.run(cos.handle_contact_deep_dive(None, cte.BIZ,
+                        {'contact_id': cte.CONTACT_IDS['ada']}))
+    assert not cos._action_failed(result)
+    assert result['contact']['name'] == 'Ada Lovelace'
+    assert 'program outline' in result['contact']['notes']
+
+
 # ─── the scorer cannot be vacuous ────────────────────────────────────
 
 def test_scorer_rewards_the_expected_verb_and_punishes_the_neighbour():
