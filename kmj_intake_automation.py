@@ -282,6 +282,8 @@ app.include_router(growth_objective_router)
 from image_studio import router as image_studio_router
 app.include_router(image_studio_router)
 app.include_router(growth_intelligence_router)
+from academy_live_router import router as academy_live_router
+app.include_router(academy_live_router)
 app.include_router(module_spec_router)
 app.include_router(module_check_router)
 # Phase C.1 — Bookings archetype

@@ -130,6 +130,13 @@ def scrub_sentry_event(event: Dict[str, Any], _hint: Any = None) -> Optional[Dic
     try:
         req = event.get("request")
         if isinstance(req, dict):
+            if re.search(r"/academy-live(?:[/?#]|$)", str(req.get("url", ""))):
+                # Enrollment links are bearer credentials in the POST body.
+                # Webhook payloads also contain student identity/attendance.
+                req.pop("data", None)
+                req.pop("headers", None)
+                req.pop("cookies", None)
+                req.pop("query_string", None)
             for key in ("url", "query_string"):
                 if isinstance(req.get(key), str):
                     req[key] = redact(req[key])
