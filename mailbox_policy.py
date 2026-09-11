@@ -38,6 +38,7 @@ from typing import Any, Dict, Iterable, List, Set
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import os
+import re
 
 # Sources that did NOT come back through our own inbound path, and so
 # carry no implicit "we mailed them first" scoping.
@@ -64,14 +65,58 @@ def email_clock(ctx: Dict[str, Any]) -> Dict[str, Any]:
     except (ValueError, ZoneInfoNotFoundError):
         tz, label = timezone.utc, 'UTC (configured timezone unavailable)'
     stamp = (ctx.get('context_quality') or {}).get('retrieved_at')
+    local_date = None
     try:
         now = datetime.fromisoformat(str(stamp).replace('Z', '+00:00'))
         if now.tzinfo is None:
             raise ValueError('timezone missing')
-        description = f"Today is {now.astimezone(tz).date().isoformat()} in {label}; snapshot at {now.astimezone(tz).isoformat()}."
+        local_date = now.astimezone(tz).date().isoformat()
+        description = f"Today is {local_date} in {label}; snapshot at {now.astimezone(tz).isoformat()}."
     except (TypeError, ValueError):
         description = f"Snapshot date unavailable; do not infer today. Display timezone: {label}."
-    return {'timezone': tz, 'description': description}
+    return {'timezone': tz, 'description': description, 'date': local_date}
+
+
+def client_email_today_reply(message: str, ctx: Dict[str, Any]) -> str | None:
+    """Answer a narrow existence check from scoped records, never model prose.
+
+    This is also the review-outage fallback. Do not expand it to summaries of
+    message bodies, mixed instructions, or claims about the entire inbox.
+    """
+    question = ' '.join(re.sub(r'[^\w\s]', ' ', message.casefold()).split())
+    if question not in {
+        'did any client email me today', 'did any of my clients email me today',
+        'have any of my clients emailed me today',
+        'can you check to see if any of my clients emailed me today',
+        'can you check if any of my clients emailed me today',
+        'did any clients email me today',
+    }:
+        return None
+    scope = ('This covers recent stored messages, not a full inbox search or a live mailbox sync. '
+             'Open Email Hub to review your messages and mailbox connection.')
+    clock = email_clock(ctx)
+    if not clock['date']:
+        return "I can't determine today's date for this email snapshot. " + scope
+    quality = ctx.get('email_context_quality') or {}
+    available = all(quality.get(key) == 'available' for key in ('platform_replies', 'connected_mailbox'))
+    known = known_sender_emails(ctx.get('contacts_lookup') or [])
+    # Recheck the current sender policy even though the context is already
+    # filtered. A platform reply is not necessarily from a saved contact.
+    messages = [row for row in (ctx.get('email_replies') or [])
+                if (row.get('from_email') or '').strip().lower() in known
+                and is_prompt_eligible(row, known)]
+    dated = [local_received_at(row.get('received_at'), clock['timezone']) for row in messages]
+    if any(stamp.startswith(clock['date'] + 'T') for stamp in dated):
+        answer = 'Yes. I found client email dated today in the stored messages I can read. '
+        if not available:
+            answer += 'Some email sources were unavailable, so this may be incomplete. '
+    elif not available:
+        answer = "I couldn't retrieve all the email sources, so I can't confirm whether a client emailed you today. "
+    elif any(stamp.startswith('unknown') for stamp in dated):
+        answer = "Some stored client messages have missing dates, so I can't confirm whether they arrived today. "
+    else:
+        answer = "I don't see client email dated today in the recent stored messages I can read. "
+    return answer + scope
 
 
 def local_received_at(value: Any, tz) -> str:

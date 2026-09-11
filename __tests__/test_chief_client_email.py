@@ -158,5 +158,70 @@ def test_unsupported_email_answer_still_fails_closed():
         None, 'Nobody emailed you today.', ctx=context(), view_detail={}, taken=[],
         message='Did any client email me today?', business_id='business',
         reviewer=AsyncMock(return_value='{"verdict":"unsupported","claims":[]}')))
-    assert result == truth.UNVERIFIED_REPLY
-    assert meta['status'] == 'withheld'
+    assert result.startswith('Yes. I found client email dated today')
+    assert 'Nobody emailed' not in result
+    assert 'not a full inbox search' in result
+    assert meta['status'] == 'records'
+
+
+def test_no_matches_is_limited_to_the_stored_sample():
+    ctx = context()
+    ctx['email_replies'][0]['received_at'] = '2026-05-01T12:00:00Z'
+    reply = mailbox_policy.client_email_today_reply('Did any client email me today?', ctx)
+    assert reply.startswith("I don't see client email dated today in the recent stored messages")
+    assert 'not a full inbox search or a live mailbox sync' in reply
+
+
+def test_failed_reads_do_not_become_no_email():
+    ctx = context()
+    ctx['email_replies'] = []
+    ctx['email_context_quality']['connected_mailbox'] = 'unavailable'
+    reply = mailbox_policy.client_email_today_reply('Did any client email me today?', ctx)
+    assert "couldn't retrieve all the email sources" in reply
+    assert "don't see" not in reply
+
+
+def test_unknown_senders_and_bad_dates_cannot_become_client_mail_today():
+    ctx = context()
+    ctx['email_replies'][0]['received_at'] = 'bad'
+    ctx['email_replies'].append({'from_email': 'stranger@example.com', 'received_at': '2026-09-11T20:00:00Z'})
+    reply = mailbox_policy.client_email_today_reply('Did any client email me today?', ctx)
+    assert 'missing dates' in reply
+    assert 'Yes.' not in reply
+
+
+def test_email_fallback_never_infers_today_without_snapshot_clock():
+    ctx = context()
+    ctx['context_quality'] = {}
+    reply = mailbox_policy.client_email_today_reply('Did any client email me today?', ctx)
+    assert "can't determine today's date" in reply
+
+
+def test_email_fallback_matches_the_local_day():
+    ctx = context()
+    ctx['email_replies'][0]['received_at'] = '2026-09-12T02:00:00Z'
+    assert mailbox_policy.client_email_today_reply('Did any client email me today?', ctx).startswith('Yes.')
+
+
+def test_email_fallback_does_not_swallow_actions_or_other_questions():
+    for question in ('Did any client email me today? Reply to them.', 'What did Ada say?', 'Did anyone email me last week?'):
+        assert mailbox_policy.client_email_today_reply(question, context()) is None
+
+
+def test_reviewer_outage_answers_reported_question_from_records():
+    reply, meta = asyncio.run(truth.finalize_reply(
+        None, 'No one emailed you.', ctx=context(), view_detail={}, taken=[],
+        message='Can you check to see if any of my clients emailed me today?', business_id='business',
+        reviewer=AsyncMock(side_effect=RuntimeError('review unavailable'))))
+    assert reply.startswith('Yes.')
+    assert meta['status'] == 'records'
+
+
+def test_read_only_setup_check_does_not_block_scoped_email_answer():
+    reply, meta = asyncio.run(truth.finalize_reply(
+        None, 'No one emailed you.', ctx=context(), view_detail={},
+        taken=[{'type': 'email_setup_status', 'result': 'Mailbox status checked', 'label': 'Email status'}],
+        message='Did any client email me today?', business_id='business',
+        reviewer=AsyncMock(return_value='')))
+    assert reply.startswith('Yes.')
+    assert meta['status'] == 'records'

@@ -315,6 +315,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         logger.info('reply review supported; citations=%d', len(cited))
         return reply, {'status': 'supported', 'sources': cited}
     logger.info('reply review withheld; receipts=%d', len(receipts))
+    import mailbox_policy
+    email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
     if receipts:
         # Preserve real work and links/cards even when narration cannot be checked.
         import action_registry
@@ -329,6 +331,13 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 bits.append(value.strip())
         if bits:
             return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
+        if email_answer:
+            return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
         return ('I could not verify the explanation. '
                 'Please check the results shown.'), {'status': 'withheld', 'sources': []}
+    # A rejected narration must not strand a simple email existence question.
+    # Recompute a limited answer from the same scoped records, never preserve
+    # the unverified draft or infer that an empty sample means an empty inbox.
+    if email_answer:
+        return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
     return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': []}
