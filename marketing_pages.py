@@ -5009,23 +5009,6 @@ def render_features() -> str:
   </div>
 </section>
 
-<section id="demo" class="demo-section">
-  <div class="container">
-    <div class="section-head reveal">
-            <span data-spine class="eyebrow">See it move</span>
-      <h2>Fifty-eight seconds, <span class="gradient-text">end to end.</span></h2>
-      <p>One photographer's Tuesday: Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</p>
-    </div>
-    <div class="demo-frame reveal">
-      <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
-      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/film-poster.jpg?v=2">
-        <source src="/assets/film.mp4?v=2" type="video/mp4">
-        Your browser doesn't support embedded video. <a href="/assets/film.mp4?v=2">Download the film</a>.
-      </video>
-    </div>
-  </div>
-</section>
-
 <section class="final-cta">
   <div class="container">
     <span class="eyebrow reveal">Ready to try it?</span>
@@ -5255,23 +5238,9 @@ def render_compare() -> str:
 <section class="page-hero">
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
-    <span class="eyebrow reveal">Solutionist vs. alternatives</span>
-    <h1 class="reveal reveal-delay-1">Seven tools that don&rsquo;t know each other.<br>Or <span class="gradient-text">one that knows you.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:700px;margin:14px auto 0;">The stack is not expensive because of what it costs. It is expensive because you are the integration layer.</p>
-    <div class="cmp-math reveal reveal-delay-3">
-      <div class="cmp-side">
-        <span class="cmp-lbl">Seven tools, list price</span>
-        <span class="cmp-fig alt">""" + STACK_TOTAL + """<i>/mo</i></span>
-        <span class="cmp-sub">HubSpot &middot; Stripe &middot; Calendly &middot; Buffer &middot; Notion
-          &middot; Mixpanel &middot; Squarespace &middot; a spreadsheet for the rest</span>
-      </div>
-      <div class="cmp-arrow" aria-hidden="true"><span></span></div>
-      <div class="cmp-side">
-        <span class="cmp-lbl">One system</span>
-        <span class="cmp-fig">""" + SOLUTIONIST_FROM + """<i>/mo</i></span>
-        <span class="cmp-sub">Everything below, on one login, sharing what it knows</span>
-      </div>
-    </div>
+    <span class="eyebrow reveal">Every plan, every row</span>
+    <h1 class="reveal reveal-delay-1">What you get <span class="gradient-text">on each plan.</span></h1>
+    <p class="lead reveal reveal-delay-2" style="max-width:700px;margin:14px auto 0;">The short version, seven tools against one system, is on the <a href="/#compare" style="color:var(--accent);">home page</a>. This page is the whole table: every row, on every plan, and what changes if you are switching from something else.</p>
 
   </div>
 </section>
@@ -5318,33 +5287,6 @@ def render_compare() -> str:
   </div>
 </section>
 
-<section>
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="eyebrow">Feature by feature</span>
-      <h2>The side-by-side.</h2>
-    </div>
-    <div class="reveal reveal-delay-1">
-      <table class="compare">
-        <thead>
-          <tr><th>What you need</th><th class="sol-col">Solutionist</th><th>The 7-tool stack</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>CRM &amp; contacts</td><td class="sol">✓ Built-in</td><td class="alt">HubSpot / Notion / spreadsheet</td></tr>
-          <tr><td>Invoicing &amp; payments</td><td class="sol">✓ Built-in</td><td class="alt">Stripe + QuickBooks</td></tr>
-          <tr><td>Calendar &amp; booking</td><td class="sol">✓ Built-in</td><td class="alt">Calendly + Google Calendar</td></tr>
-          <tr><td>Content planning &amp; publishing</td><td class="sol">✓ Built-in</td><td class="alt">Buffer / Hootsuite + Notion</td></tr>
-          <tr><td>Goals &amp; tracking</td><td class="sol">✓ Built-in</td><td class="alt">Spreadsheet + sticky notes</td></tr>
-          <tr><td>Funnel &amp; pipeline analytics</td><td class="sol">✓ Built-in</td><td class="alt">Mixpanel / Looker / DIY</td></tr>
-          <tr><td>Website &amp; brand</td><td class="sol">✓ Built-in</td><td class="alt">Squarespace / Webflow + Figma</td></tr>
-          <tr><td>AI assistant that knows your business</td><td class="sol">✓ Chief of Staff</td><td class="alt">ChatGPT + manual context every time</td></tr>
-          <tr><td>One login</td><td class="sol">✓</td><td class="alt">8+ logins</td></tr>
-          <tr><td>Real-time data flow</td><td class="sol">✓ Native</td><td class="alt">Zapier / manual sync</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
 """ + _plan_compare_section_html() + """
 <section>
   <div class="container">
@@ -5426,7 +5368,7 @@ def render_faq() -> str:
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
     <span class="eyebrow reveal">Common questions</span>
-    <h1 class="reveal reveal-delay-1">Answers to <span class="gradient-text">what people ask first.</span></h1>
+    <h1 class="reveal reveal-delay-1">Every question, <span class="gradient-text">answered.</span></h1>
     <p class="lead reveal reveal-delay-2" style="max-width:600px;margin:14px auto 0;">Don't see your question? Email us at <a href="mailto:__CONTACT_EMAIL__" style="color:var(--accent);">__CONTACT_EMAIL__</a>.</p>
   </div>
 </section>
