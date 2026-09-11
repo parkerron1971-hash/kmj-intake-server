@@ -1824,7 +1824,11 @@
   addEventListener('resize',thumb);
   document.fonts&&document.fonts.ready.then(thumb);
   document.body.classList.add('pre');
-  if(reduce)endIntro(true);else startIntro();
+  /* v14: the intro plays once per visitor (a week of quiet); Replay intro still runs it on demand */
+  const INTRO_KEY='sol_intro_seen', INTRO_QUIET=7*24*60*60*1000;
+  const introSeen=()=>{try{const r=localStorage.getItem(INTRO_KEY);return r&&(Date.now()-parseInt(r,10))<INTRO_QUIET}catch(e){return false}};
+  try{if(!introSeen())localStorage.setItem(INTRO_KEY,String(Date.now()))}catch(e){}
+  if(reduce||introSeen()&&!/(^|[?&])intro=1/.test(location.search))endIntro(true);else startIntro();
 
   /* ticker */
   const trades=[['Barbers & salons','#2E7DFF'],['Therapists','#2DD4BF'],['Attorneys','#C9A84C'],['Contractors','#F5A524'],['Coaches','#A78BFA'],['Consultants','#22D3EE'],['Ministries & churches','#F472B6']];
