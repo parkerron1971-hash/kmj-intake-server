@@ -112,7 +112,7 @@ def founder_ad_html() -> str:
       <div class="fad-seal">Founding seat</div>
       <h2 id="founderAdTitle" class="fad-title">The first {n['limit']} run the whole system at the founding price. Forever.</h2>
       <ul class="fad-deal">
-        <li><b>Everything in Professional</b> &mdash; every room, every automation, the Chief.</li>
+        <li><b>Everything in Professional</b>: every room, every automation, the Chief.</li>
         <li><b>{n['credits']:,} AI actions a month</b>, every month, in the seat.</li>
         <li><b>${saving} a month less than the list price</b>, and the price never rises while the seat is yours.</li>
       </ul>
