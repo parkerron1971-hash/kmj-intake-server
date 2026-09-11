@@ -176,6 +176,10 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
         if not name or name in _EXCLUDED:
             continue
         out.append(_anthropic_shape(t))
+    import agent_coordination
+    out += [_anthropic_shape({"name": n, "description": d, "inputSchema": s})
+            for n, (d, s) in agent_coordination.CHIEF_TOOLS.items()
+            if action_registry.effect(n) == action_registry.READ]
     return out
 
 
@@ -183,6 +187,8 @@ def _write_verb_offered(name: str) -> bool:
     """May THIS verb be a write tool? The same two gates the agent
     surface applies — the registry is the ceiling (class A, not
     sensitive, not bulk), the reviewed schema table is the floor."""
+    if name == "delegate_to_agent":
+        return action_registry.effect(name) == action_registry.WRITE and action_registry.reversibility(name) == "A"
     return (name in mcp_server.WRITE_TOOL_SCHEMAS
             and action_registry.may_expose_to_agent(name, allow_writes=True)
             and action_registry.effect(name) == action_registry.WRITE
@@ -199,6 +205,10 @@ def write_tool_definitions() -> List[Dict[str, Any]]:
         description, schema = mcp_server.WRITE_TOOL_SCHEMAS[name]
         out.append(_anthropic_shape(
             {"name": name, "description": description, "inputSchema": schema}))
+    import agent_coordination
+    d, s = agent_coordination.CHIEF_TOOLS["delegate_to_agent"]
+    if _write_verb_offered("delegate_to_agent"):
+        out.append(_anthropic_shape({"name": "delegate_to_agent", "description": d, "inputSchema": s}))
     return out
 
 
@@ -290,6 +300,9 @@ def _shrink(result: Any) -> str:
     # A single Growth action can contain 200 audience IDs and result notes.
     # Its handler pages lists; retain the complete explicitly recalled record.
     limit = 32000 if isinstance(result, dict) and result.get('type') in ('growth_report', 'save_growth_record') else MAX_RESULT_CHARS
+    if isinstance(result, dict) and result.get('type') in ('connected_agent_assignments', 'list_connected_agents'):
+        # Targeted lookups include the entire bounded brief and result for review.
+        limit = 48000
     if len(text) > limit:
         # Remain valid JSON even when the original contains escaped strings.
         prefix = text[:limit // 2]
@@ -319,7 +332,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     if effect == action_registry.WRITE and name not in _EXCLUDED:
         return await _execute_write(client, biz, name, args)
 
-    if name in _EXCLUDED or not action_registry.may_expose_to_agent(name):
+    if name in _EXCLUDED or (not action_registry.may_expose_to_agent(name)
+                             and name not in ("list_connected_agents", "connected_agent_assignments")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

@@ -243,6 +243,8 @@ app.include_router(chief_agent_router)
 # Assignments (2026-09-04): the outcomes the standing agent works over days.
 from chief_assignments import router as chief_assignments_router
 app.include_router(chief_assignments_router)
+from agent_coordination import router as agent_coordination_router
+app.include_router(agent_coordination_router)
 # Outcomes (2026-09-04): what came of Chief's moves, per business.
 from outcome_ledger import router as outcome_ledger_router
 app.include_router(outcome_ledger_router)

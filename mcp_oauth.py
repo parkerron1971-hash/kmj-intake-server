@@ -709,6 +709,9 @@ async def authorize_post(
             error="That key is not valid, has expired, or was revoked.")
 
     business_id = str(claims.get("biz") or "")
+    if "coordinate" in (claims.get("scp") or []):
+        return _redirect_error(redirect_uri, state, "invalid_scope",
+                               "Coordination keys require a direct Bearer connection. OAuth cannot transfer a bot's capability restrictions.")
     if not business_id:
         return _redirect_error(redirect_uri, state, "server_error",
                                "that key names no business")

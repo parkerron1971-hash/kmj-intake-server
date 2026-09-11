@@ -36,6 +36,10 @@ logger = logging.getLogger("event_spine")
 #         kept under its historical name because consumers filter on it.
 
 EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
+    "agent_assignment_reported": {
+        "source": "agent_coordination: a claimed bot assignment submitted or failed",
+        "payload": ["assignment_id", "agent_id", "status"],
+    },
     # ── Money in ─────────────────────────────────────────────────
     "invoice_paid_auto": {
         "source": "stripe webhooks (payment link match + Connect checkout)",

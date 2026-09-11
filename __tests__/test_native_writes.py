@@ -77,6 +77,10 @@ def test_write_tools_are_the_reviewed_class_a_surface():
     expected = {v for v in mcp_server.WRITE_TOOL_SCHEMAS
                 if action_registry.may_expose_to_agent(v, allow_writes=True)
                 and not action_registry.is_bulk(v)}
+    # Chief may delegate; an external bot must never direct another bot.
+    expected.add("delegate_to_agent")
+    assert not action_registry.may_expose_to_agent("delegate_to_agent", allow_writes=True)
+    assert "delegate_to_agent" not in mcp_server.exposed_tools(allow_writes=True)
     assert names == expected and names
     for n in names:
         assert action_registry.reversibility(n) == "A", n
