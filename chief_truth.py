@@ -331,4 +331,11 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
         return ('I could not verify the explanation. '
                 'Please check the results shown.'), {'status': 'withheld', 'sources': []}
+    # A rejected narration must not strand a simple email existence question.
+    # Recompute a limited answer from the same scoped records, never preserve
+    # the unverified draft or infer that an empty sample means an empty inbox.
+    import mailbox_policy
+    email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
+    if email_answer:
+        return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
     return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': []}
