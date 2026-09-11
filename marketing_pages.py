@@ -172,17 +172,20 @@ SHARED_CSS = """
        Create, New Invoice, Chase Overdue, Chief AI). It is used ONLY
        inside the product replicas so they read as genuine screenshots —
        never on site chrome. ── */
-    --bg: #08090C;
-    --bg-2: #0E1015;
-    --bg-3: #141821;
+    /* 2026-09-11: the same ground, lines and greys the new home page
+       (marketing_home_v2) is built on, so a click from the home to any
+       page lands on the same material. */
+    --bg: #07080B;
+    --bg-2: #0D0F14;
+    --bg-3: #12151B;
     --surface: rgba(255,255,255,0.035);
     --surface-2: rgba(255,255,255,0.065);
-    --border: rgba(255,255,255,0.09);
-    --border-strong: rgba(255,255,255,0.17);
+    --border: #1B1F27;
+    --border-strong: #262B35;
     --text-primary: #F7F8FA;
     --text-secondary: #C9CDD6;
     --text-muted: #949AA6;
-    --text-dim: #6B707B;
+    --text-dim: #5F6672;
     --accent: #2E7DFF;
     --accent-2: #1D63E6;
     --info: #22D3EE;
@@ -211,13 +214,12 @@ SHARED_CSS = """
 
   .container{max-width:1140px;margin:0 auto;padding:0 28px;}
   .container-narrow{max-width:820px;margin:0 auto;padding:0 28px;}
-  .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);border-radius:99px;}
+  .eyebrow{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--text-muted);}
   .gradient-text{color:var(--accent);-webkit-text-fill-color:currentColor;background:none;}
-  h1,h2,h3{font-family:var(--font-heading);letter-spacing:-0.032em;line-height:1.04;}
-  /* 78, matching the home page's fold. At 68 the inner pages read as
-     a lesser tier of page, and nothing justified the demotion. */
-  h1{font-size:clamp(42px, 6.2vw, 78px);font-weight:700;}
-  h2{font-size:clamp(30px, 4.2vw, 46px);font-weight:700;letter-spacing:-0.03em;margin-bottom:14px;}
+  h1,h2,h3{font-family:var(--font-heading);letter-spacing:-0.035em;line-height:1.02;text-wrap:balance;}
+  /* the new home sets its display type at 600, not 700: same here */
+  h1{font-size:clamp(42px, 6.2vw, 78px);font-weight:600;}
+  h2{font-size:clamp(30px, 4.2vw, 46px);font-weight:600;letter-spacing:-0.035em;margin-bottom:14px;}
   h3{font-size:18px;font-weight:600;color:var(--text-primary);margin-bottom:6px;}
   p{color:var(--text-secondary);font-size:16px;}
   .lead{font-size:18px;color:var(--text-muted);line-height:1.65;}
@@ -234,8 +236,13 @@ SHARED_CSS = """
      rest — paints behind the wordmark instead of starting under it.
      Every first section carries 128px of top padding, which clears
      the 65px row with room to spare. */
-  .nav{position:absolute;top:0;left:0;right:0;z-index:50;background:transparent;border-bottom:none;}
-  .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
+  /* 2026-09-11: the new home's bar. In flow and sticky, 64px, the mark
+     and the six links, pill buttons; transparent until you scroll, then
+     it takes a ground so the way in stays one click away. */
+  .nav{position:sticky;top:0;left:0;right:0;z-index:50;background:transparent;border-bottom:1px solid transparent;transition:background .3s,border-color .3s;}
+  .nav.stuck{background:rgba(7,8,11,.86);border-bottom-color:var(--border);}
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:64px;padding:0 20px;max-width:1180px;margin:0 auto;}
+  .brand .mk{width:30px;height:26px;flex-shrink:0;filter:drop-shadow(0 0 8px rgba(224,64,251,.35)) drop-shadow(0 0 14px rgba(34,211,238,.25));}
   .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;gap:10px;}
   .brand .logo{height:32px;width:32px;object-fit:contain;display:block;flex-shrink:0;filter:drop-shadow(0 0 8px var(--glow));}
   .footer .brand .logo{height:28px;}
@@ -266,7 +273,7 @@ SHARED_CSS = """
   ::view-transition-group(nav-current){animation-duration:.34s;
     animation-timing-function:cubic-bezier(.2,.7,.3,1);}
 
-  .nav-links{display:flex;align-items:center;gap:22px;font-size:13px;font-weight:500;}
+  .nav-links{display:flex;align-items:center;gap:10px;font-size:13.5px;font-weight:400;}
   .nav-links a{color:var(--text-muted);transition:color 0.15s;position:relative;}
   .nav-links a:hover, .nav-links a.is-active{color:var(--text-primary);}
   /* THE NAV IS A TRACE. One rail under the page links, a node on it for each
@@ -277,21 +284,10 @@ SHARED_CSS = """
      it `nav-current`, so the browser morphs it across the navigation. It has
      to be a real element — a pseudo element cannot carry a
      view-transition-name, which is why this is a span and not ::after. */
-  .nav-pages{display:flex;align-items:center;gap:22px;position:relative;}
-  .nav-pages::before{content:'';position:absolute;left:0;right:0;bottom:-17px;height:1.5px;
-    background:#1E2A3B;border-radius:1px;pointer-events:none;}
-  .nav-pages a{position:relative;}
-  .nav-home{display:block;width:7px;height:7px;position:relative;flex:none;}
-  .nav-dot{position:absolute;left:50%;margin-left:-3.5px;bottom:-20.5px;width:7px;height:7px;
-    border-radius:50%;background:var(--bg);border:1.5px solid #1E2A3B;
-    transition:border-color .25s ease, background .25s ease;}
-  .nav-pages a.is-active .nav-dot, .nav-home.is-active .nav-dot{
-    border-color:var(--accent);background:#0B1220;view-transition-name:nav-current;}
-  .nav-pages a.is-active .nav-dot::after, .nav-home.is-active .nav-dot::after{
-    content:'';position:absolute;inset:1.5px;border-radius:50%;background:var(--accent);}
-  .nav-cta{white-space:nowrap;padding:8px 16px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:8px;font-weight:700;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
+  .nav-pages{display:flex;align-items:center;gap:26px;position:relative;margin-right:16px;}
+  .nav-cta{white-space:nowrap;display:inline-flex;align-items:center;height:32px;padding:0 14px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:999px;font-weight:600;font-size:12px;letter-spacing:.02em;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
   .nav-cta:hover{transform:translateY(-1px);background:var(--accent-2);box-shadow:0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);}
-  .nav-login{white-space:nowrap;padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
+  .nav-login{white-space:nowrap;display:inline-flex;align-items:center;height:32px;padding:0 14px;border:1px solid var(--border-strong);border-radius:999px;background:rgba(13,15,20,.6);color:var(--text-primary) !important;font-weight:600;font-size:12px;letter-spacing:.02em;transition:border-color 0.15s, background 0.15s;}
   .nav-login:hover{border-color:var(--accent);background:var(--surface);}
   /* 900, not 760: at ~768 every link still showed, which wrapped both the
      brand and "Get the App" onto extra lines and buckled the whole bar. */
@@ -382,9 +378,9 @@ SHARED_CSS = """
   }
 
   /* ─── buttons ─── */
-  .btn-primary{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;background:var(--accent);color:var(--ink-on-accent);font-weight:700;font-size:14px;letter-spacing:.01em;border-radius:10px;border:none;cursor:pointer;box-shadow:0 6px 24px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;font-family:inherit;}
+  .btn-primary{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 22px;background:var(--accent);color:var(--ink-on-accent);font-weight:600;font-size:13.5px;letter-spacing:.02em;border-radius:999px !important;border-radius:10px;border:none;cursor:pointer;box-shadow:0 6px 24px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;font-family:inherit;}
   .btn-primary:hover{transform:translateY(-2px);background:var(--accent-2);box-shadow:0 10px 34px color-mix(in srgb, var(--accent) 42%, transparent);}
-  .btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:13px 22px;background:var(--surface);color:var(--text-primary);font-weight:600;font-size:14px;border-radius:10px;border:1px solid var(--border-strong);cursor:pointer;transition:background 0.15s, border-color 0.15s;font-family:inherit;}
+  .btn-secondary{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 20px;background:rgba(13,15,20,.6);color:var(--text-primary);font-weight:600;font-size:13.5px;letter-spacing:.02em;border-radius:999px;border:1px solid var(--border-strong);cursor:pointer;transition:background 0.15s, border-color 0.15s;font-family:inherit;}
   .btn-secondary:hover{background:var(--surface-2);border-color:color-mix(in srgb, var(--accent) 50%, transparent);}
 
   /* ─── animations + reveals ─── */
@@ -529,8 +525,12 @@ SHARED_CSS = """
   .final-cta .btn-primary{margin-top:22px;}
 
   /* ─── page-hero (for non-home pages) ─── */
-  .page-hero{position:relative;padding:128px 0;text-align:center;overflow:hidden;border-bottom:1px solid var(--border);}
-  .page-hero::before{content:'';position:absolute;inset:-40px 0 auto;height:280px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;opacity:0.6;}
+  /* the bar is in flow now (64px), so the hero's own top padding
+     drops to keep the headline where it was; the light is the home's
+     aurora, held still: blue at the left shoulder, teal at the right */
+  .page-hero{position:relative;padding:88px 0 120px;text-align:center;overflow:hidden;border-bottom:0;}
+  .page-hero::before{content:'';position:absolute;inset:-120px 0 auto;height:520px;pointer-events:none;opacity:.9;
+    background:radial-gradient(40% 60% at 18% 20%, rgba(46,125,255,.28), transparent 70%),radial-gradient(38% 60% at 82% 30%, rgba(34,211,238,.16), transparent 70%);filter:blur(30px);}
   .page-hero .container{position:relative;z-index:1;}
   .page-hero h1{margin:14px 0 16px;}
 """
@@ -565,20 +565,25 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 {pixel_script}
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"/><stop offset=".55" stop-color="#7C5CFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+  <symbol id="mark" viewBox="8 36 496 424"><g fill="url(#mkg)" stroke="#fff" stroke-width="7" stroke-linejoin="miter" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"/><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"/><polygon points="264,274 149,279 201,359"/></g></symbol>
+</defs></svg>
 
-<nav class="nav">
+<nav class="nav" id="siteNav">
   <div class="nav-inner">
     <a class="brand" href="/">
-      <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System">
+      <svg class="mk" aria-hidden="true"><use href="#mark"/></svg>
       <span class="brand-text">The Solutionist System</span>
     </a>
     <div class="nav-links">
       <div class="nav-pages">
-        <span class="nav-home {ax_home}" aria-hidden="true"><span class="nav-dot"></span></span>
-        <a href="/about" class="{ax_about}">About<span class="nav-dot"></span></a>
-        <a href="/features" class="{ax_features}">Features<span class="nav-dot"></span></a>
-        <a href="/compare" class="{ax_compare}">Compare<span class="nav-dot"></span></a>
-        <a href="/#pricing">Pricing<span class="nav-dot"></span></a>
+        <a href="/#what">What it is</a>
+        <a href="/features" class="{ax_features}">Product</a>
+        <a href="/#trust">Chief</a>
+        <a href="/compare" class="{ax_compare}">Compare</a>
+        <a href="/#pricing">Pricing</a>
+        <a href="/faq" class="{ax_faq}">FAQ</a>
       </div>
       <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta" href="/start">Start free trial</a>
@@ -595,7 +600,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
   <div class="mm-panel" role="dialog" aria-modal="true" aria-label="Site menu">
     <div class="mm-top">
       <a class="brand" href="/">
-        <img class="logo" src="/assets/logo-nav.png" alt="" width="32" height="32">
+        <svg class="mk" aria-hidden="true"><use href="#mark"/></svg>
         <span class="brand-text">The Solutionist System</span>
       </a>
       <button class="mm-close" id="mmClose" type="button" aria-label="Close menu" data-mm-close>
@@ -603,10 +608,13 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       </button>
     </div>
     <nav class="mm-links" aria-label="Pages">
-      <a href="/about" class="{ax_about}">About</a>
-      <a href="/features" class="{ax_features}">Features</a>
+      <a href="/#what">What it is</a>
+      <a href="/features" class="{ax_features}">Product</a>
+      <a href="/#trust">Chief</a>
       <a href="/compare" class="{ax_compare}">Compare</a>
       <a href="/#pricing">Pricing</a>
+      <a href="/faq" class="{ax_faq}">FAQ</a>
+      <a href="/about" class="{ax_about}">About</a>
     </nav>
     <div class="mm-actions">
       <a class="mm-primary" href="/start">Start free trial &rarr;</a>
@@ -628,7 +636,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
   <div class="footer-inner">
     <div class="footer-brand">
       <span class="brand">
-        <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System" style="height:28px;">
+        <svg class="mk" aria-hidden="true"><use href="#mark"/></svg>
         <span class="brand-text">The Solutionist System</span>
       </span>
       <span class="small">Built by The Solutionist System LLC</span>
@@ -679,6 +687,12 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
        Below 900px the nav links are hidden, so this panel is the only
        way to the other pages. Keep it keyboard-usable: Escape closes,
        Tab stays inside, focus returns to the button that opened it. */
+    var bar = document.getElementById('siteNav');
+    if (bar) {{
+      var stick = function () {{ bar.classList.toggle('stuck', window.scrollY > 40); }};
+      window.addEventListener('scroll', stick, {{ passive: true }});
+      stick();
+    }}
     var burger = document.getElementById('navBurger');
     var menu   = document.getElementById('mobileMenu');
     if (burger && menu) {{

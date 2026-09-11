@@ -72,14 +72,14 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
      does NOT reach them. (It didn't: they sat on the old violet for a
      full pass.) */
   :root {{
-    --bg: #08090C;
-    --bg-2: #0E1015;
+    --bg: #07080B;
+    --bg-2: #0D0F14;
     --surface: rgba(255,255,255,0.035);
-    --border: rgba(255,255,255,0.09);
+    --border: #1B1F27;
     --text-primary: #F7F8FA;
     --text-secondary: #C9CDD6;
     --text-muted: #949AA6;
-    --text-dim: #6B707B;
+    --text-dim: #5F6672;
     --accent: #2E7DFF;
     --info: #22D3EE;
     --glow: rgba(46, 125, 255, 0.30);
@@ -104,10 +104,10 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
   .nav-links a{{color:var(--text-muted);text-decoration:none;transition:color 0.15s;}}
   .nav-links a:hover{{color:var(--text-primary);}}
   .nav-links{{align-items:center;}}
-  .nav-login{{padding:7px 15px;border:1px solid rgba(255,255,255,0.17);border-radius:8px;
+  .nav-login{{display:inline-flex;align-items:center;height:32px;padding:0 14px;border:1px solid var(--border-strong);border-radius:999px;background:rgba(13,15,20,.6);font-size:12px;
     color:var(--text-primary) !important;font-weight:600;transition:border-color .15s, background .15s;}}
   .nav-login:hover{{border-color:var(--accent);background:var(--surface);}}
-  .nav-cta{{padding:8px 16px;background:var(--accent);color:#fff !important;border-radius:8px;
+  .nav-cta{{display:inline-flex;align-items:center;height:32px;padding:0 14px;background:var(--accent);color:#fff !important;border-radius:999px;font-size:12px;
     font-weight:700;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);
     transition:background .15s;}}
   .nav-cta:hover{{background:#1D63E6;}}
@@ -215,19 +215,25 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 </head>
 <body>
 
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"/><stop offset=".55" stop-color="#7C5CFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+  <symbol id="mark" viewBox="8 36 496 424"><g fill="url(#mkg)" stroke="#fff" stroke-width="7" stroke-linejoin="miter" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"/><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"/><polygon points="264,274 149,279 201,359"/></g></symbol>
+</defs></svg>
 <nav class="nav">
   <div class="nav-inner">
     <a class="brand" href="/">
-      <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System">
+      <svg class="mk" aria-hidden="true" style="width:30px;height:26px;flex-shrink:0;filter:drop-shadow(0 0 8px rgba(224,64,251,.35)) drop-shadow(0 0 14px rgba(34,211,238,.25))"><use href="#mark"/></svg>
       <span class="brand-text">The Solutionist System</span>
     </a>
     <div class="nav-links">
-      <a href="/help">Help</a>
-      <a href="/privacy">Privacy</a>
-      <a href="/terms">Terms</a>
-      <a href="mailto:{contact_email}">Contact</a>
+      <a href="/#what">What it is</a>
+      <a href="/features">Product</a>
+      <a href="/#trust">Chief</a>
+      <a href="/compare">Compare</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/faq">FAQ</a>
       <a class="nav-login" href="{app_url}">Log in</a>
-      <a class="nav-cta" href="/get-started">Get Started</a>
+      <a class="nav-cta" href="/start">Start free trial</a>
       <button class="nav-burger" id="navBurger" type="button" aria-label="Open menu"
               aria-expanded="false" aria-controls="mobileMenu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
