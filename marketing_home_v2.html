@@ -1827,9 +1827,9 @@
   /* v15: the intro plays once per VISIT (Kevin 9/11: it must play when he comes to the site). A fresh tab plays it; a refresh or a return from another page in the same tab does not; ?intro=1 and Replay always run it. The v14 week-long flag is cleared so nobody stays quiet. */
   try{localStorage.removeItem('sol_intro_seen')}catch(e){}
   const INTRO_KEY='sol_intro_visit';
-  const introSeen=()=>{try{return sessionStorage.getItem(INTRO_KEY)==='1'}catch(e){return false}};
-  try{if(!introSeen())sessionStorage.setItem(INTRO_KEY,'1')}catch(e){}
-  if(reduce||introSeen()&&!/(^|[?&])intro=1/.test(location.search))endIntro(true);else startIntro();
+  /* read the flag BEFORE writing it: v14/v15 wrote first and then read, so every load counted as already seen and the intro never played */
+  let introSeen=false; try{introSeen=sessionStorage.getItem(INTRO_KEY)==='1'; if(!introSeen)sessionStorage.setItem(INTRO_KEY,'1')}catch(e){}
+  if(reduce||introSeen&&!/(^|[?&])intro=1/.test(location.search))endIntro(true);else startIntro();
 
   /* ticker */
   const trades=[['Barbers & salons','#2E7DFF'],['Therapists','#2DD4BF'],['Attorneys','#C9A84C'],['Contractors','#F5A524'],['Coaches','#A78BFA'],['Consultants','#22D3EE'],['Ministries & churches','#F472B6']];
