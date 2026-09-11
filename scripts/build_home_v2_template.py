@@ -128,6 +128,12 @@ def build(src: pathlib.Path) -> str:
     s = rep(s, "7 days free · every action logged and reversible", "__TRIAL_FREE__ · every action logged and reversible")
     s = rep(s, "7 days free on every plan.", "__TRIAL_FREE__ on every plan.", 0) if "7 days free on every plan." in s else s
 
+    # ── every trial promise is the sentinel, so a zero-day trial never reads "0 days free" ──
+    s = rep(s, "Seven days free. Every action logged and reversible. Say what you do and start.", "__TRIAL_FREE__. Every action logged and reversible. Say what you do and start.")
+    s = rep(s, "<summary>What does the free week include?</summary><p>The whole room, on the plan you pick, for seven days. No card charged until the week is up, and you can leave before then with nothing owed.</p>",
+            "<summary>What does the free trial include?</summary><p>The whole room, on the plan you pick. __TRIAL_FREE__, no card charged until the trial ends, and you can leave before then with nothing owed.</p>")
+    assert "days free" not in s.replace("__TRIAL_FREE__", ""), "a hard-coded trial promise survived"
+
     # ── the film's live note is no longer needed ──
     s = cut(s, '      <div class="live">Live, this is', "    </div>\n  </div>\n\n{{FOUNDER_AD_MARKUP}}")
 
