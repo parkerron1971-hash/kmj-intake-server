@@ -235,6 +235,8 @@ app.include_router(module_router)
 app.include_router(chief_router)
 from chief_jobs import router as chief_jobs_router  # Feature 2 — queued desk jobs
 app.include_router(chief_jobs_router)
+from connected_ai import router as connected_ai_router
+app.include_router(connected_ai_router)
 # The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.
 from chief_agent import router as chief_agent_router
 app.include_router(chief_agent_router)
