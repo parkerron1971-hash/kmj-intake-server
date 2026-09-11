@@ -43,32 +43,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS connected_ai_job_request ON public.chief_jobs(
 -- accept a model-supplied recipient. Compare this again at completion AND send.
 CREATE OR REPLACE FUNCTION public.connected_ai_invoice_snapshot(p_business uuid, p_invoice uuid)
 RETURNS jsonb LANGUAGE plpgsql SET search_path = public AS $$
-DECLARE i jsonb; c jsonb; matches integer; bname text;
+DECLARE i jsonb; c jsonb; bname text;
 BEGIN
   SELECT to_jsonb(v) INTO i FROM public.invoices v WHERE id=p_invoice AND business_id=p_business;
-  IF i IS NULL OR i->>'status' NOT IN ('open','sent','overdue') OR i->>'archived_at' IS NOT NULL
-    OR i->>'paid_at' IS NOT NULL OR coalesce((i->>'amount_due_cents')::bigint,0)<=0
+  IF i IS NULL OR i->>'status' NOT IN ('sent','viewed','overdue') OR i->>'archived_at' IS NOT NULL
+    OR i->>'paid_at' IS NOT NULL OR coalesce((i->>'total')::numeric,0)<=0
     OR i->>'due_date' IS NULL OR (i->>'due_date')::date >= current_date THEN
     RAISE EXCEPTION 'invoice_not_overdue';
   END IF;
   IF nullif(i->>'contact_id','') IS NOT NULL THEN
     SELECT to_jsonb(v) INTO c FROM public.contacts v
       WHERE id=(i->>'contact_id')::uuid AND business_id=p_business;
-  ELSE
-    SELECT count(*) INTO matches FROM public.contacts v WHERE business_id=p_business
-      AND lower(trim(v.email))=lower(trim(i->>'customer_email'));
-    IF matches <> 1 THEN RAISE EXCEPTION 'invoice_contact_required'; END IF;
-    SELECT to_jsonb(v) INTO c FROM public.contacts v WHERE business_id=p_business
-      AND lower(trim(v.email))=lower(trim(i->>'customer_email'));
   END IF;
   IF c IS NULL OR coalesce(c->>'email','') NOT LIKE '%@%' THEN RAISE EXCEPTION 'invoice_contact_required'; END IF;
   SELECT name INTO bname FROM public.businesses WHERE id=p_business;
   RETURN jsonb_build_object('invoice_id',p_invoice,'contact_id',c->>'id',
-    'contact_name',left(coalesce(c->>'name','Client'),160),
+    'contact_name',left(coalesce(nullif(trim(c->>'name'),''),'Client'),160),
     'recipient_email',lower(trim(c->>'email')),
     'invoice_number',left(coalesce(nullif(i->>'invoice_number',''),i->>'id'),100),
-    'amount_due_cents',(i->>'amount_due_cents')::bigint,'currency',upper(coalesce(i->>'currency','USD')),
-    'due_date',i->>'due_date','business_name',left(coalesce(bname,'Your business'),160),
+    'amount_due_cents',round((i->>'total')::numeric*100)::bigint,'currency',upper(coalesce(i->>'currency','USD')),
+    'due_date',i->>'due_date','business_name',left(coalesce(nullif(trim(bname),''),'Your business'),160),
     'updated_at',i->>'updated_at');
 END $$;
 REVOKE ALL ON FUNCTION public.connected_ai_invoice_snapshot(uuid,uuid) FROM PUBLIC, anon, authenticated;
@@ -86,7 +80,7 @@ DECLARE d public.connected_ai_devices; pair public.connected_ai_pairings;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended(p_business::text, 411));
   SELECT owner_id INTO owner FROM public.businesses WHERE id=p_business;
-  IF owner IS NULL OR owner <> p_actor THEN RAISE EXCEPTION 'owner_required'; END IF;
+  IF p_actor IS NULL OR owner IS NULL OR owner <> p_actor THEN RAISE EXCEPTION 'owner_required'; END IF;
 
   IF p_op='pair' THEN
     IF (SELECT count(*) FROM public.connected_ai_pairings WHERE business_id=p_business

@@ -93,6 +93,21 @@ def test_companion_download_is_allowlisted(client):
         assert set(z.namelist())=={'connected_agents/__init__.py','connected_agents/contracts.py','connected_agents/runtime.py','connected_agents/companion.py','Start Solutionist.cmd','README.txt'}
         assert TOKEN.encode() not in r.content
 
+def test_invoice_list_uses_canonical_decimal_schema(client,monkeypatch):
+    paths=[]
+    def rows(path):
+        paths.append(path)
+        if path.startswith('/businesses'):return [BUSINESS]
+        return [{'id':J,'invoice_number':'DEMO-105','total':'120.35','currency':'USD','due_date':'2026-09-01'}]
+    monkeypatch.setattr(ca,'_rows',rows)
+    r=client.get('/connected-ai/invoices',params={'business_id':B})
+    assert r.status_code==200
+    assert r.json()['invoices'][0]['amount_due_cents']==12035
+    assert r.json()['invoices'][0]['invoice_number']=='DEMO-105'
+    assert 'amount_due_cents' not in paths[-1] and 'customer_name' not in paths[-1]
+    assert 'status=in.(sent,viewed,overdue)' in paths[-1]
+    assert 'paid_at=is.null' in paths[-1] and 'total=gt.0' in paths[-1]
+
 def test_robot_approval_never_claims_send(monkeypatch):
     monkeypatch.setattr(ca,'transition',lambda *args:pytest.fail('Robot claimed send'))
     result=asyncio.run(ca.approve_connected(BUSINESS,{'connected_ai_job_id':J},None))

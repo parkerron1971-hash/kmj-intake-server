@@ -12,6 +12,7 @@ import os
 import secrets
 import zipfile
 from datetime import date, datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
@@ -264,10 +265,14 @@ def cancel(job_id: UUID, business_id: UUID, user: AuthedUser = Depends(require_u
 @router.get('/invoices')
 def invoices(business_id: UUID, user: AuthedUser = Depends(require_user)):
     _require_enabled(_owner(business_id, user))
-    rows = _rows(f'/invoices?business_id=eq.{business_id}&status=in.(open,sent,overdue)'
-                 f'&due_date=lt.{date.today().isoformat()}&amount_due_cents=gt.0&archived_at=is.null'
-                 '&select=id,customer_name,amount_due_cents,currency,due_date&order=due_date.asc&limit=100')
-    return {'invoices': rows}
+    # Canonical invoices store decimal `total`, not the abandoned Stripe
+    # mirror's amount_due_cents/customer_email columns. No cross-tenant join.
+    rows = _rows(f'/invoices?business_id=eq.{business_id}&status=in.(sent,viewed,overdue)'
+                 f'&due_date=lt.{date.today().isoformat()}&total=gt.0&archived_at=is.null&paid_at=is.null'
+                 '&select=id,invoice_number,total,currency,due_date&order=due_date.asc&limit=100')
+    return {'invoices': [{'id': row['id'], 'invoice_number': row['invoice_number'],
+        'amount_due_cents': int((Decimal(str(row['total']))*100).quantize(Decimal('1'), rounding=ROUND_HALF_UP)),
+        'currency': row['currency'], 'due_date': row['due_date']} for row in rows]}
 
 
 @router.get('/jobs/{job_id}/draft')
