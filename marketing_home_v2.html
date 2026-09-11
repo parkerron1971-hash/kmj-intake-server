@@ -1824,10 +1824,11 @@
   addEventListener('resize',thumb);
   document.fonts&&document.fonts.ready.then(thumb);
   document.body.classList.add('pre');
-  /* v14: the intro plays once per visitor (a week of quiet); Replay intro still runs it on demand */
-  const INTRO_KEY='sol_intro_seen', INTRO_QUIET=7*24*60*60*1000;
-  const introSeen=()=>{try{const r=localStorage.getItem(INTRO_KEY);return r&&(Date.now()-parseInt(r,10))<INTRO_QUIET}catch(e){return false}};
-  try{if(!introSeen())localStorage.setItem(INTRO_KEY,String(Date.now()))}catch(e){}
+  /* v15: the intro plays once per VISIT (Kevin 9/11: it must play when he comes to the site). A fresh tab plays it; a refresh or a return from another page in the same tab does not; ?intro=1 and Replay always run it. The v14 week-long flag is cleared so nobody stays quiet. */
+  try{localStorage.removeItem('sol_intro_seen')}catch(e){}
+  const INTRO_KEY='sol_intro_visit';
+  const introSeen=()=>{try{return sessionStorage.getItem(INTRO_KEY)==='1'}catch(e){return false}};
+  try{if(!introSeen())sessionStorage.setItem(INTRO_KEY,'1')}catch(e){}
   if(reduce||introSeen()&&!/(^|[?&])intro=1/.test(location.search))endIntro(true);else startIntro();
 
   /* ticker */
