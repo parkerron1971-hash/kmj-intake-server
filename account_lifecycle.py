@@ -137,6 +137,9 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # Connection metadata travels with the business; credentials never do.
+    # Remove devices first so workers lose access before jobs are erased.
+    "connected_ai_devices", "connected_ai_pairings",
     "image_publications", "image_artworks",  # publication records reference originals
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
     "media_assets",
@@ -365,6 +368,12 @@ async def _owned_businesses(client: httpx.AsyncClient, user_id: str) -> List[Dic
 _TABLE_SELECT = {"audit_log": LEDGER_EXPORT_SELECT}
 from media_library import PUBLIC_COLUMNS as MEDIA_EXPORT_COLUMNS
 _TABLE_SELECT['media_assets'] = MEDIA_EXPORT_COLUMNS
+_TABLE_SELECT['connected_ai_devices'] = (
+    'id,business_id,owner_id,provider,label,state,last_seen_at,expires_at,revoked_at,created_at'
+)
+_TABLE_SELECT['connected_ai_pairings'] = (
+    'id,business_id,owner_id,provider,expires_at,consumed_at,created_at'
+)
 
 
 # One page of a table, and the ceiling past which we stop and SAY SO.
@@ -558,6 +567,8 @@ _IMPORT_SKIP = {
     "program_outcome_reports", "business_financial_policies",
     "business_financial_account_locks", "business_financial_policy_history",
     "audit_log", "agent_runs", "chief_jobs", "mcp_tokens",
+    # A restored archive must pair fresh devices, never resurrect access.
+    "connected_ai_devices", "connected_ai_pairings",
     # Growth history and JSON records cite original contact/invoice/campaign
     # IDs. The generic importer mints new IDs without a reference map; copying
     # these would attach evidence to another business's records. Preserve the

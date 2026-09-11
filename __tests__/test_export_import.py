@@ -126,6 +126,8 @@ class TestTheImportRefusesTheDangerousThings:
     def test_it_refuses_to_import_live_credentials(self):
         """Re-importing tokens would resurrect access somebody revoked."""
         assert "mcp_tokens" in al._IMPORT_SKIP
+        assert "connected_ai_devices" in al._IMPORT_SKIP
+        assert "connected_ai_pairings" in al._IMPORT_SKIP
 
     def test_it_restores_parents_before_children(self):
         """The delete list is ordered children-first for FK safety, so
@@ -231,6 +233,8 @@ class TestTheListCannotRot:
 
     def test_children_precede_their_parents(self):
         order = {t: i for i, t in enumerate(al.BUSINESS_CHILD_TABLES)}
+        assert order["connected_ai_devices"] < order["chief_jobs"]
+        assert order["connected_ai_pairings"] < order["chief_jobs"]
         assert order["support_ticket_messages"] < order["support_tickets"]
         assert order["concierge_conversations"] < order["contacts"]
         assert order["consent_records"] < order["contacts"]

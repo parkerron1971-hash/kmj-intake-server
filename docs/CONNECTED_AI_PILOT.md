@@ -13,6 +13,9 @@ job and approval records. It does not introduce edition prices or change billing
 - Ten-minute, single-use pairing codes. Only their hashes reach the database.
   Device bearer secrets expire after 90 days, are independently revocable, and
   are protected with the current Windows user's DPAPI (POSIX permissions 0600).
+- Account export includes connection metadata without credential hashes.
+  Account deletion removes connections before their jobs. Imports skip device
+  and pairing records so an archive cannot restore revoked access.
 - Foreground desktop companion with heartbeat, bounded draft execution,
   cancellation and reconnect polling. Closing its window stops local work.
 - One active connected task per business. An overdue invoice is resolved to an
