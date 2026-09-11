@@ -215,3 +215,13 @@ def test_reviewer_outage_answers_reported_question_from_records():
         reviewer=AsyncMock(side_effect=RuntimeError('review unavailable'))))
     assert reply.startswith('Yes.')
     assert meta['status'] == 'records'
+
+
+def test_read_only_setup_check_does_not_block_scoped_email_answer():
+    reply, meta = asyncio.run(truth.finalize_reply(
+        None, 'No one emailed you.', ctx=context(), view_detail={},
+        taken=[{'type': 'email_setup_status', 'result': 'Mailbox status checked', 'label': 'Email status'}],
+        message='Did any client email me today?', business_id='business',
+        reviewer=AsyncMock(return_value='')))
+    assert reply.startswith('Yes.')
+    assert meta['status'] == 'records'
