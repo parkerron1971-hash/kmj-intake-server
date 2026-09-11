@@ -437,6 +437,12 @@ SHARED_CSS = """
   .footer-links{display:flex;flex-wrap:wrap;gap:18px;font-size:13px;}
   .footer-links a{color:var(--text-muted);transition:color 0.15s;}
   .footer-links a:hover{color:var(--text-primary);}
+  /* 2026-09-11: four columns, the same map the new home's footer carries */
+  .footer-cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;flex:1;min-width:0;max-width:720px;}
+  .footer-cols b{display:block;font-family:var(--font-mono, monospace);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;font-weight:500;}
+  .footer-cols a{display:block;color:var(--text-dim);font-size:13px;padding:4px 0;transition:color .15s;}
+  .footer-cols a:hover{color:var(--text-primary);}
+  @media (max-width:720px){.footer-cols{grid-template-columns:1fr 1fr;max-width:none;}}
   .footer-bottom{max-width:1140px;margin:32px auto 0;padding:16px 28px 0;border-top:1px solid var(--border);font-size:11px;color:var(--text-dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
 
   /* ─── shared feature mini-visuals ─── */
@@ -627,22 +633,11 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       </span>
       <span class="small">Built by The Solutionist System LLC</span>
     </div>
-    <div class="footer-links">
-      <a href="/features">Features</a>
-      <a href="/compare">Compare</a>
-      <a href="/faq">FAQ</a>
-      <a href="/about">About</a>
-      <a href="/news">News</a>
-      <a href="/start">Start free trial</a>
-      <a href="/get-started">Talk to us</a>
-      <a href="{app_url}">Log in</a>
-      <a href="/download">Get the app</a>
-      <a href="/help">Help</a>
-      <a href="{app_url}/status.html">Status</a>
-      <a href="/privacy">Privacy</a>
-      <a href="/data-deletion">Data Deletion</a>
-      <a href="/terms">Terms</a>
-      <a href="mailto:{contact_email}">Contact</a>
+    <div class="footer-cols">
+      <div><b>Product</b><a href="/#what">What it is</a><a href="/#room">The room</a><a href="/features">Every feature</a><a href="/#trust">Chief</a></div>
+      <div><b>Plans</b><a href="/#pricing">Pricing</a><a href="/compare">Compare</a><a href="/start?plan=founder">Founding seat</a><a href="/start">Start free</a></div>
+      <div><b>Company</b><a href="/about">About</a><a href="/news">News</a><a href="/faq">Questions</a><a href="/help">Help</a><a href="/get-started">Talk to us</a><a href="/download">Get the app</a></div>
+      <div><b>Account</b><a href="{app_url}">Log in</a><a href="{app_url}/status.html">Status</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/data-deletion">Data deletion</a><a href="mailto:{contact_email}">Contact</a></div>
     </div>
   </div>
   <div class="footer-bottom">
@@ -2185,7 +2180,7 @@ def _credits_in_words(credits: int, *, chief_works: bool, builds: int = 1) -> st
     after = _about(max(0, (credits - builds * build) // per_turn))
     noun = "a site build" if builds == 1 else f"{ {2: 'two', 3: 'three'}.get(builds, builds)} site builds"
     out = f"about {conversations:,} conversations, or {noun} and {after:,}"
-    return out + (" &mdash; and Chief works between them" if chief_works else "")
+    return out + (", and Chief works between them" if chief_works else "")
 
 
 _FOUNDER_CACHE: dict = {"taken": None, "at": 0.0}
@@ -2275,7 +2270,7 @@ def _price_cards_html() -> str:
         words = _credits_in_words(credits_n[plan], chief_works=(plan != "starter"),
                                   builds=(3 if plan == "practice" else 1))
         if plan == "practice":
-            words = words.replace(" &mdash; and Chief works between them", "")
+            words = words.replace(", and Chief works between them", "")
         ribbon = '<div class="ribbon">Most people land here</div>' if mid else ""
         return f"""
       <div class="price-card{' is-mid' if mid else ''}">
@@ -2306,8 +2301,8 @@ def _price_cards_html() -> str:
         # Professional actually buys is the gate map's professional
         # block, so that is what it says now.
         + card("professional", "Professional",
-               "Everything in Starter, plus the full accounting layer &mdash; closing, "
-               "1099s, year-end &mdash; and Chief on your books, your site and your sourcing.",
+               "Everything in Starter, plus the full accounting layer: closing, "
+               "1099s, year-end. And Chief on your books, your site and your sourcing.",
                "Your own AI can keep records here",
                mid=True)
         + card("practice", "Solutionist",
@@ -2361,8 +2356,8 @@ _COMPARE_GROUPS = (
         ("Invoices &amp; estimates", "invoicing",
          "Send it, they pay by card, and the books post themselves."),
         ("Card payments &amp; checkout", _ALL,
-         "Stripe on your own account &mdash; the money lands in your bank, never ours."),
-        ("Email &mdash; send, receive, templates", _ALL,
+         "Stripe on your own account: the money lands in your bank, never ours."),
+        ("Email: send, receive, templates", _ALL,
          "A real inbox for the business, sending from your own domain once you connect one."),
         ("Text messaging (SMS)", _ALL,
          "Two-way threads, appointment reminders, and broadcasts to your own list."),
@@ -2391,7 +2386,7 @@ _COMPARE_GROUPS = (
     ("Your presence", (
         ("Your website, designed and built for you", _ALL,
          "Chief builds it from what it knows about the business; you edit it in place."),
-        ("Brand kit &mdash; logo, palette, type, voice", _ALL,
+        ("Brand kit: logo, palette, type, voice", _ALL,
          "One brand, applied everywhere the business shows up."),
         ("Print materials &amp; flyers", _ALL,
          "Designed in the same brand, ready to hand out or post."),
@@ -2399,38 +2394,38 @@ _COMPARE_GROUPS = (
          "Draft, schedule, post, and read the engagement back."),
     )),
     ("Chief, your AI Chief of Staff", (
-        ("Chief on every screen &mdash; chat and voice", _ALL,
+        ("Chief on every screen, chat and voice", _ALL,
          "Ask for it in plain words and the system moves."),
         ("AI actions a month", lambda t: t["credits"],
          "One action is a message, a piece of analysis, or a build. Top up any time; credits never expire."),
         ("Depth of analysis", lambda t: t["analysis"],
          "How hard the system is allowed to think on the slow, careful work."),
-        ("Give Chief an assignment &mdash; &ldquo;fill Thursday&rdquo;", _ALL,
+        ("Give Chief an assignment: &ldquo;fill Thursday&rdquo;", _ALL,
          "Say it once. Chief works it between conversations, checks the numbers, and closes it when it lands. One open on Starter, three on Professional, ten on Solutionist."),
-        ("Chief asks before it spends &mdash; on your phone", _ALL,
+        ("Chief asks before it spends, on your phone", _ALL,
          "A text, an invoice, a payment link: the exact words reach your phone with Yes, do that. Nothing goes out until you tap, and a draft you ignore is let go."),
         ("Chief&rsquo;s week, every Monday", _ALL,
          "What it did on its own, what came of it, what is waiting on you, and the minutes you did not spend. Counted, not guessed."),
-        ("Autopilot &mdash; the overnight run", _ALL,
+        ("Autopilot, the overnight run", _ALL,
          "Chief works the list while you sleep, and logs a line for everything it did."),
         ("Memory, standing instructions &amp; weekly briefing", _ALL,
          "It remembers how you work, and tells you what changed before you ask."),
         ("Chief reads and explains your books", "chief_bookkeeping",
          "Ask why the month looks like that, and get the answer from the ledger."),
-        ("Website concierge &mdash; Chief answers your visitors", "site_concierge",
+        ("Website concierge: Chief answers your visitors", "site_concierge",
          "The chat on your own site, answering from your real business facts."),
         ("Connect your own AI to this business", "agent_connector",
          "Point the assistant you already carry at your workspace. It can read on every plan."),
         ("Let your own AI keep records here", "agent_connector_write",
          "A write key: contacts, tasks, notes, sessions, time, drafts. Never a send, a charge, or a delete."),
-        ("Sourcing Desk &mdash; find &amp; RFQ vendors", "sourcing_desk",
+        ("Sourcing Desk: find &amp; RFQ vendors", "sourcing_desk",
          "Search the live web for suppliers, then send them a request for quote."),
     )),
     ("Books, tax &amp; compliance", (
         ("Bookkeeping &amp; bank reconciliation", "bookkeeping_basic",
          "Connect the bank, match the transactions, keep the balance honest."),
         ("Bank connections", lambda t: t["banks"], ""),
-        ("Core reports &mdash; P&amp;L, balance sheet, AR aging", "reports_basic", ""),
+        ("Core reports: P&amp;L, balance sheet, AR aging", "reports_basic", ""),
         ("General Ledger &amp; Trial Balance", "general_ledger",
          "Your authoritative books. Every business gets to see its own record."),
         ("Full GL-authoritative reports", "reports_full",
@@ -2543,6 +2538,16 @@ def _plan_compare_section_html() -> str:
 
 
 def render_home() -> str:
+    """The home page: the second edition (marketing_home_v2, 2026-09-11),
+    Kevin's cut-by-cut concept built into the site. The first edition
+    stays below as render_home_v1 for reference and for the pieces the
+    new page still borrows (_founder_strip_html, _price_cards_html,
+    _COMPARE_GROUPS, SHELL_TEMPLATE's analytics)."""
+    import marketing_home_v2
+    return marketing_home_v2.render_home_v2()
+
+
+def render_home_v1() -> str:
     #      1. blue leads (see :root) — the ember/brass pass read purple-
     #         adjacent to him and he asked to flip the original palette
     #         so blue carries it instead of violet/pink;
