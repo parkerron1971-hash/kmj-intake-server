@@ -125,6 +125,9 @@ def _w(rev: str, why: str, bulk: bool = False) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────
 
 REGISTRY: Dict[str, Dict[str, Any]] = {
+    "list_connected_agents": {**_r("owner-approved bot capabilities; private to Chief and owner", sensitive=True), "chief_only": True},
+    "connected_agent_assignments": {**_r("delegated briefs and untrusted returned results; not shared between bots", sensitive=True), "chief_only": True},
+    "delegate_to_agent": {**_w("A", "creates a cancellable brief; release is restricted by the owner's saved per-agent coordination permission"), "chief_only": True},
     "get_dashboard_layout": _r("reads only the signed-in person's dashboard and landing preferences", sensitive=True),
     "inspect_video": _r("reads private video projects and exact revision hashes", sensitive=True),
     "set_dashboard_focus": _w("A", "changes the signed-in person's featured dashboard page; clear restores the default"),
@@ -751,7 +754,7 @@ def may_expose_to_agent(verb: str, allow_writes: bool = False) -> bool:
     "can this break anything"; sensitivity answers "may a third party see
     it". Those are different questions and donor giving records are where
     they diverge."""
-    if is_sensitive(verb):
+    if is_sensitive(verb) or (classification(verb) or {}).get("chief_only"):
         return False
     kind = effect(verb)
     if kind == READ:

@@ -61,6 +61,19 @@ def test_a_read_request_against_a_write_key_stays_read(client):
     assert body["scope"] == "read"
 
 
+def test_oauth_cannot_strip_a_coordination_keys_capability_restrictions(client):
+    cid = register(client)
+    token, _ = mcp_tokens.mint('biz-1', label='Research', scopes=['read', 'coordinate'])
+    response = client.post('/oauth/authorize', data={
+        'client_id': cid, 'redirect_uri': REDIRECT, 'state': 's',
+        'code_challenge': CHALLENGE, 'code_challenge_method': 'S256',
+        'scope': 'read', 'agent_key': token, 'decision': 'approve',
+    }, follow_redirects=False)
+    query = parse_qs(urlsplit(response.headers['location']).query)
+    assert query['error'] == ['invalid_scope']
+    assert 'code' not in query
+
+
 def test_unknown_scopes_are_never_granted(client):
     cid = register(client)
     code = _code_with_scope(client, cid, _write_key(), "read write admin delete")

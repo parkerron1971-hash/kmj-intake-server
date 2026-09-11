@@ -67,7 +67,7 @@ SCOPE_READ = "read"
 # (sends, money, hard deletes) has no scope and never will, and class B
 # does not exist until an outbox does. See action_registry's header.
 SCOPE_WRITE = "write"
-KNOWN_SCOPES = (SCOPE_READ, SCOPE_WRITE)
+KNOWN_SCOPES = (SCOPE_READ, SCOPE_WRITE, "coordinate")
 
 
 def normalize_scopes(scopes: Optional[List[str]]) -> List[str]:
@@ -76,7 +76,7 @@ def normalize_scopes(scopes: Optional[List[str]]) -> List[str]:
     that can change a record it cannot look at is a worse credential,
     not a narrower one."""
     keep = [s for s in (scopes or []) if s in KNOWN_SCOPES]
-    if SCOPE_WRITE in keep and SCOPE_READ not in keep:
+    if (SCOPE_WRITE in keep or "coordinate" in keep) and SCOPE_READ not in keep:
         keep.append(SCOPE_READ)
     return sorted(set(keep)) or [SCOPE_READ]
 

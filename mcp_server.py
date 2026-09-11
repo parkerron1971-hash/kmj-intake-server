@@ -98,6 +98,7 @@ simply not on the path.
 Kill switch: MCP_ENABLED=off (default on).
 """
 from __future__ import annotations
+import asyncio
 
 import json
 import logging
@@ -1095,6 +1096,15 @@ def tool_definitions(caller: Optional["Caller"] = None) -> List[Dict[str, Any]]:
         # is ever a tool — and these appear only where a write key is.
         import action_proposals
         out += action_proposals.tool_definitions()
+    if caller and "coordinate" in caller.scopes:
+        import agent_coordination
+        try:
+            profile = agent_coordination.caller_profile(caller)
+            out = [t for t in out if t["name"] in profile.get("allowed_tools", [])]
+            out += [{"name": n, "description": d, "inputSchema": s}
+                    for n, (d, s) in agent_coordination.MAILBOX_TOOLS.items()]
+        except (HTTPException, ValueError):
+            return []
     return out
 
 
@@ -1611,6 +1621,26 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
     # what runs it, prompted, through the same door as a chat action.
     # Write scope, the tier gate and the ledger apply exactly as for a
     # write; the policy engine is asked when the person approves.
+    import agent_coordination
+    if name in agent_coordination.MAILBOX_TOOLS:
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                biz = await _resolve_business(client, caller)
+            if not biz:
+                return False, False, "No business resolved for this key", None
+            payload = await asyncio.to_thread(agent_coordination.mailbox, caller, biz, name, arguments)
+            _ledger(str(biz["id"]), name, caller, allowed=True, ok=True, reason="agent:coordination")
+            return True, True, payload, str(biz["id"])
+        except (HTTPException, ValueError) as exc:
+            message = str(getattr(exc, "detail", exc))
+            _ledger(caller.business_id, name, caller, allowed=False, ok=False, reason="agent:coordination", error=message[:200])
+            return False, False, message, caller.business_id
+    if "coordinate" in caller.scopes:
+        try:
+            if not await asyncio.to_thread(agent_coordination.permits_tool, caller, name):
+                return False, False, "This tool is not approved for this agent.", caller.business_id
+        except (HTTPException, ValueError) as exc:
+            return False, False, str(getattr(exc, "detail", exc)), caller.business_id
     import action_proposals
     if name in action_proposals.PROPOSALS:
         return await _file_proposal(name, arguments, caller)

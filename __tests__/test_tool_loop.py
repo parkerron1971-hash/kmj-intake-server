@@ -58,8 +58,10 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
     names = {t["name"] for t in ctl.read_tool_definitions()}
     exposed = set(mcp_server.exposed_tools())
     assert "show_view" not in names, "display stays an action"
-    assert names == (exposed - {"show_view"}), (
-        "one audited list — the loop must not grow or shrink it on its own"
+    private_coordination = {"list_connected_agents", "connected_agent_assignments"}
+    assert all(not action_registry.may_expose_to_agent(n) for n in private_coordination)
+    assert names == (exposed - {"show_view"}) | private_coordination, (
+        "The only extra reads are Chief's private coordination tools; bots cannot see one another's briefs"
     )
 
 

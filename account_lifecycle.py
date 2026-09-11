@@ -137,6 +137,8 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    "agent_assignments",      # before connected_agents (foreign key)
+    "connected_agents",       # bot profiles; no live credentials in this table
     # Connection metadata travels with the business; credentials never do.
     # Remove devices first so workers lose access before jobs are erased.
     "connected_ai_devices", "connected_ai_pairings",
@@ -556,6 +558,7 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # documents live in S3. Stated here rather than discovered later.
 
 _IMPORT_SKIP = {
+    "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication
     # claims or private storage paths tied to the original business.
     "image_publications", "image_artworks",
