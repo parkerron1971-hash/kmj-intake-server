@@ -143,8 +143,8 @@ def test_compare_table_names_the_everyday_product():
                 "Guided setup",
                 "Your data stays yours"):
         assert row in html, row
-    # Email is written with an em dash in the label; match the stem.
-    assert "Email &mdash; send, receive, templates" in html
+    # 2026-09-11: no dash-joined labels on the site (Kevin); a colon carries it.
+    assert "Email: send, receive, templates" in html
     # The bands that make forty rows readable.
     for group in ("The day-to-day work", "Your presence",
                   "Chief, your AI Chief of Staff", "Books, tax &amp; compliance",

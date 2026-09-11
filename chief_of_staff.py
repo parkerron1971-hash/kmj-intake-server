@@ -1917,6 +1917,12 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         **_split_email_replies_for_prompt(
             _merge_inbound_mail(email_replies or [], mailbox_messages or []),
             contacts or []),
+        "email_context_quality": {
+            "platform_replies": "available" if email_replies is not None else "unavailable",
+            "connected_mailbox": "available" if mailbox_messages is not None else "unavailable",
+            "contact_filter": "available" if contacts_available else "unavailable",
+            "scope": "Recent stored sample, not a full inbox search or a live mailbox sync.",
+        },
         "sms_messages": sms_messages or [],
         # 8/01 — flattened to the same shape handle_list_projects returns,
         # so the context block and the action agree on vocabulary.
@@ -2767,13 +2773,24 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     """
     replies = ctx.get("email_replies") or []
     withheld = int(ctx.get("email_replies_withheld") or 0)
+    clock = mailbox_policy.email_clock(ctx)
+    scope_header = (
+        f"EMAIL DATE CONTEXT: {clock['description']}\n"
+        "  Resolve 'today' using this date and timezone; only call a message today's\n"
+        "  when its received date matches. Report matching messages in the stored\n"
+        "  sample directly; the question does not need a client name to be answerable.\n"
+        f"EMAIL READ STATUS: {json.dumps(ctx.get('email_context_quality') or {'scope': 'Recent stored sample; availability unknown'})}\n"
+        "  An unavailable read is not an empty inbox. An available read does not\n"
+        "  prove the mailbox is connected or fully synced. For missing mail or\n"
+        "  connection questions, use email_setup_status and explain the limitation.\n"
+    )
 
     # Mail arrived from senders who are not contacts. Saying "nothing
     # arrived" here would be the same lie in a new shape — the messages
     # exist, they are in the Email Hub, they are simply not readable by
     # the model. Chief has to be able to tell those two apart out loud.
     withheld_line = (
-        f"  WITHHELD: {withheld} message(s) arrived from senders who are not in\n"
+        f"  WITHHELD: {withheld} message(s) in the fetched sample are from senders not in\n"
         f"  their contacts. They are stored and visible in the Email Hub, but\n"
         f"  are NOT shown to you — unknown senders do not reach your input. Say\n"
         f"  the count and point them to the Email Hub; never claim to know what\n"
@@ -2781,9 +2798,9 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     ) if withheld else ""
 
     if not replies:
-        return (
+        return scope_header + (
             "EMAIL REPLIES (nothing readable — and NOT a view of their inbox):\n"
-            "  Nothing readable has come back through the platform. This block\n"
+            "  No readable messages are present in this context sample. This block\n"
             "  shows replies to mail sent through the platform, plus mail from a\n"
             "  connected mailbox WHEN the sender is already a contact. Mail sent\n"
             "  directly to them by anyone else is not visible to you. Empty here\n"
@@ -2831,11 +2848,11 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
         contact_part = f" [contact={r['contact_id']}]" if r.get("contact_id") else ""
         lines.append(
             f"  - {name}{flag}{contact_part} reply_id={r.get('id')} "
-            f"received={(r.get('received_at') or '')[:16]}"
+            f"received={mailbox_policy.local_received_at(r.get('received_at'), clock['timezone'])}"
         )
         lines.append(f"      Re: \"{subject}\"")
         lines.append(f"      Body: \"{body_one_line}\"")
-    return "\n".join(lines) + "\n"
+    return scope_header + "\n".join(lines) + "\n"
 
 
 def _format_site_info(ctx: Dict[str, Any]) -> str:

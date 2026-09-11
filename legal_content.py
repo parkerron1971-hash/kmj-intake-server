@@ -199,6 +199,12 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
   .footer-links{{display:flex;flex-wrap:wrap;gap:16px;}}
   .footer-links a{{color:var(--text-muted);text-decoration:none;transition:color 0.15s;}}
   .footer-links a:hover{{color:var(--text-primary);}}
+  /* 2026-09-11: the same four columns every marketing page carries (marketing_pages SHELL_TEMPLATE) */
+  .footer-cols{{max-width:820px;margin:0 auto 22px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;padding-bottom:22px;border-bottom:1px solid var(--border);}}
+  .footer-cols b{{display:block;font-family:var(--font-mono, monospace);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;font-weight:500;}}
+  .footer-cols a{{display:block;color:var(--text-dim);text-decoration:none;font-size:13px;padding:4px 0;transition:color .15s;}}
+  .footer-cols a:hover{{color:var(--text-primary);}}
+  @media (max-width:720px){{.footer-cols{{grid-template-columns:1fr 1fr;}}}}
   @media (max-width: 640px) {{
     .page{{padding:40px 20px 24px;}}
     /* the bar stays a ROW now — the burger holds the links, so stacking
@@ -270,14 +276,16 @@ PAGE_SHELL_HTML = """<!DOCTYPE html>
 </div>
 
 <footer class="footer">
+  <div class="footer-cols">
+    <div><b>Product</b><a href="/#what">What it is</a><a href="/#room">The room</a><a href="/features">Every feature</a><a href="/#trust">Chief</a></div>
+    <div><b>Plans</b><a href="/#pricing">Pricing</a><a href="/compare">Compare</a><a href="/start?plan=founder">Founding seat</a><a href="/start">Start free</a></div>
+    <div><b>Company</b><a href="/about">About</a><a href="/news">News</a><a href="/faq">Questions</a><a href="/help">Help</a><a href="/get-started">Talk to us</a><a href="/download">Get the app</a></div>
+    <div><b>Account</b><a href="{app_url}">Log in</a><a href="{app_url}/status.html">Status</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/data-deletion">Data deletion</a><a href="mailto:{contact_email}">Contact</a></div>
+  </div>
   <div class="footer-inner">
     <span>&copy; {year} {business_name}</span>
     <div class="footer-links">
-      <a href="/privacy">Privacy</a>
-      <a href="/data-deletion">Data Deletion</a>
-      <a href="/help">Help</a>
-      <a href="/terms">Terms</a>
-      <a href="mailto:{contact_email}">Contact</a>
+      <a href="/">mysolutionist.app</a>
     </div>
   </div>
 </footer>
