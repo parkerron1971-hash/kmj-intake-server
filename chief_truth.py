@@ -23,6 +23,24 @@ MAX_REPLY_CHARS = 16000
 UNVERIFIED_REPLY = ("I couldn't verify that answer from the information available. "
                     "Please narrow the question or provide the missing details so I can check it.")
 
+
+def conversation_check_reply(message: str) -> str | None:
+    """Acknowledge receipt of an exact check-in, never bless model-written prose.
+
+    Receiving a transcript proves receipt of words, not microphone quality or
+    access to previous audio. Full matching keeps mixed business/action requests
+    on the ordinary evidence path.
+    """
+    text = re.sub(r'[^\w\s]', ' ', message.casefold())
+    text = ' '.join(text.split())
+    text = re.sub(r'^(?:hello|hi|hey)(?: chief)?\s+', '', text)
+    if text in {'hello', 'hi', 'hey', 'hey chief', 'hello chief', 'hi chief',
+                'chief', 'are you there', 'chief are you there',
+                'can you hear me', 'can you hear what i just said',
+                'did you hear me', 'can you read this', 'are you listening'}:
+        return "I'm here. I received your message. What would you like help with?"
+    return None
+
 AUTHOR_RULES = """
 ANSWER ACCURACY:
 - Use current business records or a lookup for names, totals, amounts, dates and status.
@@ -214,7 +232,10 @@ def evidence_for_review(ctx, view_detail, taken):
         context.append(('email_replies', chief._format_email_replies_block(ctx)))
     for name, value in context:
         if value is not None:
-            text = json.dumps(value, default=str, ensure_ascii=False)
+            # Keep prose as prose. JSON-encoding a string here double-escapes
+            # quotes/newlines in the outer review payload, so a reviewer citing
+            # the visible email text fails the exact-substring check.
+            text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
             # A source fitting in the prompt does not make its database
             # sample exhaustive. Only explicit scalar metadata is complete.
             exhaustive = name in ('contacts_total', 'contacts_loaded', 'contacts_complete',
@@ -271,6 +292,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):
         return chief._deterministic_fallback_reply(receipts), {'status': 'receipts', 'sources': []}
+    check_in = conversation_check_reply(message) if not receipts else None
+    if check_in:
+        return check_in, {'status': 'acknowledged', 'sources': []}
     sources = evidence_for_review(ctx, view_detail, receipts)
     raw = ''
     if reply and len(reply) <= MAX_REPLY_CHARS:

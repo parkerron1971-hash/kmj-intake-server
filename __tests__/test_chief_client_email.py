@@ -46,7 +46,7 @@ def test_reported_questions_keep_supported_email_answer(question):
         # reviewer had no source it could cite and withheld the answer.
         if source is None:
             return json.dumps({'verdict': 'unsupported', 'claims': []})
-        block = json.loads(source['text'])
+        block = source['text']
         assert block == chief._format_email_replies_block(ctx)
         assert 'Today is 2026-09-11 in America/New_York' in block
         assert '2026-09-11T13:30:00-04:00' in block
@@ -76,13 +76,27 @@ def test_email_review_does_not_expose_unknown_senders_or_raw_settings():
     assert 'Recent stored sample' in email['text']
 
 
+def test_email_review_can_cite_literal_quotes_and_newlines():
+    ctx = context()
+    source = truth.evidence_for_review(ctx, {}, [])['context:email_replies']
+    block = chief._format_email_replies_block(ctx)
+    # A reviewer sees the rendered email excerpt, not JSON string escapes.
+    quote = next(line for line in block.splitlines() if 'The draft looks good.' in line)
+    assert '"' in quote
+    reply = 'Ada wrote: "The draft looks good."'
+    review = json.dumps({'verdict': 'supported', 'claims': [
+        {'text': reply, 'kind': 'fact', 'source_id': 'context:email_replies', 'quote': quote}]})
+    assert truth.validate_review(review, reply, {'context:email_replies': source})[0]
+    assert '\n' in source['text']
+
+
 def test_sample_remains_incomplete_and_failed_read_is_visible():
     ctx = context()
     ctx['email_replies'] = []
     ctx['email_context_quality']['connected_mailbox'] = 'unavailable'
     block = chief._format_email_replies_block(ctx)
     source = truth.evidence_for_review(ctx, {}, [])['context:email_replies']
-    assert json.loads(source['text']) == block
+    assert source['text'] == block
     assert 'unavailable' in block
     assert 'NEVER tell them nobody emailed them' in block
     assert 'email_setup_status' in block
