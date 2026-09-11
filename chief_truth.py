@@ -205,6 +205,13 @@ def evidence_for_review(ctx, view_detail, taken):
         context.append(('business_identity', {k: biz[k] for k in ('name', 'type') if k in biz}))
     if view_detail:
         context.append(('current_view', view_detail))
+    # The author sees policy-filtered, bounded email text. Review exactly
+    # that same text (including scope/date/read failures), never raw inbox
+    # rows or full message bodies. Keep it near the end so large unrelated
+    # context cannot evict the evidence for an email answer first.
+    if 'email_replies' in (ctx or {}):
+        import chief_of_staff as chief
+        context.append(('email_replies', chief._format_email_replies_block(ctx)))
     for name, value in context:
         if value is not None:
             text = json.dumps(value, default=str, ensure_ascii=False)

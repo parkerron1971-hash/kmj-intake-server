@@ -35,6 +35,9 @@ WHAT THE RULE IS
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Set
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import os
 
 # Sources that did NOT come back through our own inbound path, and so
 # carry no implicit "we mailed them first" scoping.
@@ -43,6 +46,42 @@ UNSOLICITED_SOURCES = {"mailbox", "forward"}
 # How many eligible messages reach the prompt. The renderer caps at 6;
 # this is the ceiling on what it may choose from.
 PROMPT_REPLY_CAP = 10
+
+
+def email_clock(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Use the snapshot's clock for both author and reviewer, with no extra reads.
+
+    Follow the availability clock's precedence. Only expose the resolved
+    clock, never the rest of the business or practitioner settings.
+    """
+    settings = (ctx.get('business') or {}).get('settings') or {}
+    name = ((settings.get('availability') or {}).get('timezone')
+            or (ctx.get('practitioner_profile_raw') or {}).get('timezone')
+            or os.environ.get('PLATFORM_DEFAULT_TZ', '').strip() or 'UTC')
+    try:
+        tz = ZoneInfo(str(name).strip())
+        label = str(tz)
+    except (ValueError, ZoneInfoNotFoundError):
+        tz, label = timezone.utc, 'UTC (configured timezone unavailable)'
+    stamp = (ctx.get('context_quality') or {}).get('retrieved_at')
+    try:
+        now = datetime.fromisoformat(str(stamp).replace('Z', '+00:00'))
+        if now.tzinfo is None:
+            raise ValueError('timezone missing')
+        description = f"Today is {now.astimezone(tz).date().isoformat()} in {label}; snapshot at {now.astimezone(tz).isoformat()}."
+    except (TypeError, ValueError):
+        description = f"Snapshot date unavailable; do not infer today. Display timezone: {label}."
+    return {'timezone': tz, 'description': description}
+
+
+def local_received_at(value: Any, tz) -> str:
+    try:
+        received = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        if received.tzinfo is None:
+            raise ValueError('timezone missing')
+        return received.astimezone(tz).isoformat()
+    except (TypeError, ValueError):
+        return 'unknown (cannot determine local received date)'
 
 
 def reply_source(reply: Dict[str, Any]) -> str:
