@@ -16,7 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Callable
 
-from .contracts import Draft, OUTPUT_SCHEMA, Provider, RehearsalError, fixture_prompt
+from .contracts import Draft, OUTPUT_SCHEMA, Provider, RehearsalError, fixture_prompt, invoice_prompt
 
 MAX_OUTPUT = 1_000_000
 SAFE_ENV = {
@@ -260,3 +260,16 @@ async def rehearse(provider: Provider, state: Path, binary: str,
             "subscription_entitlement_verified": False,
             "solutionist_inference_calls": 0,
         }
+
+
+async def draft_invoice(provider: Provider, state: Path, binary: str, facts: dict,
+                        timeout: float = 180) -> Draft:
+    """Customer-device execution. No server keys, tools, or send authority."""
+    prompt = invoice_prompt(facts)
+    with TemporaryDirectory(prefix='solutionist-draft-') as directory:
+        work = Path(directory)
+        code, out, _ = await run_process(draft_command(provider, binary, work),
+                                        provider_env(provider, state), work, prompt, timeout)
+        if code:
+            raise RehearsalError(failure_reason(provider, out))
+        return decode(provider, out, work)

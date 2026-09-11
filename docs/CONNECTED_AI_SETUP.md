@@ -12,10 +12,12 @@ sanitized authentication status, and a shared invoice-follow-up draft contract.
 The public provider IDs are `claude` and `chatgpt`; the latter executes through
 Codex. They are account/provider choices, not hardcoded model IDs.
 
-The rehearsal accepts **only its built-in synthetic invoice**. It does not load
-business data, listen on a port, poll production jobs, pair a device, approve
-anything, or send a message. It is not imported by the FastAPI server. Production
-`service_profile.external_agent.in_app_delegation_supported` stays false.
+The `python -m connected_agents` rehearsal accepts **only its built-in synthetic
+invoice**. It never pairs a device or sends a message. The September 11 companion
+and server integration now add real, owner-scoped pairing and Chief jobs behind
+a disabled pilot flag; see [implementation and release](CONNECTED_AI_PILOT.md).
+`service_profile.external_agent.in_app_delegation_supported` stays false for the
+external MCP transport. `/connected-ai/status` reports companion availability.
 
 The existing MCP connector remains the way to use Solutionist from Claude or
 ChatGPT. That direction of control is separate from Chief dispatching tasks to
@@ -114,17 +116,16 @@ Before live customer rollout:
 1. Complete the successful Claude synthetic draft after its account limit resets.
    Record successful execution, cancellation, quota exhaustion, and native
    account funding. Revalidate CLI flags when the supported versions change.
-2. Add authenticated device pairing and durable Chief job leases, tenant/owner
-   binding, heartbeat, connection revocation, and job cancellation. A desktop
-   worker going offline must be shown as unavailable, including on mobile.
-3. Integrate drafts with the existing approval queue, revalidate invoice and
-   recipient facts before delivery, and prove duplicate-send protection and
-   recovery from ambiguous delivery. Do not autoapprove externally drafted work.
+2. Release and verify the implemented device pairing, durable Chief leases,
+   tenant/owner binding, heartbeat, revocation and cancellation in a test business.
+3. Complete the deployed acceptance workflow for the implemented approval queue,
+   stale-invoice checks and duplicate-send protection. Local SQL/HTTP checks pass;
+   actual delivery and recovery still need the authorized test-business rehearsal.
 4. Measure coordination and tool costs; implement server-controlled edition
    mapping and billing rehearsal before exposing a Connect price or checkout.
 
-No migration, new price, account conversion, deployment, or customer-facing
-connection-success claim is included in this local preparation.
+The pilot migration is pending manual application. No new price, account
+conversion, deployment, or production connection-success claim is included.
 
 ## Provider references checked 2026-09-10
 

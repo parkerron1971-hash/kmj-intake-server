@@ -148,7 +148,9 @@ async def approve_draft_endpoint(
     if payload.body is not None:
         edits["body"] = payload.body
     if edits:
-        sb_clients.sb_patch_as_service(f"/agent_queue?id=eq.{queue_id}", edits)
+        # Connected drafts persist edits atomically with the one-send claim.
+        if not item.get("connected_ai_job_id"):
+            sb_clients.sb_patch_as_service(f"/agent_queue?id=eq.{queue_id}", edits)
         item = {**item, **edits}
 
     # The shared core — the SAME machinery the approve_draft verb uses.
@@ -160,7 +162,8 @@ async def approve_draft_endpoint(
         async with httpx.AsyncClient() as client:
             delivery = await chief_of_staff._do_approve_one(
                 client, biz, item,
-                override_blockers=bool(payload.override_blockers))
+                override_blockers=bool(payload.override_blockers),
+                **({"human_actor_id": str(user.id)} if item.get("connected_ai_job_id") else {}))
     except Exception as e:  # the "failed": True seam — audited, then surfaced
         error = str(e)[:300]
         logger.exception(f"[approvals] approve {queue_id} failed")

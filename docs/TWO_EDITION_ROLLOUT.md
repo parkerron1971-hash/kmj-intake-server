@@ -1,7 +1,9 @@
 # One Solutionist platform, two editions
 
-Status: foundation implemented on a development branch; neither a Connect launch
-nor a pricing migration. Decision recorded 2026-09-10 from the product discussion.
+Status: foundation and the gated invoice/desktop pilot are implemented on
+development branches; neither a Connect launch nor a pricing migration.
+Decision recorded 2026-09-10 from the product discussion. See the September 11
+[pilot release checklist](CONNECTED_AI_PILOT.md).
 
 ## Product decision
 
@@ -50,8 +52,9 @@ Implemented in this change:
 - `GET /billing/entitlements` keeps its fields and adds `service_profile`.
 - The profile separately describes the business tier and limits, current AI
   delivery and monthly plan grant, and external-agent plan inclusions.
-- Current offers resolve to `edition: legacy`. Chief delegation is explicitly
-  unsupported. Neither edition nor payer is read from business settings.
+- Current offers resolve to `edition: legacy`. External MCP alone does not grant
+  Chief delegation. Companion availability is reported separately by its status
+  endpoint. Neither edition nor payer is read from business settings.
 - Existing feature decisions, price resolution, credit charging, and checkout
   remain authoritative and unchanged. No schema migration is required.
 - Endpoint execution tests cover ownership, missing auth/businesses, billing
@@ -81,6 +84,12 @@ tools and produce a draft. No production customer writes or messages are needed
 for this milestone. Document unsupported capabilities and connection loss.
 
 ### F3: connect Chief's jobs to the runner
+
+Implemented 2026-09-11 for the bounded overdue-invoice pilot: authenticated
+pairing, hashed/revocable devices, heartbeats, durable leases, cancellation,
+existing queue integration, explicit owner review and one-send claims. Local
+PostgreSQL and HTTP tests cover the lifecycle. Migration/deployment and the
+authorized live acceptance workflow remain release steps; see the pilot runbook.
 
 Extend the existing job/assignment lifecycle rather than inventing another queue.
 Persist business, actor, provider connection, execution source, permitted tools,

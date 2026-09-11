@@ -298,6 +298,9 @@ def is_orphaned(row: Dict[str, Any], now: datetime, inflight: set) -> bool:
     have called it dead. A queued row that was never picked up gets the
     started_at rule on created_at.
     """
+    # Customer-device jobs have database leases, not an in-process runner.
+    if row.get("kind") == "connected_ai_follow_up":
+        return False
     if str(row.get("id")) in inflight:
         return False
     status = row.get("status")
@@ -875,6 +878,8 @@ async def retry_job(req: _RetryReq, user_session: UserSession = Depends(require_
         job = rows[0] if isinstance(rows, list) and rows else None
         if not job:
             raise HTTPException(404, "job not found")
+        if job.get("kind") == "connected_ai_follow_up":
+            raise HTTPException(409, "Retry connected work from Connect your AI.")
         await _sb(client, "PATCH", f"/chief_jobs?id=eq.{req.job_id}",
                   {"status": "queued", "error": None, "started_at": None, "finished_at": None})
     asyncio.create_task(_run(job["id"], uid, job["business_id"], job["kind"], job.get("params") or {}))

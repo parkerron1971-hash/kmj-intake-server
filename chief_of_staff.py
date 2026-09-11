@@ -5803,7 +5803,9 @@ def _compose_body_with_signature(body: str, biz: Dict[str, Any]) -> str:
     return out
 
 
-async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) -> Dict[str, Any]:
+async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
+                             *, connected_delivery: bool = False,
+                             expected_email: Optional[str] = None) -> Dict[str, Any]:
     """Deliver a queue item via Resend. Returns a dict describing the
     outcome — never raises. Fields:
       sent: bool            — True only if Resend returned 2xx
@@ -5814,6 +5816,9 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
       provider_id: str | None   — Resend message id when sent
     """
     out: Dict[str, Any] = {"sent": False, "reason": None, "to_email": None, "to_name": None, "provider_id": None}
+
+    if (item.get("connected_ai_job_id") or item.get("action_type") == "connected_ai_follow_up") and not connected_delivery:
+        return {**out, "reason": "human_review_required"}
 
     # v1 rule: if the queue item has a contact_id and the contact has an
     # email, send. No channel/action_type gating — the frozen channel value
@@ -5831,6 +5836,8 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any]) 
         return out
     contact = rows[0]
     email = (contact.get("email") or "").strip()
+    if expected_email is not None and email.lower() != expected_email.lower():
+        return {**out, "reason": "recipient_changed"}
     if not email or "@" not in email:
         out["reason"] = "no_email"
         out["to_name"] = contact.get("name")
@@ -6426,7 +6433,8 @@ async def _evaluate_escalations(client, biz: Dict[str, Any]) -> int:
 
 
 async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
-                          *, override_blockers: bool = False) -> Dict[str, Any]:
+                          *, override_blockers: bool = False,
+                          human_actor_id: Optional[str] = None) -> Dict[str, Any]:
     """Approve a single queue item: PATCH status, attempt Resend send,
     emit event, bump health. Returns delivery info for the caller to
     surface in the action's `result`/`label`.
@@ -6437,6 +6445,12 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
     result: Dict[str, Any] = {"ok": False, "sent": False, "reason": None, "to_email": None, "to_name": None, "provider_id": None}
     if not qid:
         return result
+
+    # Connected work is never released by an autopilot or conversational model.
+    # The owner-authenticated review endpoint supplies the actor explicitly.
+    if item.get("connected_ai_job_id") or item.get("action_type") == "connected_ai_follow_up":
+        import connected_ai
+        return await connected_ai.approve_connected(biz, item, human_actor_id)
 
     # A generated document gets read once more on its way out.
     #
