@@ -6,6 +6,32 @@ funds, or enable Chief checkout. It does not replace the existing Payments OAuth
 
 ## Provider registration blocker
 
+September 12 diagnostic update: CLI authentication now passes. The CLI profile's
+missing user ID was restored using Stripe's authenticated `/v1/stripecli/user_info`
+response. Put `--project-name` AFTER `apps` so the host CLI forwards it to the
+plugin. The Apps plugin warns that it does not support `STRIPE_API_KEY`; use its
+supported credential option through a private process when needed. Never paste a
+secret into documentation, chat, shell history or source files.
+
+The dependency-free package manifest and lockfile are required by Stripe's
+packager. The corrected command is:
+
+```powershell
+npm.cmd exec --yes --package=@stripe/cli -- stripe apps upload --project-name chief-cards --non-interactive --wait --format json
+```
+
+Current developer candidate `acct_1TpHDMDIR4Ra17by` passes authentication and file
+packaging, then Stripe rejects the upload with `App not eligible for distribution
+type: PUBLIC`. This was reproduced with both authorized live CLI context and the
+verified developer test key passed through the plugin's supported `--api-key`
+option. The account is Standard, activated, with charges/payouts enabled, no
+currently-due or pending-verification fields, and `controller.type=application`.
+It has no created app in the Dashboard. Public-distribution ineligibility is
+confirmed; the connection to a platform is a likely cause, not a proven reason
+from Stripe's generic error. Use an eligible independent developer account.
+Do not change this customer OAuth connector to private distribution as a shortcut.
+No app upload has succeeded, and no card developer key was stored in Railway.
+
 Stripe's current Getting started with Stripe Apps guide says a Connect platform
 account cannot publish a Marketplace app. The existing production account
 `acct_1TeyOmRh4utPVrAs` is used for Connect. On September 12, 2026, its Dashboard
