@@ -251,6 +251,7 @@ def test_pointer_and_view_members_execute(controller,name,args):
 
 
 def test_text_key_hold_select_checkbox_and_scroll_members(controller):
+    assert not run(controller,'key',text='Tab').get('is_error')
     ref=find_ref(controller,'Quantity')
     assert not run(controller,'scroll_to',target=ref).get('is_error')
     assert not run(controller,'left_click',target=ref).get('is_error')

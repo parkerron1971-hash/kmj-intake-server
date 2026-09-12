@@ -357,7 +357,7 @@ class BrowserController:
     def _focused(self, page):
         frame = page.main_frame
         for _ in range(10):
-            el = frame.query_selector(':focus')
+            el = frame.evaluate_handle('document.activeElement').as_element()
             if el is None:
                 raise BrowserStopped('Focus could not be inspected.')
             if el.evaluate('el => el.tagName') not in ('IFRAME', 'FRAME'):
