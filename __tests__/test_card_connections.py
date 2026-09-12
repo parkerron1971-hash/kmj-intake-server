@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import card_connections as cc
+import ledger_unlock
 from access_log_redaction import RedactCredentialPaths, scrub_sentry_event
 
 BID='00000000-0000-4000-8000-000000000001'
@@ -106,6 +107,21 @@ def connect(client):
     response=client.post(path('complete'),json=authorize(client))
     assert response.status_code==200,response.text
     return response.json()
+
+
+@pytest.mark.parametrize('action',['start','select'])
+@pytest.mark.parametrize('token_user,scope,expected',[
+    (UID,'danger',200), (OTHER,'danger',403), (UID,'ledger',403),
+])
+def test_card_routes_verify_real_user_bound_step_up(api,monkeypatch,action,token_user,scope,expected):
+    client,_=api
+    connect(client)
+    monkeypatch.setenv('AUDITOR_LINK_SECRET','synthetic-step-up-regression-secret')
+    monkeypatch.setattr(cc,'require_unlock',ledger_unlock.require_unlock)
+    token=ledger_unlock.mint(token_user,scope)['token']
+    response=client.post(path(action),headers={'x-ledger-unlock':token},
+        json={'card_id':'ic_fixture'} if action=='select' else {})
+    assert response.status_code==expected,response.text
 
 
 def test_external_test_channel_preserves_state_and_callback(api,monkeypatch):
