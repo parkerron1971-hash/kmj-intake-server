@@ -1,0 +1,17 @@
+<!doctype html><html><head><title>Checkout</title></head><body>
+<h1>Checkout</h1><p>Total $2.00. Quantity 1.</p>
+<form>
+<input autocomplete="cc-name" aria-label="Cardholder">
+<input autocomplete="cc-number" aria-label="Card number">
+<input autocomplete="cc-exp" aria-label="Expiry">
+<input autocomplete="cc-csc" aria-label="CVC">
+<button type="button">Pay $2.00</button>
+</form>
+<p id="echo"></p><canvas id="canvas" width="600" height="50"></canvas>
+<script>
+document.querySelector('[autocomplete="cc-number"]').addEventListener('input',e=>{
+ const v=e.target.value; document.querySelector('#echo').textContent=v;
+ document.title='Card '+v; history.replaceState({},'', '/checkout?card='+v+'#'+v);
+ document.querySelector('#canvas').getContext('2d').fillText(v,10,30);
+});
+</script></body></html>
