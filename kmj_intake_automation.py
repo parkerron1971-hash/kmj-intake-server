@@ -118,6 +118,7 @@ if os.environ.get("SENTRY_DSN"):
             # credential. Without this, switching error tracking on would
             # ship live audit links to a third party.
             before_send=scrub_sentry_event,
+            before_send_transaction=scrub_sentry_event,
         )
         print("   Sentry error tracking: ON")
     except Exception as _e:
@@ -235,6 +236,8 @@ app.include_router(module_router)
 app.include_router(chief_router)
 from chief_jobs import router as chief_jobs_router  # Feature 2 — queued desk jobs
 app.include_router(chief_jobs_router)
+from chief_errands import router as chief_errands_router
+app.include_router(chief_errands_router)
 from connected_ai import router as connected_ai_router
 app.include_router(connected_ai_router)
 # The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.

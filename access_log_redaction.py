@@ -37,6 +37,9 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Dict, Optional
+from urllib.parse import unquote
+
+_SECURE_ENTRY = re.compile(r"/agents/chief/errands/[^/\s?]+/secret(?:[/?\s\"']|$)")
 
 # Each pattern keeps the identifying prefix — the log is still useful for
 # "how many auditors read the ledger today" — and destroys the secret.
@@ -63,6 +66,8 @@ _MASK = r"\1<redacted>"
 
 def redact(text: str) -> str:
     """The whole policy, in one testable function."""
+    if _SECURE_ENTRY.search(unquote(text)):
+        return "Chief Secure Entry request (details omitted)"
     for rx in _REDACTIONS:
         text = rx.sub(_MASK, text)
     return text
@@ -80,6 +85,13 @@ class RedactCredentialPaths(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
+            if _SECURE_ENTRY.search(unquote(record.getMessage())):
+                record.msg = "Chief Secure Entry request (details omitted)"
+                record.args = ()
+                record.exc_info = None
+                record.exc_text = None
+                record.stack_info = None
+                return True
             if isinstance(record.args, tuple):
                 scrubbed = tuple(
                     redact(a) if isinstance(a, str) else a for a in record.args)
@@ -129,6 +141,10 @@ def scrub_sentry_event(event: Dict[str, Any], _hint: Any = None) -> Optional[Dic
     """
     try:
         req = event.get("request")
+        # Drop the whole Secure Entry event, including locals and breadcrumbs.
+        if _SECURE_ENTRY.search(unquote(str((req or {}).get("url", "")))) or _SECURE_ENTRY.search(
+                unquote(str(event.get("transaction", "")))):
+            return None
         if isinstance(req, dict):
             if re.search(r"/academy-live(?:[/?#]|$)", str(req.get("url", ""))):
                 # Enrollment links are bearer credentials in the POST body.

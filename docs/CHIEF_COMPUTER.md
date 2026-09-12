@@ -120,11 +120,41 @@ reuse, which needs a separate account rehearsal.
 
 ## Verification
 
+PR3 adds the section 7 HTTP routes and `chief_jobs` errand kind. Apply
+`supabase/APPLY-2026-09-12-chief-computer-runtime.sql` after merge. Browser execution
+stays off behind `ERRANDS_ENABLED=off` until PR4. Planning and metadata can be
+used independently. POST planning includes `business_id`; an email-only supplier
+returns the existing purchase-order action with `errand:null, door:"email"`.
+
+Approvals are one service-only database transaction with job creation. Other
+enqueue paths cannot start an errand. Plans also serialize per business to refuse
+overlapping same-day item orders. Event numbers and state changes share row locks;
+old statuses or hold IDs cannot release newer holds. Pause preserves pending
+Secure Entry/checkout approval. Stop and saved-login revoke require the appropriate
+role, with no step-up. Settings writes require owner danger step-up and preserve
+unrelated settings. Metadata reads use named columns; only the future worker can
+read a saved cipher for an authenticated fill. Secure Entry has bounded raw JSON
+parsing, six attempts/minute per user/errand/process, no body-bearing validation
+errors, and whole-event log/Sentry suppression. Worker mailboxes are process-local;
+a missing worker never silently launches a replacement.
+
+The production deployment currently uses one replica. A future multi-replica
+upgrade needs owner-worker routing for mailboxes and a shared Secure Entry rate
+limiter. Restart reconciliation marks errands interrupted without retrying or
+claiming the supplier did not receive an order.
+
+Existing auth limitation: `/auth/step-up` currently issues danger tokens only to
+business owners. Managers may plan, stop, fill transient values and approve priced
+errands within their limit; an owner must handle cases requiring a new danger
+token (over-limit/unpriced approval and saving/reusing logins). This arc does not
+broaden the existing danger-token gate used by other destructive operations.
+
 ```text
 python -m pytest __tests__/test_secret_vault.py __tests__/test_export_import.py -q
 python -m pytest __tests__/test_browser_controller.py -q
 python scripts/chief_computer_sabotage.py
 node scripts/chief-computer-db-check.mjs
+node scripts/chief-computer-runtime-db-check.mjs
 ```
 
 The SQL check uses PGlite (`PGLITE_MODULE` can identify its module; CI installs
@@ -142,8 +172,8 @@ redaction, and export/import rules. CI runs both suites.
 2. Controller implemented; 116 focused controller/vault/legacy-hand tests passed
    locally. All three independent sabotage mutations were detected. CI installs
    Chromium and runs the fixture suite plus sabotage checks with no service keys.
-3. Add errands, endpoints, holds, settings and job interruption handling. This is
-   the frontend integration milestone; notify the frontend owner when it merges.
+3. Errands, endpoints, holds, settings and job interruption handling implemented.
+   This is the frontend integration milestone; announce when PR3 merges.
 4. Add the driver and receipts.
 5. Wire Chief's actions, prompt, policy, ledger, inventory and planned cancellation.
 6. Fold the old browser hand into the errand path.
