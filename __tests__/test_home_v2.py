@@ -82,22 +82,25 @@ def test_the_money_is_live():
     assert f'data-to="{prices["starter"] // 100}">${prices["starter"] // 100}</b>' in html
 
 
-def test_the_plan_table_is_the_whole_product():
-    """9/12: every row on every plan, behind the Compare every plan dropdown,
-    so Starter shows what it includes and not a column of dashes."""
+def test_the_plan_matrix_is_the_whole_product():
+    """9/12: every row on every plan as a matrix (groups as cards, lit rings,
+    dial pills) behind the Compare every plan dropdown UNDER the pricing, so
+    Starter shows what it includes and not a column of dashes. The
+    seven-tools chapter sits ABOVE the pricing."""
     html = _home()
     assert 'id="cmpMore"' in html and "Compare every plan" in html
-    i = html.index("Every plan is the whole product")
-    seg = html[i:html.index("</table>", i)]
-    rows = re.findall(r"<tr><td>(.*?)</td>(.*?)</tr>", seg, re.S)
+    i = html.index('class="matrix"')
+    seg = html[i:html.index("</details>", i)]
+    rows = re.findall(r'<div class="mx-row">(.*?)</div>(<span class="mx-cell">.*?)</div>', seg, re.S)
     assert len(rows) >= 40, f"only {len(rows)} rows"
-    for label, cells in rows:
-        assert len(re.findall(r"<td>(.*?)</td>", cells)) == 3, label
+    for _what, cells in rows:
+        assert cells.count('<span class="mx-cell">') == 3, _what
     assert "Contacts &amp; CRM" in seg and "Audit trail" in seg and "Team seats" in seg
-    starter_ticks = sum(1 for _l, c in rows if c.startswith('<td><span class="ok">'))
+    starter_ticks = sum(1 for _w, c in rows if c.startswith('<span class="mx-cell"><i class="ok">'))
     assert starter_ticks >= 25, "Starter should read as a column of what it includes"
-    # the compare chapter sits under pricing, before the FAQ
-    assert html.index('id="pricing"') < html.index('id="compare"') < html.index('id="faq"')
+    prices = pricing_config.tier_price_cents()
+    assert f'Professional<b>${prices["professional"] // 100}</b>' in seg
+    assert html.index('id="compare"') < html.index('id="pricing"') < html.index('id="plans"') < html.index('id="faq"')
 
 
 def test_the_flyer_is_the_live_one(monkeypatch):

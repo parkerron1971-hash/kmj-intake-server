@@ -72,7 +72,8 @@ def _compare_tiers_html() -> str:
     plans = ("starter", "professional", "practice")
     names = ("Starter", "Professional", "Solutionist")
     rank = feature_gates._PLAN_RANK
-    ok, no = '<span class="ok">✓</span>', '<span class="no">—</span>'
+    ok = '<span class="mx-cell"><i class="ok"></i></span>'
+    no = '<span class="mx-cell"><i class="no"></i></span>'
     groups = []
     for group, entries in mp._COMPARE_GROUPS:
         rows = []
@@ -81,18 +82,18 @@ def _compare_tiers_html() -> str:
                 values = [str(source(d[p])) for p in plans]
                 if not all(v.strip() for v in values):
                     continue
-                cells = "".join(f"<td>{v}</td>" for v in values)
+                cells = "".join(f'<span class="mx-cell"><b>{v}</b></span>' for v in values)
             elif source == mp._ALL:
-                cells = "".join(f"<td>{ok}</td>" for _ in plans)
+                cells = ok * 3
             else:
                 min_plan = feature_gates.FEATURE_MIN_PLAN.get(source)
                 if not min_plan:
                     continue
-                cells = "".join(f"<td>{ok if rank.get(p, 0) >= rank.get(min_plan, 99) else no}</td>" for p in plans)
+                cells = "".join(ok if rank.get(p, 0) >= rank.get(min_plan, 99) else no for p in plans)
             sub = f"<small>{_note}</small>" if _note else ""
-            rows.append(f"          <tr><td>{label}{sub}</td>{cells}</tr>")
+            rows.append(f'            <div class="mx-row"><div class="mx-what"><b>{label}</b>{sub}</div>{cells}</div>')
         if rows:
-            groups.append(f'          <tr class="grp"><td colspan="4">{group}</td></tr>\n' + "\n".join(rows))
+            groups.append(f'          <div class="mx-group"><h4>{group}</h4>\n' + "\n".join(rows) + "\n          </div>")
     return chr(10).join(groups)
 
 
@@ -109,11 +110,14 @@ def render_home_v2() -> str:
     import marketing_founder_ad
     import marketing_pages as mp
     ad_css, ad_markup = marketing_founder_ad.founder_ad_bundle("/")
-    starter = mp._tier_dials()["starter"]["price_num"]
+    dials = mp._tier_dials()
+    starter = dials["starter"]["price_num"]
     html = (_template()
             .replace("{{PRICING}}", _pricing_html())
             .replace("{{COMPARE_TIERS}}", _compare_tiers_html())
             .replace("{{STARTER_PRICE}}", str(starter))
+            .replace("{{PRO_PRICE}}", str(dials["professional"]["price_num"]))
+            .replace("{{SOL_PRICE}}", str(dials["practice"]["price_num"]))
             .replace("{{FOUNDER_AD_CSS}}", ad_css)
             .replace("{{FOUNDER_AD_MARKUP}}", ad_markup)
             .replace("{{PIXEL}}", mp._pixel_script())
