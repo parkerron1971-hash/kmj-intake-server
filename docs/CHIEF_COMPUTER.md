@@ -2,7 +2,7 @@
 
 PR1 implements the database foundation and server-side encryption primitives.
 PR2 adds the browser controller, independently testable before any route or job
-can start an errand. The existing `browser_hand.py` remains operational until PR6.
+can start an errand. PR6 folds the browser hand into the same errand/controller path.
 Sections 7 and 9 of `CHIEF_COMPUTER_ARC_SPEC.md` in the frontend repo remain the
 integration contract and delivery order.
 
@@ -260,5 +260,62 @@ copied checkout. The equivalent script was run from this worktree against the li
 model: **71/72**, with one generated expense-dashboard width validation failure.
 The isolated expenses retest repeated that pre-existing generator validation failure.
 No module generator source changed in this arc. Reports remain local with synthetic
-fixture content. The completion migration is pending merge/application; execution
-remains disabled.
+fixture content. The completion migration was applied after PR #939 merged on
+September 12, 2026; its live function-permission probe passed. Execution remains
+disabled during rollout.
+
+## PR6: one computer for portals and orders
+
+`use_browser_hand` now calls `plan_errand(kind='portal')`. A portal plan still files
+an Approval Queue proposal on channel `hand`, bound to the errand ID and canonical
+task specification. Queue approval requires an authenticated human actor; autopilot
+calls cannot reuse the business owner ID to claim human approval. Changed or foreign
+queue bindings fail closed. Old proposals convert on a fresh human approval. The
+transactional errand approval remains the only job-creation path. Legacy queue
+proposals retain their smaller step/time budgets (usually 12 steps/180 seconds).
+
+The old model loop and browser adapter were removed from `browser_hand.py`.
+Historical job kinds/frame links remain readable, but new legacy enqueues fail and
+an old queued runner returns a fixed retirement response without opening Chromium.
+
+Portal tasks can use login/OTP Secure Entry, but cannot enter cards, review checkout,
+or click a recognized purchase control. A successful portal report contains an
+exact piece of visible, scrubbed page evidence in `plan.report`, with `receipt:null`;
+it never fabricates an order receipt. Cancellation errands require the original
+order, a still-valid independently recorded cancellation window and reviewed
+order/button DOM evidence. They cannot purchase and never infer a refund. The
+generic driver does not invent cancellation windows, so suppliers without a verified
+window still fall back to an unsent cancellation request.
+
+Rehearsal: 74 focused portal/driver/queue/history tests passed. The production-model
+API contract probe returned `list_tabs` with `toolset_name: browser`, confirming
+the configured model accepts the actual toolset. It used synthetic input and opened
+no browser. The owner explicitly approved public-source publication on September 12.
+PRs #938 and #939 are merged and deployed successfully; the final hand migration is
+PR #940. Frontend #907 aligns receipt/portal rendering, interruption warnings and
+Secure Entry with this contract. Do not enable execution before the final merge,
+frontend deployment and production checks.
+
+Final review also checks spending limits again when a queued Continue command reaches
+the worker. A newly lowered limit cannot reuse an approval without danger step-up.
+Replacement plans inspect recent interrupted/failed/stopped submissions for matching
+items, warn to check the supplier, and require card step-up if an earlier submission
+is uncertain. This warning does not prove the supplier did or did not accept it.
+
+Final local verification: 230 focused tests and 85 agent tests passed. The broad
+backend run passed 7,805 tests with 16 skipped and found one usage-meter registry
+mismatch; the registry correction and related regressions then passed 67 tests.
+The corrected PR4 registers the self-metering errand driver; PR6 removes the retired
+hand entry. All three PostgreSQL harnesses and all three sabotage checks passed.
+The unchanged module generator's expenses eval still fails its dashboard width
+validation; that separate generator issue was reproduced in an isolated retest.
+
+Office Depot remains a low-cost guest-checkout candidate, not a certified supplier.
+The Windows guarded-browser probe received `ERR_HTTP2_PROTOCOL_ERROR`, but the
+September 12 production Railway probe successfully opened item 222056 and saw the
+paper clips and $3.49 price with no challenge page. It used the real controller,
+exact Office Depot host restrictions and the app's runtime environment. Other
+resource hosts remained blocked. This verifies product-page access, not checkout.
+No guard was weakened, account opened, cart changed or purchase made. The first
+purchase still requires the owner's presence, delivery details, Secure Entry and
+approval of the final total.

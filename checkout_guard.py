@@ -13,6 +13,41 @@ from browser_controller import BrowserStopped, FIELD, VISIBLE_TEXT
 
 PURCHASE = re.compile(r'\b(place\s+(?:the\s+)?order|pay(?:\s+now)?|buy(?:\s+now)?|confirm\s+(?:order|purchase)|complete\s+(?:order|purchase)|submit\s+order)\b',re.I)
 QUANTITY = re.compile(r'\bqty\b|quantity',re.I)
+CANCEL = re.compile(r'\bcancel\s+(?:this\s+|the\s+)?order\b',re.I)
+CANCEL_TOOL={'name':'review_cancellation','description':'Before cancelling, identify the final cancel-order button and the containing order row showing the exact approved order number.',
+    'input_schema':{'type':'object','properties':{'tab_id':{'type':'string'},'submit_ref':{'type':'string'},
+        'order_ref':{'type':'string'}},'required':['submit_ref','order_ref'],'additionalProperties':False}}
+
+
+@dataclass(repr=False)
+class CancellationReview:
+    page: object
+    submit: object
+    order_element: object
+    order_number: str
+    host: str
+    before_text: str
+
+    def validate(self,controller):
+        controller._check_hosts()
+        if self.page.url.split('/')[2]!=self.host:
+            raise BrowserStopped('The cancellation host changed.')
+        if not self.submit.is_visible() or not self.order_element.is_visible():
+            raise BrowserStopped('The cancellation controls changed.')
+        text=self.order_element.evaluate(VISIBLE_TEXT)
+        if (self.order_number not in text or len(text)>2000 or
+            not self.order_element.evaluate('(el,button)=>el.contains(button)',self.submit) or
+            not CANCEL.search(self.submit.evaluate(VISIBLE_TEXT))):
+            raise BrowserStopped('The cancellation does not match the approved order.')
+
+
+def inspect_cancellation(controller,order_number,args):
+    tid,page=controller._page(args)
+    ref=lambda value:controller._element(tid,{'type':'ref','ref':value})
+    review=CancellationReview(page,ref(args.get('submit_ref')),ref(args.get('order_ref')),order_number,
+        page.url.split('/')[2],controller.scrubber.text(page.locator('body').evaluate(VISIBLE_TEXT)))
+    review.validate(controller)
+    return review
 
 CHECKOUT_TOOL = {'name':'review_checkout','description':
     'Required before placing an order. Use read_page(filter="all") to obtain references to each item row, its quantity input, the final dollar-total text and the final purchase button. The server verifies their current values against the plan. Never submit without an accepted review.',

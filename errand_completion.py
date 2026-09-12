@@ -9,6 +9,7 @@ def lifecycle(row,kind):
            'failed':'errand_failed','stopped':'errand_stopped',
            'paused':'errand_paused','resumed':'errand_resumed'}
     if kind not in verbs: return
+    if kind=='done' and row.get('kind','reorder')!='reorder': verbs['done']='errand_done'
     import audit_log
     receipt=row.get('receipt') or {}
     payload={'errand_id':row['id'],'status':row['status']}

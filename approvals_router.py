@@ -163,7 +163,8 @@ async def approve_draft_endpoint(
             delivery = await chief_of_staff._do_approve_one(
                 client, biz, item,
                 override_blockers=bool(payload.override_blockers),
-                **({"human_actor_id": str(user.id)} if item.get("connected_ai_job_id") else {}))
+                **({"human_actor_id": str(user.id)} if item.get("connected_ai_job_id")
+                   or item.get('channel')=='hand' or item.get('action_type')=='browser_hand' else {}))
     except Exception as e:  # the "failed": True seam — audited, then surfaced
         error = str(e)[:300]
         logger.exception(f"[approvals] approve {queue_id} failed")

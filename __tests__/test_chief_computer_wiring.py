@@ -106,6 +106,14 @@ def test_unknown_cancel_window_returns_unsent_request_without_browser(monkeypatc
     rpc.assert_not_called()
 
 
+def test_cancellation_expiry_compares_instants_not_timezone_strings():
+    from datetime import datetime,timedelta,timezone
+    expired=(datetime.now(timezone.utc)-timedelta(minutes=1)).astimezone(timezone(timedelta(hours=14))).isoformat()
+    assert not ce.future_timestamp(expired)
+    assert not ce.future_timestamp('malformed')
+    assert ce.future_timestamp((datetime.now(timezone.utc)+timedelta(minutes=1)).isoformat())
+
+
 def test_ledger_receives_last_four_and_no_page_or_fields(monkeypatch):
     import audit_log
     record=Mock(return_value=True)

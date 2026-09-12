@@ -31,6 +31,7 @@ class Store:
         self.events=[]
         self.holds=[]
         self.on_hold=None
+        self.settings={}
 
     def get_row(self,eid):
         assert eid==EID
@@ -38,7 +39,7 @@ class Store:
 
     def db(self,method,path,body=None):
         if path.startswith('/businesses'):
-            return [{'id':BID,'settings':{}}]
+            return [{'id':BID,'settings':copy.deepcopy(self.settings)}]
         if path.startswith('/business_secrets'):
             return []
         raise AssertionError('Unexpected storage call')
@@ -70,7 +71,7 @@ class Backend:
         self.context=self.browser.new_context(viewport=VIEWPORT,service_workers='block')
         self.context.set_default_timeout(1000)
         self.context.route('**/*',lambda route:route.fulfill(status=200,content_type='text/html',
-            body=(FIXTURES/('checkout.html' if '/checkout' in route.request.url else 'supplier.html')).read_text()))
+            body=(FIXTURES/('cancellation.html' if '/cancel' in route.request.url else 'checkout.html' if '/checkout' in route.request.url else 'supplier.html')).read_text()))
     def page(self):
         return self.context.new_page()
     def close(self):
@@ -111,6 +112,8 @@ class ScriptedClient:
                         if ' p ' in line and 'Total $2.00' in line: self.refs['total']=ref
                         if ' button ' in line and ('Place order' in line or 'Pay $2.00' in line): self.refs['buy']=ref
                         if 'Card number' in line and ' input ' in line: self.refs['card']=ref
+                        if ' article ' in line and 'TEST-1' in line: self.refs['cancel_row']=ref
+                        if ' button ' in line and 'Cancel order' in line: self.refs['cancel']=ref
         def use(name,args=None,browser=True):
             return {'content':[{'type':'tool_use','id':'tool_'+str(turn),'name':name,'input':args or {},
                                **({'toolset_name':'browser'} if browser else {})}],
@@ -119,6 +122,14 @@ class ScriptedClient:
             return use('read_page',{'filter':'interactive'})
         if turn==1:
             return use('read_page',{'filter':'all'})
+        if self.mode=='portal':
+            return {'content':[{'type':'text','text':json.dumps({'evidence':'Test supply shop'})}]}
+        if self.mode=='cancel':
+            if turn==2:
+                return use('review_cancellation',{'submit_ref':self.refs['cancel'],'order_ref':self.refs['cancel_row']},False)
+            if turn==3:
+                return use('left_click',{'target':{'type':'ref','ref':self.refs['cancel']}})
+            return {'content':[{'type':'text','text':json.dumps({'cancelled_order_number':'TEST-1'})}]}
         if self.mode=='injection':
             return use('form_input',{'target':{'type':'ref','ref':self.refs['qty']},'value':40})
         if self.mode=='offdomain':
@@ -308,4 +319,60 @@ def test_pause_after_model_response_prevents_action_until_resume(browser,monkeyp
     driver.sleeper=resume
     result=driver.run()
     assert not result['ok'] and store.row['status']=='stopped'
+    writer.assert_not_called()
+
+
+def test_portal_finishes_with_visible_evidence_and_no_purchase_receipt(browser,monkeypatch):
+    driver,store,backend,client,writer,frames=setup_driver(browser,monkeypatch,'portal')
+    store.row['kind']='portal'
+    driver.row['kind']='portal'
+    result=driver.run()
+    assert result['ok'] and result['report']=='Test supply shop'
+    assert '"kind": "portal"' in client.requests[0]['messages'][0]['content']
+    assert not driver.submitted and not store.row.get('receipt')
+    writer.assert_not_called()
+
+
+@pytest.mark.parametrize('mode',['happy','secret'])
+def test_portal_cannot_purchase_or_enter_card(browser,monkeypatch,mode):
+    driver,store,backend,client,writer,frames=setup_driver(browser,monkeypatch,mode)
+    store.row['kind']='portal'
+    driver.row['kind']='portal'
+    result=driver.run()
+    assert not result['ok'] and not driver.submitted
+    assert not store.holds
+    writer.assert_not_called()
+
+
+@pytest.mark.parametrize('expired',[False,True])
+def test_cancellation_requires_original_order_and_live_window(browser,monkeypatch,expired):
+    driver,store,backend,client,writer,frames=setup_driver(browser,monkeypatch,'cancel')
+    store.row.update(kind='cancel_order')
+    store.row['plan'].update(original_errand_id=OID,order_number='TEST-1',__start_url='https://supplier.test/cancel')
+    driver.row=store.get_row(EID)
+    original_get=store.get_row
+    store.get_row=lambda eid: {'id':OID,'business_id':BID,'status':'done','cancel_until':
+        '2000-01-01T00:00:00Z' if expired else '2099-01-01T00:00:00Z',
+        'receipt':{'order_number':'TEST-1'}} if eid==OID else original_get(eid)
+    result=driver.run()
+    assert result['ok'] is (not expired),result
+    assert driver.cancel_submitted is (not expired)
+    assert not driver.submitted
+    writer.assert_not_called()
+
+
+def test_spend_limit_drop_while_continue_is_queued_requires_fresh_stepup(browser,monkeypatch):
+    driver,store,backend,client,writer,frames=setup_driver(browser,monkeypatch,total=100)
+    commands=[]
+    def approve_at_old_limit(hold):
+        assert not hold['needs_stepup']
+        command=ce.Command('continue',UID,hold_id=hold['id'])
+        commands.append(command)
+        store.settings={'computer':{'spend_limit_cents':1}}
+        driver.mailbox.put(command)
+    store.on_hold=approve_at_old_limit
+    driver.sleeper=lambda _:store.row.update(status='stopped')
+    result=driver.run()
+    assert not result['ok'] and not driver.submitted
+    assert commands[0].result.exception().status_code==409
     writer.assert_not_called()

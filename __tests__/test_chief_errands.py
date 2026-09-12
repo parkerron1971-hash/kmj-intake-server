@@ -107,6 +107,14 @@ def test_plan_is_saved_when_execution_disabled(api,monkeypatch):
     chief_jobs.enqueue.assert_not_called()
 
 
+def test_retry_after_uncertain_submission_requires_card_stepup(api):
+    client,state=api
+    state['row']['plan']['__uncertain_predecessors']=[SID]
+    assert client.post(f'/agents/chief/errands/{EID}/approve',json={}).status_code==403
+    assert client.post(f'/agents/chief/errands/{EID}/approve',json={},
+        headers={'X-Ledger-Unlock':'fixture-stepup'}).status_code==200
+
+
 def test_pause_preserves_hold_and_stop_needs_no_stepup(api):
     client,state=api
     hold(state)
@@ -335,6 +343,23 @@ def test_all_new_routes_require_an_authenticated_session():
             method=next(iter(route.methods))
             response=client.request(method,path+'?business_id='+BID+'&n=1',json={})
             assert response.status_code==401,(method,path,response.text)
+
+
+def test_email_order_desk_takes_precedence_over_supplier_website(api,monkeypatch):
+    client,state=api
+    import chief_inventory_actions
+    offering={'id':SID,'business_id':BID,'name':'Clips','reorder_qty':1,'supplier_email':'orders@supplier.test'}
+    original=ce.db
+    monkeypatch.setattr(ce,'db',lambda m,p,b=None:[offering] if p.startswith('/offerings?') else original(m,p,b))
+    monkeypatch.setattr(chief_inventory_actions,'_primary_supplier',lambda *a:{'id':JOB,'business_id':BID,
+        'website':'https://supplier.test','email':'orders@supplier.test'})
+    draft=AsyncMock(return_value={'type':'draft_purchase_order','label':'Draft','result':'Nothing sent.'})
+    monkeypatch.setattr(chief_inventory_actions,'handle_draft_purchase_order',draft)
+    response=client.post('/agents/chief/errands',json={'business_id':BID,'offering_ids':[SID],'qty':{SID:1}})
+    assert response.status_code==200
+    assert response.json()['door']=='email' and response.json()['errand'] is None
+    ce.rpc.assert_not_called()
+    chief_jobs.enqueue.assert_not_called()
 
 
 def test_orphan_reconciliation_happens_before_job_is_removed_from_sweep(monkeypatch):

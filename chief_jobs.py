@@ -169,10 +169,8 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "done": "your revised blueprint is ready",
         "nav": "build:mysite",
     },
-    # THE BROWSER HAND (2026-09-04). Starts from an approved proposal
-    # (_do_approve_one, channel "hand"), never from a click or a chat
-    # turn directly. Bounded by browser_hand.run's own budgets; the
-    # heartbeat and orphan sweep cover a deploy mid-run.
+    # Historical label only. New enqueues are refused and the old runner returns
+    # retired without opening a browser. Portal work uses approved errand jobs.
     "browser_hand": {
         "label": "Browser hand",
         "working": "working through that site",
@@ -586,6 +584,8 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
     older than STALE_AFTER_MIN is marked failed here and a new job starts."""
     if kind not in KIND_META:
         raise ValueError(f"unknown job kind: {kind}")
+    if kind=='browser_hand':
+        raise ValueError('The browser hand is retired. Plan and approve a portal errand instead.')
     if kind == "errand":
         # The approval RPC creates the job and approval in ONE transaction.
         # Generic enqueue/dedupe cannot mint authority to execute an errand.

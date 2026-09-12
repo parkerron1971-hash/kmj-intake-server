@@ -6484,6 +6484,10 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
         import connected_ai
         return await connected_ai.approve_connected(biz, item, human_actor_id)
 
+    if item.get('channel')=='hand' or item.get('action_type')=='browser_hand':
+        import chief_errands
+        return await chief_errands.approve_portal_queue(biz,item,human_actor_id)
+
     # A generated document gets read once more on its way out.
     #
     # The gate lives HERE, in the shared core, rather than at the HTTP
@@ -6521,26 +6525,6 @@ async def _do_approve_one(client, biz: Dict[str, Any], item: Dict,
     if item.get("channel") == "action" or item.get("action_type") == "chief_action":
         import action_proposals
         return {**result, **(await action_proposals.execute(client, biz, item))}
-
-    # THE BROWSER HAND (2026-09-04). A proposal on channel "hand" is not a
-    # message: approving it starts a bounded browser job. Same audited
-    # door as every other approval (the endpoint, the verb, autopilot all
-    # come through here); the run belongs to the job runner, heartbeat
-    # and orphan sweep included. Nothing is sent to anyone.
-    if item.get("channel") == "hand" or item.get("action_type") == "browser_hand":
-        import browser_hand
-        import chief_jobs
-        spec = browser_hand.spec_from_body(item.get("body") or "")
-        if not spec:
-            return {**result, "ok": False, "reason": "hand_spec_invalid",
-                    "message": "this proposal's task could not be read back"}
-        job = await chief_jobs.enqueue(
-            client, user_id=str(biz.get("owner_id") or ""), business_id=biz_id,
-            kind="browser_hand", params={"spec": spec, "queue_id": qid},
-            source="approval") or {}
-        return {**result, "ok": True, "sent": False,
-                "reason": "hand_busy" if job.get("deduped") else "hand_started",
-                "job_id": job.get("id")}
 
     # Step 2: attempt delivery
     delivery = await _send_queued_email(client, biz, item)
