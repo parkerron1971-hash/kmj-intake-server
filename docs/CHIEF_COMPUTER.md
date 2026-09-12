@@ -260,8 +260,9 @@ copied checkout. The equivalent script was run from this worktree against the li
 model: **71/72**, with one generated expense-dashboard width validation failure.
 The isolated expenses retest repeated that pre-existing generator validation failure.
 No module generator source changed in this arc. Reports remain local with synthetic
-fixture content. The completion migration is pending merge/application; execution
-remains disabled.
+fixture content. The completion migration was applied after PR #939 merged on
+September 12, 2026; its live function-permission probe passed. Execution remains
+disabled during rollout.
 
 ## PR6: one computer for portals and orders
 
@@ -289,9 +290,11 @@ window still fall back to an unsent cancellation request.
 Rehearsal: 74 focused portal/driver/queue/history tests passed. The production-model
 API contract probe returned `list_tabs` with `toolset_name: browser`, confirming
 the configured model accepts the actual toolset. It used synthetic input and opened
-no browser. Publication of PR4–PR6 is currently awaiting explicit public-repository
-approval; only PR1–PR3 are deployed. Do not enable execution before the remaining
-merges, completion migration and production checks.
+no browser. The owner explicitly approved public-source publication on September 12.
+PRs #938 and #939 are merged and deployed successfully; the final hand migration is
+PR #940. Frontend #907 aligns receipt/portal rendering, interruption warnings and
+Secure Entry with this contract. Do not enable execution before the final merge,
+frontend deployment and production checks.
 
 Final review also checks spending limits again when a queued Continue command reaches
 the worker. A newly lowered limit cannot reuse an approval without danger step-up.
@@ -308,6 +311,11 @@ The unchanged module generator's expenses eval still fails its dashboard width
 validation; that separate generator issue was reproduced in an isolated retest.
 
 Office Depot remains a low-cost guest-checkout candidate, not a certified supplier.
-The Windows guarded-browser probe received `ERR_HTTP2_PROTOCOL_ERROR`; an HTTP/1
-diagnostic also did not complete. No guard was weakened, account opened, cart changed,
-or purchase made. Rehearse from the deployed worker before approving a real order.
+The Windows guarded-browser probe received `ERR_HTTP2_PROTOCOL_ERROR`, but the
+September 12 production Railway probe successfully opened item 222056 and saw the
+paper clips and $3.49 price with no challenge page. It used the real controller,
+exact Office Depot host restrictions and the app's runtime environment. Other
+resource hosts remained blocked. This verifies product-page access, not checkout.
+No guard was weakened, account opened, cart changed or purchase made. The first
+purchase still requires the owner's presence, delivery details, Secure Entry and
+approval of the final total.
