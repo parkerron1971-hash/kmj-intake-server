@@ -71,48 +71,8 @@ def build(src: pathlib.Path) -> str:
     i = s.index('    <section class="pricing chapter" id="pricing">')
     j = s.index('    <section class="plans" id="plans">')   # the plan matrix follows pricing since v17
     s = s[:i] + "{{PRICING}}\n\n" + s[j:]
-    s = rep(s, "  /* v8: pricing, the live site's setup */",
-            r"""  /* the live price cards (_price_cards_html) and the founding strip (_founder_strip_html), styled in this page's tokens */
-  .price-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-  .price-card{position:relative;display:flex;flex-direction:column;gap:12px;padding:26px 24px 24px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--bg-2);transition:transform .35s var(--spring),border-color .3s}
-  .price-card:hover{transform:translateY(-4px);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
-  .price-card.is-mid{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 0 80px -40px var(--accent)}
-  .price-card .ribbon{position:absolute;top:-12px;left:24px;font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:var(--accent);color:#fff}
-  .price-name{font:600 15px var(--display);letter-spacing:-.01em}
-  .price-fig{display:flex;align-items:baseline;gap:6px}
-  .price-fig b{font:600 44px var(--display);letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;display:inline-block;min-width:3.2ch}
-  .price-fig b.roll{animation:numRoll .5s var(--ease)}
-  .price-fig span{font:500 13px var(--body);color:var(--muted)}
-  .price-billed{font-size:12px;color:var(--dim);margin-top:-8px;min-height:16px;font-variant-numeric:tabular-nums}
-  .price-card p{margin:0;font-size:13.5px;color:var(--muted);line-height:1.5}
-  .price-facts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--muted)}
-  .price-facts li{display:flex;gap:9px;align-items:flex-start;flex-wrap:wrap}
-  .price-facts li::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);margin-top:7px;flex-shrink:0;box-shadow:0 0 8px var(--accent)}
-  .price-facts li.credits{color:var(--text);font-weight:600}
-  .price-facts li.credits small{flex-basis:100%;padding-left:15px;font-weight:400;color:var(--dim);font-size:11.5px}
-  .price-cta{margin-top:auto;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:42px;padding:0 20px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid var(--line-2);background:rgba(13,15,20,.6);color:var(--text);text-decoration:none;transition:background .2s,border-color .2s,transform .2s var(--spring)}
-  .price-cta:hover{background:var(--bg-3);transform:translateY(-1px)}
-  .price-cta.is-mid{background:var(--accent);border-color:transparent;color:#fff}
-  .price-cta.is-mid:hover{filter:brightness(1.08);box-shadow:0 8px 30px -8px var(--accent)}
-  .founder{margin:0 0 14px;display:grid;grid-template-columns:auto 1fr auto;gap:22px;align-items:center;padding:18px 24px;border:1px solid color-mix(in srgb,#F3C56B 45%,var(--line));border-radius:var(--r-lg);background:linear-gradient(90deg,color-mix(in srgb,#F3C56B 10%,var(--bg-2)),var(--bg-2) 60%)}
-  .founder .seal{font:500 10px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:#F3C56B;padding:5px 12px;border:1px solid color-mix(in srgb,#F3C56B 45%,transparent);border-radius:999px;white-space:nowrap}
-  .founder .copy{font-size:13.5px;color:var(--muted);line-height:1.5}
-  .founder .copy b{color:var(--text);font-weight:600}
-  .founder .meter{height:4px;margin-top:10px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden;max-width:420px}
-  .founder .meter i{display:block;height:100%;background:#F3C56B;transition:width 1.2s var(--ease)}
-  .founder .left{font:400 11px var(--mono);color:#F3C56B;margin-top:6px}
-  .founder>a{color:#F3C56B;font-weight:600;font-size:13.5px;text-decoration:none;white-space:nowrap}
-  .founder.is-gone{border-color:var(--line);background:transparent}
-  .founder.is-gone .seal,.founder.is-gone .left{color:var(--muted);border-color:var(--line-2)}
-  .founder.is-gone .meter i{background:var(--muted)}
-  @media (max-width:900px){.price-grid{grid-template-columns:1fr}.founder{grid-template-columns:1fr;gap:10px}}
-
-  /* v8: pricing, the live site's setup */""")
-    # the count-up and the switch read the live cards' hooks
-    s = rep(s, "document.querySelectorAll('.tier .num').forEach((n,i)=>{n.textContent='$0';setTimeout(()=>countTo(n,+n.dataset.monthly,900),120*i)});",
-            "document.querySelectorAll('.pc-num').forEach((n,i)=>{n.textContent='$0';setTimeout(()=>countTo(n,+n.dataset.monthly,900),120*i)});")
-    s = rep(s, "    document.querySelectorAll('.tier .num').forEach(n=>{n.classList.remove('roll');void n.offsetWidth;n.classList.add('roll');countTo(n,+(annual?n.dataset.annual:n.dataset.monthly),500)});\n    document.querySelectorAll('.tier .billed').forEach(n=>{n.innerHTML=annual?n.dataset.annual:'&nbsp;'});",
-            "    document.querySelectorAll('.pc-num').forEach(n=>{n.classList.remove('roll');void n.offsetWidth;n.classList.add('roll');countTo(n,+(annual?n.dataset.annual:n.dataset.monthly),500)});\n    document.querySelectorAll('.price-billed').forEach(n=>{n.innerHTML=annual?n.dataset.annual:'&nbsp;'});")
+    # v18: the pricing stylesheet and the count-up/switch hooks (.pc-num, .price-billed) now live in the concept itself
+    assert "  /* v18: pricing." in s and ".pc-num" in s, "the concept's v18 pricing block is missing"
 
     # ── compare: the plan differences come from the gate map ──
     i = s.index('<!-- PLAN TABLE -->')
