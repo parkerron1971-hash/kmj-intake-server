@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "business_secrets": "encrypted browser credentials; never exported, cascade on business deletion",
     # Platform books and metering — the platform must keep these for its
     # own accounts, whatever a business does with theirs.
     "usage_grants":            "platform credit grants; platform billing record",
@@ -137,6 +138,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
     "connected_agents",       # bot profiles; no live credentials in this table
     # Connection metadata travels with the business; credentials never do.
@@ -558,6 +560,7 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # documents live in S3. Stated here rather than discovered later.
 
 _IMPORT_SKIP = {
+    "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication
     # claims or private storage paths tied to the original business.
