@@ -238,6 +238,8 @@ from chief_jobs import router as chief_jobs_router  # Feature 2 — queued desk 
 app.include_router(chief_jobs_router)
 from chief_errands import router as chief_errands_router
 app.include_router(chief_errands_router)
+from card_connections import router as card_connections_router
+app.include_router(card_connections_router)
 from connected_ai import router as connected_ai_router
 app.include_router(connected_ai_router)
 # The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.

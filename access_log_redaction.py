@@ -39,7 +39,7 @@ import re
 from typing import Any, Dict, Optional
 from urllib.parse import unquote
 
-_SECURE_ENTRY = re.compile(r"/agents/chief/errands/[^/\s?]+/secret(?:[/?\s\"']|$)")
+_SECURE_ENTRY = re.compile(r"(?:/agents/chief/errands/[^/\s?]+/secret|/payments/card-connections)(?:[/?\s\"']|$)")
 
 # Each pattern keeps the identifying prefix — the log is still useful for
 # "how many auditors read the ledger today" — and destroys the secret.
