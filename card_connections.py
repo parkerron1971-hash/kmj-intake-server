@@ -221,7 +221,7 @@ def status(business_id:str,mode:Literal['test','live','sandbox'],session:UserSes
 @router.post('/{business_id}/{mode}/start')
 def start(business_id:str,mode:Literal['test','live','sandbox'],request:Request,session:UserSession=Depends(sb_clients.authed_request)):
     bid=owner(business_id,session)
-    require_unlock(request,session.user,SCOPE_DANGER)
+    require_unlock(request,str(session.user.id),SCOPE_DANGER)
     if not configured(mode):
         raise HTTPException(503,'Stripe card connection setup is pending. No account was connected.')
     state,verifier=secrets.token_urlsafe(32),secrets.token_urlsafe(32)
@@ -313,7 +313,7 @@ def cards(business_id:str,mode:Literal['test','live','sandbox'],after:str='',ses
 @router.post('/{business_id}/{mode}/select')
 def select(business_id:str,mode:Literal['test','live','sandbox'],body:Selection,request:Request,session:UserSession=Depends(sb_clients.authed_request)):
     bid=owner(business_id,session)
-    require_unlock(request,session.user,SCOPE_DANGER)
+    require_unlock(request,str(session.user.id),SCOPE_DANGER)
     row=connection(bid,mode)
     if not row:
         changed()
