@@ -46,6 +46,7 @@ def _template() -> str:
 def _pricing_html() -> str:
     import marketing_pages as mp
     return f"""    <section class="pricing chapter" id="pricing">
+      <div class="spot" aria-hidden="true"></div>
       <div class="hd reveal">
         <span class="eyebrow">What it costs</span>
         <h2 style="margin-top:12px">Chief works while you work: every plan, from day one.</h2>
@@ -53,7 +54,7 @@ def _pricing_html() -> str:
         <div class="billing" role="group" aria-label="Billing period"><button type="button" data-period="monthly" aria-pressed="true">Monthly</button><button type="button" data-period="annual" aria-pressed="false">Annual <span class="save">2 months free</span></button></div>
       </div>
 {mp._founder_strip_html()}
-      <div class="price-grid is-lit-grid">{mp._price_cards_html()}
+      <div class="price-grid is-lit-grid reveal">{mp._price_cards_html()}
       </div>
       <p class="askline reveal">__TRIAL_FREE__ on every plan. Every action logged and reversible. <button type="button" id="askCost">Or ask Chief what it costs.</button></p>
     </section>
