@@ -53,6 +53,14 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def future_timestamp(value):
+    try:
+        parsed=datetime.fromisoformat(str(value).replace('Z','+00:00'))
+        return parsed.tzinfo is not None and parsed>datetime.now(timezone.utc)
+    except (TypeError,ValueError):
+        return False
+
+
 def uid(value):
     try:
         return str(UUID(str(value)))
@@ -144,13 +152,13 @@ def outward(row, steps=0):
     result={k:row.get(k) for k in allowed}
     result['plan']={k:v for k,v in (row.get('plan') or {}).items() if not k.startswith('__')}
     result['steps_done']=steps
-    result['steps_total_hint']=60
+    result['steps_total_hint']=min(60,int((row.get('plan') or {}).get('__max_steps',60)))
     return result
 
 
 def card(row, *, planned=False, replay=False):
     return {'type':'errand_plan' if planned else 'errand_status','errand_id':row['id'],
-        'errand':outward(row),'label':row['title'],'result':f"Errand {row['status']}.",
+        'errand':outward(row),'label':row['title'],'result':row.get('plan',{}).get('report') or f"Errand {row['status']}.",
         'nav':{'room':'operate','panel':'computer'}, **({'replay':True} if replay else {})}
 
 
@@ -227,6 +235,8 @@ async def plan(biz, user_id, body, client=None):
     kind=body.get('kind','reorder')
     if kind=='cancel_order':
         return await plan_cancellation(biz,user_id,body)
+    if kind=='portal':
+        return await plan_portal(biz,user_id,body)
     if kind!='reorder':
         raise HTTPException(422,'This endpoint currently plans inventory reorders.')
     ids=body.get('offering_ids')
@@ -260,11 +270,15 @@ async def plan(biz, user_id, body, client=None):
         if candidate and str(candidate.get('business_id'))!=str(biz['id']):
             raise HTTPException(404,'Supplier not found.')
         website=(candidate or {}).get('website')
-        if not website and offering.get('supplier_email') and len(ids)==1:
+        if offering.get('supplier_email'):
+            if len(ids)!=1:
+                raise HTTPException(422,'This supplier accepts email orders. Preview one item at a time through the purchase-order flow.')
             async with httpx.AsyncClient() as email_client:
                 draft=await handle_draft_purchase_order(client or email_client,biz,
                     {'type':'draft_purchase_order','offering_id':oid,'qty':qty})
             return {'errand':None,'action':draft,'door':'email'}
+        if (candidate or {}).get('email'):
+            raise HTTPException(422,'This supplier accepts email orders. Save its email on the item reorder plan before drafting the purchase order.')
         if not website:
             raise HTTPException(422,'Add the supplier website to this item first.')
         if not str(website).startswith('https://'):
@@ -295,6 +309,13 @@ async def plan(biz, user_id, body, client=None):
         'items':items,'ship_to':None,'planned_total_cents':total,'priced':total is not None,
         'notes':['Final tax, delivery charges, quantities and total require checkout verification.'],
         'door':'browser','__start_url':website,'__require_stepup_unpriced':settings['require_stepup_unpriced']}
+    recent=await asyncio.to_thread(db,'GET',f'/chief_errands?business_id=eq.{biz["id"]}'
+        '&status=in.(interrupted,failed,stopped)&select=id,plan&order=created_at.desc&limit=200') or []
+    uncertain=[r['id'] for r in recent if (r.get('plan') or {}).get('__submission_attempted_at') and
+        set(ids).intersection(i.get('offering_id') for i in (r.get('plan') or {}).get('items',[]))]
+    if uncertain:
+        plan_data['notes'].append('An earlier submission for these items may already be an order. Check the supplier before approving this replacement.')
+        plan_data['__uncertain_predecessors']=uncertain
     key='reorder:'+(':'.join(ids) if len(ids)==1 else hashlib.sha256(':'.join(ids).encode()).hexdigest())+':'+now()[:10]
     row=await asyncio.to_thread(rpc,'chief_errand_plan',p_row={'business_id':biz['id'],'user_id':uid(user_id),
         'kind':'reorder','title':('Reorder from '+str(supplier.get('name') or host))[:200],
@@ -311,7 +332,7 @@ async def plan_cancellation(biz,user_id,body):
         raise HTTPException(404,'Confirmed order not found.')
     receipt=row.get('receipt') or {}
     deadline=row.get('cancel_until')
-    if not deadline or deadline<=now():
+    if not future_timestamp(deadline):
         order=receipt.get('order_number','')
         return {'errand':None,'door':'email','action':{'type':'draft_purchase_order',
             'label':'Cancellation request ready to copy','result':
@@ -320,6 +341,7 @@ async def plan_cancellation(biz,user_id,body):
             'body':'Please cancel order '+order+' if it has not shipped, and confirm whether a refund will be issued.',
             'nav':{'room':'operate','panel':'computer'}}}
     data={**row['plan'],'items':[],'original_errand_id':row['id'],'order_number':receipt['order_number'],
+          'planned_total_cents':0,'priced':True,
           'notes':['Ask to cancel this order only. Do not place any new purchase.']}
     data={k:v for k,v in data.items() if not k.startswith('__') or k=='__start_url'}
     planned=await asyncio.to_thread(rpc,'chief_errand_plan',p_row={
@@ -329,6 +351,78 @@ async def plan_cancellation(biz,user_id,body):
         'idempotency_key':'cancel:'+row['id']})
     _audit(planned,'planned')
     return {'errand':outward(planned)}
+
+
+async def plan_portal(biz,user_id,body,*,queue_id=None):
+    import browser_hand
+    from browser_controller import host_allowed
+    try:
+        spec=browser_hand.make_spec(body.get('task',''),body.get('start_url',''),
+            body.get('domains') or [],body.get('max_steps'))
+        host=secret_vault.normalize_host(urlsplit(spec['start_url']).hostname or '')
+        domains=sorted(set([host,*[secret_vault.normalize_host(h) for h in spec['domains']]]))
+    except (ValueError,TypeError):
+        raise HTTPException(422,'Describe the portal task and provide a valid HTTPS start page.') from None
+    settings=settings_of(biz)
+    if not host_allowed(spec['start_url'],[host],settings['deny_hosts']):
+        raise HTTPException(422,'This portal host is not allowed.')
+    # Legacy www normalization must not automatically approve the bare origin.
+    domains=[h for h in domains if h!=host.removeprefix('www.') or h==host]
+    if not set(domains).issubset({host,*settings['allowed_hosts']}) or any(
+            not host_allowed('https://'+h,domains,settings['deny_hosts']) for h in domains):
+        raise HTTPException(422,'Add the additional exact portal hosts in computer settings first.')
+    key='portal:'+str(queue_id or hashlib.sha256(json.dumps(spec,sort_keys=True).encode()).hexdigest())+':'+now()[:10]
+    p={'supplier':{'id':None,'name':host,'host':host},'task':spec['task'],'items':[],
+       'ship_to':None,'planned_total_cents':0,'priced':True,'door':'browser',
+       'notes':['Portal task only. No purchases or payment submission are permitted.'],
+       '__start_url':spec['start_url'],'__legacy_spec':spec,'__max_steps':spec['max_steps'],
+       '__time_budget_s':spec['time_budget_s']}
+    row=await asyncio.to_thread(rpc,'chief_errand_plan',p_row={'business_id':biz['id'],'user_id':uid(user_id),
+        'kind':'portal','title':spec['task'][:200],'plan':p,'hosts':domains,'spend_limit_cents':0,
+        'planned_total_cents':0,'idempotency_key':key})
+    if queue_id:
+        if row['status']=='planned':
+            row=await asyncio.to_thread(transition,row,('planned',),{'plan':{**row['plan'],'__queue_id':queue_id}})
+    elif not row['plan'].get('__queue_id') and row['status']=='planned':
+        queued=await asyncio.to_thread(db,'POST','/agent_queue',{'business_id':biz['id'],
+            'agent':'chief','action_type':'browser_hand','channel':'hand',
+            'subject':'Chief computer: '+spec['task'][:90],
+            'body':browser_hand.spec_to_body(spec)+'\nerrand: '+row['id'],
+            'status':'draft','priority':'medium','ai_reasoning':'Portal task proposed; a person must approve before execution.'})
+        qid=(queued or [{}])[0].get('id')
+        if not qid: raise HTTPException(503,'The portal plan was saved but its approval could not be filed.')
+        row=await asyncio.to_thread(transition,row,('planned',),{'plan':{**row['plan'],'__queue_id':qid}})
+    _audit(row,'planned')
+    return {'errand':outward(row),'queue_id':row['plan'].get('__queue_id')}
+
+
+async def approve_portal_queue(biz,item,human_actor_id):
+    import browser_hand
+    from types import SimpleNamespace
+    if not human_actor_id:
+        return {'ok':False,'sent':False,'reason':'hand_approval_required','message':'Approve this portal task yourself in the Approval Queue.'}
+    user=SimpleNamespace(id=uid(human_actor_id))
+    current=await asyncio.to_thread(business,biz['id'],user,'manager')
+    spec=browser_hand.spec_from_body(item.get('body') or '')
+    if not spec:
+        return {'ok':False,'sent':False,'reason':'hand_spec_invalid','message':'This portal proposal could not be read. Create a new plan.'}
+    match=re.search(r'^errand:\s*([a-fA-F0-9-]{36})\s*$',item.get('body',''),re.M)
+    if match:
+        row=await asyncio.to_thread(get_row,match[1])
+        if row['business_id']!=biz['id'] or row['kind']!='portal' or row['plan'].get('__queue_id')!=item['id']:
+            raise HTTPException(404,'Portal plan not found.')
+        if row['plan'].get('__legacy_spec')!=spec:
+            raise HTTPException(409,'The proposal changed. Create and review a new portal plan.')
+    else:
+        planned=await plan_portal(current,user.id,spec,queue_id=uid(item['id']))
+        row=await asyncio.to_thread(get_row,planned['errand']['id'])
+    if row['status']=='planned':
+        row=await approve(row,user,None)
+    elif row['status'] not in LIVE:
+        raise HTTPException(409,'This portal task has already ended. Review its report before making a new plan.')
+    await asyncio.to_thread(db,'PATCH',f'/agent_queue?id=eq.{uid(item["id"])}&business_id=eq.{biz["id"]}',
+                            {'status':'approved','reviewed_at':now()})
+    return {'ok':True,'sent':False,'reason':'hand_started','job_id':row.get('job_id'),'errand_id':row['id']}
 
 
 @dataclass(repr=False)
@@ -342,6 +436,7 @@ class Command:
     expires: float = field(default_factory=lambda:time.monotonic()+25)
     result: Future = field(default_factory=Future,repr=False)
     cancelled: bool = False
+    stepup_verified: bool = False
 
 
 def register_worker(errand_id):
@@ -395,7 +490,7 @@ async def approve(row, user, request, *, via_chat=False):
         raise HTTPException(409,'This errand is no longer awaiting approval.')
     biz=await asyncio.to_thread(business,row['business_id'],user,'manager')
     settings=settings_of(biz)
-    stepup=needs_stepup(row.get('planned_total_cents'),min(row['spend_limit_cents'],settings['spend_limit_cents']),settings)
+    stepup=needs_stepup(row.get('planned_total_cents'),min(row['spend_limit_cents'],settings['spend_limit_cents']),settings) or bool(row['plan'].get('__uncertain_predecessors'))
     if via_chat and stepup:
         raise HTTPException(403,{'code':'ledger_locked','scope':'danger','message':'Approve this errand on its card.'})
     if stepup:
@@ -409,6 +504,12 @@ async def approve(row, user, request, *, via_chat=False):
     async with httpx.AsyncClient() as client:
         await chief_jobs.enqueue(client,user_id=str(user.id),business_id=row['business_id'],kind='errand',
             params={'errand_id':row['id']},source='approval',prepared_job=prepared['job'])
+    if row['kind']=='portal' and row['plan'].get('__queue_id'):
+        try:
+            await asyncio.to_thread(db,'PATCH',f'/agent_queue?id=eq.{uid(row["plan"]["__queue_id"])}&business_id=eq.{row["business_id"]}',
+                {'status':'approved','reviewed_at':now()})
+        except Exception:
+            pass  # approval/job are durable; a stale queue card cannot start it twice
     return prepared['errand']
 
 
@@ -447,11 +548,11 @@ async def errand_status(errand_id:str,since:int=Query(0,ge=0),session:UserSessio
     rows=await asyncio.to_thread(db,'GET',f'/chief_errand_events?errand_id=eq.{row["id"]}'
         f'&business_id=eq.{row["business_id"]}&n=gt.{since}&select={EVENT_COLUMNS}&order=n.asc&limit=200') or []
     latest=await asyncio.to_thread(db,'GET',f'/chief_errand_events?errand_id=eq.{row["id"]}'
-        f'&business_id=eq.{row["business_id"]}&frame_path=not.is.null&select=n,at,frame_path&order=n.desc&limit=1') or []
+        f'&business_id=eq.{row["business_id"]}&frame_path=not.is.null&select=n,at,frame_path,meta&order=n.desc&limit=1') or []
     last=latest[0] if latest else {}
     from storage_links import signed_url_sync
     url=await asyncio.to_thread(signed_url_sync,'proposals',last['frame_path'],ttl=60) if last.get('frame_path') else None
-    return {'errand':outward(row,max([r['n'] for r in rows]+[last.get('n',0)])),
+    return {'errand':outward(row,max([(r.get('meta') or {}).get('steps_done',0) for r in rows]+[(last.get('meta') or {}).get('steps_done',0)])),
         'events':[{**{k:v for k,v in r.items() if k!='frame_path'},'has_frame':bool(r.get('frame_path'))} for r in rows],
         'frame_url':url,'frame_at':last.get('at')}
 
@@ -526,9 +627,11 @@ async def continue_errand(errand_id:str,request:Request,session:UserSession=Depe
         raise HTTPException(409,'The checkout approval has expired or changed.')
     biz=await asyncio.to_thread(business,row['business_id'],session.user,'manager')
     settings=settings_of(biz)
+    verified=False
     if needs_stepup(hold.get('observed_total_cents'),min(row['spend_limit_cents'],settings['spend_limit_cents']),settings):
         require_unlock(request,str(session.user.id),SCOPE_DANGER)
-    await send_command(row['id'],Command('continue',str(session.user.id),hold_id=hold['id']))
+        verified=True
+    await send_command(row['id'],Command('continue',str(session.user.id),hold_id=hold['id'],stepup_verified=verified))
     return {'errand':outward(await asyncio.to_thread(get_row,row['id']))}
 
 
