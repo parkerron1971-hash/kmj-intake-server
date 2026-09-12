@@ -389,6 +389,14 @@ class Driver:
             warning='Order confirmed; receipt filing needs repair. Do not reorder.'
         self.row=self.store.transition(self.row,('running',),{'status':'done','receipt':receipt,
             'hold':None,'error':warning,'finished_at':errands.now()},'done',warning or 'Supplier order confirmed and receipt filed.')
+        if self.store is errands:
+            from errand_completion import repair
+            try:
+                self.row=repair(self.row)
+                warning=self.row.get('error')
+            except Exception:
+                warning='Order confirmed; bookkeeping or receipt filing needs repair. Do not reorder.'
+                self.row=self.store.transition(self.row,('done',),{'error':warning})
         return {'ok':True,'errand_id':self.eid,'status':'done',**({'warning':warning} if warning else {})}
 
     def run(self):

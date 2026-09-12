@@ -156,14 +156,26 @@ def card(row, *, planned=False, replay=False):
 
 def event(row, kind, note, **extra):
     # Extra is produced by the controller/driver, never arbitrary API/model JSON.
-    return rpc('chief_errand_event',p_business_id=row['business_id'],p_id=row['id'],
+    result=rpc('chief_errand_event',p_business_id=row['business_id'],p_id=row['id'],
                p_event={'kind':kind,'note':note,**extra})
+    _audit(row,kind)
+    return result
+
+
+def _audit(row,kind):
+    try:
+        from errand_completion import lifecycle
+        lifecycle(row,kind)
+    except Exception:
+        pass  # same best-effort policy as audit_log; never log raw exceptions
 
 
 def transition(row, expected, patch, kind=None, note=None, hold_id=None):
-    return rpc('chief_errand_transition',p_business_id=row['business_id'],p_id=row['id'],
+    result=rpc('chief_errand_transition',p_business_id=row['business_id'],p_id=row['id'],
         p_expected=list(expected),p_patch=patch,p_hold_id=hold_id,
         p_event={'kind':kind,'note':note} if kind else None)
+    if kind: _audit(result,kind)
+    return result
 
 
 def rate_limit(user_id, errand_id):
@@ -213,6 +225,8 @@ async def plan(biz, user_id, body, client=None):
     from reorder_engine import compose_purchase_order, REORDER_DEDUP_HOURS
     settings=settings_of(biz)
     kind=body.get('kind','reorder')
+    if kind=='cancel_order':
+        return await plan_cancellation(biz,user_id,body)
     if kind!='reorder':
         raise HTTPException(422,'This endpoint currently plans inventory reorders.')
     ids=body.get('offering_ids')
@@ -286,7 +300,35 @@ async def plan(biz, user_id, body, client=None):
         'kind':'reorder','title':('Reorder from '+str(supplier.get('name') or host))[:200],
         'plan':plan_data,'hosts':hosts,'spend_limit_cents':settings['spend_limit_cents'],
         'planned_total_cents':total,'idempotency_key':key})
+    _audit(row,'planned')
     return {'errand':outward(row)}
+
+
+async def plan_cancellation(biz,user_id,body):
+    """Undo prepares an errand or a contact draft. It cannot cancel an order."""
+    row=await asyncio.to_thread(get_row,body.get('original_errand_id'))
+    if row['business_id']!=biz['id'] or row['status']!='done' or row['kind']!='reorder':
+        raise HTTPException(404,'Confirmed order not found.')
+    receipt=row.get('receipt') or {}
+    deadline=row.get('cancel_until')
+    if not deadline or deadline<=now():
+        order=receipt.get('order_number','')
+        return {'errand':None,'door':'email','action':{'type':'draft_purchase_order',
+            'label':'Cancellation request ready to copy','result':
+                'The supplier cancellation window is unknown or closed. Ask the supplier to cancel order '+order+'. Nothing was sent.',
+            'subject':'Cancellation request for order '+order,
+            'body':'Please cancel order '+order+' if it has not shipped, and confirm whether a refund will be issued.',
+            'nav':{'room':'operate','panel':'computer'}}}
+    data={**row['plan'],'items':[],'original_errand_id':row['id'],'order_number':receipt['order_number'],
+          'notes':['Ask to cancel this order only. Do not place any new purchase.']}
+    data={k:v for k,v in data.items() if not k.startswith('__') or k=='__start_url'}
+    planned=await asyncio.to_thread(rpc,'chief_errand_plan',p_row={
+        'business_id':biz['id'],'user_id':uid(user_id),'kind':'cancel_order',
+        'title':'Request cancellation of order '+receipt['order_number'],
+        'plan':data,'hosts':row['hosts'],'spend_limit_cents':0,'planned_total_cents':0,
+        'idempotency_key':'cancel:'+row['id']})
+    _audit(planned,'planned')
+    return {'errand':outward(planned)}
 
 
 @dataclass(repr=False)
@@ -362,6 +404,7 @@ async def approve(row, user, request, *, via_chat=False):
         raise HTTPException(503,'Chief computer execution is not enabled yet. Your plan is saved.')
     prepared=await asyncio.to_thread(rpc,'chief_errand_approve',p_business_id=row['business_id'],
         p_id=row['id'],p_user_id=str(user.id),p_scope='stepup:danger' if stepup else ('chat' if via_chat else 'button'))
+    _audit(prepared['errand'],'approved')
     import chief_jobs
     async with httpx.AsyncClient() as client:
         await chief_jobs.enqueue(client,user_id=str(user.id),business_id=row['business_id'],kind='errand',
@@ -421,6 +464,16 @@ async def approve_errand(errand_id:str,request:Request,session:UserSession=Depen
 
 @router.post('/errands/{errand_id}/secret')
 async def secure_entry(errand_id:str,request:Request,session:UserSession=Depends(sb_clients.authed_request)):
+    try:
+        return await _secure_entry(errand_id,request,session)
+    except HTTPException:
+        raise
+    except Exception:
+        # No body-bearing traceback can escape into uvicorn's error logger.
+        raise HTTPException(503,'Secure Entry could not be completed. Refresh the errand before retrying.') from None
+
+
+async def _secure_entry(errand_id,request,session):
     row=await asyncio.to_thread(authorized,errand_id,session.user,'manager')
     rate_limit(str(session.user.id),row['id'])
     body=await json_body(request)

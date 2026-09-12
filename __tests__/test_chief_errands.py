@@ -25,6 +25,7 @@ JOB='00000000-0000-4000-8000-000000000005'
 
 @pytest.fixture
 def api(monkeypatch):
+    monkeypatch.setattr(ce,'_audit',Mock())
     row={'id':EID,'business_id':BID,'user_id':UID,'kind':'reorder','title':'Test reorder','status':'planned',
         'plan':{'items':[],'__start_url':'https://supplier.test/private'},'hosts':['supplier.test'],
         'spend_limit_cents':15000,'planned_total_cents':200,'hold':None}
@@ -242,6 +243,44 @@ def test_uvicorn_and_sentry_remove_entire_secure_entry_payload(suffix):
         'exception':{'values':[{'stacktrace':{'frames':[{'vars':{'fields':'SECRET-PASSWORD'}}]}}]},
         'breadcrumbs':{'values':[{'message':'SECRET-PASSWORD'}]}}
     assert scrub_sentry_event(event) is None
+
+
+def test_real_uvicorn_secure_entry_has_no_secret_in_logs_or_error_response(api,monkeypatch):
+    import socket
+    import threading
+    import time
+    import uvicorn
+    import httpx
+    client,state=api
+    hold(state)
+    secret='SYNTHETIC-PRIVATE-PASSWORD-ONLY'
+    monkeypatch.setattr(ce,'send_command',AsyncMock(side_effect=RuntimeError(secret)))
+    stream=io.StringIO()
+    handler=logging.StreamHandler(stream)
+    handler.addFilter(RedactCredentialPaths())
+    loggers=[logging.getLogger(n) for n in ('uvicorn.access','uvicorn.error')]
+    for logger in loggers: logger.addHandler(handler)
+    sock=socket.socket()
+    sock.bind(('127.0.0.1',0))
+    port=sock.getsockname()[1]
+    server=uvicorn.Server(uvicorn.Config(client.app,log_config=None,access_log=True,lifespan='off'))
+    thread=threading.Thread(target=server.run,kwargs={'sockets':[sock]},daemon=True)
+    thread.start()
+    try:
+        deadline=time.monotonic()+5
+        while not server.started and time.monotonic()<deadline: time.sleep(.01)
+        assert server.started
+        response=httpx.post(f'http://127.0.0.1:{port}/agents/chief/errands/{EID}/secret',
+            json={'hold_id':'hold-1','fields':{'username':'fixture','password':secret}})
+        assert response.status_code==503
+        assert secret not in response.text
+    finally:
+        server.should_exit=True
+        thread.join(5)
+        sock.close()
+        for logger in loggers: logger.removeHandler(handler)
+    assert secret not in stream.getvalue()
+    assert 'Exception in ASGI' not in stream.getvalue()
 
 
 def test_unapproved_generic_job_enqueue_is_rejected(monkeypatch):

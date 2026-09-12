@@ -94,6 +94,12 @@ def _swap(verb: str, keys: tuple) -> Callable:
 
 INVERSES: Dict[str, Inverse] = {
 
+    # Undo prepares a class-A cancellation plan; a separate approval is required
+    # before anything touches the supplier. Unknown windows produce a draft only.
+    "approve_errand": Inverse("plan_errand", "prepare a cancellation request for that order",
+        lambda a,r: {'type':'plan_errand','kind':'cancel_order','original_errand_id':r['errand_id']}
+        if r.get('status')=='done' and r.get('errand_id') else None),
+
     "add_block_range": Inverse(
         "remove_block_range",
         "un-block those dates",

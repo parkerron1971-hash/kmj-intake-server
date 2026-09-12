@@ -223,3 +223,42 @@ null unless independently verified. PR5 owns inventory, ledger and undo integrat
 
 Blocked off-host subresources are aborted without terminating a page; blocked
 navigations still stop the run. Origins are never automatically approved.
+
+## PR5 Chief integration
+
+Chief exposes `plan_errand`, `approve_errand`, `stop_errand`, and `errand_status`.
+Planning is class A; approval is class C. Approval requires the authenticated actor
+and the current turn's explicit "approve this errand" wording. Model-supplied flags
+and earlier turns grant no authority. A plan created during that turn cannot be
+approved during the same turn. Scheduler, workflow, autopilot and external-agent
+paths cannot approve errands, even if they mislabel themselves as prompted.
+
+Lifecycle events enter the existing append-only audit writer using fixed messages,
+errand identifiers, permission scope and (on completion) amount, host and last four
+only. This retains the existing audit writer's best-effort delivery policy. Raw page
+text, form fields and arbitrary exceptions are excluded. A Secure Entry boundary
+also turns unexpected exceptions into a fixed response before uvicorn can log them.
+The real localhost uvicorn test and Sentry memory-transport test cover this boundary.
+
+`chief_errand_complete` locks a confirmed errand and stamps its inventory, supplier
+order note, expense and undo entry. It never launches a browser. The ordinary expense
+insert feeds the existing GL triggers; no duplicate accounting entries are posted.
+A closed accounting period preserves inventory/undo and leaves an explicit expense
+review warning. Repairs after reopening use the original order date. Repeated
+completion produces one expense, one undo entry, and one appended supplier note.
+
+Undo creates only a new cancellation plan. Unknown or expired supplier windows
+produce an unsent cancellation request to copy; neither path silently contacts the
+supplier. The next chat injects unshown terminal errand cards independently of model
+output and retries unfinished receipt/bookkeeping repair without reordering.
+
+Validation: **208** focused action/API/policy/undo/registry/Sentry/MCP tests passed.
+Chief replay: **102/102**. Live website-only planning **4/4** and stop **3/3** passed
+after correcting the old prompt's instruction to always draft an email reorder.
+The `eval-run/eval.bat` wrapper invokes `scripts/module_build_eval.py` from its old
+copied checkout. The equivalent script was run from this worktree against the live
+model: **71/72**, with one generated expense-dashboard width validation failure.
+The isolated expenses retest repeated that pre-existing generator validation failure.
+No module generator source changed in this arc. Reports remain local with synthetic
+fixture content. The completion migration is pending merge/application; execution
+remains disabled.
