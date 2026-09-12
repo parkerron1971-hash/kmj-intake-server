@@ -149,11 +149,10 @@ def _fields(line):
 
 def test_every_turn_logs_its_timing(run_turn, caplog):
     out, lines = run_turn(caplog)
-    # The fixture has no answer reviewer: unsupported business-health claims
-    # must be withheld while the timing instrument still runs normally.
-    import chief_truth
-    assert out["response"] == chief_truth.UNVERIFIED_REPLY
-    assert out['grounding']['status'] == 'withheld'
+    # The fixture has no answer reviewer: nothing checked the answer, so it
+    # flows marked unchecked while the timing instrument still runs normally.
+    assert out["response"] == "All good."
+    assert out['grounding']['status'] == 'unchecked'
     assert len(lines) == 1, (
         "exactly one timing line per turn — none means the instrument is "
         "silent, more than one means it is double-counting"

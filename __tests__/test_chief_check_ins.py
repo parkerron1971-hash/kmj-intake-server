@@ -27,7 +27,7 @@ def test_check_ins_survive_unavailable_reviewer(message):
 ])
 def test_substantive_questions_still_require_review(message):
     assert truth.conversation_check_reply(message) is None
-    reviewer = AsyncMock(return_value='')
+    reviewer = AsyncMock(return_value='{"verdict":"unsupported","claims":[]}')
     reply, meta = asyncio.run(truth.finalize_reply(
         None, 'All your invoices are paid.', ctx={}, view_detail={}, taken=[],
         message=message, business_id='fixture', reviewer=reviewer))
