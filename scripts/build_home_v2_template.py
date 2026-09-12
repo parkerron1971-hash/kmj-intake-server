@@ -69,7 +69,7 @@ def build(src: pathlib.Path) -> str:
 
     # ── pricing: the live cards and strip, in the concept's frame ──
     i = s.index('    <section class="pricing chapter" id="pricing">')
-    j = s.index('    <section class="cmp" id="compare">')   # compare sits under pricing since v16
+    j = s.index('    <section class="plans" id="plans">')   # the plan matrix follows pricing since v17
     s = s[:i] + "{{PRICING}}\n\n" + s[j:]
     s = rep(s, "  /* v8: pricing, the live site's setup */",
             r"""  /* the live price cards (_price_cards_html) and the founding strip (_founder_strip_html), styled in this page's tokens */
@@ -119,6 +119,8 @@ def build(src: pathlib.Path) -> str:
     j = s.index('<!-- /PLAN TABLE -->', i) + len('<!-- /PLAN TABLE -->')
     s = s[:i] + "{{COMPARE_TIERS}}" + s[j:]
     s = rep(s, '<b data-to="79">$79</b><em>/mo</em>', '<b data-to="{{STARTER_PRICE}}">${{STARTER_PRICE}}</b><em>/mo</em>')
+    s = rep(s, '<span class="pl">Starter<b>$79</b></span><span class="pl hot">Professional<b>$149</b><i>most chosen</i></span><span class="pl">Solutionist<b>$299</b></span>',
+            '<span class="pl">Starter<b>${{STARTER_PRICE}}</b></span><span class="pl hot">Professional<b>${{PRO_PRICE}}</b><i>most chosen</i></span><span class="pl">Solutionist<b>${{SOL_PRICE}}</b></span>')
 
     # ── links ──
     s = s.replace('href="https://system.mysolutionist.app/"', 'href="{{APP_URL}}"')
