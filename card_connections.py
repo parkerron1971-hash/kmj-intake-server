@@ -63,6 +63,7 @@ def configuration(mode):
         raise HTTPException(422,'Invalid connection environment.')
     prefix='STRIPE_CARDS_'+mode.upper()
     return {'client_id':os.getenv(prefix+'_CLIENT_ID',''),
+            'authorize_url':os.getenv(prefix+'_AUTHORIZE_URL','https://marketplace.stripe.com/oauth/v2/authorize'),
             'key':os.getenv(prefix+'_DEVELOPER_KEY',''),
             'webhook':os.getenv(prefix+'_WEBHOOK_SECRET','')}
 
@@ -78,7 +79,8 @@ def configured(mode):
     conf=configuration(mode)
     expected='sk_live_' if mode=='live' else 'sk_test_'
     if not (conf['client_id'].startswith('ca_') and conf['key'].startswith(expected)
-            and conf['webhook'].startswith('whsec_')):
+            and conf['webhook'].startswith('whsec_')
+            and re.fullmatch(r'https://marketplace\.stripe\.com/oauth/v2/(?:chnlink_[A-Za-z0-9]+/)?authorize',conf['authorize_url'])):
         return False
     try:
         cipher()
@@ -225,7 +227,7 @@ def start(business_id:str,mode:Literal['test','live','sandbox'],request:Request,
     state,verifier=secrets.token_urlsafe(32),secrets.token_urlsafe(32)
     rpc('card_connection_begin',p_business=bid,p_mode=mode,p_user=str(session.user.id),
         p_state=digest(state),p_verifier=digest(verifier))
-    url='https://marketplace.stripe.com/oauth/v2/authorize?'+urlencode({
+    url=configuration(mode)['authorize_url']+'?'+urlencode({
         'client_id':configuration(mode)['client_id'],'redirect_uri':CALLBACK,'state':state})
     return {'url':url,'state':state,'verifier':verifier}
 
