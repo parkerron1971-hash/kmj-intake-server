@@ -615,31 +615,56 @@
     .phone.dev{width:236px}
   }
 
-  /* v8: compare, reduced from the live /compare */
+  /* v16: seven tools, or one: a ledger, then a dropdown that holds every plan */
   .cmp{padding-block:128px}
   .cmp .hd{text-align:center;max-width:680px;margin:0 auto 64px}
   .cmp h2{font-size:clamp(34px,5vw,60px);font-weight:600;letter-spacing:-.035em;line-height:1}
   .cmp h2 em{font-style:normal;color:var(--accent);transition:color .8s}
   .cmp .hd p{color:var(--muted);font-size:16px;margin:16px auto 0;max-width:520px}
-  .cmp-two{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:56px}
-  .cmp-fig{border:1px solid var(--line);border-radius:var(--r-lg);background:var(--bg-2);padding:24px}
-  .cmp-fig.one{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 0 80px -40px var(--accent)}
-  .cmp-fig .k{font:500 10.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
-  .cmp-fig .pr{font:600 44px var(--display);letter-spacing:-.04em;line-height:1;margin-top:10px}
-  .cmp-fig .pr small{font:500 13px var(--body);color:var(--muted);letter-spacing:0;margin-left:4px}
-  .cmp-fig p{margin:10px 0 0;font-size:13px;color:var(--muted);line-height:1.5}
-  .cmp table{font-size:13.5px}
-  .cmp th{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-  .cmp td:first-child{color:var(--text);width:36%}
+  .ledger{display:grid;grid-template-columns:minmax(0,1fr) 88px minmax(0,1fr);align-items:stretch;gap:0}
+  .lg{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r-lg);background:rgba(13,15,20,.7);padding:22px 24px 20px;min-width:0}
+  .lg.one{border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 0 100px -40px var(--accent),inset 0 1px 0 rgba(255,255,255,.06);background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 8%,var(--bg-2)),var(--bg-2) 60%);transition:border-color .8s,box-shadow .8s}
+  .lh{display:flex;justify-content:space-between;font:500 10.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .lg.one .lh{color:color-mix(in srgb,var(--accent) 70%,var(--muted))}
+  .li{display:grid;grid-template-columns:150px 1fr auto;gap:14px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--line);font-size:14px}
+  .li b{font-weight:600;color:var(--text)}
+  .li span{color:var(--muted);font-size:13px}
+  .li i{font:500 14px var(--mono);font-style:normal;color:var(--text);font-variant-numeric:tabular-nums}
+  .li.dim b,.li.dim i{color:var(--muted)}
+  .lg.one ul{list-style:none;margin:0;padding:0;flex:1}
+  .lg.one li{display:flex;gap:12px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--line);font-size:14px;color:var(--text)}
+  .lg.one li::before{content:"";width:16px;height:16px;border-radius:50%;flex-shrink:0;align-self:center;background:color-mix(in srgb,var(--success) 18%,transparent);border:1px solid color-mix(in srgb,var(--success) 55%,transparent);box-shadow:0 0 10px -2px var(--success);background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2334D399' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><path d='M20 6 9 17l-5-5'/></svg>");background-size:9px;background-position:center;background-repeat:no-repeat}
+  .lt{display:flex;align-items:baseline;gap:6px;padding-top:16px;margin-top:auto}
+  .lt span{flex:1;font-size:13px;color:var(--muted)}
+  .lt b{font:600 34px var(--display);letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+  .lt em{font:500 13px var(--mono);font-style:normal;color:var(--muted)}
+  .lg.one .lt b{color:var(--accent);text-shadow:0 0 24px color-mix(in srgb,var(--accent) 45%,transparent);transition:color .8s}
+  .beam{position:relative;display:grid;place-items:center}
+  .beam span{position:absolute;left:12px;right:12px;top:50%;height:2px;background:linear-gradient(90deg,var(--line-2),var(--accent));box-shadow:0 0 14px var(--accent);transform-origin:left;animation:beamIn 1s var(--ease) .4s both}
+  .beam span::after{content:"";position:absolute;right:-1px;top:-5px;width:12px;height:12px;border-radius:50%;background:var(--accent);box-shadow:0 0 16px var(--accent)}
+  @keyframes beamIn{from{transform:scaleX(0)}}
+  .cmp-more{margin-top:40px;border:0}
+  .cmp-more summary{list-style:none;display:inline-flex;align-items:center;gap:10px;margin:0 auto;height:44px;padding:0 20px 0 22px;border-radius:999px;border:1px solid var(--line-2);background:rgba(13,15,20,.6);color:var(--text);font:600 13.5px var(--body);letter-spacing:.02em;cursor:pointer;transition:border-color .2s,background .2s}
+  .cmp-more summary::-webkit-details-marker{display:none}
+  .cmp-more summary:hover{border-color:var(--accent);background:var(--bg-3)}
+  .cmp-more summary i{width:8px;height:8px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(45deg) translateY(-2px);transition:transform .3s var(--ease)}
+  .cmp-more[open] summary i{transform:rotate(-135deg) translateY(-2px)}
+  .cmp-more{text-align:center}
+  .cmp-body{text-align:left;margin-top:40px;animation:rise .5s var(--ease)}
+  .cmp-body h3{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0 0 8px}
+  .cmp-body .sub{font-size:14px;color:var(--muted);margin:0 0 18px;max-width:64ch}
+  .cmp table{font-size:13.5px;width:100%;border-collapse:collapse}
+  .cmp th{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}
+  .cmp td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--muted)}
+  .cmp td:first-child{color:var(--text);width:44%}
+  .cmp td small{display:block;font-size:12px;color:var(--dim);margin-top:2px;max-width:56ch}
   .cmp td .ok{color:var(--success);font-weight:600}
   .cmp td .no{color:var(--dim)}
-  .cmp .grp td{font:500 10.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding-top:22px;border-bottom-color:var(--line-2)}
-  .cmp .tiers-note{font-size:13px;color:var(--muted);max-width:60ch;margin:14px 0 0}
-  .cmp h3{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:88px 0 8px}
-  .cmp .sub{font-size:14px;color:var(--muted);margin:0 0 18px;max-width:60ch}
-  .cmp .more{margin-top:18px;font-size:13px}
+  .cmp .grp td{font:500 10.5px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding-top:26px;border-bottom-color:var(--line-2)}
+  .cmp .more{margin-top:18px;font-size:13px;color:var(--muted)}
   .cmp .more a{color:var(--accent)}
-  @media (max-width:760px){.cmp-two{grid-template-columns:1fr}.cmp td:first-child{width:auto}}
+  @media (max-width:860px){.ledger{grid-template-columns:1fr}.beam{height:56px}.beam span{left:50%;right:auto;top:8px;bottom:8px;height:auto;width:2px;transform-origin:top;background:linear-gradient(180deg,var(--line-2),var(--accent))}.beam span::after{right:-5px;top:auto;bottom:-1px}.li{grid-template-columns:1fr auto;grid-template-areas:"b i" "s s"}.li b{grid-area:b}.li span{grid-area:s}.li i{grid-area:i}}
+  @media (max-width:760px){.cmp{padding-block:96px}.cmp td:first-child{width:auto}}
 
   /* v9: the prices count up on arrival and roll on the switch; the cards rise in turn */
   .tiers .tier.reveal:nth-child(2){transition-delay:.12s}
@@ -648,7 +673,6 @@
   .tier .num.roll{animation:numRoll .5s var(--ease)}
   @keyframes numRoll{0%{opacity:.4;transform:translateY(6px)}100%{opacity:1;transform:none}}
   .fstrip .meter i{transition:width 1.2s var(--ease)}
-  .cmp-fig .pr b{font:inherit}
   /* v9: the floating Ask Chief (the concierge), once the hero is gone */
   #askFab{position:fixed;right:22px;bottom:22px;z-index:45;display:inline-flex;align-items:center;gap:10px;height:46px;padding:0 18px 0 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line-2));background:rgba(13,15,20,.85);backdrop-filter:blur(12px);color:var(--text);font:600 13px var(--body);cursor:pointer;box-shadow:0 20px 60px -20px rgba(0,0,0,.9),0 0 40px -14px var(--accent);transition:transform .35s var(--spring),opacity .3s,background .8s}
   #askFab .orb{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:color-mix(in srgb,var(--accent) 18%,transparent);border:1px solid color-mix(in srgb,var(--accent) 45%,transparent)}
@@ -1070,36 +1094,53 @@
       </div>
     </section>
 
+{{PRICING}}
+
     <section class="cmp" id="compare">
       <div class="hd reveal">
-        <h2>Seven tools that don’t know each other. <em>Or one that knows you.</em></h2>
+        <span class="eyebrow">Seven tools, or one</span>
+        <h2 style="margin-top:12px">Seven tools that don’t know each other. <em>Or one that knows you.</em></h2>
         <p>The stack is not expensive because of what it costs. It is expensive because you are the integration layer.</p>
       </div>
-      <div class="cmp-two reveal">
-        <div class="cmp-fig"><div class="k">Seven tools, list price</div><div class="pr"><b data-to="105">$105</b>+<small>/ month</small></div><p>HubSpot · Stripe · Calendly · Buffer · Notion · Mixpanel · Squarespace · a spreadsheet for the rest</p></div>
-        <div class="cmp-fig one"><div class="k">One system</div><div class="pr"><b data-to="{{STARTER_PRICE}}">${{STARTER_PRICE}}</b><small>/ month</small></div><p>Everything below, on one login, sharing what it knows.</p></div>
+      <div class="ledger reveal">
+        <div class="lg stack">
+          <div class="lh"><span>Your stack today</span><span>list price</span></div>
+          <div class="li"><b>HubSpot Starter</b><span>contacts and CRM</span><i>$20</i></div>
+          <div class="li"><b>Stripe</b><span>payments, fees on every sale</span><i>$0+</i></div>
+          <div class="li"><b>Calendly</b><span>booking</span><i>$12</i></div>
+          <div class="li"><b>Buffer</b><span>posts and scheduling</span><i>$15</i></div>
+          <div class="li"><b>Notion</b><span>notes, goals, the plan</span><i>$10</i></div>
+          <div class="li"><b>Mixpanel or Looker</b><span>what is working</span><i>$25+</i></div>
+          <div class="li"><b>Squarespace</b><span>the website</span><i>$23</i></div>
+          <div class="li dim"><b>ChatGPT</b><span>an assistant that starts from zero every time</span><i>your time</i></div>
+          <div class="lt"><span>Eight logins. Nothing shared.</span><b data-to="105">$105</b><em>+ /mo</em></div>
+        </div>
+        <div class="beam" aria-hidden="true"><span></span></div>
+        <div class="lg one">
+          <div class="lh"><span>One system</span><span>Starter, from</span></div>
+          <ul>
+            <li>Contacts and CRM</li><li>Invoices, payments, the books</li><li>Calendar and self-serve booking</li><li>Posts, scheduling, email and text</li><li>Goals, pipeline, what is working</li><li>Your site and your brand</li><li>Chief, a chief of staff who knows the business</li><li>One login, one record, every room sharing it</li>
+          </ul>
+          <div class="lt"><span>One login. Everything shared.</span><b data-to="{{STARTER_PRICE}}">${{STARTER_PRICE}}</b><em>/mo</em></div>
+        </div>
       </div>
-      <div class="tbl reveal">
-      <table>
-        <thead><tr><th>What you need</th><th>Solutionist</th><th>The 7-tool stack</th></tr></thead>
-        <tbody>
-          <tr><td>CRM &amp; contacts</td><td><span class="ok">✓ Built-in</span></td><td>HubSpot / Notion / spreadsheet</td></tr>
-          <tr><td>Invoicing &amp; payments</td><td><span class="ok">✓ Built-in</span></td><td>Stripe + QuickBooks</td></tr>
-          <tr><td>Calendar &amp; booking</td><td><span class="ok">✓ Built-in</span></td><td>Calendly + Google Calendar</td></tr>
-          <tr><td>Content planning &amp; publishing</td><td><span class="ok">✓ Built-in</span></td><td>Buffer / Hootsuite + Notion</td></tr>
-          <tr><td>Goals &amp; tracking</td><td><span class="ok">✓ Built-in</span></td><td>Spreadsheet + sticky notes</td></tr>
-          <tr><td>Funnel &amp; pipeline analytics</td><td><span class="ok">✓ Built-in</span></td><td>Mixpanel / Looker / DIY</td></tr>
-          <tr><td>Website &amp; brand</td><td><span class="ok">✓ Built-in</span></td><td>Squarespace / Webflow + Figma</td></tr>
-          <tr><td>AI assistant that knows your business</td><td><span class="ok">✓ Chief of Staff</span></td><td>ChatGPT + manual context every time</td></tr>
-          <tr><td>One login</td><td><span class="ok">✓</span></td><td>8+ logins</td></tr>
-          <tr><td>Real-time data flow</td><td><span class="ok">✓ Native</span></td><td>Zapier / manual sync</td></tr>
-        </tbody>
-      </table>
-      </div>
+      <details class="cmp-more reveal" id="cmpMore">
+        <summary><span>Compare every plan</span><i></i></summary>
+        <div class="cmp-body">
+          <h3>Every plan is the whole product.</h3>
+          <p class="sub">Every row below ships on Starter unless a cell says otherwise. The tiers change how much Chief does for you each month, how deep he thinks, and the room for a team and the books.</p>
+          <div class="tbl">
+          <table>
+            <thead><tr><th>What you get</th><th>Starter $79</th><th>Professional $149</th><th>Solutionist $299</th></tr></thead>
+            <tbody>
 {{COMPARE_TIERS}}
+            </tbody>
+          </table>
+          </div>
+          <p class="more">Switching from something else? <a href="/compare">What changes, tool by tool</a>.</p>
+        </div>
+      </details>
     </section>
-
-{{PRICING}}
 
     <section class="faq chapter" id="faq">
       <h2 class="reveal">Questions people ask first</h2>
@@ -1733,7 +1774,7 @@
     (function tick(now){const p=Math.min(1,(now-t0)/ms),e=1-Math.pow(1-p,3);el.textContent='$'+Math.round(from+(to-from)*e).toLocaleString();if(p<1)requestAnimationFrame(tick)})(t0);
   }
   let priced=false;
-  function pricesIn(){ if(priced) return; priced=true; document.querySelectorAll('.pc-num').forEach((n,i)=>{n.textContent='$0';setTimeout(()=>countTo(n,+n.dataset.monthly,900),120*i)}); document.querySelectorAll('.cmp-fig .pr b').forEach((n,i)=>{const to=+n.dataset.to;n.textContent='$0';setTimeout(()=>countTo(n,to,900),120*i)}); }
+  function pricesIn(){ if(priced) return; priced=true; document.querySelectorAll('.pc-num').forEach((n,i)=>{n.textContent='$0';setTimeout(()=>countTo(n,+n.dataset.monthly,900),120*i)}); document.querySelectorAll('.lt b[data-to]').forEach((n,i)=>{const to=+n.dataset.to;n.textContent='$0';setTimeout(()=>countTo(n,to,900),120*i)}); }
   new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)pricesIn()}),{threshold:.25}).observe($('#pricing'));
   new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)pricesIn()}),{threshold:.25}).observe($('#compare'));
   document.querySelectorAll('.billing button').forEach(b=>b.onclick=()=>{

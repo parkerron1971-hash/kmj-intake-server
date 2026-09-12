@@ -69,7 +69,7 @@ def build(src: pathlib.Path) -> str:
 
     # ── pricing: the live cards and strip, in the concept's frame ──
     i = s.index('    <section class="pricing chapter" id="pricing">')
-    j = s.index('    <section class="faq chapter" id="faq">')
+    j = s.index('    <section class="cmp" id="compare">')   # compare sits under pricing since v16
     s = s[:i] + "{{PRICING}}\n\n" + s[j:]
     s = rep(s, "  /* v8: pricing, the live site's setup */",
             r"""  /* the live price cards (_price_cards_html) and the founding strip (_founder_strip_html), styled in this page's tokens */
@@ -115,10 +115,10 @@ def build(src: pathlib.Path) -> str:
             "    document.querySelectorAll('.pc-num').forEach(n=>{n.classList.remove('roll');void n.offsetWidth;n.classList.add('roll');countTo(n,+(annual?n.dataset.annual:n.dataset.monthly),500)});\n    document.querySelectorAll('.price-billed').forEach(n=>{n.innerHTML=annual?n.dataset.annual:'&nbsp;'});")
 
     # ── compare: the plan differences come from the gate map ──
-    i = s.index('      <h3 class="reveal">What changes between plans</h3>')
-    j = s.index('    </section>', i)
-    s = s[:i] + "{{COMPARE_TIERS}}\n" + s[j:]
-    s = rep(s, '<div class="pr"><b data-to="79">$79</b><small>/ month</small></div>', '<div class="pr"><b data-to="{{STARTER_PRICE}}">${{STARTER_PRICE}}</b><small>/ month</small></div>')
+    i = s.index('<!-- PLAN TABLE -->')
+    j = s.index('<!-- /PLAN TABLE -->', i) + len('<!-- /PLAN TABLE -->')
+    s = s[:i] + "{{COMPARE_TIERS}}" + s[j:]
+    s = rep(s, '<b data-to="79">$79</b><em>/mo</em>', '<b data-to="{{STARTER_PRICE}}">${{STARTER_PRICE}}</b><em>/mo</em>')
 
     # ── links ──
     s = s.replace('href="https://system.mysolutionist.app/"', 'href="{{APP_URL}}"')

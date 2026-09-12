@@ -82,22 +82,22 @@ def test_the_money_is_live():
     assert f'data-to="{prices["starter"] // 100}">${prices["starter"] // 100}</b>' in html
 
 
-def test_the_plan_table_only_lists_differences():
+def test_the_plan_table_is_the_whole_product():
+    """9/12: every row on every plan, behind the Compare every plan dropdown,
+    so Starter shows what it includes and not a column of dashes."""
     html = _home()
-    i = html.index("What changes between plans")
+    assert 'id="cmpMore"' in html and "Compare every plan" in html
+    i = html.index("Every plan is the whole product")
     seg = html[i:html.index("</table>", i)]
-    rows = re.findall(r"<tr><td>(.*?)</td>(.*?)</tr>", seg)
-    assert rows, "no rows"
+    rows = re.findall(r"<tr><td>(.*?)</td>(.*?)</tr>", seg, re.S)
+    assert len(rows) >= 40, f"only {len(rows)} rows"
     for label, cells in rows:
-        marks = re.findall(r"<td>(.*?)</td>", cells)
-        assert len(marks) == 3, label
-        assert len(set(marks)) > 1, f"{label} is the same on every plan and does not belong here"
-    # a gated key that every plan has never appears
-    for key, min_plan in feature_gates.FEATURE_MIN_PLAN.items():
-        if min_plan == "starter":
-            for label, source, _n in (e for _g, es in mp._COMPARE_GROUPS for e in es):
-                if source == key:
-                    assert label not in seg
+        assert len(re.findall(r"<td>(.*?)</td>", cells)) == 3, label
+    assert "Contacts &amp; CRM" in seg and "Audit trail" in seg and "Team seats" in seg
+    starter_ticks = sum(1 for _l, c in rows if c.startswith('<td><span class="ok">'))
+    assert starter_ticks >= 25, "Starter should read as a column of what it includes"
+    # the compare chapter sits under pricing, before the FAQ
+    assert html.index('id="pricing"') < html.index('id="compare"') < html.index('id="faq"')
 
 
 def test_the_flyer_is_the_live_one(monkeypatch):
