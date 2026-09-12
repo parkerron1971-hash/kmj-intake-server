@@ -108,6 +108,32 @@ def connect(client):
     return response.json()
 
 
+def test_external_test_channel_preserves_state_and_callback(api,monkeypatch):
+    client,_=api
+    endpoint='https://marketplace.stripe.com/oauth/v2/chnlink_fixture/authorize'
+    monkeypatch.setenv('STRIPE_CARDS_SANDBOX_AUTHORIZE_URL',endpoint)
+    response=client.post(path('start'),headers={'x-ledger-unlock':'fixture'})
+    assert response.status_code==200
+    data=response.json()
+    parsed=urlparse(data['url'])
+    assert parsed.scheme+'://'+parsed.netloc+parsed.path==endpoint
+    assert parse_qs(parsed.query)=={'client_id':['ca_fixture'],'redirect_uri':[cc.CALLBACK],'state':[data['state']]}
+
+
+@pytest.mark.parametrize('endpoint',[
+    'https://evil.example/oauth/v2/authorize',
+    'https://marketplace.stripe.com.evil.example/oauth/v2/authorize',
+    'https://marketplace.stripe.com/oauth/v2/authorize?state=injected',
+    'http://marketplace.stripe.com/oauth/v2/authorize',
+    'https://marketplace.stripe.com/oauth/v2/chnlink_test/authorize#fragment',
+])
+def test_untrusted_authorization_destination_fails_closed(api,monkeypatch,endpoint):
+    client,store=api
+    monkeypatch.setenv('STRIPE_CARDS_SANDBOX_AUTHORIZE_URL',endpoint)
+    assert client.post(path('start'),headers={'x-ledger-unlock':'fixture'}).status_code==503
+    assert store['states']=={}
+
+
 def test_owner_stepup_configuration_and_separate_environments(api):
     client,store=api
     assert client.post(path('start')).status_code==403
