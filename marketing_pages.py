@@ -2458,7 +2458,7 @@ _COMPARE_GROUPS = (
         ("Team seats", lambda t: t["seats"], ""),
         ("Businesses in one account", lambda t: t["businesses"], ""),
     )),
-    ("Getting set up &mdash; and getting out", (
+    ("Getting set up, and getting out", (
         ("Guided setup", _ALL,
          "Three questions, then Chief builds the workspace around your answers."),
         ("Bring the spreadsheets you already have", _ALL,
@@ -2467,7 +2467,7 @@ _COMPARE_GROUPS = (
         ("Free trial on every plan", _ALL,
          "__TRIAL_FREE__, then the plan you picked. Switch tier or cancel from inside the app."),
         ("Your data stays yours", _ALL,
-         "Export the whole account &mdash; every business, every table &mdash; whenever you want it."),
+         "Export the whole account, every business and every table, whenever you want it."),
     )),
 )
 

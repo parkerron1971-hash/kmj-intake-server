@@ -61,9 +61,11 @@ def _pricing_html() -> str:
 
 
 def _compare_tiers_html() -> str:
-    """Only the rows that differ between plans, from the same source the
-    /compare table reads. A row with the same answer on every plan is
-    the product, not a difference, and stays off this table."""
+    """The whole product on every plan, from the same source the /compare
+    page reads (_COMPARE_GROUPS + FEATURE_MIN_PLAN + the dials): every row,
+    a tick where every plan has it, the dial where plans differ. Kevin,
+    9/12: a differences-only table made Starter read as a column of
+    dashes; the old site showed what each plan includes, so this does."""
     import feature_gates
     import marketing_pages as mp
     d = mp._tier_dials()
@@ -77,35 +79,21 @@ def _compare_tiers_html() -> str:
         for label, source, _note in entries:
             if callable(source):
                 values = [str(source(d[p])) for p in plans]
-                if not all(v.strip() for v in values) or len(set(values)) == 1:
+                if not all(v.strip() for v in values):
                     continue
                 cells = "".join(f"<td>{v}</td>" for v in values)
             elif source == mp._ALL:
-                continue
+                cells = "".join(f"<td>{ok}</td>" for _ in plans)
             else:
                 min_plan = feature_gates.FEATURE_MIN_PLAN.get(source)
                 if not min_plan:
                     continue
-                marks = [rank.get(p, 0) >= rank.get(min_plan, 99) for p in plans]
-                if all(marks):
-                    continue
-                cells = "".join(f"<td>{ok if m else no}</td>" for m in marks)
-            rows.append(f"          <tr><td>{label}</td>{cells}</tr>")
+                cells = "".join(f"<td>{ok if rank.get(p, 0) >= rank.get(min_plan, 99) else no}</td>" for p in plans)
+            sub = f"<small>{_note}</small>" if _note else ""
+            rows.append(f"          <tr><td>{label}{sub}</td>{cells}</tr>")
         if rows:
             groups.append(f'          <tr class="grp"><td colspan="4">{group}</td></tr>\n' + "\n".join(rows))
-    header = "".join(f"<th>{n} {d[p]['price']}</th>" for p, n in zip(plans, names))
-    return f"""      <h3 class="reveal">What changes between plans</h3>
-      <p class="sub reveal">Contacts, invoices, booking, documents, your site, Chief on every screen, the overnight run: on every plan. These are the rows that differ.</p>
-      <div class="tbl reveal">
-      <table>
-        <thead><tr><th>What you get</th>{header}</tr></thead>
-        <tbody>
-{chr(10).join(groups)}
-        </tbody>
-      </table>
-      </div>
-      <p class="more reveal">The full table, every row on every plan: <a href="/compare">mysolutionist.app/compare</a></p>
-"""
+    return chr(10).join(groups)
 
 
 def _analytics_scripts() -> str:
