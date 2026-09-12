@@ -132,7 +132,12 @@ jobs:
         run: python -m compileall -q . -x '(\.bak|__pycache__)'
 
       - name: Run test suite
-        run: pytest -q __tests__ agents --maxfail=10
+        # Controller fixtures use real Chromium with local route responses only.
+        # No supplier, model or paid service is contacted.
+        run: |
+          python -m playwright install --with-deps chromium
+          pytest -q __tests__ agents --maxfail=10
+          python scripts/chief_computer_sabotage.py
 
       - uses: actions/setup-node@v4
         with:

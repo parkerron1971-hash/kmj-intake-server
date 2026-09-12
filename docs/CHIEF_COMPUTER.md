@@ -1,10 +1,10 @@
 # Chief's computer — backend arc
 
 PR1 implements the database foundation and server-side encryption primitives.
-It extends the existing browser hand; `browser_hand.py` and its credential refusal
-remain unchanged. There are no new routes, model tools, jobs, or browser actions
-in this PR. Sections 7 and 9 of `CHIEF_COMPUTER_ARC_SPEC.md` in the frontend repo
-remain the integration contract and delivery order.
+PR2 adds the browser controller, independently testable before any route or job
+can start an errand. The existing `browser_hand.py` remains operational until PR6.
+Sections 7 and 9 of `CHIEF_COMPUTER_ARC_SPEC.md` in the frontend repo remain the
+integration contract and delivery order.
 
 ## PR1 implementation
 
@@ -70,13 +70,60 @@ The existing `SecretMeta`/Secure Entry field names are not changed by PR1.
    record its result in the migration ledger. A local test does not prove a
    production migration was applied.
 
-No production migration or key configuration has been performed for this arc.
+PR1 merged as #935 and deployed successfully on 2026-09-12 (UTC), commit
+`e13dd6c9c4a8f84dec2e67775abd0fa68a730e33`. The production migration is applied;
+the transactional role probe passed, denying both authenticated and anonymous
+vault SELECT. All three tables respond through the service API and health is 200.
+The vault key has not yet been configured; do so before enabling Secure Entry.
 Do not deploy while `chief_jobs` contains queued/running paid work.
+
+## PR2 controller
+
+`browser_controller.py` implements the 27 default members of
+`browser_toolset_20260801`, with the four optional members disabled and refused.
+Its callbacks are mandatory: the driver checks current authority before every
+member, creates a Secure Entry hold, and records sanitized private frames.
+No HTTP endpoint or model can invoke `fill_secret` directly. It is a same-thread
+primitive for an authenticated mailbox command, with an expiring, exact-host,
+live-element-bound hold. Missing or ambiguous field mappings fail closed.
+
+The Chromium backend pins each approved host to public DNS addresses at launch,
+blocks other network requests, denies Amazon and all non-HTTPS navigation, closes
+popups, refuses uploads/downloads, blocks service workers and WebSockets, and
+does not pass server keys into the child process. Approved hosts are exact DNS
+names, including `www` or payment/CDN origins when needed. There is no automatic
+expansion of an allowlist based on a page's requests. A site needing additional
+origins requires a revised plan. Browser shortcuts that access clipboard,
+developer tools, address bars or native dialogs are refused.
+
+References are server-side handles, scoped to a tab and invalidated on navigation,
+new reads and material changes to the target. Page reads return rendered text,
+not HTML source or field values. Known filled values (including card last four)
+are scrubbed from text, tab titles and URL paths; query strings and fragments are
+always omitted. Screenshot output is 1280x800 PNG; private recorded frames are
+JPEG quality 55 under `{business}/errand/{id}/{n:03d}.jpg` in `proposals`.
+
+**Privacy limitation and deliberate v1 behavior:** before filling, all editable
+fields are masked navy. After any Secure Entry fill, screenshots for that run
+use a full navy privacy curtain. A site can render a secret in canvas, CSS or
+an image, so field rectangles alone cannot guarantee screenshot privacy. Chief
+continues from scrubbed DOM text. This means the user cannot watch checkout
+pixels after a secret is entered. Do not describe it as unrestricted live viewing
+or claim arbitrary transformed/encoded secret echoes are covered by text matching.
+Never use raw `page.pdf()` or raw screenshots for receipts.
+
+Rehearsal candidate: Office Depot guest checkout, one box of paper clips (item
+222056). Its official checkout guide supports guest orders. This is a proposal,
+not an approved purchase or account; final item, shipping/tax total, and owner
+presence remain prerequisites. A guest purchase does not exercise saved-login
+reuse, which needs a separate account rehearsal.
 
 ## Verification
 
 ```text
 python -m pytest __tests__/test_secret_vault.py __tests__/test_export_import.py -q
+python -m pytest __tests__/test_browser_controller.py -q
+python scripts/chief_computer_sabotage.py
 node scripts/chief-computer-db-check.mjs
 ```
 
@@ -92,8 +139,9 @@ redaction, and export/import rules. CI runs both suites.
 
 ## Next PRs and integration notes
 
-2. Build `browser_controller.py` on the existing browser hand and the verified
-   Anthropic browser toolset contract. Preserve the section 7 wire shapes.
+2. Controller implemented; 116 focused controller/vault/legacy-hand tests passed
+   locally. All three independent sabotage mutations were detected. CI installs
+   Chromium and runs the fixture suite plus sabotage checks with no service keys.
 3. Add errands, endpoints, holds, settings and job interruption handling. This is
    the frontend integration milestone; notify the frontend owner when it merges.
 4. Add the driver and receipts.
