@@ -89,6 +89,7 @@ _SELF_METERING = frozenset({
     # browser_hand (2026-09-04): SDK client + its own api_usage row per
     # decision, attributed to the business, like vision_grader.
     "browser_hand",
+    "errand_driver",  # logs each browser-toolset turn under task=errand
 })
 
 # Frames to walk past when deciding who the caller is. model_ladder

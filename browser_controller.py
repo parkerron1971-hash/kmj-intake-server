@@ -156,7 +156,10 @@ class ChromiumBackend:
 
     def _route(self, route):
         if not host_allowed(route.request.url, self.hosts, self.deny_hosts):
-            self.blocked = True
+            # Abort unapproved subresources too, but a blocked analytics image
+            # need not terminate an otherwise approved top-level navigation.
+            if route.request.is_navigation_request():
+                self.blocked = True
             route.abort('blockedbyclient')
         else:
             route.continue_()
@@ -453,7 +456,10 @@ class BrowserController:
                 continue
             if args.get('filter') != 'interactive' and query is None:
                 lines.append(scope.evaluate(VISIBLE_TEXT))
-            for el in scope.query_selector_all('a,button,input,textarea,select,[role="button"],[contenteditable="true"]'):
+            selectors='a,button,input,textarea,select,[role="button"],[contenteditable="true"]'
+            if args.get('filter')=='all' or query is not None:
+                selectors+=',p,li,tr,article,section,div,span,[role="row"]'
+            for el in scope.query_selector_all(selectors):
                 if not el.is_visible():
                     continue
                 attrs = el.evaluate(FIELD)
@@ -461,12 +467,16 @@ class BrowserController:
                 if attrs['tag']=='select':
                     label += ' options: ' + self.scrubber.text(', '.join(
                         option.inner_text() for option in el.query_selector_all('option')))[:1000]
+                if not label and attrs['tag'] not in ('input','textarea','select'):
+                    continue
                 if query and not all(word in label.lower() for word in query.lower().split()):
                     continue
                 ref = 'ref_' + uuid4().hex
                 self.refs[ref] = (tid, el, self._signature(el))
                 lines.append(f'{ref} {attrs["tag"]} {attrs["type"]} {label}')
                 if query and len(self.refs) >= 20:
+                    break
+                if len(self.refs)>=500:
                     break
         return self.scrubber.text('\n'.join(lines))[:50000]
 

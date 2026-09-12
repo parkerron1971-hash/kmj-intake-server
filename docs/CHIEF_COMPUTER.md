@@ -74,7 +74,7 @@ PR1 merged as #935 and deployed successfully on 2026-09-12 (UTC), commit
 `e13dd6c9c4a8f84dec2e67775abd0fa68a730e33`. The production migration is applied;
 the transactional role probe passed, denying both authenticated and anonymous
 vault SELECT. All three tables respond through the service API and health is 200.
-The vault key has not yet been configured; do so before enabling Secure Entry.
+The independent vault key is configured in Railway and preserved across releases.
 Do not deploy while `chief_jobs` contains queued/running paid work.
 
 ## PR2 controller
@@ -122,7 +122,7 @@ reuse, which needs a separate account rehearsal.
 
 PR3 adds the section 7 HTTP routes and `chief_jobs` errand kind. Apply
 `supabase/APPLY-2026-09-12-chief-computer-runtime.sql` after merge. Browser execution
-stays off behind `ERRANDS_ENABLED=off` until PR4. Planning and metadata can be
+stays off behind `ERRANDS_ENABLED=off` until all six PRs are integrated. Planning and metadata can be
 used independently. POST planning includes `business_id`; an email-only supplier
 returns the existing purchase-order action with `errand:null, door:"email"`.
 
@@ -174,7 +174,7 @@ redaction, and export/import rules. CI runs both suites.
    Chromium and runs the fixture suite plus sabotage checks with no service keys.
 3. Errands, endpoints, holds, settings and job interruption handling implemented.
    This is the frontend integration milestone; announce when PR3 merges.
-4. Add the driver and receipts.
+4. Driver and sanitized receipts implemented; execution remains disabled until the Chief integration is complete.
 5. Wire Chief's actions, prompt, policy, ledger, inventory and planned cancellation.
 6. Fold the old browser hand into the errand path.
 
@@ -190,3 +190,36 @@ in the source spec's Contract changes section:
   the PDF itself or build it from already-masked pixels before storage.
 - Hold timeout and total errand budget need one explicit clock policy; approval
   cannot silently extend an expired job or reuse an obsolete field reference.
+
+## PR4 driver and receipts
+
+The production runtime migration and rollback verification passed on September 12,
+2026, after PR #937 merged (`ea4d9e401d2ddd57bdd1db4cf9b07c70d60631f0`). Railway
+deployed that commit; health returned 200 and protected computer routes returned 401.
+
+`errand_driver.py` runs the browser toolset sequentially on the job thread. It checks
+current role, status, host settings and elapsed budget before actions, pauses without
+model calls for Secure Entry or changed totals, and refuses another purchase attempt
+after persisting the first submission marker. Holds do not extend the eight-minute
+budget. Sixty model tool calls are allowed. An SDK wire-contract test checks newer
+browser fields against the pinned SDK. Scripted clients exercise real local Chromium,
+including quantity injection, off-host navigation, changed checkout, privacy, stop,
+timeout, interrupted work, invented confirmations and duplicate submission.
+
+Supported checkouts need identifiable final purchase controls, visible item rows
+with one quantity field each and an unambiguous final dollar total. `review_checkout`
+checks current DOM evidence, quantities and all cart quantity fields. The reviewed
+button, items and total are checked again before submission. Unsupported layouts
+require manual completion. This generic DOM guard is not a guarantee about arbitrary
+website JavaScript or misleading supplier controls; supplier compatibility must be
+rehearsed before enabling that site for real orders.
+
+Confirmed orders retain their receipt and idempotency protection even if document
+storage fails. Receipts are PDFs built from scrubbed confirmation text, never raw
+page PDFs. The canonical private path is `{business}/receipts/{errand}.pdf`; a second
+copy at `{business}/general/Receipt-{errand}.pdf` makes it visible in Documents.
+`document_id` is the storage object ID. Delivery dates and cancellation windows stay
+null unless independently verified. PR5 owns inventory, ledger and undo integration.
+
+Blocked off-host subresources are aborted without terminating a page; blocked
+navigations still stop the run. Origins are never automatically approved.

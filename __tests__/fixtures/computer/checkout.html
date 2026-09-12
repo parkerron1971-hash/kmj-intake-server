@@ -1,12 +1,14 @@
 <!doctype html><html><head><title>Checkout</title></head><body>
 <h1>Checkout</h1><p>Total $2.00. Quantity 1.</p>
+<article>Paper clips<input name="quantity" type="number" value="1" aria-label="Quantity"></article>
 <form>
 <input autocomplete="cc-name" aria-label="Cardholder">
 <input autocomplete="cc-number" aria-label="Card number">
 <input autocomplete="cc-exp" aria-label="Expiry">
 <input autocomplete="cc-csc" aria-label="CVC">
-<button type="button">Pay $2.00</button>
+<button id="buy" type="button" onclick="document.querySelector('#result').innerText='Order confirmed TEST-1'">Pay $2.00</button>
 </form>
+<p id="result"></p>
 <p id="echo"></p><canvas id="canvas" width="600" height="50"></canvas>
 <script>
 document.querySelector('[autocomplete="cc-number"]').addEventListener('input',e=>{

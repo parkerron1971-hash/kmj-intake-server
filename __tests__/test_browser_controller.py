@@ -87,9 +87,13 @@ def test_production_route_blocks_subresources_and_redirect_targets():
     backend=bc.ChromiumBackend(['supplier.test'])
     route=Mock()
     route.request.url='https://evil.test/image.png'
+    route.request.is_navigation_request.return_value=False
     backend._route(route)
     route.abort.assert_called_once()
     route.continue_.assert_not_called()
+    assert not backend.blocked
+    route.request.is_navigation_request.return_value=True
+    backend._route(route)
     assert backend.blocked
 
 
