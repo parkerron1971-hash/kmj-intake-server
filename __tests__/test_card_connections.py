@@ -55,6 +55,12 @@ def api(monkeypatch):
             store['states'][args['p_state']]={'state_hash':args['p_state'],'verifier_hash':args['p_verifier'],
                 'user_id':args['p_user'],'connection_id':CID,'version':row['version'],'status':'issued','expires_at':'2099-01-01T00:00:00Z'}
             return {'id':CID}
+        if name=='card_connection_uninstall':
+            if args['p_mode']!=row['mode']: return None
+            active=row.get('account_id')==args['p_account']
+            pending=any(p.get('account_id')==args['p_account'] and p['status']=='authorized' for p in store['states'].values())
+            if not active and not pending: return None
+            name='card_connection_disconnect'
         if name=='card_connection_disconnect':
             row.update(status='disconnected',tokens_ciphertext=None,selected_card=None,version=row['version']+1)
             store['states'].clear()

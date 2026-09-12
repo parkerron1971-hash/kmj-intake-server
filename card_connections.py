@@ -350,14 +350,10 @@ async def webhook(mode:Literal['test','live','sandbox'],request:Request):
             account=event.get('account')
             if not ACCOUNT.fullmatch(str(account)) or event.get('data',{}).get('object',{}).get('id')!=configuration(mode)['client_id']:
                 raise ValueError()
-            rows=db('GET',f'/business_card_connections?account_id=eq.{account}&mode=eq.{mode}') or []
-            pending=db('GET',f'/card_connection_oauth_states?account_id=eq.{account}&status=eq.authorized') or []
-            for item in pending:
-                rows.extend(db('GET',f'/business_card_connections?id=eq.{uid(item["connection_id"])}&mode=eq.{mode}') or [])
-            # A late uninstall conservatively disconnects; never revives access.
-            unique={row['id']:row for row in rows}
-            for row in unique.values():
-                rpc('card_connection_disconnect',p_business=row['business_id'],p_mode=mode)
+            # Scope comes only from the signature-verified provider account.
+            # Atomically erase both active and pending authorizations; there is
+            # no caller-supplied business id and no read/write race in Python.
+            rpc('card_connection_uninstall',p_account=account,p_mode=mode)
     except (ValueError,TypeError,AttributeError):
         raise HTTPException(400,'Invalid Stripe event.') from None
     return {'ok':True}

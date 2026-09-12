@@ -71,4 +71,18 @@ GRANT EXECUTE ON FUNCTION public.card_connection_begin(uuid,text,uuid,text,text)
  public.card_connection_update(uuid,bigint,text,text,text,timestamptz,jsonb),
  public.card_connection_disconnect(uuid,text) TO service_role;
 COMMENT ON TABLE public.business_card_connections IS 'Customer-owned purchasing account connection. Read-only Stripe App access; no PAN/CVC. No browser/model/direct user access to tokens.';
+-- Uninstall function: signed provider account, never a caller's business id.
+CREATE OR REPLACE FUNCTION public.card_connection_uninstall(p_account text,p_mode text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+ WITH revoked AS (
+   UPDATE business_card_connections SET status='disconnected',tokens_ciphertext=NULL,
+     expires_at=NULL,selected_card=NULL,version=version+1,updated_at=now()
+   WHERE mode=p_mode AND (account_id=p_account OR id IN (
+     SELECT connection_id FROM card_connection_oauth_states WHERE account_id=p_account AND status='authorized'
+   )) RETURNING id
+ ) DELETE FROM card_connection_oauth_states WHERE connection_id IN (SELECT id FROM revoked);
+END $$;
+REVOKE ALL ON FUNCTION public.card_connection_uninstall(text,text) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.card_connection_uninstall(text,text) TO service_role;
 COMMIT;
