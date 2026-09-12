@@ -151,3 +151,4 @@ jobs:
           node scripts/image-studio-db-check.mjs
           node scripts/chief-computer-db-check.mjs
           node scripts/chief-computer-runtime-db-check.mjs
+          node scripts/chief-computer-completion-db-check.mjs

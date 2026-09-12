@@ -626,6 +626,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "complete_strategy_track": _w("C", "composite finaliser: creates a products module and entries, "
                                        "seeds an intake form, GENERATES THE SITE, and flips the "
                                        "business to launched. Site generation alone earns the C"),
+    "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
+    "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),
+    "stop_errand":          _w("A", "stops further browser actions; does not reverse a submitted order"),
+    "errand_status":        _r("reads the current errand and sanitized receipt; Secure Entry metadata stays in authenticated Chief chat", sensitive=True),
     "use_browser_hand":     _w("C", "proposes a bounded browser task for approval; the run "
                                "acts on third-party sites the practitioner named, so the "
                                "proposal itself is held to the run's class"),

@@ -213,7 +213,8 @@ from chief_offering_actions import (
     handle_update_offering,
 )
 # The browser hand (2026-09-04) — proposes; the approval starts the job.
-from chief_hand_actions import handle_use_browser_hand
+from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
+    handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
 # giving history never reaches an agent surface.
 from chief_giving_actions import (
@@ -2510,6 +2511,16 @@ _TURN_IS_VOICE: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
     "chief.turn_is_voice", default=False)
 _TURN_CONFIRMED: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
     "chief.turn_confirmed", default=False)
+_TURN_ERRAND_CONFIRMED: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "chief.turn_errand_confirmed", default=False)
+_TURN_ERRAND_PLANS: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
+    "chief.turn_errand_plans", default=())
+
+
+def _is_errand_confirmation(message):
+    # Current user words only. Quoted instructions, questions, and historical
+    # approvals must not grant a model's proposed action execution authority.
+    return bool(re.fullmatch(r"\s*(?:please\s+)?approve\s+(?:(?:this|that|the)\s+)?(?:errand|order)(?:\s+and\s+run\s+it)?[.!]?\s*",str(message),re.I))
 
 # Deliberately NOT "yes" / "yeah" / "ok" / "sure". Those are what a
 # person says to someone else in the room while the mic is open, and a
@@ -3321,6 +3332,22 @@ _REMINDER_ECHO_RES = (
 
 
 _REPLACED_BY_REPLAY = ("propose_module_from_intake", "ensure_module")
+
+
+async def _inject_errand_report(taken,business_id):
+    import errand_completion
+    import chief_errands
+    try:
+        reports=await asyncio.to_thread(errand_completion.reports,business_id)
+        existing={a.get('errand_id') for a in taken if isinstance(a,dict)}
+        for report in reports:
+            if report['errand_id'] not in existing:
+                taken.append(report)
+            await asyncio.to_thread(chief_errands.rpc,'chief_errand_shown',
+                p_business_id=business_id,p_id=report['errand_id'])
+    except Exception:
+        pass  # next chat retries; never generate another purchase as a fallback
+    return taken
 
 
 def _inject_ready_layout(actions: List[Dict[str, Any]], ready: Optional[Dict[str, Any]],
@@ -10454,6 +10481,10 @@ ACTION_HANDLERS = {
     "save_note":             handle_save_note,
     "queue_build_request":   handle_queue_build_request,
     "use_browser_hand":      handle_use_browser_hand,
+    "plan_errand":           handle_plan_errand,
+    "approve_errand":        handle_approve_errand,
+    "stop_errand":           handle_stop_errand,
+    "errand_status":         handle_errand_status,
     "forget":                handle_forget,
     "approve_draft":         handle_approve_draft,
     "dismiss_draft":         handle_dismiss_draft,
@@ -13361,6 +13392,8 @@ async def chief_chat(
             _voice_token = _TURN_IS_VOICE.set(_is_voice_turn)
             _confirm_token = _TURN_CONFIRMED.set(
                 _is_voice_turn and _is_voice_confirmation(req.message or ""))
+            _errand_confirm_token = _TURN_ERRAND_CONFIRMED.set(_is_errand_confirmation(req.message or ""))
+            _errand_plans_token = _TURN_ERRAND_PLANS.set(())
             turn_tokens = chief_models.max_tokens_for(lane, default=1600)
             # Pricing v2 model ladder: heavy lanes scale with the plan
             # tier (Starter=Sonnet 5, Pro=Opus 4.8, Practice=Fable 5).
@@ -13509,6 +13542,7 @@ async def chief_chat(
             taken = tool_taken + (await _execute_actions(
                 client, biz, actions, user_id=str(user_session.user.id),
                 owner_text=req.message) if actions else [])
+            taken = await _inject_errand_report(taken,biz['id'])
 
             # Deterministic goodbye enforcement (8/15). The GOODBYES CLOSE
             # THE ROOM prompt rule (#592) is real but advisory, and Kevin's
@@ -13696,10 +13730,14 @@ async def chief_chat(
             try:
                 _TURN_IS_VOICE.reset(_voice_token)
                 _TURN_CONFIRMED.reset(_confirm_token)
+                _TURN_ERRAND_CONFIRMED.reset(_errand_confirm_token)
+                _TURN_ERRAND_PLANS.reset(_errand_plans_token)
                 _TRUNCATED_TAGS.reset(_trunc_token)
             except Exception:
                 _TURN_IS_VOICE.set(False)
                 _TURN_CONFIRMED.set(False)
+                _TURN_ERRAND_CONFIRMED.set(False)
+                _TURN_ERRAND_PLANS.set(())
         except ValueError:
             _TURN_USER_ID.set("")
 

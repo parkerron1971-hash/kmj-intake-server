@@ -77,6 +77,12 @@ def _tag(verb: str, **args: Any) -> str:
 
 
 CASES: List[Dict[str, Any]] = [
+    {'id':'errand_plan','message':'Use Chief\'s computer to plan a reorder of one box of paper clips for inventory item 00000000-0000-4000-8000-000000000003. This supplier only takes website orders, with no API or email ordering. Show the browser errand plan; do not run it yet.',
+     'expect':['plan_errand'],'must_not':['approve_errand','use_browser_hand','send_purchase_order'],
+     'encoding':'tag','reply':'Here is the plan. '+_tag('plan_errand',kind='reorder',offering_ids=['00000000-0000-4000-8000-000000000003'])},
+    {'id':'errand_stop','message':'Stop errand 00000000-0000-4000-8000-000000000003 now.',
+     'expect':['stop_errand'],'must_not':['approve_errand','plan_errand'],
+     'encoding':'tag','reply':'Stopped. '+_tag('stop_errand',errand_id='00000000-0000-4000-8000-000000000003')},
     # ── people ──────────────────────────────────────────────────────
     {"id": "create_contact_lead",
      "message": "Add Ada Lovelace as a lead, ada@example.com",
@@ -295,6 +301,8 @@ def summarize(results: List[Dict[str, Any]], mode: str) -> Dict[str, Any]:
 def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
     import chief_of_staff as cos
     import rate_limit
+    import errand_completion
+    monkeypatch.setattr(errand_completion,'reports',lambda *a:[])
 
     async def _instant(value=None):
         return value

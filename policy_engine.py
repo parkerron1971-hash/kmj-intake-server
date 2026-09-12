@@ -194,6 +194,10 @@ def evaluate(business_id: str, *, verb: str, surface: str,
     if not business_id or not verb:
         return Verdict(False, "policy:invalid", "Missing business or verb.")
 
+    if verb=='approve_errand' and (not prompted or surface not in ('chat','notification')):
+        return Verdict(False,'errand:explicit-approval-required',
+                       'Approve this errand yourself on its card or in the current chat turn.')
+
     role = role_of(business_id, user_id)
 
     try:
