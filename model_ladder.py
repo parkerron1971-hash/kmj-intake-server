@@ -144,6 +144,28 @@ def supports_sampling(model: str) -> bool:
     return not any(k in m for k in _NO_SAMPLING_MARKERS)
 
 
+# Families that accept `output_config.effort` (Opus 4.5 takes low/medium/high
+# only; everything newer takes the full range). Haiku 4.5 and Sonnet 4.5
+# return a 400 for it.
+_EFFORT_MARKERS = ("opus-4-5", "opus-4-6", "opus-4-7", "opus-4-8", "opus-5",
+                   "sonnet-4-6", "sonnet-5", "fable", "mythos")
+
+
+def supports_effort(model: str) -> bool:
+    m = (model or "").lower()
+    return any(k in m for k in _EFFORT_MARKERS)
+
+
+def effort_kwargs(model: str, effort: Optional[str]) -> dict:
+    """`{"output_config": {"effort": e}}` where the model accepts it, `{}`
+    where it would 400. Effort bounds adaptive thinking, which otherwise
+    counts against max_tokens: a mechanical JSON task at default effort
+    can spend its whole output budget thinking and return no text."""
+    if not effort or not supports_effort(model):
+        return {}
+    return {"output_config": {"effort": effort}}
+
+
 def sampling_kwargs(model: str, temperature: Optional[float]) -> dict:
     """`{"temperature": t}` where the model accepts it, `{}` where it
     would 400. This is the fix for the live Arc 11 failure mode: the

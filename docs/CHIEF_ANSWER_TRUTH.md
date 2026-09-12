@@ -1,6 +1,10 @@
 # Chief answer checks
 
-Chief now checks its final answer against the evidence available on the turn before returning it to chat, speech, or conversation history. Failed actions produce an execution-result reply. Unsupported answers and unavailable reviews produce an uncertainty response; successful write receipts can still report the actual result.
+Chief now checks its final answer against the evidence available on the turn before returning it to chat, speech, or conversation history. Failed actions produce an execution-result reply. Unsupported answers produce an uncertainty response; successful write receipts can still report the actual result.
+
+A review that never arrives is different from a review that says no. When the reviewer times out, hits the spend guard, returns something that is not the JSON contract, or is cut off at its output cap, nothing was checked and nothing was refuted: an ordinary answer is delivered with `grounding.status = "unchecked"` and the reason is logged. Deterministic truth still outranks an unchecked draft (write receipts, the scoped email-records answer), and prose that claims completed work without a receipt is still withheld. Before this rule, a long answer whose review overflowed the 2,400-token cap was replaced by "I couldn't verify that answer" every time.
+
+The overflow itself had a specific cause. The review call sent no effort setting, so the model ran adaptive thinking at default depth, and thinking tokens count against `max_tokens`. On a real turn the usage row showed 2,400 output tokens of which 2,400 were thinking: the reviewer never wrote one character of JSON. The review now runs at `output_config.effort = "low"` (guarded by `model_ladder.effort_kwargs` for models that accept it), which in a live probe cut thinking to about 260 tokens and let an 18-claim review finish in 15 to 18 seconds. Two provenance rules were also corrected: the hour in an ISO timestamp (`2026-09-14T10:00`) now counts as a number, so calendar claims check against their own records, and the log reason names the number that failed.
 
 ## Repairs in audit order
 
@@ -18,9 +22,9 @@ Run offline regression tests with `python -m pytest -q __tests__ agents`. Run th
 
 For generated answers and real review, run `python scripts/chief_factual_eval.py --live --out chief-factual-report.json` with `ANTHROPIC_API_KEY` configured, or dispatch CI with `chief_eval=true`. The live factual harness uses synthetic evidence and does not access a business database or send messages. It measures answer generation and review, not the complete authenticated production conversation. The existing action evaluation remains separate. A scenario named `backup_unverified_claim` tests unverified fallback-style prose; it does not force a second provider outage.
 
-The review is one tool-free, metered model call using the chat lane, subject to the spend guard and a 30-second outer timeout. Its input is bounded to 60,000 evidence characters plus a 16,000-character draft; review output is capped at 2,400 tokens. Chat timing now includes `actions` and `review`. The response includes `grounding.status` (`supported`, `receipts`, or `withheld`) and cited source IDs. Logs record status and citation counts without answer content.
+The review is one tool-free, metered model call using the chat lane, subject to the spend guard and a 30-second outer timeout. Its input is bounded to 60,000 evidence characters plus a 16,000-character draft; review output is capped at `REVIEW_MAX_TOKENS` (4,000), and the reviewer is told to keep each quote to the shortest exact excerpt. Chat timing now includes `actions` and `review`. The response includes `grounding.status` (`supported`, `receipts`, `records`, `unchecked`, or `withheld`) and cited source IDs. The `chief.truth` logger records status, citation counts and the reason for any non-supported outcome, without answer content.
 
-There is additional model cost and a wait for review before conversational text or speech begins. Server progress remains available during the wait. Review outages withhold prose; they do not undo actions already performed. No database migration is required.
+There is additional model cost and a wait for review before conversational text or speech begins. Server progress remains available during the wait. Review outages deliver ordinary prose unchecked; they do not undo actions already performed. No database migration is required.
 
 ## Remaining limits
 

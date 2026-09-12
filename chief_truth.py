@@ -17,7 +17,18 @@ from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger('chief.truth')
+if not logger.handlers:
+    # Same shape as the chief_of_staff logger so verdicts show up in Railway
+    # logs next to the timing line instead of vanishing under the root level.
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] chief.truth: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
 MAX_EVIDENCE_CHARS = 60000
+# The review lists every claim with an exact quote. 2,400 tokens was hit on a
+# long ordinary answer (output_tokens == cap in api_usage), which discarded the
+# whole review and replaced the answer with UNVERIFIED_REPLY.
+REVIEW_MAX_TOKENS = 4000
 MAX_SOURCE_CHARS = 10000
 MAX_REPLY_CHARS = 16000
 UNVERIFIED_REPLY = ("I couldn't verify that answer from the information available. "
@@ -137,10 +148,16 @@ Earlier assistant prose is NEVER evidence of execution. Receipts override older 
 If sources conflict, the answer must disclose uncertainty instead of selecting a guess.
 Ordinary greetings, questions, clearly labeled creative drafts and nonfactual suggestions
 may pass without citations. Do not treat factual assertions inside a draft as creative license.
-Return ONLY JSON:
+Return ONLY JSON, no prose or code fences:
 {"verdict":"supported"|"unsupported", "claims":[{"text":"exact substring of draft",
 "kind":"fact"|"action"|"estimate", "source_id":"supplied source id",
 "quote":"exact nonempty substring of that source's text"}]}
+Keep every text and quote SHORT: the smallest exact excerpt that carries the
+claim, at most about 12 words each. Split a sentence with several figures into
+several short claims instead of quoting the whole sentence or a whole record.
+Every number in the draft must appear inside some claim's text, and every
+number in a claim's text must appear inside that claim's quote: a figure that
+comes from a different record gets its own claim citing that record.
 Use unsupported if ANY claim lacks support. Include all factual claims in claims.
 Use claims=[] only for a reply with no factual assertions or action claims.
 Do not rewrite the answer or suggest any tool/action invocation."""
@@ -148,52 +165,96 @@ Do not rewrite the answer or suggest any tool/action invocation."""
 
 def validate_review(raw: str, reply: str, sources: dict) -> tuple[bool, list[str]]:
     """Validate the review contract and exact provenance independently of the model."""
+    verdict, cited, _reason = assess_review(raw, reply, sources)
+    return verdict == 'supported', cited
+
+
+def _strip_fences(raw: str) -> str:
+    text = (raw or '').strip()
+    match = re.fullmatch(r'```(?:json)?\s*(.*?)\s*```', text, re.S)
+    return match.group(1) if match else text
+
+
+def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], str]:
+    """Return (verdict, cited_source_ids, reason).
+
+    verdict is one of:
+      'supported'   - a well-formed review whose every citation checks out.
+      'unsupported' - the reviewer said so, or its citations fail provenance
+                      (a quote not in the source, a number no claim covers, an
+                      uncited link, an action claim without a write receipt).
+      'invalid'     - no usable review at all: empty (timeout, HTTP error,
+                      budget stop, truncated at max_tokens), not JSON, or not
+                      the contract shape. Nothing was checked, so nothing was
+                      refuted; the caller decides whether the draft may flow.
+    """
+    text = _strip_fences(raw)
+    if not text:
+        return 'invalid', [], 'no review text'
     try:
-        review = json.loads(raw)
-        if set(review) != {'verdict', 'claims'} or review['verdict'] != 'supported':
-            return False, []
-        claims = review['claims']
-        if not isinstance(claims, list) or len(claims) > 80:
-            return False, []
+        review = json.loads(text)
+    except ValueError:
+        return 'invalid', [], 'review is not JSON'
+    if not isinstance(review, dict) or review.get('verdict') not in ('supported', 'unsupported'):
+        return 'invalid', [], 'review lacks a verdict'
+    if review['verdict'] != 'supported':
+        return 'unsupported', [], 'reviewer verdict unsupported'
+    claims = review.get('claims')
+    if not isinstance(claims, list) or len(claims) > 80:
+        return 'invalid', [], 'claims is not a bounded list'
+    try:
         cited = []
         for claim in claims:
             if not isinstance(claim, dict) or set(claim) != {'text', 'kind', 'source_id', 'quote'}:
-                return False, []
-            text, quote, sid = claim['text'], claim['quote'], claim['source_id']
-            if not all(isinstance(v, str) and v.strip() for v in (text, quote, sid)):
-                return False, []
+                return 'invalid', [], 'claim has the wrong shape'
+            text_, quote, sid = claim['text'], claim['quote'], claim['source_id']
+            if not all(isinstance(v, str) and v.strip() for v in (text_, quote, sid)):
+                return 'invalid', [], 'claim has an empty field'
             source = sources.get(sid)
-            if not source or text not in reply or quote not in source['text']:
-                return False, []
+            if not source:
+                return 'unsupported', [], 'cited source does not exist'
+            if text_ not in reply:
+                return 'unsupported', [], 'claim text is not in the draft'
+            if quote not in source['text']:
+                return 'unsupported', [], 'quote is not in the cited source'
             if claim['kind'] not in ('fact', 'action', 'estimate'):
-                return False, []
+                return 'invalid', [], 'unknown claim kind'
             if claim['kind'] == 'estimate' and not re.search(
                     r'\b(?:estimat\w*|assuming|assumption|hypothetic\w*|project\w*|approximately|roughly)\b',
                     reply, re.I):
-                return False, []
+                return 'unsupported', [], 'estimate without an explicit label'
             if claim['kind'] == 'action' and source['kind'] != 'receipt':
-                return False, []
+                return 'unsupported', [], 'action claim without a write receipt'
             # A reviewer cannot bless a fabricated number with an unrelated
             # real quote. Calculated estimates remain a separate, labeled kind.
-            if claim['kind'] != 'estimate' and not _numbers(text) <= _numbers(quote):
-                return False, []
+            if claim['kind'] != 'estimate':
+                missing = _numbers(text_) - _numbers(quote)
+                if missing:
+                    return 'unsupported', [], 'claim number %s is not in the quote' % ','.join(
+                        str(n) for n in sorted(missing))
             cited.append(sid)
         # Do not let an empty/partial review silently skip an unsupported figure.
         # Numbered-list markers are presentation, not factual quantities.
         prose = re.sub(r'(?m)^\s*\d+[.)]\s+', '', reply)
         reviewed_numbers = set().union(*(_numbers(c['text']) for c in claims)) if claims else set()
-        if not _numbers(prose) <= reviewed_numbers:
-            return False, []
+        unreviewed = _numbers(prose) - reviewed_numbers
+        if unreviewed:
+            return 'unsupported', [], 'draft number %s has no reviewed claim' % ','.join(
+                str(n) for n in sorted(unreviewed))
         for url in re.findall(r'https?://[^\s<>\]"\)]+', reply):
             url = url.rstrip('.,;:')
             if not any(url in sid or url in sources[sid]['text'] for sid in cited):
-                return False, []
-        return True, list(dict.fromkeys(cited))
+                return 'unsupported', [], 'a link in the draft is not in any cited source'
+        return 'supported', list(dict.fromkeys(cited)), ''
     except (ValueError, TypeError, KeyError, AttributeError):
-        return False, []
+        return 'invalid', [], 'review could not be validated'
 
 
 def _numbers(text):
+    # An ISO timestamp glues the hour to the date with a letter
+    # ("2026-09-14T10:00"); split it so the hour counts as a number too,
+    # or every calendar claim ("at 10:00") fails against its own record.
+    text = re.sub(r'(?<=\d)T(?=\d)', ' ', text or '')
     return {Decimal(n.replace(',', '')).normalize()
             for n in re.findall(r'(?<!\w)\d[\d,]*(?:\.\d+)?', text)}
 
@@ -271,11 +332,19 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     import httpx
     import llm_call
     import chief_models
+    import model_ladder
     import spend_guard
     if not llm_call.api_key() or spend_guard.over_budget(business_id):
         return ''
-    payload = {'model': chief_models.model_for('chat'), 'max_tokens': max_tokens,
-               'system': system, 'messages': messages}
+    model = chief_models.model_for('chat')
+    # The review is a mechanical check with a fixed JSON contract. At default
+    # effort the model's adaptive thinking ate the entire 2,400-token output
+    # budget (usage showed thinking_tokens == output_tokens) and returned no
+    # JSON at all, so every long answer was withheld. Low effort keeps the
+    # thinking short enough that the verdict actually gets written.
+    payload = {'model': model, 'max_tokens': max_tokens,
+               'system': system, 'messages': messages,
+               **model_ladder.effort_kwargs(model, 'low')}
     response = await llm_call.apost(client, payload,
         timeout=httpx.Timeout(25.0, connect=5.0), task='chief_answer_review', business_id=business_id)
     if response.status_code >= 400:
@@ -304,31 +373,50 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         try:
             raw = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM,
                 [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
-                max_tokens=2400, enable_web_search=False, business_id=business_id), timeout=30.0)
-        except Exception:
-            logger.warning('reply review unavailable; withholding unsupported prose')
-    supported, cited = validate_review(raw, reply, sources)
+                max_tokens=REVIEW_MAX_TOKENS, enable_web_search=False, business_id=business_id),
+                timeout=30.0)
+        except Exception as exc:
+            logger.warning('reply review unavailable: %s', type(exc).__name__)
+    verdict, cited, reason = assess_review(raw, reply, sources)
     # A vacuous reviewer verdict cannot clear a recognizable completion claim.
-    if supported and not cited and has_completion_claim(reply):
-        supported = False
-    if supported:
+    if verdict == 'supported' and not cited and has_completion_claim(reply):
+        verdict, reason = 'unsupported', 'completion claim without a receipt'
+    if verdict == 'supported':
         logger.info('reply review supported; citations=%d', len(cited))
         return reply, {'status': 'supported', 'sources': cited}
-    logger.info('reply review withheld; receipts=%d', len(receipts))
+    # Preserve real work and links/cards even when narration cannot be checked.
+    import action_registry
+    bits = []
+    for receipt in receipts:
+        if action_registry.effect(receipt.get('type') or '') != action_registry.WRITE:
+            continue
+        # A read/analysis summary may itself contain model prose. It cannot
+        # bypass the reviewer by masquerading as a deterministic receipt.
+        value = receipt.get('label') or receipt.get('result')
+        if isinstance(value, str) and value.strip():
+            bits.append(value.strip())
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
+    if verdict == 'invalid':
+        # The reviewer never delivered a usable verdict (timeout, budget stop,
+        # truncated JSON). Nothing refuted the draft, so an ordinary answer
+        # flows, marked unchecked, instead of being replaced with a canned
+        # "couldn't verify" line. Deterministic truth still outranks it:
+        # write receipts beat unchecked narration of that work, a scoped
+        # records answer beats an unchecked guess about the inbox, and prose
+        # claiming a completed action without a receipt is withheld.
+        if bits:
+            logger.info('reply review unchecked (%s); receipts shown', reason)
+            return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
+        if email_answer:
+            logger.info('reply review unchecked (%s); records answer shown', reason)
+            return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
+        if not has_completion_claim(reply):
+            logger.info('reply review unchecked (%s); draft delivered', reason)
+            return reply, {'status': 'unchecked', 'sources': [], 'reason': reason}
+        reason = 'unchecked completion claim'
+    logger.info('reply review withheld (%s); receipts=%d', reason, len(receipts))
     if receipts:
-        # Preserve real work and links/cards even when narration cannot be checked.
-        import action_registry
-        bits = []
-        for receipt in receipts:
-            if action_registry.effect(receipt.get('type') or '') != action_registry.WRITE:
-                continue
-            # A read/analysis summary may itself contain model prose. It cannot
-            # bypass the reviewer by masquerading as a deterministic receipt.
-            value = receipt.get('label') or receipt.get('result')
-            if isinstance(value, str) and value.strip():
-                bits.append(value.strip())
         if bits:
             return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
         if email_answer:

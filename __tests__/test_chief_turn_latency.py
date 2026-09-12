@@ -167,7 +167,7 @@ def turn(monkeypatch):
 
 def test_the_enrichment_sources_do_not_wait_on_each_other(turn):
     baseline, out = turn(delay=0.0)
-    assert out["response"] == chief_truth.UNVERIFIED_REPLY
+    assert out["response"] == "All good."
     slowed, _ = turn(delay=DELAY)
     added = slowed - baseline
     assert added < BUDGET, (
@@ -210,7 +210,7 @@ def test_one_broken_source_never_takes_the_turn_down(turn, monkeypatch, broken):
         raise RuntimeError(f"{broken} is down")
     monkeypatch.setattr(cos, broken, _boom)
     _, out = turn()
-    assert out["response"] == chief_truth.UNVERIFIED_REPLY, (
+    assert out["response"] == "All good.", (
         f"{broken} raising must degrade its own block, not the turn — "
         "gathering context is not worth losing the conversation over"
     )
@@ -230,7 +230,7 @@ def test_a_broken_off_thread_module_never_takes_the_turn_down(
         raise RuntimeError(f"{module_name} is down")
     monkeypatch.setattr(mod, attr, _boom)
     _, out = turn()
-    assert out["response"] == chief_truth.UNVERIFIED_REPLY
+    assert out["response"] == "All good."
 
 
 def test_every_source_failing_at_once_still_answers(turn, monkeypatch):
@@ -244,7 +244,7 @@ def test_every_source_failing_at_once_still_answers(turn, monkeypatch):
                  "_get_habit_insights"]:
         monkeypatch.setattr(cos, name, _boom)
     _, out = turn()
-    assert out["response"] == chief_truth.UNVERIFIED_REPLY
+    assert out["response"] == "All good."
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -300,7 +300,7 @@ def test_a_prewarmed_turn_refetches_nothing(turn, monkeypatch):
     chief_prewarm.store("user-1", "biz-1", dict(_WARM_PAYLOAD))
     try:
         _, out = turn(delay=0.0)
-        assert out["response"] == chief_truth.UNVERIFIED_REPLY
+        assert out["response"] == "All good."
         assert hits == {}, (
             f"the turn re-fetched {sorted(hits)} after the mic-open prewarm "
             f"had already loaded it — the prewarm bought nothing"
@@ -316,7 +316,7 @@ def test_a_cold_turn_fetches_everything_itself(turn, monkeypatch):
     chief_prewarm.clear()
     hits = _count_sources(monkeypatch)
     _, out = turn(delay=0.0)
-    assert out["response"] == chief_truth.UNVERIFIED_REPLY
+    assert out["response"] == "All good."
     assert len(hits) == 8 and all(v == 1 for v in hits.values()), hits
 
 

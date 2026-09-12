@@ -102,9 +102,64 @@ def test_unverified_read_summary_cannot_bypass_review():
         ctx={}, view_detail={}, taken=[{'type': 'lookup', 'result': 'found',
             'summary': 'You earned $900.', 'label': 'You earned $900.'}],
         message='How much did I earn?', business_id='biz',
-        reviewer=AsyncMock(return_value='')))
+        reviewer=AsyncMock(return_value='{"verdict":"unsupported","claims":[]}')))
     assert '$900' not in result
     assert meta['status'] == 'withheld'
+
+
+@pytest.mark.parametrize('raw', ['', 'Everything is correct.', '{"verdict":"supported","claims":[{"text":"There are 9 con'])
+def test_unusable_review_delivers_the_answer_unchecked(raw):
+    # A timeout, budget stop or a review truncated at max_tokens never checked
+    # anything, so it cannot refute the answer. The turn must not collapse
+    # into "I couldn't verify that answer" for an ordinary question.
+    answer = 'You have 9 contacts and 1 paid invoice.'
+    result, meta = asyncio.run(truth.finalize_reply(None, answer, ctx={}, view_detail={}, taken=[],
+        message='How many contacts do I have?', business_id='biz',
+        reviewer=AsyncMock(return_value=raw)))
+    assert result == answer
+    assert meta['status'] == 'unchecked'
+    assert meta['sources'] == []
+
+
+def test_reviewer_exception_delivers_the_answer_unchecked():
+    answer = 'Your busiest day is usually Tuesday.'
+    result, meta = asyncio.run(truth.finalize_reply(None, answer, ctx={}, view_detail={}, taken=[],
+        message='When am I busiest?', business_id='biz',
+        reviewer=AsyncMock(side_effect=RuntimeError('timeout'))))
+    assert (result, meta['status']) == (answer, 'unchecked')
+
+
+@pytest.mark.parametrize('reply', ['The appointment is booked.', "I've sent the email to Ada."])
+def test_unchecked_answer_cannot_claim_completed_work(reply):
+    result, meta = asyncio.run(truth.finalize_reply(None, reply, ctx={}, view_detail={}, taken=[],
+        message='Please do this', business_id='biz', reviewer=AsyncMock(return_value='')))
+    assert result == truth.UNVERIFIED_REPLY
+    assert meta['status'] == 'withheld'
+
+
+def test_explicit_unsupported_verdict_still_withholds():
+    result, meta = asyncio.run(truth.finalize_reply(None, 'You have 900 contacts.',
+        ctx={}, view_detail={}, taken=[], message='How many contacts?', business_id='biz',
+        reviewer=AsyncMock(return_value='{"verdict":"unsupported","claims":[]}')))
+    assert result == truth.UNVERIFIED_REPLY
+    assert meta['status'] == 'withheld'
+
+
+def test_iso_timestamp_hours_count_as_numbers():
+    # "at 10:00" against a record of "2026-09-14T10:00:00-04:00" used to fail
+    # because the hour sits behind the T separator.
+    assert {10, 0, 2026, 9, 14, 4} <= {int(n) for n in truth._numbers('2026-09-14T10:00:00-04:00')}
+    source = {'context:events': {'kind': 'context', 'text': '{"title": "Discovery call", "start": "2026-09-14T10:00:00-04:00"}'}}
+    raw = review('a discovery call on 2026-09-14 at 10:00', 'context:events', '"start": "2026-09-14T10:00:00-04:00"')
+    assert truth.validate_review(raw, 'There is a discovery call on 2026-09-14 at 10:00.', source) == (True, ['context:events'])
+
+
+def test_assess_review_separates_invalid_from_unsupported():
+    sources = {'count': {'kind': 'count', 'text': '725'}}
+    assert truth.assess_review('', 'There are 725 contacts.', sources)[0] == 'invalid'
+    assert truth.assess_review('```json\n{"verdict":"supported","claims":[]}\n```', 'Hello!', {})[0] == 'supported'
+    assert truth.assess_review(review('725 contacts', 'count', '900'), 'There are 725 contacts.', sources)[0] == 'unsupported'
+    assert truth.assess_review(review('725 contacts', 'invented', '725'), 'There are 725 contacts.', sources)[0] == 'unsupported'
 
 
 def test_supported_reply_stays_natural_and_review_has_no_tools():
@@ -249,11 +304,11 @@ def test_real_review_seam_is_bounded_metered_and_tool_free(monkeypatch, stop_rea
         'text': '{"verdict":"unsupported","claims":[]}'}]}))
     monkeypatch.setattr(llm_call, 'apost', post)
     result = asyncio.run(truth.review_reply(None, truth.REVIEW_SYSTEM, [],
-        max_tokens=2400, business_id='biz'))
+        max_tokens=truth.REVIEW_MAX_TOKENS, business_id='biz'))
     assert result == expected
     payload = post.call_args.args[1]
     assert 'tools' not in payload
-    assert payload['max_tokens'] == 2400
+    assert payload['max_tokens'] == truth.REVIEW_MAX_TOKENS >= 4000
     assert post.call_args.kwargs['task'] == 'chief_answer_review'
     assert post.call_args.kwargs['business_id'] == 'biz'
     assert post.call_args.kwargs['timeout'].read == 25.0
