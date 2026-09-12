@@ -1,0 +1,16 @@
+{
+  "id": "app.mysolutionist.chief-cards",
+  "version": "0.1.0",
+  "name": "Solutionist Chief Cards",
+  "stripe_api_access_type": "oauth",
+  "distribution_type": "public",
+  "sandbox_install_compatible": true,
+  "allowed_redirect_uris": [
+    "https://kmj-intake-server-production.up.railway.app/payments/card-connections/stripe/callback"
+  ],
+  "permissions": [
+    { "permission": "connected_account_read", "purpose": "Verify the identity of the business-owned account you connect." },
+    { "permission": "issuing_card_read", "purpose": "Let your business select an existing active virtual card using its last four digits and status. This version does not retrieve card numbers or CVCs." },
+    { "permission": "event_read", "purpose": "Remove our access when you uninstall this connection in Stripe." }
+  ]
+}
