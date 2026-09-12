@@ -150,3 +150,4 @@ jobs:
           npm install --ignore-scripts --no-package-lock --prefix "$RUNNER_TEMP/image-db-check" @electric-sql/pglite@0.5.8
           node scripts/image-studio-db-check.mjs
           node scripts/chief-computer-db-check.mjs
+          node scripts/chief-computer-runtime-db-check.mjs

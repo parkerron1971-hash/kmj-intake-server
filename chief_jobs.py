@@ -94,6 +94,11 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
 # Extensible registry — add monthly_report / reconcile_month here later;
 # the runner + endpoints + frontend are kind-agnostic.
 KIND_META: Dict[str, Dict[str, Any]] = {
+    "errand": {
+        "label": "Errand", "working": "running an errand on Chief's computer",
+        "done": "the errand finished; review its result", "nav": "operate:computer",
+        "dedupe_key": "errand_id",
+    },
     "learn_business": {
         "label": "Business discovery",
         "working": "learning how your business works and checking what is missing",
@@ -343,15 +348,19 @@ def sweep_orphans(reason: str = "boot") -> int:
         if not is_orphaned(row, now, _INFLIGHT):
             continue
         try:
+            if row.get("kind") == "errand":
+                from chief_errands import interrupt_job
+                interrupt_job(row['id'])
             sb_clients.sb_patch_as_service(
                 f"/chief_jobs?id=eq.{row['id']}&status=in.(queued,running)",
-                {"status": "failed", "error": INTERRUPTED_REASON,
+                {"status": "failed", "error": ("Errand interrupted; check the supplier before retrying."
+                                                  if row.get("kind") == "errand" else INTERRUPTED_REASON),
                  "finished_at": now.isoformat()})
             swept += 1
             logger.warning(f"[chief_jobs] {reason} sweep: {row.get('kind')} job "
                            f"{row.get('id')} for {str(row.get('business_id'))[:8]} "
                            f"was {row.get('status')} with nobody running it — "
-                           f"marked failed, retryable")
+                           f"marked failed")
         except Exception as e:
             logger.warning(f"[chief_jobs] {reason} sweep could not mark {row.get('id')}: {e}")
     return swept
@@ -371,6 +380,21 @@ def _execute_kind(kind: str, business_id: str, params: dict,
     """SYNC heavy work, run in a worker thread so the event loop stays free.
     Returns a JSON-serializable result dict. Raises on failure."""
     progress = _make_progress_cb(job_id) if job_id else None
+    if kind == "errand":
+        try:
+            from errand_driver import run
+            return run(business_id, (params or {}).get("errand_id"), job_id=job_id,
+                       progress_cb=progress)
+        except Exception:
+            # Never log a traceback from a worker that can hold transient secrets.
+            logger.warning("[chief_jobs] errand worker stopped without a confirmed result")
+            try:
+                from chief_errands import interrupt_job
+                if job_id:
+                    interrupt_job(job_id)
+            except Exception:
+                pass
+            return {"ok": False, "error": "Errand interrupted; check the supplier before trying again."}
     if kind == "rebuild_site":
         # Lazy import — avoids any import-time cost/cycles at module load.
         # compose_site (DRL PR3) authors the Design Rationale Object first,
@@ -546,7 +570,7 @@ async def _run_inner(job_id: str, user_id: str, business_id: str, kind: str,
 
 async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
                   kind: str, params: Optional[dict] = None,
-                  source: str = "desktop") -> Optional[dict]:
+                  source: str = "desktop", prepared_job: Optional[dict] = None) -> Optional[dict]:
     """Insert a queued job and kick off its runner. Returns the job row.
     Raises ValueError for an unknown kind.
 
@@ -562,6 +586,16 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
     older than STALE_AFTER_MIN is marked failed here and a new job starts."""
     if kind not in KIND_META:
         raise ValueError(f"unknown job kind: {kind}")
+    if kind == "errand":
+        # The approval RPC creates the job and approval in ONE transaction.
+        # Generic enqueue/dedupe cannot mint authority to execute an errand.
+        job = prepared_job or {}
+        if (not job.get("id") or job.get("kind") != kind or job.get("status") != "queued"
+                or str(job.get("business_id")) != business_id or str(job.get("user_id")) != user_id
+                or job.get("params") != params or not (params or {}).get("errand_id")):
+            raise ValueError("Errands require a transactionally approved job.")
+        asyncio.create_task(_run(job["id"], user_id, business_id, kind, params or {}))
+        return job
     STALE_AFTER_MIN = 10
     existing = await _sb(
         client, "GET",
