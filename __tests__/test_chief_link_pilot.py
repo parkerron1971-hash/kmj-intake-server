@@ -138,7 +138,8 @@ def test_test_request_journal_survives_network_failure_without_duplicate(store, 
 
 def test_verified_fake_card_never_escapes_and_is_canceled(store, monkeypatch):
     seed({**connected(), 'trial': {'key': 'key', 'id': RID, 'status': 'pending_approval'}})
-    raw = {'id': RID, 'status': 'approved', 'card': {'number': '4242424242424242',
+    # Literal from Link's published test-mode documentation, independent of the implementation constant.
+    raw = {'id': RID, 'status': 'approved', 'card': {'number': '4000009990001984',
             'cvc': 'SECRET_CVC', 'exp_month': 12, 'exp_year': 2030, 'billing_address': {'name': 'PRIVATE_NAME'}}}
     call = Mock(side_effect=[(200, {'id': RID, 'status': 'approved'}), (200, raw),
                              (200, {'id': RID, 'status': 'canceled'})])
@@ -147,7 +148,7 @@ def test_verified_fake_card_never_escapes_and_is_canceled(store, monkeypatch):
     assert result['test_credential_verified'] and result['status'] == 'canceled'
     with pilot.Session(BID, UID) as s:
         journal = json.dumps(s.state['trial'])
-    for forbidden in ['4242424242424242', 'SECRET_CVC', 'PRIVATE_NAME', 'PRIVATE_ACCESS']:
+    for forbidden in ['4000009990001984', 'SECRET_CVC', 'PRIVATE_NAME', 'PRIVATE_ACCESS']:
         assert forbidden not in json.dumps(result) + journal
     assert call.call_args.args[1].endswith('/cancel')
 
@@ -279,3 +280,23 @@ def test_approval_and_finished_receipts_are_actionable_without_model_text():
     receipt.update(status='canceled', test_credential_verified=True)
     assert 'verified the fake test credential' in pilot.receipt_text(receipt)
     assert url not in pilot.receipt_text(receipt)
+
+
+@pytest.mark.parametrize('verified', [True, False])
+def test_only_explicit_rehearsal_retries_an_ended_unverified_test(store, monkeypatch, verified):
+    seed({**connected(), 'trial': {'key': 'old-key', 'id': RID, 'status': 'canceled', 'verified': verified}})
+    call = Mock(side_effect=[(200, {'id': 'lsrq_retry', 'status': 'created'}),
+                            (200, {'id': 'lsrq_retry', 'approval_link': 'https://app.link.com/activity/approve/lsrq_retry'})])
+    monkeypatch.setattr(pilot, 'request', call)
+    pilot.run(BID, UID, 'cancel')
+    call.assert_not_called()
+    result = pilot.run(BID, UID, 'rehearse')
+    if verified:
+        call.assert_not_called()
+        assert result['status'] == 'canceled' and result['test_credential_verified']
+    else:
+        assert result['test_request_id'] == 'lsrq_retry'
+        assert call.call_args_list[0].kwargs['body']['test'] is True
+        assert call.call_args_list[0].kwargs['body']['idempotency_key'] != 'chief-link-pilot-old-key'
+        pilot.run(BID, UID, 'rehearse')
+        assert call.call_count == 2

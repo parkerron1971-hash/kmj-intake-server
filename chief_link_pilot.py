@@ -23,6 +23,9 @@ CLIENT_ID = 'lwlpk_U7Qy7ThG69STZk'  # Stripe's published public device client ID
 SCOPE = 'payment_methods.agentic userinfo:read'
 LOGIN = 'https://login.link.com'
 API = 'https://api.link.com'
+# Link CLI README, Spend request lifecycle (not Stripe Checkout's generic test card).
+# https://github.com/stripe/link-cli#spend-request-lifecycle
+LINK_TEST_CARD = '4000009990001984'
 OPERATIONS = ('connect', 'status', 'rehearse', 'check', 'cancel', 'disconnect')
 STATUSES = {'pending', 'pending_approval', 'approved', 'declined', 'canceled',
             'expired', 'completed', 'failed', 'requires_approval', 'created',
@@ -254,6 +257,12 @@ def record_trial(session, data):
 
 def create_trial(session, approval=True):
     access(session)
+    previous = session.state.get('trial') or {}
+    if approval and previous.get('status') in TERMINAL and not previous.get('verified'):
+        # Only an explicit new rehearsal may retry an ended, unverified test.
+        # Status/check/cancel never create another request; a passed test is reused.
+        session.state['previous_trial'] = previous
+        session.state.pop('trial', None)
     if not session.state.get('trial'):
         session.state['trial'] = {'key': str(uuid4()), 'status': 'creating', 'verified': False}
         session.save()  # journal stable idempotency key BEFORE any provider write
@@ -306,7 +315,7 @@ def check_trial(session):
             # Never return, persist, log, or supply this body to Chief/browser/Sentry.
             card = data.get('card') or {}
             valid = (data.get('id') == trial['id'] and data.get('status') == 'approved'
-                     and card.get('number') == '4242424242424242'
+                     and card.get('number') == LINK_TEST_CARD
                      and bool(card.get('cvc')) and bool(card.get('exp_month')) and bool(card.get('exp_year')))
             del data, card
             trial['verified'] = bool(valid)
