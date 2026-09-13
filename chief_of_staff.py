@@ -213,6 +213,7 @@ from chief_offering_actions import (
     handle_update_offering,
 )
 # The browser hand (2026-09-04) — proposes; the approval starts the job.
+from chief_link_pilot import handle_link_wallet_pilot
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -10465,6 +10466,7 @@ ACTION_HANDLERS = {
     "save_note":             handle_save_note,
     "queue_build_request":   handle_queue_build_request,
     "use_browser_hand":      handle_use_browser_hand,
+    "link_wallet_pilot":     handle_link_wallet_pilot,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,
@@ -11490,7 +11492,12 @@ async def _execute_actions(client, biz, actions: List[Dict],
             resolved["_unattended"] = True
 
         try:
-            res = await handler(client, biz, resolved)
+            if atype == 'link_wallet_pilot':
+                import chief_link_pilot
+                res = await chief_link_pilot.dispatch(client, biz, resolved,
+                    surface=surface, prompted=prompted, user_id=user_id)
+            else:
+                res = await handler(client, biz, resolved)
             if isinstance(res, dict):
                 res["_authorized_by"] = policy_rule
                 # One refresh contract for chat, voice and future write verbs.

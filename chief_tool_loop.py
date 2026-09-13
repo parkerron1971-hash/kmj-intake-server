@@ -252,7 +252,19 @@ def _image_tool_offered() -> bool:
 def remaining_tag_actions(actions):
     # Native execution already attempted the paid job, including a failed/held
     # attempt. A prose tag must not retry it or incur a second charge.
-    return [a for a in actions if not (image_attempted() and a.get("type") == "generate_image")]
+    link_operations = {r.get('link_operation') for r in _writes_this_turn.get()
+                       if r.get('type') == 'link_wallet_pilot'}
+    return [a for a in actions if not (image_attempted() and a.get("type") == "generate_image")
+            and not (a.get('type') == 'link_wallet_pilot' and a.get('operation', 'status') in link_operations)]
+
+
+def _link_pilot_offered() -> bool:
+    import os
+    from chief_of_staff import _TURN_USER_ID
+    return (_writes_allowed.get() and _turn_surface.get() == 'chat' and _turn_prompted.get()
+            and os.getenv('CHIEF_LINK_PILOT_ENABLED') == 'true'
+            and bool(_TURN_USER_ID.get()) and _TURN_USER_ID.get() == os.getenv('CHIEF_LINK_PILOT_USER_ID')
+            and action_registry.effect('link_wallet_pilot') == action_registry.WRITE)
 
 
 def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
@@ -267,6 +279,9 @@ def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
         tools += write_tool_definitions()
         if _image_tool_offered():
             tools.append(image_tool_definition())
+        if _link_pilot_offered():
+            from chief_link_pilot import tool_definition
+            tools.append(tool_definition())
         if _turn_surface.get() != "chat" or not _turn_prompted.get():
             import action_proposals
             tools += [_anthropic_shape(t) for t in action_proposals.tool_definitions()]
@@ -390,7 +405,8 @@ async def _execute_write(client, biz: Dict[str, Any],
     if not _writes_allowed.get():
         return True, (f"'{name}' changes records and is not a mid-turn tool on "
                       f"this turn. Operations go through [ACTION:] tags in your reply.")
-    if not (_write_verb_offered(name) or (name == "generate_image" and _image_tool_offered())):
+    if not (_write_verb_offered(name) or (name == "generate_image" and _image_tool_offered())
+            or (name == 'link_wallet_pilot' and _link_pilot_offered())):
         # Class C, bulk, unreviewed, or sensitive. The same flat sentence
         # the agent surface uses, so a refusal is never a hint that a
         # scope or a retry would help.
@@ -435,6 +451,8 @@ async def _execute_write(client, biz: Dict[str, Any],
         _writes_this_turn.set(_writes_this_turn.get() + [result])
         return True, _shrink(result)
     result = results[0] if results else chief_of_staff._fail(name, "nothing was returned")
+    if name == 'link_wallet_pilot' and isinstance(result, dict):
+        result['link_operation'] = args.get('operation', 'status')
     if not isinstance(result, dict):
         result = {"type": name, "result": str(result), "label": name}
 
