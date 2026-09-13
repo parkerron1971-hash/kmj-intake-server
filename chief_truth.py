@@ -361,6 +361,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):
         return chief._deterministic_fallback_reply(receipts), {'status': 'receipts', 'sources': []}
+    if receipts and all(r.get('type') == 'link_wallet_pilot' for r in receipts):
+        # This private payment rehearsal has only validated server states/URLs.
+        # Its required connection/approval link must survive unavailable prose
+        # review and tag-only turns, where the model never saw the tool result.
+        from chief_link_pilot import receipt_text
+        return '\n\n'.join(receipt_text(r) for r in receipts), {'status': 'receipts', 'sources': []}
     check_in = conversation_check_reply(message) if not receipts else None
     if check_in:
         return check_in, {'status': 'acknowledged', 'sources': []}
@@ -393,6 +399,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # A read/analysis summary may itself contain model prose. It cannot
         # bypass the reviewer by masquerading as a deterministic receipt.
         value = receipt.get('label') or receipt.get('result')
+        if receipt.get('type') == 'link_wallet_pilot':
+            from chief_link_pilot import receipt_text
+            value = receipt_text(receipt)
         if isinstance(value, str) and value.strip():
             bits.append(value.strip())
     import mailbox_policy
