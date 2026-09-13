@@ -253,3 +253,29 @@ def test_provider_failures_do_not_return_raw_errors(store, monkeypatch):
     with pytest.raises(pilot.PilotError) as error:
         pilot.run(BID, UID, 'rehearse')
     assert 'PRIVATE_PROVIDER_BODY' not in str(error.value)
+
+
+def test_connection_link_survives_tag_only_and_unavailable_reviewer(store):
+    import chief_truth
+    from unittest.mock import AsyncMock
+    with pilot.Session(BID, UID) as s:
+        s.state = {'pending': {'url': 'https://app.link.com/device/setup?user_code=fixture'}}
+        receipt = pilot.snapshot(s)
+    reviewer = AsyncMock(side_effect=RuntimeError('review unavailable'))
+    result, grounding = asyncio.run(chief_truth.finalize_reply(None, 'Link private test', ctx={},
+        view_detail='', taken=[receipt], message='Connect my Link account', business_id=BID, reviewer=reviewer))
+    assert receipt['connection_url'] in result
+    assert 'then tell me to check' in result and 'No purchase or charge' in result
+    assert receipt['connection_url'] in chief._format_action_results_for_reply([receipt])
+    reviewer.assert_not_called()
+    assert grounding['status'] == 'receipts'
+
+
+def test_approval_and_finished_receipts_are_actionable_without_model_text():
+    url = 'https://app.link.com/activity/approve/' + RID
+    receipt = {'test_mode': True, 'connected': True, 'approval_url': url, 'status': 'pending_approval'}
+    assert url in pilot.receipt_text(receipt)
+    assert 'simulated $1' in pilot.receipt_text(receipt)
+    receipt.update(status='canceled', test_credential_verified=True)
+    assert 'verified the fake test credential' in pilot.receipt_text(receipt)
+    assert url not in pilot.receipt_text(receipt)
