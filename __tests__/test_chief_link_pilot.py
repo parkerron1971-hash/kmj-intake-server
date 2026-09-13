@@ -221,6 +221,7 @@ def test_nonchat_paths_blocked_even_when_prompted(surface, prompted):
 
 def test_native_tool_uses_central_door_and_rejects_model_knobs(store, monkeypatch):
     token = chief._TURN_USER_ID.set(UID)
+    taint = chief._UNTRUSTED_TAINT.set(0)
     monkeypatch.setattr(policy_engine, 'evaluate', lambda *a, **kw: policy_engine.Verdict(True, 'chat:owner', 'fixture'))
     monkeypatch.setattr(pilot, 'run', Mock(return_value={'type': 'link_wallet_pilot', 'result': 'fixture connected'}))
     try:
@@ -242,6 +243,7 @@ def test_native_tool_uses_central_door_and_rejects_model_knobs(store, monkeypatc
         assert pilot.run.call_count == 1
     finally:
         chief._TURN_USER_ID.reset(token)
+        chief._UNTRUSTED_TAINT.reset(taint)
         loop.reset_turn()
 
 
