@@ -43,7 +43,9 @@ workers; a journaled idempotency key recovers an ambiguous create safely.
    in memory, returns only a boolean, and cancels the request. No merchant is visited.
 6. **Disconnect my Link test account** cancels a pending request, revokes this
    connection, and removes its stored tokens. **Cancel my Link test** preserves
-   the connection. A completed test is reused rather than creating duplicate requests.
+   the connection. A passed test is reused rather than creating duplicate requests.
+   Explicitly asking to rehearse again after an ended, unverified test creates a
+   fresh simulation; status/check/cancel never restart an ended request.
 
 Do not paste credentials or verification codes into Chief. Payment values never
 enter the model, browser hand, receipts, logs, or database. Only opaque auth tokens
