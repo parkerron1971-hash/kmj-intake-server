@@ -114,7 +114,7 @@ def safe_url(value, purpose):
         prefix = '/device/' if purpose == 'connect' else '/activity/approve/'
         if (parsed.scheme == 'https' and parsed.hostname == 'app.link.com'
                 and parsed.netloc == 'app.link.com' and parsed.path.startswith(prefix)
-                and not parsed.fragment):
+                and not parsed.fragment and not re.search(r'[\s<>\[\]()\\]', value)):
             return value
     except Exception:
         pass
@@ -207,7 +207,31 @@ def snapshot(session, note=None):
         result['approval_url'] = safe_url(trial['approval_url'], 'approve')
     if trial.get('id'):
         result['test_request_id'] = trial['id']
+    result['speak'] = result['result'] = note or receipt_text(result)
     return result
+
+
+def receipt_text(receipt):
+    """Deterministic chat text from validated server fields, including next-step links."""
+    if receipt.get('test_mode') is not True:
+        return 'Private Link test status is unavailable.'
+    if receipt.get('connection_url'):
+        url = safe_url(receipt['connection_url'], 'connect')
+        return (f'[Connect your Link account]({url}) for the private test. Complete authorization there, '
+                'then tell me to check the Link connection. No purchase or charge is being made.')
+    if receipt.get('status') == 'canceled':
+        if receipt.get('test_credential_verified') is True:
+            return ('The simulated Link approval worked: I verified the fake test credential and canceled '
+                    'the request. No real charge or merchant order was made.')
+        return 'The Link test request is canceled. No real charge or merchant order was made.'
+    if receipt.get('approval_url'):
+        url = safe_url(receipt['approval_url'], 'approve')
+        return (f'[Review the simulated $1 Link request]({url}). Approve it in Link, then tell me to '
+                'check the Link test. This is test mode; no real purchase or charge will be made.')
+    if receipt.get('connected'):
+        return ('Your Link account is connected for the private test. Ask me to run the Link test '
+                'rehearsal when ready. Live purchases are disabled.')
+    return 'Your private Link connection is disconnected. Ask me to connect it to start the test.'
 
 
 def trial_id(trial):
