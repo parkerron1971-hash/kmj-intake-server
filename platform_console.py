@@ -12,6 +12,9 @@ Endpoints:
   GET  /platform/subscriptions/summary    → aggregate from billing_status view
   GET  /platform/costs/summary            → 30d cost aggregate from api_usage
   POST /platform/chief/message            → ask the Platform Chief a question
+  GET  /platform/inbox?folder=inbox|sent  → platform mail (inbound / composed here)
+  GET  /platform/inbox/addresses          → the addresses compose may send from
+  POST /platform/inbox/compose            → send a fresh email from a platform address
 
 ═══════════════════════════════════════════════════════════════════════
 ENV
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -1593,25 +1597,55 @@ def _require_email_uuid(email_id: str) -> str:
                             detail="invalid email id")
 
 
+INBOX_SENT_MIGRATION = "supabase/APPLY-2026-09-13-platform-inbox-sent.sql"
+
+
+def _direction_column_missing(resp_text: str) -> bool:
+    """PostgREST's wording when a filter names a column the table does
+    not have yet — the shape of 'the sent migration is not applied'."""
+    t = (resp_text or "").lower()
+    return "direction" in t and ("column" in t or "42703" in t)
+
+
 @router.get("/inbox")
 async def platform_inbox_list(
     limit: int = 50,
     unread_only: bool = False,
+    folder: str = "inbox",
     user=Depends(require_owner),
 ):
-    """List platform inbox mail, newest first, plus the unread count."""
+    """List platform mail, newest first, plus the unread count.
+
+    `folder` is `inbox` (mail that came in) or `sent` (mail composed
+    here). The two share a table and are told apart by `direction`;
+    before INBOX_SENT_MIGRATION is applied the inbox lists everything
+    (all of it inbound) and the sent folder is empty."""
     limit = min(max(limit, 1), 200)
+    if folder not in ("inbox", "sent"):
+        raise HTTPException(status_code=400, detail="folder must be inbox or sent")
+    direction = "inbound" if folder == "inbox" else "sent"
     q = ("/platform_emails"
          "?select=id,to_address,from_email,from_name,subject,read,catchall,received_at"
          f"&order=received_at.desc&limit={limit}")
     if unread_only:
         q += "&read=eq.false"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        r = await c.get(f"{SUPABASE_URL}/rest/v1{q}", headers=_service_headers())
+        r = await c.get(f"{SUPABASE_URL}/rest/v1{q}&direction=eq.{direction}",
+                        headers=_service_headers())
+        if r.status_code >= 400 and _direction_column_missing(r.text):
+            logger.warning(
+                f"platform_emails.direction is missing — apply {INBOX_SENT_MIGRATION}; "
+                "listing without the folder filter")
+            if folder == "sent":
+                return {"emails": [], "unread": 0, "folder": folder,
+                        "migration_pending": INBOX_SENT_MIGRATION}
+            r = await c.get(f"{SUPABASE_URL}/rest/v1{q}", headers=_service_headers())
         if r.status_code >= 400:
             raise HTTPException(status_code=502,
                                 detail=f"inbox read failed: {r.text[:200]}")
         rows = r.json()
+        if folder == "sent":
+            return {"emails": rows, "unread": 0, "folder": folder}
         unread = 0
         try:
             hr = await c.head(
@@ -1624,7 +1658,140 @@ async def platform_inbox_list(
             unread = int(last) if last and last != "*" else 0
         except Exception:
             pass
-    return {"emails": rows, "unread": unread}
+    return {"emails": rows, "unread": unread, "folder": folder}
+
+
+# ─── Compose: start a thread from one of the platform's own addresses ──
+#
+# These two routes are registered BEFORE /inbox/{email_id} on purpose:
+# FastAPI matches in registration order, and "addresses" / "compose"
+# would otherwise be read as an email id and rejected as not-a-uuid.
+
+
+def _platform_send_addresses() -> List[str]:
+    """The addresses Mission Control may send AS: every platform inbox
+    local (kevin@, support@, ...) at the inbound domain — the same set
+    inbound mail is claimed for, so a reply to a composed mail lands
+    back in this inbox. With no inbound domain configured there is only
+    the platform's default sender."""
+    from email_sender import _platform_local_parts, _inbound_domain
+    domain = _inbound_domain()
+    if domain:
+        return [f"{local}@{domain}" for local in _platform_local_parts()]
+    fallback = (os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app").strip().lower()
+    return [fallback]
+
+
+@router.get("/inbox/addresses")
+async def platform_inbox_addresses(user=Depends(require_owner)):
+    """Which addresses compose may send from; the first is the default."""
+    addrs = _platform_send_addresses()
+    return {"addresses": addrs, "default": addrs[0] if addrs else None}
+
+
+class InboxComposeBody(BaseModel):
+    to_email: str
+    to_name: Optional[str] = None
+    from_address: Optional[str] = None
+    subject: str = ""
+    body: str
+
+
+_EMAIL_SHAPE = re.compile(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$")
+
+
+def _looks_like_email(addr: str) -> bool:
+    return bool(_EMAIL_SHAPE.match((addr or "").strip()))
+
+
+@router.post("/inbox/compose")
+async def platform_inbox_compose(
+    payload: InboxComposeBody,
+    user=Depends(require_owner),
+):
+    """Send a fresh email from a platform address (kevin@, support@,
+    ...). Same send_via_resend path as replies, so the suppression gate
+    applies. The sent mail is recorded in platform_emails with
+    direction=sent; when that column is not there yet the send still
+    goes out and the response says it was not recorded."""
+    from email_sender import send_via_resend
+
+    to_email = (payload.to_email or "").strip()
+    if not _looks_like_email(to_email):
+        raise HTTPException(status_code=400, detail="to_email is not a valid address")
+    body_text = (payload.body or "").strip()
+    if not body_text:
+        raise HTTPException(status_code=400, detail="email body is empty")
+    subject = (payload.subject or "").strip() or "(no subject)"
+
+    allowed = _platform_send_addresses()
+    from_addr = (payload.from_address or "").strip().lower() or allowed[0]
+    if from_addr not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"from_address must be one of the platform's addresses: {', '.join(allowed)}")
+    from_name = from_addr.split("@", 1)[0].capitalize()
+    to_name = (payload.to_name or "").strip() or None
+
+    try:
+        sent = await send_via_resend(
+            to_email=to_email,
+            to_name=to_name,
+            from_email=from_addr,
+            from_name=from_name,
+            subject=subject,
+            body=body_text,
+            reply_to=from_addr,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)[:300])
+
+    resend_id = (sent or {}).get("id")
+    # A sent row reads like the envelope: to_address is who it went TO,
+    # from_email / from_name is the platform address it went FROM.
+    row: Dict[str, Any] = {
+        "direction": "sent",
+        "to_address": to_email,
+        "from_email": from_addr,
+        "from_name": from_name,
+        "subject": subject,
+        "body_text": body_text,
+        "read": True,
+        "catchall": False,
+        "resend_id": resend_id,
+    }
+    recorded = False
+    saved: Optional[Dict[str, Any]] = None
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.post(
+            f"{SUPABASE_URL}/rest/v1/platform_emails",
+            headers={**_service_headers(), "Prefer": "return=representation"},
+            json=row,
+        )
+        if r.status_code < 400:
+            recorded = True
+            try:
+                saved = (r.json() or [None])[0]
+            except Exception:
+                saved = None
+        elif _direction_column_missing(r.text):
+            logger.warning(
+                f"composed mail sent but not recorded — apply {INBOX_SENT_MIGRATION}")
+        else:
+            logger.warning(f"composed mail sent but record failed: {r.text[:200]}")
+
+    return {
+        "ok": True,
+        "resend_id": resend_id,
+        "recorded": recorded,
+        "migration_pending": None if recorded else INBOX_SENT_MIGRATION,
+        "email": saved,
+        "from_address": from_addr,
+        "to_email": to_email,
+        "to_name": to_name,
+        "subject": subject,
+        "sent_at": (saved or {}).get("received_at") or datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/inbox/{email_id}")
