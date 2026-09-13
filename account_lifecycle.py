@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "chief_link_pilot_sessions": "encrypted private Link OAuth credentials and test journal; never portable, cascade on user/business deletion",
     "business_card_connections": "encrypted third-party OAuth credentials and card preferences; never portable, cascade on business deletion",
     "business_secrets": "encrypted browser credentials; never exported, cascade on business deletion",
     # Platform books and metering — the platform must keep these for its

@@ -626,6 +626,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "complete_strategy_track": _w("C", "composite finaliser: creates a products module and entries, "
                                        "seeds an intake form, GENERATES THE SITE, and flips the "
                                        "business to launched. Site generation alone earns the C"),
+    "link_wallet_pilot":    {**_w("C", "private owner-only Link authorization and simulated payment rehearsal; never live spending"), "chief_only": True},
     "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
     "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),
     "stop_errand":          _w("A", "stops further browser actions; does not reverse a submitted order"),
