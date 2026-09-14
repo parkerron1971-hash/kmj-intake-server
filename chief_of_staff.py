@@ -944,6 +944,22 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
     return result
 
 
+async def _sb_service(client: httpx.AsyncClient, method: str, path: str, body=None):
+    """The server's own bookkeeping, written with the service role.
+
+    chief_undo_log has RLS on and an owner SELECT policy only (the
+    2026-07-29 migration). Chat binds the practitioner's JWT to the
+    context, so every INSERT and PATCH the door made there through `_sb`
+    was refused by RLS and swallowed as None — the undo log stayed empty,
+    "undo that" answered "nothing to undo", and the model went on to tell
+    Kevin the task had never been created (2026-09-14). The row is the
+    server's record of its own action, the caller has already passed the
+    owner check at the door, and the path is fixed by the code, not the
+    payload — so it is written the way the audit trail is: as the server.
+    Only for tables the server owns; practitioner data stays under RLS."""
+    return await sb_clients.sb_as_service(client, method, path, body)
+
+
 async def _sb_count(client, path):
     count = await sb_clients.sb_count_as_current_context(client, path, allow_service_fallback=True)
     import chief_truth
@@ -11675,7 +11691,7 @@ async def _record_undoable(client, biz, atype: str, action: Dict, result: Dict) 
     # it is not undoable in practice, whatever the verb allows in principle.
     if action_inverse.build_inverse(atype, action, result) is None:
         return
-    await _sb(client, "POST", "/chief_undo_log", {
+    await _sb_service(client, "POST", "/chief_undo_log", {
         "business_id": biz["id"],
         "user_id": biz.get("owner_id"),
         "action_type": atype,

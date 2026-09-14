@@ -105,7 +105,7 @@ async def undo_row(client, biz, row: Dict[str, Any]) -> Dict[str, Any]:
     row picked from the while-you-were-away feed (2026-09-13). The row
     stays undoable when the inverse fails; it is marked undone only after
     the handler said the reversal happened."""
-    from chief_of_staff import ACTION_HANDLERS, _sb, _action_failed
+    from chief_of_staff import ACTION_HANDLERS, _sb_service, _action_failed
 
     verb = row.get("action_type") or ""
     inverse = action_inverse.build_inverse(
@@ -136,7 +136,8 @@ async def undo_row(client, biz, row: Dict[str, Any]) -> Dict[str, Any]:
                 "label": f"Undo failed: {verb}",
                 "nav": res.get("nav"), "failed": True}
 
-    await _sb(client, "PATCH", f"/chief_undo_log?id=eq.{row['id']}", {
+    # Service role: the row is the server's own record (see _sb_service).
+    await _sb_service(client, "PATCH", f"/chief_undo_log?id=eq.{row['id']}", {
         "status": "undone",
         "undone_at": datetime.now(timezone.utc).isoformat(),
         "undo_result": str(res.get("result"))[:240],

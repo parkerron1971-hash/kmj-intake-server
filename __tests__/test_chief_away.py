@@ -64,6 +64,7 @@ def test_undo_row_keeps_the_row_undoable_when_the_inverse_fails(monkeypatch):
         return {"type": "delete_task", "result": "Failed: no such task", "failed": True}
 
     monkeypatch.setattr(cos, "_sb", fake_sb)
+    monkeypatch.setattr(cos, "_sb_service", fake_sb)
     monkeypatch.setitem(cos.ACTION_HANDLERS, "delete_task", failing_inverse)
     import action_inverse
     monkeypatch.setattr(action_inverse, "build_inverse",
@@ -85,6 +86,7 @@ def test_undo_row_marks_the_row_undone_after_the_inverse_ran(monkeypatch):
         return {"type": "delete_task", "result": "removed task t1", "nav": None}
 
     monkeypatch.setattr(cos, "_sb", fake_sb)
+    monkeypatch.setattr(cos, "_sb_service", fake_sb)
     monkeypatch.setitem(cos.ACTION_HANDLERS, "delete_task", ok_inverse)
     import action_inverse
     monkeypatch.setattr(action_inverse, "build_inverse",
