@@ -1218,6 +1218,10 @@ Pick up naturally — don't re-introduce yourself. If they reference something f
         greeting_style_guidance = "Give a fuller report (4-6 sentences) covering what happened since they were last here, what's pending, and what's coming up."
     else:
         greeting_style_guidance = "Lead with up to 3 priorities (use the TODAY'S PRIORITIES list above). Be specific — name names, cite numbers, reference dates. End with ONE question."
+    # "Good morning, Kevin McCloud" is how a form letter opens. The
+    # practitioner's first name is how a chief of staff does.
+    greeting_style_guidance += (" Address the practitioner by FIRST NAME only (the first word of the "
+                                "Practitioner name in context), never the full name.")
 
     # First-run launch greeting. When the server has MEASURED that this
     # business is brand new (setup snapshot: nearly nothing connected,

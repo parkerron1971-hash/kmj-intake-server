@@ -131,11 +131,20 @@ _turn_prompted: contextvars.ContextVar[bool] = contextvars.ContextVar(
 _image_attempted: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "chief_tool_loop.image_attempted", default=False)
 
+# The same read with the same arguments, again, in the same turn. Seen
+# live 2026-09-14: catch_up called three times in one turn after "0
+# updates" came back, each a full round trip and a model round. An empty
+# result reads as "try again" to the model; the answer does not change.
+# Reads only — a write repeated on purpose is the practitioner's call.
+_reads_this_turn: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
+    "chief_tool_loop.reads", default={})
+
 
 def reset_turn(writes_allowed: bool = False, *, surface: str = "chat",
                prompted: bool = True) -> None:
     _calls_this_turn.set(0)
     _image_attempted.set(False)
+    _reads_this_turn.set({})
     _writes_allowed.set(bool(writes_allowed))
     _writes_this_turn.set([])
     _write_calls.set(0)
@@ -359,6 +368,12 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     if handler is None:
         return True, f"'{name}' has no handler."
 
+    seen_key = name + " " + json.dumps(args or {}, sort_keys=True, default=str)[:2000]
+    seen = _reads_this_turn.get()
+    if seen_key in seen:
+        return False, ("Same lookup as earlier this turn; the result is unchanged: "
+                       + seen[seen_key] + " Answer from it; do not look it up again.")
+
     _calls_this_turn.set(_calls_this_turn.get() + 1)
     action = dict(args or {})
     action["type"] = name
@@ -381,7 +396,9 @@ async def execute_tool_use(client, biz: Dict[str, Any],
             return True, 'Lookup unavailable. Do not infer zero results or invent an answer.'
         return True, _shrink(result)
     chief_truth.record('tool:' + name, result)
-    return False, _shrink(result)
+    text = _shrink(result)
+    _reads_this_turn.set({**seen, seen_key: text})
+    return False, text
 
 
 def _looks_held(result: Any) -> bool:

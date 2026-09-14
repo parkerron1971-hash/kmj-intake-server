@@ -229,7 +229,9 @@ def test_reads_do_not_spend_the_write_budget(door, monkeypatch):
     async def fake(client, biz, action):
         return {"type": "check_goals", "result": "ok", "label": "G"}
     monkeypatch.setitem(cos.ACTION_HANDLERS, "check_goals", fake)
-    outs, taken, calls = _turn([("check_goals", {})] * 4
+    # Distinct arguments: the same read with the same arguments is
+    # answered from the first result now (2026-09-14) and does not count.
+    outs, taken, calls = _turn([("check_goals", {"lens": f"l{i}"}) for i in range(4)]
                                + [("create_task", {"title": "still allowed"})])
     assert not outs[-1][0]
     assert len(taken) == 1 and calls == 5
