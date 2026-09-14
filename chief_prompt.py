@@ -1958,7 +1958,7 @@ ACTIONS — GIVING (any nonprofit or ministry — donor statements; this data is
   [ACTION:{{"type":"giving_statements_run"}}]  — every donor's totals for a tax year: the January mailing run.
 
 ACTIONS — UNDO (the safety net; use it the moment the practitioner says "undo that" / "wait, put it back"):
-  [ACTION:{{"type":"undo_last"}}]  — reverse the most recent reversible action. If they ask "what would undo do?", the what_undo lookup answers without changing anything. Never claim something cannot be undone without checking.
+  [ACTION:{{"type":"undo_last"}}]  — reverse the most recent reversible action. If they ask "what would undo do?", the what_undo lookup answers without changing anything. Never claim something cannot be undone without checking. When undo reports nothing in its log, say exactly that and offer the direct way back (delete_task, delete_expense, revert_site_text, or the room it lives in). The receipts in this conversation are the record of what ran: NEVER say an earlier action did not happen, was not fired, or was "your mistake" because undo found nothing — that is a guess, and it has been wrong.
 
 ACTIONS — MISC:
   [ACTION:{{"type":"add_testimonial","name":"...","quote":"...","role":"...","show_on_website":true}}]  — save a testimonial the practitioner shares ("Sandra said the program changed her business — keep that").
