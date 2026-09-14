@@ -167,16 +167,38 @@ def _sb_headers() -> Dict[str, str]:
     }
 
 
+# Tables the server owns outright. business_sites has RLS on with one
+# policy: anon may read a published site (2026-06-04). There is no policy
+# for a signed-in practitioner, on purpose — the site is edited through
+# the server's owner-checked routes, never from the client. So under a
+# bound practitioner JWT (business_access binds one since 2026-08-09) the
+# row reads back empty and a patch is refused and swallowed as None: the
+# slot manifest showed every slot unpopulated, set-site-type answered
+# "site not found", a reroll could not save (found 2026-09-14, the day
+# the same shape emptied Chief's undo log). The caller has passed the
+# owner check by the time it is here; the row is written as the server.
+_SERVER_OWNED_PATHS = ("/business_sites",)
+
+
+def _server_owned(path: str) -> bool:
+    return path.startswith(_SERVER_OWNED_PATHS)
+
+
 def _sb_get(path: str) -> Optional[Any]:
     """RLS-readiness migration — delegates to sb_clients.sb_get_current_context.
     User JWT bound by the handler (via sb_clients.set_user_jwt) is forwarded
     automatically. Falls back to service-role when no JWT is bound
-    (server-initiated paths)."""
+    (server-initiated paths). Server-owned tables are read as the server."""
+    if _server_owned(path):
+        return sb_clients.sb_get_as_service(path)
     return sb_clients.sb_get_current_context(path, allow_service_fallback=True)
 
 
 def _sb_patch(path: str, body: Dict[str, Any]) -> Optional[Any]:
-    """RLS-readiness migration — delegates to sb_clients.sb_patch_current_context."""
+    """RLS-readiness migration — delegates to sb_clients.sb_patch_current_context.
+    Server-owned tables are written as the server."""
+    if _server_owned(path):
+        return sb_clients.sb_patch_as_service(path, body)
     return sb_clients.sb_patch_current_context(path, body, allow_service_fallback=True)
 
 
