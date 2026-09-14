@@ -438,7 +438,8 @@ def test_create_contact_refusal_names_the_containment_law():
 
 
 @pytest.mark.parametrize("verb", [
-    "create_task", "create_goal", "create_note", "save_note",
+    # create_task left this list on 2026-09-14: delete_task exists now.
+    "create_goal", "create_note", "save_note",
     "log_time", "save_email_template",
 ])
 def test_reviewed_creates_are_refused_with_reasons(verb):

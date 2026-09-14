@@ -7647,6 +7647,45 @@ async def handle_create_task(client, biz, action) -> Dict:
     }
 
 
+async def handle_delete_task(client, biz, action) -> Dict:
+    """Remove a task Chief just created. This is the undo of create_task
+    (2026-09-14: "undo that task" answered "nothing to undo" and the model
+    then told Kevin the task had never been created, while it sat on his
+    list). Scoped on purpose: an explicit id, this business, still open,
+    and created within the undo window — a fresh task, not a way to
+    clear the list. Anything else is refused with the reason."""
+    import action_inverse
+    task_id = str(action.get("task_id") or "").strip()
+    if not task_id:
+        return _fail("delete_task", "task_id required")
+    rows = await _sb(client, "GET",
+        f"/tasks?id=eq.{task_id}&business_id=eq.{biz['id']}"
+        f"&select=id,title,status,created_at&limit=1") or []
+    if not rows:
+        return _fail("delete_task", "no such task in this business")
+    row = rows[0]
+    if str(row.get("status") or "") == "done":
+        return _fail("delete_task", "that task is already done; re-open it in Tasks if you need it back")
+    try:
+        made = datetime.fromisoformat(str(row.get("created_at") or "").replace("Z", "+00:00"))
+        if made.tzinfo is None:
+            made = made.replace(tzinfo=timezone.utc)
+        fresh = datetime.now(timezone.utc) - made <= timedelta(hours=action_inverse.UNDO_WINDOW_HOURS)
+    except ValueError:
+        fresh = False
+    if not fresh:
+        return _fail("delete_task", "that task is older than a day; edit it in Tasks directly")
+    await _sb(client, "DELETE", f"/tasks?id=eq.{task_id}&business_id=eq.{biz['id']}")
+    title = str(row.get("title") or "task")
+    return {
+        "type": "delete_task",
+        "result": f"removed the task \u201c{title}\u201d",
+        "label": f"Removed task: {title}",
+        "nav": {"tab": "operate", "sub": "tasks"},
+        "task_id": task_id,
+    }
+
+
 async def handle_complete_task(client, biz, action) -> Dict:
     task_id = action.get("task_id")
     title_hint = (action.get("title") or "").strip()
@@ -10595,6 +10634,7 @@ ACTION_HANDLERS = {
     **business_track_actions.HANDLERS,
     # Phase-2 operations
     "create_task":                handle_create_task,
+    "delete_task":                handle_delete_task,
     "complete_task":              handle_complete_task,
     "create_note":                handle_create_note,
     "log_activity":               handle_log_activity,

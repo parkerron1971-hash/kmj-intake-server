@@ -24,6 +24,16 @@ import action_inverse
 
 logger = logging.getLogger("chief_undo_actions")
 
+# An empty undo log is not evidence that nothing happened. Said plainly,
+# because the model read "nothing to undo" as "that task was never
+# created" and told the practitioner so while the task sat on his list
+# (2026-09-14).
+NOTHING_TO_UNDO = (
+    f"nothing in the undo log from the last {action_inverse.UNDO_WINDOW_HOURS} hours. "
+    "That is not the same as nothing having happened: earlier actions may have run and "
+    "simply not be reversible (a note, a goal, time logged). Do not tell the practitioner "
+    "an action did not happen; point them at the receipts above or the room it lives in.")
+
 
 def _fail(action_type: str, msg: str) -> Dict[str, Any]:
     # Capital "Failed:" — chief_of_staff._action_failed and the frontend's
@@ -54,8 +64,7 @@ async def handle_what_undo(client, biz, action) -> Dict[str, Any]:
     row = await _most_recent(client, biz)
     if not row:
         return {"type": "what_undo",
-                "result": (f"nothing to undo from the last "
-                           f"{action_inverse.UNDO_WINDOW_HOURS} hours"),
+                "result": NOTHING_TO_UNDO,
                 "label": "Nothing to undo", "nav": None}
 
     verb = row.get("action_type") or ""
@@ -73,8 +82,7 @@ async def handle_undo_last(client, biz, action) -> Dict[str, Any]:
     row = await _most_recent(client, biz)
     if not row:
         return {"type": "undo_last",
-                "result": (f"nothing to undo from the last "
-                           f"{action_inverse.UNDO_WINDOW_HOURS} hours"),
+                "result": NOTHING_TO_UNDO,
                 "label": "Nothing to undo", "nav": None}
     return await undo_row(client, biz, row)
 

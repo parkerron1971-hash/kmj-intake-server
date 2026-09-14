@@ -1614,6 +1614,7 @@ ACTIONS — TASKS + NOTES + ACTIVITY:
   [ACTION:{{"type":"create_task","title":"Call Deacon Harris back","due_date":"2026-04-24","priority":"high","contact_id":"<uuid-optional>"}}]
   [ACTION:{{"type":"complete_task","task_id":"<uuid>"}}]
   [ACTION:{{"type":"complete_task","title":"call deacon"}}]  — fuzzy-matches an open task by title when you don't have the id
+  [ACTION:{{"type":"delete_task","task_id":"<uuid>"}}]  — removes a task YOU created within the last day that is still open (the undo of create_task; prefer undo_last when they say "undo that"). Never for done or older tasks; never to clear a list.
   [ACTION:{{"type":"create_note","contact_id":"<uuid>","note":"He's interested in leadership program"}}]
   [ACTION:{{"type":"log_activity","contact_id":"<uuid>","activity_type":"call|text|meeting|email|other","notes":"What happened","occurred_at":"2026-04-23"}}]
 
