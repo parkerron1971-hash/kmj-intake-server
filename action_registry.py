@@ -255,6 +255,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "update_contact_status":         _w("A", "sets a status field"),
     "create_note":                   _w("A", "creates a note"),
     "create_task":                   _w("A", "creates a task"),
+    "delete_task":                   _w("A", "removes a task Chief created within the undo window; "
+                                            "the inverse of create_task, refused for done or old tasks"),
     "complete_task":                 _w("A", "flips a task's done flag; re-openable"),
     "create_goal":                   _w("A", "creates a goal"),
     "add_reminder":                  _w("A", "creates a reminder"),

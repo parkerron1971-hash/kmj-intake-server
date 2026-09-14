@@ -152,6 +152,14 @@ INVERSES: Dict[str, Inverse] = {
                       if (a.get("offering_id") or _first_id(r, "offering_id", "id"))
                       else None)),
 
+    # create_task carries the new row's id back; delete_task (2026-09-14)
+    # removes that row while it is fresh and still open.
+    "create_task": Inverse(
+        "delete_task",
+        "remove that task again",
+        lambda a, r: ({"type": "delete_task", "task_id": _first_id(r, "task_id", "id")}
+                      if _first_id(r, "task_id", "id") else None)),
+
     # complete_task flips a done flag the registry calls "re-openable".
     "complete_task": Inverse(
         "update_module_entry",
@@ -267,7 +275,6 @@ NOT_UNDOABLE_REASON: Dict[str, str] = {
                        "reaches those — open the contact and use Delete there."),
     # No delete verb exists for these creates; inventing one belongs to
     # chief_of_staff (owned elsewhere this wave), not to undo.
-    "create_task": "There's no verb that deletes a task yet — mark it done or edit it directly.",
     "create_goal": "There's no verb that removes a goal yet — edit it in Goals directly.",
     "create_note": "Contact notes have no delete verb yet — the note stays on the record.",
     # save_note rows carry no id back, and 'forget' matches by content
