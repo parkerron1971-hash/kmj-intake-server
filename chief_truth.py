@@ -451,7 +451,15 @@ def has_completion_claim(reply):
 
 def evidence_for_review(ctx, view_detail, taken):
     turn = _turn.get()
-    sources = dict(turn.sources) if turn else {}
+    # Filled in rank order, lowest first, because the budget below keeps
+    # the LAST entries: standing context, then what this turn read, then
+    # what this turn did. A tool read is the evidence the reply is about;
+    # ranked under the context it used to be the first thing the budget
+    # dropped for any business with a full blueprint, brand and playbook
+    # (up to 10,000 chars each), and the reviewer, never shown the
+    # availability record the turn had just fetched, marked "Thursday's
+    # 9am to 5pm" a gap (2026-09-14).
+    sources = {}
     # Use only the same business facts already intended for Chief's context,
     # never the raw businesses/settings/profile rows or arbitrary DB reads.
     context_fields = ('contacts_total', 'contacts_loaded', 'contacts_complete',
@@ -486,6 +494,10 @@ def evidence_for_review(ctx, view_detail, taken):
                                   'context_quality', 'business_identity')
             sources['context:' + name] = {'kind': 'context', 'text': text[:MAX_SOURCE_CHARS],
                                          'complete': exhaustive and len(text) <= MAX_SOURCE_CHARS}
+    if turn:
+        for sid, source in turn.sources.items():
+            sources.pop(sid, None)
+            sources[sid] = source
     for index, item in enumerate(taken):
         if not isinstance(item, dict):
             continue
@@ -507,6 +519,10 @@ def evidence_for_review(ctx, view_detail, taken):
         bounded[sid] = {**source, 'text': text,
                         'complete': source['complete'] and len(text) == len(source['text'])}
         remaining -= len(text)
+    dropped = [sid for sid in sources if sid not in bounded]
+    if dropped:
+        logger.info('review evidence: %d of %d sources fit; dropped %s',
+                    len(bounded), len(sources), ', '.join(dropped[:12]))
     return bounded
 
 
