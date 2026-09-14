@@ -256,7 +256,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 return 'unsupported', [], _claim_fail('quote is not in the cited source', text_)
             if claim['kind'] not in ('fact', 'action', 'estimate'):
                 return 'invalid', [], 'unknown claim kind'
-            quoted = _numbers(quote)
+            quoted = _numbers(quote) | _clock_twins(quote)
             quoted_all = _number_list(quote)
             source_all = _number_list(source['text'])[:16]
             # A figure the claim did not quote is fine when it is the exact
@@ -361,12 +361,64 @@ def _number_list(text):
 _IDENTIFIER = re.compile(r'(?<![\w-])(?=[\w-]*[A-Za-z])(?=[\w-]*\d)[\w-]+')
 _FIGURE = re.compile(r'(?<!\w)\d[\d,]*(?:\.\d+)?')
 
+# A clock time: "9am", "9 a.m.", "5:30pm", "11:30", "17:30". A bare hour
+# only counts with a meridiem, so "5 invoices" stays a quantity. Written
+# by the practitioner one way and by the receipt another ("9am to
+# 5:30pm" against "09:00–17:30"), the same moment must read as the same
+# figures — and "9am" is not an identifier, whatever the letters say.
+# Six voice replies in a row were withheld over this while a
+# practitioner set her week's hours (2026-09-14).
+_CLOCK = re.compile(
+    r'(?<![\w:.])(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\b\.?'   # 9am, 9 a.m., 5:30pm
+    r'|(?<![\w:.])(\d{1,2}):(\d{2})(?![\w:])',                  # 11:30, 17:30
+    re.I)
+
+
+def _clock_times(text):
+    """Every clock time in the text as (hour24, minute), in order, and
+    the text with those tokens blanked so nothing counts them twice."""
+    times = []
+
+    def swap(m):
+        if m.group(3):
+            h, mi, mer = int(m.group(1)), int(m.group(2) or 0), m.group(3).lower()
+            if h > 12 or mi > 59:
+                return m.group(0)
+            h = h % 12 + (12 if mer == 'p' else 0)
+        else:
+            h, mi = int(m.group(4)), int(m.group(5))
+            if h > 24 or mi > 59:
+                return m.group(0)
+        times.append((h, mi))
+        return ' '
+
+    return times, _CLOCK.sub(swap, text or '')
+
 
 def _figures(text):
-    # Drop tokens that mix letters and digits (INV-2026-007, A1B2, sha
-    # fragments) before counting figures. A date or a time has no letters
-    # and keeps every part.
-    return _FIGURE.findall(_IDENTIFIER.sub(' ', text or ''))
+    # Clock times first, as hour and minute on the 24-hour clock. Then drop
+    # tokens that mix letters and digits (INV-2026-007, A1B2, sha
+    # fragments) before counting figures. A date has no letters and keeps
+    # every part.
+    times, rest = _clock_times(text)
+    out = []
+    for h, mi in times:
+        out.append(str(h))
+        out.append(str(mi))
+    return out + _FIGURE.findall(_IDENTIFIER.sub(' ', rest))
+
+
+def _clock_twins(text):
+    """Hours a quote's clock times can also be called: 13:00 is "1" on
+    the practitioner's clock, and "9" is 09:00. A draft that says
+    "1 to 8" against a receipt of 13:00–20:00 is telling the truth."""
+    twins = set()
+    for h, _ in _clock_times(text)[0]:
+        twins.add(Decimal(h))
+        twins.add(Decimal(h % 12 or 12))
+        if h < 12:
+            twins.add(Decimal(h + 12))
+    return twins
 
 
 def _is_sum_of(target, nums, max_terms=8):
