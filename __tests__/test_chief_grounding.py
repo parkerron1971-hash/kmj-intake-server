@@ -418,19 +418,26 @@ def test_a_total_may_add_up_from_the_whole_cited_source():
     assert truth.assess_review(raw, 'You have $255 outstanding.', sources)[0] == 'supported'
 
 
-def test_a_quote_the_reviewer_got_wrong_names_the_claim_instead_of_blanking_the_answer():
+def test_a_quote_the_reviewer_got_wrong_still_withholds_and_names_the_claim_in_the_reason():
     sources = {'context:open_invoices': {'kind': 'context', 'text': '[{"number": "INV-2026-007", "contact": "Monica Walton", "amount": 150.0, "days_overdue": 51}]'}}
     raw = json.dumps({"verdict": "supported", "claims": [
         {"text": "Monica Walton is 51 days overdue", "kind": "fact", "source_id": "context:open_invoices",
          "quote": '"contact": "Monica Walton", "days_overdue": 51'}]})   # skipped the amount field
     verdict, _, reason = truth.assess_review(raw, 'Monica Walton is 51 days overdue.', sources)
     assert verdict == 'unsupported' and reason.startswith('quote is not in the cited source :: Monica Walton')
-    assert truth.unconfirmed_claims(raw, reason) == ['Monica Walton is 51 days overdue']
+    # a fabricated citation is never delivered with a caveat (the factual eval pins this)
+    assert truth.unconfirmed_claims(raw, reason) == []
     result, meta = asyncio.run(truth.finalize_reply(None, 'Monica Walton is 51 days overdue.',
         ctx={'open_invoices': [{"number": "INV-2026-007", "contact": "Monica Walton", "amount": 150.0, "days_overdue": 51}]},
         view_detail={}, taken=[], message='Who is overdue?', business_id='biz', reviewer=AsyncMock(return_value=raw)))
-    assert meta['status'] == 'caveated'
-    assert result.startswith('Monica Walton is 51 days overdue.') and 'I could not confirm' in result
+    assert result == truth.UNVERIFIED_REPLY and meta['status'] == 'withheld'
+
+
+def test_a_re_spaced_quote_still_matches():
+    sources = {'context:queue': {'kind': 'context', 'text': '{"pending": 10}'}}
+    raw = json.dumps({"verdict": "supported", "claims": [
+        {"text": "ten drafts", "kind": "fact", "source_id": "context:queue", "quote": '"pending":10'}]})
+    assert truth.assess_review(raw, 'You have ten drafts waiting.', sources)[0] == 'supported'
 
 
 def test_identifier_digits_are_not_figures_but_dates_and_money_are():

@@ -305,13 +305,13 @@ def _claim_fail(msg, text_):
 def unconfirmed_claims(raw, reason):
     """The claim texts a review could not support: the reviewer's own gaps,
     or the one claim whose citation failed the check."""
+    # Only the reviewer's own declared gaps qualify. A citation that fails
+    # the check (a quote not in the source, a figure not in the quote, a
+    # source that does not exist) is the fabricated-evidence signal the
+    # factual eval pins, and a wrong claim under "could not confirm" is
+    # still a wrong claim on the screen. Those stay withheld.
     if reason.startswith('claim without support'):
         return _gap_claims(raw)
-    # A figure that is not in the evidence is never delivered with a
-    # caveat: a wrong number under a "could not confirm" is still a wrong
-    # number on the screen. Those stay withheld.
-    if ' :: ' in reason and not reason.startswith('claim number'):
-        return [reason.split(' :: ', 1)[1]]
     return []
 
 
