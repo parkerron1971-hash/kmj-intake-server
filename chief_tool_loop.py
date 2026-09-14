@@ -362,14 +362,18 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     _calls_this_turn.set(_calls_this_turn.get() + 1)
     action = dict(args or {})
     action["type"] = name
+    # A read is a step on the stream too; the door does this for writes.
+    step = chief_of_staff._turn_step_start(name)
     try:
         result = await handler(client, biz, action)
     except Exception as e:
         logger.warning(f"[tool-loop] {name} raised: {e}")
+        chief_of_staff._turn_step_end(step, None)
         import chief_truth
         chief_truth.record('tool:' + name, None)
         return True, (f"'{name}' failed: {type(e).__name__}. This data is unavailable. "
                       "Say you could not verify it; do not guess or report zero results.")
+    chief_of_staff._turn_step_end(step, result)
     import chief_truth
     if result is None or (isinstance(result, dict) and chief_of_staff._action_failed(result)):
         chief_truth.record('tool:' + name, None)
