@@ -14171,6 +14171,142 @@ class _SeenRequest(BaseModel):
     business_id: Optional[str] = None
 
 
+# ─── while you were away (2026-09-13) ─────────────────────────────────
+# The Chat Mode rest screen shows what Chief did since the practitioner
+# last looked, each with a way back. The rows are chief_activity's
+# unseen recap (every surface: chat, voice, mobile, agent, jobs) and the
+# way back is chief_undo_log, which the door writes at the same moment
+# for anything that has a concrete inverse. Nothing new is stored; the
+# two tables are joined here by verb and moment.
+
+AWAY_UNDO_MATCH_SECONDS = 20
+
+
+def _iso_seconds(raw: Any) -> Optional[float]:
+    try:
+        d = datetime.fromisoformat(str(raw or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.timestamp()
+
+
+def attach_undo_pointers(activity: List[Dict[str, Any]],
+                         undo_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Give each activity row the undo row recorded for it, if any:
+    same verb, still undoable, recorded within AWAY_UNDO_MATCH_SECONDS.
+    Each undo row is handed out once, nearest first."""
+    pool = [u for u in (undo_rows or []) if str(u.get("status") or "undoable") == "undoable"]
+    out: List[Dict[str, Any]] = []
+    for a in activity or []:
+        item = dict(a)
+        at = _iso_seconds(a.get("created_at"))
+        verb = str(a.get("action_type") or "")
+        best = None
+        best_gap = None
+        for u in pool:
+            if str(u.get("action_type") or "") != verb:
+                continue
+            ut = _iso_seconds(u.get("created_at"))
+            if at is None or ut is None:
+                continue
+            gap = abs(ut - at)
+            if gap <= AWAY_UNDO_MATCH_SECONDS and (best_gap is None or gap < best_gap):
+                best, best_gap = u, gap
+        if best is not None:
+            pool.remove(best)
+            item["undo_id"] = best.get("id")
+            import action_inverse
+            item["undo_describe"] = action_inverse.describe(verb)
+        out.append(item)
+    return out
+
+
+@router.get("/agents/chief/away")
+async def chief_away(
+    business_id: str,
+    limit: int = 30,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """What Chief did since you last looked, with a way back where one
+    exists. RLS scopes both reads: chief_activity to the caller's own
+    rows, chief_undo_log to the business owner — so a member sees the
+    recap without undo pointers."""
+    _jwt_token = sb_clients.set_user_jwt(user_session.token)
+    try:
+        lim = max(1, min(int(limit or 30), 100))
+        q = ("/chief_activity?select=id,source,action_type,label,summary,nav,created_at"
+             f"&seen_at=is.null&business_id=eq.{business_id}&order=created_at.desc&limit={lim}")
+        import action_inverse
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(hours=action_inverse.UNDO_WINDOW_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        uq = (f"/chief_undo_log?business_id=eq.{business_id}&status=eq.undoable"
+              f"&created_at=gte.{cutoff}&order=created_at.desc&limit=200"
+              "&select=id,action_type,created_at,status")
+        async with httpx.AsyncClient() as client:
+            activity = await _sb(client, "GET", q)
+            try:
+                undo_rows = await _sb(client, "GET", uq)
+            except Exception as e:
+                logger.warning(f"chief_away undo read failed: {e}")
+                undo_rows = []
+        items = attach_undo_pointers(activity or [], undo_rows or [])
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        logger.warning(f"chief_away GET failed: {e}")
+        return {"items": [], "count": 0}
+    finally:
+        sb_clients.reset_user_jwt(_jwt_token)
+
+
+class _UndoRowRequest(BaseModel):
+    business_id: str
+
+
+@router.post("/agents/chief/undo/{undo_id}")
+async def chief_undo_row(
+    undo_id: str,
+    req: _UndoRowRequest,
+    user_session: UserSession = Depends(require_user_session),
+):
+    """Take back ONE recorded action from the away feed. Owner-only by
+    the undo log's RLS; the row must belong to the business, still be
+    undoable, and be inside the undo window."""
+    try:
+        uuid.UUID(undo_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(400, "invalid undo id")
+    import chief_undo_actions
+    _jwt_token = sb_clients.set_user_jwt(user_session.token)
+    try:
+        async with httpx.AsyncClient() as client:
+            biz_rows = await _sb(client, "GET",
+                                 f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
+            if not biz_rows:
+                raise HTTPException(404, "business not found")
+            biz = biz_rows[0]
+            rows = await _sb(client, "GET",
+                             f"/chief_undo_log?id=eq.{undo_id}&select=*&limit=1")
+            if not rows or str(rows[0].get("business_id")) != str(biz.get("id")):
+                raise HTTPException(404, "nothing to undo")
+            row = rows[0]
+            if str(row.get("status") or "") != "undoable":
+                raise HTTPException(409, "already undone")
+            if not chief_undo_actions.within_window(row):
+                raise HTTPException(409, "outside the undo window")
+            res = await chief_undo_actions.undo_row(client, biz, row)
+        return {
+            "ok": not _action_failed(res),
+            "result": res.get("result"),
+            "label": res.get("label"),
+            "nav": res.get("nav"),
+            "failed": bool(_action_failed(res)),
+        }
+    finally:
+        sb_clients.reset_user_jwt(_jwt_token)
+
+
 @router.post("/agents/chief/activity/seen")
 async def chief_activity_seen(
     req: _SeenRequest,
