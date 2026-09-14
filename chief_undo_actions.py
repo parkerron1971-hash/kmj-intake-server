@@ -70,14 +70,34 @@ async def handle_what_undo(client, biz, action) -> Dict[str, Any]:
 
 async def handle_undo_last(client, biz, action) -> Dict[str, Any]:
     """Reverse the most recent reversible action."""
-    from chief_of_staff import ACTION_HANDLERS, _sb, _action_failed
-
     row = await _most_recent(client, biz)
     if not row:
         return {"type": "undo_last",
                 "result": (f"nothing to undo from the last "
                            f"{action_inverse.UNDO_WINDOW_HOURS} hours"),
                 "label": "Nothing to undo", "nav": None}
+    return await undo_row(client, biz, row)
+
+
+def within_window(row: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Still inside UNDO_WINDOW_HOURS of when it was recorded."""
+    raw = str(row.get("created_at") or "")
+    try:
+        made = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if made.tzinfo is None:
+        made = made.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return now - made <= timedelta(hours=action_inverse.UNDO_WINDOW_HOURS)
+
+
+async def undo_row(client, biz, row: Dict[str, Any]) -> Dict[str, Any]:
+    """Reverse ONE recorded action — the newest (undo_last) or a specific
+    row picked from the while-you-were-away feed (2026-09-13). The row
+    stays undoable when the inverse fails; it is marked undone only after
+    the handler said the reversal happened."""
+    from chief_of_staff import ACTION_HANDLERS, _sb, _action_failed
 
     verb = row.get("action_type") or ""
     inverse = action_inverse.build_inverse(
