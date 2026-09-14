@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import uuid
 import json
 import logging
 import os
@@ -354,6 +355,76 @@ def _turn_status(text: str) -> None:
         pass
 
 
+# ─── the turn shows its work (2026-09-13) ─────────────────────────────
+# A status is one phrase for the whole turn; a step is one line per
+# thing Chief did, with a start and an end, so the chat can draw the
+# work as it happens instead of a receipt at the end. Kevin: "if chief
+# is working in the mid task, will we be able to see the work being
+# done?" Same sink, its own prefix, JSON body. The plain endpoint
+# never sees a step; an old streaming client ignores the type.
+STEP_PREFIX = "\x00step:"
+
+
+def _step_phrase(atype: str) -> str:
+    """The starting line for an action: the status phrase, sentence case."""
+    t = str(atype or "").strip()
+    p = _ACTION_PHRASES.get(t) or (t.replace("_", " ") if t else "working")
+    return p[:1].upper() + p[1:]
+
+
+def _turn_step_start(atype: str, n0: int = 0) -> Optional[Dict[str, Any]]:
+    """Announce one action starting. Returns the pending step to finish
+    later, or None when nobody is listening — so the door pays nothing
+    on the plain endpoint."""
+    try:
+        sink = _STREAM_SINK.get()
+    except LookupError:
+        sink = None
+    if not sink:
+        return None
+    step = {
+        "id": uuid.uuid4().hex[:10],
+        "type": str(atype or ""),
+        "label": _step_phrase(atype),
+        "n0": n0,
+        "t0": time.monotonic(),
+    }
+    try:
+        sink(STEP_PREFIX + json.dumps({
+            "id": step["id"], "action": step["type"], "label": step["label"], "state": "running",
+        }))
+    except Exception:
+        pass
+    return step
+
+
+def _turn_step_end(step: Optional[Dict[str, Any]], result: Any) -> None:
+    """Finish a pending step with what the handler said."""
+    if not step:
+        return
+    try:
+        sink = _STREAM_SINK.get()
+    except LookupError:
+        sink = None
+    if not sink:
+        return
+    failed = result is None or (isinstance(result, dict) and _action_failed(result))
+    label = step["label"]
+    if isinstance(result, dict):
+        rl = result.get("label")
+        if isinstance(rl, str) and rl.strip():
+            label = rl.strip()[:120]
+    held = failed and "held" in label.lower()
+    try:
+        sink(STEP_PREFIX + json.dumps({
+            "id": step["id"], "action": step["type"], "label": label,
+            "state": "held" if held else ("failed" if failed else "done"),
+            "ms": int((time.monotonic() - step["t0"]) * 1000),
+        }))
+    except Exception:
+        pass
+
+
 def _humanize_actions(actions: List[Dict[str, Any]]) -> str:
     phrases: List[str] = []
     for a in actions or []:
@@ -375,6 +446,14 @@ def _stream_piece_events(piece: str, filt: "_ActionTagFilter") -> List[Dict[str,
     text the tag filter lets through as a delta (possibly nothing yet)."""
     if isinstance(piece, str) and piece.startswith(STATUS_PREFIX):
         return [{"type": "status", "text": piece[len(STATUS_PREFIX):]}]
+    if isinstance(piece, str) and piece.startswith(STEP_PREFIX):
+        try:
+            body = json.loads(piece[len(STEP_PREFIX):])
+        except ValueError:
+            return []
+        if not isinstance(body, dict) or not body.get("id"):
+            return []
+        return [{"type": "step", **body}]
     txt = filt.feed(piece)
     return [{"type": "delta", "text": txt}] if txt else []
 
@@ -11399,8 +11478,24 @@ async def _execute_actions(client, biz, actions: List[Dict],
     # list and a plan could not use its own findings.
     def _reference_pool() -> List[Dict[str, Any]]:
         return (prior_results or []) + results
+    # One step per action on the stream: started at the top of the loop,
+    # finished with whatever the loop appended for it (the handler's
+    # result, a gate verdict, a policy refusal or a failure) when the
+    # next action starts or the loop ends. Free when nobody streams.
+    pending_step: Optional[Dict[str, Any]] = None
+
+    def _finish_pending() -> None:
+        nonlocal pending_step
+        if not pending_step:
+            return
+        produced = results[pending_step["n0"]:]
+        _turn_step_end(pending_step, produced[-1] if produced else None)
+        pending_step = None
+
     for action in actions:
+        _finish_pending()
         atype = action.get("type")
+        pending_step = _turn_step_start(atype, len(results))
         handler = ACTION_HANDLERS.get(atype)
         if not handler:
             # Lookup MISS. Instead of dead-ending, REASON the intent into a
@@ -11519,6 +11614,7 @@ async def _execute_actions(client, biz, actions: List[Dict],
         except Exception as e:
             logger.exception(f"Action {atype} raised: {e}")
             results.append(_fail(atype, str(e)[:200]))
+    _finish_pending()
     return results
 
 
@@ -13829,7 +13925,7 @@ async def chief_chat_stream(
     def _sink(piece: str) -> None:
         # Only server-authored progress crosses this boundary early.
         # Do not even queue raw prose (including corrections and retries).
-        if not piece.startswith(STATUS_PREFIX):
+        if not (piece.startswith(STATUS_PREFIX) or piece.startswith(STEP_PREFIX)):
             return
         try:
             q.put_nowait(piece)
@@ -13878,9 +13974,13 @@ async def chief_chat_stream(
                         yield _evt(ev)
                     continue
                 getter.cancel()
-                # Only status messages can be waiting when the turn ends.
+                # Only status and step pieces can be waiting when the turn
+                # ends. A step that finished in the last milliseconds is
+                # still part of the work; emit it, do not drop it.
                 while not q.empty():
-                    q.get_nowait()
+                    for ev in _stream_piece_events(q.get_nowait(), filt):
+                        if ev.get("type") in ("status", "step"):
+                            yield _evt(ev)
                 try:
                     payload = turn.result()
                 except HTTPException as e:
