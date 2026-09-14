@@ -24,7 +24,12 @@ if not logger.handlers:
     _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] chief.truth: %(message)s"))
     logger.addHandler(_h)
     logger.setLevel(logging.INFO)
-MAX_EVIDENCE_CHARS = 60000
+# 60,000 chars of evidence made the answer check the longest part of a
+# turn (review=12-15s of 31-37s, 2026-09-14 timing lines): the reviewer
+# reads every source before it writes a word. Half that keeps the
+# latest results and the most recent context (bounded newest-first
+# below) and drops the tail that was never cited.
+MAX_EVIDENCE_CHARS = 30000
 # The review lists every claim with an exact quote. 2,400 tokens was hit on a
 # long ordinary answer (output_tokens == cap in api_usage), which discarded the
 # whole review and replaced the answer with UNVERIFIED_REPLY.
@@ -462,7 +467,7 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     import spend_guard
     if not llm_call.api_key() or spend_guard.over_budget(business_id):
         return ''
-    model = chief_models.model_for('chat')
+    model = chief_models.model_for('review')
     # The review is a mechanical check with a fixed JSON contract. At default
     # effort the model's adaptive thinking ate the entire 2,400-token output
     # budget (usage showed thinking_tokens == output_tokens) and returned no

@@ -45,6 +45,11 @@ _LANE_DEFAULTS = {
     "draft":      "claude-sonnet-5",
     "insight":    "claude-opus-4-8",
     "background": "claude-haiku-4-5-20251001",
+    # The answer check is a mechanical JSON task that ran on the chat
+    # model and took 12-15s of every turn (2026-09-14 timing lines:
+    # review=15509ms of total=37576ms). Its own lane, so it can be
+    # moved and measured on its own.
+    "review":     "claude-sonnet-5",
 }
 
 # Per-lane reply budgets. Voice is deliberately tight: replies are read

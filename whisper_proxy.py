@@ -365,10 +365,17 @@ async def text_to_speech(req: TTSRequest, request: Request,
         elif not _el_allowance_ok(metered_biz):
             logger.info(f"ElevenLabs monthly char cap reached for business {metered_biz} — falling back to OpenAI nova")
         else:
-            return await _elevenlabs_speak(text, el_voice_id, el_key,
-                                           business_id=metered_biz,
-                                           user_id=user.id if user else None,
-                                           fmt=fmt)
+            spoken = await _elevenlabs_speak(text, el_voice_id, el_key,
+                                             business_id=metered_biz,
+                                             user_id=user.id if user else None,
+                                             fmt=fmt)
+            if spoken is not None:
+                return spoken
+            # ElevenLabs was busy (429, concurrent-request cap on the
+            # shared account) or down (5xx). Seen live 2026-09-14: a
+            # voice turn that took 37s and then said nothing, because
+            # the reply was withheld by the provider, not by Chief.
+            logger.warning("ElevenLabs unavailable for this reply — falling back to OpenAI nova")
 
     voice = raw_voice.lower()
     if voice not in TTS_VOICES:
@@ -465,7 +472,7 @@ _EL_OUTPUT_FORMATS = {"mp3": "mp3_44100_128", "pcm": "pcm_24000"}
 async def _elevenlabs_speak(text: str, voice_id: str, key: str,
                             business_id: Optional[str] = None,
                             user_id: Optional[str] = None,
-                            fmt: str = "mp3") -> StreamingResponse:
+                            fmt: str = "mp3") -> Optional[StreamingResponse]:
     """Stream ElevenLabs TTS back to the client — same audio-over-HTTP
     contract as the OpenAI path (mp3 or raw PCM, chosen by `fmt`), so
     the frontend audio pipeline doesn't know or care which provider
@@ -506,6 +513,11 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
         await upstream.aclose()
         await client.aclose()
         logger.warning(f"ElevenLabs TTS {upstream.status_code}: {body}")
+        # Busy or broken upstream: None tells the caller to speak with the
+        # included voice instead. A 4xx that is about THIS request (a bad
+        # voice id, an unauthorized key) still surfaces as an error.
+        if upstream.status_code == 429 or upstream.status_code >= 500:
+            return None
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
     logger.info(
