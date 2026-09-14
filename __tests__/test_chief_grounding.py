@@ -324,3 +324,116 @@ def test_review_budget_stop_never_calls_provider(monkeypatch):
     assert asyncio.run(truth.review_reply(None, truth.REVIEW_SYSTEM, [],
         max_tokens=2400, business_id='biz')) == ''
     post.assert_not_called()
+
+
+# ─── 2026-09-14: the deterministic check is the authority ────────────
+# Two benign turns were withheld with "reviewer verdict unsupported":
+# every claim the reviewer listed was cited and checked out, and it still
+# said no. The verdict field is advisory now; a claim it cannot support
+# carries a gap, and a total that adds up from the quote is arithmetic.
+
+def test_model_unsupported_over_fully_cited_claims_is_overruled():
+    sources = {'result:0': {'kind': 'record', 'text': '{"type": "catch_up", "result": "0 updates"}'}}
+    raw = json.dumps({"verdict": "unsupported", "claims": [
+        {"text": "Nothing has changed since Friday.", "kind": "fact", "source_id": "result:0", "quote": "0 updates"},
+        {"text": "No new payments, replies, or leads came in.", "kind": "fact", "source_id": "result:0", "quote": "0 updates"},
+    ]})
+    verdict, cited, reason = truth.assess_review(
+        raw, 'Nothing has changed since Friday. No new payments, replies, or leads came in.', sources)
+    assert verdict == 'supported' and cited == ['result:0']
+
+
+def test_a_gap_claim_withholds_with_a_readable_reason():
+    sources = {'count': {'kind': 'count', 'text': '725'}}
+    raw = json.dumps({"verdict": "unsupported", "claims": [
+        {"text": "There are 725 contacts.", "kind": "fact", "source_id": "count", "quote": "725"},
+        {"text": "All of them are paid up.", "kind": "fact", "source_id": "", "quote": "", "gap": "no payment records supplied"},
+    ]})
+    verdict, cited, reason = truth.assess_review(raw, 'There are 725 contacts. All of them are paid up.', sources)
+    assert verdict == 'unsupported' and cited == []
+    assert reason.startswith('claim without support: All of them are paid up.')
+    assert 'no payment records supplied' in reason
+
+
+def test_a_bare_unsupported_with_nothing_cited_stays_unsupported():
+    verdict, _, reason = truth.assess_review('{"verdict":"unsupported","claims":[]}', 'You have 900 contacts.', {})
+    assert verdict == 'unsupported' and 'nothing cited' in reason
+
+
+def test_a_total_that_adds_up_from_the_quote_is_arithmetic_not_an_estimate():
+    quote = '"amount": 150.0}, {"amount": 100.0}, {"amount": 5.0}, {"amount": 5.0}, {"amount": 5.0}'
+    sources = {'context:open_invoices': {'kind': 'context', 'text': '[{' + quote + '}]'}}
+    ok = json.dumps({"verdict": "supported", "claims": [
+        {"text": "$265 in total", "kind": "fact", "source_id": "context:open_invoices", "quote": quote}]})
+    assert truth.assess_review(ok, 'You are owed $265 in total.', sources)[0] == 'supported'
+    bad = json.dumps({"verdict": "supported", "claims": [
+        {"text": "$270 in total", "kind": "fact", "source_id": "context:open_invoices", "quote": quote}]})
+    verdict, _, reason = truth.assess_review(bad, 'You are owed $270 in total.', sources)
+    assert verdict == 'unsupported' and '270' in reason
+
+
+def test_sum_check_is_bounded_and_exact():
+    from decimal import Decimal as D
+    assert truth._is_sum_of(D('265'), [D('150'), D('100'), D('5'), D('5'), D('5')])
+    assert truth._is_sum_of(D('10'), [D('5'), D('5'), D('3')])          # repeated figures count
+    assert not truth._is_sum_of(D('10'), [D('5'), D('3')])
+    assert not truth._is_sum_of(D('7'), [D('5'), D('3')])
+    assert not truth._is_sum_of(D('5'), [D('5')])                       # itself is not a sum
+    assert truth._number_list('5.0, 5.0 and 150') == [D('5'), D('5'), D('150')]
+
+
+def test_a_prose_gap_is_delivered_with_the_doubt_named():
+    raw = json.dumps({"verdict": "unsupported", "claims": [
+        {"text": "There are 725 contacts.", "kind": "fact", "source_id": "context:contacts_total", "quote": "725"},
+        {"text": "Most of them are active.", "kind": "fact", "source_id": "", "quote": "", "gap": "no status field"},
+    ]})
+    result, meta = asyncio.run(truth.finalize_reply(None, 'There are 725 contacts. Most of them are active.',
+        ctx={'contacts_total': 725}, view_detail={}, taken=[], message='How many contacts?', business_id='biz',
+        reviewer=AsyncMock(return_value=raw)))
+    assert result.startswith('There are 725 contacts. Most of them are active.')
+    assert 'I could not confirm: “Most of them are active.”' in result
+    assert meta['status'] == 'caveated' and meta['gaps'] == ['Most of them are active.']
+
+
+def test_a_gap_never_lets_a_completion_claim_or_a_bad_figure_through():
+    gap_raw = json.dumps({"verdict": "unsupported", "claims": [
+        {"text": "Everything was sent.", "kind": "action", "source_id": "", "quote": "", "gap": "no receipt"}]})
+    result, meta = asyncio.run(truth.finalize_reply(None, 'Done. Everything was sent.',
+        ctx={}, view_detail={}, taken=[], message='Send it', business_id='biz',
+        reviewer=AsyncMock(return_value=gap_raw)))
+    assert meta['status'] == 'withheld'
+    figure_raw = json.dumps({"verdict": "supported", "claims": [
+        {"text": "900 contacts", "kind": "fact", "source_id": "context:contacts_total", "quote": "725"}]})
+    result, meta = asyncio.run(truth.finalize_reply(None, 'You have 900 contacts.',
+        ctx={'contacts_total': 725}, view_detail={}, taken=[], message='How many?', business_id='biz',
+        reviewer=AsyncMock(return_value=figure_raw)))
+    assert result == truth.UNVERIFIED_REPLY and meta['status'] == 'withheld'
+
+
+def test_a_total_may_add_up_from_the_whole_cited_source():
+    text = '[{"amount": 150.0, "days_overdue": 51}, {"amount": 100.0, "days_overdue": 3}, {"amount": 5.0, "days_overdue": 76}]'
+    sources = {'context:open_invoices': {'kind': 'context', 'text': text}}
+    raw = json.dumps({"verdict": "supported", "claims": [
+        {"text": "$255 outstanding", "kind": "fact", "source_id": "context:open_invoices", "quote": '"amount": 150.0'}]})
+    assert truth.assess_review(raw, 'You have $255 outstanding.', sources)[0] == 'supported'
+
+
+def test_a_quote_the_reviewer_got_wrong_names_the_claim_instead_of_blanking_the_answer():
+    sources = {'context:open_invoices': {'kind': 'context', 'text': '[{"number": "INV-2026-007", "contact": "Monica Walton", "amount": 150.0, "days_overdue": 51}]'}}
+    raw = json.dumps({"verdict": "supported", "claims": [
+        {"text": "Monica Walton is 51 days overdue", "kind": "fact", "source_id": "context:open_invoices",
+         "quote": '"contact": "Monica Walton", "days_overdue": 51'}]})   # skipped the amount field
+    verdict, _, reason = truth.assess_review(raw, 'Monica Walton is 51 days overdue.', sources)
+    assert verdict == 'unsupported' and reason.startswith('quote is not in the cited source :: Monica Walton')
+    assert truth.unconfirmed_claims(raw, reason) == ['Monica Walton is 51 days overdue']
+    result, meta = asyncio.run(truth.finalize_reply(None, 'Monica Walton is 51 days overdue.',
+        ctx={'open_invoices': [{"number": "INV-2026-007", "contact": "Monica Walton", "amount": 150.0, "days_overdue": 51}]},
+        view_detail={}, taken=[], message='Who is overdue?', business_id='biz', reviewer=AsyncMock(return_value=raw)))
+    assert meta['status'] == 'caveated'
+    assert result.startswith('Monica Walton is 51 days overdue.') and 'I could not confirm' in result
+
+
+def test_identifier_digits_are_not_figures_but_dates_and_money_are():
+    nums = {int(n) for n in truth._numbers('INV-2026-007 for $150, order A1B2, due 2026-09-14T10:00')}
+    assert {150, 2026, 9, 14, 10, 0} <= nums
+    assert 7 not in nums and 1 not in nums

@@ -148,10 +148,19 @@ Earlier assistant prose is NEVER evidence of execution. Receipts override older 
 If sources conflict, the answer must disclose uncertainty instead of selecting a guess.
 Ordinary greetings, questions, clearly labeled creative drafts and nonfactual suggestions
 may pass without citations. Do not treat factual assertions inside a draft as creative license.
+A record saying 0 updates, no updates or no changes supports "nothing changed" and
+"no new payments/replies/leads" statements for the period it covers: cite it.
+Counts, totals, sums, and oldest/newest/largest over the records of a cited source are
+arithmetic, kind fact, not estimates: cite that source and quote one of the figures; the
+check verifies the arithmetic against the whole cited source.
+An invoice record with days_overdue above zero is past due / overdue. A record list that
+contains N entries supports "N <things>" for what the list is.
+A claim you cannot support is still listed: give it source_id "" and quote "" and a
+short "gap" saying what is missing. The verdict is unsupported when any claim has a gap.
 Return ONLY JSON, no prose or code fences:
 {"verdict":"supported"|"unsupported", "claims":[{"text":"exact substring of draft",
 "kind":"fact"|"action"|"estimate", "source_id":"supplied source id",
-"quote":"exact nonempty substring of that source's text"}]}
+"quote":"exact nonempty substring of that source's text", "gap":"only on an unsupported claim"}]}
 Keep every text and quote SHORT: the smallest exact excerpt that carries the
 claim, at most about 12 words each. Split a sentence with several figures into
 several short claims instead of quoting the whole sentence or a whole record.
@@ -197,41 +206,76 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
         return 'invalid', [], 'review is not JSON'
     if not isinstance(review, dict) or review.get('verdict') not in ('supported', 'unsupported'):
         return 'invalid', [], 'review lacks a verdict'
-    if review['verdict'] != 'supported':
-        return 'unsupported', [], 'reviewer verdict unsupported'
     claims = review.get('claims')
     if not isinstance(claims, list) or len(claims) > 80:
         return 'invalid', [], 'claims is not a bounded list'
+    # The model's verdict is advisory. What decides is the claims it lists:
+    # a claim it could not support carries a gap and withholds the draft
+    # with a reason we can read; a verdict of unsupported over claims that
+    # all check out is the reviewer being stricter than its own evidence
+    # (seen 2026-09-14: "0 updates" cited for "nothing changed", and every
+    # greeting figure cited, still marked unsupported) and is overruled.
+    # A bare unsupported with nothing cited stays unsupported: nothing was
+    # checked, so nothing can be cleared.
+    model_says_unsupported = review['verdict'] != 'supported'
+    if model_says_unsupported and not claims:
+        return 'unsupported', [], 'reviewer verdict unsupported, nothing cited'
     try:
         cited = []
         for claim in claims:
-            if not isinstance(claim, dict) or set(claim) != {'text', 'kind', 'source_id', 'quote'}:
+            if not isinstance(claim, dict):
+                return 'invalid', [], 'claim has the wrong shape'
+            keys = set(claim)
+            if keys - {'text', 'kind', 'source_id', 'quote', 'gap'} or not {'text', 'kind', 'source_id', 'quote'} <= keys:
                 return 'invalid', [], 'claim has the wrong shape'
             text_, quote, sid = claim['text'], claim['quote'], claim['source_id']
-            if not all(isinstance(v, str) and v.strip() for v in (text_, quote, sid)):
+            if not isinstance(text_, str) or not text_.strip():
                 return 'invalid', [], 'claim has an empty field'
+            gap = claim.get('gap')
+            if (isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip()) \
+                    or not (isinstance(quote, str) and quote.strip()):
+                why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
+                return 'unsupported', [], 'claim without support: %s (%s)' % (text_.strip()[:80], why)
             source = sources.get(sid)
             if not source:
-                return 'unsupported', [], 'cited source does not exist'
-            if text_ not in reply:
-                return 'unsupported', [], 'claim text is not in the draft'
-            if quote not in source['text']:
-                return 'unsupported', [], 'quote is not in the cited source'
+                return 'unsupported', [], _claim_fail('cited source does not exist', text_)
+            # Whitespace-insensitive containment: the reviewer re-spaces
+            # JSON it quotes ("amount":150 for "amount": 150) often enough
+            # to fail a greeting on its own evidence. The words and the
+            # figures must still match exactly.
+            if _squash(text_) not in _squash(reply):
+                # The reviewer quoted something the draft does not say: its
+                # review is unusable, not a finding about the draft.
+                return 'invalid', [], 'claim text is not in the draft'
+            if _squash(quote) not in _squash(source['text']):
+                return 'unsupported', [], _claim_fail('quote is not in the cited source', text_)
             if claim['kind'] not in ('fact', 'action', 'estimate'):
                 return 'invalid', [], 'unknown claim kind'
-            if claim['kind'] == 'estimate' and not re.search(
-                    r'\b(?:estimat\w*|assuming|assumption|hypothetic\w*|project\w*|approximately|roughly)\b',
-                    reply, re.I):
-                return 'unsupported', [], 'estimate without an explicit label'
+            quoted = _numbers(quote)
+            quoted_all = _number_list(quote)
+            source_all = _number_list(source['text'])[:16]
+            # A figure the claim did not quote is fine when it is the exact
+            # sum of figures in the quote or in the cited source: arithmetic
+            # over the records, not a new number.
+            missing = {n for n in _numbers(text_) - quoted
+                       if not (_is_sum_of(n, quoted_all) or _is_sum_of(n, source_all))}
+            if claim['kind'] == 'estimate':
+                # The reviewer labels totals "estimate" more often than the
+                # rules ask; a total that adds up from the source is a fact
+                # and needs no hedge. A genuine estimate still does.
+                if missing and not re.search(
+                        r'\b(?:estimat\w*|assuming|assumption|hypothetic\w*|project\w*|approximately|roughly)\b',
+                        reply, re.I):
+                    return 'unsupported', [], _claim_fail('estimate without an explicit label', text_)
+                missing = set()
             if claim['kind'] == 'action' and source['kind'] != 'receipt':
                 return 'unsupported', [], 'action claim without a write receipt'
             # A reviewer cannot bless a fabricated number with an unrelated
-            # real quote. Calculated estimates remain a separate, labeled kind.
+            # real quote.
             if claim['kind'] != 'estimate':
-                missing = _numbers(text_) - _numbers(quote)
                 if missing:
-                    return 'unsupported', [], 'claim number %s is not in the quote' % ','.join(
-                        str(n) for n in sorted(missing))
+                    return 'unsupported', [], _claim_fail('claim number %s is not in the quote' % ','.join(
+                        format(n, 'f') for n in sorted(missing)), text_)
             cited.append(sid)
         # Do not let an empty/partial review silently skip an unsupported figure.
         # Numbered-list markers are presentation, not factual quantities.
@@ -240,14 +284,97 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
         unreviewed = _numbers(prose) - reviewed_numbers
         if unreviewed:
             return 'unsupported', [], 'draft number %s has no reviewed claim' % ','.join(
-                str(n) for n in sorted(unreviewed))
+                format(n, 'f') for n in sorted(unreviewed))
         for url in re.findall(r'https?://[^\s<>\]"\)]+', reply):
             url = url.rstrip('.,;:')
             if not any(url in sid or url in sources[sid]['text'] for sid in cited):
                 return 'unsupported', [], 'a link in the draft is not in any cited source'
+        if model_says_unsupported:
+            logger.info('reviewer said unsupported but every claim it listed checks out; overruled')
         return 'supported', list(dict.fromkeys(cited)), ''
     except (ValueError, TypeError, KeyError, AttributeError):
         return 'invalid', [], 'review could not be validated'
+
+
+def _claim_fail(msg, text_):
+    """A provenance failure that names the claim, so the answer can be
+    delivered with that claim marked unconfirmed instead of withheld."""
+    return '%s :: %s' % (msg, (text_ or '').strip()[:80])
+
+
+def unconfirmed_claims(raw, reason):
+    """The claim texts a review could not support: the reviewer's own gaps,
+    or the one claim whose citation failed the check."""
+    if reason.startswith('claim without support'):
+        return _gap_claims(raw)
+    # A figure that is not in the evidence is never delivered with a
+    # caveat: a wrong number under a "could not confirm" is still a wrong
+    # number on the screen. Those stay withheld.
+    if ' :: ' in reason and not reason.startswith('claim number'):
+        return [reason.split(' :: ', 1)[1]]
+    return []
+
+
+def _squash(text):
+    """Collapse whitespace, including the spaces JSON puts after commas
+    and colons, so a quote survives being re-spaced by the reviewer."""
+    return re.sub(r'\s+', '', text or '')
+
+
+def _gap_claims(raw):
+    """The claims the reviewer listed without support, in draft order."""
+    try:
+        review = json.loads(_strip_fences(raw))
+        claims = review.get('claims') if isinstance(review, dict) else None
+    except (ValueError, AttributeError):
+        return []
+    out = []
+    for c in claims or []:
+        if not isinstance(c, dict):
+            continue
+        gap = c.get('gap')
+        sid, quote = c.get('source_id'), c.get('quote')
+        unsupported = (isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip())             or not (isinstance(quote, str) and quote.strip())
+        text = c.get('text')
+        if unsupported and isinstance(text, str) and text.strip():
+            out.append(text.strip()[:140])
+    return out
+
+
+def _number_list(text):
+    """Every figure in the text, duplicates kept: three $5 invoices are
+    three fives when they are added up."""
+    text = re.sub(r'(?<=\d)T(?=\d)', ' ', text or '')
+    return [Decimal(n.replace(',', '')).normalize() for n in _figures(text)]
+
+
+# A figure is a quantity. The digits inside an identifier (INV-2026-007,
+# an order number, a hash) are not, and comparing them as quantities made
+# a greeting with an invoice number fail its own evidence (2026-09-14).
+# A hyphen glued to the digits marks the identifier; a stand-alone number
+# or one after a space, a currency sign or a bracket still counts.
+_IDENTIFIER = re.compile(r'(?<![\w-])(?=[\w-]*[A-Za-z])(?=[\w-]*\d)[\w-]+')
+_FIGURE = re.compile(r'(?<!\w)\d[\d,]*(?:\.\d+)?')
+
+
+def _figures(text):
+    # Drop tokens that mix letters and digits (INV-2026-007, A1B2, sha
+    # fragments) before counting figures. A date or a time has no letters
+    # and keeps every part.
+    return _FIGURE.findall(_IDENTIFIER.sub(' ', text or ''))
+
+
+def _is_sum_of(target, nums, max_terms=8):
+    """Is `target` the exact sum of two or more of `nums` (a list, so
+    repeated figures count as often as they appear)? Bounded so a quote
+    with many figures cannot turn this into a search."""
+    from itertools import combinations
+    pool = sorted(n for n in nums if n != target)[:12]
+    for k in range(2, min(max_terms, len(pool)) + 1):
+        for combo in combinations(pool, k):
+            if sum(combo) == target:
+                return True
+    return False
 
 
 def _numbers(text):
@@ -255,8 +382,7 @@ def _numbers(text):
     # ("2026-09-14T10:00"); split it so the hour counts as a number too,
     # or every calendar claim ("at 10:00") fails against its own record.
     text = re.sub(r'(?<=\d)T(?=\d)', ' ', text or '')
-    return {Decimal(n.replace(',', '')).normalize()
-            for n in re.findall(r'(?<!\w)\d[\d,]*(?:\.\d+)?', text)}
+    return {Decimal(n.replace(',', '')).normalize() for n in _figures(text)}
 
 
 def has_completion_claim(reply):
@@ -406,6 +532,18 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             bits.append(value.strip())
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
+    gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
+    if gaps and not receipts and not has_completion_claim(reply):
+        # The reviewer listed what it could not support and everything else
+        # checked out. An ordinary answer with a doubt in it reaches the
+        # practitioner WITH the doubt named, instead of a blank "couldn't
+        # verify" that made Chief useless for a day (Kevin, 2026-09-14).
+        # Fabricated figures and completion claims never take this path.
+        logger.info('reply review caveated (%d gap%s); draft delivered', len(gaps), '' if len(gaps) == 1 else 's')
+        quoted = '; '.join('“%s”' % g for g in gaps[:3])
+        caveat = "\n\nI could not confirm: " + quoted + "."
+        return (reply.rstrip() + caveat), {
+            'status': 'caveated', 'sources': [], 'gaps': gaps}
     if verdict == 'invalid':
         # The reviewer never delivered a usable verdict (timeout, budget stop,
         # truncated JSON). Nothing refuted the draft, so an ordinary answer
