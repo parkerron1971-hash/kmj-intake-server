@@ -106,6 +106,9 @@ API_REGISTRY: List[Dict[str, Any]] = [
     {"id": "stripe",    "name": "Stripe",          "envs": ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
      "powers": "Subscriptions, payment links, PAYG billing (dormant until enforcement)",
      "touchpoints": "billing routers, stripe_webhook_events"},
+    {"id": "buffer", "name": "Buffer (Solutionist marketing)", "envs": ["BUFFER_API_KEY"],
+     "powers": "Owner-only organic publishing; select channels in Growth and enable BUFFER_PUBLISHING after review",
+     "touchpoints": "buffer_client.py, platform_marketing.py"},
     {"id": "meta",      "name": "Meta (FB/IG)",    "envs": ["META_APP_ID", "META_APP_SECRET"],
      "powers": "Facebook + Instagram OAuth and post publishing",
      "touchpoints": "meta integration router"},
@@ -561,6 +564,22 @@ def _channel_of(attribution: Optional[Dict[str, Any]]) -> Optional[str]:
     return "direct"
 
 
+def _traffic_kind(attribution: Any) -> str:
+    a = attribution if isinstance(attribution, dict) else {}
+    medium = str(a.get("utm_medium") or "").strip().lower()
+    if medium in {"cpc", "ppc", "paid", "paid_social", "paid-social", "paid_search", "display"} or a.get("gclid"):
+        return "paid"
+    if medium in {"organic", "organic_social", "organic-social", "social", "referral", "email", "qr"}:
+        return "organic"
+    return "unspecified"
+
+
+def _growth_channel(attribution: Any) -> str:
+    source = _channel_of(attribution) or "untracked"
+    kind = _traffic_kind(attribution)
+    return f"{source} · {kind}" if kind != "unspecified" else source
+
+
 @router.get("/growth")
 async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
     """The marketing scoreboard: visits → leads → waitlist → signups →
@@ -619,7 +638,7 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         return channels.setdefault(label, _bucket())
 
     def _ch(attribution: Any) -> str:
-        return _channel_of(attribution) or "untracked"
+        return _growth_channel(attribution)
 
     # Marketing-site traffic: distinct sessions per channel. A session's
     # first campaign-carrying event names its channel; sessions that
@@ -631,7 +650,7 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         if not sid:
             continue
         all_sessions.add(sid)
-        ch = _channel_of(e.get("data"))
+        ch = _growth_channel(e.get("data")) if _channel_of(e.get("data")) else None
         if ch and sid not in session_channel:
             session_channel[sid] = ch
     for sid in all_sessions:
@@ -679,20 +698,22 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         "subscription_status": b.get("subscription_status"),
     } for b in recent]
 
-    # Rung 3 — spend next to what it bought. Dark ({"configured": False},
-    # no card rendered) until META_ADS_ACCESS_TOKEN + META_AD_ACCOUNT_ID
-    # are set. CAC divides Meta spend by the window's Meta-channel
-    # signups — both sides measured here, so the number is honest, and
-    # None whenever either side is zero rather than a fake $0.
+    # Only explicitly paid Meta signups belong in the paid acquisition
+    # denominator. A Facebook click ID alone also occurs on organic posts.
+    # This is cost per signup, not cost per paying customer (CAC).
     import meta_ads
     ads = await meta_ads.spend_summary(days)
     if ads.get("configured"):
-        paid_signups = sum(v["signups"] for k, v in channels.items()
-                           if k in ("facebook", "instagram", "meta", "fb", "ig"))
+        paid_signups = sum(1 for b in businesses
+            if (b.get("created_at") or "") >= since
+            and _channel_of(b.get("attribution")) in ("facebook", "instagram", "meta", "fb", "ig")
+            and _traffic_kind(b.get("attribution")) == "paid")
         ads["paid_signups_window"] = paid_signups
-        ads["cac_cents"] = (int(ads["spend_cents"] / paid_signups)
+        ads["cost_per_paid_signup_cents"] = (int(ads["spend_cents"] / paid_signups)
                             if ads.get("ok") and ads.get("spend_cents") and paid_signups
                             else None)
+        # Compatibility for older clients; new UI names the measure correctly.
+        ads["cac_cents"] = ads["cost_per_paid_signup_cents"]
 
     return {
         "ok": True,
