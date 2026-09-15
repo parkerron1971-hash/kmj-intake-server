@@ -22,13 +22,13 @@ Initial publishing support: Facebook, Instagram, X and LinkedIn. One image or vi
 1. Deploy the backend and frontend changes together. The backend defaults to publishing **off**.
 2. Apply `supabase/APPLY-2026-09-15-platform-marketing.sql` using the Supabase SQL editor. Repository convention is manual migration application. It adds four service-only tables, atomic approval/claim functions, audit triggers and the public `platform-marketing` export bucket. It does not modify tenant social connections.
 3. Sign into or create the owner's Buffer account. Connect only the channels belonging to The Solutionist System. Start with the desired plan; no subscription was purchased by this build.
-4. In Buffer → Settings → API, create a personal API key. Save it as **BUFFER_API_KEY** in backend Railway variables. Do not place it in frontend environment variables, source control or chat. The app never returns the key.
+4. In Buffer → Settings → API, create a personal API key. Save it as **BUFFER_API_KEY** in backend Railway variables. Do not place it in frontend environment variables, source control or chat. The app never returns the key. In the `kmj-intake-worker` service, reference it as `BUFFER_API_KEY=${{kmj-intake-server.BUFFER_API_KEY}}` and reference the dispatch switch as `BUFFER_PUBLISHING=${{kmj-intake-server.BUFFER_PUBLISHING}}`. The web process handles the UI API; the worker runs scheduled jobs. Both must deploy this release.
 5. Open Mission Control → Growth → Buffer connection and setup. Click **Check Buffer connection**, select the correct organization/accounts, then **Save channels**. This leaves publishing paused.
 6. Save one reviewed post with a real export and tracked landing page. Inspect the media preview and exact destination. Test the signup journey's tags separately.
 7. Set **BUFFER_PUBLISHING=on** in Railway. Approve the test post and click **Resume approved posts**. This is the point at which reviewed content may publish publicly at its due time.
 8. Verify the Buffer receipt becomes **published**, and check the live post, media and tracked link. Check an actual short video independently. Only then approve the rest of the week.
 
-Production setup on 2026-09-15: migration applied after a successful rollback rehearsal; four RLS-protected tables, the export bucket, atomic approval/claim and audit verified. The owner added BUFFER_API_KEY to Railway and a read-only Buffer account/channel check succeeded. BUFFER_PUBLISHING is set to on; the database calendar remains paused and empty. Buffer currently reports no connected social accounts. Connect the intended Solutionist social accounts in Buffer, then check and save those channels in Mission Control. No live post or paid campaign has been created. Deployment verification is recorded in the release PRs.
+Production setup on 2026-09-15: migration applied after a successful rollback rehearsal; four RLS-protected tables, the export bucket, atomic approval/claim and audit verified. The owner added BUFFER_API_KEY to Railway and a read-only Buffer account/channel check succeeded. The worker references the web service Buffer key and publishing switch. BUFFER_PUBLISHING is set to on; the database calendar remains paused and empty. Buffer currently reports no connected social accounts. Connect the intended Solutionist social accounts in Buffer, then check and save those channels in Mission Control. No live post or paid campaign has been created. Deployment verification is recorded in the release PRs.
 
 ## Daily operation
 
@@ -70,4 +70,4 @@ node __tests__/platform_marketing_ui.mjs
 
 The database harness runs real PostgreSQL-compatible PGlite locally, replays the migration twice, and verifies batch rollback, stale review, unique claims, pause, expiry, audit and denied tenant access. It is not a live Supabase/network-concurrency test. Browser checks use the mocked `tests/platform-marketing-preview.html` fixture at desktop and 390px widths. Real account connection and social delivery remain activation checks.
 
-Frontend validation: Vite production build passed; app typecheck retains the same 14 pre-existing errors and adds none.
+Frontend validation: Vite production build passed on the latest trunk plus this change; app typecheck retains the same 14 pre-existing errors and adds none.
