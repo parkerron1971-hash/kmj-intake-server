@@ -504,7 +504,10 @@ async def _handler_send_to_solution_space(action: Dict[str, Any]) -> Dict[str, A
 
 # ─── Dispatcher ────────────────────────────────────────────────────────
 
+from platform_chief_marketing import HANDLERS as MARKETING_HANDLERS
+
 HANDLERS = {
+    **MARKETING_HANDLERS,
     "extend_trial":            _handler_extend_trial,
     "resend_invite":           _handler_resend_invite,
     "send_practitioner_email": _handler_send_practitioner_email,
