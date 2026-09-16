@@ -59,9 +59,20 @@ def detail(b,p,user):
         'messages':rows(f'/video_messages?business_id=eq.{key(b)}&project_id=eq.{key(p)}&select=*&order=created_at.desc&limit=200')[::-1],
         'jobs':rows(f'/video_jobs?business_id=eq.{key(b)}&project_id=eq.{key(p)}&select={JOB_FIELDS}&order=created_at.desc&limit=50'),
         'configuration':configuration()}
-def create(b,body,user):
+def create(b,body,user,*,project_id=None):
     access(b,user)
-    return one(sb_clients.sb_post_as_service('/video_projects',body.model_dump()|{'business_id':key(b),'created_by':str(user.id)}))
+    record=body.model_dump()|{'business_id':key(b),'created_by':str(user.id)}
+    if project_id is not None:
+        record['id']=key(project_id)
+        existing=rows(f'/video_projects?id=eq.{key(project_id)}&business_id=eq.{key(b)}&limit=1')
+        if existing:return existing[0]
+    try:
+        return one(sb_clients.sb_post_as_service('/video_projects',record))
+    except Exception:
+        if project_id is not None:
+            existing=rows(f'/video_projects?id=eq.{key(project_id)}&business_id=eq.{key(b)}&limit=1')
+            if existing:return existing[0]
+        raise
 def no_active(b,p):
     if rows(f'/video_jobs?business_id=eq.{key(b)}&project_id=eq.{key(p)}&status=in.(queued,working)&select=id&limit=1'):
         raise HTTPException(409,'Wait for Chief to finish or cancel this job before changing the project.')
