@@ -19,6 +19,8 @@ Do not use historical pricing or beta availability from the strategic context in
 unless the owner confirms it. Write the intended caption in your reply for review.
 [ACTION:{"type":"generate_image","prompt":"complete creative brief and exact visible copy","size":"1024x1536","quality":"high"}]
 Sizes: 1024x1536 flyer/story, 1024x1024 square, 1536x1024 landscape.
+Quality must be exactly low (draft), medium (standard), or high. Honor the
+owner's requested quality; use high only when no quality was requested.
 To revise saved artwork, include reference_ids:["artwork UUID from the conversation"].
 Never invent IDs. Use [ACTION:{"type":"find_images"}] to retrieve saved artwork.
 [ACTION:{"type":"create_video","brief":"complete approved brief","title":"short title","format":"portrait"}]
@@ -94,6 +96,9 @@ def handlers(owner, request_id):
                     handler = images.handle_generate_image if kind == 'generate_image' else images.handle_find_images
                     # No model-selected tenant, endpoint, model or website fetch.
                     safe = {k: action[k] for k in ('prompt', 'size', 'quality', 'reference_ids') if k in action}
+                    if 'quality' in safe and isinstance(safe['quality'], str):
+                        quality = safe['quality'].strip().lower()
+                        safe['quality'] = {'draft': 'low', 'standard': 'medium', 'best': 'high'}.get(quality, quality)
                     result = await handler(client, biz, safe)
             finally:
                 images.turn_id.reset(identity)
