@@ -10,7 +10,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -19,6 +19,7 @@ from PIL import Image
 
 from buffer_client import BufferClient, BufferError
 from lead_admin import require_owner
+from auth_supabase import UserSession
 import sb_clients
 
 router = APIRouter(prefix='/platform/marketing', tags=['platform-marketing'], dependencies=[Depends(require_owner)])
@@ -259,6 +260,35 @@ async def draft_week(req: Week, owner=Depends(require_owner)):
 
 @router.post('/assets')
 async def upload_asset(file: UploadFile = File(...)):
+    return await save_asset(file)
+
+
+class ChiefArtwork(BaseModel):
+    image_id: UUID
+
+
+@router.post('/assets/from-chief')
+async def import_chief_artwork(req: ChiefArtwork, owner=Depends(require_owner),
+                               session: UserSession = Depends(sb_clients.authed_request)):
+    from platform_chief_creative import platform_business
+    import image_studio
+    from starlette.datastructures import Headers
+    biz = await platform_business(owner)
+    # Resolve original bytes with the real user JWT and platform business ID;
+    # never accept a client URL or a selected tenant ID for a public copy.
+    async with httpx.AsyncClient(timeout=60) as client:
+        row = await image_studio.artwork(client, biz['id'], req.image_id)
+        raw = image_studio.normalize_image(await image_studio.original(client, row))
+    aid = uuid5(NAMESPACE_URL, f"platform-marketing:{biz['id']}:{req.image_id}")
+    return await save_asset(UploadFile(filename=f'Chief artwork {str(req.image_id)[:8]}.png',
+        file=io.BytesIO(raw), headers=Headers({'content-type': 'image/png'})), asset_id=aid)
+
+
+async def save_asset(file: UploadFile, *, asset_id=None):
+    if asset_id is not None:
+        existing = await db('GET', f'/platform_marketing_assets?id=eq.{asset_id}&limit=1')
+        if existing:
+            return existing[0]
     # Streaming read bounds memory even when Content-Length is absent/false.
     blob = bytearray()
     while chunk := await file.read(1024 * 1024):
@@ -280,17 +310,25 @@ async def upload_asset(file: UploadFile = File(...)):
         ext, kind = 'mp4', 'video'
     else:
         raise HTTPException(422, 'Upload a PNG, JPEG or MP4 marketing export.')
-    aid = str(uuid4())
+    aid = str(asset_id or uuid4())
     sha = hashlib.sha256(blob).hexdigest()
     path = f'platform-marketing/{aid}/{sha}.{ext}'
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(sb_clients.sb_url() + '/storage/v1/object/' + path,
-            headers={**sb_clients.sb_headers_service(), 'Content-Type': mime, 'x-upsert': 'false'}, content=bytes(blob))
+            headers={**sb_clients.sb_headers_service(), 'Content-Type': mime,
+                     'x-upsert': 'true' if asset_id else 'false'}, content=bytes(blob))
     if r.status_code >= 400:
         raise HTTPException(503, 'Could not save the marketing export. Check storage configuration.')
     row = {'id': aid, 'sha256': sha, 'url': sb_clients.sb_url() + '/storage/v1/object/public/' + path,
            'kind': kind, 'mime_type': mime, 'name': (file.filename or 'Marketing export')[:180]}
-    return (await db('POST', '/platform_marketing_assets', row))[0]
+    try:
+        return (await db('POST', '/platform_marketing_assets', row))[0]
+    except HTTPException:
+        if asset_id is not None:
+            existing = await db('GET', f'/platform_marketing_assets?id=eq.{aid}&limit=1')
+            if existing:
+                return existing[0]
+        raise
 
 
 async def build_draft(req):

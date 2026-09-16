@@ -35,12 +35,16 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
 
 import httpx
 
 import llm_call
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from auth_supabase import UserSession
+import sb_clients
+import platform_chief_creative
 
 from lead_admin import require_owner, _service_headers, SUPABASE_URL
 from api_usage_logger import log_api_usage, _compute_cost_cents
@@ -1277,6 +1281,7 @@ class ChiefTurn(BaseModel):
 
 class ChiefMessageBody(BaseModel):
     message: str
+    request_id: UUID = Field(default_factory=uuid4)
     # Optional client-held conversation history (newest last). The
     # endpoint stays stateless server-side; the console sends its last
     # few turns so follow-up questions keep their thread.
@@ -1500,7 +1505,8 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
 
 
 @router.post("/chief/message")
-async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_owner)):
+async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_owner),
+                                 session: UserSession = Depends(sb_clients.authed_request)):
     """Stateless Q&A — builds snapshot, asks Anthropic, returns reply."""
     headers = _service_headers()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -1511,6 +1517,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     import json as _json
     system = (
         PLATFORM_CHIEF_SYSTEM
+        + platform_chief_creative.PROMPT
         + "\n\nCURRENT PLATFORM SNAPSHOT:\n```json\n"
         + _json.dumps(snapshot, indent=2, default=str)
         + "\n```"
@@ -1581,6 +1588,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
             actions_in_reply,
             triggered_by_message=body.message,
             chief_reply_excerpt=raw_text[:500],
+            extra_handlers=platform_chief_creative.handlers(_owner, body.request_id),
         )
 
     # The reply the operator SEES has the action JSON stripped — the

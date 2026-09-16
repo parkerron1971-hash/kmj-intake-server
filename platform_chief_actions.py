@@ -521,13 +521,14 @@ async def dispatch_actions(
     *,
     triggered_by_message: Optional[str] = None,
     chief_reply_excerpt: Optional[str] = None,
+    extra_handlers: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Run every action sequentially. Each result is logged. Returns
     the list of result dicts (same length as input)."""
     results: List[Dict[str, Any]] = []
     for action in actions:
         act_type = action.get("type", "")
-        handler = HANDLERS.get(act_type)
+        handler = (extra_handlers or {}).get(act_type) or HANDLERS.get(act_type)
         if not handler:
             res = {"ok": False, "label": f"Unknown action: {act_type}", "type": act_type}
             results.append(res)
@@ -542,7 +543,8 @@ async def dispatch_actions(
             res = await handler(action)
         except Exception as e:
             logger.exception(f"Handler {act_type} crashed")
-            res = {"ok": False, "label": f"Handler crashed: {e}", "type": act_type, "error": str(e)}
+            message = str(getattr(e, 'detail', None) or e)
+            res = {"ok": False, "label": message, "result": message, "type": act_type, "error": message}
         res["type"] = act_type
         results.append(res)
         await _log_action(
@@ -551,7 +553,7 @@ async def dispatch_actions(
             result=res,
             ok=bool(res.get("ok")),
             error=res.get("error") if not res.get("ok") else None,
-            business_id=action.get("business_id"),
+            business_id=res.get("business_id") or action.get("business_id"),
             lead_id=action.get("lead_id"),
             user_id=action.get("user_id"),
             triggered_by_message=triggered_by_message,
