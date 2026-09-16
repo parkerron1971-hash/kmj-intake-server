@@ -74,6 +74,18 @@ def test_one_paid_asset_per_turn(setup, monkeypatch):
     run(check())
 
 
+@pytest.mark.parametrize('label,expected', [('standard','medium'), ('draft','low'), ('best','high'), (' low ','low')])
+def test_quality_labels_match_engine_values(setup, monkeypatch, label, expected):
+    async def generate(client, biz, action):
+        assert action['quality'] == expected
+        return {'result': 'Queued', 'label': 'Queued'}
+    monkeypatch.setattr(creative.images, 'handle_generate_image', generate)
+    async def check():
+        with sb_clients.with_user_jwt('verified-test-token'):
+            await creative.handlers(OWNER, uuid4())['generate_image']({'type':'generate_image','prompt':'A flyer','quality':label})
+    run(check())
+
+
 def test_creative_tools_have_no_publish_or_approval(setup):
     assert set(creative.handlers(OWNER, uuid4())) == {'generate_image','find_images','create_video'}
 
