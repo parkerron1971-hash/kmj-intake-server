@@ -12,7 +12,9 @@ Paid Mission Control chat and creative entry points now check a fresh database a
 
 ## Independent development boundary
 
-Both Claude builder workflows accept only owner-originated triggers, leave PRs open, and no longer instruct the agent to merge. Production branch rules must additionally require owner/code-owner review with stale approvals dismissed and no agent bypass. CODEOWNERS assigns all deployed code to the owner because any application code can run with application authority. The workflow wording is not the enforcement boundary; GitHub permissions and active branch rules are.
+Both Claude builder workflows accept only owner-originated triggers. The coding job has read-only repository credentials, explicitly supplied to the pinned Claude action so it cannot exchange for a broader app token. A separate fresh job applies the untrusted patch and publishes a draft PR; it never executes proposed code, installs its dependencies, or merges it. Git hooks are disabled in that job. It rejects workflow/security-metadata edits before publishing, preventing a proposed PR workflow from requesting a stronger token. CI also has read-only repository permissions.
+
+The public backend supports production branch rules requiring owner/code-owner review with stale approvals dismissed and no agent bypass. GitHub returned HTTP 403 for rulesets on the private frontend repository under its current plan; no paid upgrade or visibility change is made. Its cloud agent's containment relies on the separate read-only coding job and fixed draft publisher. CODEOWNERS alone is not an enforced rule on that repository. This distinction must remain visible in release verification.
 
 **A local agent running as the owner's Windows account is outside this containment.** It can use whatever personal credentials that account exposes. Solution Space currently launches sessions this way. Completing local containment requires an isolated cloud worker or a restricted OS account with separate credentials; adding prompt instructions or an editable command hook would not solve it. Do not describe the entire desktop as contained until that migration is completed and verified.
 

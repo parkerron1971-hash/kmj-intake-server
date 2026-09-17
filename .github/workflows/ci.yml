@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 # Arc 29 — turns the 66-file pytest suite into a gate on every push/PR.
 # Tests use in-memory fakes (no live Supabase/Stripe/Anthropic), so no
 # secrets are needed in CI. Compile-checks the whole tree first so a
