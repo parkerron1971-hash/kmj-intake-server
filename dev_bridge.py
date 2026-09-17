@@ -240,6 +240,17 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
     if not title:
         raise HTTPException(422, "title required")
     repo = (body.repo or "frontend").strip().lower()
+    if repo not in LOCAL_PROJECTS:
+        raise HTTPException(422, "Choose the frontend or backend project.")
+    from platform_chief_authority import current_authorization, digest
+    approved = current_authorization.get()
+    scope = {'lane': lane, 'repo': repo, 'title': title, 'details': body.details,
+             'project_path': body.project_path or LOCAL_PROJECTS[repo]}
+    authorization = {'owner_id': str(_owner.id), 'approved_at': _now(),
+                     'source': 'chief_review' if approved else 'dev_desk',
+                     'approval_id': approved[1]['id'] if approved else None,
+                     'scope_hash': digest(scope), 'scope': scope,
+                     'deployment': 'owner_review_required'}
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         if lane == "cloud":
@@ -248,6 +259,7 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
             from chief_of_staff import _fire_build_issue
             issue_url = await _fire_build_issue(c, title, body.details or title, repo)
             row = await _sb_insert(c, "dev_tasks", {
+                "authority_record": authorization,
                 "lane": "cloud",
                 "status": "dispatched" if issue_url else "failed",
                 "title": title,
@@ -262,6 +274,7 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
 
         project_path = (body.project_path or "").strip() or LOCAL_PROJECTS.get(repo, "")
         row = await _sb_insert(c, "dev_tasks", {
+            "authority_record": authorization,
             "lane": "local",
             "status": "queued",
             "title": title,

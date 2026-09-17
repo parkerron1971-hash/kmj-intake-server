@@ -17,6 +17,8 @@ import platform_marketing as marketing
 import sb_clients
 import spend_guard
 import rate_limit
+import platform_chief_authority as authority
+from __tests__.test_platform_chief_authority import store
 from auth_supabase import UserSession, require_user
 from lead_admin import PLATFORM_OWNER_EMAIL
 
@@ -30,6 +32,7 @@ def setup(monkeypatch):
     monkeypatch.setattr(creative, 'platform_business', AsyncMock(return_value=BIZ))
     monkeypatch.setattr(spend_guard, 'over_budget', lambda *a: False)
     monkeypatch.setattr(rate_limit, 'allow', lambda *a: True)
+    monkeypatch.setattr(authority, 'require_budget', AsyncMock())
 
 
 def test_dispatch_binds_platform_and_resets_image_context(setup, monkeypatch):
@@ -49,15 +52,16 @@ def test_dispatch_binds_platform_and_resets_image_context(setup, monkeypatch):
     assert seen == [(BIZ, {'prompt':'Make a flyer'}, str(rid), 'verified-test-token')]
 
 
-def test_failure_resets_context_and_is_visible(setup, monkeypatch):
+def test_failure_resets_context_and_is_visible(setup, store, monkeypatch):
+    monkeypatch.setattr(authority, "policy", AsyncMock(return_value={"settings": {"creative": "allow"}}))
     async def fail(*args): raise HTTPException(403, 'Reference belongs to another business.')
     monkeypatch.setattr(creative.images, 'handle_generate_image', fail)
     monkeypatch.setattr(actions, '_log_action', AsyncMock())
     async def check():
         with sb_clients.with_user_jwt('verified-test-token'):
-            results = await actions.dispatch_actions([{'type':'generate_image','prompt':'Edit'}], extra_handlers=creative.handlers(OWNER, uuid4()))
+            results = await actions.dispatch_actions([{'type':'generate_image','prompt':'Edit'}], extra_handlers=creative.handlers(OWNER, uuid4()), owner=OWNER, request_id=uuid4())
         assert results[0]['ok'] is False
-        assert 'another business' in results[0]['label']
+        assert results[0]['approval']['status'] == 'uncertain'
         assert creative.images.turn_id.get() == ''
     run(check())
 
@@ -151,7 +155,7 @@ def test_video_retry_reuses_project_and_does_not_requeue(setup,monkeypatch):
     for _ in range(2): run(creative.create_video(BIZ,OWNER,{'brief':'Make a 15 second video'},rid))
     assert ids[0] == ids[1]
 
-def test_chief_endpoint_executes_real_dispatch_with_user_jwt(setup, monkeypatch):
+def test_chief_endpoint_requires_review_before_paid_generation(setup, store, monkeypatch):
     import platform_console as console
     from auth_supabase import require_user_session
     monkeypatch.setenv('ANTHROPIC_API_KEY','test-only')
@@ -171,5 +175,5 @@ def test_chief_endpoint_executes_real_dispatch_with_user_jwt(setup, monkeypatch)
     with TestClient(app) as client:
         response=client.post('/platform/chief/message',json={'message':'Create the flyer','request_id':str(uuid4())})
     assert response.status_code == 200, response.text
-    assert response.json()['actions_taken'][0]['image']['business_id'] == BIZ['id']
+    assert response.json()['actions_taken'][0]['approval']['status'] == 'pending'
     assert '[ACTION:' not in response.json()['reply']

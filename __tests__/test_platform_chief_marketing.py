@@ -58,6 +58,9 @@ def test_existing_owner_gate_still_covers_multimodal_chat():
 
 def test_endpoint_uses_vision_and_marketing_context(monkeypatch):
     import llm_call, spend_guard, rate_limit
+    import platform_chief_authority as authority
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(authority, "require_budget", AsyncMock())
     captured={}
     async def snapshot(*args): return {'known_fact':'Current business data'}
     async def marketing_data(): return {'config':{'channels':[{'id':'actual-account'}]}}
