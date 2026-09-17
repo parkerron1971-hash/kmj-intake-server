@@ -534,6 +534,8 @@ app.include_router(lead_admin_diag_router)
 # Tauri app.
 from platform_console import router as platform_console_router
 app.include_router(platform_console_router)
+from platform_chief_authority import router as platform_chief_authority_router
+app.include_router(platform_chief_authority_router)
 # What BILLING_ENFORCE=on would do today, without flipping it (2026-09-04). Owner-only.
 from billing_rehearsal import router as billing_rehearsal_router
 app.include_router(billing_rehearsal_router)

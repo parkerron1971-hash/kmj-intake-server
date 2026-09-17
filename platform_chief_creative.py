@@ -82,6 +82,8 @@ def handlers(owner, request_id):
                 raise HTTPException(429, 'Please wait before starting another creative job.')
             if await asyncio.to_thread(spend_guard.over_budget):
                 raise HTTPException(429, spend_guard.block_message())
+            from platform_chief_authority import require_budget
+            await require_budget()
         biz = await platform_business(owner)
         if not sb_clients.get_current_user_jwt():
             raise HTTPException(401, 'Sign in again to create artwork.')

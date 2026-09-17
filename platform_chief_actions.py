@@ -45,6 +45,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+from fastapi import HTTPException
 
 from lead_admin import _service_headers, SUPABASE_URL
 
@@ -216,6 +217,8 @@ async def _handler_resend_invite(payload: Dict[str, Any]) -> Dict[str, Any]:
         email = lead.get("email")
         if not email:
             return {"ok": False, "label": "Lead has no email"}
+        if payload.get('recipient') != email:
+            return {"ok": False, "label": "Recipient changed. Review a new invitation before sending."}
 
         # Send invite via Supabase Auth Admin
         invite_body = {
@@ -292,6 +295,8 @@ async def _handler_send_practitioner_email(payload: Dict[str, Any]) -> Dict[str,
         owner_email = ur.json().get("email")
         if not owner_email:
             return {"ok": False, "label": "Owner has no email"}
+        if payload.get('recipient') != owner_email:
+            return {"ok": False, "label": "Recipient changed. Review a new email before sending."}
 
     # Send via the email_sender router we already deploy
     try:
@@ -425,84 +430,27 @@ async def _handler_resolve_platform_note(action: Dict[str, Any]) -> Dict[str, An
     return {"ok": True, "label": f"Marked entry #{note_id} done"}
 
 
-async def _handler_queue_build(action: Dict[str, Any]) -> Dict[str, Any]:
-    """Chief -> Claude Code bridge, platform side (2026-07-11): Kevin
-    tells the Platform Chief to queue a build and it dispatches straight
-    to the builder — a GitHub issue tagged @claude (which the Claude
-    Code workflow turns into a PR), plus an operator-log entry as the
-    record. No support ticket here: Mission Control IS the operator
-    surface."""
-    title = (action.get("title") or "").strip()
-    if not title:
-        return {"ok": False, "label": "queue_build: title required"}
-    details = (action.get("details") or "").strip() or title
-    repo_key = (action.get("repo") or "frontend").strip().lower()
-
-    issue_url = None
-    try:
-        import httpx as _hx
-        from chief_of_staff import _fire_build_issue
-        async with _hx.AsyncClient(timeout=_hx.Timeout(20.0)) as c:
-            issue_url = await _fire_build_issue(c, title, details, repo_key)
-    except Exception as e:
-        logger.warning(f"queue_build dispatch failed: {e}")
-
-    # Operator-log record either way.
-    try:
-        await _handler_log_platform_note({
-            "category": "pending",
-            "title": f"BUILD: {title[:120]}",
-            "detail": (details[:1500] + (f"\n\nissue: {issue_url}" if issue_url
-                                         else "\n\n(dispatch unavailable — GITHUB_TOKEN?)")),
-        })
-    except Exception:
-        pass
-
-    if issue_url:
-        return {"ok": True, "label": f"Dispatched to Claude Code: {title[:70]}", "issue_url": issue_url}
-    return {"ok": True, "label": f"Logged (dispatch unavailable — check GITHUB_TOKEN): {title[:60]}"}
+async def _authorized_development_handoff(action, lane):
+    from platform_chief_authority import current_authorization
+    from dev_bridge import DispatchBody, dispatch_task
+    context = current_authorization.get()
+    if not context:
+        raise HTTPException(403, 'Development work requires recorded owner authorization.')
+    owner, record = context
+    body = DispatchBody(lane=lane, title=action.get('title', ''),
+                        details=action.get('details'), repo=action.get('repo', 'frontend'))
+    result = await dispatch_task(body, owner)
+    return {'ok': result['ok'], 'label': 'Development handoff recorded. Review resulting changes before deployment.',
+            'task_id': result.get('task', {}).get('id'), 'issue_url': result.get('issue_url')}
 
 
-async def _handler_send_to_solution_space(action: Dict[str, Any]) -> Dict[str, Any]:
-    """Dev Bridge, local lane (2026-08-19): file a dev task on the local
-    queue. Solution Space on Kevin's desktop polls this queue and handles
-    the rest; progress lands back in the Dev Desk. See dev_bridge.py."""
-    title = (action.get("title") or "").strip()
-    if not title:
-        return {"ok": False, "label": "send_to_solution_space: title required"}
-    details = (action.get("details") or "").strip() or title
-    repo_key = (action.get("repo") or "frontend").strip().lower()
-    try:
-        import secrets as _secrets
-        from dev_bridge import LOCAL_PROJECTS
-        project_path = (action.get("project_path") or "").strip() \
-            or LOCAL_PROJECTS.get(repo_key, "")
-        headers = _service_headers()
-        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-            r = await c.post(
-                f"{SUPABASE_URL}/rest/v1/dev_tasks",
-                headers=headers,
-                json={
-                    "lane": "local",
-                    "status": "queued",
-                    "title": title[:300],
-                    "details": details[:4000],
-                    "repo": repo_key,
-                    "project_path": project_path,
-                    "report_key": _secrets.token_hex(16),
-                },
-            )
-            if r.status_code >= 400:
-                return {"ok": False,
-                        "label": "Queue failed — is the dev-bridge migration applied?",
-                        "error": r.text[:200]}
-    except Exception as e:
-        return {"ok": False, "label": f"Solution Space queue failed: {e}"}
-    return {"ok": True,
-            "label": f"Queued for Solution Space: {title[:70]}"}
+async def _handler_queue_build(action):
+    return await _authorized_development_handoff(action, 'cloud')
 
 
-# ─── Dispatcher ────────────────────────────────────────────────────────
+async def _handler_send_to_solution_space(action):
+    return await _authorized_development_handoff(action, 'local')
+
 
 from platform_chief_marketing import HANDLERS as MARKETING_HANDLERS
 
@@ -525,41 +473,17 @@ async def dispatch_actions(
     triggered_by_message: Optional[str] = None,
     chief_reply_excerpt: Optional[str] = None,
     extra_handlers: Optional[Dict[str, Any]] = None,
+    owner=None,
+    request_id=None,
 ) -> List[Dict[str, Any]]:
     """Run every action sequentially. Each result is logged. Returns
     the list of result dicts (same length as input)."""
-    results: List[Dict[str, Any]] = []
-    for action in actions:
-        act_type = action.get("type", "")
-        handler = (extra_handlers or {}).get(act_type) or HANDLERS.get(act_type)
-        if not handler:
-            res = {"ok": False, "label": f"Unknown action: {act_type}", "type": act_type}
-            results.append(res)
-            await _log_action(
-                action_type=act_type or "unknown", payload=action, result=res,
-                ok=False, error=f"unknown handler: {act_type}",
-                triggered_by_message=triggered_by_message,
-                chief_reply_excerpt=chief_reply_excerpt,
-            )
-            continue
-        try:
-            res = await handler(action)
-        except Exception as e:
-            logger.exception(f"Handler {act_type} crashed")
-            message = str(getattr(e, 'detail', None) or e)
-            res = {"ok": False, "label": message, "result": message, "type": act_type, "error": message}
-        res["type"] = act_type
-        results.append(res)
-        await _log_action(
-            action_type=act_type,
-            payload=action,
-            result=res,
-            ok=bool(res.get("ok")),
-            error=res.get("error") if not res.get("ok") else None,
-            business_id=res.get("business_id") or action.get("business_id"),
-            lead_id=action.get("lead_id"),
-            user_id=action.get("user_id"),
-            triggered_by_message=triggered_by_message,
-            chief_reply_excerpt=chief_reply_excerpt,
-        )
+    import platform_chief_authority as authority
+    results = await authority.dispatch(actions, owner, request_id,
+                                       {**HANDLERS, **(extra_handlers or {})})
+    for action, res in zip(actions, results):
+        await _log_action(action_type=action.get('type', 'unknown'), payload=action,
+                         result=res, ok=bool(res.get('ok')),
+                         triggered_by_message=triggered_by_message,
+                         chief_reply_excerpt=chief_reply_excerpt)
     return results

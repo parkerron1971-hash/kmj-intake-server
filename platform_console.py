@@ -1500,11 +1500,13 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     import asyncio
     import rate_limit
     import spend_guard
+    import platform_chief_authority as authority
     conversation_messages(body)
     if not rate_limit.allow('platform_chief', str(_owner.id)):
         raise HTTPException(429, 'Please wait before asking Chief again.')
     if await asyncio.to_thread(spend_guard.over_budget):
         raise HTTPException(429, spend_guard.block_message())
+    await authority.require_budget()
     headers = _service_headers()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1513,7 +1515,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     snapshot = await _build_snapshot(headers)
     import json as _json
     system = (
-        PLATFORM_CHIEF_SYSTEM
+        PLATFORM_CHIEF_SYSTEM + authority.POLICY_PROMPT
         + platform_chief_creative.PROMPT
         + "\n\nCURRENT PLATFORM SNAPSHOT:\n```json\n"
         + _json.dumps(snapshot, indent=2, default=str)
@@ -1574,6 +1576,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
             triggered_by_message=body.message,
             chief_reply_excerpt=raw_text[:500],
             extra_handlers=platform_chief_creative.handlers(_owner, body.request_id),
+            owner=_owner, request_id=body.request_id,
         )
 
     # The reply the operator SEES has the action JSON stripped — the
