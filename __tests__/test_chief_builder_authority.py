@@ -30,7 +30,7 @@ def test_publisher_refuses_workflow_changes_without_evaluating_file_names():
     line=next(l for l in script.splitlines() if 'python -I -c' in l)
     code=line.split("python -I -c '",1)[1][:-1]
     for paths,blocked in [(b'src/app.tsx\0',False),(b'.github/workflows/ci.yml\0',True),
-                          (b'.gitattributes\0',True),(b'$(touch stolen)\0',False)]:
+                          (b'.gitattributes\0',True),(b'.github\0',True),(b'$(touch stolen)\0',False)]:
         result=subprocess.run([sys.executable,'-I','-c',code],input=paths,capture_output=True)
         assert (result.returncode!=0)==blocked
 

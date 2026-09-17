@@ -91,7 +91,7 @@ jobs:
           git -c core.hooksPath=/dev/null apply --index "$patch"
           # Workflow changes cannot ride an agent-published branch: a PR workflow
           # could otherwise request a stronger token. Owner applies these separately.
-          git diff --cached --name-only -z | python -I -c 'import sys; paths=sys.stdin.buffer.read().split(b"\0"); forbidden=[p for p in paths if p.startswith(b".github/") or p in (b".gitmodules",b".gitattributes")]; sys.exit("Workflow/security metadata changes require a separate owner-controlled change.") if forbidden else None'
+          git diff --cached --no-renames --name-only -z | python -I -c 'import sys; paths=sys.stdin.buffer.read().split(b"\0"); forbidden=[p for p in paths if p.startswith(b".github/") or p in (b".github",b".gitmodules",b".gitattributes")]; sys.exit("Workflow/security metadata changes require a separate owner-controlled change.") if forbidden else None'
           git -c core.hooksPath=/dev/null -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Chief development proposal'
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
