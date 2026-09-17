@@ -61,7 +61,7 @@ async def db(method, path, body=None):
         response = await client.request(method, SUPABASE_URL + '/rest/v1' + path,
                                         headers=_service_headers(), json=body)
     if response.status_code >= 400:
-        raise HTTPException(503, 'Chief permissions are unavailable. No action was authorized.')
+        raise HTTPException(503, 'Chief authorization storage is unavailable. Refresh the action status before retrying.')
     return response.json() if response.content else []
 
 
