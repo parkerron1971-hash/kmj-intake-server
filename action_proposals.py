@@ -70,7 +70,9 @@ PROPOSALS: Dict[str, Tuple[str, str, Dict[str, Any]]] = {
         "send_invoice",
         "PROPOSE sending an existing invoice to its contact. Nothing is "
         "sent until the practitioner approves it in their queue.",
-        _obj({"invoice_id": {"type": "string"}}, ["invoice_id"])),
+        _obj({"invoice_id": {"type": "string"},
+              "channel": {"type": "string", "enum": ["email", "sms"],
+                          "description": "Delivery channel. Defaults to email; sms texts the invoice to its linked contact."}}, ["invoice_id"])),
     "propose_mark_invoice_paid": (
         "mark_invoice_paid",
         "PROPOSE recording an invoice as paid (a ledger fact). Recorded "
@@ -141,6 +143,8 @@ def action_for(tool: str, arguments: Optional[Dict[str, Any]]) -> Dict[str, Any]
             raise ValueError("propose_send_sms needs contact_id or contact_name")
         if len(args["message"]) > SMS_MAX:
             raise ValueError(f"keep the text under {SMS_MAX} characters")
+    if verb == "send_invoice" and args.get('channel', 'email') not in ('email', 'sms'):
+        raise ValueError('Invoice delivery channel must be email or sms')
     if verb == "generate_payment_link" and not (args.get("product_id") or args.get("name")):
         raise ValueError("propose_generate_payment_link needs product_id or name")
     if verb == "publish_to_site" and not (args.get("post_id") or args.get("post_title")):
@@ -156,7 +160,8 @@ def describe(action: Dict[str, Any]) -> str:
         msg = str(action.get("message") or "")
         return f"Text {who}: “{msg[:120]}{'…' if len(msg) > 120 else ''}”"
     if verb == "send_invoice":
-        return f"Send invoice {str(action.get('invoice_id') or '')[:8]} to its contact"
+        channel = 'text' if action.get('channel') in ('sms', 'text') else 'email'
+        return f"Send invoice {str(action.get('invoice_id') or '')[:8]} to its contact by {channel}"
     if verb == "mark_invoice_paid":
         how = f" ({action['payment_method']})" if action.get("payment_method") else ""
         return f"Mark invoice {str(action.get('invoice_id') or '')[:8]} paid{how}"
