@@ -55,7 +55,8 @@ def test_repair_never_fails_open_or_retries_again(second_review):
     reviewer = AsyncMock(side_effect=[unsupported(), second_review])
     repairer = AsyncMock(return_value='Which invoice should I text?')
     reply, meta = run(reviewer, repairer)
-    assert reply == truth.UNVERIFIED_REPLY and meta['status'] == 'withheld'
+    assert reply == truth.NO_ACTION_REPLY and meta['status'] == 'withheld'
+    assert meta['recovery_attempted'] and meta['sources'] == ['turn:execution']
     assert reviewer.await_count == 2 and repairer.await_count == 1
 
 
@@ -64,18 +65,20 @@ def test_repair_never_fails_open_or_retries_again(second_review):
 def test_repair_cannot_emit_actions_or_unchecked_completions(repair):
     reviewer = AsyncMock(return_value=unsupported())
     reply, _ = run(reviewer, AsyncMock(return_value=repair))
-    assert reply == truth.UNVERIFIED_REPLY
+    assert reply == truth.NO_ACTION_REPLY
     reviewer.assert_awaited_once()
 
 
 def test_repair_timeout_retains_withholding():
     reply, _ = run(AsyncMock(return_value=unsupported()), AsyncMock(side_effect=TimeoutError))
-    assert reply == truth.UNVERIFIED_REPLY
+    assert reply == truth.NO_ACTION_REPLY
 
 
 def test_explanation_does_not_swallow_mixed_action_requests_or_invent_prior_failure():
     history = [{'role': 'assistant', 'content': truth.UNVERIFIED_REPLY}]
     assert truth.verification_explanation('What can you verify?', history)
+    assert truth.verification_explanation('What can you verify?',
+        [{'role': 'assistant', 'content': truth.NO_ACTION_REPLY}])
     assert truth.verification_explanation('What can you verify? Send the invoice.', history) is None
     assert truth.verification_explanation('What can you verify?', []) is None
     assert truth.verification_explanation('What can you verify?',

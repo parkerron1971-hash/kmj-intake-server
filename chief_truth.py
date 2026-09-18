@@ -39,6 +39,8 @@ MAX_REPLY_CHARS = 16000
 MAX_REVIEW_HISTORY_MESSAGES = 30
 UNVERIFIED_REPLY = ("Your request came through. I couldn't verify the answer "
                     "from the information available.")
+NO_ACTION_REPLY = ("No action ran in this request. I couldn't verify my proposed answer. "
+                   "Would you like me to try again?")
 
 
 def conversation_check_reply(message: str) -> str | None:
@@ -220,7 +222,7 @@ def verification_explanation(message, history):
         role = entry.get('role') if isinstance(entry, dict) else getattr(entry, 'role', None)
         content = entry.get('content', '') if isinstance(entry, dict) else getattr(entry, 'content', '')
         if role == 'assistant':
-            if content != UNVERIFIED_REPLY:
+            if content not in (UNVERIFIED_REPLY, NO_ACTION_REPLY):
                 return None
             return ("I check answers against available records, this conversation, and results from actions that ran. "
                     "My previous answer failed that check; that message did not confirm any work was completed. "
@@ -769,6 +771,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 logger.info('reply recovery rejected (%s)', checked_reason)
         except Exception as exc:
             logger.warning('reply recovery unavailable: %s', type(exc).__name__)
+        # The model can reject even its own repair. Do not strand the owner
+        # behind the same opaque fallback again. This statement comes only
+        # from the actual empty execution results, never from model prose.
+        # It is safe even when the repair/review timed out or hallucinated.
+        return NO_ACTION_REPLY, {'status': 'withheld', 'sources': ['turn:execution'],
+                                 'reason': reason, 'recovery_attempted': True}
     return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'reason': reason}
 
 
