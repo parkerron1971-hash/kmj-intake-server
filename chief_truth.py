@@ -297,6 +297,20 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             if claim['kind'] not in ('fact', 'action', 'estimate'):
                 return 'invalid', [], 'unknown claim kind'
             gap = claim.get('gap')
+            # A statement that something did NOT happen ("the $10 invoice
+            # was never created or sent", "nothing has gone out yet") is
+            # not an action claim needing a write receipt: it is the
+            # execution state itself, and the turn knows that state
+            # without a reviewer. It clears whenever this turn wrote
+            # nothing that went through; the figures in it name the
+            # request, not a record, so they need no quote. Seen
+            # 2026-09-18: "stop." after a held invoice was answered with
+            # "No action ran... Would you like me to try again?" because
+            # the honest "nothing was created" sentence had no receipt.
+            if claim['kind'] == 'action' and is_non_execution_claim(text_) and not wrote_anything(sources):
+                if 'turn:execution' in sources:
+                    cited.append('turn:execution')
+                continue
             if (isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip()) \
                     or not (isinstance(quote, str) and quote.strip()):
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
@@ -525,11 +539,65 @@ def _numbers(text):
     return {Decimal(n.replace(',', '')).normalize() for n in _figures(text)}
 
 
+_NON_EXECUTION = re.compile(
+    r"\b(?:never|nothing (?:has|was|went|happened|is)|no (?:action|invoice|text|email|message|"
+    r"payment|charge|booking|post|change)s?\b|not (?:yet |been |actually |already )?"
+    r"(?:created|sent|booked|saved|paid|published|scheduled|run|done|completed|gone|"
+    r"started|texted|emailed|charged|recorded|deleted|updated|made|placed|posted)|"
+    r"(?:has|have|had|was|were|did|is|are)n['’]t|(?:has|have|had|was|were|did|is|are) not)\b",
+    re.I)
+
+
+def is_non_execution_claim(text):
+    """Does this claim say something did NOT happen? A negated action
+    sentence is a report of execution state, never a completion claim."""
+    import chief_of_staff as chief
+    t = text or ''
+    return bool(_NON_EXECUTION.search(t)) and not chief._looks_like_completed_action(t)
+
+
+def wrote_anything(sources):
+    """Did this turn carry a write receipt that went through?"""
+    for source in (sources or {}).values():
+        if source.get('kind') == 'receipt' and '"failed": true' not in (source.get('text') or ''):
+            return True
+    return False
+
+
+# Words that turn a completion phrase into an offer: "once you say go
+# ahead, I'll create the invoice" promises nothing done. The completion
+# detector's phrase list ("i'll create", "i'll add", ...) exists for the
+# retry path, where an offer without an action tag is worth a second
+# call; here it withheld honest offers as if they were claims
+# (2026-09-18: a plain "can you text an invoice?" answered three times
+# with "I couldn't verify that answer").
+_OFFER_MARK = re.compile(
+    r"\b(?:once|if|when|after|as soon as|before|unless|until|shall i|should i|want me to|"
+    r"would you like|do you want|say (?:the word|go ahead|send it|yes)|go ahead|confirm)\b|\?",
+    re.I)
+_OFFER_PHRASES = ("i'll add", "i’ll add", "i'll create", "i’ll create",
+                  "creating the", "sending the", "adding them now")
+
+
+def _asserted_text(reply):
+    """The reply with offers neutralised: a sentence that hinges on a
+    condition or asks a question keeps its words except the future-tense
+    completion phrases, so only what is stated as done is tested."""
+    out = []
+    for sentence in re.split(r'(?<=[.!?])\s+', reply or ''):
+        if _OFFER_MARK.search(sentence):
+            for phrase in _OFFER_PHRASES:
+                sentence = re.sub(re.escape(phrase), 'could', sentence, flags=re.I)
+        out.append(sentence)
+    return ' '.join(out)
+
+
 def has_completion_claim(reply):
     import chief_of_staff as chief
-    return chief._looks_like_completed_action(reply) or bool(re.search(
+    asserted = _asserted_text(reply)
+    return chief._looks_like_completed_action(asserted) or bool(re.search(
         r'\b(?:appointment is booked|changes have been saved|payment recorded successfully)\b',
-        reply, re.IGNORECASE))
+        asserted, re.IGNORECASE))
 
 
 def evidence_for_review(ctx, view_detail, taken):
