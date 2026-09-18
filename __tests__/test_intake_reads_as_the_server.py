@@ -44,6 +44,33 @@ def test_supabase_request_sends_the_service_key_when_configured():
     assert seen["headers"]["Prefer"] == "return=representation"
 
 
+def test_the_form_page_posts_over_https_behind_the_proxy(monkeypatch):
+    """Railway's proxy makes request.base_url say http://; a browser will
+    not POST from an https page to an http address."""
+    import chief_form_actions
+
+    async def fake_sb(client, method, path, body=None):
+        if path.startswith("/intake_forms"):
+            return [{"id": "f1", "business_id": "biz-1", "name": "Reg", "fields": [], "settings": {}}]
+        return [{"id": "biz-1", "name": "KMJ", "type": "coach", "settings": {}}]
+
+    monkeypatch.setattr(intake_endpoint, "supabase_request", fake_sb)
+    monkeypatch.setattr(chief_form_actions, "public_form_url", lambda b, f: "https://kmj.mysolutionist.app/public/widget/form/f1")
+
+    class _Url:
+        hostname = "kmj-creative-solutions.mysolutionist.app"
+        port = None
+
+    class _Req:
+        url = _Url()
+        base_url = "http://kmj-creative-solutions.mysolutionist.app/"
+
+    resp = asyncio.run(intake_endpoint.public_form_page("f1", _Req()))
+    body = resp.body.decode()
+    assert 'action="https://kmj-creative-solutions.mysolutionist.app/intake/submit"' in body
+    assert "http://" not in body.split("<form", 1)[1].split(">", 1)[0]
+
+
 def test_supabase_request_falls_back_to_anon_without_a_service_key():
     seen = {}
 
