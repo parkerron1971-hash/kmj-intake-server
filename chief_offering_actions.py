@@ -106,16 +106,39 @@ async def handle_create_offering(client, biz, action) -> Dict:
         )
     slug = (action.get("slug") or _slugify_offering(name)).lower()
 
-    # Idempotency — refuse if a same-slug offering already exists for this biz.
+    # Idempotency — a same-slug offering already on file IS this offering.
+    # The model re-emits create_offering on the follow-up turn that adds
+    # a detail ("the address will be…"), and refusing it read the model's
+    # own hint aloud: "Try update_offering instead, or pick a different
+    # name" (2026-09-18, Embrace the Shift Workshop). Now the details the
+    # turn carried are applied to the existing row and the reply says it
+    # was already on file — nothing duplicated, nothing lost.
     existing = await _sb(client, "GET",
-        f"/offerings?business_id=eq.{biz['id']}&slug=eq.{slug}&select=id,name&limit=1")
+        f"/offerings?business_id=eq.{biz['id']}&slug=eq.{slug}&select=id,name,archived_at&limit=1")
     if existing:
-        return _fail(
-            "create_offering",
-            f"an offering with slug '{slug}' already exists "
-            f"(currently named '{existing[0].get('name')}'). "
-            f"Try update_offering instead, or pick a different name."
-        )
+        current = existing[0]
+        update = {k: v for k, v in action.items() if k not in ("type", "slug")}
+        update["offering_id"] = current["id"]
+        # Creating it again means it should be live, whatever happened before.
+        if current.get("archived_at"):
+            await _sb(client, "PATCH", f"/offerings?id=eq.{current['id']}",
+                      {"archived_at": None, "is_active": True})
+        updated = await handle_update_offering(client, biz, update)
+        if updated.get("failed") and "no fields to update" not in str(updated.get("result") or ""):
+            return updated
+        detail = ""
+        if not updated.get("failed"):
+            label = str(updated.get("label") or "")
+            detail = label.split(": ", 1)[1] if ": " in label else ""
+        return {
+            "type": "create_offering",
+            "result": "already on file" + (f" — {detail}" if detail and detail != "updated" else ""),
+            "label": (f"{current.get('name')} is already on file"
+                      + (f" — {detail}" if detail and detail != "updated" else " — nothing changed")),
+            "offering_id": current["id"],
+            "nav": _nav("build"),
+            "frontend_event": {"name": "solutionist-offerings-changed"},
+        }
 
     payload: Dict[str, Any] = {
         "business_id": biz["id"],

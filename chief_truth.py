@@ -768,7 +768,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
     gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
-    if gaps and not receipts and not has_completion_claim(reply):
+    # A receipt in the turn does not change this: the work is real (the
+    # failed-receipt report already won above) and the doubt is named.
+    # With receipts excluded, "So there's already a workshop on file?"
+    # was answered with the bare receipt label "Embrace the Shift
+    # Workshop: updated" and no answer at all (2026-09-18).
+    if gaps and not has_completion_claim(reply):
         # The reviewer listed what it could not support and everything else
         # checked out. An ordinary answer with a doubt in it reaches the
         # practitioner WITH the doubt named, instead of a blank "couldn't
