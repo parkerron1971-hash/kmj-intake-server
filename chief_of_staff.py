@@ -10953,11 +10953,18 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
         return taken[0]['label']
     succeeded: List[tuple] = []
     failed: List[tuple] = []
+    # An action HELD for the practitioner's confirmation is not a failure
+    # to report; its label is the read-back they need to hear. Its
+    # `result` is the model-facing instruction and must never reach the
+    # screen or the speaker.
+    held: List[str] = []
     for t in taken or []:
         atype = t.get("type") or "action"
         result = t.get("result") or ""
         label = t.get("label") or ""
-        if _action_failed(t):
+        if t.get("needs_confirmation") and isinstance(label, str) and label.strip():
+            held.append(label.strip())
+        elif _action_failed(t):
             reason = result.strip()
             if reason.lower().startswith("failed:"):
                 reason = reason[len("failed:"):].strip()
@@ -10965,7 +10972,7 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
         else:
             succeeded.append((atype, label, result))
 
-    if not failed:
+    if not failed and not held:
         # Defensive — _deterministic_fallback_reply is only called when
         # any_failed is true. If somehow we land here without failures,
         # acknowledge the success terse so the bubble isn't blank.
@@ -10983,7 +10990,7 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
             _, lbl, res = succeeded[0]
             chunks.append(f"{(lbl or res).strip()}.")
         else:
-            total = len(succeeded) + len(failed)
+            total = len(succeeded) + len(failed) + len(held)
             chunks.append(f"{len(succeeded)} of {total} actions went through.")
 
     # Failures — name + reason for each.
@@ -10994,14 +11001,18 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
             chunks.append(f"The {phrase} didn't go through — {reason}")
         else:
             chunks.append(f"The {phrase} didn't go through.")
-    else:
+    elif failed:
         per = "; ".join(
             f"{_humanize_action_type(a)} ({r or 'no reason returned'})"
             for a, _, r in failed
         )
         chunks.append(f"{len(failed)} actions didn't go through: {per}.")
 
-    chunks.append("Check the actions panel below for full details.")
+    # Held actions: the read-back, in the practitioner's own terms.
+    chunks.extend(held)
+
+    if failed:
+        chunks.append("Check the actions panel below for full details.")
     return " ".join(chunks)
 
 
@@ -11419,6 +11430,13 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
             what = _humanize_action_type(atype)
             target = _confirmation_subject(action)
             logger.info(f"[gate] holding spoken class-C {atype} for confirmation")
+            # `result` is written FOR THE MODEL (how to read the hold back).
+            # `label` is what the practitioner hears when the model's own
+            # read-back is replaced by the deterministic reply — the
+            # failure-report path always wins on a held turn, so without a
+            # spoken label the practitioner heard "emit this same action
+            # again" and "Do NOT tell them it is done" read aloud (2026-09-18).
+            # needs_confirmation is the flag that path keys on.
             return "handled", {
                 "type": atype,
                 "result": (
@@ -11429,7 +11447,12 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
                     + ", then ask them to say \"send it\" (or \"go ahead\"). "
                     f"When they do, emit this same action again and it will run. "
                     f"Do NOT tell them it is done — nothing has happened yet."),
-                "label": f"Held for your spoken yes — {what}",
+                "label": (
+                    f"Before I {what.lower()}"
+                    + (f" ({target})" if target else "")
+                    + " I need your spoken go-ahead — nothing has run yet. "
+                    "Say \"go ahead\" or \"send it\" and I will do it."),
+                "needs_confirmation": True,
                 "nav": None, "failed": True,
             }
         if untrusted_taint():
