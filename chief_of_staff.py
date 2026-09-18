@@ -2728,6 +2728,10 @@ def _confirmation_subject(action: Dict[str, Any]) -> str:
     is actually about to run."""
     a = action or {}
     bits = []
+    if a.get('type') == 'send_invoice':
+        bits.append('by text' if str(a.get('channel') or '').strip().lower() in ('sms', 'text') else 'by email')
+        if a.get('invoice_number') or a.get('invoice_id'):
+            bits.append('invoice ' + str(a.get('invoice_number') or a['invoice_id']))
     for key in ("to", "recipient", "contact_name", "client_name", "name", "email"):
         val = str(a.get(key) or "").strip()
         if val:
@@ -8629,6 +8633,12 @@ async def _send_invoice_email(
 
 
 async def handle_send_invoice(client, biz, action) -> Dict:
+    channel = str(action.get('channel') or 'email').strip().lower()
+    if channel in ('sms', 'text'):
+        from chief_invoice_sms import send_invoice_sms
+        return await send_invoice_sms(client, biz, action)
+    if channel != 'email':
+        return _fail('send_invoice', 'Choose email or SMS for invoice delivery.')
     invoice_id = action.get("invoice_id")
     print(f"[Chief] send_invoice START — invoice_id={invoice_id!r}", flush=True)
 
@@ -10873,7 +10883,8 @@ def _resolve_action_references(action: Dict[str, Any], prior_results: List[Dict[
     # Phase 2: auto-backfill invoice_id when missing — a very common
     # multi-action pattern where the Chief emits send_invoice right after
     # create_invoice without an explicit reference.
-    if atype in ("send_invoice", "mark_invoice_paid") and not resolved.get("invoice_id"):
+    if (atype in ("send_invoice", "mark_invoice_paid") and not resolved.get("invoice_id")
+            and not resolved.get('invoice_number')):
         for prev in reversed(prior_results):
             if prev.get("type") == "create_invoice" and prev.get("invoice_id"):
                 resolved["invoice_id"] = prev["invoice_id"]
@@ -10938,6 +10949,8 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
     Never preserves first-pass narration. This is the architectural
     safety layer that makes the optimistic-claim-plus-honesty-footer
     contradiction impossible — independent of any LLM behavior."""
+    if len(taken or []) == 1 and taken[0].get('needs_confirmation') and taken[0].get('label'):
+        return taken[0]['label']
     succeeded: List[tuple] = []
     failed: List[tuple] = []
     for t in taken or []:
@@ -11400,6 +11413,9 @@ async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
         # — on a voice surface the practitioner may not be looking at
         # the screen, so hearing WHO and HOW MUCH is the whole review.
         if turn_needs_spoken_confirmation():
+            if atype == 'send_invoice' and str(action.get('channel') or '').strip().lower() in ('sms', 'text'):
+                from chief_invoice_sms import send_invoice_sms
+                return 'handled', await send_invoice_sms(client, biz, action, preview=True)
             what = _humanize_action_type(atype)
             target = _confirmation_subject(action)
             logger.info(f"[gate] holding spoken class-C {atype} for confirmation")
@@ -13776,7 +13792,8 @@ async def chief_chat(
                 view_detail=_format_view_block(req.current_context, view_detail),
                 taken=taken, message=req.message,
                 conversation_history=history,
-                business_id=biz.get('id'), reviewer=chief_truth.review_reply)
+                business_id=biz.get('id'), reviewer=chief_truth.review_reply,
+                repairer=chief_truth.repair_reply)
             _t.mark("review")
             _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
 
