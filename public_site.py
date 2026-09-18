@@ -5716,6 +5716,43 @@ async def _serve_give_page(client, biz_id: Optional[str], slug: str) -> HTMLResp
     )
 
 
+_FORM_PAGE_PREFIX = "/public/widget/form/"
+
+
+async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: str) -> HTMLResponse:
+    """One client form's public page on the site's own address —
+    https://<slug>.mysolutionist.app/public/widget/form/<id> (and the
+    same path on a custom domain). This address had been handed out by
+    Chief, the form list and the composed site since client forms
+    shipped, with no handler behind it on any host (2026-09-18).
+
+    The form must belong to this site's business and be active; anything
+    else is the site's own 404. Rendering lives in form_page_renderer
+    (pure); the post goes to the intake endpoint on the API host."""
+    fid = (form_id or "").strip().strip("/")
+    if not biz_id or not fid or "/" in fid or len(fid) > 64:
+        raise HTTPException(404, "form not found")
+    rows = await _sb_service(
+        client,
+        f"/intake_forms?id=eq.{fid}&business_id=eq.{biz_id}&is_active=eq.true"
+        "&select=id,business_id,name,fields,settings,form_type&limit=1",
+    )
+    if not rows:
+        raise HTTPException(404, "form not found")
+    biz_rows = await _sb_service(
+        client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
+    if not biz_rows:
+        raise HTTPException(404, "business not found")
+    from form_page_renderer import render_form_page
+    from chief_host import FALLBACK_BASE
+    html = render_form_page(
+        biz_rows[0], rows[0],
+        submit_url=f"{FALLBACK_BASE.rstrip('/')}/intake/submit",
+        canonical_url=f"https://{slug}.mysolutionist.app{_FORM_PAGE_PREFIX}{fid}")
+    return HTMLResponse(content=html, media_type="text/html",
+                        headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
 async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLResponse:
     """Public event RSVP — render the events page at
     https://<slug>.mysolutionist.app/events (mirrors _serve_give_page).
@@ -6514,6 +6551,9 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # (same always-wins sub-path contract as /book and /give).
         if normalized_path == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # A client form's own page — the link Chief hands out.
+        if normalized_path.startswith(_FORM_PAGE_PREFIX):
+            return await _serve_form_page(client, biz_id, slug, normalized_path[len(_FORM_PAGE_PREFIX):])
         # The shop, on the site's own domain rather than a railway.app
         # URL the visitor has never seen (2026-08-13 gap list).
         if normalized_path == "/store":
@@ -6669,6 +6709,9 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # reasoning as /give.
         if _norm == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # A client form's page works on custom domains too.
+        if _norm.startswith(_FORM_PAGE_PREFIX):
+            return await _serve_form_page(client, biz_id, slug, _norm[len(_FORM_PAGE_PREFIX):])
         # Booking (2026-08-02): this was MISSING here while present on
         # the subdomain path, so /book on a practitioner's own domain
         # silently served the home page — a dead Book button on the

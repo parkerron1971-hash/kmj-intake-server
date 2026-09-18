@@ -618,7 +618,7 @@ def evidence_for_review(ctx, view_detail, taken):
         'queue', 'events', 'sessions', 'insights', 'modules', 'module_counts',
         'memories', 'notifications', 'recent_queue_24h', 'auto_recent',
         'products', 'contacts_lookup', 'projects', 'open_missions', 'open_assignments',
-        'learning_lines', 'open_invoices', 'foundation_block', 'business_profile_block',
+        'learning_lines', 'open_invoices', 'image_jobs', 'foundation_block', 'business_profile_block',
         'practitioner_block', 'brand_block', 'voice_block', 'playbook_block', 'blueprint_block')
     context = [(name, ctx[name]) for name in context_fields if name in (ctx or {})]
     biz = (ctx or {}).get('business') or {}

@@ -344,12 +344,34 @@ async def handle_set_site_capability(client, biz, action) -> Dict:
     doesn't actually have live, so the label can never promise a Book
     button with no booking page behind it."""
     cap = str(action.get("capability") or "").strip().lower()
-    if cap not in ("booking", "store"):
+    if cap not in ("booking", "store", "events"):
         return _fail("set_site_capability",
-                     "capability must be 'booking' or 'store'")
+                     "capability must be 'booking', 'store' or 'events'")
     on = action.get("on")
     on = True if on is None else bool(on)
     import offering_profiles
+    if cap == "events":
+        # The events door is different from the other two: Chief can
+        # switch the page itself on (settings.events_public.enabled —
+        # the same flag the Events panel toggles), provided an Events
+        # module exists to feed it. Nothing on the site may link to a
+        # page with nothing behind it.
+        from events_rsvp_router import events_settings, roster_modules_for
+        rosters = await asyncio.to_thread(roster_modules_for, str(biz["id"]))
+        if on and not rosters:
+            return _fail("set_site_capability",
+                         "there is no Events module yet, so there is nothing "
+                         "for the events page to show. Create it first "
+                         "(ensure_module with archetype event_roster), add "
+                         "the occasion, then switch the events page on.")
+        settings = dict(biz.get("settings") or {})
+        cfg = dict(events_settings(settings))
+        if bool(cfg.get("enabled")) != on:
+            cfg["enabled"] = on
+            settings["events_public"] = cfg
+            await _sb(client, "PATCH", f"/businesses?id=eq.{biz['id']}",
+                      {"settings": settings})
+            biz["settings"] = settings
     state = await asyncio.to_thread(
         offering_profiles.business_state, str(biz["id"]))
     if on and cap == "booking" and not (
@@ -361,6 +383,10 @@ async def handle_set_site_capability(client, biz, action) -> Dict:
         return _fail("set_site_capability",
                      "no store page exists yet — the business needs a "
                      "published site slug first")
+    if on and cap == "events" and not state.get("events_url"):
+        return _fail("set_site_capability",
+                     "the events page could not be switched on — the "
+                     "business needs a published site address first")
     import discovery
     patch = {"capabilities": {cap: {"value": "on" if on else "off",
                                     "source": "asked"}}}
@@ -370,11 +396,19 @@ async def handle_set_site_capability(client, biz, action) -> Dict:
                      "no site row to store the site plan on yet — "
                      "create the site first")
     if on:
-        url = (state.get("booking_url") if cap == "booking"
-               else state.get("store_url"))
-        label = (f"🔌 {cap.title()} is wired into the site plan ({url}). "
-                 "The next site pass must carry it — say 'refine my "
-                 "site' to apply it now.")
+        url = {"booking": state.get("booking_url"),
+               "store": state.get("store_url"),
+               "events": state.get("events_url")}.get(cap)
+        if cap == "events":
+            label = (f"🔌 The events page is live at {url} — visitors see "
+                     "every dated occasion and can RSVP there now. It is "
+                     "also in the site plan: the next site pass adds an "
+                     "Upcoming Events link — say 'refine my site' to "
+                     "apply it now.")
+        else:
+            label = (f"🔌 {cap.title()} is wired into the site plan ({url}). "
+                     "The next site pass must carry it — say 'refine my "
+                     "site' to apply it now.")
     else:
         label = (f"🔌 {cap.title()} removed from the site plan — the "
                  "next site pass drops the door.")
