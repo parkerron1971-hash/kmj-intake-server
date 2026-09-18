@@ -75,7 +75,15 @@ RESIDUAL = [h for h in UNGUARDED
 # widget's book_anon). It sits behind the IP cap, the client policy
 # verdict, and book_anon's own guards. The residual stays at ZERO;
 # this raise records one deliberate public door, not slack.
-MAX_UNGUARDED_TOTAL = 45
+# 45 -> 46 (2026-09-18, the client form's page): intake_endpoint gained
+# GET /public/widget/form/{form_id} — the page behind the link Chief
+# hands out for a client form (it had been a 404 on every host). A
+# visitor with the link, no account, by design — the same person who
+# then POSTs to /intake/submit, which was already public. A READ of an
+# active form's own fields (the composed site already exposes the same
+# list); the business is read only to brand the page. The residual
+# stays at ZERO; this raise records one deliberate public door.
+MAX_UNGUARDED_TOTAL = 46
 MAX_UNGUARDED_RESIDUAL = 0
 
 

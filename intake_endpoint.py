@@ -679,6 +679,40 @@ RESPOND ONLY WITH VALID JSON:
         }
 
 
+@router.get("/public/widget/form/{form_id}")
+async def public_form_page(form_id: str, request: Request):
+    """The page behind the link Chief hands out for a client form, served
+    on the API host (the site domains serve the same page via
+    public_site._serve_form_page). Until 2026-09-18 this path existed
+    only inside `embed_url` strings — a 404 wherever it was opened."""
+    from fastapi.responses import HTMLResponse
+    fid = (form_id or "").strip()
+    if not fid or len(fid) > 64:
+        raise HTTPException(status_code=404, detail="Form not found")
+    async with httpx.AsyncClient() as client:
+        forms = await supabase_request(
+            client, "GET",
+            f"/intake_forms?id=eq.{fid}&is_active=eq.true"
+            "&select=id,business_id,name,fields,settings,form_type&limit=1")
+        form = forms[0] if forms else None
+        if not form:
+            raise HTTPException(status_code=404, detail="Form not found")
+        businesses = await supabase_request(
+            client, "GET",
+            f"/businesses?id=eq.{form['business_id']}&select=id,name,type,settings&limit=1")
+        business = businesses[0] if businesses else None
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+    from form_page_renderer import render_form_page
+    from chief_form_actions import public_form_url
+    canonical = await asyncio.to_thread(public_form_url, str(form["business_id"]), fid)
+    base = str(request.base_url).rstrip("/")
+    html = render_form_page(business, form, submit_url=f"{base}/intake/submit",
+                            canonical_url=canonical)
+    return HTMLResponse(content=html, media_type="text/html",
+                        headers={"Cache-Control": "no-store"})
+
+
 @router.get("/intake/health")
 async def intake_health():
     """Liveness probe."""

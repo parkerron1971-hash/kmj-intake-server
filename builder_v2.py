@@ -187,7 +187,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 11c. NO VISIBLE STAND-INS: a photo the inventory lacks is INVISIBLE to the visitor. Never author a "filled" or "art-directed" placeholder that reads as intentional — no tinted or textured box, no framed panel, no caption-only frame, no italic line describing the photograph that should be there. The hidden .sx-drop of 11b is the ONLY stand-in; its shot direction never appears outside it. HERO without a hero photo: a typographic hero — display type carries the composition and rule 15's presence is a ghost word or the signature motif, never an empty frame. WORK/GALLERY with fewer than two real photos: no photo grid at all — say what you make and how it feels in words, with drop slots the Studio reveals. A visitor must never be able to tell a photo is missing.
 12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border.
 13. HEAD + SHARE: a real <title>, a meta description written from the data, and og:title / og:description / og:image (the strongest image url from the data) so a shared link looks intentional.
-14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
+14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store, events) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section, an Upcoming Events moment that invites the visitor to see the dates and RSVP). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
 15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
 
 CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold.
@@ -340,7 +340,7 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
 
 
 _CONNECTED_LINE_RE = re.compile(
-    r"^- (BOOKING|STORE): ON — .*?(https://\S+)", re.MULTILINE)
+    r"^- (BOOKING|STORE|EVENTS): ON — .*?(https://\S+)", re.MULTILINE)
 _STORE_OFF_LINE_RE = re.compile(r"^- STORE: OFF\b", re.MULTILINE)
 # a link to a shop that is not there: /store or /shop as a path on any
 # origin (the author invents it on the site's own), or a bare #store
@@ -397,6 +397,11 @@ def connected_systems_block(business_id: str,
         lines.append("- STORE: OFF — there is nothing in the shop yet. "
                      "No shop section, no shop link, no /store url "
                      "anywhere on the page.")
+    if state.get("events_enabled") and state.get("events_url") \
+            and not _off("events"):
+        lines.append(f"- EVENTS: ON — the Upcoming Events moment and an Events "
+                     f"link in the navigation link to {state['events_url']} "
+                     f"— visitors see the dates and RSVP there")
     if not lines:
         return ""
     return ("CONNECTED SYSTEMS (working doors the owner turned on — "

@@ -529,6 +529,18 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.info(f"[composer] giving connection skipped: {e}")
 
+    # Public events (RSVP) — same connection pattern: on only when the
+    # /events page is actually live (operator toggle + an Events module),
+    # so a composed "Upcoming events" door can never dead-end.
+    events_door = {"enabled": False, "url": ""}
+    try:
+        from events_rsvp_router import (events_public_is_active, events_url_for_site,
+                                        roster_modules_for)
+        if site and slug and events_public_is_active(biz, roster_modules_for(business_id)):
+            events_door = {"enabled": True, "url": events_url_for_site(site)}
+    except Exception as e:
+        logger.info(f"[composer] events connection skipped: {e}")
+
     # Only real dict rows the owner left visible reach composed sites —
     # hidden quotes (show_on_website=False) must not render, inflate the
     # statband count, or pad the LLM prompt; legacy string entries are
@@ -824,6 +836,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "business_picture": business_picture,
         "booking": booking,
         "giving": giving,
+        "events_door": events_door,
         "public_modules": _fetch_public_modules(business_id),
         "contact": contact,
         "footer": bundle.get("footer") or {},

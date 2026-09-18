@@ -1834,8 +1834,15 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # What came of Chief's own moves (outcome_ledger, 2026-09-04):
         # approvals, dismissals, tasks completed or ignored, replies.
         outcome_ledger.digest_async(biz_id),
+        # Images still generating. Without this Chief re-emitted
+        # generate_image on every "is my flyer ready?" and the spoken
+        # hold answered instead of the status (2026-09-18, four turns).
+        _sb(client, "GET",
+            f"/image_artworks?business_id=eq.{biz_id}&status=in.(queued,working)"
+            f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace('+00:00', 'Z')}"
+            f"&order=created_at.desc&limit=5&select=id,prompt,status,created_at"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs = await asyncio.gather(*tasks)
 
     if not biz_rows:
         return {}
@@ -2048,6 +2055,11 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         ],
         "open_assignments": list(open_assignments or []),
         "learning_lines": list(learning_lines or []),
+        "image_jobs": [
+            {"id": r.get("id"), "prompt": str(r.get("prompt") or "")[:120],
+             "status": r.get("status"), "created_at": r.get("created_at")}
+            for r in (image_jobs or []) if isinstance(r, dict)
+        ],
         "open_invoices": [
             {
                 "id": r.get("id"),
@@ -3281,6 +3293,20 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         line += f" [id={inv.get('id')}]"
         invoice_lines.append(line)
 
+    # Images still generating: the answer to "is my flyer ready?" is
+    # THIS line, never another generate_image.
+    image_lines = []
+    for job in (ctx.get("image_jobs") or [])[:5]:
+        started = ""
+        try:
+            _t0 = datetime.fromisoformat(str(job.get("created_at") or "").replace("Z", "+00:00"))
+            _mins = max(0, int((datetime.now(timezone.utc) - _t0).total_seconds() // 60))
+            started = f", started {_mins} min ago" if _mins else ", just started"
+        except (TypeError, ValueError):
+            pass
+        image_lines.append(
+            f"  - \"{_neutralize_untrusted(job.get('prompt') or '')[:90]}\" — {job.get('status') or 'queued'}{started}")
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
@@ -3320,6 +3346,9 @@ OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for ad
 
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
+
+IMAGES IN PROGRESS (a flyer or picture already generating — when one is listed and they ask about it, answer from this line: it is on its way and lands in Media Library; do NOT emit generate_image again unless they ask for a different image):
+{chr(10).join(image_lines) if image_lines else '  (none generating right now)'}
 
 CUSTOM MODULES:
 {chr(10).join(module_lines) if module_lines else '  (none)'}
@@ -7134,8 +7163,38 @@ async def handle_contact_deep_dive(client, biz, action) -> Dict:
     }
 
 
+# Archetypes Chief may create DIRECTLY with ensure_module, with the schema
+# and params their hand-written surfaces read. Everything else still goes
+# through propose_module_from_intake (the generator designs the schema).
+# event_roster: one occasion, many people — the public /events page
+# (events_rsvp_router) reads title/date/location/capacity/signups by
+# these exact param names.
+ENSURE_MODULE_ARCHETYPES: Dict[str, Dict[str, Any]] = {
+    "event_roster": {
+        "icon": "📅",
+        "schema": {
+            "fields": [
+                {"name": "title", "type": "text", "label": "Title", "required": True},
+                {"name": "date", "type": "date", "label": "Date", "required": True},
+                {"name": "location", "type": "text", "label": "Location"},
+                {"name": "capacity", "type": "number", "label": "Capacity"},
+                {"name": "description", "type": "textarea", "label": "Details"},
+            ],
+            "default_sort": "date",
+            "default_view": "list",
+            "views": ["list"],
+        },
+        "params": {"title_field": "title", "date_field": "date",
+                   "location_field": "location", "capacity_field": "capacity",
+                   "signups_field": "signups", "occasion_noun": "Event"},
+    },
+}
+
+
 async def handle_ensure_module(client, biz, action) -> Dict:
-    """Find or create a module by name. Used for auto-creating Blog, Testimonials, etc."""
+    """Find or create a module by name. Used for auto-creating Blog, Testimonials, etc.
+    With `archetype` (see ENSURE_MODULE_ARCHETYPES) it creates a first-class
+    module — an Events roster the public /events page can publish."""
     name = (action.get("module_name") or "").strip()
     if not name:
         return _fail("ensure_module", "module_name required")
@@ -7179,7 +7238,13 @@ async def handle_ensure_module(client, biz, action) -> Dict:
         }
 
     # Build a minimal schema
-    schema = action.get("schema") or {
+    archetype = str(action.get("archetype") or "").strip().lower()
+    if archetype and archetype not in ENSURE_MODULE_ARCHETYPES:
+        return _fail("ensure_module",
+                     f"I can create a module of kind {', '.join(sorted(ENSURE_MODULE_ARCHETYPES))} "
+                     f"this way, not '{archetype}'. Describe what you want tracked and I will propose the module instead.")
+    schema = action.get("schema") or (
+        ENSURE_MODULE_ARCHETYPES[archetype]["schema"] if archetype else {
         "fields": [
             {"name": "title", "type": "text", "label": "Title", "required": True},
             {"name": "body", "type": "textarea", "label": "Content"},
@@ -7190,14 +7255,14 @@ async def handle_ensure_module(client, biz, action) -> Dict:
         "default_sort": "created_at",
         "default_view": "list",
         "views": ["list"],
-    }
+    })
 
-    icon = action.get("icon") or "📝"
+    icon = action.get("icon") or (ENSURE_MODULE_ARCHETYPES[archetype]["icon"] if archetype else "📝")
     slug = name.lower().replace(" ", "-").replace("'", "")[:60]
     enable_public = action.get("public_display_enabled", False)
     display_type = action.get("display_type", "list")
 
-    inserted = await _sb(client, "POST", "/custom_modules", {
+    row = {
         "business_id": biz["id"],
         "name": name,
         "slug": slug,
@@ -7215,7 +7280,18 @@ async def handle_ensure_module(client, biz, action) -> Dict:
             "sort_by": "created_at",
         },
         "is_active": True,
-    })
+    }
+    if archetype:
+        # A first-class archetype: the hand-written surface (the roster,
+        # the RSVP page) reads these params, so they are set here, not
+        # left for the practitioner to discover in a settings pane.
+        row["archetype"] = archetype
+        row["archetype_params"] = dict(ENSURE_MODULE_ARCHETYPES[archetype]["params"])
+        if archetype == "event_roster":
+            noun = str(action.get("occasion_noun") or "").strip()
+            if noun:
+                row["archetype_params"]["occasion_noun"] = noun[:40]
+    inserted = await _sb(client, "POST", "/custom_modules", row)
     if not inserted or not isinstance(inserted, list):
         return _fail("ensure_module", "creation failed")
 

@@ -94,6 +94,14 @@ def business_state(business_id: str) -> Dict[str, Any]:
     _site_origin = (f"https://{_custom}" if _custom
                     else (f"https://{slug}.mysolutionist.app" if slug else ""))
 
+    _events_live = False
+    try:
+        from events_rsvp_router import events_public_is_active, roster_modules_for
+        _events_live = events_public_is_active(
+            {"settings": settings}, roster_modules_for(business_id))
+    except Exception:
+        _events_live = False
+
     # One-calendar pass (2026-07-10): canonical hosted booking URL
     # (subdomain /book), not the legacy Railway path.
     booking_url = ""
@@ -113,6 +121,12 @@ def business_state(business_id: str) -> Dict[str, Any]:
         # 2026-08-13; this used to hand out a railway.app URL.
         "store_url": f"{_site_origin}/store" if _site_origin else "",
         "product_file_ids": product_file_ids,
+        # The public events page (RSVP) — live only when the operator
+        # switched it on AND an Events (event_roster) module exists, the
+        # same gate the page itself applies. A third door beside booking
+        # and the store, so a site can carry an Upcoming Events moment.
+        "events_enabled": _events_live,
+        "events_url": f"{_site_origin}/events" if (_site_origin and _events_live) else "",
     }
 
 
