@@ -100,8 +100,16 @@ VALID_TYPES = sorted(set(_TYPE_ALIASES.values()))
 
 # Mirrors the vocabulary the seeded forms use. Anything else falls back to
 # "general", which is what `submit_intake` itself defaults to.
+#
+# THIS LIST AND THE DATABASE CHECK MUST AGREE. intake_forms.form_type has
+# a CHECK constraint (supabase/APPLY-2026-09-18-intake-form-types.sql);
+# until 2026-09-18 it allowed six values while this tuple allowed ten,
+# so "intake" (the prompt's own example), "application", "feedback",
+# "waitlist" and "quote" were accepted here and rejected by Postgres —
+# "I couldn't save that form just now" on every one, with no log.
+# test_chief_form_types pins the two lists to the migration.
 _FORM_TYPES = ("general", "intake", "discovery", "consultation", "connect_card",
-               "volunteer", "application", "feedback", "waitlist", "quote")
+               "volunteer", "application", "feedback", "waitlist", "quote", "event")
 
 # THE THREE KEYS THE SUBMIT DOOR READS BY EXACT NAME.
 #
@@ -393,6 +401,15 @@ async def handle_create_client_form(client, biz, action) -> Dict[str, Any]:
     try:
         inserted = await asyncio.to_thread(sb_clients.sb_post_as_service,
                                            "/intake_forms", row)
+        if (not inserted or not isinstance(inserted, list)) and form_type != "general":
+            # The database's form_type CHECK may lag the list above (it did
+            # for five months). A rejected label must not cost the form:
+            # save it as "general" and keep the asked-for kind in settings.
+            logger.warning(f"create_client_form: form_type {form_type!r} rejected; saving as general")
+            row = {**row, "form_type": "general",
+                   "settings": {**settings, "requested_form_type": form_type}}
+            inserted = await asyncio.to_thread(sb_clients.sb_post_as_service,
+                                               "/intake_forms", row)
     except Exception as e:
         logger.exception(f"create_client_form insert failed: {e}")
         return _fail("create_client_form",

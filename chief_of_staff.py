@@ -1728,7 +1728,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/custom_modules?business_id=eq.{biz_id}&is_active=eq.true"
             # schema included (2026-07-03) so the Chief knows each module's
             # FIELD NAMES — create/update_module_entry stops guessing keys.
-            f"&select=id,name,slug,description,schema&limit=50"),
+            f"&select=id,name,slug,description,schema,archetype&limit=50"),
         _sb(client, "GET",
             # Chief Layers arc — over-fetch to 100 so _blend_memories can
             # re-rank with recency before keeping the top 50.
@@ -3056,6 +3056,11 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         count = str(count) if count is not None else 'unknown number of'
         desc = f" — {m.get('description')}" if m.get('description') else ""
         slug_part = f" slug={m.get('slug')}" if m.get('slug') else ""
+        # The archetype is how Chief knows an Events module (event_roster)
+        # exists to put a dated occasion in — without it Chief invented a
+        # free "event" offering and said registration was not built.
+        if m.get('archetype') and m.get('archetype') != 'fallback_generic':
+            slug_part += f" archetype={m.get('archetype')}"
         try:
             _fields = ((m.get("schema") or {}).get("fields") or [])[:12]
             fields_part = " fields: " + ", ".join(
