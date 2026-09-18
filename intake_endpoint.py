@@ -160,14 +160,31 @@ async def supabase_request(
     path: str,
     body: Optional[Dict] = None,
 ) -> Any:
-    """Make a request to the Supabase REST API."""
+    """Make a request to the Supabase REST API AS THE SERVER.
+
+    This door is public by design (ownership_sweep.PUBLIC_BY_DESIGN): a
+    visitor with a form link and no account. Its reads of intake_forms,
+    businesses and contacts ran with the ANON key, and every row-level
+    policy on those tables is member-scoped — so once RLS landed, every
+    anonymous submission and every open of the form's page answered
+    "Form not found". No contact has come through this door since
+    2026-04-15 (checked 2026-09-18). The endpoint itself does the
+    scoping: the form must belong to the business_id the caller claims,
+    the honeypot and the rate limit run first, and it only ever touches
+    the rows of that one form. Falls back to anon only when no service
+    key is configured (local runs), which is the old behaviour."""
     url = f"{get_supabase_url()}/rest/v1{path}"
-    headers = {
-        "apikey": get_supabase_anon(),
-        "Authorization": f"Bearer {get_supabase_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+    try:
+        import sb_clients
+        headers = sb_clients.sb_headers_service(prefer="return=representation")
+        headers.setdefault("Content-Type", "application/json")
+    except Exception:
+        headers = {
+            "apikey": get_supabase_anon(),
+            "Authorization": f"Bearer {get_supabase_anon()}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
     resp = await client.request(
         method, url, headers=headers,
         content=json.dumps(body) if body else None,
