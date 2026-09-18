@@ -13775,6 +13775,7 @@ async def chief_chat(
                 client, clean or _scrub_response_text(raw or ''), ctx=ctx,
                 view_detail=_format_view_block(req.current_context, view_detail),
                 taken=taken, message=req.message,
+                conversation_history=history,
                 business_id=biz.get('id'), reviewer=chief_truth.review_reply)
             _t.mark("review")
             _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)

@@ -391,7 +391,7 @@ def test_a_prose_gap_is_delivered_with_the_doubt_named():
         ctx={'contacts_total': 725}, view_detail={}, taken=[], message='How many contacts?', business_id='biz',
         reviewer=AsyncMock(return_value=raw)))
     assert result.startswith('There are 725 contacts. Most of them are active.')
-    assert 'I could not confirm: “Most of them are active.”' in result
+    assert 'These parts of my answer are still unverified:\n- “Most of them are active.”' in result
     assert meta['status'] == 'caveated' and meta['gaps'] == ['Most of them are active.']
 
 
