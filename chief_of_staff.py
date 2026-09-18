@@ -5111,7 +5111,23 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
     module_id = action.get("module_id")
     module = await _validate_module(client, biz["id"], module_id)
     if not module:
-        return _fail("create_module_entry", f"Module {module_id} not found")
+        # Every other module handler resolves by id, slug OR name; this
+        # one took the id only, so "log it in Flyer Orders" failed with
+        # "I couldn't find that" whenever the model named the module the
+        # way the practitioner does (2026-09-18).
+        module = await _resolve_module(client, biz["id"], action)
+    if not module and module_id:
+        # The model puts the slug or the name in module_id more often
+        # than an id ("flyer-orders", "Flyer Orders"). Read it both ways.
+        module = await _resolve_module(client, biz["id"],
+                                       {"module_slug": module_id, "module_name": module_id})
+    if not module:
+        wanted = (module_id or action.get("module_slug") or action.get("slug")
+                  or action.get("module_name") or action.get("name") or "").strip()
+        return _fail("create_module_entry",
+                     (f"There is no module called \"{wanted}\" in this business. "
+                      if wanted else "No module was named. ")
+                     + "Tell me which module this entry belongs in.")
 
     data = action.get("data") or {}
     if not isinstance(data, dict):
@@ -8062,7 +8078,13 @@ async def handle_create_invoice(client, biz, action) -> Dict:
         "total": total,
         "is_recurring": payload.get("is_recurring", False),
         "stripe_payment_url": stripe_url,
-        "stripe_auto_generated": bool(is_owner and stripe_url and stripe_url != manual_stripe_link),
+        # Auto-generated means the link came from the practitioner's
+        # connected Stripe account above, not the manual link they pasted.
+        # This used to read an `is_owner` that the 2026-07-11 owner-gate
+        # change had deleted — a NameError AFTER the insert, so every
+        # invoice Chief created since was reported as "didn't go through"
+        # while the row sat in Operate → Invoices (2026-09-18, INV-2026-014).
+        "stripe_auto_generated": bool(stripe_url and stripe_url != manual_stripe_link),
     }
 
 
