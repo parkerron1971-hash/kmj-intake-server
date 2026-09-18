@@ -723,8 +723,14 @@ async def public_form_page(form_id: str, request: Request):
     from form_page_renderer import render_form_page
     from chief_form_actions import public_form_url
     canonical = await asyncio.to_thread(public_form_url, str(form["business_id"]), fid)
-    base = str(request.base_url).rstrip("/")
-    html = render_form_page(business, form, submit_url=f"{base}/intake/submit",
+    # Behind Railway's proxy request.base_url says http://; a browser
+    # will not POST from an https page to an http address (mixed
+    # content), so the submit url is pinned to https on the same host.
+    host = request.url.hostname or ""
+    local = host in ("localhost", "127.0.0.1")
+    scheme = "http" if local else "https"
+    port = f":{request.url.port}" if (local and request.url.port) else ""
+    html = render_form_page(business, form, submit_url=f"{scheme}://{host}{port}/intake/submit",
                             canonical_url=canonical)
     return HTMLResponse(content=html, media_type="text/html",
                         headers={"Cache-Control": "no-store"})
