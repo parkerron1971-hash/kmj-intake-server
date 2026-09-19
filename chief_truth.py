@@ -492,16 +492,43 @@ def _clock_times(text):
     return times, _CLOCK.sub(swap, text or '')
 
 
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), start=1)}
+# A date written the way people say it: "November 24", "Nov. 24th, 2026",
+# "the 24th of November". The record it is checked against says
+# "2026-11-24". Both are the same figures — month and day (and year) —
+# once the month is a number, exactly as "9am" and "09:00" are the same
+# clock time. Without this, "twenty users by November 24" was withheld
+# for "claim number 24 is not in the quote" and the practitioner heard
+# "No action ran in this request" to "give me an update" (2026-09-19).
+_SPOKEN_DATE = re.compile(
+    r'\b(?P<mon>jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+'
+    r'(?P<day>\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(?P<year>\d{4}))?'
+    r'|\b(?P<day2>\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?'
+    r'(?P<mon2>jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\b(?:,?\s+(?P<year2>\d{4}))?',
+    re.I)
+
+
+def _spoken_dates_as_figures(text):
+    def swap(m):
+        mon = (m.group('mon') or m.group('mon2') or '')[:3].lower()
+        day = m.group('day') or m.group('day2') or ''
+        year = m.group('year') or m.group('year2') or ''
+        return f" {_MONTHS.get(mon, '')} {day} {year} "
+    return _SPOKEN_DATE.sub(swap, text or '')
+
+
 def _figures(text):
     # Clock times first, as hour and minute on the 24-hour clock. Then drop
     # tokens that mix letters and digits (INV-2026-007, A1B2, sha
     # fragments) before counting figures. A date has no letters and keeps
-    # every part.
+    # every part; a spoken date is turned into those parts first.
     times, rest = _clock_times(text)
     out = []
     for h, mi in times:
         out.append(str(h))
         out.append(str(mi))
+    rest = _spoken_dates_as_figures(rest)
     return out + _FIGURE.findall(_IDENTIFIER.sub(' ', rest))
 
 
@@ -557,9 +584,12 @@ def is_non_execution_claim(text):
 
 
 def wrote_anything(sources):
-    """Did this turn carry a write receipt that went through?"""
+    """Did this turn carry a WRITE receipt that went through? Opening a
+    page is a receipt for "I've opened it", never a write."""
     for source in (sources or {}).values():
-        if source.get('kind') == 'receipt' and '"failed": true' not in (source.get('text') or ''):
+        if source.get('kind') != 'receipt' or '"failed": true' in (source.get('text') or ''):
+            continue
+        if source.get('effect', 'write') == 'write':
             return True
     return False
 
@@ -668,10 +698,18 @@ def evidence_for_review(ctx, view_detail, taken):
         import action_registry
         # Read results also contribute evidence, but cannot support an action claim.
         effect = action_registry.effect(item.get('type') or '')
-        kind = 'receipt' if effect == action_registry.WRITE else 'record'
+        # A UI verb that ran (navigate, show_view, close_view) is the
+        # receipt for "I've opened your booking page" — it proves that
+        # claim exactly as a write receipt proves a send. Reviewed as a
+        # record only, "the booking site" and the 90-day plan were both
+        # answered "I could not verify the explanation" (2026-09-19).
+        # `effect` rides along so wrote_anything can still tell a
+        # navigation from a write.
+        kind = 'receipt' if effect in (action_registry.WRITE, action_registry.UI) else 'record'
         text = json.dumps({k: v for k, v in item.items()
                            if k not in ('frontend_event', 'nav', 'toast')}, default=str, ensure_ascii=False)
-        sources[f'result:{index}'] = {'kind': kind, 'text': text[:MAX_SOURCE_CHARS],
+        sources[f'result:{index}'] = {'kind': kind, 'effect': effect or 'read',
+                                     'text': text[:MAX_SOURCE_CHARS],
                                      'complete': kind == 'receipt' and len(text) <= MAX_SOURCE_CHARS}
     # Latest results first, then context, then earlier reads. Excluded evidence
     # is unavailable to the review; it cannot be cited by guessing its ID.
@@ -719,7 +757,16 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
 
 
 async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, business_id, reviewer,
-                         conversation_history=None, repairer=None):
+                         conversation_history=None, repairer=None, budget_s=45.0):
+    """`budget_s` is the whole check's wall-clock allowance: review, then
+    repair, then re-review. A spoken turn cannot afford 15 s + 15 s of
+    repair after a 25 s review — "give me an update" took 58 s and ended
+    in "No action ran" (2026-09-19). Each later leg gets what is left."""
+    import time as _time
+    _t0 = _time.monotonic()
+
+    def _left():
+        return max(0.0, budget_s - (_time.monotonic() - _t0))
     import chief_of_staff as chief
     receipts = [r for r in taken if isinstance(r, dict)]
     if receipts and all(r.get('type') in ('submit_work_order','respond_work_order') for r in receipts):
@@ -755,7 +802,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             raw = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM,
                 [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
                 max_tokens=REVIEW_MAX_TOKENS, enable_web_search=False, business_id=business_id),
-                timeout=30.0)
+                timeout=min(30.0, max(5.0, _left())))
         except Exception as exc:
             logger.warning('reply review unavailable: %s', type(exc).__name__)
     verdict, cited, reason = assess_review(raw, reply, sources)
@@ -770,7 +817,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     import action_registry
     bits = []
     for receipt in receipts:
-        if action_registry.effect(receipt.get('type') or '') != action_registry.WRITE:
+        # Writes and UI verbs carry deterministic, server-written labels
+        # ("Opened BUILD → booking"); a read's label may be model prose.
+        if action_registry.effect(receipt.get('type') or '') not in (action_registry.WRITE, action_registry.UI):
             continue
         # A read/analysis summary may itself contain model prose. It cannot
         # bypass the reviewer by masquerading as a deterministic receipt.
@@ -835,14 +884,17 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     # Recover prose once, with tools disabled. A repaired answer must pass a
     # fresh review; unlike the original-draft timeout policy it never fails open.
     # Do not replay actions here: an ambiguous send could create a duplicate.
-    if repairer and verdict == 'unsupported':
+    if repairer and verdict == 'unsupported' and _left() < 8.0:
+        logger.info('reply repair skipped: %.1fs of the %.0fs budget left', _left(), budget_s)
+    if repairer and verdict == 'unsupported' and _left() >= 8.0:
         try:
             repair_payload = {'owner_message': message, 'rejected_draft': reply,
                               'rejection_reason': reason, 'sources': sources,
                               'unavailable': unavailable_sources()}
             repaired = await asyncio.wait_for(repairer(client, REPAIR_SYSTEM,
                 [{'role': 'user', 'content': json.dumps(repair_payload, ensure_ascii=False)}],
-                max_tokens=900, enable_web_search=False, business_id=business_id), timeout=15.0)
+                max_tokens=900, enable_web_search=False, business_id=business_id),
+                timeout=min(15.0, max(4.0, _left() / 2)))
             if (isinstance(repaired, str) and repaired.strip() and len(repaired) <= MAX_REPLY_CHARS
                     and not re.search(r'\[\s*ACTION\s*:', repaired, re.I)
                     and not has_completion_claim(repaired)):
@@ -851,7 +903,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                         'owner_message': message, 'draft': repaired, 'sources': sources,
                         'unavailable': unavailable_sources()}, ensure_ascii=False)}],
                     max_tokens=REVIEW_MAX_TOKENS, enable_web_search=False,
-                    business_id=business_id), timeout=15.0)
+                    business_id=business_id), timeout=min(15.0, max(4.0, _left())))
                 checked_verdict, checked_sources, checked_reason = assess_review(checked, repaired, sources)
                 if checked_verdict == 'supported':
                     logger.info('reply review recovered; citations=%d', len(checked_sources))
