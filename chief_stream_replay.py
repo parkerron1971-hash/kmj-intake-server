@@ -46,3 +46,45 @@ def recover(request, user_id):
     _expire()
     entry = _receipts.get(_key(request, user_id))
     return deepcopy(entry[1]) if entry else None
+
+
+# ── In-flight turns ──────────────────────────────────────────────────
+# The stream endpoint used to CANCEL the turn when the client went away,
+# so a proxy cut mid-actions left nothing to remember, and the client's
+# plain re-POST ran the whole turn again — any action that had already
+# completed ran twice (the 2026-09-06 double build, still open on
+# 2026-09-19). Now the turn is left to finish and registered here; the
+# re-POST finds it and WAITS for its result instead of starting over.
+_inflight = {}
+INFLIGHT_WAIT_SECONDS = 150
+
+
+def register(request, user_id, task):
+    key = _key(request, user_id)
+    if key is None:
+        return
+    _inflight[key] = task
+
+    def _done(_t):
+        _inflight.pop(key, None)
+    try:
+        task.add_done_callback(_done)
+    except Exception:
+        _inflight.pop(key, None)
+
+
+async def recover_async(request, user_id):
+    """A remembered result, or the result of the same turn still running
+    (waited for), or None."""
+    found = recover(request, user_id)
+    if found is not None:
+        return found
+    task = _inflight.get(_key(request, user_id))
+    if task is None:
+        return None
+    import asyncio
+    try:
+        payload = await asyncio.wait_for(asyncio.shield(task), timeout=INFLIGHT_WAIT_SECONDS)
+    except Exception:
+        return None
+    return deepcopy(payload) if isinstance(payload, dict) else None

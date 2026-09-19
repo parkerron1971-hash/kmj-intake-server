@@ -13350,7 +13350,7 @@ async def chief_chat(
             # read succeeded, so a saved task is not executed or narrated twice.
             import chief_stream_replay
             if _STREAM_SINK.get() is None:
-                recovered = chief_stream_replay.recover(req, user_session.user.id)
+                recovered = await chief_stream_replay.recover_async(req, user_session.user.id)
                 if recovered is not None:
                     logger.info("Chief recovered completed stream result")
                     return recovered
@@ -13951,7 +13951,9 @@ async def chief_chat(
                 taken=taken, message=req.message,
                 conversation_history=history,
                 business_id=biz.get('id'), reviewer=chief_truth.review_reply,
-                repairer=chief_truth.repair_reply)
+                repairer=chief_truth.repair_reply,
+                # A spoken reply that arrives after a minute is no reply.
+                budget_s=20.0 if lane == "voice" else 45.0)
             _t.mark("review")
             _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
 
@@ -14171,6 +14173,10 @@ async def chief_chat_stream(
         # into the turn; resetting immediately keeps THIS request's
         # context clean for anything that runs after.
         turn = asyncio.create_task(chief_chat(req, user_session))
+        import chief_stream_replay
+        _uid = getattr(getattr(user_session, "user", None), "id", None)
+        if _uid:
+            chief_stream_replay.register(req, _uid, turn)
     finally:
         _STREAM_SINK.reset(token)
 
@@ -14233,8 +14239,13 @@ async def chief_chat_stream(
                 yield _evt({"type": "final", "payload": payload})
                 return
         finally:
-            if not turn.done():
-                turn.cancel()
+            # Do NOT cancel the turn when the client goes away. Actions
+            # already ran; cancelling threw the result away and the
+            # client's plain re-POST ran them all again (double build,
+            # 2026-09-06; double-execute risk confirmed 2026-09-19). The
+            # turn finishes on its own, remembers its result, and the
+            # re-POST waits on it (chief_stream_replay.recover_async).
+            pass
 
     return StreamingResponse(_events(), media_type="text/event-stream", headers={
         # no-transform: forbid intermediary compression — a gzip layer

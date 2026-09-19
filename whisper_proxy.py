@@ -32,6 +32,7 @@ Response:
     { "text": "...", "language": "en", ... }
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -126,6 +127,9 @@ ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v1/voices"
 ELEVENLABS_MODEL = "eleven_turbo_v2_5"   # low-latency tier — right for conversation
 ELEVENLABS_MAX_CHARS = 4096              # match the OpenAI clamp
+# One short wait before giving up on ElevenLabs for a reply: the
+# concurrent-request cap is usually the previous sentence still playing out.
+ELEVENLABS_BUSY_RETRY_S = 0.6
 
 # Per-business monthly ElevenLabs character allowance. Premium voice is
 # metered per business (rows land in api_usage with endpoint /ai/tts-el,
@@ -369,6 +373,18 @@ async def text_to_speech(req: TTSRequest, request: Request,
                                              business_id=metered_biz,
                                              user_id=user.id if user else None,
                                              fmt=fmt)
+            if spoken is None:
+                # The concurrent-request cap is a moment, not an outage:
+                # the previous sentence of the SAME reply is usually the
+                # request still in flight. One short wait and a second
+                # try keeps Chief's voice the same across a call instead
+                # of switching to Nova mid-sentence (2026-09-19 log:
+                # "concurrent_limit_exceeded" → "falling back to OpenAI nova").
+                await asyncio.sleep(ELEVENLABS_BUSY_RETRY_S)
+                spoken = await _elevenlabs_speak(text, el_voice_id, el_key,
+                                                 business_id=metered_biz,
+                                                 user_id=user.id if user else None,
+                                                 fmt=fmt)
             if spoken is not None:
                 return spoken
             # ElevenLabs was busy (429, concurrent-request cap on the
