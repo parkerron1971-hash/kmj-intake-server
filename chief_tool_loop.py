@@ -196,6 +196,9 @@ def _write_verb_offered(name: str) -> bool:
     """May THIS verb be a write tool? The same two gates the agent
     surface applies — the registry is the ceiling (class A, not
     sensitive, not bulk), the reviewed schema table is the floor."""
+    if name in ('submit_work_order','respond_work_order'):
+        import chief_build_runtime
+        return chief_build_runtime.enabled() and _turn_prompted.get()
     if name == "delegate_to_agent":
         return action_registry.effect(name) == action_registry.WRITE and action_registry.reversibility(name) == "A"
     return (name in mcp_server.WRITE_TOOL_SCHEMAS
@@ -214,6 +217,10 @@ def write_tool_definitions() -> List[Dict[str, Any]]:
         description, schema = mcp_server.WRITE_TOOL_SCHEMAS[name]
         out.append(_anthropic_shape(
             {"name": name, "description": description, "inputSchema": schema}))
+    import chief_build_runtime
+    for name, (description, schema) in chief_build_runtime.BUILD_TOOLS.items():
+        if _write_verb_offered(name):
+            out.append(_anthropic_shape({'name':name,'description':description,'inputSchema':schema}))
     import agent_coordination
     d, s = agent_coordination.CHIEF_TOOLS["delegate_to_agent"]
     if _write_verb_offered("delegate_to_agent"):
@@ -253,6 +260,9 @@ def image_tool_definition() -> Dict[str, Any]:
 
 
 def _image_tool_offered() -> bool:
+    import chief_build_runtime
+    if chief_build_runtime.enabled():
+        return False
     return (_writes_allowed.get() and _turn_surface.get() == "chat"
             and _turn_prompted.get()
             and action_registry.effect("generate_image") == action_registry.WRITE)

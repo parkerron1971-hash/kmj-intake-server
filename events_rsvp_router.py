@@ -370,61 +370,59 @@ async def public_event_rsvp(
     if not module:
         raise HTTPException(404, "that occasion wasn't found")
 
-    f = resolve_fields(module.get("archetype_params"))
-    data = dict(entry.get("data") or {})
-    signups = read_signups(data, f["signups_field"])
+    import hashlib
+    import json
+    # Stable registration identity survives duplicate contact-create races and
+    # contact lookup failures without placing an email address in public data.
+    registration_key = hashlib.sha256(f'{business_id}:{entry_id}:{email}'.encode()).hexdigest()
+    contact_id = None
+    for attempt in range(3):
+        f = resolve_fields(module.get("archetype_params"))
+        original_data = entry.get("data") or {}
+        data = dict(original_data)
+        signups = read_signups(data, f["signups_field"])
+        keys = dict(data.get('_registration_keys') or {})
+        if registration_key in keys:
+            return {"ok": True, "already": True, "attending": attending_count(signups)}
+        if contact_id is None:
+            contact_id = _find_or_create_attendee(business_id, name, email)
+        if contact_id and any(s.get('contact_id') == contact_id and (s.get('status') or 'yes') == 'yes' for s in signups):
+            return {"ok": True, "already": True, "attending": attending_count(signups)}
+        capacity = _capacity_of(data, f['capacity_field'])
+        if capacity is not None and attending_count(signups) >= capacity:
+            raise HTTPException(409, 'this occasion is full')
+        if role_id:
+            role = next((r for r in f['roles'] if r.get('id') == role_id), None)
+            if not role:
+                raise HTTPException(400, 'unknown role')
+            fill = role_fill(role, signups)
+            if fill['full']:
+                raise HTTPException(409, f"the {fill['label']} role is already filled")
+        new_signup = {'name': name, 'status': 'yes'}
+        if contact_id:
+            new_signup['contact_id'] = contact_id
+        if role_id:
+            new_signup['role'] = role_id
+        data[f['signups_field']] = signups + [new_signup]
+        data['_registration_keys'] = {**keys, registration_key: True}
+        # Compare-and-swap the JSON document: concurrent registrations cannot
+        # overwrite one another or both consume the last available seat.
+        expected = urllib.parse.quote(json.dumps(original_data, separators=(',', ':')), safe='')
+        updated = sb_clients.sb_patch_as_service(
+            f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
+            f"&status=eq.active&data=eq.{expected}", {'data': data})
+        if updated is None:
+            raise HTTPException(503, 'Registration could not be saved. Please try again.')
+        if updated:
+            return {'ok': True, 'already': False, 'attending': attending_count(data[f['signups_field']])}
+        rows = sb_clients.sb_get_as_service(
+            f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
+            '&status=eq.active&select=id,module_id,data&limit=1') or []
+        if not rows or str(rows[0].get('module_id')) != str(module['id']):
+            raise HTTPException(404, "that occasion wasn't found")
+        entry = rows[0]
+    raise HTTPException(409, 'Registration changed while saving. Please try again.')
 
-    # ── Capacity honored server-side, whatever the page showed ──
-    capacity = _capacity_of(data, f["capacity_field"])
-    if capacity is not None and attending_count(signups) >= capacity:
-        raise HTTPException(409, "this occasion is full")
-
-    # ── Role validation: must exist; must have an open slot ──
-    if role_id:
-        role = next((r for r in f["roles"] if r.get("id") == role_id), None)
-        if not role:
-            raise HTTPException(400, "unknown role")
-        fill = role_fill(role, signups)
-        if fill["full"]:
-            raise HTTPException(
-                409, f"the {fill['label']} role is already filled")
-
-    # ── Contact find-or-create (dedup by email within the business) ──
-    contact_id = _find_or_create_attendee(business_id, name, email)
-
-    # Idempotent double-tap: this person is already on the list.
-    if contact_id and any(
-        s.get("contact_id") == contact_id
-        and (s.get("status") or "yes") == "yes"
-        for s in signups
-    ):
-        return {"ok": True, "already": True,
-                "attending": attending_count(signups)}
-
-    # ── Append the signup — the exact Signup shape internal.tsx reads
-    #    and writes ({contact_id?, name, status, role?}), so a public
-    #    signup renders indistinguishably from an operator-typed one ──
-    new_signup: Dict[str, Any] = {"name": name, "status": "yes"}
-    if contact_id:
-        new_signup["contact_id"] = contact_id
-    if role_id:
-        new_signup["role"] = role_id
-    data[f["signups_field"]] = signups + [new_signup]
-
-    updated = sb_clients.sb_patch_as_service(
-        f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}"
-        f"&business_id=eq.{business_id}",
-        {"data": data})
-    if updated is None:
-        logger.warning(f"[rsvp] signup append failed biz={business_id[:8]} "
-                       f"entry={entry_id[:8]}")
-        raise HTTPException(500, "something went wrong — please try again")
-
-    logger.info(f"[rsvp] signup recorded biz={business_id[:8]} "
-                f"entry={entry_id[:8]}"
-                + (f" role={role_id}" if role_id else ""))
-    return {"ok": True, "already": False,
-            "attending": attending_count(read_signups(data, f["signups_field"]))}
 
 
 # ─── Owner config endpoints ──────────────────────────────────────────

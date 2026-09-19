@@ -108,6 +108,7 @@ class FakeSB:
         self.patches.append((path, payload))
         if path.startswith("/module_entries") and self.entry:
             self.entry = {**self.entry, **payload}
+            return [self.entry]
         return []
 
 
@@ -442,3 +443,26 @@ def test_config_payload_reports_prerequisite():
     assert out["url"] == "https://first-light.mysolutionist.app/events"
     out2 = er._config_payload(biz_on, site, [])
     assert out2["has_roster_modules"] is False and out2["active"] is False
+
+
+def test_concurrent_registration_rechecks_last_seat(fake_sb, monkeypatch):
+    fake_sb.entry['data']['capacity'] = 1
+    original = fake_sb.sb_patch_as_service
+    attempts = []
+    def conflict(path, payload):
+        attempts.append(path)
+        assert '&data=eq.' in path
+        fake_sb.entry['data']['signups'] = [{'name':'Other attendee','status':'yes'}]
+        return []
+    monkeypatch.setattr(fake_sb,'sb_patch_as_service',conflict)
+    with pytest.raises(HTTPException) as exc:
+        _rsvp(_body())
+    assert exc.value.status_code == 409
+    assert len(attempts) == 1
+    assert fake_sb.entry['data']['signups'][0]['name'] == 'Other attendee'
+
+
+def test_double_tap_when_last_seat_was_taken_still_replays(fake_sb):
+    fake_sb.entry['data']['capacity'] = 1
+    assert _rsvp(_body())['already'] is False
+    assert _rsvp(_body())['already'] is True

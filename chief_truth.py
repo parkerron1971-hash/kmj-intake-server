@@ -645,6 +645,19 @@ def evidence_for_review(ctx, view_detail, taken):
                                   'context_quality', 'business_identity')
             sources['context:' + name] = {'kind': 'context', 'text': text[:MAX_SOURCE_CHARS],
                                          'complete': exhaustive and len(text) <= MAX_SOURCE_CHARS}
+    for job in (ctx or {}).get('build_jobs', []):
+        result = job.get('result') or {}
+        state_text = json.dumps({'status':result.get('status') or job.get('status'),
+            'summary_label':result.get('summary_label'), 'question':result.get('question'),
+            'held':result.get('held')}, ensure_ascii=False)
+        sources[f"result:build:{job['id']}:state"] = {'kind':'record','text':state_text[:MAX_SOURCE_CHARS],
+            'complete':len(state_text)<=MAX_SOURCE_CHARS}
+        for index, item in enumerate(result.get('receipts', [])):
+            evidence = {k:item.get(k) for k in ('label','outcome','verified','ids')}
+            evidence['failed'] = not bool((item.get('verified') or {}).get('ok'))
+            text = json.dumps(evidence,ensure_ascii=False)
+            sources[f"result:build:{job['id']}:{index}"] = {'kind':'receipt','text':text[:MAX_SOURCE_CHARS],
+                'complete':len(text)<=MAX_SOURCE_CHARS}
     if turn:
         for sid, source in turn.sources.items():
             sources.pop(sid, None)
@@ -709,6 +722,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                          conversation_history=None, repairer=None):
     import chief_of_staff as chief
     receipts = [r for r in taken if isinstance(r, dict)]
+    if receipts and all(r.get('type') in ('submit_work_order','respond_work_order') for r in receipts):
+        return '\n\n'.join(str(r.get('label') or r.get('result') or '') for r in receipts), {'status':'receipts','sources':[]}
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):
         return chief._deterministic_fallback_reply(receipts), {'status': 'receipts', 'sources': []}

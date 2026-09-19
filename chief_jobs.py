@@ -27,7 +27,8 @@ from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from uuid import UUID
 
 import sb_clients
 from auth_supabase import UserSession, require_user_session
@@ -94,6 +95,7 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
 # Extensible registry — add monthly_report / reconcile_month here later;
 # the runner + endpoints + frontend are kind-agnostic.
 KIND_META: Dict[str, Dict[str, Any]] = {
+    'build': {'label':'Build', 'working':'working on your build', 'done':'Build checked', 'nav':None},
     "errand": {
         "label": "Errand", "working": "running an errand on Chief's computer",
         "done": "the errand finished; review its result", "nav": "operate:computer",
@@ -302,7 +304,7 @@ def is_orphaned(row: Dict[str, Any], now: datetime, inflight: set) -> bool:
     started_at rule on created_at.
     """
     # Customer-device jobs have database leases, not an in-process runner.
-    if row.get("kind") == "connected_ai_follow_up":
+    if row.get("kind") in ("connected_ai_follow_up", "build"):
         return False
     if str(row.get("id")) in inflight:
         return False
@@ -368,6 +370,11 @@ async def recover_tick() -> None:
     """Scheduler tick (leader-gated by the caller): the same sweep,
     every few minutes, for the deploy that happened while nobody was
     enqueuing."""
+    import chief_build_runtime
+    try:
+        await chief_build_runtime.recover()
+    except Exception:
+        logger.exception("Build recovery is unavailable")
     n = await asyncio.to_thread(sweep_orphans, "tick")
     if n:
         logger.info(f"[chief_jobs] recovery tick swept {n} orphaned job(s)")
@@ -582,6 +589,8 @@ async def enqueue(client: httpx.AsyncClient, *, user_id: str, business_id: str,
     Without a cutoff, dedupe would then pin every future enqueue to that
     corpse — the business could never compose again. Any same-kind row
     older than STALE_AFTER_MIN is marked failed here and a new job starts."""
+    if kind == 'build':
+        raise ValueError('Builds require a trusted work order.')
     if kind not in KIND_META:
         raise ValueError(f"unknown job kind: {kind}")
     if kind=='browser_hand':
@@ -670,6 +679,7 @@ async def list_jobs(
     business_id: Optional[str] = None,
     active: bool = True,
     limit: int = 10,
+    kind: Optional[str] = None,
     user_session: UserSession = Depends(require_user_session),
 ):
     """In-progress (and recent) jobs for the caller — powers the desktop
@@ -680,15 +690,31 @@ async def list_jobs(
     q = (f"/chief_jobs?user_id=eq.{uid}"
          "&select=id,kind,status,error,result,created_at,started_at,finished_at"
          f"&order=created_at.desc&limit={max(1, min(int(limit or 10), 50))}")
+    import chief_build_runtime
+    if chief_build_runtime.enabled():
+        q = q.replace('finished_at', 'finished_at,build_revision', 1)
     if active:
         q += "&status=in.(queued,running)"
     if business_id:
         q += f"&business_id=eq.{business_id}"
+    if kind:
+        if kind not in KIND_META:
+            raise HTTPException(400, 'Unknown job kind.')
+        q += f'&kind=eq.{kind}'
+        if kind == 'build' and chief_build_runtime.enabled():
+            q = q.replace('finished_at,build_revision','finished_at,build_revision,params',1)
     async with httpx.AsyncClient() as client:
         rows = await _sb(client, "GET", q)
+    if kind == 'build' and rows is None:
+        raise HTTPException(503, 'Build progress is temporarily unavailable.')
     out = []
     for r in (rows or []):
         m = KIND_META.get(r.get("kind"), {})
+        if r.get('kind') == 'build':
+            import chief_build_runtime
+            if chief_build_runtime.enabled() and r.get('status') in ('queued','running'):
+                chief_build_runtime.launch(r)
+            r = chief_build_runtime.public_job(r)
         out.append({**r, "working": m.get("working", "working on it"),
                     "label": m.get("label", r.get("kind"))})
     return {"jobs": out}
@@ -912,9 +938,31 @@ async def retry_job(req: _RetryReq, user_session: UserSession = Depends(require_
         job = rows[0] if isinstance(rows, list) and rows else None
         if not job:
             raise HTTPException(404, "job not found")
+        if job.get('kind') == 'build':
+            raise HTTPException(409, 'Continue this build from its review card.')
         if job.get("kind") == "connected_ai_follow_up":
             raise HTTPException(409, "Retry connected work from Connect your AI.")
         await _sb(client, "PATCH", f"/chief_jobs?id=eq.{req.job_id}",
                   {"status": "queued", "error": None, "started_at": None, "finished_at": None})
     asyncio.create_task(_run(job["id"], uid, job["business_id"], job["kind"], job.get("params") or {}))
     return {"ok": True}
+
+
+class _BuildResponseReq(BaseModel):
+    job_id: UUID
+    revision: int = Field(ge=0)
+    field: Optional[str] = None
+    answer: Any = None
+    approve: bool = False
+    cancel: bool = False
+
+
+@router.post('/jobs/build/respond')
+async def build_response(req: _BuildResponseReq, user_session: UserSession = Depends(require_user_session)):
+    import chief_build_runtime
+    if not chief_build_runtime.enabled():
+        raise HTTPException(503, 'Background builds are not enabled.')
+    async with httpx.AsyncClient(timeout=30) as client:
+        job = await chief_build_runtime.respond(client,req.job_id,str(user_session.user.id),req.revision,
+            answer=req.answer,field=req.field,approve=req.approve,cancel=req.cancel)
+    return {'job':job}

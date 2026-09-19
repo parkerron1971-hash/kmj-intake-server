@@ -3347,6 +3347,7 @@ OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for ad
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
 
+{__import__('chief_build_runtime').context_block(ctx.get('build_jobs', []))}
 IMAGES IN PROGRESS (a flyer or picture already generating — when one is listed and they ask about it, answer from this line: it is on its way and lands in Media Library; do NOT emit generate_image again unless they ask for a different image):
 {chr(10).join(image_lines) if image_lines else '  (none generating right now)'}
 
@@ -5179,7 +5180,9 @@ async def handle_create_module_entry(client, biz, action) -> Dict:
         return _fail("create_module_entry",
                      f"{module.get('name')} is access-restricted — manage it in its secure view, not here.")
 
+    from chief_code import entity_id
     inserted = await _sb(client, "POST", "/module_entries", {
+        **({'id': entity_id.get()} if entity_id.get() else {}),
         "module_id": module["id"], "business_id": biz["id"],
         "data": data, "status": "active",
         "created_by": "chief_of_staff", "source": "chief_of_staff",
@@ -7291,6 +7294,9 @@ async def handle_ensure_module(client, biz, action) -> Dict:
             noun = str(action.get("occasion_noun") or "").strip()
             if noun:
                 row["archetype_params"]["occasion_noun"] = noun[:40]
+    from chief_code import entity_id
+    if entity_id.get():
+        row['id'] = entity_id.get()
     inserted = await _sb(client, "POST", "/custom_modules", row)
     if not inserted or not isinstance(inserted, list):
         return _fail("ensure_module", "creation failed")
@@ -10574,6 +10580,8 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
     import chief_jobs
     kind = str(action.get("kind") or action.get("job_kind") or "").strip()
     owner = biz.get("owner_id")
+    if kind == 'build':
+        return _fail('enqueue_job', 'Use the typed work order to queue a build.')
     if kind not in chief_jobs.KIND_META:
         return {"type": "enqueue_job", "result": f"Failed: unknown job '{kind}'",
                 "label": "Job", "nav": None}
@@ -10622,7 +10630,11 @@ from chief_business_learning_actions import (
 
 from image_studio import handle_generate_image, handle_find_images, handle_capture_website_references
 
+from chief_build_runtime import handle_submit_work_order, handle_respond_work_order
+
 ACTION_HANDLERS = {
+    'submit_work_order': handle_submit_work_order,
+    'respond_work_order': handle_respond_work_order,
     "list_connected_agents": agent_coordination.chief_handler,
     "connected_agent_assignments": agent_coordination.chief_handler,
     "delegate_to_agent": agent_coordination.chief_handler,
@@ -11690,9 +11702,17 @@ async def _execute_actions(client, biz, actions: List[Dict],
         _turn_step_end(pending_step, produced[-1] if produced else None)
         pending_step = None
 
+    from chief_code import worker_scope, turn_scope
+    import chief_build_runtime
+    if chief_build_runtime.enabled() and turn_scope.get() and not worker_scope.get():
+        actions = chief_build_runtime.route_actions(actions)
     for action in actions:
         _finish_pending()
         atype = action.get("type")
+        if (chief_build_runtime.enabled() and turn_scope.get() and turn_scope.get().get("submitted")
+                and not worker_scope.get() and atype in ("ensure_module", "create_module_entry", "set_site_capability")):
+            results.append(_fail(atype, "Your build is already handling those steps. Check its progress card."))
+            continue
         pending_step = _turn_step_start(atype, len(results))
         handler = ACTION_HANDLERS.get(atype)
         if not handler:
@@ -11777,6 +11797,9 @@ async def _execute_actions(client, biz, actions: List[Dict],
                 continue
         except Exception as e:
             logger.warning(f"[policy] {surface} evaluation failed for {atype}: {e}")
+            if worker_scope.get():
+                results.append(_fail(atype, 'The permission check is unavailable.'))
+                continue
         if not prompted:
             # The same mark chief_scheduler sets: handlers with their own
             # unattended gate (publish_post's approval check) read it.
@@ -13214,6 +13237,11 @@ async def chief_chat(
     _image_turn_token = image_studio.turn_id.set(req.request_id or str(__import__('uuid').uuid4()))
     _image_index_token = image_studio.turn_image_index.set(0)
     _image_refs_token = image_studio.turn_references.set(tuple(req.image_ids))
+    import chief_build_runtime
+    from chief_code import turn_scope
+    _build_turn_token = turn_scope.set({'user_id':str(user_session.user.id),
+        'turn_id': image_studio.turn_id.get(), 'words':req.message or '',
+        'surface':'desktop','submitted':False})
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -13314,6 +13342,8 @@ async def chief_chat(
             if not ctx:
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
+            if chief_build_runtime.enabled():
+                ctx['build_jobs'] = await chief_build_runtime.context(client, biz['id'], str(user_session.user.id))
 
             # The browser retries /chat when a stream's final event is lost.
             # Reuse its completed result only after this session's RLS context
@@ -13675,6 +13705,8 @@ async def chief_chat(
             _is_voice_turn = (req.client_surface or "") == "voice"
             _trunc_token = _TRUNCATED_TAGS.set(0)
             _voice_token = _TURN_IS_VOICE.set(_is_voice_turn)
+            if turn_scope.get():
+                turn_scope.get()['surface'] = 'voice' if _is_voice_turn else 'desktop'
             _confirm_token = _TURN_CONFIRMED.set(
                 _is_voice_turn and _is_voice_confirmation(req.message or ""))
             _errand_confirm_token = _TURN_ERRAND_CONFIRMED.set(_is_errand_confirmation(req.message or ""))
@@ -14012,6 +14044,7 @@ async def chief_chat(
         image_studio.turn_id.reset(_image_turn_token)
         image_studio.turn_image_index.reset(_image_index_token)
         image_studio.turn_references.reset(_image_refs_token)
+        turn_scope.reset(_build_turn_token)
         try:
             _TURN_USER_ID.reset(_uid_token)
             try:
