@@ -2244,6 +2244,8 @@ above it is your stable operating manual):
 
 THIS TURN (fresh every message):
 
+{__import__('chief_build_runtime').routing_instructions()}
+
 {priorities_block}
 
 {time_block}

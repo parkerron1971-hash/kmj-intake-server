@@ -125,6 +125,8 @@ def _w(rev: str, why: str, bulk: bool = False) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────
 
 REGISTRY: Dict[str, Dict[str, Any]] = {
+    'submit_work_order': {**_w('A', 'queues a durable build; each effect is separately authorized'), 'chief_only': True},
+    'respond_work_order': {**_w('A', 'answers or resumes the exact reviewed build; approval is server-bound'), 'chief_only': True},
     "list_connected_agents": {**_r("owner-approved bot capabilities; private to Chief and owner", sensitive=True), "chief_only": True},
     "connected_agent_assignments": {**_r("delegated briefs and untrusted returned results; not shared between bots", sensitive=True), "chief_only": True},
     "delegate_to_agent": {**_w("A", "creates a cancellable brief; release is restricted by the owner's saved per-agent coordination permission"), "chief_only": True},

@@ -414,7 +414,9 @@ async def handle_create_client_form(client, biz, action) -> Dict[str, Any]:
         settings["field_map"] = _auto_field_map(fields, module)
         linked_name = module.get("name")
 
+    from chief_code import entity_id
     row = {
+        **({'id': entity_id.get()} if entity_id.get() else {}),
         "business_id": business_id,
         "name": name,
         "form_type": form_type,

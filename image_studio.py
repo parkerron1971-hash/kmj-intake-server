@@ -109,7 +109,41 @@ def token() -> str:
     return jwt
 
 
+# Only the durable build runner binds this capability after checking the job owner.
+build_actor = contextvars.ContextVar('image_build_actor', default=None)
+
+
+def storage_headers(path):
+    actor = build_actor.get()
+    if actor:
+        if not path.startswith(actor['business_id'] + '/'):
+            raise HTTPException(403, 'Image access denied.')
+        return sb_clients.sb_headers_service()
+    return sb_clients.sb_headers_user(token())
+
+
 async def db(client, method, path, body=None, *, server_write=False):
+    actor = build_actor.get()
+    if actor:
+        if path == '/rpc/reserve_image_artwork' and method == 'POST':
+            if str(body['p_record']['business_id']) != actor['business_id']:
+                raise HTTPException(403, 'Image access denied.')
+            result = await sb_clients.sb_as_service(client, 'POST', '/rpc/reserve_chief_build_image',
+                {'p_record': body['p_record'], 'p_user': actor['user_id']})
+        elif path == '/image_artworks' and method == 'POST' and server_write:
+            if str(body.get('business_id')) != actor['business_id'] or str(body.get('owner_id')) != actor['user_id'] or body.get('cost_usd') != 0:
+                raise HTTPException(403, 'Image access denied.')
+            result = await sb_clients.sb_as_service(client, method, path, body)
+        elif path.startswith('/businesses?') and method == 'GET':
+            result = await sb_clients.sb_as_service(client, method, path + '&id=eq.' + actor['business_id'])
+        elif path.startswith('/image_artworks?') and method in ('GET', 'PATCH'):
+            result = await sb_clients.sb_as_service(client, method, path + '&business_id=eq.' + actor['business_id'], body)
+        else:
+            raise HTTPException(403, 'This image operation is unavailable to a build.')
+        if result is None:
+            raise HTTPException(503, 'Image storage is unavailable.')
+        return result
+
     # Explicitly require a JWT; never fall through to the service-role client.
     jwt = token()
     if server_write:
@@ -130,8 +164,9 @@ async def business(client, business_id):
     rows = await db(client, 'GET', f'/businesses?id=eq.{UUID(str(business_id))}&select=id,name,owner_id,settings')
     if not rows:
         raise HTTPException(404, 'Business not found or access denied.')
-    user = require_user(authorization=f'Bearer {token()}')
-    if str(rows[0].get('owner_id')) != str(user.id):
+    actor = build_actor.get()
+    user_id = actor['user_id'] if actor else str(require_user(authorization=f'Bearer {token()}').id)
+    if str(rows[0].get('owner_id')) != user_id:
         raise HTTPException(403, 'Business access denied.')
     # Image originals currently follow the business owner permissions, enforced again by RLS.
     return rows[0]
@@ -150,7 +185,7 @@ def storage_url(path):
 
 async def store(client, path, content, mime, bucket=BUCKET):
     r = await client.post(storage_url(f'object/{bucket}/{path}'), headers={
-        **sb_clients.sb_headers_user(token()), 'Content-Type': mime, 'x-upsert': 'true'}, content=content)
+        **storage_headers(path), 'Content-Type': mime, 'x-upsert': 'true'}, content=content)
     if not r.is_success:
         raise HTTPException(502, 'The image could not be saved. No image was published.')
 
@@ -158,7 +193,7 @@ async def store(client, path, content, mime, bucket=BUCKET):
 async def original(client, row):
     if row['status'] != 'ready' or not row.get('storage_path'):
         raise HTTPException(409, 'This image is not ready yet.')
-    r = await client.get(storage_url(f"object/authenticated/{BUCKET}/{row['storage_path']}"), headers=sb_clients.sb_headers_user(token()))
+    r = await client.get(storage_url(f"object/authenticated/{BUCKET}/{row['storage_path']}"), headers=storage_headers(row['storage_path']))
     if not r.is_success or len(r.content) > MAX_BYTES:
         raise HTTPException(502, 'The original image could not be loaded.')
     return r.content
@@ -169,7 +204,7 @@ async def present(client, row):
     if row['status'] in ('queued', 'working') and (datetime.now(timezone.utc) - datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))).total_seconds() > 600:
         result.update(status='failed', error='This generation was interrupted. Start a new request; the original may still have incurred provider charges.')
     if row.get('storage_path') and row['status'] == 'ready':
-        r = await client.post(storage_url(f"object/sign/{BUCKET}/{row['storage_path']}"), headers=sb_clients.sb_headers_user(token()), json={'expiresIn': 3600})
+        r = await client.post(storage_url(f"object/sign/{BUCKET}/{row['storage_path']}"), headers=storage_headers(row['storage_path']), json={'expiresIn': 3600})
         if not r.is_success:
             raise HTTPException(502, 'The image preview could not be opened.')
         signed = r.json().get('signedURL') or r.json().get('signedUrl')
