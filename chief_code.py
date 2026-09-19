@@ -48,7 +48,7 @@ class WorkOrder:
         facts = payload.get('facts') or {}
         if not isinstance(facts, dict) or len(json.dumps(facts)) > 16000:
             raise ValueError('The build details are too large or invalid.')
-        string_fields = ('title','starts_at','timezone','location','name','description','prompt','website_url','send_to','channel','capability','form_type','link_module','confirmation_message')
+        string_fields = ('title','starts_at','timezone','location','name','description','prompt','website_url','send_to','channel','capability','form_type','link_module','confirmation_message','admission','flyer_url')
         for key in string_fields:
             if key in facts and facts[key] is not None and (not isinstance(facts[key],str) or len(facts[key])>4000):
                 raise ValueError('Build text fields must contain plain text.')
@@ -94,6 +94,12 @@ def question(order):
     for key, text in needed:
         if not f.get(key):
             return {'field': key, 'text': text}
+    if order.kind == 'form_and_link' and str(f.get('form_type') or '').strip().lower() == 'event':
+        from event_form_details import event_values, details_question
+        details = event_values(f)
+        need = details_question(details)
+        if need: return need
+        f['event_details'] = details
     if order.kind == 'event_setup':
         try:
             tz = ZoneInfo(str(f['timezone']))
@@ -135,7 +141,7 @@ def plan(order):
         return steps
     if order.kind == 'form_and_link':
         steps = [Step('form', 'create_client_form', 'Your form is ready.',
-                      {k: f[k] for k in ('name','fields','form_type','description','link_module','confirmation_message') if k in f})]
+                      {k: f[k] for k in ('name','fields','form_type','description','link_module','confirmation_message','event_details','starts_at','timezone','location','admission','include_flyer','flyer_url') if k in f})]
         if f.get('send_to'):
             steps.append(Step('send', 'send_form_link', 'Your form link was sent.', requires=('form',), sensitive=True))
         return steps

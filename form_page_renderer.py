@@ -71,10 +71,14 @@ def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
     fields_html = "".join(_field_html(f) for f in fields)
     theme = resolve_theme(business, site, settings)
     css_vars = theme_css(theme)
-    registration = form.get('form_type') == 'event'
+    from event_form_details import is_event, details_html
+    registration = is_event(form)
+    event_html = details_html(form)
     submit_label = 'Register' if registration else 'Send'
     heading = form_name[:-13] if registration and form_name.endswith(' Registration') else form_name
     introduction = description or ('Complete the details below to register.' if registration else 'Complete the form below.')
+    if event_html:
+        introduction = 'Complete the details below to register.'
     required_note = '<p class="required-note">* Required fields</p>' if any(f.get('required') for f in fields) else ''
     canonical = urlsplit(safe_url(canonical_url))
     home_url = f'{canonical.scheme}://{canonical.netloc}/' if theme['source']=='website' and canonical.netloc else ''
@@ -120,6 +124,18 @@ body[data-embedded=true] h1{{font-size:clamp(1.6rem,5vw,2.3rem)}}
 .biz{{font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px}}
 h1{{font-family:var(--font-heading);font-size:clamp(2.2rem,4.8vw,4.5rem);font-weight:800;letter-spacing:-.035em;line-height:1.03;margin:0 0 24px;overflow-wrap:anywhere}}
 .lead{{color:var(--text-secondary);font-size:18px;line-height:1.6;max-width:42ch;margin:0}}
+.event-details{{margin-top:32px}}
+.event-details h2{{font-size:12px;letter-spacing:.14em;text-transform:uppercase;margin:0 0 24px}}
+.event-details dl{{margin:0}}
+.event-detail{{position:relative;padding-left:52px;margin:0 0 24px}}
+.event-detail-icon{{position:absolute;left:0;top:0;width:36px;height:36px;color:var(--accent)}}
+.event-detail dt{{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin:0 0 6px}}
+.event-detail dd{{margin:0;color:var(--text-secondary);font-size:16px;line-height:1.6;white-space:pre-line;overflow-wrap:anywhere}}
+.event-flyer{{margin:28px 0 0;padding-top:24px;border-top:1px solid var(--border)}}
+.event-flyer img{{display:block;max-width:min(100%,280px);max-height:400px;width:auto;height:auto;object-fit:contain}}
+.event-flyer figcaption{{margin-top:12px;font-size:13px}}
+.event-flyer a{{color:var(--text-primary);text-underline-offset:4px}}
+.event-flyer a:focus-visible{{outline:2px solid var(--focus);outline-offset:4px}}
 .field{{margin:0 0 26px}}
 .field label{{display:block;font-size:12px;letter-spacing:.06em;font-weight:600;margin:0 0 10px}}
 .field.check{{display:flex;gap:10px;align-items:center}}
@@ -147,6 +163,7 @@ footer{{margin-top:36px;font-size:.8rem;color:var(--text-muted)}}
 <p class="kicker">{'Registration' if registration else 'Get in touch'}</p>
 <h1 id="form-heading">{_esc(heading)}</h1>
 <p class="lead">{_esc(introduction)}</p>
+{event_html}
 </section>
 <div class="form-panel">
 <form id="client-form" method="post" action="{_esc(submit_url)}" novalidate>
@@ -166,6 +183,11 @@ footer{{margin-top:36px;font-size:.8rem;color:var(--text-muted)}}
   var form=document.getElementById('client-form'),btn=document.getElementById('send'),
       err=document.getElementById('err'),done=document.getElementById('done');
   var meta={json.dumps(payload)};
+  document.querySelectorAll('.event-flyer img').forEach(function(img){{
+    function hideFailedFlyer(){{img.closest('figure').hidden=true;}}
+    img.addEventListener('error',hideFailedFlyer);
+    if(img.complete && !img.naturalWidth)hideFailedFlyer();
+  }});
   form.addEventListener('submit',function(e){{
     e.preventDefault();err.style.display='none';
     var data={{}};
