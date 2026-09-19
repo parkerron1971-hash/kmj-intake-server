@@ -86,6 +86,8 @@ def test_creating_a_form_reports_its_page_link(monkeypatch):
                         lambda path: [{"slug": "kmj-creative-solutions", "site_config": {}}])
     res = asyncio.run(forms.handle_create_client_form(None, _BIZ, {
         "name": "Workshop Registration", "form_type": "event",
+        "event_details": {"description":"A practical workshop", "starts_at":"2026-10-13T19:00:00-04:00",
+                          "timezone":"America/Detroit", "location":"Studio", "admission":"Free", "include_flyer":False},
         "fields": [{"label": "Your Name", "type": "text", "required": True}]}))
     assert not res.get("failed"), res
     link = "https://kmj-creative-solutions.mysolutionist.app/public/widget/form/form-9"

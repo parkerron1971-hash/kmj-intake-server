@@ -75,7 +75,7 @@ async def submit(client, biz, payload):
         if not order.facts.get('reference_ids') and image_studio.turn_references.get():
             order.facts['reference_ids'] = [str(UUID(str(ref))) for ref in image_studio.turn_references.get()][:4]
     # Fill only a stored business preference; never infer a timezone from address.
-    if order.kind == 'event_setup' and not order.facts.get('timezone'):
+    if (order.kind == 'event_setup' or (order.kind == 'form_and_link' and order.facts.get('form_type') == 'event')) and not order.facts.get('timezone'):
         tz = (biz.get('settings') or {}).get('timezone')
         if tz:
             order.facts['timezone'] = tz
@@ -431,6 +431,8 @@ class Adapter:
                     from chief_form_actions import public_form_url, _normalize_fields
                     expected,err=_normalize_fields(params.get('fields'))
                     ok=not err and row.get('fields')==expected and row.get('is_active',True) and row.get('name')==str(params['name'])[:120]
+                    if params.get('event_details'):
+                        ok = ok and (row.get('settings') or {}).get('event_details') == params['event_details']
                     if params.get('link_module'):
                         from chief_form_actions import _resolve_module, _auto_field_map
                         resolved=await asyncio.to_thread(_resolve_module,self.bid,str(params['link_module']))
@@ -438,7 +440,13 @@ class Adapter:
                         settings=row.get('settings') or {}
                         ok=ok and bool(module) and settings.get('linked_module_id')==(module or {}).get('id') and settings.get('field_map')==_auto_field_map(expected,module or {})
                     url=await asyncio.to_thread(public_form_url,self.bid,row['id'])
-                    page_ok,_=await self.page(url,[f['label'] for f in expected])
+                    needles = [f['label'] for f in expected]
+                    if params.get('event_details'):
+                        from event_form_details import date_label
+                        details = params['event_details']
+                        needles.extend([details['description'], date_label(details), details['location'], details['admission']])
+                        if details.get('include_flyer'): needles.append(details['flyer_url'])
+                    page_ok,_=await self.page(url,needles)
                     ok=ok and page_ok
                     if ok:
                         ids={'form_id':row['id'],'url':url}; label='Your form is ready at '+url
@@ -609,7 +617,7 @@ def routing_instructions():
 For workshops, forms, flyers and Events pages, these rules replace the earlier examples that call generate_image, create_client_form, or individual event setup actions.
 Call submit_work_order exactly once. Do not plan or perform its component actions in this conversation turn. Put the user's known facts in facts, with one of these kinds:
 - event_setup: title, starts_at (ISO date and time), timezone (IANA name), location, price, capacity, wants_registration_form, wants_flyer. Workshop registration and the website link belong to this ONE order.
-- form_and_link: name, fields (form field objects with label/type/required), form_type, optional send_to and channel.
+- form_and_link: name, fields (form field objects with label/type/required), form_type, optional send_to and channel. An event registration must use form_type=event. For form_type=event, also supply description, starts_at (ISO date and time), timezone (IANA), location and admission. These event details are mandatory public page content, separate from visitor questions. Use the owner's confirmed facts; never invent them. Ask whether to include a flyer unless the owner has already chosen; include_flyer=true/false records that choice. If true, flyer_url must be the chosen public image URL. A flyer is optional and never substitutes for written event details. If the owner asks to create a flyer, prepare it through the flyer workflow, then attach its published image URL with update_client_form; never claim a private preview or pending image is attached. For an existing form, update_client_form accepts event_details and the same detail fields; include_flyer=false removes its flyer.
 - flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.
 - site_door: capability=events.
 Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form or generate_image for those build steps.

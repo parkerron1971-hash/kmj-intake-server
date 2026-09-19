@@ -128,6 +128,8 @@ def test_event_is_a_form_type_the_handler_keeps(monkeypatch):
     monkeypatch.setattr(forms.sb_clients, "sb_post_as_service", fake_post)
     res = asyncio.run(forms.handle_create_client_form(None, _BIZ, {
         "name": "Workshop Registration", "form_type": "event",
+        "event_details": {"description":"A practical workshop", "starts_at":"2026-10-13T19:00:00-04:00",
+                          "timezone":"America/Detroit", "location":"Studio", "admission":"Free", "include_flyer":False},
         "fields": [{"label": "Your Name", "type": "text", "required": True}]}))
     assert not res.get("failed"), res
     assert posted[0][1]["form_type"] == "event"

@@ -402,6 +402,14 @@ async def handle_create_client_form(client, biz, action) -> Dict[str, Any]:
     if action.get("description"):
         settings["description"] = str(action["description"])[:400]
 
+    if form_type == 'event':
+        from event_form_details import event_values, details_question
+        details = event_values(action)
+        need = details_question(details)
+        if need:
+            return {**_fail('create_client_form', need['text']), 'question': need}
+        settings['event_details'] = details
+
     linked_name: Optional[str] = None
     link_ref = (action.get("link_module") or action.get("module_name")
                 or action.get("module_id") or "")
@@ -602,6 +610,17 @@ async def handle_update_client_form(client, biz, action) -> Dict[str, Any]:
         settings_touched = True
         changes.append("unlinked from its solution")
 
+    from event_form_details import is_event, event_values, details_question
+    event_form = action.get('form_type') == 'event' or is_event(form)
+    if event_form and action.get('is_active') is not False:
+        details = event_values(action, settings.get('event_details'))
+        need = details_question(details)
+        if need:
+            return {**_fail('update_client_form', need['text']), 'question': need}
+        if details != settings.get('event_details'):
+            settings['event_details'] = details
+            settings_touched = True
+            changes.append('event details and flyer preference updated')
     if settings_touched:
         patch["settings"] = settings
 

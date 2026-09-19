@@ -22,3 +22,11 @@ New Client Forms embed code points to the shared renderer with embed=1, keeping 
 Run pytest for test_public_form_theme.py, test_site_matched_form_routes.py, test_events_on_the_site.py, test_intake_reads_as_the_server.py, test_events_rsvp.py and test_booking_page.py. Run scripts/site-matched-forms-preview.py then scripts/site-matched-forms-browser-check.py for local synthetic browser checks. Submissions are intercepted, and the preview refuses real POSTs.
 
 Frontend CI exercises the embed contract. No Chief chat source files are modified in either repository.
+
+## Event details and flyers
+
+Chief-created event registration forms require a description, start date/time, IANA timezone, location/attendance instructions, and admission information. The durable form work order asks for one missing fact at a time before any insert. Create/update handlers independently validate those facts. They are stored as settings.event_details and rendered as escaped, selectable text with the local time and timezone.
+
+Chief also asks include_flyer (yes/no). A yes requires the selected flyer_url, a public HTTPS image link; no removes the saved flyer. The form workflow never generates or spends on an image merely because a flyer is optional. If the owner requests creation, use the existing flyer workflow, publish the chosen image through its normal process, and attach its public URL with update_client_form. Generated private previews are not attachment URLs.
+
+The flyer is responsive, opens at full size, and disappears cleanly if its image fails to load. Written event information and registration remain usable. Legacy event links remain available while their saved details are filled in. The manual editor preserves settings it does not edit, including event details, flyer preference and module linkage.
