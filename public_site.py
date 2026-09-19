@@ -5744,11 +5744,14 @@ async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: st
     if not biz_rows:
         raise HTTPException(404, "business not found")
     from form_page_renderer import render_form_page
+    from public_form_theme import SITE_SELECT
+    site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
     from chief_host import FALLBACK_BASE
     html = render_form_page(
         biz_rows[0], rows[0],
         submit_url=f"{FALLBACK_BASE.rstrip('/')}/intake/submit",
-        canonical_url=f"https://{slug}.mysolutionist.app{_FORM_PAGE_PREFIX}{fid}")
+        canonical_url=f"https://{slug}.mysolutionist.app{_FORM_PAGE_PREFIX}{fid}",
+        site=site_rows[0] if site_rows else None)
     return HTMLResponse(content=html, media_type="text/html",
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
@@ -5806,8 +5809,10 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLRe
         entries_by_module[str(mod["id"])] = rows
 
     occasions = build_occasions(modules, entries_by_module)
+    from public_form_theme import SITE_SELECT
+    site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
     html = render_events_page(business, occasions, canonical, slug,
-                              api_origin=_EMBED_ORIGIN)
+                              api_origin=_EMBED_ORIGIN, site=site_rows[0] if site_rows else None)
     return HTMLResponse(
         content=html, media_type="text/html",
         headers={**_PUBLIC_SITE_NO_STORE_HEADERS},

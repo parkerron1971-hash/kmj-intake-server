@@ -714,9 +714,11 @@ async def public_form_page(form_id: str, request: Request):
         form = forms[0] if forms else None
         if not form:
             raise HTTPException(status_code=404, detail="Form not found")
-        businesses = await supabase_request(
-            client, "GET",
-            f"/businesses?id=eq.{form['business_id']}&select=id,name,type,settings&limit=1")
+        from public_form_theme import SITE_SELECT
+        businesses, site_rows = await asyncio.gather(
+            supabase_request(client, "GET", f"/businesses?id=eq.{form['business_id']}&select=id,name,type,settings&limit=1"),
+            supabase_request(client, "GET", f"/business_sites?business_id=eq.{form['business_id']}&status=eq.published&select={SITE_SELECT}&limit=1"))
+        site_rows = site_rows or []
         business = businesses[0] if businesses else None
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
@@ -731,7 +733,8 @@ async def public_form_page(form_id: str, request: Request):
     scheme = "http" if local else "https"
     port = f":{request.url.port}" if (local and request.url.port) else ""
     html = render_form_page(business, form, submit_url=f"{scheme}://{host}{port}/intake/submit",
-                            canonical_url=canonical)
+                            canonical_url=canonical, site=site_rows[0] if site_rows else None,
+                            embedded=str(getattr(request, "query_params", {}).get("embed", "")) == "1")
     return HTMLResponse(content=html, media_type="text/html",
                         headers={"Cache-Control": "no-store"})
 
