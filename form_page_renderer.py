@@ -17,7 +17,8 @@ import html as _html
 import json
 from typing import Any, Dict, List
 
-from booking_page_renderer import _brand_kit, _css_vars
+from public_form_theme import resolve_theme, css_vars as theme_css, font_links, safe_url
+from urllib.parse import urlsplit
 
 # The honeypot the submit door drops on. Rendered hidden and unlabeled so a
 # person never fills it; the endpoint discards any submission that does.
@@ -59,7 +60,7 @@ def _field_html(f: Dict[str, Any]) -> str:
 
 
 def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
-                     submit_url: str, canonical_url: str) -> str:
+                     submit_url: str, canonical_url: str, site=None, embedded=False) -> str:
     """The complete HTML document for one active client form."""
     name = (business.get("name") or "").strip() or "Contact"
     form_name = (form.get("name") or "").strip() or "Get in touch"
@@ -68,7 +69,17 @@ def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
     thanks = str(settings.get("confirmation_message") or "Thanks — we'll be in touch soon.").strip()
     fields: List[Dict[str, Any]] = [f for f in (form.get("fields") or []) if isinstance(f, dict)]
     fields_html = "".join(_field_html(f) for f in fields)
-    css_vars = _css_vars(_brand_kit(business))
+    theme = resolve_theme(business, site, settings)
+    css_vars = theme_css(theme)
+    registration = form.get('form_type') == 'event'
+    submit_label = 'Register' if registration else 'Send'
+    heading = form_name[:-13] if registration and form_name.endswith(' Registration') else form_name
+    introduction = description or ('Complete the details below to register.' if registration else 'Complete the form below.')
+    required_note = '<p class="required-note">* Required fields</p>' if any(f.get('required') for f in fields) else ''
+    canonical = urlsplit(safe_url(canonical_url))
+    home_url = f'{canonical.scheme}://{canonical.netloc}/' if theme['source']=='website' and canonical.netloc else ''
+    logo = f'<img class="brand-logo" src="{_esc(theme["logo_url"])}" alt="{_esc(name)}">' if theme['logo_url'] else ''
+    back = f'<a class="back" href="{_esc(home_url)}" target="_top">Back to website <span aria-hidden="true">↗</span></a>' if home_url else ''
     payload = {"form_id": str(form.get("id") or ""),
                "business_id": str(form.get("business_id") or business.get("id") or "")}
     return f"""<!DOCTYPE html>
@@ -80,45 +91,75 @@ def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
 <meta name="description" content="{_esc(description or form_name + ' for ' + name)}">
 <link rel="canonical" href="{_esc(canonical_url)}">
 <meta name="robots" content="noindex">
+{font_links(theme)}
 <style>
 {css_vars}
 *{{box-sizing:border-box}}
 body{{margin:0;background:var(--surface);color:var(--text-primary);font-family:var(--font-body);line-height:1.5}}
-main{{max-width:560px;margin:0 auto;padding:40px 20px 64px}}
+/* Layout follows the converted two-column registration reference; live
+   website tokens replace its raster backdrop, invented logo and fixed copy.
+   Intrinsic rows retain every real field at every viewport width. */
+main{{max-width:1280px;margin:0 auto;padding:32px clamp(20px,5vw,64px) 48px}}
+.site-header{{display:flex;justify-content:space-between;align-items:center;gap:24px;min-height:56px}}
+.brand{{display:flex;align-items:center;gap:14px;min-width:0}}
+.brand-logo{{display:block;width:auto;max-width:160px;max-height:64px;object-fit:contain}}
+.brand:has(.brand-logo) .biz{{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}}
+.back{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-primary);text-decoration:none;white-space:nowrap;min-height:44px;display:inline-flex;align-items:center;gap:10px}}
+.back:hover{{text-decoration:underline;text-underline-offset:5px}}
+.back:focus-visible,button:focus-visible{{outline:2px solid var(--focus);outline-offset:4px}}
+.form-layout{{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);gap:clamp(40px,7vw,100px);align-items:start;margin-top:80px}}
+.intro,.form-panel{{min-width:0}}
+.kicker{{font-size:12px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--text-secondary);margin:0 0 20px}}
+.required-note{{font-size:12px;color:var(--text-secondary);margin:0 0 24px}}
+@media(max-width:767px){{main{{padding:24px 20px 32px}}.form-layout{{grid-template-columns:minmax(0,1fr);gap:32px;margin-top:44px}}.site-header{{gap:12px}}.brand-logo{{max-width:124px;max-height:52px}}.back{{font-size:10px;letter-spacing:.03em}}}}
+body[data-embedded=true] main{{max-width:640px;padding:24px 20px}}
+body[data-embedded=true] .site-header{{display:none}}
+body[data-embedded=true] .form-layout{{display:block;margin-top:0}}
+body[data-embedded=true] .intro{{margin-bottom:28px}}
+body[data-embedded=true] h1{{font-size:clamp(1.6rem,5vw,2.3rem)}}
 .biz{{font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px}}
-h1{{font-family:var(--font-heading);font-size:1.75rem;line-height:1.2;margin:0 0 8px}}
-.lead{{color:var(--text-secondary);margin:0 0 28px}}
-.field{{margin:0 0 18px}}
-.field label{{display:block;font-weight:600;margin:0 0 6px}}
+h1{{font-family:var(--font-heading);font-size:clamp(2.2rem,4.8vw,4.5rem);font-weight:800;letter-spacing:-.035em;line-height:1.03;margin:0 0 24px;overflow-wrap:anywhere}}
+.lead{{color:var(--text-secondary);font-size:18px;line-height:1.6;max-width:42ch;margin:0}}
+.field{{margin:0 0 26px}}
+.field label{{display:block;font-size:12px;letter-spacing:.06em;font-weight:600;margin:0 0 10px}}
 .field.check{{display:flex;gap:10px;align-items:center}}
 .field.check label{{margin:0;font-weight:500}}
 .req{{color:var(--accent)}}
-input,select,textarea{{width:100%;font:inherit;color:inherit;background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px}}
-input[type=checkbox]{{width:auto}}
-input:focus,select:focus,textarea:focus{{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}}
+input,select,textarea{{width:100%;font:inherit;font-size:16px;min-height:52px;color:inherit;background:var(--input-surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px}}
+input[type=checkbox]{{width:20px;height:20px;min-height:20px;flex:none;accent-color:var(--focus)}}
+textarea{{resize:vertical;min-height:120px}}
+input:focus,select:focus,textarea:focus{{outline:2px solid var(--focus);outline-offset:3px;border-color:var(--accent)}}
 .hp{{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}}
-button{{display:inline-block;width:100%;font:inherit;font-weight:700;color:#fff;background:var(--accent);border:0;border-radius:12px;padding:14px 18px;cursor:pointer;margin-top:8px}}
+button{{display:inline-block;width:100%;font:inherit;font-weight:700;color:var(--accent-text);background:var(--accent);border:0;border-radius:var(--radius);padding:16px 18px;min-height:56px;letter-spacing:.08em;cursor:pointer;margin-top:8px}}
 button:hover{{background:var(--accent-hover)}}
 button[disabled]{{opacity:.6;cursor:wait}}
-.done{{display:none;padding:22px;border:1px solid var(--border);border-radius:14px;background:#fff}}
+.done{{display:none;padding:22px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input-surface)}}
 .done h2{{font-family:var(--font-heading);margin:0 0 8px;font-size:1.25rem}}
-.err{{display:none;color:#b91c1c;margin:12px 0 0}}
+.err{{display:none;color:var(--error);margin:12px 0 0}}
 footer{{margin-top:36px;font-size:.8rem;color:var(--text-muted)}}
 </style>
 </head>
-<body>
+<body data-style-source="{theme['source']}" data-embedded="{str(bool(embedded)).lower()}">
 <main>
-<p class="biz">{_esc(name)}</p>
-<h1>{_esc(form_name)}</h1>
-{f'<p class="lead">{_esc(description)}</p>' if description else ''}
+<header class="site-header"><div class="brand">{logo}<p class="biz">{_esc(name)}</p></div>{back}</header>
+<div class="form-layout">
+<section class="intro" aria-labelledby="form-heading">
+<p class="kicker">{'Registration' if registration else 'Get in touch'}</p>
+<h1 id="form-heading">{_esc(heading)}</h1>
+<p class="lead">{_esc(introduction)}</p>
+</section>
+<div class="form-panel">
 <form id="client-form" method="post" action="{_esc(submit_url)}" novalidate>
+{required_note}
 {fields_html}
 <div class="hp" aria-hidden="true"><label>Leave this empty<input type="text" name="{HONEYPOT_NAME}" tabindex="-1" autocomplete="off"></label></div>
-<button type="submit" id="send">Send</button>
+<button type="submit" id="send">{submit_label}</button>
 <p class="err" id="err" role="alert"></p>
 </form>
-<section class="done" id="done" aria-live="polite"><h2>Received</h2><p>{_esc(thanks)}</p></section>
+<section class="done" id="done" aria-live="polite"><h2 tabindex="-1">Received</h2><p>{_esc(thanks)}</p></section>
 <footer>Powered by The Solutionist System</footer>
+</div>
+</div>
 </main>
 <script>
 (function(){{
@@ -139,15 +180,16 @@ footer{{margin-top:36px;font-size:.8rem;color:var(--text-muted)}}
       if(!v){{missing.push(el.id);}}
     }});
     if(missing.length){{err.textContent='Please fill in the required fields.';err.style.display='block';document.getElementById(missing[0]).focus();return;}}
+    if(!form.reportValidity())return;
     btn.disabled=true;btn.textContent='Sending…';
     fetch({json.dumps(submit_url)},{{method:'POST',headers:{{'Content-Type':'application/json'}},
       body:JSON.stringify({{form_id:meta.form_id,business_id:meta.business_id,data:data}})}})
     .then(function(r){{return r.json().then(function(j){{return {{ok:r.ok,j:j}};}});}})
     .then(function(x){{
       if(!x.ok){{throw new Error((x.j&&x.j.detail)||'Something went wrong.');}}
-      form.style.display='none';done.style.display='block';done.scrollIntoView({{behavior:'smooth',block:'start'}});
+      form.style.display='none';done.style.display='block';done.querySelector('h2').focus();done.scrollIntoView({{behavior:'smooth',block:'start'}});
     }})
-    .catch(function(ex){{err.textContent=ex.message||'Something went wrong. Please try again.';err.style.display='block';btn.disabled=false;btn.textContent='Send';}});
+    .catch(function(ex){{err.textContent=ex.message||'Something went wrong. Please try again.';err.style.display='block';btn.disabled=false;btn.textContent={json.dumps(submit_label)};}});
   }});
 }})();
 </script>

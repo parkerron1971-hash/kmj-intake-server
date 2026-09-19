@@ -569,6 +569,7 @@ def render_events_page(
     slug: str,
     *,
     api_origin: str,
+    site=None,
 ) -> str:
     """The public events page. Mobile-first by design — members RSVP
     from phones: single column, ≤480px shell (the /give shell), 44px+
@@ -581,7 +582,10 @@ def render_events_page(
 
     title = f"Events — {name}"
     description = f"See what's coming up at {name} and let us know you're coming."
-    css_vars = _brand_css_vars(business)
+    from public_form_theme import resolve_theme, css_vars as theme_css, font_links
+    theme = resolve_theme(business, site)
+    css_vars = theme_css(theme)
+    logo_url = theme["logo_url"]
 
     logo_html = (f'<img class="ev-logo" src="{_esc(logo_url)}" alt="{_esc(name)} logo">'
                  if logo_url else "")
@@ -609,6 +613,7 @@ def render_events_page(
 <meta property="og:url" content="{_esc(canonical_url)}">
 <meta property="og:type" content="website">
 {og_image_html}
+{font_links(theme)}
 <style>{css_vars}</style>
 <style>
 html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);
@@ -620,7 +625,7 @@ background:var(--surface);min-height:100vh;}}
 .ev-name{{font-family:var(--font-heading);font-size:24px;font-weight:700;margin:0;}}
 .ev-kicker{{font-family:var(--font-heading);font-size:15px;font-weight:600;
 color:var(--text-secondary);margin:6px 0 0;letter-spacing:.06em;text-transform:uppercase;}}
-.ev-card{{border:1px solid var(--border);border-radius:16px;padding:18px 16px;
+.ev-card{{border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;
 margin-bottom:16px;}}
 .ev-when{{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
 color:var(--accent);}}
@@ -639,15 +644,16 @@ border:1px solid var(--border);border-radius:999px;padding:4px 10px;}}
 .ev-role.done{{opacity:.55;text-decoration:line-through;}}
 .ev-form{{margin-top:14px;display:flex;flex-direction:column;gap:8px;}}
 .ev-input{{width:100%;padding:12px 14px;font-size:16px;border:1.5px solid var(--border);
-border-radius:12px;background:transparent;color:var(--text-primary);min-height:48px;
+border-radius:var(--radius);background:var(--input-surface);color:var(--text-primary);min-height:48px;
 font-family:var(--font-body);}}
 .ev-go{{width:100%;padding:14px 0;font-size:16px;font-weight:700;border:0;
-border-radius:12px;background:var(--accent);color:#fff;cursor:pointer;min-height:48px;
+border-radius:var(--radius);background:var(--accent);color:var(--accent-text);cursor:pointer;min-height:48px;
 font-family:var(--font-body);}}
 .ev-go:disabled{{opacity:.55;cursor:default;}}
 .ev-msg{{display:none;font-size:13px;line-height:1.5;}}
 .ev-msg.ok{{display:block;color:var(--text-primary);font-weight:600;}}
-.ev-msg.err{{display:block;color:#b3261e;}}
+.ev-msg.err{{display:block;color:var(--error);}}
+.ev-input:focus-visible,.ev-go:focus-visible{{outline:2px solid var(--focus);outline-offset:3px;}}
 .ev-fullnote{{margin-top:12px;font-size:13px;color:var(--text-muted);line-height:1.5;}}
 .ev-empty{{text-align:center;padding:32px 16px;color:var(--text-secondary);
 border:1px dashed var(--border);border-radius:16px;font-size:14px;line-height:1.6;}}
