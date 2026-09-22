@@ -362,3 +362,47 @@ def test_trace_persists_decision_with_outcomes(monkeypatch):
     assert audits[0]["payload"]["decision"] == decision
     assert runs[0]["detail"]["decision"] == decision
     assert runs[0]["detail"]["actions"] == []
+
+@pytest.mark.parametrize('probabilities', [
+    {'lead_followup': 0.97, 'booking_review': 0.02, 'payment_review': 0.0, 'contract_review': 0.0, 'assignment_review': 0.0, 'unknown': 0.0},
+    {'lead_followup': 0.97, 'booking_review': 0.04, 'payment_review': 0.0, 'contract_review': 0.0, 'assignment_review': 0.0, 'unknown': 0.0},
+])
+def test_live_hundredth_rounding_is_accepted_without_normalizing(probabilities):
+    body = response()
+    body['answers']['workflow']['probabilities'] = probabilities
+    result, _ = evaluate(body)
+    assert result.status == 'ready'
+    assert result.answers['workflow']['probabilities'] == probabilities
+
+
+def test_live_score_rounding_accepts_independently_rounded_mean():
+    body = response()
+    body['answers']['urgency'].update(score=0.36, probabilities={'0': 0.64, '1': 0.35, '2': 0.01})
+    result, _ = evaluate(body)
+    assert result.status == 'ready' and result.answers['urgency']['score'] == 0.36
+
+
+@pytest.mark.parametrize('probabilities', [
+    {'a': 0.8, 'b': 0.1}, {'a': 0.97, 'b': 0.07},
+    {'a': 0.9733, 'b': 0.02}, {'a': 0.0, 'b': 0.0},
+])
+def test_rounding_tolerance_does_not_accept_impossible_mass(probabilities):
+    with pytest.raises(ValueError):
+        ds._distribution(probabilities, set(probabilities))
+
+
+def test_rounded_probability_never_promotes_low_confidence():
+    body = response()
+    body['answers']['workflow'].update(confidence=0.99, probabilities={
+        k: 0.84 if k=='lead_followup' else 0.15 if k=='booking_review' else 0.0
+        for k in ds.QUESTIONS['workflow']['criteria']})
+    result, _ = evaluate(body)
+    assert result.status == 'uncertain'
+
+
+def test_context_questions_are_self_contained():
+    import computer_decisions as cd
+    assert set(ds.QUESTIONS['sufficient_context']['criteria']) == {'true', 'false'}
+    assert all(kind in ds.QUESTIONS['sufficient_context']['instructions'] for kind in ds.EVENT_WORKFLOWS)
+    assert 'web page' in cd.QUESTIONS['sufficient_context']['instructions']
+    assert set(cd.QUESTIONS['sufficient_context']['criteria']) == {'true', 'false'}

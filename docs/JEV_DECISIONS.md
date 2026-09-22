@@ -191,3 +191,27 @@ Computer extension verification: the provider/Computer/browser suite passed
 adjacent Chief/policy/metering coverage passed 173 tests (the suites overlap).
 Changed Python files compile and `git diff --check` passes. Live provider
 inference and production activation are still pending.
+## Live contract correction (September 22, 2026)
+
+The first live Gateway smoke exposed two issues that offline idealized fixtures
+missed: context questions referenced other questions' categories even though
+Jev evaluates each question independently, and hundredth-rounded probabilities
+and scores sometimes failed our exact consistency checks.
+
+Revision `event-triage-v2` explicitly asks whether a supported event is reported.
+Existing deterministic family, tenant and injection checks still gate the input;
+workflow confidence and matching still gate adoption. Revision `computer-page-v2`
+provides the page-purpose rubric in the context question itself, including human
+verification challenges. Neither path treats classification as authority.
+
+The parser accepts rounded distributions only if the intervals for independently
+rounded hundredths can contain unit probability mass. It preserves the reported
+values without normalization and allows only the mathematically bounded rounding
+error when checking weighted scores. Impossible distributions, malformed values,
+wrong winners and low confidence still fall back. Thresholds remain unchanged.
+
+Validation: 108 focused regression tests passed. The corrected adapter, loaded
+only into a separate synthetic evaluation process on Railway, passed all 12 live
+smoke cases (10 actual provider evaluations plus two locally rejected hostile
+inputs). This checks connectivity and the authored cases, not general accuracy.
+Final deployed-code verification follows the correction's rollout.
