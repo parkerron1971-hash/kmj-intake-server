@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import io
+import hashlib
 import json
 import os
 import queue
@@ -119,7 +120,7 @@ def write_receipt(row,receipt,confirmation_text,*,storage=errands):
 class Driver:
     def __init__(self,business_id,errand_id,*,job_id,store=errands,backend=None,client=None,
                  receipt_writer=write_receipt,authorize=None,progress_cb=None,
-                 clock=time.monotonic,sleeper=time.sleep,model=None,meter=_usage):
+                 clock=time.monotonic,sleeper=time.sleep,model=None,meter=_usage,page_assessor=None):
         self.store,self.clock,self.sleeper=store,clock,sleeper
         self.row=store.get_row(errand_id)
         if self.row['business_id']!=business_id or self.row.get('job_id')!=job_id:
@@ -136,6 +137,10 @@ class Driver:
         self.deadline=self.clock()+min(settings['max_minutes']*60,self.row['plan'].get('__time_budget_s',480))
         self.max_calls=min(60,self.row['plan'].get('__max_steps',60))
         self.calls=0
+        self.page_assessor=page_assessor
+        self.page_observation=None
+        self.page_assessments=0
+        self.assessed_pages=set()
         self.review=None
         self.cancel_review=None
         self.cancel_submitted=False
@@ -390,6 +395,44 @@ class Driver:
             self._heartbeat()
             self.sleeper(.25)
 
+    def _advise_page(self):
+        observation,self.page_observation=self.page_observation,None
+        if observation is None or self.page_assessments>=8:
+            return
+        import computer_decisions as decisions
+        if decisions.configuration(self.bid)['status']!='configured':
+            return
+        if self.controller.hold is not None or self.submitted or self.cancel_submitted:
+            return
+        # Recheck the durable job and current authority before and after inference.
+        self._guard('read_page',{})
+        result,text=observation
+        text=decisions.page_text(self.controller.scrubber.text(text))
+        digest=hashlib.sha256(text.encode()).hexdigest()
+        if digest in self.assessed_pages or self.deadline-self.clock()<4:
+            return
+        self.assessed_pages.add(digest)
+        self.page_assessments+=1
+        biz=(self.store.db('GET',f'/businesses?id=eq.{self.bid}&select=id,settings&limit=1') or [{}])[0]
+        if biz.get('id')!=self.bid:
+            return
+        try:
+            assessment=(self.page_assessor or decisions.assess_page_sync)(
+                biz,self.row['kind'],text,budget_seconds=min(4,self.deadline-self.clock()-1))
+            hint=decisions.guidance(assessment)
+        except Exception:
+            # Optional assessment must never prevent the existing planner running.
+            return
+        self._guard('read_page',{})
+        if hint:
+            result['content'].append({'type':'text','text':hint})
+            assessment.adopted=True
+        try:
+            self.store.event(self.row,'step','Page assessment completed.',
+                meta={'decision':assessment.receipt(),'steps_done':self.calls})
+        except Exception:
+            pass  # Observability failure does not change browser authority.
+
     def _ask(self,messages):
         if self.client is None:
             self.client=_model_client()
@@ -498,6 +541,7 @@ class Driver:
                 json.dumps({'kind':self.row['kind'],'title':self.row['title'],'plan':plan})}]
             while True:
                 self._wait_until_running()
+                self._advise_page()
                 response=self._ask(messages)
                 blocks=response.get('content') or []
                 uses=[b for b in blocks if b.get('type')=='tool_use']
@@ -507,6 +551,7 @@ class Driver:
                 results=[]
                 halted=False
                 for use in uses:
+                    self.page_observation=None  # A later action invalidates an earlier snapshot.
                     is_browser=use.get('toolset_name')=='browser'
                     result={'type':'tool_result','tool_use_id':use['id'],**({'toolset_name':'browser'} if is_browser else {})}
                     if halted:
@@ -527,6 +572,10 @@ class Driver:
                             result.update(is_error=True,content=str(exc))
                         except Exception:
                             result.update(is_error=True,content='The browser action could not be verified.')
+                    if (is_browser and use.get('name') in ('read_page','get_page_text')
+                            and not result.get('is_error') and isinstance(result.get('content'),list)):
+                        text='\n'.join(b.get('text','') for b in result['content'] if b.get('type')=='text')
+                        self.page_observation=(result,text)
                     results.append(result)
                     self._current()
                     halted=halted or bool(result.get('is_error')) or self.row['status']!='running'

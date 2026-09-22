@@ -151,14 +151,15 @@ def _distribution(value: Any, keys: set[str]) -> dict[str, float]:
     return result
 
 
-def _answers(body: Any, model: str) -> dict:
+def _answers(body: Any, model: str, questions: dict | None = None) -> dict:
+    questions = QUESTIONS if questions is None else questions
     if not isinstance(body, dict) or body.get("model") != model:
         raise ValueError("unexpected_model")
     answers = body.get("answers")
-    if not isinstance(answers, dict) or set(answers) != set(QUESTIONS):
+    if not isinstance(answers, dict) or set(answers) != set(questions):
         raise ValueError("invalid_answers")
     clean = {}
-    for name, question in QUESTIONS.items():
+    for name, question in questions.items():
         answer, kind = answers[name], question["type"]
         if not isinstance(answer, dict) or answer.get("type") != kind:
             raise ValueError("invalid_answer_type")
@@ -184,7 +185,8 @@ def _answers(body: Any, model: str) -> dict:
 
 
 async def _meter(body: Any, business_id: str, result: Decision, ok: bool,
-                 duration_ms: int, error: str | None) -> None:
+                 duration_ms: int, error: str | None, *,
+                 endpoint: str = METER_ENDPOINT, task_type: str = "event_triage") -> None:
     usage = body.get("usage", {}) if isinstance(body, dict) else {}
     if not isinstance(usage, dict):
         usage = {}
@@ -204,15 +206,16 @@ async def _meter(body: Any, business_id: str, result: Decision, ok: bool,
     try:
         from api_usage_logger import log_api_usage
         await asyncio.wait_for(log_api_usage(
-            endpoint=METER_ENDPOINT, model=result.model, business_id=business_id,
-            task_type="event_triage", duration_ms=duration_ms, ok=ok, error=error,
+            endpoint=endpoint, model=result.model, business_id=business_id,
+            task_type=task_type, duration_ms=duration_ms, ok=ok, error=error,
             cost_cents_override=cost, units=0, **counts), timeout=1.0)
     except Exception:
         logger.warning("Jev usage recording unavailable")
 
 
 async def _request(client: httpx.AsyncClient, state: dict, business_id: str,
-                   result: Decision, deadline: float) -> dict:
+                   result: Decision, deadline: float, *,
+                   questions: dict | None = None, meter_options: dict | None = None) -> dict:
     endpoint, model, key_name = PROVIDERS[result.provider]
     for attempt in range(2):
         body, error, ok = None, "provider_error", False
@@ -221,7 +224,7 @@ async def _request(client: httpx.AsyncClient, state: dict, business_id: str,
         try:
             response = await client.post(
                 endpoint, headers={"Authorization": "Bearer " + os.environ[key_name].strip()},
-                json={"model": model, "state": state, "questions": QUESTIONS},
+                json={"model": model, "state": state, "questions": QUESTIONS if questions is None else questions},
                 timeout=max(0.01, deadline - time.monotonic()), follow_redirects=False)
             if len(response.content) > 65536:
                 raise ValueError("response_too_large")
@@ -234,11 +237,11 @@ async def _request(client: httpx.AsyncClient, state: dict, business_id: str,
             elif response.status_code != 200:
                 raise ValueError("provider_status")
             else:
-                answers = _answers(body, model)
+                answers = _answers(body, model, questions)
                 ok, error = True, None
                 return answers
         finally:
-            await _meter(body, business_id, result, ok, int((time.monotonic() - start) * 1000), error)
+            await _meter(body, business_id, result, ok, int((time.monotonic() - start) * 1000), error, **(meter_options or {}))
         # One retry at most. Do not shorten the server's Retry-After.
         try:
             delay = float(response.headers.get("retry-after", "0.1"))

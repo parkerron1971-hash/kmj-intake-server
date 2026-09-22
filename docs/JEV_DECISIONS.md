@@ -129,3 +129,65 @@ No live key was present during implementation. Deployment and live provider
 validation remain to be performed; offline test results do not certify them.
 
 Local verification (2026-09-22): 196 focused and adjacent regression tests passed. Changed Python modules compile and git diff --check passes. Existing Protobuf/FastAPI deprecation warnings were reported. Full repository CI, browser/database migration checks and live provider inference were not run; this change has no frontend or migration.
+## Chief Computer page guidance
+
+Set `CHIEF_COMPUTER_DECISIONS=on` on the service running Computer jobs, alongside
+`CHIEF_DECISIONS=on`, the explicit business allowlist and Gateway key above.
+This is active guidance when enabled, with no shadow mode. Set the Computer flag
+back to `off` to restore the existing browser planner independently of event triage.
+
+After a successful page-text read, Jev classifies the page and its blocker. A
+high-confidence result adds code-owned instructions to that snapshot's tool result.
+The existing model chooses the next browser action. This first version does not
+remove a planner call; latency or cost savings are not established.
+
+Only scrubbed text (up to 12,000 characters) and the approved task kind are sent.
+Opaque DOM references and links are removed. No screenshots, form input values,
+credentials, full plan, business ID or raw provider errors enter the Jev payload.
+Scrubbing removes known secrets; visible text may still contain personal data.
+Assessments are skipped during Secure Entry and after submission. A later tool in
+the same batch invalidates the earlier observation. Identical text is assessed
+once per job, with at most eight assessments and four concurrent helper threads
+per process. Browser objects never leave their owning thread. The worker waits
+at most four seconds per assessment and discards late results. There are no
+background browser or job writes from the helper. Current job authority is
+rechecked after inference before guidance can be used.
+
+Unknown, low-confidence, malformed, timed-out, paused, over-budget or unavailable
+assessments retain the existing planner. Three provider failures open a separate
+Computer circuit for 60 seconds. All actual actions still pass the existing host,
+quantity, checkout, approval and completion guards. A `confirmation` classification
+cannot establish success, and blocker detection cannot authorize credentials or
+changes to the approved plan.
+
+The existing errand step metadata stores only validated decision receipts. Usage
+is metered separately under `/chief/decisions/computer-page`, with zero additional
+customer credit units. No schema migration or frontend install is needed.
+
+Offline verification:
+
+```text
+python -m pytest __tests__/test_computer_decisions.py __tests__/test_decision_service.py __tests__/test_errand_driver.py __tests__/test_browser_controller.py -q
+```
+
+Synthetic live verification, after the key is entered in the runtime environment:
+
+```text
+python scripts/jev_eval.py --live --provider vercel --suite all --out ../jev-live-report.json
+```
+
+This runs event and page fixtures without visiting suppliers, executing purchases,
+or reading/writing business records. It is a connection smoke test, not a measured
+accuracy benchmark. Deployment success alone does not establish a working Jev call.
+
+
+September 22 deployment audit: GitHub reports a successful Vercel production
+frontend deployment at `1d964f4` and a successful Railway backend/worker deployment
+at `73b5f44`. The public backend `/health` returned HTTP 200 with status `running`.
+Those revisions predate this Jev branch. No live Jev request has been verified.
+
+Computer extension verification: the provider/Computer/browser suite passed
+166 tests; the follow-up suite with two additional snapshot/budget tests and
+adjacent Chief/policy/metering coverage passed 173 tests (the suites overlap).
+Changed Python files compile and `git diff --check` passes. Live provider
+inference and production activation are still pending.
