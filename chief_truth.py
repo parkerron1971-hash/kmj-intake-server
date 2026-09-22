@@ -458,6 +458,20 @@ def _number_list(text):
 _IDENTIFIER = re.compile(r'(?<![\w-])(?=[\w-]*[A-Za-z])(?=[\w-]*\d)[\w-]+')
 _FIGURE = re.compile(r'(?<!\w)\d[\d,]*(?:\.\d+)?')
 
+# A document's name is not a quantity either: "Form 990", "the 990 form",
+# "Schedule 1", "Section 501(c)(3)", "Publication 15". The hyphenated
+# variants (990-EZ, 1099-NEC, W-9) already read as identifiers above;
+# the bare ones did not, and "Can we do a 990 form to fill out" was
+# answered twice with "No action ran in this request" because the
+# draft's "Form 990" was a figure no claim covered (2026-09-22). A
+# number AFTER the word needs three digits, so "2 forms on file" stays
+# a count.
+_DOCUMENT_NAME = re.compile(
+    r'\b(?:form|schedule|section|sec\.|publication|pub\.?|§)\s*\d[\d,]*(?:\([a-z0-9]+\))*'
+    r'|(?<![\w$.,])\d{3,}(?:\([a-z0-9]+\))*\s+(?:form|return|filing)\b'
+    r'|(?<!\w)\d+(?:\([a-z0-9]+\))+',
+    re.I)
+
 # A clock time: "9am", "9 a.m.", "5:30pm", "11:30", "17:30". A bare hour
 # only counts with a meridiem, so "5 invoices" stays a quantity. Written
 # by the practitioner one way and by the receipt another ("9am to
@@ -528,7 +542,7 @@ def _figures(text):
     for h, mi in times:
         out.append(str(h))
         out.append(str(mi))
-    rest = _spoken_dates_as_figures(rest)
+    rest = _spoken_dates_as_figures(_DOCUMENT_NAME.sub(' ', rest))
     return out + _FIGURE.findall(_IDENTIFIER.sub(' ', rest))
 
 
