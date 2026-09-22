@@ -69,6 +69,10 @@ HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 # $1/$5). Keys are matched LONGEST-PREFIX-FIRST so
 # "claude-opus-4-8-..." hits its own entry, not "claude-opus-4".
 MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
+    # Jev: $0.042/MTok input, free output. Gateway actual cost overrides this
+    # conservative estimate when returned (including promotional free usage).
+    "jev-1.13.0":       (4.2, 0.0),
+    "typesafe-ai/jev":  (4.2, 0.0),
     # Fable 5 — Mythos-class flagship: $10/MTok in, $50/MTok out.
     # (Elite-tier deep/insight lanes — the launch-gate entry.)
     "claude-fable-5":    (1000.0, 5000.0),

@@ -318,13 +318,11 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
     import chief_models
     import chief_of_staff as cos
     import chief_tool_loop as ctl
+    import decision_service
 
     business_id = str(biz["id"])
     kind = f", a {biz.get('type')} business" if biz.get("type") else ""
     system = _SYSTEM.format(name=biz.get("name") or "this business", kind=kind)
-    user = "New since you last looked:\n" + _event_lines(events)
-    # _event_lines ran the defuser; its taint (if any) belongs to this
-    # run and is read by the gate. It is reset at the top of the NEXT run.
 
     try:
         import feature_gates
@@ -341,6 +339,8 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
         cos._UNTRUSTED_TAINT.set(0)
     except Exception:
         pass
+    # Reset BEFORE defusing this run's input so its taint survives.
+    user = "New since you last looked:\n" + _event_lines(events)
     started = _now()
     # What came of the last thirty days of moves (outcome_ledger): the
     # next move is shaped by what landed, not by nothing.
@@ -356,11 +356,20 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
             #    spec's §2.2 rule. No tools on this call: it cannot act,
             #    and it is cheap. A plan that begins "Nothing" ends here.
             ctl.reset_turn(writes_allowed=False, surface="agent", prompted=False)
-            raw_plan = await cos._call_claude(
-                client, _PLAN_SYSTEM.format(name=name, kind=kind),
-                [{"role": "user", "content": user + "\n\nWrite your plan for this look."}],
-                max_tokens=220, enable_web_search=False, business_id=business_id, model=model)
-            _, reasoning = cos._extract_actions_and_clean(raw_plan or "")
+            decision = decision_service.Decision(status="untrusted_input")
+            if not cos.untrusted_taint():
+                try:
+                    decision = await decision_service.assess_events(client, biz, events)
+                except Exception:
+                    decision = decision_service.Decision(status="unavailable")
+            reasoning = decision.plan()
+            decision.adopted = bool(reasoning)
+            if not reasoning:
+                raw_plan = await cos._call_claude(
+                    client, _PLAN_SYSTEM.format(name=name, kind=kind),
+                    [{"role": "user", "content": user + "\n\nWrite your plan for this look."}],
+                    max_tokens=220, enable_web_search=False, business_id=business_id, model=model)
+                _, reasoning = cos._extract_actions_and_clean(raw_plan or "")
             reasoning = (reasoning or "").strip()[:600] or "No plan written."
             idle = reasoning.lower().startswith("nothing")
             raw = ""
@@ -396,6 +405,7 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
             "idle": idle,
             "tags_ignored": len(tag_actions),
             "duration_ms": int((_now() - started).total_seconds() * 1000),
+            "decision": decision.receipt(),
         }
         await _leave_trace(client, biz, taken, record)
     return record
@@ -440,7 +450,8 @@ async def _leave_trace(client, biz: Dict[str, Any], taken: List[Dict[str, Any]],
             summary=(record.get("reasoning") or record["recap"])[:240],
             payload={"events": record["events"], "actions": record["actions"],
                      "idle": bool(record.get("idle")),
-                     "tags_ignored": record["tags_ignored"]},
+                     "tags_ignored": record["tags_ignored"],
+                     "decision": record.get("decision")},
             source="agent", authorized_by="agent:unattended")
     except Exception as e:
         logger.warning(f"[agent] ledger row failed: {e}")
@@ -455,7 +466,8 @@ async def _leave_trace(client, biz: Dict[str, Any], taken: List[Dict[str, Any]],
             "arg_keys": sorted(set(record["events"])),
             "detail": {"actions": record["actions"], "tags_ignored": record["tags_ignored"],
                        "reasoning": (record.get("reasoning") or "")[:300],
-                       "idle": bool(record.get("idle"))},
+                       "idle": bool(record.get("idle")),
+                       "decision": record.get("decision")},
         }, prefer="return=minimal")
     except Exception as e:
         logger.warning(f"[agent] agent_runs row failed: {e}")
@@ -489,8 +501,10 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
 @router.get("")
 def agent_status(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz = _require_owner(business_id, user)
+    import decision_service
     return {"ok": True, "enabled": business_enabled(biz), "platform_enabled": enabled(),
-            "events": list(AGENT_EVENT_TYPES)}
+            "events": list(AGENT_EVENT_TYPES),
+            "decisions": decision_service.configuration(business_id)}
 
 
 @router.post("/enable")
