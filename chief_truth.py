@@ -176,15 +176,22 @@ An invoice record with days_overdue above zero is past due / overdue. A record l
 contains N entries supports "N <things>" for what the list is.
 A claim you cannot support is still listed: give it source_id "" and quote "" and a
 short "gap" saying what is missing. The verdict is unsupported when any claim has a gap.
+A "reference" claim states a published public rule that is not about this business:
+a law, tax or filing threshold, government deadline, form requirement or regulation
+(e.g. "the 990-N is for gross receipts of $50,000 or less"). Unless a supplied research
+source supports it, give it source_id "" and quote "" and no gap: the owner sees it
+labeled as general knowledge, not verified. A claim about this business, its records,
+the owner, their people or their money is NEVER a reference claim.
 Return ONLY JSON, no prose or code fences:
 {"verdict":"supported"|"unsupported", "claims":[{"text":"exact substring of draft",
-"kind":"fact"|"action"|"estimate", "source_id":"supplied source id",
+"kind":"fact"|"action"|"estimate"|"reference", "source_id":"supplied source id",
 "quote":"exact nonempty substring of that source's text", "gap":"only on an unsupported claim"}]}
 Keep every text and quote SHORT: the smallest exact excerpt that carries the
 claim, at most about 12 words each. Split a sentence with several figures into
 several short claims instead of quoting the whole sentence or a whole record.
 Every number in the draft must appear inside some claim's text, and every
-number in a claim's text must appear inside that claim's quote: a figure that
+number in a claim's text must appear inside that claim's quote (an unsourced
+reference claim has no quote): a figure that
 comes from a different record gets its own claim citing that record.
 Use unsupported if ANY claim lacks support. Include all factual claims in claims.
 Use claims=[] only for a reply with no factual assertions or action claims.
@@ -242,6 +249,47 @@ def _strip_fences(raw: str) -> str:
     return match.group(1) if match else text
 
 
+def _review_json(raw):
+    """The reviewer's JSON object. Told to return only JSON, it sometimes
+    puts a sentence before it or a note after it; one such reply made a
+    repaired answer read as "review is not JSON" and the practitioner got
+    "No action ran" (2026-09-22). The object is still the review; every
+    claim in it is checked exactly as before. Raises ValueError when no
+    object with a verdict is present."""
+    text = _strip_fences(raw)
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    decoder = json.JSONDecoder()
+    for m in re.finditer(r'\{', text):
+        try:
+            obj, _end = decoder.raw_decode(text, m.start())
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and 'verdict' in obj:
+            return obj
+    raise ValueError('no review object')
+
+
+# A reference claim is about the world, not this business: "the 990-N is
+# for gross receipts of $50,000 or less". Anything addressed to the owner
+# or said of us ("your receipts were $48,000") is a business fact however
+# the reviewer labels it, and keeps the full check.
+_ABOUT_THE_BUSINESS = re.compile(r"\b(?:you|your|yours|you['’](?:re|ve|ll|d)|we|our|ours|us|my|me)\b|\bI\b", re.I)
+
+
+def _is_reference(claim):
+    return (claim.get('kind') == 'reference' and isinstance(claim.get('text'), str)
+            and not _ABOUT_THE_BUSINESS.search(claim['text']))
+
+
+def _unsourced(claim):
+    gap, sid, quote = claim.get('gap'), claim.get('source_id'), claim.get('quote')
+    return bool((isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip())
+                or not (isinstance(quote, str) and quote.strip()))
+
+
 def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], str]:
     """Return (verdict, cited_source_ids, reason).
 
@@ -259,8 +307,11 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
     if not text:
         return 'invalid', [], 'no review text'
     try:
-        review = json.loads(text)
+        review = _review_json(text)
     except ValueError:
+        # Keep the head of it: the one time this happened the log could
+        # not say what the reviewer wrote instead.
+        logger.info('review is not JSON: %r', text[:160])
         return 'invalid', [], 'review is not JSON'
     if not isinstance(review, dict) or review.get('verdict') not in ('supported', 'unsupported'):
         return 'invalid', [], 'review lacks a verdict'
@@ -281,6 +332,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
     try:
         cited = []
         gaps = []
+        references = []
         for claim in claims:
             if not isinstance(claim, dict):
                 return 'invalid', [], 'claim has the wrong shape'
@@ -294,8 +346,19 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # reviewer can introduce words the draft never actually contained.
             if _squash(text_) not in _squash(reply):
                 return 'invalid', [], 'claim text is not in the draft'
-            if claim['kind'] not in ('fact', 'action', 'estimate'):
+            if claim['kind'] not in ('fact', 'action', 'estimate', 'reference'):
                 return 'invalid', [], 'unknown claim kind'
+            # A public rule with nothing to cite ("the 990-N is for gross
+            # receipts of $50,000 or less") is delivered labeled as general
+            # knowledge. Held to the same bar as a business figure, every
+            # filing question was answered "No action ran" (2026-09-22).
+            # A reference claim WITH a citation is checked like a fact.
+            if _is_reference(claim) and _unsourced(claim):
+                references.append(text_.strip()[:140])
+                continue
+            if claim['kind'] == 'reference':
+                # Addressed to the owner: a business fact, not a rule.
+                claim = {**claim, 'kind': 'fact'}
             gap = claim.get('gap')
             # A statement that something did NOT happen ("the $10 invoice
             # was never created or sent", "nothing has gone out yet") is
@@ -371,6 +434,8 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 return 'unsupported', [], 'a link in the draft is not in any cited source'
         if gaps:
             return 'unsupported', [], gaps[0]
+        if references:
+            return 'unsupported', [], _claim_fail('general rule, not from records', references[0])
         if model_says_unsupported:
             logger.info('reviewer said unsupported but every claim it listed checks out; overruled')
         return 'supported', list(dict.fromkeys(cited)), ''
@@ -392,9 +457,17 @@ def unconfirmed_claims(raw, reason):
     # source that does not exist) is the fabricated-evidence signal the
     # factual eval pins, and a wrong claim under "could not confirm" is
     # still a wrong claim on the screen. Those stay withheld.
-    if reason.startswith('claim without support'):
+    if reason.startswith(('claim without support', 'general rule')):
         return _gap_claims(raw)
     return []
+
+
+def reference_claims(raw, reason):
+    """The public rules a review delivered as general knowledge. Only when
+    nothing worse withheld the draft: the reason is the last word."""
+    if not reason.startswith(('claim without support', 'general rule')):
+        return []
+    return _gap_claims(raw, references=True)
 
 
 def _squash(text):
@@ -403,10 +476,11 @@ def _squash(text):
     return re.sub(r'\s+', '', text or '')
 
 
-def _gap_claims(raw):
-    """The claims the reviewer listed without support, in draft order."""
+def _gap_claims(raw, references=False):
+    """The claims the reviewer listed without support, in draft order:
+    the gaps, or with `references` the public rules stated from memory."""
     try:
-        review = json.loads(_strip_fences(raw))
+        review = _review_json(raw)
         claims = review.get('claims') if isinstance(review, dict) else None
     except (ValueError, AttributeError):
         return []
@@ -414,11 +488,8 @@ def _gap_claims(raw):
     for c in claims or []:
         if not isinstance(c, dict):
             continue
-        gap = c.get('gap')
-        sid, quote = c.get('source_id'), c.get('quote')
-        unsupported = (isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip())             or not (isinstance(quote, str) and quote.strip())
         text = c.get('text')
-        if unsupported and isinstance(text, str) and text.strip():
+        if _unsourced(c) and _is_reference(c) == references and isinstance(text, str) and text.strip():
             out.append(text.strip()[:140])
     return out
 
@@ -846,24 +917,33 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
     gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
+    references = reference_claims(raw, reason) if verdict == 'unsupported' else []
     # A receipt in the turn does not change this: the work is real (the
     # failed-receipt report already won above) and the doubt is named.
     # With receipts excluded, "So there's already a workshop on file?"
     # was answered with the bare receipt label "Embrace the Shift
     # Workshop: updated" and no answer at all (2026-09-18).
-    if gaps and not has_completion_claim(reply):
+    if (gaps or references) and not has_completion_claim(reply):
         # The reviewer listed what it could not support and everything else
         # checked out. An ordinary answer with a doubt in it reaches the
         # practitioner WITH the doubt named, instead of a blank "couldn't
         # verify" that made Chief useless for a day (Kevin, 2026-09-14).
         # Fabricated figures and completion claims never take this path.
-        logger.info('reply review caveated (%d gap%s); draft delivered', len(gaps), '' if len(gaps) == 1 else 's')
+        logger.info('reply review caveated (%d gap%s, %d general rule%s); draft delivered',
+                    len(gaps), '' if len(gaps) == 1 else 's',
+                    len(references), '' if len(references) == 1 else 's')
         # Label excerpts explicitly: the reviewer may quote a dependent clause,
         # which is not a useful standalone sentence after "I could not confirm".
-        caveat = "\n\nThese parts of my answer are still unverified:\n" + '\n'.join(
-            '- “%s”' % g for g in gaps)
+        caveat = ''
+        if gaps:
+            caveat += "\n\nThese parts of my answer are still unverified:\n" + '\n'.join(
+                '- “%s”' % g for g in gaps)
+        if references:
+            caveat += ("\n\nThese are general rules from what I know, not from your records. "
+                       "Check them against the official source before you rely on them:\n") + '\n'.join(
+                '- “%s”' % r for r in references)
         return (reply.rstrip() + caveat), {
-            'status': 'caveated', 'sources': [], 'gaps': gaps}
+            'status': 'caveated', 'sources': [], 'gaps': gaps, 'references': references}
     if verdict == 'invalid':
         # The reviewer never delivered a usable verdict (timeout, budget stop,
         # truncated JSON). Nothing refuted the draft, so an ordinary answer
@@ -912,10 +992,10 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             if (isinstance(repaired, str) and repaired.strip() and len(repaired) <= MAX_REPLY_CHARS
                     and not re.search(r'\[\s*ACTION\s*:', repaired, re.I)
                     and not has_completion_claim(repaired)):
-                checked = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM,
-                    [{'role': 'user', 'content': json.dumps({
-                        'owner_message': message, 'draft': repaired, 'sources': sources,
-                        'unavailable': unavailable_sources()}, ensure_ascii=False)}],
+                recheck = [{'role': 'user', 'content': json.dumps({
+                    'owner_message': message, 'draft': repaired, 'sources': sources,
+                    'unavailable': unavailable_sources()}, ensure_ascii=False)}]
+                checked = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM, recheck,
                     max_tokens=REVIEW_MAX_TOKENS, enable_web_search=False,
                     business_id=business_id), timeout=min(15.0, max(4.0, _left())))
                 checked_verdict, checked_sources, checked_reason = assess_review(checked, repaired, sources)
