@@ -56,3 +56,18 @@ def test_a_read_that_is_also_a_context_field_is_the_read():
         truth.end(token)
     assert list(sources) == ["context:queue"]
     assert '"pending": 3' in sources["context:queue"]["text"]
+
+
+def test_the_calendar_survives_a_full_context():
+    # 2026-09-23: "when is my next appointment?" was answered right
+    # ("nothing on your calendar") and marked unverified, because the
+    # budget dropped context:sessions to keep the blueprint.
+    ctx = {**FAT, "foundation_block": "f" * 10000, "business_profile_block": "q" * 10000,
+           "sessions": [], "open_invoices": [{"number": "INV-2026-013", "total": 55}],
+           "contacts_total": 725, "context_quality": {"sessions": "ok"}}
+    sources = truth.evidence_for_review(ctx, {}, [])
+    for sid in ("context:sessions", "context:open_invoices", "context:contacts_total",
+                "context:context_quality"):
+        assert sid in sources, sid
+    assert "context:blueprint_block" not in sources
+    assert sum(len(s["text"]) for s in sources.values()) <= truth.MAX_EVIDENCE_CHARS
