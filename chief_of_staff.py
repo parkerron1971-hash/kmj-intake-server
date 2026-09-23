@@ -1842,37 +1842,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace('+00:00', 'Z')}"
             f"&order=created_at.desc&limit=5&select=id,prompt,status,created_at"),
     ]
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs = await asyncio.gather(*tasks)
-
-    if not biz_rows:
-        return {}
-    biz = biz_rows[0]
-
-    # Counts use PostgREST's exact aggregate, independently of sampled rows.
-    exact_contact_total = await _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id')
-    contacts_available = contacts is not None
-    # A server-side row cap can be lower than our requested limit. Even a
-    # short page cannot establish the total when the exact count failed.
-    contact_total = exact_contact_total
     context_unavailable = []
-
-    # ── Wave 2 (latency round 4, 2026-08-26) ─────────────────────────
-    # These context blocks had become TEN SEQUENTIAL awaits — one
-    # Supabase round trip after another, 2-4s of the context leg every
-    # turn. That is the exact serial-reads class the 8/14 fix (#584)
-    # cured in wave 1, regrown BEHIND it as new blocks accreted one
-    # try/except at a time. Every one depends only on biz_id or
-    # owner_id (which wave 1's business row supplies), so they run as
-    # ONE gather. Each keeps its own fail-open fallback — a block that
-    # errors degrades to empty exactly as it always did, never the turn.
-    #
-    # The semantic memory match rides in the same wave — and moves OFF
-    # the event loop while it's at it: chief_memory_semantic.match does
-    # a SYNCHRONOUS OpenAI embedding call (httpx.post) that was running
-    # directly on the loop every turn, blocking the whole process —
-    # including other requests' SSE streams — for the length of an
-    # external API round trip.
-    owner_id_for_pp = (biz or {}).get("owner_id")
 
     async def _soft(awaitable, fallback):
         try:
@@ -1896,10 +1866,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         mod = importlib.import_module(modname)
         return getattr(mod, fnname)(*args)
 
-    (foundation_block, business_profile_block, _mat_block, _growth_block,
-     business_profile_raw, practitioner_block, practitioner_profile_raw,
-     brand_block, voice_block, playbook_block, _semantic_hits,
-     blueprint_block) = await asyncio.gather(
+    # ── Wave 2, started early (latency round 5, 2026-09-23) ──────────
+    # Wave 1, the exact contact count, wave 2 and the module counts ran
+    # one after another: 2.3 s of "context" on a voice turn whose data
+    # was already prewarmed. Everything below needs only biz_id, so it
+    # starts NOW and overlaps wave 1; only the owner-keyed blocks wait
+    # for the business row. Each keeps its fail-open fallback.
+    early = [asyncio.ensure_future(a) for a in (
         _soft(foundation_agent.chief_context_block(biz_id), ""),
         _soft(asyncio.to_thread(bp_chief_context_block, biz_id), ""),
         # LGS Phase 2/4 — maturity + growth objectives fold into the
@@ -1911,15 +1884,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # Raw profile row — the JIT capture detector reads
         # proactive_capture_enabled and brand_voice from it.
         _soft(asyncio.to_thread(business_profile_agent.get_profile, biz_id), {}),
-        # Practitioner-keyed blocks (Build 3 / Pass 2.5b) — owner_id,
-        # because they follow the human across all their businesses.
-        _soft(asyncio.to_thread(pp_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
-        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
-              if owner_id_for_pp else _const({}), {}),
         _soft(asyncio.to_thread(brand_engine_chief_context_block, biz_id), ""),
-        _soft(asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
         # Standing playbook (2026-07-13) — the distilled per-business brief.
         _soft(asyncio.to_thread(_lazy_sync, "chief_playbook",
                                 "context_block", biz_id), ""),
@@ -1931,19 +1896,70 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # the practitioner accepts the module cards.
         _soft(asyncio.to_thread(_lazy_sync, "business_blueprint",
                                 "context_block", biz_id), ""),
-    )
-    if _mat_block:
-        business_profile_block = (business_profile_block + "\n\n" + _mat_block).strip()
-    if _growth_block:
-        business_profile_block = (business_profile_block + "\n\n" + _growth_block).strip()
+        # Counts use PostgREST's exact aggregate, independently of sampled rows.
+        _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id'),
+    )]
 
-    # Exact counts, not the size of a capped page of rows.
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs = await asyncio.gather(*tasks)
+
+    if not biz_rows:
+        for t in early:
+            t.cancel()
+        await asyncio.gather(*early, return_exceptions=True)
+        return {}
+    biz = biz_rows[0]
+
+    # ── Wave 2 (latency round 4, 2026-08-26) ─────────────────────────
+    # These context blocks had become TEN SEQUENTIAL awaits — one
+    # Supabase round trip after another, 2-4s of the context leg every
+    # turn. That is the exact serial-reads class the 8/14 fix (#584)
+    # cured in wave 1, regrown BEHIND it as new blocks accreted one
+    # try/except at a time. Every one depends only on biz_id or
+    # owner_id (which wave 1's business row supplies), so they run as
+    # ONE gather. Each keeps its own fail-open fallback — a block that
+    # errors degrades to empty exactly as it always did, never the turn.
+    #
+    # The semantic memory match rides in the same wave — and moves OFF
+    # the event loop while it's at it: chief_memory_semantic.match does
+    # a SYNCHRONOUS OpenAI embedding call (httpx.post) that was running
+    # directly on the loop every turn, blocking the whole process —
+    # including other requests' SSE streams — for the length of an
+    # external API round trip.
+    owner_id_for_pp = (biz or {}).get("owner_id")
+
+    # The rest of wave 2: practitioner-keyed blocks (Build 3 / Pass 2.5b)
+    # need owner_id, because they follow the human across all their
+    # businesses; the module counts need wave 1's module list. They join
+    # whatever of the early wave is still running.
     module_entries_tasks = [
         _sb_count(client,
             f"/module_entries?business_id=eq.{biz_id}&module_id=eq.{m['id']}&status=eq.active&select=id")
         for m in (modules or [])
     ]
-    module_entry_rows = await asyncio.gather(*module_entries_tasks) if module_entries_tasks else []
+    late = await asyncio.gather(
+        _soft(asyncio.to_thread(pp_chief_context_block, owner_id_for_pp)
+              if owner_id_for_pp else _const(""), ""),
+        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
+              if owner_id_for_pp else _const({}), {}),
+        _soft(asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
+              if owner_id_for_pp else _const(""), ""),
+        *early,
+        *module_entries_tasks,
+    )
+    practitioner_block, practitioner_profile_raw, voice_block = late[0:3]
+    (foundation_block, business_profile_block, _mat_block, _growth_block,
+     business_profile_raw, brand_block, playbook_block, _semantic_hits,
+     blueprint_block, exact_contact_total) = late[3:3 + len(early)]
+    module_entry_rows = list(late[3 + len(early):])
+
+    contacts_available = contacts is not None
+    # A server-side row cap can be lower than our requested limit. Even a
+    # short page cannot establish the total when the exact count failed.
+    contact_total = exact_contact_total
+    if _mat_block:
+        business_profile_block = (business_profile_block + "\n\n" + _mat_block).strip()
+    if _growth_block:
+        business_profile_block = (business_profile_block + "\n\n" + _growth_block).strip()
     module_counts = {
         (modules or [])[i]["id"]: count
         for i, count in enumerate(module_entry_rows)
