@@ -441,6 +441,106 @@ def _humanize_actions(actions: List[Dict[str, Any]]) -> str:
     return " and ".join(phrases)
 
 
+# ─── Sentences as they are written (2026-09-23) ──────────────────────
+# Kevin: "chief responding as it's receiving information … instead of
+# waiting until it gets all the information." The reply used to be held
+# whole until actions and the answer check finished — 10-30 s of silence
+# on a voice turn — because a spoken sentence cannot be taken back.
+#
+# Now each finished sentence of the FIRST model call is checked the moment
+# it is complete (chief_truth.streamable_sentence: every figure and name in
+# one record, no claim anything was done, no state of a record, nothing
+# about the business unproved) and sent as it passes. The first sentence
+# that cannot be proved closes the stream for the turn; everything after
+# it waits for the full answer check exactly as before, and arrives as the
+# continuation of what was already said (_stitch_after_stream).
+PROSE_PREFIX = "\x00prose:"
+_SENTENCE_END = re.compile(r'(?<=[.!?])["”’)]?\s+|\n+')
+
+
+class _SentenceStreamer:
+    """The main model call's stream sink on a streamed turn."""
+
+    def __init__(self, sink, prover) -> None:
+        self._sink = sink
+        self._prover = prover
+        self._filt = _ActionTagFilter()
+        self._buf = ""
+        self._raw_tail = ""
+        self.open = prover is not None and sink is not None
+        self.sent: List[str] = []
+
+    def __call__(self, piece: str) -> None:
+        if not self.open or not isinstance(piece, str):
+            return
+        # An action tag means the reply is about to narrate work: stop
+        # before it. The tag filter hides the tag; this sees it coming.
+        self._raw_tail = (self._raw_tail + piece)[-16:]
+        if "[ACTION" in self._raw_tail.upper() or "[ACTION" in piece.upper():
+            self.close()
+            return
+        self._buf += self._filt.feed(piece)
+        while self.open:
+            m = _SENTENCE_END.search(self._buf)
+            if not m:
+                break
+            sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
+            if not sentence.strip():
+                self._emit(sentence)
+                continue
+            import chief_truth as _truth
+            if not _truth.streamable_sentence(self._prover, sentence):
+                self.close()
+                break
+            self._emit(sentence)
+
+    def _emit(self, text: str) -> None:
+        try:
+            self._sink(PROSE_PREFIX + text)
+            self.sent.append(text)
+        except Exception:
+            self.close()
+
+    def close(self) -> None:
+        """Nothing more streams this turn; an unfinished sentence waits."""
+        self.open = False
+        self._buf = ""
+
+    @property
+    def text(self) -> str:
+        return "".join(self.sent)
+
+
+_WITHHELD_REPLIES = ("No action ran in this request.", "Your request came through. I couldn",
+                     "I could not verify the explanation")
+
+
+def _stitch_after_stream(prefix: str, final: str) -> str:
+    """The reply as a continuation of what already streamed.
+
+    The checked reply normally starts with the streamed sentences (same
+    draft); whitespace may differ. When the rest was withheld, the
+    practitioner already heard the checked start, so the canned "No
+    action ran … try again?" is replaced by one honest line."""
+    if not prefix:
+        return final or ""
+    final = final or ""
+    if final.startswith(prefix):
+        return final
+    squash = lambda t: re.sub(r"\s+", "", t)
+    want = squash(prefix)
+    if want and squash(final).startswith(want):
+        seen, i = 0, 0
+        while i < len(final) and seen < len(want):
+            if not final[i].isspace():
+                seen += 1
+            i += 1
+        return prefix + final[i:]
+    if not final.strip() or any(final.strip().startswith(w) for w in _WITHHELD_REPLIES):
+        return prefix.rstrip() + "\n\nI couldn't confirm the rest of that from your records, so I stopped there."
+    return prefix.rstrip() + "\n\n" + final
+
+
 def _stream_piece_events(piece: str, filt: "_ActionTagFilter") -> List[Dict[str, Any]]:
     """What one sink piece becomes on the wire: a status event, or the
     text the tag filter lets through as a delta (possibly nothing yet)."""
@@ -454,6 +554,9 @@ def _stream_piece_events(piece: str, filt: "_ActionTagFilter") -> List[Dict[str,
         if not isinstance(body, dict) or not body.get("id"):
             return []
         return [{"type": "step", **body}]
+    if isinstance(piece, str) and piece.startswith(PROSE_PREFIX):
+        txt = piece[len(PROSE_PREFIX):]
+        return [{"type": "delta", "text": txt, "checked": True}] if txt else []
     txt = filt.feed(piece)
     return [{"type": "delta", "text": txt}] if txt else []
 
@@ -13844,6 +13947,7 @@ async def chief_chat(
             _confirm_token = _TURN_CONFIRMED.set(
                 _is_voice_turn and _is_voice_confirmation(req.message or ""))
             _go_ahead_token = _TURN_GO_AHEAD.set(_is_voice_confirmation(req.message or ""))
+            _sentence_streamer = None
             _errand_confirm_token = _TURN_ERRAND_CONFIRMED.set(_is_errand_confirmation(req.message or ""))
             _errand_plans_token = _TURN_ERRAND_PLANS.set(())
             turn_tokens = chief_models.max_tokens_for(lane, default=1600)
@@ -13872,6 +13976,22 @@ async def chief_chat(
             _read_tools = chief_tool_loop.tool_definitions_for_turn(_native_writes)
             system += chief_truth.AUTHOR_RULES
             _turn_status("thinking")
+            # Checked sentences go out as the model writes them (see
+            # _SentenceStreamer). Only this first call streams: retries,
+            # corrections and second passes stay private until checked.
+            _sentence_streamer = None
+            if _STREAM_SINK.get() is not None:
+                try:
+                    import mailbox_policy as _mp
+                    _prover = chief_truth.stream_prover(
+                        chief_truth.evidence_for_review(
+                            ctx, _format_view_block(req.current_context, view_detail), []),
+                        _mp.email_clock(ctx)['timezone'])
+                except Exception as e:  # pragma: no cover — never cost the turn
+                    logger.warning(f"[chief] sentence streaming unavailable: {e}")
+                    _prover = None
+                _sentence_streamer = (_SentenceStreamer(_STREAM_SINK.get(), _prover)
+                                      if _prover is not None else (lambda _piece: None))
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
@@ -13885,9 +14005,11 @@ async def chief_chat(
                                      enable_web_search=_web_search_allowed(req.message or ""),
                                      # Voice streaming arc — set only when
                                      # /chat/stream drives this turn.
-                                     stream_sink=(lambda _piece: None) if _STREAM_SINK.get() is not None else None,
+                                     stream_sink=_sentence_streamer,
                                      read_tools=_read_tools,
                                      tool_biz=biz)
+            if isinstance(_sentence_streamer, _SentenceStreamer):
+                _sentence_streamer.close()
             _t.mark("model")
             _t.tools = chief_tool_loop.calls_this_turn()
             if not raw:
@@ -14146,6 +14268,10 @@ async def chief_chat(
             # injected into history. Belt-and-suspenders so nothing
             # internal-looking ever reaches the practitioner.
             response_text = clean if clean else _scrub_response_text(raw or "")
+            # What streamed was already shown and said: the reply on file,
+            # on screen and in history continues it rather than repeating it.
+            if isinstance(_sentence_streamer, _SentenceStreamer) and _sentence_streamer.text:
+                response_text = _stitch_after_stream(_sentence_streamer.text, response_text)
 
             # The turn goes on file (2026-09-04) — every turn, every
             # surface, no model call — so recall_conversation reads a
@@ -14296,7 +14422,10 @@ async def chief_chat_stream(
     def _sink(piece: str) -> None:
         # Only server-authored progress crosses this boundary early.
         # Do not even queue raw prose (including corrections and retries).
-        if not (piece.startswith(STATUS_PREFIX) or piece.startswith(STEP_PREFIX)):
+        # Checked prose (PROSE_PREFIX) is the one exception: sentences the
+        # turn's _SentenceStreamer already proved against the records.
+        if not (piece.startswith(STATUS_PREFIX) or piece.startswith(STEP_PREFIX)
+                or piece.startswith(PROSE_PREFIX)):
             return
         try:
             q.put_nowait(piece)
@@ -14332,6 +14461,11 @@ async def chief_chat_stream(
         # The cost is 16KB per turn on a path whose whole purpose is to
         # ship a few hundred bytes EARLY.
         yield ":" + (" " * 16384) + "\n\n"
+        # What the client has already been given of the reply (checked
+        # sentences only). The end of the turn sends the rest, never the
+        # whole reply again: a spoken sentence said twice is the repetition
+        # this arc exists to remove.
+        sent: List[str] = []
         try:
             while True:
                 getter = asyncio.ensure_future(q.get())
@@ -14346,6 +14480,8 @@ async def chief_chat_stream(
                     continue
                 if getter in done:
                     for ev in _stream_piece_events(getter.result(), filt):
+                        if ev.get("type") == "delta":
+                            sent.append(ev.get("text") or "")
                         yield _evt(ev)
                     continue
                 getter.cancel()
@@ -14354,7 +14490,9 @@ async def chief_chat_stream(
                 # still part of the work; emit it, do not drop it.
                 while not q.empty():
                     for ev in _stream_piece_events(q.get_nowait(), filt):
-                        if ev.get("type") in ("status", "step"):
+                        if ev.get("type") in ("status", "step") or ev.get("checked"):
+                            if ev.get("type") == "delta":
+                                sent.append(ev.get("text") or "")
                             yield _evt(ev)
                 try:
                     payload = turn.result()
@@ -14370,8 +14508,20 @@ async def chief_chat_stream(
                     yield _evt({"type": "error", "detail": "turn failed"})
                     return
                 final_text = payload.get("response")
+                already = "".join(sent)
                 if isinstance(final_text, str) and final_text:
-                    yield _evt({"type": "delta", "text": final_text})
+                    if already:
+                        # The turn stitches its reply onto what streamed
+                        # (_stitch_after_stream); a path that returned
+                        # without it is stitched here, so the rest is
+                        # always a true continuation.
+                        final_text = _stitch_after_stream(already, final_text)
+                        payload = {**payload, "response": final_text}
+                        rest = final_text[len(already):]
+                        if rest:
+                            yield _evt({"type": "delta", "text": rest})
+                    else:
+                        yield _evt({"type": "delta", "text": final_text})
                 yield _evt({"type": "final", "payload": payload})
                 return
         finally:
