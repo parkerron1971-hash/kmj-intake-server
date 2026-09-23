@@ -144,6 +144,16 @@ def supports_sampling(model: str) -> bool:
     return not any(k in m for k in _NO_SAMPLING_MARKERS)
 
 
+# Families that REJECT a forced tool_choice (`any` / `tool` → 400). Only
+# `auto` and `none` are accepted there.
+_NO_FORCED_TOOL_MARKERS = ("opus-5-5", "fable-5-1", "mythos-5-1")
+
+
+def supports_forced_tool_choice(model: str) -> bool:
+    m = (model or "").lower()
+    return not any(k in m for k in _NO_FORCED_TOOL_MARKERS)
+
+
 # Families that accept `output_config.effort` (Opus 4.5 takes low/medium/high
 # only; everything newer takes the full range). Haiku 4.5 and Sonnet 4.5
 # return a 400 for it.
