@@ -1068,63 +1068,144 @@ def _local_figures(item, tz):
     return out
 
 
+# A quantity said in words: voice replies spell numbers out ("about eleven
+# dollars", "eighteen sixty-five in unpaid invoices"), so the digit test
+# above sees no figure at all and a spoken amount would pass as figure-less
+# prose. Money words, big-number words, or a number word before a unit.
+_SPELLED_QUANTITY = re.compile(
+    r"\b(?:dollars?|bucks|cents?|percent|hundreds?|thousands?|millions?|grand)\b"
+    r"|\b(?:%s|half|a couple of|a few|several|dozen)(?:[\s-]+(?:%s))?\s+"
+    r"(?:hours?|minutes?|mins?|days?|weeks?|months?|years?|clients?|customers?|leads?|"
+    r"invoices?|sessions?|appointments?|bookings?|people|seats?|members?|contacts?|times?)\b"
+    % ('|'.join(_NUMBER_WORDS), '|'.join(_NUMBER_WORDS)), re.I)
+
+# Words that open a sentence of advice and are not names ("Step one, lock
+# the date."). Only the streaming check skips them: the review-skip lane
+# keeps treating an unknown capitalised word as a name to prove.
+_STREAM_OPENERS = frozenset('''
+step here here's let let's start pick lock set build run keep make try think that's it's
+sounds great okay alright got good perfect absolutely sure honestly quick then once after
+before while since because instead also plus both either each every another same other
+'''.split())
+
+
+class _SentenceProver:
+    """Checks one sentence at a time against the records a turn had.
+
+    Two callers with two bars. The review-skip lane (fast_lane) may
+    deliver a whole draft unreviewed, so a sentence with nothing to check
+    passes only as a question, an offer or a short aside. The streaming
+    lane (streamable_sentence) only decides what may be SAID BEFORE the
+    review, which still runs on the whole draft; plain advice with no
+    figure, name, record, or claim about the business may go early there.
+    Both hold every figure and name to one record item."""
+
+    def __init__(self, sources, tz=None):
+        # Only what the business's records say. The practitioner's own
+        # words and the capability note prove nothing about her calendar.
+        self.records = [(sid, s['text']) for sid, s in (sources or {}).items()
+                        if s.get('text') and _fast_evidence(sid, s)]
+        self.tz = tz
+        self._figures_of = {}
+
+    def _items(self, sid, text):
+        if sid not in self._figures_of:
+            # A zoned timestamp counts on her clock only: saying the UTC
+            # hour ("3pm" for 15:00+00, 11am in Michigan) is wrong.
+            self._figures_of[sid] = [
+                (_numbers(bare) | _clock_twins(bare) | _duration_twins(bare)
+                 | _local_figures(item, self.tz), item.lower())
+                for item in _record_items(text) if not _HEDGED_ITEM.search(item)
+                for bare in [_ISO_STAMP.sub(' ', item) if self.tz is not None else item]]
+        return self._figures_of[sid]
+
+    def link_ok(self, text):
+        for url in re.findall(r'https?://[^\s<>\]"\)]+', text or ''):
+            url = url.rstrip('.,;:')
+            if not any(url in t for _, t in self.records):
+                return False
+        return True
+
+    def prove(self, sentence, *, stream=False):
+        """(True, record id or None) when the sentence may go, else (False, None)."""
+        sentence = (sentence or '').strip()
+        if not sentence:
+            return True, None
+        if re.search(r'\[\s*ACTION', sentence, re.I) or not self.link_ok(sentence):
+            return False, None
+        if has_completion_claim(sentence) or _DONE_CLAIM.search(_asserted_text(sentence)):
+            return False, None
+        if _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence):
+            return False, None
+        figures = _numbers(sentence)
+        if not figures and _SPELLED_QUANTITY.search(sentence):
+            return False, None
+        names = [n.lower() for n in _fast_lane_names(sentence)
+                 if not (stream and n.lower().replace('’', "'") in _STREAM_OPENERS)]
+        if not figures:
+            # Nothing to check it against. "Your busiest day is Tuesday."
+            # and "Tasha prefers mornings." are claims with no figure in
+            # them — a real name does not prove what is said about her.
+            if sentence.endswith('?') or _OFFER_MARK.search(sentence):
+                return True, None
+            if not names and len(sentence.split()) <= 6 and not re.search(
+                    r"\byou(?:r|'re|’re)?\b", sentence, re.I):
+                return True, None
+            if stream and not names and not _ABOUT_THE_BUSINESS.search(sentence) \
+                    and not _RECORD_NOUN.search(sentence):
+                return True, None
+            return False, None
+        for sid, text in self.records:
+            if any(figures <= nums and all(n in low for n in names)
+                   for nums, low in self._items(sid, text)):
+                return True, sid
+        return False, None
+
+
+def _fast_lane_off():
+    return os.environ.get('CHIEF_REVIEW_FAST_LANE', 'on').strip().lower() in ('off', '0', 'false', 'no')
+
+
 def fast_lane(reply, sources, tz=None):
     """The records that prove a question turn's draft, sentence by sentence,
     or None when the full review must run. Only a turn that wrote nothing
     and opened nothing may take it; the caller checks that."""
-    if not reply or len(reply) > FAST_LANE_MAX_CHARS or os.environ.get(
-            'CHIEF_REVIEW_FAST_LANE', 'on').strip().lower() in ('off', '0', 'false', 'no'):
+    if not reply or len(reply) > FAST_LANE_MAX_CHARS or _fast_lane_off():
         return None
     if has_completion_claim(reply) or _DONE_CLAIM.search(_asserted_text(reply)) \
             or re.search(r'\[\s*ACTION\s*:', reply, re.I):
         return None
-    # Only what the business's records say. The practitioner's own words
-    # and the capability note prove nothing about her calendar.
-    records = [(sid, s['text']) for sid, s in (sources or {}).items()
-               if s.get('text') and _fast_evidence(sid, s)]
-    for url in re.findall(r'https?://[^\s<>\]"\)]+', reply):
-        url = url.rstrip('.,;:')
-        if not any(url in text for _, text in records):
-            return None
-    figures_of = {}
+    prover = _SentenceProver(sources, tz)
+    if not prover.link_ok(reply):
+        return None
     cited = []
     prose = re.sub(r'(?m)^\s*(?:\d+[.)]|[-*•])\s+', '', reply)
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', prose):
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        if _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence):
+        ok, sid = prover.prove(sentence)
+        if not ok:
             return None
-        figures = _numbers(sentence)
-        names = [n.lower() for n in _fast_lane_names(sentence)]
-        if not figures:
-            # Nothing to check it against, so it may only be a question,
-            # an offer, or a short reply that says nothing about her
-            # business. "Your busiest day is Tuesday." is a claim with no
-            # figure in it; so is "Tasha prefers mornings." — a real name
-            # does not prove what is said about her. The reviewer sees both.
-            if sentence.endswith('?') or _OFFER_MARK.search(sentence) or (
-                    not names and len(sentence.split()) <= 6
-                    and not re.search(r"\byou(?:r|'re|’re)?\b", sentence, re.I)):
-                continue
-            return None
-        found = None
-        for sid, text in records:
-            if sid not in figures_of:
-                # A zoned timestamp counts on her clock only: saying the
-                # UTC hour ("3pm" for 15:00+00, 11am in Michigan) is wrong.
-                figures_of[sid] = [
-                    (_numbers(bare) | _clock_twins(bare) | _duration_twins(bare)
-                     | _local_figures(item, tz), item.lower())
-                    for item in _record_items(text) if not _HEDGED_ITEM.search(item)
-                    for bare in [_ISO_STAMP.sub(' ', item) if tz is not None else item]]
-            if any(figures <= nums and all(n in low for n in names) for nums, low in figures_of[sid]):
-                found = sid
-                break
-        if found is None:
-            return None
-        cited.append(found)
+        if sid:
+            cited.append(sid)
     return list(dict.fromkeys(cited))
+
+
+def stream_prover(sources, tz=None):
+    """A prover for one turn's streaming lane, or None when the lane is off
+    (CHIEF_STREAM_SENTENCES=off, or the review-skip kill switch)."""
+    if _fast_lane_off() or os.environ.get('CHIEF_STREAM_SENTENCES', 'on').strip().lower() in (
+            'off', '0', 'false', 'no'):
+        return None
+    return _SentenceProver(sources, tz)
+
+
+def streamable_sentence(prover, sentence):
+    """May this sentence be said before the answer check has read the
+    whole draft? Once said it cannot be taken back, so the bar is the fast
+    lane's: every figure and name in one record, no claim that anything
+    was done, no state of a record, nothing about the business unproved."""
+    if prover is None:
+        return False
+    return prover.prove(re.sub(r'^\s*(?:\d+[.)]|[-*•])\s+', '', sentence or ''), stream=True)[0]
 
 
 async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, business_id, reviewer,
