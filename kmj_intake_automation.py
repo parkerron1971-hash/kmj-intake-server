@@ -240,6 +240,8 @@ from chief_errands import router as chief_errands_router
 app.include_router(chief_errands_router)
 from card_connections import router as card_connections_router
 app.include_router(card_connections_router)
+from link_wallet import router as link_wallet_router
+app.include_router(link_wallet_router)
 from connected_ai import router as connected_ai_router
 app.include_router(connected_ai_router)
 # The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.
