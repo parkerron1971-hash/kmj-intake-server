@@ -381,3 +381,23 @@ def test_callback_retries_a_short_polling_lease_conflict(setup, monkeypatch):
     assert callback(setup, start).status_code == 200
     assert calls == 2
     setup.exchange.assert_not_called()
+
+
+def test_reconnecting_does_not_claim_an_old_verification(setup):
+    seed({'connected_at': 1, 'verified_at': 2})
+    start = begin(setup)
+    callback(setup, start)
+    setup.exchange.side_effect = None
+    setup.exchange.return_value = (200, tokens())
+    result = setup.client.post(BASE + '/complete', json=finish_body(start)).json()
+    assert result['connected_at'] > 2
+    assert result['verified_at'] is None
+
+
+def test_callback_refuses_when_original_owner_lost_access(setup):
+    start = begin(setup)
+    setup.access.side_effect = HTTPException(403, 'Forbidden')
+    assert callback(setup, start).status_code == 400
+    with wallet.Session(BID, UID) as connection:
+        assert 'code' not in connection.state['pending']
+    setup.exchange.assert_not_called()

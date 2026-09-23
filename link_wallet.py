@@ -14,6 +14,7 @@ import secrets
 import time
 from contextlib import contextmanager
 from typing import Literal
+from types import SimpleNamespace
 from urllib.parse import urlencode, quote
 from uuid import UUID, uuid4
 
@@ -162,7 +163,9 @@ def save_tokens(session, data, previous=None):
         raise pilot.PilotError('Link returned an incomplete authorization. Reconnect your account.')
     auth = pilot.tokens(data, previous)
     session.state['auth'] = auth
-    session.state['connected_at'] = session.state.get('connected_at') or time.time()
+    if previous is None:
+        session.state['connected_at'] = time.time()
+        session.state.pop('verified_at', None)
     session.save()
     return auth
 
@@ -339,6 +342,10 @@ def callback(request: Request):
             if OPAQUE.fullmatch(state) and (denied or (0 < len(code) <= 4096 and not re.search(r'[\s<>]', code))):
                 match = rpc('link_wallet_find_oauth', p_state_hash=digest(state))
                 if match:
+                    # Identity comes only from the server-held random-state lookup,
+                    # never callback parameters. Recheck access if ownership changed.
+                    business_access.assert_access(str(match['business_id']),
+                        SimpleNamespace(id=str(match['user_id'])), 'owner')
                     with Session(str(match['business_id']), str(match['user_id'])) as connection:
                         pending = connection.state.get('pending') or {}
                         if (pending.get('expires_at', 0) > time.time()

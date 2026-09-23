@@ -57,7 +57,8 @@ sanitized operational failures are no-store.
 - POST .../connect: danger-scope step-up; starts PKCE/state; returns authorization_url,
   state, a separate browser verifier, and expires_in=600.
 - GET /link/oauth/callback: public provider callback. State hash finds a tenant,
-  the encrypted pending state verifies expiry/binding, and the first callback
+  the stored initiating owner is rechecked, the encrypted pending state verifies
+  expiry/binding, and the first callback
   saves a code (or denial). It never exchanges tokens or changes ownership.
 - POST .../complete with state/verifier: the same authenticated owner polls.
   202 means awaiting callback; 200 means connected. A code is consumed before
