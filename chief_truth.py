@@ -30,7 +30,11 @@ if not logger.handlers:
 # reads every source before it writes a word. Half that keeps the
 # latest results and the most recent context (bounded newest-first
 # below) and drops the tail that was never cited.
-MAX_EVIDENCE_CHARS = 30000
+# 30,000 held the records OR the prose blocks, not both: with the records
+# ranked to survive (2026-09-23), the blueprint and playbook were dropped,
+# and the owner's own "$750 for 90 days" Founders' Table price was withheld
+# as having no evidence. ~12k tokens of evidence on a ~21k-token review.
+MAX_EVIDENCE_CHARS = 50000
 # The review lists every claim with an exact quote. 2,400 tokens was hit on a
 # long ordinary answer (output_tokens == cap in api_usage), which discarded the
 # whole review and replaced the answer with UNVERIFIED_REPLY.
@@ -280,7 +284,38 @@ def _review_json(raw):
 _ABOUT_THE_BUSINESS = re.compile(r"\b(?:you|your|yours|you['’](?:re|ve|ll|d)|we|our|ours|us|my|me)\b|\bI\b", re.I)
 
 
+# A figure given as a ballpark about the world, not this business: "a coach
+# charging $300 an hour typically prices a workshop at $75 to $120 a head",
+# "similar two-day intensives run roughly $800-$1,500 a seat". Asked "can we
+# come up with a better price?", every draft with a benchmark in it was
+# withheld as "claim number has no evidence", and she heard "No action ran
+# ... try again?" three times running (2026-09-23). The hedge is the label:
+# a bare "the current market rate is $175" asserts a fact and stays held
+# (the factual eval's uncited_external_fact case).
+_ESTIMATE_WORDING = re.compile(
+    r"\b(?:typical(?:ly)?|usually|often|generally|roughly|approximately|ballpark|"
+    r"benchmark\w*|similar|comparable|might|could|would|for example|e\.g\.|anywhere from|or so)\b"
+    # A hypothetical third party: "a coach charging $300 an hour", "a salon that ..."
+    r"|\b(?:a|an)\s+\w+\s+(?:charging|who|that|with|at)\b",
+    re.I)
+# A sentence about records is a business fact whatever its wording: "revenue
+# was roughly $900,000" must still be proved.
+_RECORD_NOUN = re.compile(
+    r"\b(?:invoice\w*|revenue|income|sales|profit\w*|balance|payment\w*|paid|owed?|owing|"
+    r"clients?|customers?|contacts?|leads?|bookings?|booked|appointments?|sessions?|"
+    r"subscribers?|members?|donations?|expenses?|ledger|bank|cash)\b", re.I)
+
+
+def _is_general_estimate(claim):
+    text = claim.get('text')
+    return (isinstance(text, str) and claim.get('kind') in ('fact', 'estimate', 'reference')
+            and bool(_numbers(text)) and not _ABOUT_THE_BUSINESS.search(text)
+            and not _RECORD_NOUN.search(text) and bool(_ESTIMATE_WORDING.search(text)))
+
+
 def _is_reference(claim):
+    if _is_general_estimate(claim):
+        return True
     return (claim.get('kind') == 'reference' and isinstance(claim.get('text'), str)
             and not _ABOUT_THE_BUSINESS.search(claim['text']))
 
