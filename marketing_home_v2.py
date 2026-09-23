@@ -16,7 +16,11 @@ renders it with everything that has to be live:
   * the founding-seat flyer is marketing_founder_ad's, with its rules;
   * the film is /assets/film.mp4, the pixel and the first-party
     analytics are the shell's own;
-  * the trial length and the contact address are the shell's sentinels.
+  * the trial length and the contact address are the shell's sentinels;
+  * the structured data for search (Organization, SoftwareApplication with
+    the three plans as offers, FAQPage) is built here at request time from
+    the same dials and the FAQ already on the page, so the prices a search
+    result shows can never drift from the cards (2026-09-22).
 
 Everything inside the room (Fade & Co., Andre, $6,910) is sample data,
 labeled so on the page, and never reads a real business.
@@ -25,7 +29,9 @@ from __future__ import annotations
 
 import datetime
 import html as _html
+import json
 import pathlib
+import re
 
 TEMPLATE_PATH = pathlib.Path(__file__).resolve().parent / "marketing_home_v2.html"
 DESCRIPTION = ("One system runs the whole business: clients, calendar, invoices, books, your site and your "
@@ -107,6 +113,42 @@ def _analytics_scripts() -> str:
     return t[i:j].replace("{{", "{").replace("}}", "}")
 
 
+_FAQ_RE = re.compile(r"<details><summary>(.*?)</summary><p>(.*?)</p></details>", re.S)
+
+
+def _plain(fragment: str) -> str:
+    return " ".join(_html.unescape(re.sub(r"<[^>]+>", " ", fragment)).split())
+
+
+def _jsonld(page: str, dials: dict) -> str:
+    """schema.org for the home page: who we are, what the product costs
+    (the live dials, one Offer per plan, the same names the cards use) and
+    the FAQ exactly as the page answers it. Built from the rendered page,
+    so an answer edited in the concept is the answer search sees."""
+    import marketing_pages as mp
+    faq = []
+    i = page.find('id="faq"')
+    if i != -1:
+        j = page.find("</section>", i)
+        for q, a in _FAQ_RE.findall(page[i:j]):
+            faq.append({"@type": "Question", "name": _plain(q),
+                        "acceptedAnswer": {"@type": "Answer", "text": _plain(a)}})
+    offers = [{"@type": "Offer", "name": name, "price": str(dials[plan]["price_num"]),
+               "priceCurrency": "USD", "url": f"https://mysolutionist.app/start?plan={plan}"}
+              for plan, name in (("starter", "Starter"), ("professional", "Professional"), ("practice", "Solutionist"))]
+    graph = [
+        {"@type": "Organization", "name": "The Solutionist System", "url": "https://mysolutionist.app/",
+         "logo": "https://mysolutionist.app/favicon.png", "email": mp._public_contact_email()},
+        {"@type": "SoftwareApplication", "name": "The Solutionist System",
+         "applicationCategory": "BusinessApplication", "operatingSystem": "Web",
+         "url": "https://mysolutionist.app/", "description": DESCRIPTION, "offers": offers},
+    ]
+    if faq:
+        graph.append({"@type": "FAQPage", "mainEntity": faq})
+    body = json.dumps({"@context": "https://schema.org", "@graph": graph}, ensure_ascii=False, separators=(",", ":"))
+    return '<script type="application/ld+json">' + body.replace("</", "<\\/") + "</script>\n"
+
+
 def render_home_v2() -> str:
     import marketing_founder_ad
     import marketing_pages as mp
@@ -126,4 +168,6 @@ def render_home_v2() -> str:
             .replace("{{APP_URL}}", mp.APP_URL)
             .replace("{{DESCRIPTION}}", _html.escape(DESCRIPTION))
             .replace("{{YEAR}}", str(datetime.date.today().year)))
-    return mp._fill_trial(mp._fill_contact(html))
+    html = mp._fill_trial(mp._fill_contact(html))
+    # after the sentinels are filled, so the FAQ answers carry the real trial length
+    return html.replace("</head>", _jsonld(html, dials) + "</head>", 1)
