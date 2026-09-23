@@ -12878,6 +12878,45 @@ class ChatRequest(BaseModel):
     # ("Let me take a look.") — the reply continues from it instead of
     # opening with a second acknowledgement. Voice surface only.
     spoken_opener: Optional[str] = None
+    # The phone composer's Ask · Do · Build dial (Chief Go, 9/23). A
+    # closed set — anything else is ignored — so it steers the turn
+    # without ever carrying free text into the prompt.
+    intent: Optional[str] = None
+
+
+# What each dial position asks of the turn. Appended to the uncached
+# dynamic tail, so the cached prefix stays byte-identical across them.
+_INTENT_BLOCKS = {
+    "ask": (
+        "\n\nTHE PRACTITIONER'S DIAL IS ON ASK: they want an answer, not an "
+        "action. Answer from what you know and can read. Do not create, send, "
+        "change or delete anything this turn; if the answer is that something "
+        "should be done, say so and offer it — they will switch the dial to "
+        "Do or say go ahead."
+    ),
+    "do": (
+        "\n\nTHE PRACTITIONER'S DIAL IS ON DO: when their message asks for "
+        "something to be done, carry it out with your actions now rather "
+        "than describing how it could be done. A plain question still gets "
+        "a plain answer. Confirm-first rules still apply to anything that "
+        "sends, spends or deletes."
+    ),
+    "build": (
+        "\n\nTHE PRACTITIONER'S DIAL IS ON BUILD: they want something made in "
+        "the background — a flyer, a form and link, an event setup, a page. "
+        "Queue it as one background build with submit_work_order, passing the "
+        "facts you have (the job asks the next question itself), then tell "
+        "them in one sentence that it is building and they can keep talking. "
+        "If what they asked is not something a build makes, say so plainly "
+        "and do it the normal way."
+    ),
+}
+
+
+def _intent_block(intent: Optional[str]) -> str:
+    """The prompt tail for the phone dial. Empty for no dial or any value
+    outside the closed set."""
+    return _INTENT_BLOCKS.get((intent or "").strip().lower(), "")
 
 
 def _spoken_opener_block(opener: Optional[str]) -> str:
@@ -13721,6 +13760,8 @@ async def chief_chat(
                 system = system + chief_models.VOICE_DELIVERY_BLOCK
                 # After the delivery block, in the uncached tail with it.
                 system = system + _spoken_opener_block(req.spoken_opener)
+            # The phone's Ask · Do · Build dial — any lane, uncached tail.
+            system = system + _intent_block(req.intent)
             # The voice confirmation grammar. Set from the SURFACE, not
             # the lane, so a coach turn spoken aloud is still treated as
             # spoken (coaches ride the deep lane and would otherwise slip
