@@ -68,6 +68,20 @@ V2_MAX_TOKENS_DEFAULT = 64000
 # wall, never a second charge for nothing.
 V2_OUTPUT_BUDGET_DEFAULT = 120000
 V2_TEMPERATURE = 0.8
+
+# The builder thinks at HIGH effort on every model. Opus 5 defaults to
+# high; Opus 5.5 defaults to medium, so switching BUILDER_V2_MODEL to it
+# without this would quietly make every build shallower (2026-09-22).
+# Where the model takes no effort setting this adds nothing.
+BUILDER_EFFORT = (os.environ.get("BUILDER_V2_EFFORT") or "high").strip().lower()
+
+
+def _gen_kwargs(model: str, temperature: Optional[float]) -> Dict[str, Any]:
+    """Sampling and effort for one builder call, each only where the
+    model accepts it (a rejected one is a 400, not a no-op)."""
+    import model_ladder
+    return {**model_ladder.sampling_kwargs(model, temperature),
+            **model_ladder.effort_kwargs(model, BUILDER_EFFORT)}
 DOC_MAX_BYTES = 300 * 1024
 
 _ALLOWED_LINK_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
@@ -1005,7 +1019,7 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
                 model=model, max_tokens=max_tokens, system=_INSPECTOR,
                 messages=[{"role": "user", "content": content}],
                 timeout=max(timeout, 180.0),
-                **model_ladder.sampling_kwargs(model, 0.2))
+                **_gen_kwargs(model, 0.2))
 
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="builder_v2_eyes",
@@ -1076,7 +1090,7 @@ def _call(system: str, user: str, business_id: str,
             return _stream_message(
                 client, model=model, max_tokens=max_tokens, system=system,
                 messages=turns, timeout=max(timeout, 900.0),
-                sampling=model_ladder.sampling_kwargs(model, V2_TEMPERATURE))
+                sampling=_gen_kwargs(model, V2_TEMPERATURE))
 
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="builder_v2",
@@ -1110,7 +1124,7 @@ def _call(system: str, user: str, business_id: str,
                 more = _stream_message(
                     client, model=used_model or _model(), max_tokens=_max_tokens(),
                     system=system, messages=turns, timeout=900.0,
-                    sampling=model_ladder.sampling_kwargs(used_model or _model(),
+                    sampling=_gen_kwargs(used_model or _model(),
                                                           V2_TEMPERATURE))
                 _record_spend(spend, used_model or "", getattr(more, "usage", None))
                 try:
