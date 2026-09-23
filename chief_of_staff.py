@@ -11135,14 +11135,29 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
         else:
             chunks.append(f"The {phrase} didn't go through.")
     elif failed:
+        # Each reason ONCE, with how many it covers. Three invoices held
+        # for the same reason read the same paragraph out three times —
+        # "Chief says the same thing 3 to 4 times" (2026-09-23).
+        grouped: Dict[tuple, int] = {}
+        for a, _, r in failed:
+            key = (_humanize_action_type(a), r or "no reason returned")
+            grouped[key] = grouped.get(key, 0) + 1
         per = "; ".join(
-            f"{_humanize_action_type(a)} ({r or 'no reason returned'})"
-            for a, _, r in failed
+            f"{phrase}{f' ×{n}' if n > 1 else ''} ({r})"
+            for (phrase, r), n in grouped.items()
         )
         chunks.append(f"{len(failed)} actions didn't go through: {per}.")
 
-    # Held actions: the read-back, in the practitioner's own terms.
-    chunks.extend(held)
+    # Held actions: the read-back, in the practitioner's own terms — once
+    # per distinct read-back, however many actions share it.
+    held_counts: Dict[str, int] = {}
+    for h in held:
+        held_counts[h] = held_counts.get(h, 0) + 1
+    for h, n in held_counts.items():
+        if n > 1:
+            h = h.replace(" I need your spoken go-ahead", f" ({n} of them) I need your spoken go-ahead", 1) \
+                if " I need your spoken go-ahead" in h else f"{h} ({n} of them)"
+        chunks.append(h)
 
     if failed:
         chunks.append("Check the actions panel below for full details.")
