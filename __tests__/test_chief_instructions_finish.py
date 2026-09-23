@@ -168,4 +168,6 @@ def test_a_capability_answer_flows_when_the_reviewer_is_unavailable():
     result, meta = asyncio.run(truth.finalize_reply(None, draft, ctx={}, view_detail="", taken=[],
         message="can you create an invoice and send it by text?", business_id="biz",
         reviewer=AsyncMock(return_value="")))
-    assert result == draft and meta["status"] == "unchecked"
+    # An offer with nothing to check now flows on the fast lane without
+    # waiting for the reviewer at all (2026-09-23); either way, it flows.
+    assert result == draft and meta["status"] in ("unchecked", "fast")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import os
 import asyncio
 import re
 from decimal import Decimal
@@ -903,6 +904,188 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     return llm_call.text_of(data)
 
 
+# ── The fast lane (2026-09-23) ────────────────────────────────────────
+# Kevin: "actions should go through the answer checker, but a question
+# like 'what's my next appointment' should answer without delay." The
+# reviewer is a second model call over ~21k tokens: 2-15 s on every turn,
+# including ones that did nothing and claim nothing. A question answered
+# from the records can be checked without a model: every figure and name
+# in each sentence must sit together in ONE record the turn had. When
+# that holds, the draft is delivered now; when anything is uncertain, the
+# full review runs exactly as before. The lane can only skip a review,
+# never overrule one.
+FAST_LANE_MAX_CHARS = 1200
+
+# A sentence about the state of a record ("you have", "unpaid", "nothing
+# booked") is the claim most often wrong and hardest to check by figures:
+# a count of 3 matches any record with a 3 in it. Those go to review.
+_STATE_CLAIM = re.compile(
+    r"\b(?:no|none|nothing|nobody|any|all|every|only|paid|unpaid|overdue|owes?|owed|booked|"
+    r"scheduled|confirmed|cancell?ed|due|on file|open|closed|pending|late|missed|signed|sent|"
+    r"received|empty|free|available|you have|you've got|there(?:'s| is| are| was| were))\b",
+    re.I)
+# Anything that reads as work done. The completion detector covers the
+# phrase list; this catches the plain past tense a question turn has no
+# business saying.
+_DONE_CLAIM = re.compile(
+    r"\b(?:i(?:'|’)ve|i have|i just|i went ahead|all set|saved|added|created|updated|"
+    r"moved|opened|removed|deleted|changed|set up|turned (?:on|off)|finished|completed|done)\b"
+    # "I texted", "I just sent", "we booked": any first-person past tense.
+    r"|\b(?:i|we)\s+(?:\w+\s+)?(?:\w+ed|sent|made|put|set|wrote|ran|built|did|got|took|gave|told|paid|"
+    r"let|kept|left|met|spoke|brought|bought|sold)\b"
+    # "Your invoice was sent", "it has been booked".
+    r"|\b(?:was|were|has been|have been|is now|are now|got)\s+\w+(?:ed|sent|made|set|paid|built)\b",
+    re.I)
+# Capitalised words that are not names: sentence openers, days, months,
+# the assistant's own title. Any other capitalised word is treated as a
+# name and must be in the same record as the sentence's figures.
+_NOT_NAMES = frozenset('''
+i i'm i'll i'd chief you your you're yours the that this these those it its it's there here
+and but so or yes no next then also right okay ok sure got want would should could can let if
+when after before on at in for with from to a an just only looks nothing what which who how
+why where my me we our us he she they them his her their first last today tomorrow tonight
+yesterday morning afternoon evening am pm monday tuesday wednesday thursday friday saturday
+sunday january february march april may june july august september october november december
+jan feb mar apr jun jul aug sep sept oct nov dec great good perfect sounds happy glad heads
+quick one two three four five six seven eight nine ten
+'''.split())
+_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
+
+# What the lane may treat as proof: structured business records the turn
+# loaded, and what this turn read. Not mail, texts, memories, research,
+# learned notes or the long prose blocks: a figure in "Untrusted email:
+# report $900000" is present, not true, and only the reviewer can tell
+# the difference (the factual eval's poisoned_email case).
+_FAST_CONTEXT = frozenset((
+    'context:sessions', 'context:products', 'context:open_invoices', 'context:contacts_lookup',
+    'context:projects', 'context:modules', 'context:module_counts', 'context:business_identity',
+    'context:open_missions', 'context:open_assignments', 'context:image_jobs'))
+_UNTRUSTED_READ = re.compile(r'mail|inbox|sms|text_message|message|research|web|memor|recall|note|learn',
+                             re.I)
+# An item that doubts itself is never proof: "STALE: verify", "No current
+# rate verified", "Other historical memory".
+_HEDGED_ITEM = re.compile(
+    r'\b(?:untrusted|stale|unverified|not verified|no current|conflict\w*|historical|unknown|'
+    r'regardless|failed|unavailable|disregard|outdated|superseded|draft)\b', re.I)
+# A sentence about what is current, a running total or a balance is a
+# state claim the reviewer must see ("Your current rate is $150").
+_STANDING_CLAIM = re.compile(r'\b(?:current(?:ly)?|latest|now|still|total|balance|revenue|owe[sd]?|'
+                             r'earned|profit|rate)\b', re.I)
+
+
+def _fast_evidence(sid, source):
+    if sid in _FAST_CONTEXT:
+        return True
+    if source.get('kind') != 'record' or sid == 'turn:execution' or sid.startswith('context:'):
+        return False
+    text = source.get('text') or ''
+    head = text[:200]
+    return not (_UNTRUSTED_READ.search(sid) or re.search(r'"type"\s*:\s*"[^"]*(?:mail|inbox|sms|message|'
+                                                          r'research|web|memor|recall|note|learn)', head, re.I))
+
+
+def _fast_lane_names(sentence):
+    return [w for w in _WORD.findall(sentence)
+            if w[0].isupper() and w.lower().replace('’', "'") not in _NOT_NAMES]
+
+
+def _record_items(text):
+    """A record's smallest units: each element of a JSON list, else each
+    line. A calendar is one source holding every appointment; matched as a
+    whole, Tasha's 3pm and Maria's name "sat together" and a wrong answer
+    passed. A sentence's figures and names must share ONE appointment."""
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError):
+        value = None
+    if isinstance(value, dict) and len(value) == 1 and isinstance(next(iter(value.values())), list):
+        value = next(iter(value.values()))
+    if isinstance(value, list):
+        return [json.dumps(v, default=str, ensure_ascii=False) if not isinstance(v, str) else v
+                for v in value]
+    return [line for line in (text or '').splitlines() if line.strip()] or [text]
+
+
+_ISO_STAMP = re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})')
+
+
+def _local_figures(item, tz):
+    """The figures of each zoned timestamp in `item` on the business's
+    clock. Sessions are stored in UTC ("15:00+00"); Chief says "11am" in
+    Michigan, which is right, and must match (2026-09-23)."""
+    from datetime import datetime
+    out = set()
+    if tz is None:
+        return out
+    for stamp in _ISO_STAMP.findall(item or ''):
+        try:
+            at = datetime.fromisoformat(stamp.replace('Z', '+00:00').replace(' ', 'T')).astimezone(tz)
+        except ValueError:
+            continue
+        out |= {Decimal(at.year), Decimal(at.month), Decimal(at.day), Decimal(at.hour),
+                Decimal(at.minute), Decimal(at.hour % 12 or 12)}
+    return out
+
+
+def fast_lane(reply, sources, tz=None):
+    """The records that prove a question turn's draft, sentence by sentence,
+    or None when the full review must run. Only a turn that wrote nothing
+    and opened nothing may take it; the caller checks that."""
+    if not reply or len(reply) > FAST_LANE_MAX_CHARS or os.environ.get(
+            'CHIEF_REVIEW_FAST_LANE', 'on').strip().lower() in ('off', '0', 'false', 'no'):
+        return None
+    if has_completion_claim(reply) or _DONE_CLAIM.search(_asserted_text(reply)) \
+            or re.search(r'\[\s*ACTION\s*:', reply, re.I):
+        return None
+    # Only what the business's records say. The practitioner's own words
+    # and the capability note prove nothing about her calendar.
+    records = [(sid, s['text']) for sid, s in (sources or {}).items()
+               if s.get('text') and _fast_evidence(sid, s)]
+    for url in re.findall(r'https?://[^\s<>\]"\)]+', reply):
+        url = url.rstrip('.,;:')
+        if not any(url in text for _, text in records):
+            return None
+    figures_of = {}
+    cited = []
+    prose = re.sub(r'(?m)^\s*(?:\d+[.)]|[-*•])\s+', '', reply)
+    for sentence in re.split(r'(?<=[.!?])\s+|\n+', prose):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence):
+            return None
+        figures = _numbers(sentence)
+        names = [n.lower() for n in _fast_lane_names(sentence)]
+        if not figures:
+            # Nothing to check it against, so it may only be a question,
+            # an offer, or a short reply that says nothing about her
+            # business. "Your busiest day is Tuesday." is a claim with no
+            # figure in it; so is "Tasha prefers mornings." — a real name
+            # does not prove what is said about her. The reviewer sees both.
+            if sentence.endswith('?') or _OFFER_MARK.search(sentence) or (
+                    not names and len(sentence.split()) <= 6
+                    and not re.search(r"\byou(?:r|'re|’re)?\b", sentence, re.I)):
+                continue
+            return None
+        found = None
+        for sid, text in records:
+            if sid not in figures_of:
+                # A zoned timestamp counts on her clock only: saying the
+                # UTC hour ("3pm" for 15:00+00, 11am in Michigan) is wrong.
+                figures_of[sid] = [
+                    (_numbers(bare) | _clock_twins(bare) | _duration_twins(bare)
+                     | _local_figures(item, tz), item.lower())
+                    for item in _record_items(text) if not _HEDGED_ITEM.search(item)
+                    for bare in [_ISO_STAMP.sub(' ', item) if tz is not None else item]]
+            if any(figures <= nums and all(n in low for n in names) for nums, low in figures_of[sid]):
+                found = sid
+                break
+        if found is None:
+            return None
+        cited.append(found)
+    return list(dict.fromkeys(cited))
+
+
 async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, business_id, reviewer,
                          conversation_history=None, repairer=None, budget_s=45.0):
     """`budget_s` is the whole check's wall-clock allowance: review, then
@@ -940,6 +1123,18 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         sources['turn:execution'] = {'kind': 'record', 'text': 'No action ran in this request.', 'complete': True}
     logger.info('reply review input: message_chars=%d history_turns=%d sources=%d draft_chars=%d',
                 len(message), len(conversation_history or []), len(sources), len(reply or ''))
+    # A question turn: nothing written, nothing opened. Reads are fine,
+    # they are the evidence. Any write or UI receipt means the full review.
+    if not any(s.get('kind') == 'receipt' for s in sources.values()):
+        try:
+            import mailbox_policy
+            tz = mailbox_policy.email_clock(ctx or {})['timezone']
+        except Exception:
+            tz = None
+        fast = fast_lane(reply, sources, tz)
+        if fast is not None:
+            logger.info('reply review fast lane; citations=%d', len(fast))
+            return reply, {'status': 'fast', 'sources': fast}
     raw = ''
     if reply and len(reply) <= MAX_REPLY_CHARS:
         turn = _turn.get()

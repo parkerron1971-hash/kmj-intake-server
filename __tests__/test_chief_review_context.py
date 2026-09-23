@@ -89,7 +89,9 @@ def test_earlier_assistant_completion_is_not_execution_evidence(kind):
     assert metadata['status'] == 'withheld'
 
 
-def test_reviewer_cannot_add_a_gap_that_was_never_in_the_answer():
+def test_reviewer_cannot_add_a_gap_that_was_never_in_the_answer(monkeypatch):
+    # This pins the reviewer's contract; the fast lane would skip it.
+    monkeypatch.setenv('CHIEF_REVIEW_FAST_LANE', 'off')
     draft = 'Let us work through this.'
     result, metadata = finalize(draft, review(claim('You paid the invoice', gap='No receipt')))
     assert result == draft
