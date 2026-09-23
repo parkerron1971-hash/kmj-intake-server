@@ -379,7 +379,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
                 if claim['kind'] == 'action':
                     return 'unsupported', [], 'action claim without a write receipt'
-                if _numbers(text_):
+                if _numbers(text_) - _practitioner_figures(sources):
                     return 'unsupported', [], _claim_fail('claim number has no evidence', text_)
                 gaps.append('claim without support: %s (%s)' % (text_.strip()[:80], why))
                 # A prose gap must not hide a bad citation/figure later in the
@@ -394,7 +394,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # figures must still match exactly.
             if _squash(quote) not in _squash(source['text']):
                 return 'unsupported', [], _claim_fail('quote is not in the cited source', text_)
-            quoted = _numbers(quote) | _clock_twins(quote)
+            quoted = _numbers(quote) | _clock_twins(quote) | _duration_twins(quote)
             quoted_all = _number_list(quote)
             source_all = _number_list(source['text'])[:16]
             # A figure the claim did not quote is fine when it is the exact
@@ -614,6 +614,7 @@ def _figures(text):
         out.append(str(h))
         out.append(str(mi))
     rest = _spoken_dates_as_figures(_DOCUMENT_NAME.sub(' ', rest))
+    rest = _UNIT_GLUE.sub(r'\1 \2', rest)
     return out + _FIGURE.findall(_IDENTIFIER.sub(' ', rest))
 
 
@@ -628,6 +629,67 @@ def _clock_twins(text):
         if h < 12:
             twins.add(Decimal(h + 12))
     return twins
+
+
+# A measure written with its unit glued on: "54in", "360min", "2hrs".
+# The identifier rule above dropped it as letters-and-digits, so a
+# receipt reading "Braids (54in Hair) ... (360 min)" held no 54 and
+# "54 inch hair" was withheld (2026-09-23). Only a known unit after a
+# stand-alone number splits off; "a54in" and hashes stay identifiers.
+_UNIT_GLUE = re.compile(
+    r'(?<![\w.-])(\d+(?:\.\d+)?)(in|inch|inches|min|mins|hr|hrs|ft|lbs?|oz|cm|mm|kg)\b', re.I)
+
+# A duration: "150 min", "2.5 hours", "6 hrs". Receipts write minutes,
+# people say hours.
+_DURATION = re.compile(
+    r'(?<![\w.])(\d+(?:\.\d+)?)\s*-?\s*(min(?:ute)?s?|h(?:ou)?rs?|hours?)\b', re.I)
+
+
+def _duration_twins(text):
+    """The other unit a quote's durations can be said in. A receipt of
+    "(360 min)" is "6 hours" in the draft, and "2.5 hours" is "150 min".
+    Seven replies in one evening were withheld as "claim number 6 is not
+    in the quote" while a stylist entered her service menu by voice, each
+    one right (2026-09-23). Only whole minutes and quarter hours: 20 min
+    is not a figure anyone says as 0.333 hours."""
+    twins = set()
+    for value, unit in _DURATION.findall(_UNIT_GLUE.sub(r'\1 \2', text or '')):
+        n = Decimal(value)
+        if unit.lower().startswith('m'):
+            hours = n / 60
+            if (hours * 4) == (hours * 4).to_integral_value():
+                twins.add(hours.normalize())
+        else:
+            minutes = n * 60
+            if minutes == minutes.to_integral_value():
+                twins.add(minutes.normalize())
+    return twins
+
+
+_NUMBER_WORDS = {w: i for i, w in enumerate((
+    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+    'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+    'eighteen', 'nineteen', 'twenty'))}
+_NUMBER_WORDS.update({'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60, 'ninety': 90})
+_NUMBER_WORD = re.compile(r'\b(%s)\b' % '|'.join(_NUMBER_WORDS), re.I)
+
+
+def _practitioner_figures(sources):
+    """Every figure the practitioner said in this conversation, in digits
+    or in words ("a two-hour appointment at 3:30"), with the other unit of
+    each duration. Restating them in an explanation ("a 2-hour style won't
+    be bookable after 3:30") is not a business figure the draft made up:
+    with nothing to cite, that claim reaches them named as unverified
+    instead of being withheld (2026-09-23). A record-backed claim is not
+    loosened: its figures still have to be in its quote."""
+    out = set()
+    for source in (sources or {}).values():
+        if source.get('kind') != 'conversation' or source.get('role') != 'user':
+            continue
+        text = source.get('text') or ''
+        worded = _NUMBER_WORD.sub(lambda m: ' %d ' % _NUMBER_WORDS[m.group(1).lower()], text)
+        out |= _numbers(text) | _numbers(worded) | _duration_twins(worded) | _clock_twins(text)
+    return out
 
 
 def _is_sum_of(target, nums, max_terms=8):
