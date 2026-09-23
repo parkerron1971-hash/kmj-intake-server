@@ -3310,6 +3310,36 @@ def _owner_direction_evidence(ctx: Dict[str, Any]) -> Dict[str, Any]:
             and bool(design.get("fonts_locked"))}
 
 
+def _study_inspiration_sites(business_id: str, ctx: Dict[str, Any]) -> None:
+    """The sites pasted into the quick brief get the same study the Design
+    Session gives a pasted link: screenshots at phone and desktop width
+    read by a vision model, saved to the site's design notes (discovery
+    dossier). Until 2026-09-22 they only got the HTML/CSS palette scrape
+    below, which feeds this compose and never reached the Blueprint or
+    the builder. Fail-soft; a URL already studied cleanly is not studied
+    again."""
+    try:
+        import discovery
+        prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+        urls = [u.strip() for u in (prefs.get("inspiration_urls") or [])
+                if isinstance(u, str) and u.strip()][:3]
+        if not urls:
+            return
+        dossier = discovery.get_dossier(business_id) or {}
+        done = {r.get("url") for r in ((dossier.get("artifacts") or {}).get("references") or [])
+                if isinstance(r, dict) and not r.get("error")}
+        why = str(prefs.get("inspiration_notes") or "").strip()[:200]
+        for url in urls:
+            if url in done:
+                continue
+            entry = discovery.study_reference(business_id, url, "love", why)
+            if entry.get("error"):
+                logger.info(f"[composer] {business_id[:8]} inspiration study failed "
+                            f"for {url[:80]}: {str(entry['error'])[:80]}")
+    except Exception as e:
+        logger.warning(f"[composer] inspiration study skipped: {type(e).__name__}: {e}")
+
+
 def _maybe_analyze_references(business_id: str,
                               ctx: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Run reference_analyzer over site_prefs.inspiration_urls when the
@@ -3847,6 +3877,10 @@ def compose_site(business_id: str, brief_notes: str = "",
     # both the DRL signal pass and the DRO author see the evidence.
     _report_progress(progress_cb, 15, "Listening to your style words")
     ref_analysis = _maybe_analyze_references(business_id, ctx)
+    if progress_cb is not None:
+        # A build job only: each study is two page loads and a vision call.
+        _report_progress(progress_cb, 17, "Looking at the sites you love")
+        _study_inspiration_sites(business_id, ctx)
 
     # Arc 6 — the owner's creative brief flows into DRO authoring on the
     # SINGLE compose path too (directions are opt-in, not a prerequisite).

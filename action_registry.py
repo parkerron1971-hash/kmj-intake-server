@@ -401,6 +401,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "device, but never reaches a client, so it is not the "
                                       "client-facing send class B exists for"),
     "generate_image":         _w("C", "pays for image generation and saves a private original; explicit requests only"),
+    "study_website":          _w("A", "screenshots a public website at phone and desktop width, reads its design with a vision model, and saves the lessons to this business's site design notes (discovery dossier); no publishing, no site change"),
     "capture_website_references": _w("A", "captures a public website and logo into the authenticated business private image gallery; no publishing or paid generation"),
     "find_images":            _r("reads the authenticated business image gallery", sensitive=True),
     "plan_content":           _w("A", "adds a planned post to settings.content_calendar"),

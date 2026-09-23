@@ -102,6 +102,33 @@ class PublicFetcher:
         raise ValueError('Too many logo redirects.')
 
 
+async def _guarded_context(browser, fetcher, viewport):
+    """A browser context whose every request goes through the public-only
+    fetcher: no private addresses, no redirects into them, no second
+    network path (sockets, peers, workers)."""
+    context = await browser.new_context(viewport=viewport, device_scale_factor=1,
+        accept_downloads=False, service_workers='block')
+    # Keep page code on the intercepted HTTP surface; no peer/UDP transports
+    # or worker globals that could open a second, unguarded network path.
+    await context.add_init_script('''for (const name of [
+        'RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport',
+        'Worker', 'SharedWorker', 'WebSocket']) {
+        Object.defineProperty(globalThis, name, {value: undefined, configurable: false, writable: false});
+    }''')
+    async def route_request(route):
+        request = route.request
+        if request.method != 'GET' or request.resource_type not in ('document', 'stylesheet', 'image', 'font', 'script'):
+            return await route.abort()
+        try:
+            status, headers, raw = await fetcher.one(request.url)
+            await route.fulfill(status=status, headers=headers, body=raw)
+        except (ValueError, OSError, httpx.HTTPError, TimeoutError):
+            await route.abort()
+    await context.route('**/*', route_request)
+    await context.route_web_socket('**/*', lambda ws: ws.close())
+    return context
+
+
 async def capture_website(url: str, *, include_logo=True):
     """One desktop viewport and the best visible logo; no AI/provider generation."""
     from playwright.async_api import async_playwright
@@ -113,26 +140,7 @@ async def capture_website(url: str, *, include_logo=True):
         async with asyncio.timeout(45), async_playwright() as pw:
             browser = await pw.chromium.launch()
             try:
-                context = await browser.new_context(viewport=VIEWPORT, device_scale_factor=1,
-                    accept_downloads=False, service_workers='block')
-                # Keep page code on the intercepted HTTP surface; no peer/UDP transports
-                # or worker globals that could open a second, unguarded network path.
-                await context.add_init_script('''for (const name of [
-                    'RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport',
-                    'Worker', 'SharedWorker', 'WebSocket']) {
-                    Object.defineProperty(globalThis, name, {value: undefined, configurable: false, writable: false});
-                }''')
-                async def route_request(route):
-                    request = route.request
-                    if request.method != 'GET' or request.resource_type not in ('document', 'stylesheet', 'image', 'font', 'script'):
-                        return await route.abort()
-                    try:
-                        status, headers, raw = await fetcher.one(request.url)
-                        await route.fulfill(status=status, headers=headers, body=raw)
-                    except (ValueError, OSError, httpx.HTTPError, TimeoutError):
-                        await route.abort()
-                await context.route('**/*', route_request)
-                await context.route_web_socket('**/*', lambda ws: ws.close())
+                context = await _guarded_context(browser, fetcher, VIEWPORT)
                 page = await context.new_page()
                 context.on('page', lambda other: asyncio.create_task(other.close()) if other != page else None)
                 response = await page.goto(url, wait_until='domcontentloaded', timeout=25000)
@@ -173,3 +181,74 @@ async def capture_website(url: str, *, include_logo=True):
                 await browser.close()
     finally:
         await fetcher.close()
+
+
+async def capture_viewports(url: str, widths=(390, 1440), height: int = 900):
+    """JPEG screenshots of one public page at each width, through the
+    same guarded context as capture_website. Raises ValueError on a
+    private address, a login page, or a page that will not open."""
+    from playwright.async_api import async_playwright
+
+    url = public_url(url)
+    shots = []
+    fetchers = []
+    try:
+        async with asyncio.timeout(60), async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            try:
+                for width in widths:
+                    # Each width loads the page afresh: its own resource budget.
+                    fetcher = PublicFetcher()
+                    fetchers.append(fetcher)
+                    context = await _guarded_context(browser, fetcher, {'width': width, 'height': height})
+                    try:
+                        page = await context.new_page()
+                        context.on('page', lambda other: asyncio.create_task(other.close()) if other != page else None)
+                        response = await page.goto(url, wait_until='domcontentloaded', timeout=25000)
+                        if not response or response.status >= 400:
+                            raise ValueError('The public website could not be opened.')
+                        await page.evaluate('() => Promise.race([document.fonts.ready, new Promise(r => setTimeout(r, 2500))])')
+                        await page.wait_for_timeout(1200)
+                        if await page.locator('input[type=password]').count():
+                            raise ValueError('This page requires a login. Use a public page instead.')
+                        shots.append(await page.screenshot(type='jpeg', quality=55, animations='disabled'))
+                    finally:
+                        await context.close()
+            finally:
+                await browser.close()
+    finally:
+        for fetcher in fetchers:
+            await fetcher.close()
+    return shots
+
+
+def capture_viewports_sync(url: str, widths=(390, 1440), height: int = 900):
+    """capture_viewports for sync callers (a threadpool route, a build
+    job). Runs on its own event loop in a worker thread, so it is safe
+    whether or not the caller is inside a running loop."""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, capture_viewports(url, widths, height)).result(timeout=90)
+
+
+async def fetch_public_page(url: str, max_redirects: int = 5):
+    """(status, text) of one public page, following redirects only to
+    other public addresses. The page-text twin of capture_viewports."""
+    fetcher = PublicFetcher()
+    try:
+        url = public_url(url)
+        for _ in range(max_redirects + 1):
+            status, headers, raw = await fetcher.one(url)
+            if 300 <= status < 400 and headers.get('location'):
+                url = headers['location']
+                continue
+            return status, raw.decode('utf-8', errors='replace')
+        raise ValueError('Too many redirects.')
+    finally:
+        await fetcher.close()
+
+
+def fetch_public_page_sync(url: str, max_redirects: int = 5):
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, fetch_public_page(url, max_redirects)).result(timeout=60)

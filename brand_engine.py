@@ -1397,14 +1397,19 @@ def learn_from_url(business_id: str, url: str) -> Dict[str, Any]:
     proposal. Returns the kit (not yet saved). Frontend confirms then calls save."""
     if not url or not url.startswith(("http://", "https://")):
         return {"ok": False, "error": "Invalid URL"}
+    # Public addresses only, redirects included (2026-09-22: this fetched
+    # with follow_redirects and no address check, so a link or a redirect
+    # to an internal address was read by the server).
     try:
-        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-            page = client.get(url)
-        if page.status_code != 200:
-            return {"ok": False, "error": f"Could not fetch URL: {page.status_code}"}
-        html_snippet = page.text[:8000]
+        from website_image_references import fetch_public_page_sync
+        status, text = fetch_public_page_sync(url)
+        if status != 200:
+            return {"ok": False, "error": f"Could not fetch URL: {status}"}
+        html_snippet = text[:8000]
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     except Exception as e:
-        return {"ok": False, "error": f"Fetch failed: {e}"}
+        return {"ok": False, "error": f"Fetch failed: {type(e).__name__}"}
 
     # Defuse action-tag syntax before the model ever sees it.
     #
