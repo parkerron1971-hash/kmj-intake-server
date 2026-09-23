@@ -82,6 +82,10 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # against. When a new model ships, its row lands here BEFORE any
     # engine adopts it.
     "claude-opus-5":     (500.0, 2500.0),
+    # Opus 5.5 — $4/MTok in, $20/MTok out (claude-api skill table,
+    # 2026-09-22). Without its own row it matched "claude-opus-5" above
+    # and every builder call booked 25% high.
+    "claude-opus-5-5":   (400.0, 2000.0),
     # Opus 4.5–4.8 — $5/MTok in, $25/MTok out
     "claude-opus-4-8":   (500.0, 2500.0),
     "claude-opus-4-7":   (500.0, 2500.0),

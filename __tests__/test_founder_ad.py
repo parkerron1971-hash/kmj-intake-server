@@ -54,11 +54,12 @@ def test_the_flyer_carries_the_live_deal(seats):
     prices = pricing_config.tier_price_cents()
     price, lst = prices["founder"] // 100, prices["professional"] // 100
     assert 'data-left="43"' in seg and "<b>43</b> of 50 seats left" in seg
-    assert f'<span class="fad-dollar">$</span>{price}<span class="fad-per">/mo</span>' in seg
-    assert f"Professional is ${lst}" in seg
-    assert f"${lst - price} a month less than the list price" in seg
-    assert f"{pricing_config.founder_credits():,} AI actions a month" in seg
-    assert 'href="/start?plan=founder"' in seg and "Take a founding seat" in seg
+    # Kevin, 2026-09-22: the flyer is the founding TICKET; seven are taken, so this is seat 08
+    assert 'class="fst fst-pop"' in seg
+    assert f"<b>${price}<small>/mo</small></b><s>list ${lst}</s>" in seg
+    assert "Seat 08 &middot; open" in seg and "Claim seat 08" in seg and "N&ordm; 08 / 50" in seg
+    assert f"{pricing_config.founder_credits():,}</b> AI actions a month" in seg
+    assert 'href="/start?plan=founder"' in seg
     # a real dialog, closed until the script says otherwise
     assert 'role="dialog"' in seg and 'aria-modal="true"' in seg
     assert 'aria-labelledby="founderAdTitle"' in seg and 'id="founderAdTitle"' in seg
@@ -69,8 +70,23 @@ def test_the_flyer_carries_the_live_deal(seats):
     assert 'id="founderAdCard" tabindex="-1"' in seg
     # the strip and the flyer read one query
     assert 'id="founderStrip"' in html and 'data-left="43"' in html[html.index('id="founderStrip"'):][:200]
-    # styles and script ride with it
-    assert ".fad-card{" in html and "id=\"founderAdCta\"" in html
+    # styles and script ride with it; the ticket's styles too, for the strip as well
+    assert ".fad-card{" in html and "id=\"founderAdCta\"" in html and ".fst{" in html
+
+
+def test_the_ticket_numbers_its_seats_and_stays_honest():
+    """The ticket carries the NEXT seat's number, never a claim the page
+    cannot back (no anchor, no sample figures), and its barcode is drawn
+    server-side so it needs no script."""
+    n = {"limit": 50, "left": 50, "next": 1, "pct": 0, "price": 99, "list_price": 149, "credits": 6000}
+    t = fad.ticket_html(n, popup=False)
+    assert "Seat 01 &middot; open" in t and "Claim seat 01" in t and "<b>50</b> of 50 seats left" in t
+    assert 'id="founderAdCta"' not in t and "data-fad-close" not in t, "only the popup copy is a dialog"
+    assert t.count("<i style=\"width:") == 34
+    for bad in ("Hedera", "sample", "verify"):
+        assert bad not in t
+    p = fad.ticket_html({**n, "left": 3, "next": 48}, popup=True)
+    assert "Claim seat 48" in p and 'id="founderAdTitle"' in p and "data-fad-close" in p
 
 
 # ─── 2. gone when the deal is gone ───────────────────────────────────
@@ -137,6 +153,8 @@ def test_the_script_waits_remembers_and_can_be_forced():
     assert "cta.addEventListener('click', remember)" in s
     assert "somethingElseIsOpen" in s and "videoModal" in s and "mobileMenu" in s
     assert "e.key === 'Escape'" in s
+    # on the home it waits for the visitor to reach the pricing section, with a backstop
+    assert "document.getElementById('pricing')" in s and f"setTimeout(open, {fad.PRICING_WAIT_MS})" in s
 
 
 # ─── 5. no stray words ───────────────────────────────────────────────

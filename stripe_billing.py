@@ -511,7 +511,8 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     # it; the founding member you'd have to claw back costs more in trust
     # than the seat.)
     plan_key = (body.plan or "").strip().lower()
-    if plan_key.startswith("founder") or price_id in _founder_price_ids():
+    is_founder = plan_key.startswith("founder") or price_id in _founder_price_ids()
+    if is_founder:
         limit = _founder_seat_limit()
         taken = await _founder_seats_taken()
         if taken >= limit:
@@ -550,12 +551,24 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         # Echo business_id in metadata so the webhook can resolve back
         # even if the customer object's metadata is missing it.
         "subscription_data": _subscription_data(biz, user, skip_trial=bool(body.skip_trial)),
-        "metadata": {
-            "business_id":  biz["id"],
-            "auth_user_id": user.id,
-        },
+        "metadata": _checkout_metadata(biz, user, price_id, is_founder),
     })
     return {"url": session.get("url"), "id": session.get("id")}
+
+
+def _checkout_metadata(biz, user, price_id: str, is_founder: bool) -> Dict[str, str]:
+    """The Checkout Session's own metadata. A founder checkout carries
+    founder_seat=1 so the success page can hand the new holder their
+    Founding Charter. The charter's copy is the monthly seat, so an
+    annual founder price says so and gets the plain page instead of a
+    charter that would quote the wrong cadence."""
+    meta = {"business_id": biz["id"], "auth_user_id": user.id}
+    if is_founder:
+        meta["founder_seat"] = "1"
+        annual = (os.environ.get("STRIPE_PRICE_ID_FOUNDER_ANNUAL") or "").strip()
+        if annual and price_id == annual:
+            meta["founder_interval"] = "year"
+    return meta
 
 
 # ─── Prepaid credit packs (Pricing v2 Phase C, 2026-07-12) ────────────
@@ -831,9 +844,69 @@ async def billing_success(session_id: Optional[str] = None,
         body = ("<p>Your payment method takes a little longer to clear. We'll "
                 "switch your account on the moment it does &mdash; no action "
                 "needed from you.</p>")
+    elif (sess and not credits and mode == "subscription"
+          and _is_founder_charter_session(sess)):
+        # A founding seat that went through: the holder gets their
+        # Founding Charter. Any failure building it falls through to the
+        # plain page below, never an error.
+        try:
+            return await _founder_charter_page(sess)
+        except Exception as e:
+            logger.warning(f"founder charter page failed, plain page instead: {e}")
 
     return _billing_page(title="Subscription started", eyebrow=eyebrow,
                          heading=heading, body_html=body)
+
+
+def _is_founder_charter_session(sess: Dict[str, Any]) -> bool:
+    """A founder-seat checkout (create_checkout marks it) on the monthly
+    founder price, the only cadence the charter's copy describes."""
+    meta = sess.get("metadata") or {}
+    return (str(meta.get("founder_seat") or "") == "1"
+            and str(meta.get("founder_interval") or "") != "year")
+
+
+async def _founder_charter_page(sess: Dict[str, Any]) -> HTMLResponse:
+    """The Founding Charter for a finished founder checkout. Every value
+    on it is read, not typed: the business row, the live founder count,
+    the pricing dials. Raises on anything missing; the caller falls back
+    to the plain success page."""
+    import founder_charter
+    import marketing_pages
+    import pricing_config
+
+    meta = sess.get("metadata") or {}
+    business_id = str(meta.get("business_id") or "").strip()
+    if not business_id:
+        raise ValueError("founder session without a business_id")
+    biz = await _load_business(business_id)
+
+    limit = _founder_seat_limit()
+    taken = await _founder_seats_taken()
+    # The webhook that writes the founder price onto the business can
+    # land after Stripe redirects the tab here. Until it does, this seat
+    # is not in the count yet, so it is the next one.
+    if (biz.get("subscription_plan") or "") not in _founder_seat_price_ids():
+        taken += 1
+    seat = min(max(taken, 1), max(limit, 1))
+
+    prices = pricing_config.tier_price_cents()
+    trial = bool(sess.get("subscription") and sess.get("amount_total") == 0)
+    html = founder_charter.render_page(
+        {
+            "business_name": biz.get("name") or "",
+            "seat": seat,
+            "seat_limit": limit,
+            "price_dollars": prices["founder"] // 100,
+            "list_dollars": prices["professional"] // 100,
+            "credits": pricing_config.founder_credits(),
+            "issued": founder_charter.issued_date(),
+            "trial": trial,
+            "app_home": APP_HOME,
+        },
+        render_shell=marketing_pages._render_shell,
+    )
+    return HTMLResponse(html)
 
 
 @router.get("/cancel", include_in_schema=False)

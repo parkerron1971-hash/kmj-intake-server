@@ -54,14 +54,15 @@ def test_the_strip_reads_the_live_count(monkeypatch):
     seen = []
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: seen.append(p) or [{"id": i} for i in range(7)])
     seg = _pricing(mp.render_home())
-    assert 'id="founderStrip"' in seg and 'data-left="43"' in seg and "43 of 50 seats left" in seg
+    assert 'id="founderStrip"' in seg and 'data-left="43"' in seg and "<b>43</b> of 50 seats left" in seg
     assert "subscription_plan=in.(price_f,price_fa,price_old)" in seen[0] and "active,trialing,past_due" in seen[0], (
         "seats sold at the retired founder price still count")
     price = pricing_config.tier_price_cents()["founder"] // 100
-    assert f"50 founding seats at ${price} a month" in seg
-    assert f"{pricing_config.founder_credits():,} AI actions a month" in seg
-    assert 'href="/start?plan=founder"' in seg
-    assert "locked for as long as you keep it" in seg
+    # Kevin, 2026-09-22: the strip is the founding ticket; seven taken, so seat 08 is next
+    assert 'class="fst-strip' in seg and f"<b>${price}<small>/mo</small></b>" in seg
+    assert f"{pricing_config.founder_credits():,}</b> AI actions a month" in seg
+    assert 'href="/start?plan=founder"' in seg and "Claim seat 08" in seg
+    assert "locked while you hold it" in seg
     # cached: a second render does not hit the database again
     mp.render_home()
     assert len(seen) == 1
@@ -75,7 +76,7 @@ def test_zero_left_is_gone_and_no_price_is_no_strip(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: [{"id": i} for i in range(50)])
     seg = _pricing(mp.render_home())
     assert "founder is-gone" in seg and "The 50 founding seats are gone" in seg
-    assert "Take a founding seat" not in seg and 'data-left="0"' in seg
+    assert "Claim seat" not in seg and "Take a founding seat" not in seg and 'data-left="0"' in seg
     monkeypatch.setitem(mp._FOUNDER_CACHE, "taken", None)
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
     seg = _pricing(mp.render_home())

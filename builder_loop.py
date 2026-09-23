@@ -306,6 +306,21 @@ def _stream(client, *, model: str, max_tokens: int, system: str,
         return s.get_final_message()
 
 
+FINISH_NOW = ("That was the last tool call this build allows. Call finish now "
+              "with the complete HTML document.")
+
+
+def _with_note(turns: List[Dict[str, Any]], note: str) -> List[Dict[str, Any]]:
+    """The turns with `note` added to the closing user message, for one
+    request only (the stored conversation is not changed)."""
+    out = list(turns)
+    last = out[-1]
+    content = last["content"]
+    blocks = [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+    out[-1] = {**last, "content": blocks + [{"type": "text", "text": note}]}
+    return out
+
+
 def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
              spend: Dict[str, Any], progress_cb: Optional[Callable[[int, str], None]] = None,
              toolbox: Optional[ToolBox] = None, client: Any = None,
@@ -337,7 +352,7 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
     system = v2._SYSTEM + "\n\n" + ROOM.format(n=max_tools())
     user = v2.build_user_prompt(spec_text, real_data)
     turns: List[Dict[str, Any]] = [{"role": "user", "content": user}]
-    sampling = model_ladder.sampling_kwargs(model, v2.V2_TEMPERATURE)
+    sampling = v2._gen_kwargs(model, v2.V2_TEMPERATURE)
     final_html: Optional[str] = None
     cap = max_tools()
 
@@ -346,10 +361,20 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
         force = (report["tool_calls"] >= cap) or not budget_ok
         _progress(48 + min(20, round_no * 3),
                   "The builder looks, renders, corrects" if not force else "Handing in")
+        tools, choice, sent = TOOLS, None, list(turns)
+        if force:
+            if model_ladder.supports_forced_tool_choice(model):
+                choice = {"type": "tool", "name": "finish"}
+            else:
+                # Opus 5.5 / Fable 5.1 answer a forced tool_choice with a
+                # 400, which ended the loop with no page (2026-09-22).
+                # Same effect by other means: finish is the only tool left
+                # and the turn says so.
+                tools = [t for t in TOOLS if t["name"] == "finish"]
+                sent = _with_note(sent, FINISH_NOW)
         try:
             msg = _stream(client, model=model, max_tokens=v2._max_tokens(), system=system,
-                          messages=list(turns), tools=TOOLS,
-                          tool_choice={"type": "tool", "name": "finish"} if force else None,
+                          messages=sent, tools=tools, tool_choice=choice,
                           sampling=sampling)
         except Exception as e:
             logger.error(f"[loop] call failed: {type(e).__name__}: {e}")
