@@ -1121,6 +1121,7 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
                          bookkeeping_block: str = "",
                          learned_block: str = "",
                          growth_block: str = "",
+                         growth_turn_block: str = "",
                          setup_block: str = "",
                          first_run: bool = False,
                          orientation_kind: Optional[str] = None,
@@ -2216,8 +2217,6 @@ above it is your stable operating manual):
 {business_track_block}
 {setup_block}
 
-{learned_block}
-
 {forecast_block}
 
 {bookkeeping_block}
@@ -2245,6 +2244,10 @@ above it is your stable operating manual):
 [[CHIEF_TURN_SPLIT]]
 
 THIS TURN (fresh every message):
+
+{learned_block}
+
+{growth_turn_block}
 
 {__import__('chief_build_runtime').routing_instructions()}
 

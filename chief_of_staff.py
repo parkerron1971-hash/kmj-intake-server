@@ -13544,10 +13544,15 @@ async def chief_chat(
             growth_block = _growth_intelligence_prompt
             from chief_video_actions import PROMPT as _video_creation_prompt
             growth_block += "\n" + _video_creation_prompt
+            # The doctrine comes and goes with the message, so it rides the
+            # TURN tail (growth_turn_block). In the cached state segment it
+            # flipped that ~12k-token segment on every growth/non-growth
+            # toggle and forced a fresh cache write (2026-09-23).
+            growth_turn_block = ""
             try:
                 import growth_doctrine as _growth
                 _view = req.current_context
-                growth_block += "\n" + _growth.context_block(
+                growth_turn_block = _growth.context_block(
                     req.message or "",
                     mode=req.mode,
                     tab=(_view.tab if _view else None),
@@ -13573,6 +13578,7 @@ async def chief_chat(
                 bookkeeping_block=bookkeeping_block,
                 learned_block=learned_block,
                 growth_block=growth_block,
+                growth_turn_block=growth_turn_block,
                 setup_block=setup_block,
                 first_run=first_run,
                 orientation_kind=orientation_kind,
