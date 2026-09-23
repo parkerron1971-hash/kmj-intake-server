@@ -10629,6 +10629,7 @@ from chief_business_learning_actions import (
 )
 
 from image_studio import handle_generate_image, handle_find_images, handle_capture_website_references
+from chief_reference_actions import handle_study_website
 
 from chief_build_runtime import handle_submit_work_order, handle_respond_work_order
 
@@ -10641,6 +10642,7 @@ ACTION_HANDLERS = {
     "generate_image": handle_generate_image,
     "find_images": handle_find_images,
     "capture_website_references": handle_capture_website_references,
+    "study_website": handle_study_website,
     "create_video": __import__('chief_video_actions').handle_create_video,
     "inspect_video": __import__('chief_video_actions').handle_inspect_video,
     "revise_video": __import__('chief_video_actions').handle_revise_video,

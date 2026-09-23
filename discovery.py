@@ -286,32 +286,19 @@ For a LOVED site: rules carry the learning. For a HATED site: bans carry it (rul
 
 
 def _screenshot_url(url: str) -> Optional[List[bytes]]:
-    """Navigate + screenshot at 390/1440. None on any failure (the
-    caller records the failure loudly — Footnote B)."""
+    """Screenshots at 390/1440 through the public-only guarded browser
+    (website_image_references): a private or internal address, or a
+    redirect into one, is refused, not opened (2026-09-22; this used a
+    bare Chromium that would navigate anywhere). None on any failure
+    (the caller records the failure loudly — Footnote B)."""
     try:
-        from playwright.sync_api import sync_playwright
-    except Exception:
-        return None
-    shots: List[bytes] = []
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch()
-            try:
-                for width in (390, 1440):
-                    page = browser.new_page(
-                        viewport={"width": width, "height": 900})
-                    page.goto(url, wait_until="domcontentloaded",
-                              timeout=20000)
-                    page.wait_for_timeout(1200)
-                    shots.append(page.screenshot(type="jpeg", quality=55))
-                    page.close()
-            finally:
-                browser.close()
+        from website_image_references import capture_viewports_sync
+        shots = capture_viewports_sync(url, (390, 1440), 900)
     except Exception as e:
         logger.info(f"[discovery] screenshot failed for {url}: "
                     f"{type(e).__name__}: {e}")
         return None
-    return shots
+    return shots or None
 
 
 def study_reference(business_id: str, url: str, verdict: str,

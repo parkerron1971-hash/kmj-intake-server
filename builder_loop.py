@@ -136,6 +136,15 @@ def _jpeg_block(data: bytes) -> Dict[str, Any]:
                                         "data": base64.b64encode(data).decode()}}
 
 
+_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
+
+
+def _is_image_url(url: str) -> bool:
+    from urllib.parse import urlsplit
+    path = urlsplit(url).path.lower()
+    return path.endswith(_IMAGE_EXT) or "/storage/v1/object/" in path
+
+
 class ToolBox:
     """Executes the builder's tools against one business's context.
     Remembers the last rendered document (the loop's 'never nothing')."""
@@ -166,7 +175,20 @@ class ToolBox:
         if not any(u == a.rstrip(").,") for a in self.allowed_urls):
             return [{"type": "text", "text": f"{u} is not in the real data — "
                                              "look only at the owner's images and references."}]
-        return [{"type": "text", "text": f"IMAGE — exact url: {u}"}, _image_block(u)]
+        if _is_image_url(u):
+            return [{"type": "text", "text": f"IMAGE — exact url: {u}"}, _image_block(u)]
+        # A web page (a reference site the owner loved) is not an image:
+        # sent as one, the API refused the whole request and the loop
+        # ended (2026-09-22). Look at it the way a person would.
+        try:
+            from website_image_references import capture_viewports_sync
+            shot = capture_viewports_sync(u, (1440,), 900)[0]
+        except Exception as e:
+            return [{"type": "text", "text": f"{u} could not be opened ({type(e).__name__}); "
+                                             "work from the written reference notes."}]
+        return [{"type": "text", "text": f"PAGE — screenshot at 1440px of {u}. Learn its "
+                                         "disciplines; never copy its brand, words or images."},
+                _jpeg_block(shot)]
 
     def render(self, html: str, note: str = "") -> List[Dict[str, Any]]:
         self.renders += 1
