@@ -791,13 +791,19 @@ def evidence_for_review(ctx, view_detail, taken):
     sources = {}
     # Use only the same business facts already intended for Chief's context,
     # never the raw businesses/settings/profile rows or arbitrary DB reads.
-    context_fields = ('contacts_total', 'contacts_loaded', 'contacts_complete',
-        'context_quality', 'contacts_by_status', 'avg_health', 'at_risk',
-        'queue', 'events', 'sessions', 'insights', 'modules', 'module_counts',
-        'memories', 'notifications', 'recent_queue_24h', 'auto_recent',
-        'products', 'contacts_lookup', 'projects', 'open_missions', 'open_assignments',
-        'learning_lines', 'open_invoices', 'image_jobs', 'foundation_block', 'business_profile_block',
-        'practitioner_block', 'brand_block', 'voice_block', 'playbook_block', 'blueprint_block')
+    # Lowest rank first: the budget keeps the END of this list. The long
+    # prose blocks (up to 10,000 chars each) go first so they are what the
+    # budget drops; the business's records go last so they survive. It was
+    # the other way round, and "when is my next appointment?" was answered
+    # correctly ("nothing on your calendar") and marked unverified because
+    # context:sessions was dropped to fit the blueprint (2026-09-23).
+    context_fields = ('blueprint_block', 'playbook_block', 'voice_block', 'brand_block',
+        'practitioner_block', 'business_profile_block', 'foundation_block',
+        'learning_lines', 'memories', 'insights', 'notifications', 'auto_recent',
+        'recent_queue_24h', 'events', 'image_jobs', 'queue', 'modules', 'module_counts',
+        'projects', 'open_missions', 'open_assignments', 'products', 'contacts_lookup',
+        'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'sessions',
+        'contacts_total', 'contacts_loaded', 'contacts_complete', 'context_quality')
     context = [(name, ctx[name]) for name in context_fields if name in (ctx or {})]
     biz = (ctx or {}).get('business') or {}
     if biz:
