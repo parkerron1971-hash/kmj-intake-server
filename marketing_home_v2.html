@@ -127,9 +127,9 @@
   .hero p b{color:var(--text);font-weight:500}
   .say{margin-top:28px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
   .say .lbl{font-size:13px;color:var(--muted)}
-  .say .field{position:relative;display:flex;align-items:center;min-width:260px;border-bottom:1.5px solid var(--line-2);transition:border-color .25s}
+  .say .field{position:relative;display:flex;align-items:center;min-width:260px;flex:1 1 400px;border-bottom:1.5px solid var(--line-2);transition:border-color .25s}
   .say .field:focus-within{border-color:var(--accent);box-shadow:0 1px 0 0 color-mix(in srgb,var(--accent) 60%,transparent)}
-  .say .field input{flex:1;background:none;border:0;padding:6px 2px 8px;color:#fff;font:500 24px var(--display);letter-spacing:-.015em;min-width:0}
+  .say .field input{flex:1;background:none;border:0;padding:6px 2px 8px;color:#fff;font:500 clamp(18px,4.9vw,24px) var(--display);letter-spacing:-.015em;min-width:0;text-overflow:ellipsis}
   .say .field input::placeholder{color:var(--dim);font-weight:500}
   .say .field .go{font:500 12px var(--mono);color:var(--dim);padding:0 4px;opacity:0;transition:opacity .2s}
   .say .field:focus-within .go{opacity:1}
@@ -609,7 +609,7 @@
     .devices{grid-template-columns:minmax(0,1fr)}
     .scene{height:auto;width:100%;display:flex;flex-direction:column;align-items:center;gap:30px;padding-top:10px}
     .dev{position:static}
-    .laptop{width:min(560px,100%);filter:drop-shadow(0 30px 40px rgba(0,0,0,.6))}.laptop .scr{height:calc(min(560px,100vw - 60px) * .6)}.lap{transform:scale(calc(min(560px,100vw - 60px) / 1000 * .95))}
+    .laptop{width:min(560px,100%);filter:drop-shadow(0 30px 40px rgba(0,0,0,.6))}.laptop .scr{height:calc(min(560px,100vw - 60px) * .6)}.lap{transform:scale(var(--lapS,.34))}
     .laptop .base{margin:0 -16px}
     .tablet{width:min(300px,100%)}
     .phone.dev{width:236px}
@@ -778,7 +778,7 @@
   .price-cta.is-mid:hover{filter:brightness(1.08)}
   .pricing .askline{text-align:center;margin-top:26px;font-size:13px;color:var(--muted);position:relative;z-index:1}
   .pricing .askline button{background:none;border:0;color:var(--accent);font:600 13px var(--body);cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
-  @media (max-width:900px){.price-grid{grid-template-columns:1fr;align-items:stretch}.price-grid.seen .price-card.is-mid{transform:none}.founder{grid-template-columns:1fr}.founder .copy::before,.founder .copy::after{display:none}.founder .seal{margin:20px 22px 0;justify-self:start}.founder .copy{border-left:0;border-top:1px dashed color-mix(in srgb,#F3C56B 40%,transparent);padding:16px 22px}.founder>a{margin:0 22px 20px;justify-self:start}.spot{width:420px;height:420px}}
+  @media (max-width:900px){.price-grid{grid-template-columns:1fr;align-items:stretch}.price-grid.seen .price-card.is-mid{transform:none}.founder{grid-template-columns:1fr}.founder .copy::before,.founder .copy::after{display:none}.founder .seal{margin:20px 22px 0;justify-self:start}.founder .copy{border-left:0;border-top:1px dashed color-mix(in srgb,#F3C56B 40%,transparent);padding:16px 22px}.founder>a{margin:0 22px 20px;justify-self:start}.spot{width:min(420px,100%);height:420px}}
 
   /* v7: faq */
   .faq{padding-block:128px;max-width:760px;margin:0 auto}
@@ -813,7 +813,7 @@
   .what .hd p{color:var(--muted);font-size:17px;margin:18px auto 0;max-width:560px}
   .filmwrap{position:relative;border-radius:18px;overflow:hidden;border:1px solid var(--line-2);background:#000;box-shadow:0 60px 140px -30px rgba(0,0,0,.85),0 0 120px -50px var(--accent);cursor:pointer}
   .filmwrap video{display:block;width:100%;aspect-ratio:16/9;background:#000}
-  .filmwrap .playbig{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:linear-gradient(180deg,rgba(7,8,11,.1),rgba(7,8,11,.55));border:0;color:#fff;cursor:pointer;font:600 15px var(--body)}
+  .filmwrap .playbig{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:radial-gradient(60% 70% at 50% 50%,rgba(7,8,11,.86),rgba(7,8,11,.55) 70%,rgba(7,8,11,.35));border:0;color:#fff;cursor:pointer;font:600 15px var(--body)}
   .filmwrap .playbig i{width:84px;height:84px;border-radius:50%;background:var(--accent);display:grid;place-items:center;box-shadow:0 20px 60px -10px var(--accent),0 0 0 12px color-mix(in srgb,var(--accent) 22%,transparent);transition:transform .3s var(--spring),background .8s}
   .filmwrap .playbig i svg{width:30px;height:30px;margin-left:5px}
   .filmwrap:hover .playbig i{transform:scale(1.06)}
@@ -833,9 +833,78 @@
   .steps3 p{margin:8px 0 0 36px;color:var(--muted);font-size:13.5px;line-height:1.5}
   @media (max-width:900px){.what .three-facts,.steps3{grid-template-columns:1fr}.steps3 > div{border-right:0;border-bottom:1px solid var(--line)}.steps3 > div:last-child{border-bottom:0}}
   @media (max-width:760px){.what{padding-block:96px}.what .three-facts,.steps3{margin-top:48px}}
+  /* v19: phone menu, thumb bar, film chapters, what it is worth, ask this page */
+  .hn-burger{display:none;width:38px;height:38px;border-radius:12px;border:1px solid var(--line-2);background:rgba(13,15,20,.6);cursor:pointer;place-items:center;padding:0}
+  .hn-burger i{display:block;width:16px;height:1.6px;background:var(--text);box-shadow:0 5px 0 var(--text),0 -5px 0 var(--text);margin:auto}
+  @media (max-width:760px){.hn-burger{display:grid}}
+  .hn-menu{position:fixed;inset:0;z-index:60}
+  .hn-menu[hidden]{display:none}
+  .hn-menu-scrim{position:absolute;inset:0;background:rgba(3,4,6,.7);backdrop-filter:blur(6px)}
+  .hn-menu-card{position:absolute;left:12px;right:12px;top:calc(env(safe-area-inset-top,0px) + 70px);border:1px solid var(--line-2);border-radius:20px;background:var(--bg-2);padding:10px;display:grid;box-shadow:0 40px 80px -20px #000;animation:rise .3s var(--ease)}
+  .hn-menu-card>a{padding:14px 12px;font:600 18px var(--display);letter-spacing:-.01em;text-decoration:none;color:var(--text);border-bottom:1px solid var(--line)}
+  .hn-menu-ctas{display:grid;grid-template-columns:1fr 1.4fr;gap:8px;padding-top:12px}
+  .hn-menu-ctas .btn{justify-content:center}
+  .hn-thumb{display:none}
+  @media (max-width:760px){
+    .hn-thumb{display:grid;grid-template-columns:44px 1fr 1.5fr;gap:8px;position:fixed;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:44;padding:8px;border-radius:20px;border:1px solid var(--line-2);background:rgba(13,15,20,.92);backdrop-filter:blur(14px);box-shadow:0 20px 50px -10px #000;transform:translateY(140%);transition:transform .35s var(--ease)}
+    .hn-thumb.on{transform:none}
+    .hn-thumb .btn{justify-content:center;height:44px}
+    .hn-orb{width:44px;height:44px;border-radius:14px;border:1px solid color-mix(in srgb,var(--accent) 50%,var(--line-2));background:color-mix(in srgb,var(--accent) 16%,transparent);display:grid;place-items:center;cursor:pointer;padding:0}
+    .hn-orb .mk{width:20px;height:17px}
+    #askFab{display:none}
+    footer{padding-bottom:90px}
+  }
+  .hn-chapters{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));margin-top:14px;border:1px solid var(--line);border-radius:14px;background:rgba(13,15,20,.6);overflow:hidden}
+  .hn-chapters button{all:unset;box-sizing:border-box;cursor:pointer;display:grid;gap:5px;padding:12px 14px 13px;border-right:1px solid var(--line);min-width:0}
+  .hn-chapters button:last-child{border-right:0}
+  .hn-chapters button:hover b{color:var(--text)}
+  .hn-chapters button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .hn-chapters .bar{height:3px;border-radius:3px;background:var(--line-2);overflow:hidden}
+  .hn-chapters .bar i{display:block;height:100%;width:0;background:var(--accent)}
+  .hn-chapters b{font:600 13px var(--display);color:var(--muted);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hn-chapters em{font:500 11px var(--mono);font-style:normal;color:var(--dim)}
+  .hn-chapters button.on b{color:var(--text)}
+  @media (max-width:760px){.hn-chapters{grid-template-columns:repeat(3,minmax(0,1fr))}.hn-chapters button:nth-child(3){border-right:0}.hn-chapters button:nth-child(-n+3){border-bottom:1px solid var(--line)}}
+  .hn-worth{padding-block:128px 32px}
+  .hn-worth .hd{text-align:center;max-width:640px;margin:0 auto 48px}
+  .hn-worth h2{font-size:clamp(34px,5vw,60px);font-weight:600;letter-spacing:-.035em;line-height:1}
+  .hn-worth .hd p{color:var(--muted);font-size:16px;margin:16px auto 0}
+  .hn-calc{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);border:1px solid var(--line-2);background:var(--bg-2);clip-path:polygon(28px 0,100% 0,100% 100%,0 100%,0 28px)}
+  .hn-in{padding:32px;display:grid;gap:26px;border-right:1px solid var(--line)}
+  .hn-trades{display:flex;flex-wrap:wrap;gap:8px}
+  .hn-trades button{height:34px;padding:0 14px;border-radius:999px;border:1px solid var(--line-2);background:rgba(13,15,20,.6);color:var(--muted);font:500 13px var(--body);cursor:pointer}
+  .hn-trades button[aria-pressed="true"]{border-color:var(--accent);color:var(--text);box-shadow:0 0 24px -8px var(--accent)}
+  .hn-sl{display:grid;gap:10px}
+  .hn-sl span{display:flex;justify-content:space-between;font-size:14px;color:var(--muted)}
+  .hn-sl em{font-style:normal}
+  .hn-sl output{font:500 14px var(--mono);color:var(--text);font-variant-numeric:tabular-nums}
+  .hn-sl input{width:100%;accent-color:var(--accent)}
+  .hn-out{padding:32px;display:flex;flex-direction:column;gap:10px;background:radial-gradient(80% 60% at 80% 0%,color-mix(in srgb,var(--accent) 12%,transparent),transparent 70%)}
+  .hn-leak{font:600 clamp(48px,6vw,72px)/1 var(--display);letter-spacing:-.04em;color:#F3C56B;font-variant-numeric:tabular-nums}
+  .hn-out p{margin:0;color:var(--muted);font-size:15px}
+  .hn-x{display:flex;align-items:baseline;gap:12px;padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:8px 0}
+  .hn-x b{font:600 34px var(--display);color:var(--accent-2);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .hn-x span{font-size:13px;color:var(--muted)}
+  .hn-out .hn-assume{font-size:12px;color:var(--dim)}
+  .hn-out .btn{align-self:flex-start;margin-top:8px}
+  @media (max-width:900px){.hn-calc{grid-template-columns:1fr}.hn-in{border-right:0;border-bottom:1px solid var(--line)}.hn-worth{padding-block:96px 24px}}
+  @media (max-width:520px){.hn-in,.hn-out{padding:22px}}
+  .hn-ask{border:1px solid var(--line-2);border-radius:18px;background:var(--bg-2);padding:18px;margin-bottom:28px;display:grid;gap:12px}
+  .hn-ask-hd{display:flex;align-items:center;gap:10px;font:500 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .hn-ask-hd .mk{width:20px;height:17px;flex:none}
+  .hn-thread{display:flex;flex-direction:column;gap:10px}
+  .hn-thread:empty{display:none}
+  .hn-thread .msg{max-width:88%;padding:11px 14px;border-radius:14px;font-size:14.5px;line-height:1.5}
+  .hn-thread .msg.u{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+  .hn-thread .msg.c{align-self:flex-start;background:var(--bg-3);border:1px solid var(--line);border-bottom-left-radius:4px}
+  .hn-thread .msg.c .k{display:block;font:500 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--success);margin-top:6px}
+  .hn-thread .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .hn-note{margin:0;font-size:12px;color:var(--dim)}
+  .hn-askform input{font-size:15px}
+  .hn-askform input:focus-visible{outline:none}
   /* v11: the nav stays with you */
   nav.top{position:sticky;top:0;z-index:30;margin-inline:-20px;padding-inline:20px;transition:background .3s,border-color .3s,backdrop-filter .3s}
-  nav.top.stuck{background:rgba(7,8,11,.86);box-shadow:0 0 0 100vmax rgba(7,8,11,.86),0 1px 0 100vmax var(--line);clip-path:inset(0 -100vmax -1px)}
+  nav.top.stuck{background:rgba(7,8,11,.965);box-shadow:0 0 0 100vmax rgba(7,8,11,.965),0 1px 0 100vmax var(--line);clip-path:inset(0 -100vmax -1px);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
   /* v11: a real footer */
   footer{flex-direction:column;align-items:stretch;gap:28px}
   footer .frow{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
@@ -894,7 +963,8 @@
     nav.top .right .btn.sm{padding:0 11px}
     #intro .sub{bottom:9vh}
     #intro .mark-slot{margin-bottom:24px}
-    nav.top .right .btn.sm:not(.primary){display:none}
+    nav.top .right .btn.sm.primary{display:none}
+    nav.top .right .btn.sm:not(.primary){display:inline-flex;border:0;background:none;padding:0 6px;backdrop-filter:none}
     .problems span{font-size:11px}
     .say .field{min-width:0;flex:1 1 100%}
   }
@@ -936,7 +1006,7 @@
   <nav class="top reveal" aria-label="Site">
     <div class="brand"><svg class="mk" id="navMark" aria-hidden="true"><use href="#mark"/></svg>The Solutionist System</div>
     <div class="links"><a href="#what">What it is</a><a href="#rooms">Product</a><a href="#trust">Chief</a><a href="#compare">Compare</a><a href="#pricing">Pricing</a><a href="#faq">FAQ</a></div>
-    <div class="right"><a class="btn sm" href="{{APP_URL}}">Log in</a><a class="btn sm primary" href="/start">Start free trial</a></div>
+    <div class="right"><a class="btn sm" href="{{APP_URL}}">Log in</a><a class="btn sm primary" href="/start">Start free trial</a><button type="button" class="hn-burger" id="navBurger" aria-label="Menu" aria-expanded="false" aria-controls="mobileMenu"><i></i></button></div>
   </nav>
 
   <main>
@@ -1012,6 +1082,14 @@
       <div class="filmwrap reveal" id="filmInline" role="button" tabindex="0" aria-label="Play the film, fifty-eight seconds">
         <video id="filmV2" playsinline preload="none"></video>
         <button type="button" class="playbig" tabindex="-1"><i><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></i>Watch the system at work<span>58 seconds · one photographer’s Tuesday</span></button>
+      </div>
+      <div class="hn-chapters reveal" id="filmChapters" role="group" aria-label="Jump to a part of the film">
+        <button type="button" data-t="3"><span class="bar"><i></i></span><b>Sign in</b><em>0:03</em></button>
+        <button type="button" data-t="12"><span class="bar"><i></i></span><b>Say it</b><em>0:12</em></button>
+        <button type="button" data-t="21"><span class="bar"><i></i></span><b>Run the day</b><em>0:21</em></button>
+        <button type="button" data-t="27"><span class="bar"><i></i></span><b>Be found</b><em>0:27</em></button>
+        <button type="button" data-t="36"><span class="bar"><i></i></span><b>Bring what you have</b><em>0:36</em></button>
+        <button type="button" data-t="42"><span class="bar"><i></i></span><b>The night shift</b><em>0:42</em></button>
       </div>
       <p class="cap reveal">Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</p>
       <div class="three-facts">
@@ -1141,6 +1219,32 @@
       </div>
     </section>
 
+    <section class="hn-worth" id="worth" data-pro="{{PRO_PRICE}}">
+      <div class="hd reveal">
+        <span class="eyebrow">What it is worth</span>
+        <h2 style="margin-top:12px" id="worthH">What the quiet chairs cost you.</h2>
+        <p>Move the numbers to match your week. It follows the trade you picked at the top.</p>
+      </div>
+      <div class="hn-calc reveal">
+        <div class="hn-in">
+          <div class="hn-trades" role="group" aria-label="Trade">
+            <button type="button" data-t="barber" aria-pressed="true">Barber</button><button type="button" data-t="therapist" aria-pressed="false">Therapist</button><button type="button" data-t="contractor" aria-pressed="false">Contractor</button><button type="button" data-t="coach" aria-pressed="false">Coach</button>
+          </div>
+          <label class="hn-sl"><span><em id="worthL1">Average cut</em><output id="worthO1">$35</output></span><input type="range" id="worthS1" min="5" max="120" step="5" value="35"></label>
+          <label class="hn-sl"><span><em id="worthL2">No-shows a week</em><output id="worthO2">4</output></span><input type="range" id="worthS2" min="0" max="15" step="1" value="4"></label>
+          <label class="hn-sl"><span><em id="worthL3">Regulars gone quiet</em><output id="worthO3">18</output></span><input type="range" id="worthS3" min="0" max="60" step="1" value="18"></label>
+        </div>
+        <div class="hn-out" aria-live="polite">
+          <span class="eyebrow">Slipping away a month</span>
+          <b class="hn-leak" id="worthLeak">$1,232</b>
+          <p id="worthWon">Chief could win back about $516 of it.</p>
+          <div class="hn-x"><b id="worthTimes">3.5x</b><span>what Professional costs, ${{PRO_PRICE}} a month</span></div>
+          <p class="hn-assume" id="worthAssume">Assumes Chief fills a third of the missed slots and wins back half of the quiet clients once a month.</p>
+          <a class="btn primary" href="/start?plan=professional">Start free trial</a>
+        </div>
+      </div>
+    </section>
+
 {{PRICING}}
 
     <section class="plans" id="plans">
@@ -1159,6 +1263,13 @@
 
     <section class="faq chapter" id="faq">
       <h2 class="reveal">Questions people ask first</h2>
+      <div class="hn-ask reveal" id="pageAsk" data-starter="{{STARTER_PRICE}}" data-pro="{{PRO_PRICE}}" data-sol="{{SOL_PRICE}}">
+        <div class="hn-ask-hd"><svg class="mk" aria-hidden="true"><use href="#mark"/></svg><span>Ask Chief. It answers from this page and says where.</span></div>
+        <div class="hn-thread" id="pageThread" aria-live="polite"></div>
+        <form class="ask hn-askform" id="pageAskForm"><input id="pageAskIn" placeholder="Ask anything: price, trial, what it will not do" aria-label="Ask Chief" autocomplete="off"><button class="send" type="submit" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:14px;height:14px"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button></form>
+        <div class="sugg hn-sugg"><button type="button">Which plan do I need?</button><button type="button">Will it text my clients without asking?</button><button type="button">What if I run out of AI actions?</button></div>
+        <p class="hn-note">These answers come from this page: the prices, the plan cards and the questions below.</p>
+      </div>
       <div class="reveal">
         <details><summary>Will it do something I did not want?</summary><p>Chief asks before anything that touches money, messages a client, or cannot be taken back. Everything else it does is logged in plain English with an Undo, and Undo means undo: the action is reversed, not just hidden.</p></details>
         <details><summary>Does it actually read my business, or guess?</summary><p>It reads your real contacts, calendar, invoices and inbox every turn. The morning brief and every answer come from your data, not from a template. Sample data on this page stands in for yours.</p></details>
@@ -1182,7 +1293,7 @@
     <div class="scrim" data-film-close></div>
     <div class="box">
       <button type="button" class="x" data-film-close aria-label="Close film">&times;</button>
-      <video id="filmVideo" controls playsinline preload="none" poster="/assets/film-poster.jpg?v=2"></video>
+      <video id="filmVideo" controls playsinline preload="none" poster="/assets/film-poster.jpg?v=3"></video>
       <div class="cap">One photographer’s Tuesday: Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</div>
     </div>
   </div>
@@ -1190,6 +1301,14 @@
 {{FOUNDER_AD_MARKUP}}
   <button type="button" id="askFab" class="away" aria-label="Ask Chief"><span class="orb"><svg class="mk" aria-hidden="true"><use href="#mark"/></svg></span>Ask Chief<kbd>⌘K</kbd></button>
   <div id="tourBar" hidden role="status"><svg class="mk" aria-hidden="true"><use href="#mark"/></svg><span id="tourCap"></span><button id="tourStop" type="button">Stop</button></div>
+  <div class="hn-menu" id="mobileMenu" hidden>
+    <div class="hn-menu-scrim" data-menu-close></div>
+    <nav class="hn-menu-card" aria-label="Menu">
+      <a href="#what" data-menu-close>What it is</a><a href="#rooms" data-menu-close>Product</a><a href="#trust" data-menu-close>Chief</a><a href="#compare" data-menu-close>Compare</a><a href="#pricing" data-menu-close>Pricing</a><a href="#faq" data-menu-close>FAQ</a>
+      <div class="hn-menu-ctas"><a class="btn" href="{{APP_URL}}">Log in</a><a class="btn primary" href="/start">Start free trial</a></div>
+    </nav>
+  </div>
+  <div class="hn-thumb" id="thumbBar"><button type="button" class="hn-orb" id="thumbAsk" aria-label="Ask Chief"><svg class="mk" aria-hidden="true"><use href="#mark"/></svg></button><a class="btn" href="{{APP_URL}}">Log in</a><a class="btn primary" href="/start">Start free trial</a></div>
   <footer>
     <div class="frow">
       <span class="fb"><svg class="mk" aria-hidden="true"><use href="#mark"/></svg>The Solutionist System</span>
@@ -1527,11 +1646,13 @@
     win.querySelectorAll('.log').forEach(el=>el.style.animationDelay=(d+1.05)+'s');
   }
   /* ---------- the room: nothing until you speak ---------- */
-  const roomEl=$('#room'); let roomOpen=false, spoken=false, autoT=null, sayT=null;
+  const roomEl=$('#room'); let roomOpen=false, spoken=false, autoT=null, sayT=null, autoSay=false;
   function openRoom(){
     if(roomOpen)return; roomOpen=true; roomEl.hidden=false; roomEl.classList.remove('in'); void roomEl.offsetWidth; roomEl.classList.add('in');
     $('#sayHint').hidden=true;
-    setTimeout(()=>roomEl.scrollIntoView({behavior:'smooth',block:'start'}),80);
+    /* v19: when the page typed the problem itself, a phone stays where the visitor is; the room waits below the headline */
+    const phoneAuto=autoSay&&!tourOn&&matchMedia('(max-width:760px)').matches; autoSay=false;
+    if(!phoneAuto)setTimeout(()=>roomEl.scrollIntoView({behavior:'smooth',block:'start'}),80);
     setTimeout(()=>{if(!reduce)fieldMode('frame',win.getBoundingClientRect())},650);
     setTimeout(()=>{if(fmode==='frame')fieldMode('release')},1650);
     setTimeout(()=>boot(true),150);
@@ -1558,8 +1679,8 @@
     if(reduce){inp.value=s;speakText(s);return}
     sayT=setInterval(()=>{i++;inp.value=s.slice(0,i);if(i>=s.length){clearInterval(sayT);setTimeout(()=>{if(inp.value===s)speakText(s)},450)}},55);
   }
-  function scheduleAutoSay(){clearTimeout(autoT);autoT=setTimeout(()=>{if(!spoken&&!roomOpen&&!$('#sayInput').value&&document.activeElement!==$('#sayInput'))typeSay(SAY[trade])},2200)}
-  $('#sayInput').addEventListener('focus',()=>{clearTimeout(autoT);clearInterval(sayT)});
+  function scheduleAutoSay(){clearTimeout(autoT);autoT=setTimeout(()=>{if(!spoken&&!roomOpen&&!$('#sayInput').value&&document.activeElement!==$('#sayInput')){autoSay=true;typeSay(SAY[trade])}},2200)}
+  $('#sayInput').addEventListener('focus',()=>{clearTimeout(autoT);clearInterval(sayT);autoSay=false});
   $('#sayInput').addEventListener('input',()=>{spoken=true;clearTimeout(autoT)});
   $('#tryBtn').onclick=e=>{e.preventDefault();clearTimeout(autoT);$('#sayInput').focus()};
   $('#backBtn').onclick=e=>{e.preventDefault();if(!roomOpen){opener();openRoom()}else roomEl.scrollIntoView({behavior:'smooth',block:'start'})};
@@ -1916,6 +2037,142 @@
   const io3=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting&&!pulseLive){pulse.querySelectorAll('b[data-v]').forEach(countUp);pulseLive=setInterval(()=>{const b=pulse.querySelector('b[data-v]');const n=parseInt(b.textContent.replace(/,/g,''),10)+1+(Math.random()*2|0);b.textContent=n.toLocaleString();b.classList.add('tick');setTimeout(()=>b.classList.remove('tick'),500)},3500+Math.random()*2500)}}),{threshold:.5});
   io3.observe(pulse);
 
+})();
+</script>
+<script>
+/* v19: the phone menu, the thumb bar, the laptop that fits, film chapters, what it is worth, ask this page */
+(function(){
+  var $=function(q){return document.querySelector(q)}, $$=function(q){return Array.prototype.slice.call(document.querySelectorAll(q))};
+  var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function esc(x){return String(x).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+  function money(n){return '$'+Math.round(n).toLocaleString('en-US')}
+
+  /* the laptop scales to the screen it is on (the CSS fallback is .34) */
+  function fitLap(){
+    var scr=$('.laptop .scr'); if(!scr) return;
+    if(innerWidth<=900) document.documentElement.style.setProperty('--lapS',String(scr.clientWidth/1000));
+    else document.documentElement.style.removeProperty('--lapS');
+  }
+  addEventListener('resize',fitLap); fitLap(); setTimeout(fitLap,400);
+  if(window.ResizeObserver&&$('.laptop .scr')) new ResizeObserver(fitLap).observe($('.laptop .scr'));
+
+  /* the phone menu */
+  var menu=$('#mobileMenu'), burger=$('#navBurger');
+  function setMenu(open){ menu.hidden=!open; burger.setAttribute('aria-expanded',String(open)); document.body.style.overflow=open?'hidden':''; }
+  if(menu&&burger){
+    burger.addEventListener('click',function(){setMenu(menu.hidden)});
+    $$('[data-menu-close]').forEach(function(el){el.addEventListener('click',function(){setMenu(false)})});
+    document.addEventListener('keydown',function(e){if(e.key==='Escape'&&!menu.hidden)setMenu(false)});
+  }
+
+  /* the thumb bar: in reach once the first screen is behind you, never over the intro */
+  var thumb=$('#thumbBar');
+  function syncThumb(){ if(thumb) thumb.classList.toggle('on',scrollY>innerHeight*.6&&!document.body.classList.contains('pre')); }
+  addEventListener('scroll',syncThumb,{passive:true}); syncThumb();
+  new MutationObserver(syncThumb).observe(document.body,{attributes:true,attributeFilter:['class']});
+  var orb=$('#thumbAsk'); if(orb) orb.addEventListener('click',function(){var f=$('#askFab'); if(f) f.click();});
+
+  /* film chapters: each one starts the film and jumps to its part */
+  var fw=$('#filmInline'), fv=$('#filmV2'), chapters=$$('#filmChapters button');
+  var times=chapters.map(function(b){return +b.getAttribute('data-t')});
+  function seek(t){
+    if(!fw||!fv) return;
+    if(!fw.classList.contains('playing')) fw.click(); else fv.play().catch(function(){});
+    var go=function(){try{fv.currentTime=t}catch(e){}};
+    if(fv.readyState>=1) go(); else fv.addEventListener('loadedmetadata',go,{once:true});
+    fw.scrollIntoView({behavior:reduce?'auto':'smooth',block:'center'});
+  }
+  chapters.forEach(function(b){b.addEventListener('click',function(){seek(+b.getAttribute('data-t'))})});
+  if(fv) fv.addEventListener('timeupdate',function(){
+    var t=fv.currentTime, dur=fv.duration||58;
+    chapters.forEach(function(b,i){
+      var a=times[i], z=i+1<times.length?times[i+1]:dur;
+      var p=t<=a?0:t>=z?1:(t-a)/(z-a);
+      b.querySelector('.bar i').style.width=(p*100).toFixed(1)+'%';
+      b.classList.toggle('on',t>=a&&t<z);
+    });
+  });
+
+  /* what the gaps cost, in the trade picked at the top */
+  var worth=$('#worth');
+  if(worth){
+    var PRO=+worth.getAttribute('data-pro')||0;
+    var W={
+      barber:{h:'What the quiet chairs cost you.',l:['Average cut','No-shows a week','Regulars gone quiet'],v:[35,4,18],max:120,step:5},
+      therapist:{h:'What the empty hours cost you.',l:['Session fee','Late cancels a week','Clients who drifted'],v:[140,2,6],max:300,step:5},
+      contractor:{h:'What the cold leads cost you.',l:['Average job','Leads gone cold a week','Past clients never asked back'],v:[2400,2,10],max:10000,step:100},
+      coach:{h:'What the missed calls cost you.',l:['Monthly package','Missed calls a week','Clients who lapsed'],v:[300,1,5],max:1500,step:25}
+    };
+    var cur='barber', s1=$('#worthS1'), s2=$('#worthS2'), s3=$('#worthS3');
+    var calc=function(){
+      var a=+s1.value, b=+s2.value, c=+s3.value, leak, won, note;
+      $('#worthO1').textContent=money(a); $('#worthO2').textContent=b; $('#worthO3').textContent=c;
+      if(cur==='contractor'){
+        leak=b*4.3*a*.25+c*a*.1; won=leak*.2;
+        note='Assumes one in four cold leads would have closed and one in ten past clients would hire again, and that Chief wins back a fifth of that.';
+      } else {
+        leak=b*4.3*a+c*a; won=b*4.3*a/3+c*a/2;
+        note='Assumes Chief fills a third of the missed slots and wins back half of the quiet clients once a month.';
+      }
+      $('#worthLeak').textContent=money(leak);
+      $('#worthWon').textContent='Chief could win back about '+money(won)+' of it.';
+      var x=PRO?won/PRO:0;
+      $('#worthTimes').textContent=(x>=10?Math.round(x):x.toFixed(1))+'x';
+      $('#worthAssume').textContent=note;
+    };
+    var setWorth=function(t){
+      if(!W[t]) return; cur=t; var d=W[t];
+      $('#worthH').textContent=d.h;
+      $('#worthL1').textContent=d.l[0]; $('#worthL2').textContent=d.l[1]; $('#worthL3').textContent=d.l[2];
+      s1.min=d.step; s1.max=d.max; s1.step=d.step;
+      s1.value=d.v[0]; s2.value=d.v[1]; s3.value=d.v[2];
+      $$('.hn-trades button').forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-t')===t))});
+      calc();
+    };
+    [s1,s2,s3].forEach(function(el){el.addEventListener('input',calc)});
+    $$('.hn-trades button').forEach(function(b){b.addEventListener('click',function(){setWorth(b.getAttribute('data-t'))})});
+    var heroTrade=function(){var c=$('.hero .chip[aria-pressed="true"]'); return c?c.getAttribute('data-trade'):'barber'};
+    setWorth(heroTrade());
+    var chips=$('.hero .chips');
+    if(chips) new MutationObserver(function(){var t=heroTrade(); if(t!==cur) setWorth(t)}).observe(chips,{attributes:true,subtree:true,attributeFilter:['aria-pressed']});
+  }
+
+  /* ask this page: answers matched from the page's own facts, each with where it came from */
+  var box=$('#pageAsk');
+  if(box){
+    var P={s:box.getAttribute('data-starter'),p:box.getAttribute('data-pro'),o:box.getAttribute('data-sol')};
+    var K=[
+      {k:/plan|price|cost|how much|\$|cheap|expens|pay/i,a:'Starter is $'+P.s+' a month: the full workspace, with contacts, invoicing, scheduling, content, goals, your site, and Chief. Professional is $'+P.p+' a month and adds the full accounting layer: closing, 1099s and year end. Solutionist is $'+P.o+' a month: Professional, plus room for a team and more than one business. Pay for the year and two months are free.',src:'pricing',cta:true},
+      {k:/text|message|without ask|permission|on its own|did not want|didn.t want|surprise/i,a:'No. I ask before anything that touches money, messages a client, or cannot be taken back. Everything else I do is logged in plain English with an Undo, and Undo means undo: the action is reversed, not just hidden.',src:'FAQ, will it do something I did not want'},
+      {k:/run out|actions|credits|limit/i,a:'Only my AI work pauses, and I tell you. Bookings, invoices, contacts and your site keep working. Top up with a prepaid pack, or wait for the month to roll.',src:'FAQ, running out of AI actions'},
+      {k:/trial|free|card|cancel/i,a:'__TRIAL_FREE__ on every plan, the whole room on the plan you pick. No card is charged until the trial ends, and you can leave before then with nothing owed.',src:'FAQ, the free trial',cta:true},
+      {k:/trade|industry|fit|my business|work for/i,a:'Seven trades arrive already speaking your language: barbers, therapists, attorneys, contractors, coaches, consultants and ministries. Anything else, tell me what you do and I compose the room: the words, the workflows, the modules, your site.',src:'what this is, your trade'},
+      {k:/chatgpt|claude|assistant|own ai|gemini|copilot/i,a:'Yes. The system is the record; the assistant you already talk to can work through it, and the log stays in one place. On Starter your own AI can read; on Professional and up it can keep records here too.',src:'FAQ and the plan cards'},
+      {k:/site|website|domain|squarespace|wix/i,a:'Your site is part of the workspace on every plan, next to contacts, invoicing and scheduling. Tell me what you do and I compose it with the rest of the room.',src:'the plan cards, what this is'},
+      {k:/book|account|tax|1099|quickbooks|reconcil|bank/i,a:'Every day I reconcile the books as part of the work. Professional adds the full accounting layer: closing, 1099s and year end.',src:'what this is, the plan cards'},
+      {k:/phone|app|mobile|iphone|android|tablet/i,a:'One account on every screen: the same Home on a laptop, a tablet and a phone, the same data and the same me.',src:'your business, open on every screen'},
+      {k:/guess|read|data|real/i,a:'I read your real contacts, calendar, invoices and inbox every turn. The morning brief and every answer come from your data, not from a template.',src:'FAQ, does it read my business'}
+    ];
+    var thread=$('#pageThread'), askIn=$('#pageAskIn');
+    var answer=function(q){
+      for(var i=0;i<K.length;i++) if(K[i].k.test(q)) return K[i];
+      return {a:'That one is not on this page. Start a free trial and ask me inside, where I read the real business, or write to __CONTACT_EMAIL__.',src:'nothing on this page matched',cta:true};
+    };
+    var ask=function(q){
+      q=String(q||'').trim(); if(!q) return;
+      thread.insertAdjacentHTML('beforeend','<div class="msg u">'+esc(q)+'</div>');
+      var r=answer(q), el=document.createElement('div'); el.className='msg c'; thread.appendChild(el);
+      var s=r.a, i=0;
+      var done=function(){
+        el.innerHTML=esc(s)+'<span class="k">from: '+esc(r.src)+'</span>'+
+          (r.cta?'<div class="acts"><a class="btn sm primary" href="/start">Start free trial</a><a class="btn sm" href="#pricing">See every plan</a></div>':'');
+      };
+      if(reduce){done();return}
+      var iv=setInterval(function(){i+=3; el.innerHTML=esc(s.slice(0,i))+'<span class="caret"></span>'; if(i>=s.length){clearInterval(iv);done()}},16);
+    };
+    $('#pageAskForm').addEventListener('submit',function(e){e.preventDefault(); ask(askIn.value); askIn.value='';});
+    $$('.hn-sugg button').forEach(function(b){b.addEventListener('click',function(){ask(b.textContent); b.disabled=true; b.style.opacity='.45';})});
+  }
 })();
 </script>
 {{ANALYTICS}}

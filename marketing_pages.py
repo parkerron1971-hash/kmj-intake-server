@@ -2250,15 +2250,16 @@ def _founder_strip_html() -> str:
         <div class="left">0 of {limit} seats left</div>
       </div>
     </div>"""
+    # Kevin, 2026-09-22: the founding seat is a futuristic ticket, the same
+    # one the popup carries (marketing_founder_ad.ticket_html). Its styles
+    # ride in the flyer's stylesheet, which the home carries under the very
+    # same condition as this ticket: an open founding offer.
+    import marketing_founder_ad as fad
+    n = {"limit": limit, "left": left, "next": min(limit, taken + 1), "pct": pct, "price": price,
+         "list_price": pricing_config.tier_price_cents().get("professional", 0) // 100, "credits": credits}
     return f"""
-    <div class="founder reveal reveal-delay-1" id="founderStrip" data-left="{left}">
-      <div class="seal">Founding seat</div>
-      <div class="copy"><b>{limit} founding seats at ${price} a month, locked for as long as you keep it.</b>
-        Professional with {credits:,} AI actions a month. When the last seat goes, the price on this page is the price.
-        <div class="meter" aria-hidden><i style="width:{pct}%"></i></div>
-        <div class="left">{left} of {limit} seats left</div>
-      </div>
-      <a href="/start?plan=founder">Take a founding seat &rarr;</a>
+    <div class="fst-strip reveal reveal-delay-1" id="founderStrip" data-left="{left}">
+      {fad.ticket_html(n, popup=False)}
     </div>"""
 
 

@@ -64,7 +64,7 @@ def test_the_home_is_the_second_edition():
 
 def test_the_film_is_an_asset():
     html = _home()
-    assert "/assets/film.mp4?v=2" in html and "/assets/film-poster.jpg?v=2" in html
+    assert "/assets/film.mp4?v=2" in html and "/assets/film-poster.jpg?v=3" in html
     assert "base64," not in html
     assert len(html) < 400_000, "the page should be well under half a megabyte without the film"
 
@@ -159,3 +159,126 @@ def test_every_footer_link_is_a_route():
         if p.startswith("/assets/"):
             continue
         assert p in routes or p == "/", f"{p} is not a route"
+
+
+# ── 2026-09-22: the approved upgrades (concept v19) ──────────────────────
+# Kevin approved these from a clickable preview of the live page. Each
+# test pins one of them so a later concept re-import cannot drop it, and
+# the last one pins what was deliberately NOT shipped.
+
+def _section(html: str, marker: str, end: str = "</section>") -> str:
+    i = html.index(marker)
+    return html[i:html.index(end, i)]
+
+
+def test_phone_nav_keeps_log_in_and_opens_a_menu():
+    html = _home()
+    assert 'id="navBurger"' in html and 'aria-controls="mobileMenu"' in html
+    menu = html[html.index('id="mobileMenu"'):html.index('id="thumbBar"')]
+    for anchor in ("#what", "#rooms", "#trust", "#compare", "#pricing", "#faq"):
+        assert f'href="{anchor}"' in menu, anchor
+    assert f'href="{mp.APP_URL}"' in menu and 'href="/start"' in menu
+    # the founding popup waits while this menu is open; it looks it up by this id
+    assert html.count('id="mobileMenu"') == 1
+    # at 520 and under Log in stays and the primary Start hides
+    assert "nav.top .right .btn.sm.primary{display:none}" in html
+    assert "nav.top .right .btn.sm:not(.primary){display:none}" not in html
+    assert "e.key==='Escape'&&!menu.hidden" in html
+
+
+def test_the_phone_page_never_scrolls_itself():
+    html = _home()
+    assert "{autoSay=true;typeSay(SAY[trade])}" in html
+    assert "const phoneAuto=autoSay&&!tourOn&&matchMedia('(max-width:760px)').matches" in html
+    assert "if(!phoneAuto)setTimeout(()=>roomEl.scrollIntoView(" in html
+
+
+def test_the_thumb_bar():
+    html = _home()
+    bar = html[html.index('id="thumbBar"'):html.index("</div>", html.index('id="thumbBar"'))]
+    assert 'id="thumbAsk"' in bar and f'href="{mp.APP_URL}"' in bar and 'href="/start"' in bar
+    assert "Start free trial" in bar
+    assert "#askFab{display:none}" in html and "footer{padding-bottom:90px}" in html
+    assert "document.body.classList.contains('pre')" in html   # hidden while the intro plays
+
+
+def test_the_typed_line_and_the_laptop_fit():
+    html = _home()
+    assert "font:500 clamp(18px,4.9vw,24px) var(--display)" in html
+    assert "min-width:260px;flex:1 1 400px;" in html
+    # the old calc(length / number) was invalid CSS and cropped the laptop on phones
+    assert "/ 1000 * .95" not in html
+    assert ".lap{transform:scale(var(--lapS,.34))}" in html
+    assert "new ResizeObserver(fitLap)" in html
+    assert "overflow-x:clip" not in html, "clipping the page breaks the sticky nav"
+
+
+def test_the_stuck_nav_is_solid():
+    html = _home()
+    assert "nav.top.stuck{background:rgba(7,8,11,.965)" in html and "backdrop-filter:blur(14px)}" in html
+
+
+def test_the_film_has_chapters():
+    html = _home()
+    ch = html[html.index('id="filmChapters"'):html.index("</div>", html.index('id="filmChapters"'))]
+    assert re.findall(r'data-t="(\d+)"', ch) == ["3", "12", "21", "27", "36", "42"]
+    for name in ("Sign in", "Say it", "Run the day", "Be found", "Bring what you have", "The night shift"):
+        assert f"<b>{name}</b>" in ch, name
+    assert html.index('id="filmInline"') < html.index('id="filmChapters"')
+    assert "radial-gradient(60% 70% at 50% 50%,rgba(7,8,11,.86)" in html
+
+
+def _render_with_prices(monkeypatch, starter, pro, sol):
+    real = dict(pricing_config.tier_price_cents())
+    real.update({"starter": starter * 100, "professional": pro * 100, "practice": sol * 100})
+    monkeypatch.setattr(pricing_config, "tier_price_cents", lambda: dict(real))
+    return mp.render_home()
+
+
+def test_the_worth_chapter_reads_the_live_professional_price(monkeypatch):
+    html = _render_with_prices(monkeypatch, 81, 157, 311)
+    worth = _section(html, 'id="worth"')
+    assert 'data-pro="157"' in worth and "what Professional costs, $157 a month" in worth
+    assert "$149" not in worth
+    assert html.index('id="worth"') < html.index('id="pricing"')
+    assert "Assumes Chief fills a third of the missed slots" in worth, "the math says what it assumes"
+    for trade in ("barber", "therapist", "contractor", "coach"):
+        assert f'data-t="{trade}"' in worth
+    assert "attributeFilter:['aria-pressed']" in html   # it follows the hero's trade chips
+
+
+def test_ask_this_page_uses_the_live_prices(monkeypatch):
+    html = _render_with_prices(monkeypatch, 81, 157, 311)
+    box = html[html.index('id="pageAsk"'):html.index("</div>", html.index('id="pageAsk"'))]
+    assert 'data-starter="81" data-pro="157" data-sol="311"' in box
+    assert html.index('id="pageAsk"') < html.index("<details><summary>", html.index('id="faq"'))
+    assert "These answers come from this page" in html
+    assert "Website Concierge" not in html
+    script = html[html.index("var box=$('#pageAsk')"):]
+    script = script[:script.index("</script>")]
+    assert "founding" not in script.lower() and "$99" not in script, "no founder price the renderer does not fill"
+    assert "days free" not in script.replace(mp._trial_free_phrase(), "") and "__TRIAL_FREE__" not in script
+    assert "__CONTACT_EMAIL__" not in script
+
+
+def test_the_structured_data_matches_the_dials(monkeypatch):
+    import json
+    html = _render_with_prices(monkeypatch, 81, 157, 311)
+    head = html[:html.index("</head>")]
+    raw = re.search(r'<script type="application/ld\+json">(.*?)</script>', head, re.S).group(1)
+    graph = {n["@type"]: n for n in json.loads(raw)["@graph"]}
+    assert graph["Organization"]["url"] == "https://mysolutionist.app/"
+    offers = {o["name"]: o["price"] for o in graph["SoftwareApplication"]["offers"]}
+    assert offers == {"Starter": "81", "Professional": "157", "Solutionist": "311"}
+    qs = graph["FAQPage"]["mainEntity"]
+    page_qs = re.findall(r"<details><summary>(.*?)</summary>", _section(html, 'id="faq"'))
+    assert [q["name"] for q in qs] == [re.sub(r"<[^>]+>", "", q) for q in page_qs] and len(qs) >= 6
+    trial = next(q for q in qs if "free trial" in q["name"])
+    assert mp._trial_free_phrase() in trial["acceptedAnswer"]["text"] and "__TRIAL_FREE__" not in raw
+
+
+def test_what_was_not_approved_did_not_ship():
+    html = _home()
+    for marker in ("sample quote", "verify one", 'id="proof"', "pv-", "Preview, not live",
+                   "Hedera topic 0.0.", "draft signature", "Seat 01 is open", "pvSeats", "Mark changes on the page"):
+        assert marker not in html, marker

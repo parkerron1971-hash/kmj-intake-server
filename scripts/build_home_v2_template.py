@@ -49,7 +49,7 @@ def build(src: pathlib.Path) -> str:
 
     # ── the film lives at /assets, not in the page ──
     s = re.sub(r"const FILM='data:video/mp4;base64,[A-Za-z0-9+/=]+';", "const FILM='/assets/film.mp4?v=2';", s)
-    s = re.sub(r'poster="data:image/jpeg;base64,[A-Za-z0-9+/=]+"', 'poster="/assets/film-poster.jpg?v=2"', s)
+    s = re.sub(r'poster="data:image/jpeg;base64,[A-Za-z0-9+/=]+"', 'poster="/assets/film-poster.jpg?v=3"', s)   # v=3: the 9/22 poster (the current Workspace Home)
     assert "base64," not in s, "an embedded asset survived"
 
     # ── concept-only furniture ──
@@ -81,6 +81,14 @@ def build(src: pathlib.Path) -> str:
     s = rep(s, '<b data-to="79">$79</b><em>/mo</em>', '<b data-to="{{STARTER_PRICE}}">${{STARTER_PRICE}}</b><em>/mo</em>')
     s = rep(s, '<span class="pl">Starter<b>$79</b></span><span class="pl hot">Professional<b>$149</b><i>most chosen</i></span><span class="pl">Solutionist<b>$299</b></span>',
             '<span class="pl">Starter<b>${{STARTER_PRICE}}</b></span><span class="pl hot">Professional<b>${{PRO_PRICE}}</b><i>most chosen</i></span><span class="pl">Solutionist<b>${{SOL_PRICE}}</b></span>')
+
+    # ── v19 (9/22): the money calculator and the ask box read the live dials ──
+    s = rep(s, '<section class="hn-worth" id="worth" data-pro="149">', '<section class="hn-worth" id="worth" data-pro="{{PRO_PRICE}}">')
+    s = rep(s, '<span>what Professional costs, $149 a month</span>', '<span>what Professional costs, ${{PRO_PRICE}} a month</span>')
+    s = rep(s, '<div class="hn-ask reveal" id="pageAsk" data-starter="79" data-pro="149" data-sol="299">',
+            '<div class="hn-ask reveal" id="pageAsk" data-starter="{{STARTER_PRICE}}" data-pro="{{PRO_PRICE}}" data-sol="{{SOL_PRICE}}">')
+    s = rep(s, "a:'7 days free on every plan, the whole room", "a:'__TRIAL_FREE__ on every plan, the whole room")
+    s = rep(s, "or write to info@mysolutionist.app.'", "or write to __CONTACT_EMAIL__.'")
 
     # ── links ──
     s = s.replace('href="https://system.mysolutionist.app/"', 'href="{{APP_URL}}"')
