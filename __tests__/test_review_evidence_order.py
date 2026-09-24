@@ -71,3 +71,13 @@ def test_the_calendar_survives_a_full_context():
         assert sid in sources, sid
     assert "context:blueprint_block" not in sources
     assert sum(len(s["text"]) for s in sources.values()) <= truth.MAX_EVIDENCE_CHARS
+
+
+def test_saved_memories_survive_a_full_context():
+    # 2026-09-24: "the 90-day group cohort sells at $750" came from a saved
+    # memory; ranked with the prose blocks it was dropped and withheld.
+    ctx = {**FAT, "foundation_block": "f" * 10000, "business_profile_block": "q" * 10000,
+           "memories": [{"content": "Founders' Table: 90-day group cohort at $750"}]}
+    sources = truth.evidence_for_review(ctx, {}, [])
+    assert "context:memories" in sources
+    assert "$750" in sources["context:memories"]["text"]
