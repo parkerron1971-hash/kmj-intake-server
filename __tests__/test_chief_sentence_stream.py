@@ -75,9 +75,16 @@ def test_plain_advice_streams_until_it_touches_the_business():
 
 
 def test_an_action_tag_stops_the_stream_before_the_narration():
-    said, _ = _stream(["Let me pull that up. ", '[ACTION:{"type":"show_view"', '}] ',
+    said, _ = _stream(["Here's where things stand. ", '[ACTION:{"type":"show_view"', '}] ',
                        "Here it is. "])
-    assert said == ["Let me pull that up. "]
+    assert said == ["Here's where things stand. "]
+
+
+def test_a_promise_to_open_waits_for_the_action():
+    # "Let me pull that up." is a promise until the navigation exists
+    # (2026-09-23: "Let me open it." with nothing opened).
+    said, _ = _stream(["Let me pull that up. ", "Here it is. "])
+    assert said == []
 
 
 def test_the_lane_has_kill_switches(monkeypatch):
