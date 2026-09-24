@@ -229,7 +229,8 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
                 " Then, in ONE short closing line, say the matching Strategy Session in the"
                 " Solutionist Academy will sharpen it with their own numbers, and offer to open it"
                 " (\"Want me to open your pricing Strategy Session?\"). It is an offer: do not"
-                " navigate unless they say yes."
+                " navigate unless they say yes. Say the names in full — \"the Solutionist"
+                " Academy\" and \"Strategy Session\" — never just \"the Academy\" or \"session\"."
             )
         else:
             hint += (" Their Academy is finished: build on its deliverables and do not send them"
