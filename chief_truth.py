@@ -428,7 +428,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # JSON it quotes ("amount":150 for "amount": 150) often enough
             # to fail a greeting on its own evidence. The words and the
             # figures must still match exactly.
-            if _squash(quote) not in _squash(source['text']):
+            if not _quote_in_source(quote, source):
                 return 'unsupported', [], _claim_fail('quote is not in the cited source', text_)
             quoted = _numbers(quote) | _clock_twins(quote) | _duration_twins(quote)
             quoted_all = _number_list(quote)
@@ -510,6 +510,55 @@ def _squash(text):
     """Collapse whitespace, including the spaces JSON puts after commas
     and colons, so a quote survives being re-spaced by the reviewer."""
     return re.sub(r'\s+', '', text or '')
+
+
+def _caveat_text(gaps, references):
+    """The doubts a delivered answer carries, named."""
+    caveat = ''
+    if gaps:
+        caveat += "\n\nThese parts of my answer are still unverified:\n" + '\n'.join(
+            '- “%s”' % g for g in gaps)
+    if references:
+        caveat += ("\n\nThese are general rules from what I know, not from your records. "
+                   "Check them against the official source before you rely on them:\n") + '\n'.join(
+            '- “%s”' % r for r in references)
+    return caveat
+
+
+def _words(text):
+    """Whole words, lowercased; underscores split ("days_overdue" is two
+    words) so a JSON key reads like the prose it stands for."""
+    return set(re.findall(r'[a-z]+', (text or '').lower().replace('_', ' ')))
+
+
+def _quote_in_source(quote, source):
+    """Is this quote what the cited record says?
+
+    Verbatim (whitespace aside) always counts. For a business record, a
+    quote the reviewer put in its own shape also counts when ONE item of
+    the record (one invoice, one appointment, one line) holds every word
+    and every figure of it: "INV-2026-010 · Kevin McCloud · $5 · 96 days
+    overdue" against {"number": "INV-2026-010", "client": "Kevin McCloud",
+    "total": 5.0, "days_overdue": 96}. Verbatim-only withheld that correct
+    answer as "quote is not in the cited source" (2026-09-23). Whole words
+    only — "paid" is not in "unpaid", "not overdue" is not in "overdue" —
+    and the practitioner's own words stay verbatim-only."""
+    text = source.get('text') or ''
+    if _squash(quote) in _squash(text):
+        return True
+    if source.get('kind') not in ('record', 'context', 'receipt'):
+        return False
+    want_words = {w for w in _words(_ISO_STAMP.sub(' ', quote)) if len(w) >= 3}
+    want_figures = _numbers(quote)
+    if not want_words and not want_figures:
+        return False
+    for item in _record_items(text):
+        if _HEDGED_ITEM.search(item):
+            continue
+        if want_words <= _words(item) and want_figures <= (
+                _numbers(item) | _clock_twins(item) | _duration_twins(item)):
+            return True
+    return False
 
 
 def _gap_claims(raw, references=False):
@@ -1313,15 +1362,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                     len(references), '' if len(references) == 1 else 's')
         # Label excerpts explicitly: the reviewer may quote a dependent clause,
         # which is not a useful standalone sentence after "I could not confirm".
-        caveat = ''
-        if gaps:
-            caveat += "\n\nThese parts of my answer are still unverified:\n" + '\n'.join(
-                '- “%s”' % g for g in gaps)
-        if references:
-            caveat += ("\n\nThese are general rules from what I know, not from your records. "
-                       "Check them against the official source before you rely on them:\n") + '\n'.join(
-                '- “%s”' % r for r in references)
-        return (reply.rstrip() + caveat), {
+        return (reply.rstrip() + _caveat_text(gaps, references)), {
             'status': 'caveated', 'sources': [], 'gaps': gaps, 'references': references}
     if verdict == 'invalid':
         # The reviewer never delivered a usable verdict (timeout, budget stop,
@@ -1390,6 +1431,20 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 if checked_verdict == 'supported':
                     logger.info('reply review recovered; citations=%d', len(checked_sources))
                     return repaired, {'status': 'supported', 'sources': checked_sources, 'recovered': True}
+                # The repair's only doubts are side remarks it could not
+                # source ("those appear to be your own test invoices") or
+                # general rules: deliver it with them named, exactly as the
+                # first review does. A wrong figure or citation still fails.
+                # Withholding a checked invoice answer over one aside cost
+                # 41 s and ended in "try again" (2026-09-23).
+                r_gaps = unconfirmed_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
+                r_refs = reference_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
+                if (r_gaps or r_refs) and not has_completion_claim(repaired):
+                    logger.info('reply review recovered with %d gap(s), %d general rule(s)',
+                                len(r_gaps), len(r_refs))
+                    return (repaired.rstrip() + _caveat_text(r_gaps, r_refs)), {
+                        'status': 'caveated', 'sources': [], 'gaps': r_gaps,
+                        'references': r_refs, 'recovered': True}
                 logger.info('reply recovery rejected (%s)', checked_reason)
         except Exception as exc:
             logger.warning('reply recovery unavailable: %s', type(exc).__name__)

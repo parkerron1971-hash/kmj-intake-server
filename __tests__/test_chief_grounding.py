@@ -420,14 +420,21 @@ def test_a_total_may_add_up_from_the_whole_cited_source():
 
 def test_a_quote_the_reviewer_got_wrong_still_withholds_and_names_the_claim_in_the_reason():
     sources = {'context:open_invoices': {'kind': 'context', 'text': '[{"number": "INV-2026-007", "contact": "Monica Walton", "amount": 150.0, "days_overdue": 51}]'}}
-    raw = json.dumps({"verdict": "supported", "claims": [
+    # A quote that skips a field of the SAME record is a fair quote of it
+    # (2026-09-23: verbatim-only withheld correct invoice answers).
+    fair = json.dumps({"verdict": "supported", "claims": [
         {"text": "Monica Walton is 51 days overdue", "kind": "fact", "source_id": "context:open_invoices",
-         "quote": '"contact": "Monica Walton", "days_overdue": 51'}]})   # skipped the amount field
-    verdict, _, reason = truth.assess_review(raw, 'Monica Walton is 51 days overdue.', sources)
+         "quote": '"contact": "Monica Walton", "days_overdue": 51'}]})
+    assert truth.assess_review(fair, 'Monica Walton is 51 days overdue.', sources)[0] == 'supported'
+    # A quote the record does not hold is still a fabricated citation.
+    raw = json.dumps({"verdict": "supported", "claims": [
+        {"text": "Monica Walton is 52 days overdue", "kind": "fact", "source_id": "context:open_invoices",
+         "quote": '"contact": "Monica Walton", "days_overdue": 52'}]})
+    verdict, _, reason = truth.assess_review(raw, 'Monica Walton is 52 days overdue.', sources)
     assert verdict == 'unsupported' and reason.startswith('quote is not in the cited source :: Monica Walton')
     # a fabricated citation is never delivered with a caveat (the factual eval pins this)
     assert truth.unconfirmed_claims(raw, reason) == []
-    result, meta = asyncio.run(truth.finalize_reply(None, 'Monica Walton is 51 days overdue.',
+    result, meta = asyncio.run(truth.finalize_reply(None, 'Monica Walton is 52 days overdue.',
         ctx={'open_invoices': [{"number": "INV-2026-007", "contact": "Monica Walton", "amount": 150.0, "days_overdue": 51}]},
         view_detail={}, taken=[], message='Who is overdue?', business_id='biz', reviewer=AsyncMock(return_value=raw)))
     assert result == truth.UNVERIFIED_REPLY and meta['status'] == 'withheld'
