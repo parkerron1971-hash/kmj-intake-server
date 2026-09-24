@@ -105,17 +105,22 @@ def test_prose_gap_does_not_hide_a_later_bad_number(gap_first):
     bad = claim('900 contacts', 'context:contacts_total', '725')
     result, metadata = finalize('We have exchanged messages. You have 900 contacts.',
                                review(*([gap, bad] if gap_first else [bad, gap])))
-    assert result == truth.UNVERIFIED_REPLY
-    assert metadata['status'] == 'withheld'
-    assert 'number' in metadata['reason']
+    # The bad number never reaches the owner. Since 2026-09-24 its sentence
+    # is cut and the rest delivered with the gap named, instead of the
+    # whole answer withheld.
+    assert '900' not in result
+    assert metadata['status'] in ('withheld', 'caveated')
+    if metadata['status'] == 'caveated':
+        assert "left out one figure" in result and 'still unverified' in result
 
 
 @pytest.mark.parametrize('extra', ['There are 900 contacts.', 'See https://invented.example.'])
 def test_prose_gap_does_not_skip_unreviewed_figures_or_links(extra):
     result, metadata = finalize('We have exchanged messages. ' + extra,
                                review(claim('We have exchanged messages.', gap='Missing conversation')))
-    assert result == truth.UNVERIFIED_REPLY
-    assert metadata['status'] == 'withheld'
+    # The unreviewed figure or link never reaches the owner (cut or withheld).
+    assert '900' not in result and 'invented.example' not in result
+    assert metadata['status'] in ('withheld', 'caveated')
 
 
 def test_numeric_gap_cannot_deliver_an_unsupported_amount():
