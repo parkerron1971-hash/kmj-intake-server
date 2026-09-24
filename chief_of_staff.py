@@ -1285,6 +1285,16 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     sys_payload, prompt_shape = _build_system(_extended)
     if _extended and prompt_shape != "uncached-single":
         prompt_shape += "-1h"
+    if stable_tools and prompt_shape.startswith("cached-4seg"):
+        # Which cached parts moved since this business's last turn: the
+        # segments whole, the state snapshot paragraph by paragraph.
+        try:
+            import cache_watch
+            cache_watch.note("chief_prompt", business_id, {
+                "universal": sys_payload[0]["text"], "per_business": sys_payload[1]["text"],
+                **cache_watch.paragraphs(sys_payload[2]["text"])})
+        except Exception as e:  # never let a diagnostic touch the turn
+            logger.debug("cache watch failed: %s", e)
 
     # A cache_control segment under the model's minimum cacheable prefix
     # is accepted and silently never cached — no error, no warning, just
