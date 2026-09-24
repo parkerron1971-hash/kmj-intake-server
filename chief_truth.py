@@ -1106,6 +1106,10 @@ def evidence_for_review(ctx, view_detail, taken):
         import chief_of_staff as chief
         context.append(('email_replies', chief._format_email_replies_block(ctx)))
     for name, value in context:
+        if name == 'context_quality' and isinstance(value, dict) and value.get('retrieved_at'):
+            # The date, not the microseconds: a clock in the evidence made
+            # every review's records differ and nothing could be cached.
+            value = {**value, 'retrieved_at': str(value['retrieved_at'])[:10]}
         if value is not None:
             # Keep prose as prose. JSON-encoding a string here double-escapes
             # quotes/newlines in the outer review payload, so a reviewer citing
@@ -1170,6 +1174,63 @@ def evidence_for_review(ctx, view_detail, taken):
     return bounded
 
 
+# The review's business records, grouped by how often they change,
+# steadiest first. The API caches a prefix, so a change re-writes its own
+# group and every group after it, never one before it.
+# Long prose the evidence budget cuts first: how much of it fits depends
+# on how much this turn read, so it can differ between turns on the same day.
+_REVIEW_PROSE = ('blueprint_block', 'playbook_block', 'voice_block', 'brand_block',
+                 'practitioner_block', 'business_profile_block', 'foundation_block')
+# What moves while Chief works: recent activity, queues, the inbox.
+_REVIEW_ACTIVITY = ('events', 'queue', 'image_jobs', 'recent_queue_24h', 'auto_recent',
+                    'notifications', 'insights', 'learning_lines', 'email_replies')
+
+
+def _cacheable_review_messages(messages):
+    """The same review request, split so the business's records are cached.
+
+    Every review sent ~20k tokens at full price (~4.6c of a ~5c check,
+    2026-09-24), though the records (context:*) are the same from one
+    message to the next in a conversation, and between a review and its
+    recheck. The JSON document is unchanged but for key order (sources
+    first, the draft after them) and goes out as text blocks whose
+    concatenation IS that document: the steady records, the long prose,
+    recent activity (each behind a cache breakpoint), then this turn's
+    reads, the conversation, the question and the draft. Anything not in
+    the expected shape goes out exactly as given."""
+    try:
+        if len(messages) != 1 or messages[0].get('role') != 'user' \
+                or not isinstance(messages[0].get('content'), str):
+            return messages
+        data = json.loads(messages[0]['content'])
+        sources = data.get('sources') if isinstance(data, dict) else None
+        if not isinstance(sources, dict):
+            return messages
+    except (ValueError, TypeError, AttributeError):
+        return messages
+    records = [k for k in sources if k.startswith('context:') and k != 'context:current_view']
+    if not records:
+        return messages
+    group = lambda k: 1 if k[8:] in _REVIEW_PROSE else 2 if k[8:] in _REVIEW_ACTIVITY else 0
+    groups = [[k for k in records if group(k) == g] for g in (0, 1, 2)]
+    enc = lambda v: json.dumps(v, ensure_ascii=False, default=str)
+    item = lambda k: f'{enc(k)}: {enc(sources[k])}'
+    blocks, opened = [], False
+    for ids in groups:
+        if not ids:
+            continue
+        text = (', ' if opened else '{"sources": {') + ', '.join(item(k) for k in ids)
+        blocks.append({'type': 'text', 'text': text, 'cache_control': {'type': 'ephemeral'}})
+        opened = True
+    rest = [item(k) for k in sources if k not in records]
+    tail = (', ' + ', '.join(rest) if rest else '') + '}'
+    for k, v in data.items():
+        if k != 'sources':
+            tail += f', {enc(k)}: {enc(v)}'
+    blocks.append({'type': 'text', 'text': tail + '}'})
+    return [{'role': 'user', 'content': blocks}]
+
+
 def _review_thinking():
     return (os.environ.get('CHIEF_REVIEW_THINKING') or 'off').strip().lower()
 
@@ -1189,8 +1250,12 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # budget (usage showed thinking_tokens == output_tokens) and returned no
     # JSON at all, so every long answer was withheld. Low effort keeps the
     # thinking short enough that the verdict actually gets written.
+    # The instructions are the same for every review of every business;
+    # their own breakpoint keeps them cached when the records change.
+    if isinstance(system, str) and system:
+        system = [{'type': 'text', 'text': system, 'cache_control': {'type': 'ephemeral'}}]
     payload = {'model': model, 'max_tokens': max_tokens,
-               'system': system, 'messages': messages}
+               'system': system, 'messages': _cacheable_review_messages(messages)}
     # No thinking at all (2026-09-24). Benchmarked on three real answers
     # against KMJ's records, twice each: thinking off averaged 8.4 s vs
     # 10.3 s at low effort (the pricing answer 5-7 s vs 10 s), with the SAME
