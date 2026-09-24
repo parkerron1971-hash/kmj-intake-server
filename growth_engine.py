@@ -857,7 +857,7 @@ async def forecast_revenue(client: httpx.AsyncClient, biz_id: str) -> Optional[D
       }
     """
     now = datetime.now(timezone.utc)
-    six_months_ago = (now - timedelta(days=180)).isoformat()
+    six_months_ago = (now - timedelta(days=180)).isoformat().replace('+00:00', 'Z')
     paid_rows = await _sb(client, "GET",
         f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{six_months_ago}"
         f"&select=total,paid_at&limit=500"
@@ -896,7 +896,7 @@ async def forecast_revenue(client: httpx.AsyncClient, biz_id: str) -> Optional[D
     adjusted_forecast = forecast * 0.6 + pipeline_contribution * 0.4
 
     # Current-month pace via straight-line projection.
-    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat().replace('+00:00', 'Z')
     this_month_rows = await _sb(client, "GET",
         f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{this_month_start}"
         f"&select=total&limit=500"

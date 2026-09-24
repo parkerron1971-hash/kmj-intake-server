@@ -234,7 +234,9 @@ def capture_learning_signal(business_id: str, proposal_type: str,
 
 
 def recent_learning_signals(business_id: str, *, days: int = 30) -> List[Dict[str, Any]]:
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    # '+00:00' decodes to a space in a query string -> 22007, and the
+    # read came back empty on every turn (found 2026-09-24).
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace('+00:00', 'Z')
     return sb_clients.sb_get_as_service(
         f"/chief_learning_signals?business_id=eq.{business_id}"
         f"&created_at=gte.{since}&order=created_at.desc&limit=50"
