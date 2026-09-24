@@ -1084,6 +1084,13 @@ WEB_SEARCH_TOOL = {
     "max_uses": CHIEF_WEB_SEARCH_MAX_USES,
 }
 
+# Appended to the uncached turn tail when a stable-tools turn should not
+# search (see _call_claude). Everything the answer needs is in the records.
+_NO_SEARCH_THIS_TURN = (
+    "\n\nWEB SEARCH — NOT THIS TURN: this message is an instruction or is about the "
+    "practitioner's own records. Answer from the context and tools above; do not call "
+    "web_search.\n")
+
 
 # ── Extended prompt cache ────────────────────────────────────────────
 #
@@ -1154,7 +1161,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        stream_sink=None,
                        read_tools: Optional[List[Dict[str, Any]]] = None,
                        tool_biz: Optional[Dict[str, Any]] = None,
-                       effort: Optional[str] = None) -> str:
+                       effort: Optional[str] = None,
+                       stable_tools: bool = False) -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
     # turns once this business crosses its daily-dollar ceiling, or the
     # platform crosses its own. Fail-open — a bookkeeping hiccup must
@@ -1184,6 +1192,16 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # Chief Layers arc — callers pick a lane (chat/voice/deep) via
     # chief_models.model_for; no explicit model keeps the chat default.
     model = model or CHIEF_MODEL
+    # A stable tool list (2026-09-24). Tools render BEFORE the system prompt,
+    # so adding or dropping web_search between turns ("which invoices…" off,
+    # "help me price…" on) invalidated the whole cached prefix — the 45k-token
+    # operating manual re-written at ~27c a turn, 11 times in 4 days inside
+    # its own 1-hour window. With stable_tools the tool is always offered and
+    # a turn that should not search says so in the uncached tail instead.
+    if stable_tools and CHIEF_WEB_SEARCH_ENABLED and not enable_web_search:
+        if isinstance(system, str):
+            system = system + _NO_SEARCH_THIS_TURN
+        enable_web_search = True
     # Arc 20B Part 1 (+ char-core split) — the prompt splits into up to three
     # cache segments, ordered most-stable → most-volatile:
     #   1. UNIVERSAL core (identity + shared character + machinery) — before
@@ -3099,6 +3117,19 @@ def _merge_inbound_mail(
     return merged
 
 
+_SNAPSHOT_AT = re.compile(r';\s*snapshot at [^;]*?\.$')
+
+
+def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """context_quality for the CACHED state segment: the retrieval DATE,
+    not the microsecond timestamp, which changed the segment on every turn
+    and forced a ~12k-token cache re-write per message (2026-09-24)."""
+    q = dict(ctx.get('context_quality') or {'retrieved_at': 'unknown', 'lists_are_samples': True})
+    stamp = str(q.pop('retrieved_at', '') or '')
+    q = {'retrieved_on': stamp[:10] if stamp[:4].isdigit() else (stamp or 'unknown'), **q}
+    return q
+
+
 def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     """Format the recent inbound email replies for the system prompt.
 
@@ -3125,8 +3156,12 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     replies = ctx.get("email_replies") or []
     withheld = int(ctx.get("email_replies_withheld") or 0)
     clock = mailbox_policy.email_clock(ctx)
+    # The date, not the snapshot's microseconds: this block sits in the
+    # CACHED state segment, and "snapshot at 07:34:52.076830" changed it on
+    # every turn — a ~12k-token cache re-write per message (2026-09-24).
+    clock_line = _SNAPSHOT_AT.sub('.', clock['description'])
     scope_header = (
-        f"EMAIL DATE CONTEXT: {clock['description']}\n"
+        f"EMAIL DATE CONTEXT: {clock_line}\n"
         "  Resolve 'today' using this date and timezone; only call a message today's\n"
         "  when its received date matches. Report matching messages in the stored\n"
         "  sample directly; the question does not need a client name to be answerable.\n"
@@ -3529,7 +3564,7 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
 
-DATA QUALITY: {json.dumps(ctx.get('context_quality') or {'retrieved_at': 'unknown', 'lists_are_samples': True})}
+DATA QUALITY: {json.dumps(_quality_for_prompt(ctx))}
   A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete. Never infer a total or absence from a capped list.
 CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unknown'} total
   loaded: {ctx.get('contacts_loaded', 'unknown')}; complete: {ctx.get('contacts_complete', False)}
@@ -12525,7 +12560,7 @@ async def _get_session_context(client: httpx.AsyncClient, biz_id: str) -> str:
     """Recap of what the Chief has done in the last ~2 hours so the AI
     can reference it naturally without re-explaining."""
     try:
-        two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        two_hours_ago = _ts(datetime.now(timezone.utc) - timedelta(hours=2))
         rows = await _sb(
             client, "GET",
             f"/events?business_id=eq.{biz_id}"
@@ -12858,7 +12893,7 @@ async def _forecast_revenue(client: httpx.AsyncClient, biz_id: str) -> Optional[
     chief_of_staff doesn't need to import the GROW module (avoids any
     circular-import risk)."""
     now = datetime.now(timezone.utc)
-    six_months_ago = (now - timedelta(days=180)).isoformat()
+    six_months_ago = _ts(now - timedelta(days=180))
     paid_rows = await _sb(client, "GET",
         f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{six_months_ago}"
         f"&select=total,paid_at&limit=500"
@@ -12887,7 +12922,7 @@ async def _forecast_revenue(client: httpx.AsyncClient, biz_id: str) -> Optional[
     pipeline_total = sum(float(i.get("total") or 0) for i in pipeline_rows)
     adjusted = forecast * 0.6 + (pipeline_total * 0.7) * 0.4
 
-    this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    this_month_start = _ts(now.replace(day=1, hour=0, minute=0, second=0, microsecond=0))
     this_month_rows = await _sb(client, "GET",
         f"/invoices?business_id=eq.{biz_id}&status=eq.paid&paid_at=gte.{this_month_start}"
         f"&select=total&limit=500"
@@ -14124,6 +14159,9 @@ async def chief_chat(
                                      # exactly that turn, then spent its
                                      # reply apologising for the search.
                                      enable_web_search=_web_search_allowed(req.message or ""),
+                                     # Same tools every turn; the choice rides the
+                                     # uncached tail (cache: see _call_claude).
+                                     stable_tools=True,
                                      # Voice streaming arc — set only when
                                      # /chat/stream drives this turn.
                                      stream_sink=_sentence_streamer,
