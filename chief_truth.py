@@ -1235,8 +1235,44 @@ def _review_thinking():
     return (os.environ.get('CHIEF_REVIEW_THINKING') or 'off').strip().lower()
 
 
-async def review_reply(client, system, messages, *, max_tokens, enable_web_search=False, business_id=None):
-    """One bounded, metered, tool-free review; no retry or backup action path."""
+# The review's shape, enforced by the API (2026-09-24). Told in prose to
+# "Return ONLY JSON", the reviewer wrote `"claims":[[]][0] || null,"claims":[`
+# on 3 of 8 reviews of one real answer. Each read as "review is not JSON":
+# the draft went out unchecked, or was withheld when it claimed an action.
+# With the schema the same answer came back well-formed 6 of 6, at the same
+# speed and with the same verdicts on the others. assess_review still checks
+# every claim against the evidence; this fixes only the shape.
+# CHIEF_REVIEW_SCHEMA=off drops it without a deploy.
+REVIEW_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'verdict': {'type': 'string', 'enum': ['supported', 'unsupported']},
+        'claims': {'type': 'array', 'items': {
+            'type': 'object',
+            'properties': {
+                'text': {'type': 'string'},
+                'kind': {'type': 'string', 'enum': ['fact', 'action', 'estimate', 'reference']},
+                'source_id': {'type': 'string'},
+                'quote': {'type': 'string'},
+                'gap': {'type': 'string'},
+            },
+            'required': ['text', 'kind', 'source_id', 'quote'],
+            'additionalProperties': False,
+        }},
+    },
+    'required': ['verdict', 'claims'],
+    'additionalProperties': False,
+}
+
+
+def _review_schema_on():
+    return (os.environ.get('CHIEF_REVIEW_SCHEMA') or 'on').strip().lower() != 'off'
+
+
+async def review_reply(client, system, messages, *, max_tokens, enable_web_search=False, business_id=None,
+                       schema=REVIEW_SCHEMA):
+    """One bounded, metered, tool-free review; no retry or backup action path.
+    `schema` is the reply's enforced shape; the prose repair passes None."""
     import httpx
     import llm_call
     import chief_models
@@ -1268,6 +1304,9 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
         payload['thinking'] = {'type': 'disabled'}
     else:
         payload.update(model_ladder.effort_kwargs(model, 'low'))
+    if schema and _review_schema_on():
+        payload['output_config'] = {**(payload.get('output_config') or {}),
+                                    'format': {'type': 'json_schema', 'schema': schema}}
     response = await llm_call.apost(client, payload,
         timeout=httpx.Timeout(25.0, connect=5.0), task='chief_answer_review', business_id=business_id)
     if response.status_code >= 400:
@@ -1937,4 +1976,4 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
 
 async def repair_reply(client, system, messages, **kwargs):
     """Use the metered, tool-free reviewer transport for a single prose repair."""
-    return await review_reply(client, system, messages, **kwargs)
+    return await review_reply(client, system, messages, schema=None, **kwargs)
