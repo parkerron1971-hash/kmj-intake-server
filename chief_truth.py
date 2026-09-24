@@ -312,7 +312,9 @@ _RECOMMENDATION = re.compile(
     r"\b(?:I'?d|I would|I recommend|I suggest|my (?:pick|recommendation|suggestion|advice)|"
     r"consider|aim for|go with|start (?:at|with|around)|price (?:it|them|each|the|seats?|tickets?)\b|"
     r"charge|set (?:it|the price|the rate)|you could|you might|you should|you'?d|try|"
-    r"plan (?:for|on)|target|land (?:it|at|around)|shoot for|cap (?:it|the)|keep (?:it|the))\b",
+    r"plan (?:for|on)|target|land (?:it|at|around)|shoot for|cap (?:it|the)|keep (?:it|the)|"
+    # "I'd anchor at $997 per seat" (live 9/24, flagged unverified)
+    r"anchor (?:it |the price |seats? )?(?:at|around)|list (?:it|seats?) at|open (?:it|seats?) at)\b",
     re.I)
 _POSSESSIVE_FIGURE = re.compile(r"\b(?:your|our|my)\s+(?:\w+\s+)?\$?\d", re.I)
 
