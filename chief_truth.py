@@ -1299,12 +1299,13 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # Only the review: the prose repair runs at most once a turn under its
     # own instructions, so a cache it wrote was never read back, only paid
     # for at 1.25x (26,211 tokens on one repair, 2026-09-24).
+    sent = messages
     if schema:
         if isinstance(system, str) and system:
             system = [{'type': 'text', 'text': system, 'cache_control': {'type': 'ephemeral'}}]
-        messages = _cacheable_review_messages(messages)
+        sent = _cacheable_review_messages(messages)
     payload = {'model': model, 'max_tokens': max_tokens,
-               'system': system, 'messages': messages}
+               'system': system, 'messages': sent}
     # No thinking at all (2026-09-24). Benchmarked on three real answers
     # against KMJ's records, twice each: thinking off averaged 8.4 s vs
     # 10.3 s at low effort (the pricing answer 5-7 s vs 10 s), with the SAME
