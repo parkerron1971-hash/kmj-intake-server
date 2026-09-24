@@ -111,3 +111,25 @@ def test_the_review_request_caches_its_instructions_and_records(monkeypatch):
     breakpoints = sum(1 for b in sent["system"] + sent["messages"][0]["content"] if "cache_control" in b)
     assert breakpoints <= 4  # the API's limit per request
     assert json.loads("".join(b["text"] for b in sent["messages"][0]["content"])) == doc
+
+
+def test_the_prose_repair_is_sent_as_given(monkeypatch):
+    # The repair runs at most once a turn under its own instructions: a
+    # cache it wrote was never read back, only paid for at 1.25x.
+    import chief_models
+    import llm_call
+    import spend_guard
+    sent = {}
+
+    async def apost(client, payload, **kw):
+        sent.update(payload)
+        return _Resp()
+    monkeypatch.setattr(llm_call, "apost", apost)
+    monkeypatch.setattr(llm_call, "api_key", lambda: "k")
+    monkeypatch.setattr(spend_guard, "over_budget", lambda *a, **k: False)
+    monkeypatch.setattr(chief_models, "model_for", lambda lane, plan=None: "claude-sonnet-5")
+    content = json.dumps(_doc(SOURCES))
+    asyncio.run(truth.repair_reply(None, truth.REPAIR_SYSTEM,
+                [{"role": "user", "content": content}], max_tokens=100))
+    assert sent["system"] == truth.REPAIR_SYSTEM
+    assert sent["messages"] == [{"role": "user", "content": content}]
