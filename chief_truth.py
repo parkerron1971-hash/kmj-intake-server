@@ -1110,6 +1110,14 @@ def evidence_for_review(ctx, view_detail, taken):
             # The date, not the microseconds: a clock in the evidence made
             # every review's records differ and nothing could be cached.
             value = {**value, 'retrieved_at': str(value['retrieved_at'])[:10]}
+        if isinstance(value, list):
+            import chief_of_staff as chief
+            heading = chief.CONTEXT_HEADINGS.get(name)
+            if heading:
+                # The heading Chief read these rows under ("next 7 days"),
+                # so an answer that repeats it can cite it. Each row stays
+                # its own record for the fast lane.
+                value = {'heading': heading, 'rows': value}
         if value is not None:
             # Keep prose as prose. JSON-encoding a string here double-escapes
             # quotes/newlines in the outer review payload, so a reviewer citing
@@ -1288,10 +1296,16 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # thinking short enough that the verdict actually gets written.
     # The instructions are the same for every review of every business;
     # their own breakpoint keeps them cached when the records change.
-    if isinstance(system, str) and system:
-        system = [{'type': 'text', 'text': system, 'cache_control': {'type': 'ephemeral'}}]
+    # Only the review: the prose repair runs at most once a turn under its
+    # own instructions, so a cache it wrote was never read back, only paid
+    # for at 1.25x (26,211 tokens on one repair, 2026-09-24).
+    sent = messages
+    if schema:
+        if isinstance(system, str) and system:
+            system = [{'type': 'text', 'text': system, 'cache_control': {'type': 'ephemeral'}}]
+        sent = _cacheable_review_messages(messages)
     payload = {'model': model, 'max_tokens': max_tokens,
-               'system': system, 'messages': _cacheable_review_messages(messages)}
+               'system': system, 'messages': sent}
     # No thinking at all (2026-09-24). Benchmarked on three real answers
     # against KMJ's records, twice each: thinking off averaged 8.4 s vs
     # 10.3 s at low effort (the pricing answer 5-7 s vs 10 s), with the SAME
@@ -1307,6 +1321,17 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     if schema and _review_schema_on():
         payload['output_config'] = {**(payload.get('output_config') or {}),
                                     'format': {'type': 'json_schema', 'schema': schema}}
+    if schema:
+        # Which of the business's records moved since its last review (the
+        # cached blocks are re-written when any of them does).
+        try:
+            import cache_watch
+            srcs = json.loads(messages[0]['content']).get('sources') or {}
+            cache_watch.note('review_records', business_id, {
+                k: json.dumps(v, sort_keys=True, ensure_ascii=False) for k, v in srcs.items()
+                if k.startswith('context:') and k != 'context:current_view'})
+        except Exception as e:  # never let a diagnostic touch the review
+            logger.warning('cache watch failed: %s', e)
     response = await llm_call.apost(client, payload,
         timeout=httpx.Timeout(25.0, connect=5.0), task='chief_answer_review', business_id=business_id)
     if response.status_code >= 400:

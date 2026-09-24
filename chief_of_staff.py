@@ -1043,8 +1043,16 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
     )
     if method.upper() == 'GET' and result is None:
         import chief_truth
-        chief_truth.record('lookup:' + path, None)
+        # The failed read's id, minus the clock in its query: listed in
+        # DATA QUALITY (cached prompt) and in the answer check's records,
+        # a path with "created_at=gte.<now>" changed both on every message
+        # and forced ~48k tokens of cache writes per reply (2026-09-24).
+        chief_truth.record('lookup:' + _READ_CLOCK.sub('<time>', path), None)
+        logger.info("chief read unavailable: %s", path.split('?', 1)[0])
     return result
+
+
+_READ_CLOCK = re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?')
 
 
 async def _sb_service(client: httpx.AsyncClient, method: str, path: str, body=None):
@@ -1285,6 +1293,16 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     sys_payload, prompt_shape = _build_system(_extended)
     if _extended and prompt_shape != "uncached-single":
         prompt_shape += "-1h"
+    if stable_tools and prompt_shape.startswith("cached-4seg"):
+        # Which cached parts moved since this business's last turn: the
+        # segments whole, the state snapshot paragraph by paragraph.
+        try:
+            import cache_watch
+            cache_watch.note("chief_prompt", business_id or (tool_biz or {}).get("id"), {
+                "universal": sys_payload[0]["text"], "per_business": sys_payload[1]["text"],
+                **cache_watch.paragraphs(sys_payload[2]["text"])})
+        except Exception as e:  # never let a diagnostic touch the turn
+            logger.warning("cache watch failed: %s", e)
 
     # A cache_control segment under the model's minimum cacheable prefix
     # is accepted and silently never cached — no error, no warning, just
@@ -2235,6 +2253,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "queue": queue or [],
         "events": events or [],
         "sessions": sessions or [],
+        # The calendar read succeeded and came back under its limit of 10:
+        # every scheduled session in the window is in the list, so an empty
+        # list means nothing is booked. Without this the prompt said "none
+        # in the loaded sample; check data availability" either way, and
+        # "When is my next appointment?" spent two lookups (17.9 s) before
+        # saying nothing was booked (2026-09-24).
+        "sessions_complete": sessions is not None and len(sessions) < 10,
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
@@ -3121,6 +3146,15 @@ def _merge_inbound_mail(
 
 _SNAPSHOT_AT = re.compile(r';\s*snapshot at [^;]*?\.$')
 
+# Two context lists are framed in the prompt by headings that carry figures.
+# The answer check reviews the same lists and gets the same heading, from
+# here: shown only `[]`, "Nothing on the calendar in the next 7 days" was
+# withheld as a figure with no evidence, and the repair told the owner
+# Chief had no access to their calendar (2026-09-24).
+SESSIONS_HEADING = "UPCOMING SESSIONS (next 7 days)"
+AT_RISK_HEADING = "at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed)"
+CONTEXT_HEADINGS = {"sessions": SESSIONS_HEADING, "at_risk": AT_RISK_HEADING}
+
 
 def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """context_quality for the CACHED state segment: the retrieval DATE,
@@ -3572,15 +3606,15 @@ CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unkn
   loaded: {ctx.get('contacts_loaded', 'unknown')}; complete: {ctx.get('contacts_complete', False)}
   by_status (loaded sample only): {json.dumps(ctx['contacts_by_status'])}
   avg_health (loaded sample only): {ctx['avg_health']}
-  at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed):
+  {AT_RISK_HEADING}:
 {chr(10).join(at_risk_lines) if at_risk_lines else '  (none in this context sample)'}
   For complete Retention counts, names, repeat-payment rates and follow-up decisions, call growth_report section=client_health or section=retention. Do not treat this context sample as a complete report.
 
 QUEUE ({len(ctx['queue'])} loaded draft rows; sample, not a total):
 {chr(10).join(queue_lines) if queue_lines else '  (none in the loaded sample; check data availability)'}
 
-UPCOMING SESSIONS (next 7 days):
-{chr(10).join(session_lines) if session_lines else '  (none in the loaded sample; check data availability)'}
+{SESSIONS_HEADING}:
+{chr(10).join(session_lines) if session_lines else ('  (nothing booked in this window: this list is the whole calendar for it)' if ctx.get('sessions_complete') else '  (none in the loaded sample; check data availability)')}
 
 PROJECTS (loaded sample; use list_projects for additional records):
 {chr(10).join(project_lines) if project_lines else '  (none in the loaded sample; check data availability)'}
@@ -5134,9 +5168,15 @@ async def handle_show_view(client, biz, action) -> Dict:
 
     title = spec["title"]
     filt_label = "" if filt == "all" else f" ({filt})"
+    note_for_chief = None
     if not rows:
-        result = (f"0 {view} match filter '{filt}' — the list is genuinely empty; "
-                  f"tell the practitioner that plainly and do NOT invent rows")
+        # `result` is printed on the owner's Actions Taken card; the
+        # instruction to Chief rides its own field, which only the model
+        # reads. It sat in `result` and the card told the owner "tell the
+        # practitioner that plainly and do NOT invent rows" (2026-09-24).
+        result = f"No {view} match '{filt}' right now"
+        note_for_chief = ("The list is genuinely empty: tell the practitioner that plainly "
+                          "and do NOT invent rows.")
     else:
         result = f"showing {len(rows)} {view}{filt_label}"
         if total is not None:
@@ -5167,6 +5207,7 @@ async def handle_show_view(client, biz, action) -> Dict:
     return {
         "type": "show_view",
         "result": result,
+        **({"note_for_chief": note_for_chief} if note_for_chief else {}),
         "label": f"📋 {title}{filt_label} — {len(rows)} shown"
                  + (f" · ${total:,.2f}" if total else ""),
         "view": view,
@@ -11524,6 +11565,9 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
             speak = t.get("speak")
             if isinstance(speak, str) and speak.strip():
                 parts.append(f"      data now shown to the practitioner: {speak.strip()}")
+            note = t.get("note_for_chief")
+            if isinstance(note, str) and note.strip():
+                parts.append(f"      note: {note.strip()}")
     return "\n".join(parts) if parts else "(no actions ran)"
 
 
