@@ -30,7 +30,11 @@ if not logger.handlers:
 # reads every source before it writes a word. Half that keeps the
 # latest results and the most recent context (bounded newest-first
 # below) and drops the tail that was never cited.
-MAX_EVIDENCE_CHARS = 30000
+# 30,000 held the records OR the prose blocks, not both: with the records
+# ranked to survive (2026-09-23), the blueprint and playbook were dropped,
+# and the owner's own "$750 for 90 days" Founders' Table price was withheld
+# as having no evidence. ~12k tokens of evidence on a ~21k-token review.
+MAX_EVIDENCE_CHARS = 50000
 # The review lists every claim with an exact quote. 2,400 tokens was hit on a
 # long ordinary answer (output_tokens == cap in api_usage), which discarded the
 # whole review and replaced the answer with UNVERIFIED_REPLY.
@@ -280,7 +284,119 @@ def _review_json(raw):
 _ABOUT_THE_BUSINESS = re.compile(r"\b(?:you|your|yours|you['’](?:re|ve|ll|d)|we|our|ours|us|my|me)\b|\bI\b", re.I)
 
 
+# A figure given as a ballpark about the world, not this business: "a coach
+# charging $300 an hour typically prices a workshop at $75 to $120 a head",
+# "similar two-day intensives run roughly $800-$1,500 a seat". Asked "can we
+# come up with a better price?", every draft with a benchmark in it was
+# withheld as "claim number has no evidence", and she heard "No action ran
+# ... try again?" three times running (2026-09-23). The hedge is the label:
+# a bare "the current market rate is $175" asserts a fact and stays held
+# (the factual eval's uncited_external_fact case).
+_ESTIMATE_WORDING = re.compile(
+    r"\b(?:typical(?:ly)?|usually|often|generally|roughly|approximately|ballpark|"
+    r"benchmark\w*|similar|comparable|might|could|would|for example|e\.g\.|anywhere from|or so|"
+    r"sweet spot|rule of thumb|ideal|best practice|tends? to|works best|most \w+ (?:run|charge|price))\b"
+    # A hypothetical third party: "a coach charging $300 an hour", "a salon that ..."
+    r"|\b(?:a|an)\s+\w+\s+(?:charging|who|that|with|at)\b"
+    # A range is an estimate by its shape: "$50-$150", "8 to 15 people".
+    r"|\$?\d[\d,]*(?:\.\d+)?\s*(?:-|–|—|to)\s*\$?\d[\d,]*",
+    re.I)
+
+# Chief's own advice is not a claim about the world or the business:
+# "I'd price seats at $797-$1,197" is what it recommends, and nothing can
+# "prove" a recommendation. Held as a fact, every pricing answer was
+# "No action ran … try again?" (2026-09-23). A recommendation that leans on
+# a business figure ("below your $1,500 Founders' Table", "since your 11
+# clients …") still has that figure checked.
+_RECOMMENDATION = re.compile(
+    r"\b(?:I'?d|I would|I recommend|I suggest|my (?:pick|recommendation|suggestion|advice)|"
+    r"consider|aim for|go with|start (?:at|with|around)|price (?:it|them|each|the|seats?|tickets?)\b|"
+    r"charge|set (?:it|the price|the rate)|you could|you might|you should|you'?d|try|"
+    r"plan (?:for|on)|target|land (?:it|at|around)|shoot for|cap (?:it|the)|keep (?:it|the)|"
+    # "I'd anchor at $997 per seat" (live 9/24, flagged unverified)
+    r"anchor (?:it |the price |seats? )?(?:at|around)|list (?:it|seats?) at|open (?:it|seats?) at)\b",
+    re.I)
+_POSSESSIVE_FIGURE = re.compile(r"\b(?:your|our|my)\s+(?:\w+\s+)?\$?\d", re.I)
+
+
+def _sentence_containing(reply, text):
+    want = _squash(text).lower()
+    for s in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
+        if want and want in _squash(s).lower():
+            return s
+    return text or ''
+
+
+def _is_recommendation_text(sentence):
+    return (bool(_RECOMMENDATION.search(sentence or '')) and not _RECORD_NOUN.search(sentence)
+            and not _STATE_CLAIM.search(sentence) and not _POSSESSIVE_FIGURE.search(sentence))
+
+
+def _is_recommendation(claim, reply):
+    text = claim.get('text')
+    if not isinstance(text, str) or claim.get('kind') not in ('fact', 'estimate', 'reference'):
+        return False
+    return _is_recommendation_text(text) or (
+        not _RECORD_NOUN.search(text) and not _POSSESSIVE_FIGURE.search(text)
+        and _is_recommendation_text(_sentence_containing(reply, text)))
+
+
+# "In 2026", "for 2025": the year is the clock, not a figure to prove.
+_YEAR_CONTEXT = re.compile(r"\b(?:in|for|by|of|during|since|through|this|next|last)\s+(20\d\d)\b", re.I)
+
+
+def _advice_math(text, reply, sources):
+    """Figures in `text` that are the owner's own numbers, a recommendation's
+    figures, or a sum / difference / product of two of those: "Twelve seats
+    gets you $8,364" is 12 (asked for) × $697 (recommended). Withheld as
+    "no evidence", a pricing answer was lost (2026-09-24). Only arithmetic
+    on advice and on what they said; a record's figure still needs its
+    record."""
+    # Never for a sentence about a person or a record: "Monica owes $150"
+    # must not pass because 150 happens to be 2 x 75.
+    names = [n for n in _fast_lane_names(text or '')
+             if n.lower() not in _UNIT_WORDS and n.lower() not in _TENS_WORDS]
+    if _RECORD_NOUN.search(text or '') or names:
+        return set()
+    base = set(_practitioner_figures(sources))
+    for s in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
+        if _is_recommendation_text(s):
+            base |= _numbers(_counts_as_digits(s))
+    base = {n for n in base if n != 0}
+    pool = sorted(base)[:24]
+    out = set()
+    for n in _numbers(_counts_as_digits(text or '')):
+        if n in base:
+            out.add(n)
+            continue
+        if any(n == a * b or n == a + b or n == abs(a - b)
+               for i, a in enumerate(pool) for b in pool[i:]):
+            out.add(n)
+    return out
+
+
+def _free_figures(text):
+    import datetime as _dt
+    this = _dt.date.today().year
+    return {Decimal(y) for y in _YEAR_CONTEXT.findall(text or '') if abs(int(y) - this) <= 1}
+# A sentence about records is a business fact whatever its wording: "revenue
+# was roughly $900,000" must still be proved.
+_RECORD_NOUN = re.compile(
+    r"\b(?:invoice\w*|revenue|income|sales|profit\w*|balance|payment\w*|paid|owed?|owing|"
+    r"clients?|customers?|contacts?|leads?|bookings?|booked|appointments?|sessions?|"
+    r"subscribers?|members?|donations?|expenses?|ledger|bank|cash)\b", re.I)
+
+
+def _is_general_estimate(claim):
+    text = claim.get('text')
+    return (isinstance(text, str) and claim.get('kind') in ('fact', 'estimate', 'reference')
+            and bool(_numbers(text)) and not _ABOUT_THE_BUSINESS.search(text)
+            and not _RECORD_NOUN.search(text) and bool(_ESTIMATE_WORDING.search(text)))
+
+
 def _is_reference(claim):
+    if _is_general_estimate(claim):
+        return True
     return (claim.get('kind') == 'reference' and isinstance(claim.get('text'), str)
             and not _ABOUT_THE_BUSINESS.search(claim['text']))
 
@@ -328,6 +444,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
     # A bare unsupported with nothing cited stays unsupported: nothing was
     # checked, so nothing can be cleared.
     model_says_unsupported = review['verdict'] != 'supported'
+    prover = None   # built on first need: corroborates a figure a quote lacks
     if model_says_unsupported and not claims:
         return 'unsupported', [], 'reviewer verdict unsupported, nothing cited'
     try:
@@ -354,6 +471,10 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # knowledge. Held to the same bar as a business figure, every
             # filing question was answered "No action ran" (2026-09-22).
             # A reference claim WITH a citation is checked like a fact.
+            # Chief's own recommendation ("I'd price seats at $797-$1,197")
+            # is advice: delivered as said, not labeled and not proved.
+            if _unsourced(claim) and _is_recommendation(claim, reply):
+                continue
             if _is_reference(claim) and _unsourced(claim):
                 references.append(text_.strip()[:140])
                 continue
@@ -380,7 +501,11 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
                 if claim['kind'] == 'action':
                     return 'unsupported', [], 'action claim without a write receipt'
-                if _numbers(text_) - _practitioner_figures(sources):
+                # Chief's own recommendation is advice, not evidence-bound.
+                if _is_recommendation(claim, reply):
+                    continue
+                if _numbers(text_) - _practitioner_figures(sources) - _free_figures(text_) \
+                        - _advice_math(text_, reply, sources):
                     return 'unsupported', [], _claim_fail('claim number has no evidence', text_)
                 gaps.append('claim without support: %s (%s)' % (text_.strip()[:80], why))
                 # A prose gap must not hide a bad citation/figure later in the
@@ -393,7 +518,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # JSON it quotes ("amount":150 for "amount": 150) often enough
             # to fail a greeting on its own evidence. The words and the
             # figures must still match exactly.
-            if _squash(quote) not in _squash(source['text']):
+            if not _quote_in_source(quote, source):
                 return 'unsupported', [], _claim_fail('quote is not in the cited source', text_)
             quoted = _numbers(quote) | _clock_twins(quote) | _duration_twins(quote)
             quoted_all = _number_list(quote)
@@ -401,7 +526,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # A figure the claim did not quote is fine when it is the exact
             # sum of figures in the quote or in the cited source: arithmetic
             # over the records, not a new number.
-            missing = {n for n in _numbers(text_) - quoted
+            missing = {n for n in _numbers(text_) - quoted - _free_figures(text_)
                        if not (_is_sum_of(n, quoted_all) or _is_sum_of(n, source_all))}
             if claim['kind'] == 'estimate':
                 # The reviewer labels totals "estimate" more often than the
@@ -417,6 +542,31 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # A reviewer cannot bless a fabricated number with an unrelated
             # real quote.
             if claim['kind'] != 'estimate':
+                # A ballpark about the world that the reviewer tried to
+                # cite anyway ("the sweet spot for group size is 8-15") is
+                # general knowledge, labeled as such — the same bar as the
+                # unsourced path. Held as a bad citation, a whole pricing
+                # answer was dropped (2026-09-23).
+                if missing and _is_general_estimate(claim):
+                    references.append(text_.strip()[:140])
+                    continue
+                if missing and _is_recommendation(claim, reply):
+                    continue
+                # (No advice math here: the reviewer bound this claim to a
+                # record, so it is about the record — "Yes, you charged her
+                # $50" against a $40 invoice must fail even though she said 50.)
+                # One sentence can join two records: "Monica Walton, 124
+                # days since you talked, and she's carrying $150 overdue"
+                # is her contact row AND her invoice row, and one quote
+                # holds only one of them (2026-09-23: withheld as "claim
+                # number 150 is not in the quote"). A figure the quote
+                # lacks is corroborated by another trusted record item
+                # that holds it together with the claim's names (or, with
+                # no names, its record words) — the fast lane's bar.
+                if missing:
+                    if prover is None:
+                        prover = _SentenceProver(sources)
+                    missing = {n for n in missing if not prover.corroborates(n, text_)}
                 if missing:
                     return 'unsupported', [], _claim_fail('claim number %s is not in the quote' % ','.join(
                         format(n, 'f') for n in sorted(missing)), text_)
@@ -425,7 +575,16 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
         # Numbered-list markers are presentation, not factual quantities.
         prose = re.sub(r'(?m)^\s*\d+[.)]\s+', '', reply)
         reviewed_numbers = set().union(*(_numbers(c['text']) for c in claims)) if claims else set()
-        unreviewed = _numbers(prose) - reviewed_numbers
+        # The clock's year and the figures of Chief's own recommendations
+        # are not facts a claim has to cover.
+        exempt = _free_figures(prose)
+        for s in re.split(r'(?<=[.!?])\s+|\n+', prose):
+            if _is_recommendation_text(s):
+                exempt |= _numbers(s)
+        # The owner's own numbers ("fill 12 seats") and plain arithmetic on
+        # them and on Chief's recommended figures are not new facts.
+        exempt |= _practitioner_figures(sources) | _advice_math(prose, reply, sources)
+        unreviewed = _numbers(prose) - reviewed_numbers - exempt
         if unreviewed:
             return 'unsupported', [], 'draft number %s has no reviewed claim' % ','.join(
                 format(n, 'f') for n in sorted(unreviewed))
@@ -477,6 +636,120 @@ def _squash(text):
     return re.sub(r'\s+', '', text or '')
 
 
+_LEFT_OUT = "I left the rest of my answer out because I couldn't confirm it from your records."
+
+
+def _above(labels, text):
+    """A repaired answer under the labels of the pages the turn opened."""
+    return '\n\n'.join(list(labels) + [text]) if labels else text
+
+
+_TRIMMABLE = re.compile(r"^(?:claim number [^:]*|quote is not in the cited source|"
+                        r"cited source does not exist) :: (.+)$", re.S)
+_UNREVIEWED_FIGURE = re.compile(r"^draft number ([\d.,]+) has no reviewed claim$")
+
+
+def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4):
+    """(draft, verdict, cited, reason, cuts) with the failing claims'
+    sentences cut and the rest re-checked against the same review, or None
+    when cutting cannot save enough of the answer."""
+    try:
+        review = _review_json(raw)
+    except ValueError:
+        return None
+    if not isinstance(review, dict) or not isinstance(review.get('claims'), list):
+        return None
+    claims = [c for c in review['claims'] if isinstance(c, dict)]
+    draft, cuts = reply or '', 0
+    while cuts < max_cuts:
+        m = _TRIMMABLE.match(reason or '')
+        if m:
+            head = m.group(1).strip()
+            bad = next((c for c in claims if isinstance(c.get('text'), str)
+                        and c['text'].strip()[:80] == head), None)
+            if bad is None:
+                return _no_trim('failed claim not found in the review', reason)
+            sentence = _sentence_containing(draft, bad['text'])
+            claims = [c for c in claims if c is not bad]
+        else:
+            u = _UNREVIEWED_FIGURE.match(reason or '')
+            if not u:
+                return _no_trim('not a cuttable failure', reason)
+            want = {Decimal(x.replace(',', '')).normalize() for x in u.group(1).split(',') if x}
+            sentence = next((s for s in re.split(r'(?<=[.!?])\s+|\n+', draft)
+                             if _numbers(s) & want), None)
+        if not sentence or sentence not in draft:
+            return _no_trim('sentence not located', reason)
+        draft = re.sub(r'[ \t]*\n{3,}', '\n\n', draft.replace(sentence, '', 1)).strip()
+        cuts += 1
+        if len(draft) < keep_ratio * len(reply or ''):
+            return _no_trim('too little left after %d cut(s)' % cuts, reason)
+        if has_completion_claim(draft):
+            return _no_trim('the rest claims unexecuted work', reason)
+        claims = [c for c in claims if isinstance(c.get('text'), str)
+                  and _squash(c['text']) in _squash(draft)]
+        verdict, cited, reason = assess_review(json.dumps({**review, 'claims': claims}), draft, sources)
+        if verdict == 'supported' or reason.startswith(('claim without support', 'general rule')):
+            return draft, verdict, cited, reason, cuts
+        if verdict == 'invalid':
+            return _no_trim('re-check invalid', reason)
+    return _no_trim('still failing after %d cuts' % cuts, reason)
+
+
+def _no_trim(why, reason):
+    logger.info('reply trim not possible: %s (last: %s)', why, (reason or '')[:160])
+    return None
+
+
+def _caveat_text(gaps, references):
+    """The doubts a delivered answer carries, named."""
+    caveat = ''
+    if gaps:
+        caveat += "\n\nThese parts of my answer are still unverified:\n" + '\n'.join(
+            '- “%s”' % g for g in gaps)
+    if references:
+        caveat += ("\n\nThese are general rules from what I know, not from your records. "
+                   "Check them against the official source before you rely on them:\n") + '\n'.join(
+            '- “%s”' % r for r in references)
+    return caveat
+
+
+def _words(text):
+    """Whole words, lowercased; underscores split ("days_overdue" is two
+    words) so a JSON key reads like the prose it stands for."""
+    return set(re.findall(r'[a-z]+', (text or '').lower().replace('_', ' ')))
+
+
+def _quote_in_source(quote, source):
+    """Is this quote what the cited record says?
+
+    Verbatim (whitespace aside) always counts. For a business record, a
+    quote the reviewer put in its own shape also counts when ONE item of
+    the record (one invoice, one appointment, one line) holds every word
+    and every figure of it: "INV-2026-010 · Kevin McCloud · $5 · 96 days
+    overdue" against {"number": "INV-2026-010", "client": "Kevin McCloud",
+    "total": 5.0, "days_overdue": 96}. Verbatim-only withheld that correct
+    answer as "quote is not in the cited source" (2026-09-23). Whole words
+    only — "paid" is not in "unpaid", "not overdue" is not in "overdue" —
+    and the practitioner's own words stay verbatim-only."""
+    text = source.get('text') or ''
+    if _squash(quote) in _squash(text):
+        return True
+    if source.get('kind') not in ('record', 'context', 'receipt'):
+        return False
+    want_words = {w for w in _words(_ISO_STAMP.sub(' ', quote)) if len(w) >= 3}
+    want_figures = _numbers(quote)
+    if not want_words and not want_figures:
+        return False
+    for item in _record_items(text):
+        if _HEDGED_ITEM.search(item):
+            continue
+        if want_words <= _words(item) and want_figures <= (
+                _numbers(item) | _clock_twins(item) | _duration_twins(item)):
+            return True
+    return False
+
+
 def _gap_claims(raw, references=False):
     """The claims the reviewer listed without support, in draft order:
     the gaps, or with `references` the public rules stated from memory."""
@@ -490,7 +763,9 @@ def _gap_claims(raw, references=False):
         if not isinstance(c, dict):
             continue
         text = c.get('text')
-        if _unsourced(c) and _is_reference(c) == references and isinstance(text, str) and text.strip():
+        # A ballpark the reviewer tried to cite is still general knowledge.
+        listed = _unsourced(c) or (references and _is_general_estimate(c))
+        if listed and _is_reference(c) == references and isinstance(text, str) and text.strip():
             out.append(text.strip()[:140])
     return out
 
@@ -604,11 +879,18 @@ def _spoken_dates_as_figures(text):
     return _SPOKEN_DATE.sub(swap, text or '')
 
 
+_RATIO = re.compile(r"(?<![\d:.])\d(?::|-on-|x)\d(?![\d:])", re.I)
+
+
 def _figures(text):
     # Clock times first, as hour and minute on the 24-hour clock. Then drop
     # tokens that mix letters and digits (INV-2026-007, A1B2, sha
     # fragments) before counting figures. A date has no letters and keeps
     # every part; a spoken date is turned into those parts first.
+    # A format is not a quantity: "1:1 coaching", "1-on-1", "2x2". Read as
+    # figures, "1:1" failed every sentence that mentioned private coaching
+    # ("claim number 1 is not in the quote", 2026-09-24).
+    text = _RATIO.sub(' ', text or '')
     times, rest = _clock_times(text)
     out = []
     for h, mi in times:
@@ -799,10 +1081,16 @@ def evidence_for_review(ctx, view_detail, taken):
     # context:sessions was dropped to fit the blueprint (2026-09-23).
     context_fields = ('blueprint_block', 'playbook_block', 'voice_block', 'brand_block',
         'practitioner_block', 'business_profile_block', 'foundation_block',
-        'learning_lines', 'memories', 'insights', 'notifications', 'auto_recent',
+        'learning_lines', 'insights', 'notifications', 'auto_recent',
         'recent_queue_24h', 'events', 'image_jobs', 'queue', 'modules', 'module_counts',
-        'projects', 'open_missions', 'open_assignments', 'products', 'contacts_lookup',
-        'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'sessions',
+        # Their Academy work (pricing tiers, packages) — real, owner-approved.
+        'strategy_track',
+        # Saved memories are short facts the owner told Chief ("the 90-day
+        # cohort is $750"). Ranked with the prose they were dropped first
+        # and a correct answer quoting one was withheld (2026-09-24).
+        'memories',
+        'projects', 'open_missions', 'open_assignments', 'products', 'offerings', 'contacts_lookup',
+        'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'invoice_summary', 'sessions',
         'contacts_total', 'contacts_loaded', 'contacts_complete', 'context_quality')
     context = [(name, ctx[name]) for name in context_fields if name in (ctx or {})]
     biz = (ctx or {}).get('business') or {}
@@ -882,6 +1170,10 @@ def evidence_for_review(ctx, view_detail, taken):
     return bounded
 
 
+def _review_thinking():
+    return (os.environ.get('CHIEF_REVIEW_THINKING') or 'off').strip().lower()
+
+
 async def review_reply(client, system, messages, *, max_tokens, enable_web_search=False, business_id=None):
     """One bounded, metered, tool-free review; no retry or backup action path."""
     import httpx
@@ -898,8 +1190,19 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # JSON at all, so every long answer was withheld. Low effort keeps the
     # thinking short enough that the verdict actually gets written.
     payload = {'model': model, 'max_tokens': max_tokens,
-               'system': system, 'messages': messages,
-               **model_ladder.effort_kwargs(model, 'low')}
+               'system': system, 'messages': messages}
+    # No thinking at all (2026-09-24). Benchmarked on three real answers
+    # against KMJ's records, twice each: thinking off averaged 8.4 s vs
+    # 10.3 s at low effort (the pricing answer 5-7 s vs 10 s), with the SAME
+    # verdict on all six; the check is mechanical and its JSON is validated
+    # in code (assess_review). Haiku 4.5 was not faster here and returned
+    # two unusable reviews in six. CHIEF_REVIEW_THINKING=low restores the
+    # previous setting without a deploy.
+    # Only where the API accepts it: Opus 5.5 rejects disabled thinking.
+    if _review_thinking() == 'off' and 'sonnet' in (model or '').lower():
+        payload['thinking'] = {'type': 'disabled'}
+    else:
+        payload.update(model_ladder.effort_kwargs(model, 'low'))
     response = await llm_call.apost(client, payload,
         timeout=httpx.Timeout(25.0, connect=5.0), task='chief_answer_review', business_id=business_id)
     if response.status_code >= 400:
@@ -964,7 +1267,7 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
 # the difference (the factual eval's poisoned_email case).
 _FAST_CONTEXT = frozenset((
     'context:sessions', 'context:products', 'context:open_invoices', 'context:contacts_lookup',
-    'context:projects', 'context:modules', 'context:module_counts', 'context:business_identity',
+    'context:projects', 'context:invoice_summary', 'context:offerings', 'context:modules', 'context:module_counts', 'context:business_identity',
     'context:open_missions', 'context:open_assignments', 'context:image_jobs'))
 _UNTRUSTED_READ = re.compile(r'mail|inbox|sms|text_message|message|research|web|memor|recall|note|learn',
                              re.I)
@@ -1009,7 +1312,35 @@ def _record_items(text):
     if isinstance(value, list):
         return [json.dumps(v, default=str, ensure_ascii=False) if not isinstance(v, str) else v
                 for v in value]
+    if isinstance(value, dict):
+        # A tool result is one nested object. As one item, a single hedge
+        # anywhere in it ("Missing dates remain unknown") disqualified
+        # every figure, and "lapsed = no contact for 60 or more days"
+        # could not prove "60+ days quiet" (2026-09-23). Each field is
+        # its own item, labeled with its path; each list element stays
+        # whole (one person, one invoice).
+        out: list = []
+        _flatten_items(value, '', out)
+        return out or [text]
     return [line for line in (text or '').splitlines() if line.strip()] or [text]
+
+
+def _flatten_items(value, path, out, limit=400):
+    if len(out) >= limit:
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _flatten_items(v, f"{path}.{k}" if path else str(k), out, limit)
+    elif isinstance(value, list):
+        for v in value:
+            if len(out) >= limit:
+                return
+            if isinstance(v, (dict, list)):
+                out.append(f"{path}: " + json.dumps(v, default=str, ensure_ascii=False))
+            else:
+                out.append(f"{path}: {v}")
+    else:
+        out.append(f"{path}: {value}")
 
 
 _ISO_STAMP = re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})')
@@ -1033,63 +1364,277 @@ def _local_figures(item, tz):
     return out
 
 
+# A quantity said in words: voice replies spell numbers out ("about eleven
+# dollars", "eighteen sixty-five in unpaid invoices"), so the digit test
+# above sees no figure at all and a spoken amount would pass as figure-less
+# prose. Money words, big-number words, or a number word before a unit.
+_SPELLED_QUANTITY = re.compile(
+    r"\b(?:dollars?|bucks|cents?|percent|hundreds?|thousands?|millions?|grand)\b"
+    r"|\b(?:%s|half|a couple of|a few|several|dozen)(?:[\s-]+(?:%s))?\s+"
+    r"(?:hours?|minutes?|mins?|days?|weeks?|months?|years?|clients?|customers?|leads?|"
+    r"invoices?|sessions?|appointments?|bookings?|people|seats?|members?|contacts?|times?)\b"
+    % ('|'.join(_NUMBER_WORDS), '|'.join(_NUMBER_WORDS)), re.I)
+
+# Words that open a sentence of advice and are not names ("Step one, lock
+# the date."). Only the streaming check skips them: the review-skip lane
+# keeps treating an unknown capitalised word as a name to prove.
+_STREAM_OPENERS = frozenset('''
+step here here's let let's start pick lock set build run keep make try think that's it's
+sounds great okay alright got good perfect absolutely sure honestly quick then once after
+before while since because instead also plus both either each every another same other
+'''.split())
+
+
+_TENS_WORDS = {'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60,
+               'seventy': 70, 'eighty': 80, 'ninety': 90}
+_UNIT_WORDS = {w: i for i, w in enumerate((
+    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+    'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+    'eighteen', 'nineteen'))}
+# Only a number word that COUNTS something becomes a digit: "five invoices",
+# "four small overdue invoices", "eleven dollars", "ninety-six days". "Pick
+# one date" and "the one worth a call" stay words.
+_COUNTED = (r"invoices?|clients?|customers?|leads?|sessions?|appointments?|bookings?|days?|"
+            r"hours?|minutes?|weeks?|months?|years?|dollars?|bucks|people|seats?|members?|"
+            r"contacts?|times?|services?|offerings?|styles?|items?|orders?|payments?|drafts?|"
+            r"messages?|emails?|texts?|reminders?|tasks?|projects?|donors?|students?")
+# Between the number and what it counts, only describing words: "four
+# small overdue invoices" counts; "one date this week" does not.
+_COUNT_MODIFIERS = (r"small|big|large|overdue|unpaid|open|paid|new|more|late|past|full|whole|test|"
+                    r"separate|different|upcoming|scheduled|booked|active|cold|warm|hot|recent|"
+                    r"outstanding|pending|draft|unread|straight|business|calendar")
+_COUNT_WORD = re.compile(
+    r"\b(?:(%s)[\s-]+(%s)|(%s|%s))\b(?=(?:\s+(?:%s)){0,2}\s+(?:%s)\b)"
+    % ('|'.join(_TENS_WORDS), '|'.join(list(_UNIT_WORDS)[1:10]),
+       '|'.join(_TENS_WORDS), '|'.join(_UNIT_WORDS), _COUNT_MODIFIERS, _COUNTED), re.I)
+
+
+def _counts_as_digits(text):
+    def swap(m):
+        if m.group(1):
+            return str(_TENS_WORDS[m.group(1).lower()] + _UNIT_WORDS[m.group(2).lower()])
+        w = m.group(3).lower()
+        return str(_TENS_WORDS.get(w, _UNIT_WORDS.get(w, 0)))
+    return _COUNT_WORD.sub(swap, text or '')
+
+
+_UNPROVABLE_STATE = re.compile(
+    r"\b(?:most|least|more than|less than|fewer|biggest|largest|highest|lowest|smallest|"
+    r"oldest|newest|latest|top|only|all|every|none|nothing|nobody|no one|no|never|any)\b", re.I)
+_STATE_WORD = re.compile(
+    r"^(?:paid|unpaid|overdue|owes?|owed|owing|booked|scheduled|confirmed|cancell?ed|due|open|"
+    r"closed|pending|late|missed|signed|sent|received|total|balance|revenue)$")
+
+
+# What each record IS, so a row need not spell out its own kind: a
+# session row is an appointment, an invoice row is money someone owes.
+_IMPLIED_WORDS = {
+    'context:sessions': {'session', 'appointment', 'booking', 'booked', 'scheduled', 'client'},
+    'context:open_invoices': {'invoice', 'owe', 'owed', 'owe', 'owing', 'due', 'client', 'customer',
+                              'payment'},
+    'context:invoice_summary': {'invoice', 'owe', 'owed', 'owing', 'client', 'customer'},
+    'context:products': {'service', 'offering', 'product', 'style', 'item'},
+    'context:offerings': {'service', 'offering', 'product', 'package', 'price', 'session'},
+    'context:contacts_lookup': {'client', 'customer', 'contact', 'lead', 'member', 'donor'},
+    'context:projects': {'project'},
+}
+
+
+# A record that says it is partial proves no count: "Exact contacts
+# total: 725. Loaded sample: 500." must not prove "you have 500 contacts"
+# (the factual eval's count_above_page_cap case).
+_PARTIAL_ITEM = re.compile(r"\b(?:sample|loaded|first \d+|page|capped?|limit(?:ed)?|partial|"
+                           r"at least|may be more|showing|shown)\b", re.I)
+# A count in the sentence: a number right before the thing it counts.
+_COUNT_DIGITS = re.compile(r"(?<![\d.,])(\d[\d,]*)(?=(?:\s+(?:%s)){0,2}\s+(?:%s)\b)"
+                           % (_COUNT_MODIFIERS, _COUNTED), re.I)
+_DATE_TOKEN = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _counts_in(text):
+    return {Decimal(n.replace(',', '')).normalize() for n in _COUNT_DIGITS.findall(text or '')}
+
+
+def _plain_numbers(item):
+    """An item's numbers that can be COUNTS: no clock times, no dates."""
+    bare = _DATE_TOKEN.sub(' ', _ISO_STAMP.sub(' ', item or ''))
+    return {Decimal(n.replace(',', '')).normalize()
+            for n in _FIGURE.findall(_IDENTIFIER.sub(' ', _CLOCK.sub(' ', bare)))}
+
+
+def _stem(word):
+    return word[:-1] if len(word) > 3 and word.endswith('s') and not word.endswith('ss') else word
+
+
+def _state_keywords(sentence):
+    """The words a record must also hold for a state sentence to be proved:
+    its record nouns and its state words, stemmed ("invoices" = "invoice")."""
+    out = set()
+    for w in _words(sentence):
+        if _RECORD_NOUN.fullmatch(w) or _STATE_WORD.match(w):
+            out.add(_stem(w))
+    return out
+
+
+class _SentenceProver:
+    """Checks one sentence at a time against the records a turn had.
+
+    Two callers with two bars. The review-skip lane (fast_lane) may
+    deliver a whole draft unreviewed, so a sentence with nothing to check
+    passes only as a question, an offer or a short aside. The streaming
+    lane (streamable_sentence) only decides what may be SAID BEFORE the
+    review, which still runs on the whole draft; plain advice with no
+    figure, name, record, or claim about the business may go early there.
+    Both hold every figure and name to one record item."""
+
+    def __init__(self, sources, tz=None):
+        # Only what the business's records say. The practitioner's own
+        # words and the capability note prove nothing about her calendar.
+        self.records = [(sid, s['text']) for sid, s in (sources or {}).items()
+                        if s.get('text') and _fast_evidence(sid, s)]
+        self.tz = tz
+        self._figures_of = {}
+
+    def _items(self, sid, text):
+        if sid not in self._figures_of:
+            # A zoned timestamp counts on her clock only: saying the UTC
+            # hour ("3pm" for 15:00+00, 11am in Michigan) is wrong.
+            self._figures_of[sid] = [
+                (_numbers(bare) | _clock_twins(bare) | _duration_twins(bare)
+                 | _local_figures(item, self.tz), item.lower())
+                for item in _record_items(text) if not _HEDGED_ITEM.search(item)
+                for bare in [_ISO_STAMP.sub(' ', item) if self.tz is not None else item]]
+        return self._figures_of[sid]
+
+    def link_ok(self, text):
+        for url in re.findall(r'https?://[^\s<>\]"\)]+', text or ''):
+            url = url.rstrip('.,;:')
+            if not any(url in t for _, t in self.records):
+                return False
+        return True
+
+    def corroborates(self, figure, claim_text):
+        """Does one trusted record item hold this figure together with
+        every name in the claim (or, when it names no one, its record
+        words)? A claim naming nothing and no record proves nothing."""
+        names = [n.lower() for n in _fast_lane_names(claim_text)]
+        keywords = _state_keywords(claim_text)
+        if not names and not keywords:
+            return False
+        for sid, text in self.records:
+            implied = _IMPLIED_WORDS.get(sid, set())
+            for nums, low in self._items(sid, text):
+                if figure in nums and all(n in low for n in names) and \
+                        keywords <= ({_stem(w) for w in _words(low)} | implied):
+                    return True
+        return False
+
+    def prove(self, sentence, *, stream=False):
+        """(True, record id or None) when the sentence may go, else (False, None)."""
+        sentence = (sentence or '').strip()
+        if not sentence:
+            return True, None
+        if re.search(r'\[\s*ACTION', sentence, re.I) or not self.link_ok(sentence):
+            return False, None
+        if has_completion_claim(sentence) or _DONE_CLAIM.search(_asserted_text(sentence)):
+            return False, None
+        # A count said in words is a figure like any other: "Five invoices"
+        # must match a record's 5, and "Six invoices" must not.
+        figures = _numbers(_counts_as_digits(sentence))
+        if not figures and _SPELLED_QUANTITY.search(sentence):
+            return False, None
+        # A record the sentence names ("cash", "appointments") must be the
+        # record that proves it, not any record holding the same number.
+        keywords = _state_keywords(sentence)
+        if _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence):
+            # The state of a record ("five invoices are overdue, $265") is
+            # provable only with its figures AND its key words in one record
+            # item — "you have 2 appointments" must not match any record
+            # that happens to hold a 2. Nothing to count ("nothing booked"),
+            # a ranking ("owes the most") or a "none/only/all" stays with
+            # the reviewer.
+            if not figures or _UNPROVABLE_STATE.search(sentence):
+                return False, None
+            keywords = _state_keywords(sentence)
+            if not keywords:
+                return False, None
+        names = [n.lower() for n in _fast_lane_names(sentence)
+                 if not (stream and n.lower().replace('’', "'") in _STREAM_OPENERS)]
+        if not figures:
+            # Nothing to check it against. "Your busiest day is Tuesday."
+            # and "Tasha prefers mornings." are claims with no figure in
+            # them — a real name does not prove what is said about her.
+            if sentence.endswith('?') or _OFFER_MARK.search(sentence):
+                return True, None
+            if not names and len(sentence.split()) <= 6 and not re.search(
+                    r"\byou(?:r|'re|’re)?\b", sentence, re.I):
+                return True, None
+            if stream and not names and not _ABOUT_THE_BUSINESS.search(sentence) \
+                    and not _RECORD_NOUN.search(sentence):
+                return True, None
+            return False, None
+        state = bool(_STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence))
+        counts = _counts_in(_counts_as_digits(sentence))
+        for sid, text in self.records:
+            implied = _IMPLIED_WORDS.get(sid, set())
+            for nums, low in self._items(sid, text):
+                if not (figures <= nums and all(n in low for n in names)
+                        and keywords <= ({_stem(w) for w in _words(low)} | implied)):
+                    continue
+                # A count ("5 invoices", "11 appointments") must be a count
+                # in the record — never its clock hour or a date's day.
+                if counts and not counts <= _plain_numbers(low):
+                    continue
+                if state and _PARTIAL_ITEM.search(low):
+                    continue
+                return True, sid
+        return False, None
+
+
+def _fast_lane_off():
+    return os.environ.get('CHIEF_REVIEW_FAST_LANE', 'on').strip().lower() in ('off', '0', 'false', 'no')
+
+
 def fast_lane(reply, sources, tz=None):
     """The records that prove a question turn's draft, sentence by sentence,
     or None when the full review must run. Only a turn that wrote nothing
     and opened nothing may take it; the caller checks that."""
-    if not reply or len(reply) > FAST_LANE_MAX_CHARS or os.environ.get(
-            'CHIEF_REVIEW_FAST_LANE', 'on').strip().lower() in ('off', '0', 'false', 'no'):
+    if not reply or len(reply) > FAST_LANE_MAX_CHARS or _fast_lane_off():
         return None
     if has_completion_claim(reply) or _DONE_CLAIM.search(_asserted_text(reply)) \
             or re.search(r'\[\s*ACTION\s*:', reply, re.I):
         return None
-    # Only what the business's records say. The practitioner's own words
-    # and the capability note prove nothing about her calendar.
-    records = [(sid, s['text']) for sid, s in (sources or {}).items()
-               if s.get('text') and _fast_evidence(sid, s)]
-    for url in re.findall(r'https?://[^\s<>\]"\)]+', reply):
-        url = url.rstrip('.,;:')
-        if not any(url in text for _, text in records):
-            return None
-    figures_of = {}
+    prover = _SentenceProver(sources, tz)
+    if not prover.link_ok(reply):
+        return None
     cited = []
     prose = re.sub(r'(?m)^\s*(?:\d+[.)]|[-*•])\s+', '', reply)
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', prose):
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        if _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence):
+        ok, sid = prover.prove(sentence)
+        if not ok:
             return None
-        figures = _numbers(sentence)
-        names = [n.lower() for n in _fast_lane_names(sentence)]
-        if not figures:
-            # Nothing to check it against, so it may only be a question,
-            # an offer, or a short reply that says nothing about her
-            # business. "Your busiest day is Tuesday." is a claim with no
-            # figure in it; so is "Tasha prefers mornings." — a real name
-            # does not prove what is said about her. The reviewer sees both.
-            if sentence.endswith('?') or _OFFER_MARK.search(sentence) or (
-                    not names and len(sentence.split()) <= 6
-                    and not re.search(r"\byou(?:r|'re|’re)?\b", sentence, re.I)):
-                continue
-            return None
-        found = None
-        for sid, text in records:
-            if sid not in figures_of:
-                # A zoned timestamp counts on her clock only: saying the
-                # UTC hour ("3pm" for 15:00+00, 11am in Michigan) is wrong.
-                figures_of[sid] = [
-                    (_numbers(bare) | _clock_twins(bare) | _duration_twins(bare)
-                     | _local_figures(item, tz), item.lower())
-                    for item in _record_items(text) if not _HEDGED_ITEM.search(item)
-                    for bare in [_ISO_STAMP.sub(' ', item) if tz is not None else item]]
-            if any(figures <= nums and all(n in low for n in names) for nums, low in figures_of[sid]):
-                found = sid
-                break
-        if found is None:
-            return None
-        cited.append(found)
+        if sid:
+            cited.append(sid)
     return list(dict.fromkeys(cited))
+
+
+def stream_prover(sources, tz=None):
+    """A prover for one turn's streaming lane, or None when the lane is off
+    (CHIEF_STREAM_SENTENCES=off, or the review-skip kill switch)."""
+    if _fast_lane_off() or os.environ.get('CHIEF_STREAM_SENTENCES', 'on').strip().lower() in (
+            'off', '0', 'false', 'no'):
+        return None
+    return _SentenceProver(sources, tz)
+
+
+def streamable_sentence(prover, sentence):
+    """May this sentence be said before the answer check has read the
+    whole draft? Once said it cannot be taken back, so the bar is the fast
+    lane's: every figure and name in one record, no claim that anything
+    was done, no state of a record, nothing about the business unproved."""
+    if prover is None:
+        return False
+    return prover.prove(re.sub(r'^\s*(?:\d+[.)]|[-*•])\s+', '', sentence or ''), stream=True)[0]
 
 
 async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, business_id, reviewer,
@@ -1158,6 +1703,28 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     if verdict == 'supported' and has_completion_claim(reply) and (
             not cited or all(sources[sid]['kind'] == 'conversation' for sid in cited)):
         verdict, reason = 'unsupported', 'completion claim without a receipt'
+    # One figure it cannot back should not cost the whole answer. Cut the
+    # sentence(s) carrying the failed claim, re-check the rest with the
+    # SAME review (no second model call), and deliver what stands, saying
+    # a figure was left out. A 1,971-character pricing answer was withheld
+    # over one "$750", the repair timed out, and the owner waited 66 s for
+    # "try again" (2026-09-24).
+    if verdict == 'unsupported' and not any(isinstance(r, dict) and r.get('failed') for r in receipts):
+        trimmed = _trim_unsupported(raw, reply, sources, reason)
+        if trimmed:
+            t_reply, t_verdict, t_cited, t_reason, cuts = trimmed
+            note = ("\n\nI left out %s I couldn't confirm from your records."
+                    % ("one figure" if cuts == 1 else "a few figures"))
+            if t_verdict == 'supported':
+                logger.info('reply review trimmed %d claim(s); rest supported', cuts)
+                return t_reply.rstrip() + note, {'status': 'trimmed', 'sources': t_cited, 'cuts': cuts}
+            t_gaps = [g for g in unconfirmed_claims(raw, t_reason) if _squash(g) in _squash(t_reply)]
+            t_refs = [r for r in reference_claims(raw, t_reason) if _squash(r) in _squash(t_reply)]
+            if (t_gaps or t_refs) and not has_completion_claim(t_reply):
+                logger.info('reply review trimmed %d claim(s); rest caveated', cuts)
+                return (t_reply.rstrip() + note + _caveat_text(t_gaps, t_refs)), {
+                    'status': 'caveated', 'sources': [], 'gaps': t_gaps, 'references': t_refs,
+                    'cuts': cuts}
     if verdict == 'supported':
         logger.info('reply review supported; citations=%d', len(cited))
         return reply, {'status': 'supported', 'sources': cited}
@@ -1197,15 +1764,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                     len(references), '' if len(references) == 1 else 's')
         # Label excerpts explicitly: the reviewer may quote a dependent clause,
         # which is not a useful standalone sentence after "I could not confirm".
-        caveat = ''
-        if gaps:
-            caveat += "\n\nThese parts of my answer are still unverified:\n" + '\n'.join(
-                '- “%s”' % g for g in gaps)
-        if references:
-            caveat += ("\n\nThese are general rules from what I know, not from your records. "
-                       "Check them against the official source before you rely on them:\n") + '\n'.join(
-                '- “%s”' % r for r in references)
-        return (reply.rstrip() + caveat), {
+        return (reply.rstrip() + _caveat_text(gaps, references)), {
             'status': 'caveated', 'sources': [], 'gaps': gaps, 'references': references}
     if verdict == 'invalid':
         # The reviewer never delivered a usable verdict (timeout, budget stop,
@@ -1226,13 +1785,29 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             return reply, {'status': 'unchecked', 'sources': [], 'reason': reason}
         reason = 'unchecked completion claim'
     logger.info('reply review withheld (%s); receipts=%d', reason, len(receipts))
+    # Labels of pages opened / views pulled up this turn, shown above a
+    # repaired answer (see below).
+    ui_bits: list = []
     if receipts:
-        if bits:
+        wrote = any(action_registry.effect(r.get('type') or '') == action_registry.WRITE
+                    for r in receipts)
+        can_repair = bool(repairer) and verdict == 'unsupported' and _left() >= 8.0
+        if bits and wrote:
             return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
-        if email_answer:
-            return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
-        return ('I could not verify the explanation. '
-                'Please check the results shown.'), {'status': 'withheld', 'sources': [], 'reason': reason}
+        if bits and not can_repair:
+            # When all the turn did was open a page or pull up a view, the
+            # labels are not an answer: asked for pricing advice, Kevin got
+            # "Opened BUILD → strategy-track" and nothing else (2026-09-23).
+            # Say what was left out, without the "try again" dead end.
+            return '\n\n'.join(bits + [_LEFT_OUT]), {'status': 'receipts', 'sources': []}
+        if not bits:
+            if email_answer:
+                return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
+            return ('I could not verify the explanation. '
+                    'Please check the results shown.'), {'status': 'withheld', 'sources': [], 'reason': reason}
+        # Only pages opened / views shown: the answer itself can still be
+        # repaired, exactly as on a turn with no receipts at all.
+        ui_bits = bits
     # A rejected narration must not strand a simple email existence question.
     # Recompute a limited answer from the same scoped records, never preserve
     # the unverified draft or infer that an empty sample means an empty inbox.
@@ -1264,7 +1839,21 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 checked_verdict, checked_sources, checked_reason = assess_review(checked, repaired, sources)
                 if checked_verdict == 'supported':
                     logger.info('reply review recovered; citations=%d', len(checked_sources))
-                    return repaired, {'status': 'supported', 'sources': checked_sources, 'recovered': True}
+                    return _above(ui_bits, repaired), {'status': 'supported', 'sources': checked_sources, 'recovered': True}
+                # The repair's only doubts are side remarks it could not
+                # source ("those appear to be your own test invoices") or
+                # general rules: deliver it with them named, exactly as the
+                # first review does. A wrong figure or citation still fails.
+                # Withholding a checked invoice answer over one aside cost
+                # 41 s and ended in "try again" (2026-09-23).
+                r_gaps = unconfirmed_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
+                r_refs = reference_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
+                if (r_gaps or r_refs) and not has_completion_claim(repaired):
+                    logger.info('reply review recovered with %d gap(s), %d general rule(s)',
+                                len(r_gaps), len(r_refs))
+                    return _above(ui_bits, repaired.rstrip() + _caveat_text(r_gaps, r_refs)), {
+                        'status': 'caveated', 'sources': [], 'gaps': r_gaps,
+                        'references': r_refs, 'recovered': True}
                 logger.info('reply recovery rejected (%s)', checked_reason)
         except Exception as exc:
             logger.warning('reply recovery unavailable: %s', type(exc).__name__)
@@ -1272,8 +1861,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # behind the same opaque fallback again. This statement comes only
         # from the actual empty execution results, never from model prose.
         # It is safe even when the repair/review timed out or hallucinated.
+        if ui_bits:
+            return _above(ui_bits, _LEFT_OUT), {'status': 'receipts', 'sources': []}
         return NO_ACTION_REPLY, {'status': 'withheld', 'sources': ['turn:execution'],
                                  'reason': reason, 'recovery_attempted': True}
+    if ui_bits:
+        return _above(ui_bits, _LEFT_OUT), {'status': 'receipts', 'sources': []}
     return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'reason': reason}
 
 

@@ -101,3 +101,17 @@ def test_interaction_coverage_compares_instants_across_timezones():
     assert r["engagement"]["previous_complete"] is False
     prefs["history_since"] = "2026-09-01T04:00:01Z"
     assert report({}, prefs, now=NOW)["engagement"]["current_complete"] is False
+
+
+def test_a_page_says_how_much_of_the_list_it_is():
+    # Live 9/23: "Six contacts are lapsed" then five names — the page held
+    # five and nothing said so.
+    import chief_growth_intelligence_actions as gi
+    rows = [{"id": str(i), "name": f"Person {i}"} for i in range(6)]
+    report = {"currency": "USD", "timezone": "UTC", "generated_at": "", "period": "mtd",
+              "retention_health": {"lapsed": rows, "at_risk": [], "best_clients": [], "definitions": {}}}
+    page = gi.recall_view(report, {"section": "client_health", "kind": "lapsed"})
+    assert page["shown"] == "1-5 of 6"
+    assert "offset=5" in page["more"] and "first 5 of 6" in page["more"]
+    last = gi.recall_view(report, {"section": "client_health", "kind": "lapsed", "offset": 5})
+    assert last["shown"] == "6-6 of 6" and "more" not in last

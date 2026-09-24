@@ -753,7 +753,7 @@ async def _seed_products_module_from_packages(client, biz_id: str, packages: Lis
             "business_id": biz_id,
             "name": "Products & Services",
             "slug": "products-services",
-            "description": "Your offerings from The Academy",
+            "description": "Your offerings from the Solutionist Academy",
             "icon": "💼",
             "schema": {
                 "fields": [
@@ -947,7 +947,7 @@ async def handle_complete_strategy_track(client, biz, action) -> Dict:
     return {
         "type": "complete_strategy_track",
         "result": "launched",
-        "label": "The Academy complete — business is live",
+        "label": "Solutionist Academy complete — business is live",
         "nav": {"tab": "build", "page": "strategy-track"},
         "products_module_id": module_id,
     }
