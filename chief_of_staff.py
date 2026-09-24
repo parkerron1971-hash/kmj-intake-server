@@ -13290,6 +13290,25 @@ _DESCRIBED_ACTION_PHRASES = (
     "adding them now", "creating the", "sending the",
 )
 
+# A promise to open a page, said as a plain statement, is a navigation
+# with no tag (2026-09-23: "…The Academy is built to work through with
+# you. Let me open it." and nothing opened). An offer ("want me to open
+# it?", "I'll open it once you're ready") is not a promise and never
+# counts — a failed retry replaces the whole reply.
+_NAV_PROMISE = re.compile(
+    r"\b(?:let me (?:open|pull (?:it |that |them )?up|bring up|take you)|"
+    r"i['’]ll (?:open|pull (?:it |that |them )?up|take you)|"
+    r"opening (?:it|that) now|taking you there)\b", re.I)
+_NAV_OFFER = re.compile(
+    r"\?|\b(?:if|once|when|want me|would you|should i|shall i|say the word|ready|whenever)\b", re.I)
+
+
+def _promises_navigation(text: str) -> bool:
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
+        if _NAV_PROMISE.search(sentence) and not _NAV_OFFER.search(sentence):
+            return True
+    return False
+
 
 # C.1.5.6 — propose-framing rewrites. Applied to first-pass narration
 # when the LLM emits propose_module_from_intake. Deterministic
@@ -13353,7 +13372,8 @@ def _looks_like_completed_action(text: str) -> bool:
         return False
     return any(p in low for p in _DESCRIBED_ACTION_PHRASES) or bool(re.search(
         r"(?:^|[.!?]\s+)(?:(?:i['\u2019]m|i am)\s+)?"
-        r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low))
+        r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low)) \
+        or _promises_navigation(text)
 
 
 def _image_action_summary(results):
