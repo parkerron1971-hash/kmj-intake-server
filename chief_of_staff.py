@@ -1290,11 +1290,11 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         # segments whole, the state snapshot paragraph by paragraph.
         try:
             import cache_watch
-            cache_watch.note("chief_prompt", business_id, {
+            cache_watch.note("chief_prompt", business_id or (tool_biz or {}).get("id"), {
                 "universal": sys_payload[0]["text"], "per_business": sys_payload[1]["text"],
                 **cache_watch.paragraphs(sys_payload[2]["text"])})
         except Exception as e:  # never let a diagnostic touch the turn
-            logger.debug("cache watch failed: %s", e)
+            logger.warning("cache watch failed: %s", e)
 
     # A cache_control segment under the model's minimum cacheable prefix
     # is accepted and silently never cached — no error, no warning, just
