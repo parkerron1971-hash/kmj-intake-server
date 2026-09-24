@@ -1307,6 +1307,17 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     if schema and _review_schema_on():
         payload['output_config'] = {**(payload.get('output_config') or {}),
                                     'format': {'type': 'json_schema', 'schema': schema}}
+    if schema:
+        # Which of the business's records moved since its last review (the
+        # cached blocks are re-written when any of them does).
+        try:
+            import cache_watch
+            srcs = json.loads(messages[0]['content']).get('sources') or {}
+            cache_watch.note('review_records', business_id, {
+                k: json.dumps(v, sort_keys=True, ensure_ascii=False) for k, v in srcs.items()
+                if k.startswith('context:') and k != 'context:current_view'})
+        except Exception as e:  # never let a diagnostic touch the review
+            logger.debug('cache watch failed: %s', e)
     response = await llm_call.apost(client, payload,
         timeout=httpx.Timeout(25.0, connect=5.0), task='chief_answer_review', business_id=business_id)
     if response.status_code >= 400:
