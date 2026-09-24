@@ -147,10 +147,10 @@ def _strategy_profile_fill_block(track: Optional[Dict[str, Any]]) -> str:
     return (
         "ACADEMY DELIVERABLES (captured in their Strategy Sessions — real data, use it). "
         "Call it the SOLUTIONIST ACADEMY, and a working session in it a STRATEGY SESSION (the page is "
-        "BUILD → The Academy; it was called 'Strategy Track' before 2026-08-22 — understand any of these names):\n"
+        "BUILD → Solutionist Academy; it was 'The Academy' until 2026-09-24 and 'Strategy Track' before 2026-08-22 — understand any of these names):\n"
         + "\n".join(lines)
         + "\n  PROFILE FILL: when the practitioner asks you to fill their business profile from "
-        "The Academy (or 'my Strategy Track', or a profile gap is answered by the data above), propose the values you found, "
+        "the Solutionist Academy (or 'The Academy', 'my Strategy Track', or a profile gap is answered by the data above), propose the values you found, "
         "and once they confirm, emit one [ACTION:{\"type\":\"update_business_profile_field\","
         "\"field_path\":\"...\",\"value\":...}] per field.\n"
         "  Valid field paths: " + _PROFILE_FIELD_MENU + "."
@@ -163,7 +163,7 @@ def _phase_name(phase: str) -> str:
 
 
 def _academy_phases_done(track: Optional[Dict[str, Any]]) -> List[str]:
-    """The Academy phases that have a saved deliverable."""
+    """The Solutionist Academy phases that have a saved deliverable."""
     track = track or {}
     phases = track.get("phases") or {}
     done: List[str] = []
@@ -204,7 +204,7 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
             "ACADEMY AWARENESS:\n"
             f"  The practitioner is enrolled in the Solutionist Academy, the business strategy course"
             f" (mode={track_mode}). Call it the SOLUTIONIST ACADEMY, and a working session in it a"
-            " STRATEGY SESSION (the page is BUILD → The Academy; it was called 'Strategy Track'"
+            " STRATEGY SESSION (the page is BUILD → Solutionist Academy; it was 'The Academy' and before that 'Strategy Track'"
             " before 2026-08-22 — understand any of these names)."
         )
         finished = False
@@ -247,7 +247,7 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
     # Coach mode is handled by _build_coach_prompt; return empty here so the
     # main chief prompt doesn't double up.
     if not track:
-        return "THE ACADEMY: practitioner is on The Academy (the strategy track) but no track row exists yet. Create one by emitting save_phase with phase=discovery once discovery is captured."
+        return "THE ACADEMY: practitioner is in the Solutionist Academy (the strategy track) but no track row exists yet. Create one by emitting save_phase with phase=discovery once discovery is captured."
 
     current = track.get("current_phase") or "discovery"
     phases = track.get("phases") or {}
