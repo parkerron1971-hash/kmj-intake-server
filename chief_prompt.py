@@ -145,8 +145,9 @@ def _strategy_profile_fill_block(track: Optional[Dict[str, Any]]) -> str:
     if not lines:
         return ""
     return (
-        "ACADEMY DELIVERABLES (captured in their coaching sessions — real data, use it). "
-        "The practitioner-facing name is THE ACADEMY (BUILD → The Academy; called 'Strategy Track' before 2026-08-22 — understand either, say the new one):\n"
+        "ACADEMY DELIVERABLES (captured in their Strategy Sessions — real data, use it). "
+        "Call it the SOLUTIONIST ACADEMY, and a working session in it a STRATEGY SESSION (the page is "
+        "BUILD → The Academy; it was called 'Strategy Track' before 2026-08-22 — understand any of these names):\n"
         + "\n".join(lines)
         + "\n  PROFILE FILL: when the practitioner asks you to fill their business profile from "
         "The Academy (or 'my Strategy Track', or a profile gap is answered by the data above), propose the values you found, "
@@ -154,6 +155,25 @@ def _strategy_profile_fill_block(track: Optional[Dict[str, Any]]) -> str:
         "\"field_path\":\"...\",\"value\":...}] per field.\n"
         "  Valid field paths: " + _PROFILE_FIELD_MENU + "."
     )
+
+
+def _phase_name(phase: str) -> str:
+    """"Pricing Strategy", not the label's whole description."""
+    return (STRATEGY_PHASE_LABELS.get(phase) or phase).split(" — ")[0]
+
+
+def _academy_phases_done(track: Optional[Dict[str, Any]]) -> List[str]:
+    """The Academy phases that have a saved deliverable."""
+    track = track or {}
+    phases = track.get("phases") or {}
+    done: List[str] = []
+    for p in STRATEGY_PHASES:
+        if p == "discovery":
+            if phases.get("discovery"):
+                done.append(p)
+        elif track.get(p):
+            done.append(p)
+    return done
 
 
 def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]], mode: Optional[str] = None) -> str:
@@ -170,27 +190,54 @@ def _format_strategy_block(biz: Dict[str, Any], track: Optional[Dict[str, Any]],
         return ""
 
 
-    # Non-coach (normal Chief): stay in your lane and defer strategy questions.
+    # Non-coach (normal Chief): answer the planning question, and point
+    # back to the Academy when it is unfinished.
+    #
+    # Kevin (2026-09-24): "it should always give advice, because if the
+    # session was done, that advice would be wanted — but also give thought
+    # to, if the Academy is not done, going back to finish." Until then this
+    # block told Chief to DEFLECT every pricing / business-model question
+    # to the Academy ("That's a Strategy Session question — let me open it")
+    # and the practitioner asking what to charge got no answer at all.
     if not is_coach:
         hint = (
             "ACADEMY AWARENESS:\n"
-            f"  The practitioner is on The Academy, the business strategy course (mode={track_mode})."
-            " Its practitioner-facing name is THE ACADEMY (BUILD → The Academy; it was called"
-            " 'Strategy Track' before 2026-08-22 — understand either name, always say the new one)."
+            f"  The practitioner is enrolled in the Solutionist Academy, the business strategy course"
+            f" (mode={track_mode}). Call it the SOLUTIONIST ACADEMY, and a working session in it a"
+            " STRATEGY SESSION (the page is BUILD → The Academy; it was called 'Strategy Track'"
+            " before 2026-08-22 — understand any of these names)."
         )
+        finished = False
         if track:
             current = track.get("current_phase") or "discovery"
             status = track.get("status", "in_progress")
-            hint += f" Current phase: {current}. Status: {status}."
+            done = _academy_phases_done(track)
+            left = [p for p in STRATEGY_PHASES if p not in done]
+            finished = status in ("complete", "completed", "launched") or not left
+            hint += (f" Current phase: {_phase_name(current)}. Status: {status}."
+                     f" Finished phases: {', '.join(_phase_name(p) for p in done) or 'none yet'}.")
+            if left and not finished:
+                hint += f" Still to do: {', '.join(_phase_name(p) for p in left)}."
         hint += (
-            "\n  You are the operational Chief of Staff — NOT the Strategy Coach."
-            " If they ask deep business-planning questions (business model, pricing,"
-            " market research, launch plan), acknowledge briefly and redirect:"
-            " 'That's a Strategy Session question — let me open it for you.'"
-            " Then emit [ACTION:{\"type\":\"navigate\",\"tab\":\"build\",\"page\":\"strategy-track\"}]"
-            " so they land on The Academy dashboard and can hit Continue Session."
-            " Do NOT emit save_phase / save_pricing / save_packages / etc."
-            " For operational questions (contacts, queue, agents, modules), answer normally."
+            "\n  Business-planning questions (pricing, packages, business model, market, launch,"
+            " filling seats, growth strategy): ANSWER THEM. Give your real advice first — concrete"
+            " numbers, options and next steps — built on their Academy deliverables below when"
+            " they exist. Never deflect, never answer with only a pointer to the Academy."
+        )
+        if not finished:
+            hint += (
+                " Then, in ONE short closing line, say the matching Strategy Session in the"
+                " Solutionist Academy will sharpen it with their own numbers, and offer to open it"
+                " (\"Want me to open your pricing Strategy Session?\"). It is an offer: do not"
+                " navigate unless they say yes."
+            )
+        else:
+            hint += (" Their Academy is finished: build on its deliverables and do not send them"
+                     " back to it.")
+        hint += (
+            " You are the operational Chief of Staff, not the Strategy Coach: never emit"
+            " save_phase / save_pricing / save_packages / etc. — those are saved inside a"
+            " Strategy Session."
         )
         fill = _strategy_profile_fill_block(track)
         if fill:
