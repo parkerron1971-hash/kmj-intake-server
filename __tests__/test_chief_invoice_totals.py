@@ -83,3 +83,17 @@ def test_the_prompt_tells_chief_to_quote_the_totals(ctx):
 
 def test_no_invoices_no_summary():
     assert cos._invoice_summary_lines([]) == []
+
+
+def test_a_withheld_answer_after_opening_a_page_says_what_was_left_out():
+    import asyncio
+    from unittest.mock import AsyncMock
+    nav = {"type": "navigate", "result": "opened", "label": "Opened BUILD → strategy-track"}
+    reviewer = AsyncMock(return_value=json.dumps({"verdict": "unsupported", "claims": [
+        {"text": "96 days", "kind": "fact", "source_id": "", "quote": "", "gap": "no source"}]}))
+    out, meta = asyncio.run(truth.finalize_reply(
+        None, "Price it at $450. Your three test invoices are 96 days late.", ctx={},
+        view_detail="", taken=[nav], message="help me price the intensive",
+        business_id="biz", reviewer=reviewer))
+    assert out.startswith("Opened BUILD → strategy-track")
+    assert "left the rest of my answer out" in out and "try again" not in out

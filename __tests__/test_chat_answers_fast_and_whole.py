@@ -85,7 +85,9 @@ def test_a_withheld_reply_beside_a_navigation_shows_where_it_went_not_a_wall():
         ctx={}, view_detail="", taken=[_nav_receipt()], message="the booking site", business_id="biz",
         reviewer=AsyncMock(return_value=json.dumps({"verdict": "unsupported", "claims": [
             {"text": "I sent Ada a text", "kind": "action", "source_id": "", "quote": "", "gap": "no send receipt"}]}))))
-    assert result == "Opened BUILD → booking"
+    # Where it went, then one honest line for what was left out (2026-09-23).
+    assert result.startswith("Opened BUILD → booking")
+    assert "left the rest of my answer out" in result and "sent Ada" not in result
     assert "could not verify the explanation" not in result
     assert meta["status"] == "receipts"
 
