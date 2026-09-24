@@ -605,6 +605,56 @@ def _above(labels, text):
     return '\n\n'.join(list(labels) + [text]) if labels else text
 
 
+_TRIMMABLE = re.compile(r"^(?:claim number [^:]*|quote is not in the cited source|"
+                        r"cited source does not exist) :: (.+)$", re.S)
+_UNREVIEWED_FIGURE = re.compile(r"^draft number ([\d.,]+) has no reviewed claim$")
+
+
+def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4):
+    """(draft, verdict, cited, reason, cuts) with the failing claims'
+    sentences cut and the rest re-checked against the same review, or None
+    when cutting cannot save enough of the answer."""
+    try:
+        review = _review_json(raw)
+    except ValueError:
+        return None
+    if not isinstance(review, dict) or not isinstance(review.get('claims'), list):
+        return None
+    claims = [c for c in review['claims'] if isinstance(c, dict)]
+    draft, cuts = reply or '', 0
+    while cuts < max_cuts:
+        m = _TRIMMABLE.match(reason or '')
+        if m:
+            head = m.group(1).strip()
+            bad = next((c for c in claims if isinstance(c.get('text'), str)
+                        and c['text'].strip()[:80] == head), None)
+            if bad is None:
+                return None
+            sentence = _sentence_containing(draft, bad['text'])
+            claims = [c for c in claims if c is not bad]
+        else:
+            u = _UNREVIEWED_FIGURE.match(reason or '')
+            if not u:
+                return None
+            want = {Decimal(x.replace(',', '')).normalize() for x in u.group(1).split(',') if x}
+            sentence = next((s for s in re.split(r'(?<=[.!?])\s+|\n+', draft)
+                             if _numbers(s) & want), None)
+        if not sentence or sentence not in draft:
+            return None
+        draft = re.sub(r'[ \t]*\n{3,}', '\n\n', draft.replace(sentence, '', 1)).strip()
+        cuts += 1
+        if len(draft) < keep_ratio * len(reply or '') or has_completion_claim(draft):
+            return None
+        claims = [c for c in claims if isinstance(c.get('text'), str)
+                  and _squash(c['text']) in _squash(draft)]
+        verdict, cited, reason = assess_review(json.dumps({**review, 'claims': claims}), draft, sources)
+        if verdict == 'supported' or reason.startswith(('claim without support', 'general rule')):
+            return draft, verdict, cited, reason, cuts
+        if verdict == 'invalid':
+            return None
+    return None
+
+
 def _caveat_text(gaps, references):
     """The doubts a delivered answer carries, named."""
     caveat = ''
@@ -1578,6 +1628,28 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     if verdict == 'supported' and has_completion_claim(reply) and (
             not cited or all(sources[sid]['kind'] == 'conversation' for sid in cited)):
         verdict, reason = 'unsupported', 'completion claim without a receipt'
+    # One figure it cannot back should not cost the whole answer. Cut the
+    # sentence(s) carrying the failed claim, re-check the rest with the
+    # SAME review (no second model call), and deliver what stands, saying
+    # a figure was left out. A 1,971-character pricing answer was withheld
+    # over one "$750", the repair timed out, and the owner waited 66 s for
+    # "try again" (2026-09-24).
+    if verdict == 'unsupported' and not any(isinstance(r, dict) and r.get('failed') for r in receipts):
+        trimmed = _trim_unsupported(raw, reply, sources, reason)
+        if trimmed:
+            t_reply, t_verdict, t_cited, t_reason, cuts = trimmed
+            note = ("\n\nI left out %s I couldn't confirm from your records."
+                    % ("one figure" if cuts == 1 else "a few figures"))
+            if t_verdict == 'supported':
+                logger.info('reply review trimmed %d claim(s); rest supported', cuts)
+                return t_reply.rstrip() + note, {'status': 'trimmed', 'sources': t_cited, 'cuts': cuts}
+            t_gaps = [g for g in unconfirmed_claims(raw, t_reason) if _squash(g) in _squash(t_reply)]
+            t_refs = [r for r in reference_claims(raw, t_reason) if _squash(r) in _squash(t_reply)]
+            if (t_gaps or t_refs) and not has_completion_claim(t_reply):
+                logger.info('reply review trimmed %d claim(s); rest caveated', cuts)
+                return (t_reply.rstrip() + note + _caveat_text(t_gaps, t_refs)), {
+                    'status': 'caveated', 'sources': [], 'gaps': t_gaps, 'references': t_refs,
+                    'cuts': cuts}
     if verdict == 'supported':
         logger.info('reply review supported; citations=%d', len(cited))
         return reply, {'status': 'supported', 'sources': cited}
