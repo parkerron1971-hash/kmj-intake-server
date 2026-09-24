@@ -5153,9 +5153,15 @@ async def handle_show_view(client, biz, action) -> Dict:
 
     title = spec["title"]
     filt_label = "" if filt == "all" else f" ({filt})"
+    note_for_chief = None
     if not rows:
-        result = (f"0 {view} match filter '{filt}' — the list is genuinely empty; "
-                  f"tell the practitioner that plainly and do NOT invent rows")
+        # `result` is printed on the owner's Actions Taken card; the
+        # instruction to Chief rides its own field, which only the model
+        # reads. It sat in `result` and the card told the owner "tell the
+        # practitioner that plainly and do NOT invent rows" (2026-09-24).
+        result = f"No {view} match '{filt}' right now"
+        note_for_chief = ("The list is genuinely empty: tell the practitioner that plainly "
+                          "and do NOT invent rows.")
     else:
         result = f"showing {len(rows)} {view}{filt_label}"
         if total is not None:
@@ -5186,6 +5192,7 @@ async def handle_show_view(client, biz, action) -> Dict:
     return {
         "type": "show_view",
         "result": result,
+        **({"note_for_chief": note_for_chief} if note_for_chief else {}),
         "label": f"📋 {title}{filt_label} — {len(rows)} shown"
                  + (f" · ${total:,.2f}" if total else ""),
         "view": view,
@@ -11543,6 +11550,9 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
             speak = t.get("speak")
             if isinstance(speak, str) and speak.strip():
                 parts.append(f"      data now shown to the practitioner: {speak.strip()}")
+            note = t.get("note_for_chief")
+            if isinstance(note, str) and note.strip():
+                parts.append(f"      note: {note.strip()}")
     return "\n".join(parts) if parts else "(no actions ran)"
 
 
