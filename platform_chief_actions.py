@@ -438,7 +438,8 @@ async def _authorized_development_handoff(action, lane):
         raise HTTPException(403, 'Development work requires recorded owner authorization.')
     owner, record = context
     body = DispatchBody(lane=lane, title=action.get('title', ''),
-                        details=action.get('details'), repo=action.get('repo', 'frontend'))
+                        details=action.get('details'), repo=action.get('repo', 'frontend'),
+                        agent=action.get('agent') if lane == 'local' else None)
     result = await dispatch_task(body, owner)
     return {'ok': result['ok'], 'label': 'Development handoff recorded. Review resulting changes before deployment.',
             'task_id': result.get('task', {}).get('id'), 'issue_url': result.get('issue_url')}

@@ -6,8 +6,9 @@ Two lanes, one list:
   • cloud — a GitHub issue tagged @claude (the existing builder bridge);
     Claude Code runs in GitHub's cloud, opens the PR, auto-merges when green.
   • local — a row Solution Space (Kevin's Electron app) polls for; a task
-    arriving there opens a real Claude Code session in the task's project,
-    seeds the brief, and submits it.
+    arriving there opens a live coding-agent session in the task's project —
+    Claude Code by default, or Codex when the task names it — seeds the
+    brief, and submits it.
 
 Both lanes report back into dev_tasks, which the Dev Desk panel renders.
 Auth: /platform/dev-desk/* uses the owner's JWT (require_owner) like every
@@ -45,6 +46,11 @@ LOCAL_PROJECTS = {
     "frontend": r"C:\Users\kmccl\solutionist-studio\solutionist-studio",
     "backend": r"C:\Users\kmccl\kmj-intake-server",
 }
+
+# The coding agents a local task can ask for. Claude Code is the default and
+# every task before 2026-09-24 ran on it. The cloud lane is Claude only: it
+# is the @claude GitHub workflow.
+AGENTS = ("claude", "codex")
 
 _BUILD_LABEL = "chief-build"
 _GH_REPOS = {
@@ -104,7 +110,8 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-async def _require_device(c: httpx.AsyncClient, authorization: Optional[str]) -> Dict[str, Any]:
+async def _require_device(c: httpx.AsyncClient, authorization: Optional[str],
+                          agents: Optional[List[str]] = None) -> Dict[str, Any]:
     token = (authorization or "").removeprefix("Bearer ").strip()
     if not token:
         raise HTTPException(401, "Device token required")
@@ -116,12 +123,26 @@ async def _require_device(c: httpx.AsyncClient, authorization: Optional[str]) ->
     if not rows:
         raise HTTPException(401, "Unknown or revoked device token")
     device = rows[0]
+    beat: Dict[str, Any] = {"last_seen_at": _now()}
+    if agents is not None:
+        # What this build of Solution Space can open, so the Dev Desk can say
+        # whether Codex is reachable before a task sits in the queue for it.
+        beat["agents"] = agents
     try:
-        await _sb_patch(c, "dev_bridge_devices", {"id": f"eq.{device['id']}"},
-                        {"last_seen_at": _now()})
+        await _sb_patch(c, "dev_bridge_devices", {"id": f"eq.{device['id']}"}, beat)
     except HTTPException:
         pass  # a failed heartbeat must not block the queue read
     return device
+
+
+def _device_agents(raw: Optional[str]) -> List[str]:
+    """The agents a polling device says it can run. A build that predates
+    agents sends nothing, and it can only open Claude Code, so that is what
+    it is offered: a Codex task must never be opened as Claude by an old
+    build that ignores the field."""
+    named = [a.strip().lower() for a in (raw or "").split(",")]
+    supported = [a for a in AGENTS if a in named]
+    return supported or ["claude"]
 
 
 # ─── The seeded brief ─────────────────────────────────────────────────
@@ -159,6 +180,29 @@ def _compose_prompt(task: Dict[str, Any]) -> str:
     )
 
 
+def _reopen_brief(task: Dict[str, Any]) -> str:
+    """For an agent that cannot resume a past conversation by itself: the
+    original brief plus what has been said on the Dev Desk since, so a fresh
+    session picks the task up where it was left. Terminal captures are left
+    out — they are screen noise, not conversation."""
+    lines = []
+    for n in (task.get("notes") or [])[-16:]:
+        who = {"kevin": "Kevin", "dev": "You (report)", "device": "Solution Space"}.get(n.get("from"))
+        text = (n.get("text") or "").strip()
+        if who and text:
+            lines.append(f"- {who}: {text[:1200]}")
+    history = "\n".join(lines) or "- (nothing yet)"
+    return (
+        f"{_compose_prompt(task)}\n"
+        "---\n"
+        "You are picking this task up again in a new session. What has been "
+        "said on the Dev Desk so far, oldest first:\n"
+        f"{history}\n\n"
+        "Kevin's newest message is the last line above. Check the working tree "
+        "for what was already done before changing anything, then continue.\n"
+    )
+
+
 # ─── Owner lane: the Dev Desk ─────────────────────────────────────────
 
 class DispatchBody(BaseModel):
@@ -167,6 +211,7 @@ class DispatchBody(BaseModel):
     details: Optional[str] = None
     repo: Optional[str] = None  # 'frontend' | 'backend'
     project_path: Optional[str] = None
+    agent: Optional[str] = None  # 'claude' (default) | 'codex' — local lane only
 
 
 class NoteBody(BaseModel):
@@ -178,20 +223,26 @@ class PairBody(BaseModel):
 
 
 @router.get("/platform/dev-desk")
-async def dev_desk(_owner=Depends(require_owner)):
+async def dev_desk(lite: bool = False, _owner=Depends(require_owner)):
     """Everything the Dev Desk panel shows, one call. Fails soft on the
-    GitHub half so the task list never blanks because of a rate limit."""
+    GitHub half so the task list never blanks because of a rate limit.
+
+    `lite` skips the GitHub half entirely. The panel polls it every few
+    seconds while a conversation is live, which would otherwise spend three
+    GitHub API calls a poll on lists that change a few times a day."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         tasks = await _sb_get(c, "dev_tasks", {
-            "select": "id,created_at,updated_at,lane,status,title,details,repo,"
+            "select": "id,created_at,updated_at,lane,status,title,details,repo,agent,"
                       "project_path,issue_url,notes,picked_up_at,finished_at",
             "order": "created_at.desc",
             "limit": "50",
         })
         devices = await _sb_get(c, "dev_bridge_devices", {
-            "select": "id,name,created_at,last_seen_at,revoked",
+            "select": "id,name,created_at,last_seen_at,revoked,agents",
             "order": "created_at.desc",
         })
+        if lite:
+            return {"ok": True, "tasks": tasks, "devices": devices}
         cloud_open = await _open_build_issues(c)
     try:
         from platform_console import _recent_merged_prs
@@ -242,10 +293,20 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
     repo = (body.repo or "frontend").strip().lower()
     if repo not in LOCAL_PROJECTS:
         raise HTTPException(422, "Choose the frontend or backend project.")
+    agent = (body.agent or "claude").strip().lower()
+    if agent not in AGENTS:
+        raise HTTPException(422, "Choose Claude Code or Codex.")
+    if lane == "cloud" and agent != "claude":
+        raise HTTPException(422, "Codex works in Solution Space on Kevin's machine — "
+                                 "the cloud builder is Claude on GitHub.")
     from platform_chief_authority import current_authorization, digest
     approved = current_authorization.get()
     scope = {'lane': lane, 'repo': repo, 'title': title, 'details': body.details,
              'project_path': body.project_path or LOCAL_PROJECTS[repo]}
+    # Named only when it is not the default, so a Claude task's scope hashes
+    # exactly as it did before agents existed.
+    if agent != "claude":
+        scope['agent'] = agent
     authorization = {'owner_id': str(_owner.id), 'approved_at': _now(),
                      'source': 'chief_review' if approved else 'dev_desk',
                      'approval_id': approved[1]['id'] if approved else None,
@@ -280,6 +341,7 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
             "title": title,
             "details": body.details,
             "repo": repo,
+            "agent": agent,
             "project_path": project_path,
             "report_key": secrets.token_hex(16),
         })
@@ -299,7 +361,16 @@ async def add_owner_note(task_id: str, body: NoteBody, _owner=Depends(require_ow
         posted_to_issue = False
         if task.get("lane") == "cloud" and task.get("issue_url"):
             posted_to_issue = await _comment_on_issue(c, task["issue_url"], text)
-    return {"ok": True, "posted_to_issue": posted_to_issue}
+        # The Dev Desk is a conversation: a reply on a finished local task
+        # picks it back up. Replies are only delivered on active tasks, so
+        # without this the message would sit on the row and reach no one.
+        reopened = False
+        if task.get("lane") == "local" and task.get("status") in _FINISHED_STATUSES:
+            await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"},
+                            {"status": "working", "finished_at": None,
+                             "updated_at": _now()})
+            reopened = True
+    return {"ok": True, "posted_to_issue": posted_to_issue, "reopened": reopened}
 
 
 async def _comment_on_issue(c: httpx.AsyncClient, issue_url: str, text: str) -> bool:
@@ -368,13 +439,19 @@ class ReportBody(BaseModel):
 
 
 @router.get("/dev-bridge/queue")
-async def bridge_queue(authorization: Optional[str] = Header(None)):
+async def bridge_queue(authorization: Optional[str] = Header(None),
+                       agents: Optional[str] = None):
+    # Only work for an agent this device can open. The rest waits in the
+    # queue for a device that can — see _device_agents.
+    can_run = _device_agents(agents)
+    agent_filter = f"in.({','.join(can_run)})"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        await _require_device(c, authorization)
+        await _require_device(c, authorization, can_run)
         rows = await _sb_get(c, "dev_tasks", {
             "lane": "eq.local",
             "status": "eq.queued",
-            "select": "id,title,details,repo,project_path,report_key,created_at",
+            "agent": agent_filter,
+            "select": "id,title,details,repo,agent,project_path,report_key,created_at",
             "order": "created_at.asc",
             "limit": "5",
         })
@@ -385,7 +462,8 @@ async def bridge_queue(authorization: Optional[str] = Header(None)):
         active = await _sb_get(c, "dev_tasks", {
             "lane": "eq.local",
             "status": f"in.({','.join(sorted(_ACTIVE_STATUSES))})",
-            "select": "id,title,project_path,notes",
+            "agent": agent_filter,
+            "select": "id,title,details,repo,agent,project_path,report_key,notes",
             "order": "updated_at.asc",
             "limit": "20",
         })
@@ -402,6 +480,7 @@ async def bridge_queue(authorization: Optional[str] = Header(None)):
             "project_path": t.get("project_path"),
             "project_name": name,
             "repo": t.get("repo"),
+            "agent": t.get("agent") or "claude",
             "created_at": t.get("created_at"),
         })
     followups = []
@@ -412,7 +491,11 @@ async def bridge_queue(authorization: Optional[str] = Header(None)):
                 "task_id": t["id"],
                 "title": t.get("title"),
                 "project_path": t.get("project_path"),
+                "agent": t.get("agent") or "claude",
                 "notes": pending,
+                # For when the task's session is gone and its agent cannot
+                # resume one: a fresh session gets the whole story instead.
+                "reopen_brief": _reopen_brief(t),
             })
     return {"ok": True, "tasks": tasks, "followups": followups}
 

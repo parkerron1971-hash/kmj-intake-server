@@ -145,6 +145,13 @@ async def propose(owner_id, request_id, index, action, *, automatic=False):
             raise HTTPException(422, 'Choose the frontend or backend project.')
         payload['repo'] = repo
         payload.pop('project_path', None)  # registered project only
+        # Which coding agent works a Solution Space task. The cloud lane is
+        # the @claude workflow, so the field means nothing there.
+        agent = payload.pop('agent', None)
+        if payload.get('type') == 'send_to_solution_space' and agent not in (None, 'claude'):
+            if agent != 'codex':
+                raise HTTPException(422, 'Choose Claude Code or Codex.')
+            payload['agent'] = agent
         payload['deployment'] = 'Owner review of the resulting changes is required.'
     if len(json.dumps(payload)) > 24000:
         raise HTTPException(422, 'Action is too large to review.')
