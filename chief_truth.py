@@ -1344,6 +1344,15 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     logger.info('reply review withheld (%s); receipts=%d', reason, len(receipts))
     if receipts:
         if bits:
+            # When all the turn did was open a page or pull up a view, the
+            # labels are not an answer: asked for pricing advice, Kevin got
+            # "Opened BUILD → strategy-track" and nothing else (2026-09-23).
+            # Say what was left out, without the "try again" dead end.
+            wrote = any(action_registry.effect(r.get('type') or '') == action_registry.WRITE
+                        for r in receipts)
+            if not wrote:
+                bits = bits + ["I left the rest of my answer out because I couldn't confirm "
+                               "it from your records."]
             return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
         if email_answer:
             return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
