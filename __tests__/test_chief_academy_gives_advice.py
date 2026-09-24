@@ -56,3 +56,9 @@ def test_it_is_called_the_solutionist_academy_and_a_strategy_session():
 def test_no_track_row_still_answers():
     block = cp._format_strategy_block(BIZ, None)
     assert "ANSWER THEM" in block and "closing line" in block
+
+
+def test_the_names_are_said_in_full():
+    # Live 9/24: "the Academy's Financial Projections session".
+    block = cp._format_strategy_block(BIZ, UNFINISHED)
+    assert 'never just "the Academy"' in block
