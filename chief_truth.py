@@ -666,29 +666,36 @@ def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4):
             bad = next((c for c in claims if isinstance(c.get('text'), str)
                         and c['text'].strip()[:80] == head), None)
             if bad is None:
-                return None
+                return _no_trim('failed claim not found in the review', reason)
             sentence = _sentence_containing(draft, bad['text'])
             claims = [c for c in claims if c is not bad]
         else:
             u = _UNREVIEWED_FIGURE.match(reason or '')
             if not u:
-                return None
+                return _no_trim('not a cuttable failure', reason)
             want = {Decimal(x.replace(',', '')).normalize() for x in u.group(1).split(',') if x}
             sentence = next((s for s in re.split(r'(?<=[.!?])\s+|\n+', draft)
                              if _numbers(s) & want), None)
         if not sentence or sentence not in draft:
-            return None
+            return _no_trim('sentence not located', reason)
         draft = re.sub(r'[ \t]*\n{3,}', '\n\n', draft.replace(sentence, '', 1)).strip()
         cuts += 1
-        if len(draft) < keep_ratio * len(reply or '') or has_completion_claim(draft):
-            return None
+        if len(draft) < keep_ratio * len(reply or ''):
+            return _no_trim('too little left after %d cut(s)' % cuts, reason)
+        if has_completion_claim(draft):
+            return _no_trim('the rest claims unexecuted work', reason)
         claims = [c for c in claims if isinstance(c.get('text'), str)
                   and _squash(c['text']) in _squash(draft)]
         verdict, cited, reason = assess_review(json.dumps({**review, 'claims': claims}), draft, sources)
         if verdict == 'supported' or reason.startswith(('claim without support', 'general rule')):
             return draft, verdict, cited, reason, cuts
         if verdict == 'invalid':
-            return None
+            return _no_trim('re-check invalid', reason)
+    return _no_trim('still failing after %d cuts' % cuts, reason)
+
+
+def _no_trim(why, reason):
+    logger.info('reply trim not possible: %s (last: %s)', why, (reason or '')[:160])
     return None
 
 
@@ -870,11 +877,18 @@ def _spoken_dates_as_figures(text):
     return _SPOKEN_DATE.sub(swap, text or '')
 
 
+_RATIO = re.compile(r"(?<![\d:.])\d(?::|-on-|x)\d(?![\d:])", re.I)
+
+
 def _figures(text):
     # Clock times first, as hour and minute on the 24-hour clock. Then drop
     # tokens that mix letters and digits (INV-2026-007, A1B2, sha
     # fragments) before counting figures. A date has no letters and keeps
     # every part; a spoken date is turned into those parts first.
+    # A format is not a quantity: "1:1 coaching", "1-on-1", "2x2". Read as
+    # figures, "1:1" failed every sentence that mentioned private coaching
+    # ("claim number 1 is not in the quote", 2026-09-24).
+    text = _RATIO.sub(' ', text or '')
     times, rest = _clock_times(text)
     out = []
     for h, mi in times:
