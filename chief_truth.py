@@ -412,6 +412,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
     # A bare unsupported with nothing cited stays unsupported: nothing was
     # checked, so nothing can be cleared.
     model_says_unsupported = review['verdict'] != 'supported'
+    prover = None   # built on first need: corroborates a figure a quote lacks
     if model_says_unsupported and not claims:
         return 'unsupported', [], 'reviewer verdict unsupported, nothing cited'
     try:
@@ -518,6 +519,18 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                     continue
                 if missing and _is_recommendation(claim, reply):
                     continue
+                # One sentence can join two records: "Monica Walton, 124
+                # days since you talked, and she's carrying $150 overdue"
+                # is her contact row AND her invoice row, and one quote
+                # holds only one of them (2026-09-23: withheld as "claim
+                # number 150 is not in the quote"). A figure the quote
+                # lacks is corroborated by another trusted record item
+                # that holds it together with the claim's names (or, with
+                # no names, its record words) — the fast lane's bar.
+                if missing:
+                    if prover is None:
+                        prover = _SentenceProver(sources)
+                    missing = {n for n in missing if not prover.corroborates(n, text_)}
                 if missing:
                     return 'unsupported', [], _claim_fail('claim number %s is not in the quote' % ','.join(
                         format(n, 'f') for n in sorted(missing)), text_)
@@ -1346,6 +1359,22 @@ class _SentenceProver:
             if not any(url in t for _, t in self.records):
                 return False
         return True
+
+    def corroborates(self, figure, claim_text):
+        """Does one trusted record item hold this figure together with
+        every name in the claim (or, when it names no one, its record
+        words)? A claim naming nothing and no record proves nothing."""
+        names = [n.lower() for n in _fast_lane_names(claim_text)]
+        keywords = _state_keywords(claim_text)
+        if not names and not keywords:
+            return False
+        for sid, text in self.records:
+            implied = _IMPLIED_WORDS.get(sid, set())
+            for nums, low in self._items(sid, text):
+                if figure in nums and all(n in low for n in names) and \
+                        keywords <= ({_stem(w) for w in _words(low)} | implied):
+                    return True
+        return False
 
     def prove(self, sentence, *, stream=False):
         """(True, record id or None) when the sentence may go, else (False, None)."""
