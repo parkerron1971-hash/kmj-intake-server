@@ -1783,6 +1783,81 @@ def _blend_memories(memories: List[Dict], keep: int = 50) -> List[Dict]:
 # CONTEXT GATHERING
 # ═══════════════════════════════════════════════════════════════════════
 
+# ─── Invoice arithmetic, done once (2026-09-23) ──────────────────────
+# "Which of my invoices are overdue, and who owes me the most?" was
+# answered "No action ran … try again?" after 46 s, five times in a row
+# across the evening. Every draft did arithmetic on the rows — "$265
+# total", "22 days overdue", "five invoices" — and none of those numbers
+# existed anywhere the answer check could look, so every correct summary
+# was withheld (and one retry counted six). The sums, counts and ages
+# are now computed here from the rows, and the prompt and the review
+# evidence both carry them.
+_INVOICE_SAMPLE_LIMIT = 40
+
+
+def _invoice_today():
+    return datetime.now(timezone.utc).date()
+
+
+def _with_days_overdue(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each open invoice with how many days past due it is (sent/viewed/
+    overdue only; a draft was never sent, so it is not overdue)."""
+    today = _invoice_today()
+    for r in rows:
+        r["days_overdue"] = 0
+        due = str(r.get("due_date") or "")[:10]
+        if due and (r.get("status") or "draft") != "draft":
+            try:
+                r["days_overdue"] = max(0, (today - date.fromisoformat(due)).days)
+            except ValueError:
+                pass
+    return rows
+
+
+def _invoice_summary_lines(rows: List[Dict[str, Any]]) -> List[str]:
+    """Plain lines the practitioner could read aloud: the overdue total,
+    the open total, and each client's balance, largest first."""
+    rows = rows or []
+    if not rows:
+        return []
+    today = _invoice_today().isoformat()
+    sent = [r for r in rows if (r.get("status") or "draft") != "draft"]
+    overdue = [r for r in sent if (r.get("days_overdue") or 0) > 0]
+    money = lambda v: f"${v:,.2f}"
+    lines = [
+        f"As of {today}: {len(overdue)} invoice{'s' if len(overdue) != 1 else ''} overdue, "
+        f"{money(sum(float(r.get('total') or 0) for r in overdue))} in total "
+        f"(sent and past their due date; drafts are not overdue).",
+        f"Sent and unpaid: {len(sent)} invoice{'s' if len(sent) != 1 else ''}, "
+        f"{money(sum(float(r.get('total') or 0) for r in sent))} in total.",
+    ]
+    drafts = [r for r in rows if (r.get("status") or "draft") == "draft"]
+    if drafts:
+        lines.append(f"Drafts not yet sent: {len(drafts)}, "
+                     f"{money(sum(float(r.get('total') or 0) for r in drafts))}.")
+    if overdue:
+        oldest = max(overdue, key=lambda r: r.get("days_overdue") or 0)
+        lines.append(f"Oldest overdue: {oldest.get('number')} ({oldest.get('client')}), "
+                     f"{oldest.get('days_overdue')} days overdue.")
+    by_client: Dict[str, Dict[str, Any]] = {}
+    for r in sent:
+        c = by_client.setdefault(r.get("client") or "(no client)", {"owed": 0.0, "n": 0, "over": 0.0, "n_over": 0})
+        c["owed"] += float(r.get("total") or 0)
+        c["n"] += 1
+        if (r.get("days_overdue") or 0) > 0:
+            c["over"] += float(r.get("total") or 0)
+            c["n_over"] += 1
+    for name, c in sorted(by_client.items(), key=lambda kv: -kv[1]["owed"]):
+        line = f"{name} owes {money(c['owed'])} across {c['n']} invoice{'s' if c['n'] != 1 else ''}"
+        if c["n_over"]:
+            line += f", {money(c['over'])} of it overdue ({c['n_over']} invoice{'s' if c['n_over'] != 1 else ''})"
+        lines.append(line + ".")
+    if len(rows) >= _INVOICE_SAMPLE_LIMIT:
+        lines.append(f"These totals cover the first {_INVOICE_SAMPLE_LIMIT} open invoices only; "
+                     f"there may be more.")
+    return [_neutralize_untrusted(x) for x in lines]
+
+
 async def _gather_context(client: httpx.AsyncClient, biz_id: str,
                           query_text: Optional[str] = None) -> Dict[str, Any]:
     """Pull a fresh snapshot of the business state in parallel.
@@ -2112,7 +2187,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         pass
 
     import chief_truth
-    return {
+    _ctx = {
         "business": biz,
         "contacts_total": contact_total,
         "contacts_loaded": len(contacts),
@@ -2179,7 +2254,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
              "status": r.get("status"), "created_at": r.get("created_at")}
             for r in (image_jobs or []) if isinstance(r, dict)
         ],
-        "open_invoices": [
+        "open_invoices": _with_days_overdue([
             {
                 "id": r.get("id"),
                 "number": r.get("invoice_number") or "(no number)",
@@ -2190,7 +2265,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
                 "due_date": r.get("due_date") or "",
             }
             for r in (open_invoices or [])
-        ],
+        ]),
         "foundation_block": foundation_block or "",
         "business_profile_block": business_profile_block or "",
         "business_profile_raw": business_profile_raw or {},
@@ -2206,6 +2281,10 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             for c in contacts[:200]
         ],
     }
+    # Totals and ages computed once, here, from the rows: the reply and the
+    # answer check read the same figures (see _invoice_summary_lines).
+    _ctx["invoice_summary"] = _invoice_summary_lines(_ctx["open_invoices"])
+    return _ctx
 
 
 def _format_foundation_block(ctx: Dict[str, Any]) -> str:
@@ -3403,18 +3482,13 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
     # this IS the list, so "who owes what?" is answered from these rows
     # — never with "I don't have the breakdown" and never via search.
     invoice_lines = []
-    _today = datetime.now(timezone.utc).date()
     for inv in (ctx.get("open_invoices") or [])[:25]:
         line = f"  - {inv.get('number')} · {_neutralize_untrusted(inv.get('client') or '')} · ${float(inv.get('total') or 0):,.2f} · {inv.get('status')}"
         due = inv.get("due_date") or ""
         if due:
             line += f" · due {due}"
-            try:
-                days_over = (_today - date.fromisoformat(str(due)[:10])).days
-                if days_over > 0 and (inv.get("status") or "") != "draft":
-                    line += f" ({days_over}d overdue)"
-            except (TypeError, ValueError):
-                pass
+            if inv.get("days_overdue"):
+                line += f" ({inv['days_overdue']} days overdue)"
         line += f" [id={inv.get('id')}]"
         invoice_lines.append(line)
 
@@ -3465,6 +3539,9 @@ ASSIGNMENTS CHIEF IS WORKING BETWEEN CONVERSATIONS (answer "how is it going?" fr
 
 STANDING PERMISSIONS:
 {chr(10).join(standing_lines) if standing_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
+
+OPEN INVOICES — TOTALS (computed from the rows below; quote these for any count, total, age or who-owes-most answer, never add them up yourself):
+{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or '  (no open invoices)'}
 
 OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them):
 {chr(10).join(invoice_lines) if invoice_lines else '  (none in the loaded sample; check data availability)'}
