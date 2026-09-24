@@ -21,6 +21,15 @@ import re
 from collections import OrderedDict
 
 logger = logging.getLogger("chief.cache_watch")
+if not logger.handlers:
+    # The root logger stays at WARNING; like chief.truth, this one carries
+    # its own handler or its INFO lines never reach Railway (the first
+    # deploy of this watch logged nothing for exactly that reason).
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] chief.cache_watch: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 _MAX_BUSINESSES = 300
 _seen: "OrderedDict[tuple, dict]" = OrderedDict()
@@ -56,6 +65,9 @@ def note(kind: str, business_id, parts: dict) -> list:
     if not business_id or not parts:
         return []
     key = (kind, str(business_id))
+    # The order is a part too: the same records in a different order are a
+    # different prefix, and a cache miss, to the API.
+    parts = {**parts, "(order)": "\n".join(parts)}
     now = {name: (_fingerprint(text), text) for name, text in parts.items()}
     before = _seen.pop(key, None)
     _seen[key] = now
@@ -65,7 +77,10 @@ def note(kind: str, business_id, parts: dict) -> list:
         return []
     changed = [n for n in now if n not in before or before[n][0] != now[n][0]]
     gone = [n for n in before if n not in now]
-    if changed or gone:
+    if not (changed or gone):
+        logger.info("cache watch %s biz=%s: nothing changed (%d parts)",
+                    kind, str(business_id)[:8], len(now))
+    else:
         first = changed[0] if changed else None
         detail = (_where(before[first][1], now[first][1]) if first and first in before else "new")
         logger.info("cache watch %s biz=%s: %d of %d parts changed since the last call "
