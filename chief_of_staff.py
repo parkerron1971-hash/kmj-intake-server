@@ -2253,6 +2253,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "queue": queue or [],
         "events": events or [],
         "sessions": sessions or [],
+        # The calendar read succeeded and came back under its limit of 10:
+        # every scheduled session in the window is in the list, so an empty
+        # list means nothing is booked. Without this the prompt said "none
+        # in the loaded sample; check data availability" either way, and
+        # "When is my next appointment?" spent two lookups (17.9 s) before
+        # saying nothing was booked (2026-09-24).
+        "sessions_complete": sessions is not None and len(sessions) < 10,
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
@@ -3607,7 +3614,7 @@ QUEUE ({len(ctx['queue'])} loaded draft rows; sample, not a total):
 {chr(10).join(queue_lines) if queue_lines else '  (none in the loaded sample; check data availability)'}
 
 {SESSIONS_HEADING}:
-{chr(10).join(session_lines) if session_lines else '  (none in the loaded sample; check data availability)'}
+{chr(10).join(session_lines) if session_lines else ('  (nothing booked in this window: this list is the whole calendar for it)' if ctx.get('sessions_complete') else '  (none in the loaded sample; check data availability)')}
 
 PROJECTS (loaded sample; use list_projects for additional records):
 {chr(10).join(project_lines) if project_lines else '  (none in the loaded sample; check data availability)'}
