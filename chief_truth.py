@@ -343,6 +343,36 @@ def _is_recommendation(claim, reply):
 _YEAR_CONTEXT = re.compile(r"\b(?:in|for|by|of|during|since|through|this|next|last)\s+(20\d\d)\b", re.I)
 
 
+def _advice_math(text, reply, sources):
+    """Figures in `text` that are the owner's own numbers, a recommendation's
+    figures, or a sum / difference / product of two of those: "Twelve seats
+    gets you $8,364" is 12 (asked for) × $697 (recommended). Withheld as
+    "no evidence", a pricing answer was lost (2026-09-24). Only arithmetic
+    on advice and on what they said; a record's figure still needs its
+    record."""
+    # Never for a sentence about a person or a record: "Monica owes $150"
+    # must not pass because 150 happens to be 2 x 75.
+    names = [n for n in _fast_lane_names(text or '')
+             if n.lower() not in _UNIT_WORDS and n.lower() not in _TENS_WORDS]
+    if _RECORD_NOUN.search(text or '') or names:
+        return set()
+    base = set(_practitioner_figures(sources))
+    for s in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
+        if _is_recommendation_text(s):
+            base |= _numbers(_counts_as_digits(s))
+    base = {n for n in base if n != 0}
+    pool = sorted(base)[:24]
+    out = set()
+    for n in _numbers(_counts_as_digits(text or '')):
+        if n in base:
+            out.add(n)
+            continue
+        if any(n == a * b or n == a + b or n == abs(a - b)
+               for i, a in enumerate(pool) for b in pool[i:]):
+            out.add(n)
+    return out
+
+
 def _free_figures(text):
     import datetime as _dt
     this = _dt.date.today().year
@@ -472,7 +502,8 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 # Chief's own recommendation is advice, not evidence-bound.
                 if _is_recommendation(claim, reply):
                     continue
-                if _numbers(text_) - _practitioner_figures(sources) - _free_figures(text_):
+                if _numbers(text_) - _practitioner_figures(sources) - _free_figures(text_) \
+                        - _advice_math(text_, reply, sources):
                     return 'unsupported', [], _claim_fail('claim number has no evidence', text_)
                 gaps.append('claim without support: %s (%s)' % (text_.strip()[:80], why))
                 # A prose gap must not hide a bad citation/figure later in the
@@ -519,6 +550,9 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                     continue
                 if missing and _is_recommendation(claim, reply):
                     continue
+                # (No advice math here: the reviewer bound this claim to a
+                # record, so it is about the record — "Yes, you charged her
+                # $50" against a $40 invoice must fail even though she said 50.)
                 # One sentence can join two records: "Monica Walton, 124
                 # days since you talked, and she's carrying $150 overdue"
                 # is her contact row AND her invoice row, and one quote
@@ -545,6 +579,9 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
         for s in re.split(r'(?<=[.!?])\s+|\n+', prose):
             if _is_recommendation_text(s):
                 exempt |= _numbers(s)
+        # The owner's own numbers ("fill 12 seats") and plain arithmetic on
+        # them and on Chief's recommended figures are not new facts.
+        exempt |= _practitioner_figures(sources) | _advice_math(prose, reply, sources)
         unreviewed = _numbers(prose) - reviewed_numbers - exempt
         if unreviewed:
             return 'unsupported', [], 'draft number %s has no reviewed claim' % ','.join(
