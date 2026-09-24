@@ -1188,7 +1188,35 @@ def _record_items(text):
     if isinstance(value, list):
         return [json.dumps(v, default=str, ensure_ascii=False) if not isinstance(v, str) else v
                 for v in value]
+    if isinstance(value, dict):
+        # A tool result is one nested object. As one item, a single hedge
+        # anywhere in it ("Missing dates remain unknown") disqualified
+        # every figure, and "lapsed = no contact for 60 or more days"
+        # could not prove "60+ days quiet" (2026-09-23). Each field is
+        # its own item, labeled with its path; each list element stays
+        # whole (one person, one invoice).
+        out: list = []
+        _flatten_items(value, '', out)
+        return out or [text]
     return [line for line in (text or '').splitlines() if line.strip()] or [text]
+
+
+def _flatten_items(value, path, out, limit=400):
+    if len(out) >= limit:
+        return
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _flatten_items(v, f"{path}.{k}" if path else str(k), out, limit)
+    elif isinstance(value, list):
+        for v in value:
+            if len(out) >= limit:
+                return
+            if isinstance(v, (dict, list)):
+                out.append(f"{path}: " + json.dumps(v, default=str, ensure_ascii=False))
+            else:
+                out.append(f"{path}: {v}")
+    else:
+        out.append(f"{path}: {value}")
 
 
 _ISO_STAMP = re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})')
