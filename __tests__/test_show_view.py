@@ -195,10 +195,16 @@ def test_an_empty_view_is_reported_empty_not_invented(monkeypatch):
     r = _show({"type": "show_view", "view": "invoices"}, d)
     assert not cos._action_failed(r)
     assert r["rows"] == [] and r["summary"]["count"] == 0
-    assert "do NOT invent rows" in r["result"], (
+    assert "do NOT invent rows" in r["note_for_chief"], (
         "the second pass needs the explicit instruction, or the optimistic "
         "first-pass narration survives over an empty table"
     )
+    assert "do NOT invent rows" in cos._format_action_results_for_reply([r])
+    # The owner's Actions Taken card prints `result`: plain words, no
+    # instruction meant for Chief (it read "tell the practitioner that
+    # plainly and do NOT invent rows" on 2026-09-24).
+    assert r["result"] == "No invoices match 'open' right now"
+    assert "practitioner" not in r["result"] and "invent" not in r["result"]
 
 
 def test_a_refused_read_is_a_failure_not_an_empty_list(monkeypatch):
