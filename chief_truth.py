@@ -294,7 +294,8 @@ _ABOUT_THE_BUSINESS = re.compile(r"\b(?:you|your|yours|you['’](?:re|ve|ll|d)|w
 # (the factual eval's uncited_external_fact case).
 _ESTIMATE_WORDING = re.compile(
     r"\b(?:typical(?:ly)?|usually|often|generally|roughly|approximately|ballpark|"
-    r"benchmark\w*|similar|comparable|might|could|would|for example|e\.g\.|anywhere from|or so)\b"
+    r"benchmark\w*|similar|comparable|might|could|would|for example|e\.g\.|anywhere from|or so|"
+    r"sweet spot|rule of thumb|ideal|best practice|tends? to|works best|most \w+ (?:run|charge|price))\b"
     # A hypothetical third party: "a coach charging $300 an hour", "a salon that ..."
     r"|\b(?:a|an)\s+\w+\s+(?:charging|who|that|with|at)\b",
     re.I)
@@ -452,6 +453,14 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # A reviewer cannot bless a fabricated number with an unrelated
             # real quote.
             if claim['kind'] != 'estimate':
+                # A ballpark about the world that the reviewer tried to
+                # cite anyway ("the sweet spot for group size is 8-15") is
+                # general knowledge, labeled as such — the same bar as the
+                # unsourced path. Held as a bad citation, a whole pricing
+                # answer was dropped (2026-09-23).
+                if missing and _is_general_estimate(claim):
+                    references.append(text_.strip()[:140])
+                    continue
                 if missing:
                     return 'unsupported', [], _claim_fail('claim number %s is not in the quote' % ','.join(
                         format(n, 'f') for n in sorted(missing)), text_)
@@ -510,6 +519,14 @@ def _squash(text):
     """Collapse whitespace, including the spaces JSON puts after commas
     and colons, so a quote survives being re-spaced by the reviewer."""
     return re.sub(r'\s+', '', text or '')
+
+
+_LEFT_OUT = "I left the rest of my answer out because I couldn't confirm it from your records."
+
+
+def _above(labels, text):
+    """A repaired answer under the labels of the pages the turn opened."""
+    return '\n\n'.join(list(labels) + [text]) if labels else text
 
 
 def _caveat_text(gaps, references):
@@ -574,7 +591,9 @@ def _gap_claims(raw, references=False):
         if not isinstance(c, dict):
             continue
         text = c.get('text')
-        if _unsourced(c) and _is_reference(c) == references and isinstance(text, str) and text.strip():
+        # A ballpark the reviewer tried to cite is still general knowledge.
+        listed = _unsourced(c) or (references and _is_general_estimate(c))
+        if listed and _is_reference(c) == references and isinstance(text, str) and text.strip():
             out.append(text.strip()[:140])
     return out
 
@@ -1499,22 +1518,29 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             return reply, {'status': 'unchecked', 'sources': [], 'reason': reason}
         reason = 'unchecked completion claim'
     logger.info('reply review withheld (%s); receipts=%d', reason, len(receipts))
+    # Labels of pages opened / views pulled up this turn, shown above a
+    # repaired answer (see below).
+    ui_bits: list = []
     if receipts:
-        if bits:
+        wrote = any(action_registry.effect(r.get('type') or '') == action_registry.WRITE
+                    for r in receipts)
+        can_repair = bool(repairer) and verdict == 'unsupported' and _left() >= 8.0
+        if bits and wrote:
+            return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
+        if bits and not can_repair:
             # When all the turn did was open a page or pull up a view, the
             # labels are not an answer: asked for pricing advice, Kevin got
             # "Opened BUILD → strategy-track" and nothing else (2026-09-23).
             # Say what was left out, without the "try again" dead end.
-            wrote = any(action_registry.effect(r.get('type') or '') == action_registry.WRITE
-                        for r in receipts)
-            if not wrote:
-                bits = bits + ["I left the rest of my answer out because I couldn't confirm "
-                               "it from your records."]
-            return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
-        if email_answer:
-            return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
-        return ('I could not verify the explanation. '
-                'Please check the results shown.'), {'status': 'withheld', 'sources': [], 'reason': reason}
+            return '\n\n'.join(bits + [_LEFT_OUT]), {'status': 'receipts', 'sources': []}
+        if not bits:
+            if email_answer:
+                return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
+            return ('I could not verify the explanation. '
+                    'Please check the results shown.'), {'status': 'withheld', 'sources': [], 'reason': reason}
+        # Only pages opened / views shown: the answer itself can still be
+        # repaired, exactly as on a turn with no receipts at all.
+        ui_bits = bits
     # A rejected narration must not strand a simple email existence question.
     # Recompute a limited answer from the same scoped records, never preserve
     # the unverified draft or infer that an empty sample means an empty inbox.
@@ -1546,7 +1572,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 checked_verdict, checked_sources, checked_reason = assess_review(checked, repaired, sources)
                 if checked_verdict == 'supported':
                     logger.info('reply review recovered; citations=%d', len(checked_sources))
-                    return repaired, {'status': 'supported', 'sources': checked_sources, 'recovered': True}
+                    return _above(ui_bits, repaired), {'status': 'supported', 'sources': checked_sources, 'recovered': True}
                 # The repair's only doubts are side remarks it could not
                 # source ("those appear to be your own test invoices") or
                 # general rules: deliver it with them named, exactly as the
@@ -1558,7 +1584,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 if (r_gaps or r_refs) and not has_completion_claim(repaired):
                     logger.info('reply review recovered with %d gap(s), %d general rule(s)',
                                 len(r_gaps), len(r_refs))
-                    return (repaired.rstrip() + _caveat_text(r_gaps, r_refs)), {
+                    return _above(ui_bits, repaired.rstrip() + _caveat_text(r_gaps, r_refs)), {
                         'status': 'caveated', 'sources': [], 'gaps': r_gaps,
                         'references': r_refs, 'recovered': True}
                 logger.info('reply recovery rejected (%s)', checked_reason)
@@ -1568,8 +1594,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # behind the same opaque fallback again. This statement comes only
         # from the actual empty execution results, never from model prose.
         # It is safe even when the repair/review timed out or hallucinated.
+        if ui_bits:
+            return _above(ui_bits, _LEFT_OUT), {'status': 'receipts', 'sources': []}
         return NO_ACTION_REPLY, {'status': 'withheld', 'sources': ['turn:execution'],
                                  'reason': reason, 'recovery_attempted': True}
+    if ui_bits:
+        return _above(ui_bits, _LEFT_OUT), {'status': 'receipts', 'sources': []}
     return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'reason': reason}
 
 
