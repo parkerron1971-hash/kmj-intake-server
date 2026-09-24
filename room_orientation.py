@@ -239,7 +239,7 @@ ROOMS: Dict[str, Dict[str, str]] = {
     "build/business-track": {"label": "Business Track",
         "purpose": "The twenty-minute sit-down where Chief learns how they actually run: what they sell, who they serve, how money moves.",
         "next_rule": "Do it when they have twenty minutes; it picks up where they left off."},
-    "build/strategy-track": {"label": "The Academy",
+    "build/strategy-track": {"label": "Solutionist Academy",
         "purpose": "For an idea that is not a business yet: model, market, price, launch plan, with Chief.",
         "next_rule": "Continue where they left off."},
     "build/course-studio": {"label": "Course Studio",

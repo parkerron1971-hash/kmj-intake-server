@@ -3899,7 +3899,7 @@ def render_home_v1() -> str:
       <button class="room-tab" role="tab" aria-selected="true" data-i="0">Operate</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="1">Clients</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="2">The Studio</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="3">The Academy</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="3">Solutionist Academy</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="4">Smart Sites</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="5">Autopilot</button>
     </div>
@@ -3994,7 +3994,7 @@ def render_home_v1() -> str:
             <div class="app-body">""" + SIDEBAR + """
               <div class="app-canvas">
                 <div class="ah-rule"></div>
-                <div class="ah-eyebrow">The Academy &middot; Legal &amp; Tax Setup</div>
+                <div class="ah-eyebrow">Solutionist Academy &middot; Legal &amp; Tax Setup</div>
                 <div style="display:flex;align-items:center;gap:14px;">
                   <span class="ring"><i>62%</i></span>
                   <span style="flex:1;"><span class="ah-title" style="display:block;">5 of 8 courses sealed</span>
