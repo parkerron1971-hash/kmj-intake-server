@@ -1138,6 +1138,96 @@ before while since because instead also plus both either each every another same
 '''.split())
 
 
+_TENS_WORDS = {'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60,
+               'seventy': 70, 'eighty': 80, 'ninety': 90}
+_UNIT_WORDS = {w: i for i, w in enumerate((
+    'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+    'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+    'eighteen', 'nineteen'))}
+# Only a number word that COUNTS something becomes a digit: "five invoices",
+# "four small overdue invoices", "eleven dollars", "ninety-six days". "Pick
+# one date" and "the one worth a call" stay words.
+_COUNTED = (r"invoices?|clients?|customers?|leads?|sessions?|appointments?|bookings?|days?|"
+            r"hours?|minutes?|weeks?|months?|years?|dollars?|bucks|people|seats?|members?|"
+            r"contacts?|times?|services?|offerings?|styles?|items?|orders?|payments?|drafts?|"
+            r"messages?|emails?|texts?|reminders?|tasks?|projects?|donors?|students?")
+# Between the number and what it counts, only describing words: "four
+# small overdue invoices" counts; "one date this week" does not.
+_COUNT_MODIFIERS = (r"small|big|large|overdue|unpaid|open|paid|new|more|late|past|full|whole|test|"
+                    r"separate|different|upcoming|scheduled|booked|active|cold|warm|hot|recent|"
+                    r"outstanding|pending|draft|unread|straight|business|calendar")
+_COUNT_WORD = re.compile(
+    r"\b(?:(%s)[\s-]+(%s)|(%s|%s))\b(?=(?:\s+(?:%s)){0,2}\s+(?:%s)\b)"
+    % ('|'.join(_TENS_WORDS), '|'.join(list(_UNIT_WORDS)[1:10]),
+       '|'.join(_TENS_WORDS), '|'.join(_UNIT_WORDS), _COUNT_MODIFIERS, _COUNTED), re.I)
+
+
+def _counts_as_digits(text):
+    def swap(m):
+        if m.group(1):
+            return str(_TENS_WORDS[m.group(1).lower()] + _UNIT_WORDS[m.group(2).lower()])
+        w = m.group(3).lower()
+        return str(_TENS_WORDS.get(w, _UNIT_WORDS.get(w, 0)))
+    return _COUNT_WORD.sub(swap, text or '')
+
+
+_UNPROVABLE_STATE = re.compile(
+    r"\b(?:most|least|more than|less than|fewer|biggest|largest|highest|lowest|smallest|"
+    r"oldest|newest|latest|top|only|all|every|none|nothing|nobody|no one|no|never|any)\b", re.I)
+_STATE_WORD = re.compile(
+    r"^(?:paid|unpaid|overdue|owes?|owed|owing|booked|scheduled|confirmed|cancell?ed|due|open|"
+    r"closed|pending|late|missed|signed|sent|received|total|balance|revenue)$")
+
+
+# What each record IS, so a row need not spell out its own kind: a
+# session row is an appointment, an invoice row is money someone owes.
+_IMPLIED_WORDS = {
+    'context:sessions': {'session', 'appointment', 'booking', 'booked', 'scheduled', 'client'},
+    'context:open_invoices': {'invoice', 'owe', 'owed', 'owe', 'owing', 'due', 'client', 'customer',
+                              'payment'},
+    'context:invoice_summary': {'invoice', 'owe', 'owed', 'owing', 'client', 'customer'},
+    'context:products': {'service', 'offering', 'product', 'style', 'item'},
+    'context:contacts_lookup': {'client', 'customer', 'contact', 'lead', 'member', 'donor'},
+    'context:projects': {'project'},
+}
+
+
+# A record that says it is partial proves no count: "Exact contacts
+# total: 725. Loaded sample: 500." must not prove "you have 500 contacts"
+# (the factual eval's count_above_page_cap case).
+_PARTIAL_ITEM = re.compile(r"\b(?:sample|loaded|first \d+|page|capped?|limit(?:ed)?|partial|"
+                           r"at least|may be more|showing|shown)\b", re.I)
+# A count in the sentence: a number right before the thing it counts.
+_COUNT_DIGITS = re.compile(r"(?<![\d.,])(\d[\d,]*)(?=(?:\s+(?:%s)){0,2}\s+(?:%s)\b)"
+                           % (_COUNT_MODIFIERS, _COUNTED), re.I)
+_DATE_TOKEN = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _counts_in(text):
+    return {Decimal(n.replace(',', '')).normalize() for n in _COUNT_DIGITS.findall(text or '')}
+
+
+def _plain_numbers(item):
+    """An item's numbers that can be COUNTS: no clock times, no dates."""
+    bare = _DATE_TOKEN.sub(' ', _ISO_STAMP.sub(' ', item or ''))
+    return {Decimal(n.replace(',', '')).normalize()
+            for n in _FIGURE.findall(_IDENTIFIER.sub(' ', _CLOCK.sub(' ', bare)))}
+
+
+def _stem(word):
+    return word[:-1] if len(word) > 3 and word.endswith('s') and not word.endswith('ss') else word
+
+
+def _state_keywords(sentence):
+    """The words a record must also hold for a state sentence to be proved:
+    its record nouns and its state words, stemmed ("invoices" = "invoice")."""
+    out = set()
+    for w in _words(sentence):
+        if _RECORD_NOUN.fullmatch(w) or _STATE_WORD.match(w):
+            out.add(_stem(w))
+    return out
+
+
 class _SentenceProver:
     """Checks one sentence at a time against the records a turn had.
 
@@ -1184,11 +1274,26 @@ class _SentenceProver:
             return False, None
         if has_completion_claim(sentence) or _DONE_CLAIM.search(_asserted_text(sentence)):
             return False, None
-        if _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence):
-            return False, None
-        figures = _numbers(sentence)
+        # A count said in words is a figure like any other: "Five invoices"
+        # must match a record's 5, and "Six invoices" must not.
+        figures = _numbers(_counts_as_digits(sentence))
         if not figures and _SPELLED_QUANTITY.search(sentence):
             return False, None
+        # A record the sentence names ("cash", "appointments") must be the
+        # record that proves it, not any record holding the same number.
+        keywords = _state_keywords(sentence)
+        if _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence):
+            # The state of a record ("five invoices are overdue, $265") is
+            # provable only with its figures AND its key words in one record
+            # item — "you have 2 appointments" must not match any record
+            # that happens to hold a 2. Nothing to count ("nothing booked"),
+            # a ranking ("owes the most") or a "none/only/all" stays with
+            # the reviewer.
+            if not figures or _UNPROVABLE_STATE.search(sentence):
+                return False, None
+            keywords = _state_keywords(sentence)
+            if not keywords:
+                return False, None
         names = [n.lower() for n in _fast_lane_names(sentence)
                  if not (stream and n.lower().replace('’', "'") in _STREAM_OPENERS)]
         if not figures:
@@ -1204,9 +1309,20 @@ class _SentenceProver:
                     and not _RECORD_NOUN.search(sentence):
                 return True, None
             return False, None
+        state = bool(_STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence))
+        counts = _counts_in(_counts_as_digits(sentence))
         for sid, text in self.records:
-            if any(figures <= nums and all(n in low for n in names)
-                   for nums, low in self._items(sid, text)):
+            implied = _IMPLIED_WORDS.get(sid, set())
+            for nums, low in self._items(sid, text):
+                if not (figures <= nums and all(n in low for n in names)
+                        and keywords <= ({_stem(w) for w in _words(low)} | implied)):
+                    continue
+                # A count ("5 invoices", "11 appointments") must be a count
+                # in the record — never its clock hour or a date's day.
+                if counts and not counts <= _plain_numbers(low):
+                    continue
+                if state and _PARTIAL_ITEM.search(low):
+                    continue
                 return True, sid
         return False, None
 
