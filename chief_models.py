@@ -165,6 +165,29 @@ def max_tokens_for(lane: str, default: int = 1600) -> int:
     return _LANE_MAX_TOKENS.get((lane or "").strip().lower(), default)
 
 
+# How hard the model thinks before it answers (output_config.effort).
+# Unset, Sonnet 5 runs adaptive thinking at its default ("high"): a live
+# 9/23 turn asking for pricing help spent 2,507 output tokens and 46 s on
+# a ~250-token answer — most of a minute of silence was thinking nobody
+# reads. A conversation lane answers at "medium"; a spoken turn, where a
+# pause is felt most, at "low". The deep lane (coaches, heavy analysis)
+# keeps the model default. Override per lane with CHIEF_EFFORT_<LANE>
+# (low / medium / high / xhigh / max; "default" = the model's own).
+_LANE_EFFORT = {
+    "chat": "medium",
+    "voice": "low",
+}
+_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def effort_for(lane: str) -> str | None:
+    key = (lane or "chat").strip().lower()
+    env = (os.environ.get(f"CHIEF_EFFORT_{key.upper()}") or "").strip().lower()
+    if env:
+        return env if env in _EFFORTS else None
+    return _LANE_EFFORT.get(key)
+
+
 # Appended to the DYNAMIC tail of the system prompt (after
 # [[CHIEF_CACHE_SPLIT]]) on voice turns — never to the cached prefix,
 # so the cache stays byte-identical across voice and text turns.

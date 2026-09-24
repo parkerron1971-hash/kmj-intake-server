@@ -1152,7 +1152,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        model: Optional[str] = None,
                        stream_sink=None,
                        read_tools: Optional[List[Dict[str, Any]]] = None,
-                       tool_biz: Optional[Dict[str, Any]] = None) -> str:
+                       tool_biz: Optional[Dict[str, Any]] = None,
+                       effort: Optional[str] = None) -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
     # turns once this business crosses its daily-dollar ceiling, or the
     # platform crosses its own. Fail-open — a bookkeeping hiccup must
@@ -1292,6 +1293,11 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         "model": model, "max_tokens": max_tokens, "system": sys_payload,
         "messages": messages,
     }
+    # Thinking depth for this lane (chief_models.effort_for); omitted where
+    # the model would reject it.
+    if effort:
+        import model_ladder as _ml
+        payload.update(_ml.effort_kwargs(model, effort))
     _tools_arr: List[Dict[str, Any]] = []
     if enable_web_search and CHIEF_WEB_SEARCH_ENABLED:
         _tools_arr.append(WEB_SEARCH_TOOL)
@@ -14084,7 +14090,8 @@ async def chief_chat(
                                      # /chat/stream drives this turn.
                                      stream_sink=_sentence_streamer,
                                      read_tools=_read_tools,
-                                     tool_biz=biz)
+                                     tool_biz=biz,
+                                     effort=chief_models.effort_for(lane))
             if isinstance(_sentence_streamer, _SentenceStreamer):
                 _sentence_streamer.close()
             _t.mark("model")
