@@ -63,7 +63,7 @@ from auth_supabase import UserSession, require_user_session
 
 import foundation_agent
 import business_profile_agent
-from api_usage_logger import log_api_usage
+from api_usage_logger import log_api_usage, cache_write_1h
 from business_profile_agent import chief_context_block as bp_chief_context_block
 import practitioner_profile_agent
 from practitioner_profile_agent import chief_context_block as pp_chief_context_block
@@ -1363,7 +1363,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               blocks: Dict[int, Dict[str, Any]] = {}
               stop_reason = ""
               in_tok = out_tok = 0
-              cache_read_tok = cache_write_tok = 0
+              cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
               try:
                   async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
                                               extra_headers=_beta_headers(_extended)) as resp:
@@ -1439,6 +1439,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               in_tok = int(u.get("input_tokens") or 0)
                               cache_read_tok = int(u.get("cache_read_input_tokens") or 0)
                               cache_write_tok = int(u.get("cache_creation_input_tokens") or 0)
+                              cache_write_1h_tok = cache_write_1h(u)
                           elif et == "message_delta":
                               d = evt.get("delta") or {}
                               if d.get("stop_reason"):
@@ -1464,6 +1465,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       endpoint="/chief/backend", model=model,
                       input_tokens=in_tok, output_tokens=out_tok,
                       cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
+                      cache_creation_1h_tokens=cache_write_1h_tok,
                       business_id=business_id, task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms)
                   from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
@@ -1634,6 +1636,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
           # understating every cached turn. Fold them into the cost.
           cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
           cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+          cache_creation_1h_tokens=cache_write_1h(usage),
           business_id=business_id, task_type=prompt_shape,
           duration_ms=int(time.time() * 1000) - started_ms,
       )

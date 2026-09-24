@@ -123,9 +123,22 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
 }
 
 # Anthropic prompt-cache multipliers (relative to base input rate):
-# cache READ = 0.10×, cache WRITE/creation = 1.25×.
+# cache READ = 0.10×, cache WRITE = 1.25× for the 5-minute TTL and 2× for
+# the 1-hour TTL. Chief's two long segments are written at 1 hour, and
+# every write was priced at 1.25×: a 1-hour write was logged at 62% of
+# what it cost (found 2026-09-24).
 _CACHE_READ_MULT = 0.10
 _CACHE_WRITE_MULT = 1.25
+_CACHE_WRITE_1H_MULT = 2.0
+
+
+def cache_write_1h(usage) -> int:
+    """The 1-hour part of a response's cache write, from the API's
+    `usage.cache_creation` breakdown; 0 when absent."""
+    try:
+        return int(((usage or {}).get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
 
 
 def _price_for_model(model: str) -> tuple[float, float]:
@@ -146,16 +159,22 @@ def _price_for_model(model: str) -> tuple[float, float]:
 
 def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int,
                         cache_read_tokens: int = 0,
-                        cache_creation_tokens: int = 0) -> float:
+                        cache_creation_tokens: int = 0,
+                        cache_creation_1h_tokens: int = 0) -> float:
     in_cents_per_mtok, out_cents_per_mtok = _price_for_model(model)
     # Anthropic reports input_tokens as FRESH (uncached) input only; cache
-    # reads (0.10×) and cache writes (1.25×) are separate and were being
-    # dropped — understating every cached Chief turn. Fold them in.
+    # reads (0.10×) and cache writes (1.25× / 2× at 1 hour) are separate
+    # and were being dropped — understating every cached Chief turn. Fold
+    # them in. `cache_creation_tokens` is the whole write; the 1-hour part
+    # of it is priced at its own rate.
+    cache_creation_tokens = int(cache_creation_tokens or 0)
+    one_hour = min(max(int(cache_creation_1h_tokens or 0), 0), cache_creation_tokens)
     cost = (
         (input_tokens  / 1_000_000.0) * in_cents_per_mtok +
         (output_tokens / 1_000_000.0) * out_cents_per_mtok +
         (cache_read_tokens     / 1_000_000.0) * in_cents_per_mtok * _CACHE_READ_MULT +
-        (cache_creation_tokens / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_MULT
+        ((cache_creation_tokens - one_hour) / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_MULT +
+        (one_hour / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_1H_MULT
     )
     return round(cost, 4)
 
@@ -247,6 +266,7 @@ async def log_api_usage(
     cache_creation_tokens: int = 0,
     cost_cents_override: Optional[float] = None,
     units: Optional[int] = None,
+    cache_creation_1h_tokens: int = 0,
 ) -> None:
     """Append one row to api_usage. Never raises.
 
@@ -257,7 +277,8 @@ async def log_api_usage(
 
     cost_cents = (round(cost_cents_override, 4) if cost_cents_override is not None
                   else _compute_cost_cents(model, input_tokens, output_tokens,
-                                           cache_read_tokens, cache_creation_tokens))
+                                           cache_read_tokens, cache_creation_tokens,
+                                           cache_creation_1h_tokens))
     body: Dict[str, Any] = {
         "endpoint":      endpoint,
         "model":         model,
