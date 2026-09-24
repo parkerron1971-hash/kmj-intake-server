@@ -1170,6 +1170,10 @@ def evidence_for_review(ctx, view_detail, taken):
     return bounded
 
 
+def _review_thinking():
+    return (os.environ.get('CHIEF_REVIEW_THINKING') or 'off').strip().lower()
+
+
 async def review_reply(client, system, messages, *, max_tokens, enable_web_search=False, business_id=None):
     """One bounded, metered, tool-free review; no retry or backup action path."""
     import httpx
@@ -1186,8 +1190,19 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # JSON at all, so every long answer was withheld. Low effort keeps the
     # thinking short enough that the verdict actually gets written.
     payload = {'model': model, 'max_tokens': max_tokens,
-               'system': system, 'messages': messages,
-               **model_ladder.effort_kwargs(model, 'low')}
+               'system': system, 'messages': messages}
+    # No thinking at all (2026-09-24). Benchmarked on three real answers
+    # against KMJ's records, twice each: thinking off averaged 8.4 s vs
+    # 10.3 s at low effort (the pricing answer 5-7 s vs 10 s), with the SAME
+    # verdict on all six; the check is mechanical and its JSON is validated
+    # in code (assess_review). Haiku 4.5 was not faster here and returned
+    # two unusable reviews in six. CHIEF_REVIEW_THINKING=low restores the
+    # previous setting without a deploy.
+    # Only where the API accepts it: Opus 5.5 rejects disabled thinking.
+    if _review_thinking() == 'off' and 'sonnet' in (model or '').lower():
+        payload['thinking'] = {'type': 'disabled'}
+    else:
+        payload.update(model_ladder.effort_kwargs(model, 'low'))
     response = await llm_call.apost(client, payload,
         timeout=httpx.Timeout(25.0, connect=5.0), task='chief_answer_review', business_id=business_id)
     if response.status_code >= 400:
