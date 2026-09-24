@@ -1044,6 +1044,7 @@ PLATFORM_CHIEF_SYSTEM = (
     "      Claude Code session opens there in the right project with the brief loaded. Choose\n"
     "      this over queue_build when the work needs the running app, local testing, or Kevin's\n"
     "      eyes; choose queue_build for self-contained changes that can ship from the cloud.\n"
+    "      Add \"agent\":\"codex\" ONLY when Kevin asks for Codex; otherwise Claude Code works it.\n"
     "      Both show progress in Mission Control → Dev Desk.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "KEEPER OF THE RECORD (Kevin forgets — you don't)\n"
