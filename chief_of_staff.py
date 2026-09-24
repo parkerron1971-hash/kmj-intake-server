@@ -2025,6 +2025,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/image_artworks?business_id=eq.{biz_id}&status=in.(queued,working)"
             f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace('+00:00', 'Z')}"
             f"&order=created_at.desc&limit=5&select=id,prompt,status,created_at"),
+        # What the business sells, with prices (2026-09-24). Chief quoted
+        # "the Individual 90-Day Intensive at $3,000" and "the Group Cohort
+        # at $750" — both real offerings — and the answer check, which never
+        # saw the offerings table, withheld the answer as "no evidence".
+        _sb(client, "GET",
+            f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
+            f"&select=name,current_price,category&order=name.asc&limit=60"),
     ]
     context_unavailable = []
 
@@ -2084,7 +2091,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id'),
     )]
 
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs = await asyncio.gather(*tasks)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = await asyncio.gather(*tasks)
 
     if not biz_rows:
         for t in early:
@@ -2216,6 +2223,11 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "auto_recent": auto_recent,
         "site": (site_rows or [{}])[0] if site_rows else None,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
+        # Active offerings as the owner sells them: name, price, kind.
+        "offerings": [
+            {"name": r.get("name"), "price": r.get("current_price"), "category": r.get("category")}
+            for r in (offering_rows or []) if isinstance(r, dict) and r.get("name")
+        ],
         "business_track": (business_track_rows or [None])[0] if business_track_rows else None,
         "products": products or [],
         # THE WIRE. Storage and prompt-eligibility are two different
