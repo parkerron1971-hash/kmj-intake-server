@@ -56,8 +56,19 @@ def recall_view(report, action):
             result['kind'] = kind
         else:
             raise HTTPException(422, 'Choose an available Growth section')
-        result.update(rows=rows[offset:offset+5], total=len(rows), offset=offset,
+        page = rows[offset:offset+5]
+        result.update(rows=page, total=len(rows), offset=offset,
                       next_offset=offset+5 if len(rows)>offset+5 else None)
+        # Say how much of the list this is. Live 9/23: "Six contacts are
+        # lapsed … Sister Williams, Monica Walton, Patrice Cole, Katlyn
+        # Tatum, Erin Harvey" — five names for six, because the page held
+        # five and nothing said so.
+        if page:
+            result['shown'] = f"{offset + 1}-{offset + len(page)} of {len(rows)}"
+        if len(rows) > offset + len(page):
+            result['more'] = (f"{len(rows) - offset - len(page)} more not shown. Call again with "
+                              f"offset={offset + len(page)} before naming them all, or say you are "
+                              f"listing the first {offset + len(page)} of {len(rows)}.")
     return result
 
 
