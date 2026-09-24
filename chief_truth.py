@@ -1331,7 +1331,7 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
                 k: json.dumps(v, sort_keys=True, ensure_ascii=False) for k, v in srcs.items()
                 if k.startswith('context:') and k != 'context:current_view'})
         except Exception as e:  # never let a diagnostic touch the review
-            logger.debug('cache watch failed: %s', e)
+            logger.warning('cache watch failed: %s', e)
     response = await llm_call.apost(client, payload,
         timeout=httpx.Timeout(25.0, connect=5.0), task='chief_answer_review', business_id=business_id)
     if response.status_code >= 400:
