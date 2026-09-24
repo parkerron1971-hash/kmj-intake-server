@@ -978,8 +978,12 @@ def evidence_for_review(ctx, view_detail, taken):
     # context:sessions was dropped to fit the blueprint (2026-09-23).
     context_fields = ('blueprint_block', 'playbook_block', 'voice_block', 'brand_block',
         'practitioner_block', 'business_profile_block', 'foundation_block',
-        'learning_lines', 'memories', 'insights', 'notifications', 'auto_recent',
+        'learning_lines', 'insights', 'notifications', 'auto_recent',
         'recent_queue_24h', 'events', 'image_jobs', 'queue', 'modules', 'module_counts',
+        # Saved memories are short facts the owner told Chief ("the 90-day
+        # cohort is $750"). Ranked with the prose they were dropped first
+        # and a correct answer quoting one was withheld (2026-09-24).
+        'memories',
         'projects', 'open_missions', 'open_assignments', 'products', 'contacts_lookup',
         'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'invoice_summary', 'sessions',
         'contacts_total', 'contacts_loaded', 'contacts_complete', 'context_quality')
