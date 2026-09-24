@@ -45,13 +45,15 @@ def _capture(monkeypatch, model):
 def test_sonnet_reviews_with_thinking_disabled(monkeypatch):
     monkeypatch.delenv("CHIEF_REVIEW_THINKING", raising=False)
     sent = _capture(monkeypatch, "claude-sonnet-5")
-    assert sent["thinking"] == {"type": "disabled"} and "output_config" not in sent
+    # No effort with thinking disabled. (output_config also carries the
+    # review's enforced JSON shape since 2026-09-24.)
+    assert sent["thinking"] == {"type": "disabled"} and "effort" not in sent.get("output_config", {})
 
 
 def test_the_switch_restores_low_effort(monkeypatch):
     monkeypatch.setenv("CHIEF_REVIEW_THINKING", "low")
     sent = _capture(monkeypatch, "claude-sonnet-5")
-    assert "thinking" not in sent and sent["output_config"] == {"effort": "low"}
+    assert "thinking" not in sent and sent["output_config"]["effort"] == "low"
 
 
 def test_a_model_that_rejects_disabled_thinking_keeps_low_effort(monkeypatch):
