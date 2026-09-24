@@ -1110,6 +1110,14 @@ def evidence_for_review(ctx, view_detail, taken):
             # The date, not the microseconds: a clock in the evidence made
             # every review's records differ and nothing could be cached.
             value = {**value, 'retrieved_at': str(value['retrieved_at'])[:10]}
+        if isinstance(value, list):
+            import chief_of_staff as chief
+            heading = chief.CONTEXT_HEADINGS.get(name)
+            if heading:
+                # The heading Chief read these rows under ("next 7 days"),
+                # so an answer that repeats it can cite it. Each row stays
+                # its own record for the fast lane.
+                value = {'heading': heading, 'rows': value}
         if value is not None:
             # Keep prose as prose. JSON-encoding a string here double-escapes
             # quotes/newlines in the outer review payload, so a reviewer citing
