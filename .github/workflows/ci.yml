@@ -158,4 +158,5 @@ jobs:
           node scripts/chief-computer-completion-db-check.mjs
           node scripts/chief-link-pilot-db-check.mjs
           node scripts/link-wallet-db-check.mjs
+          node scripts/lane-wallet-db-check.mjs
           node scripts/chief-builds-db-check.mjs
