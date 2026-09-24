@@ -3131,6 +3131,15 @@ def _merge_inbound_mail(
 
 _SNAPSHOT_AT = re.compile(r';\s*snapshot at [^;]*?\.$')
 
+# Two context lists are framed in the prompt by headings that carry figures.
+# The answer check reviews the same lists and gets the same heading, from
+# here: shown only `[]`, "Nothing on the calendar in the next 7 days" was
+# withheld as a figure with no evidence, and the repair told the owner
+# Chief had no access to their calendar (2026-09-24).
+SESSIONS_HEADING = "UPCOMING SESSIONS (next 7 days)"
+AT_RISK_HEADING = "at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed)"
+CONTEXT_HEADINGS = {"sessions": SESSIONS_HEADING, "at_risk": AT_RISK_HEADING}
+
 
 def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """context_quality for the CACHED state segment: the retrieval DATE,
@@ -3582,14 +3591,14 @@ CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unkn
   loaded: {ctx.get('contacts_loaded', 'unknown')}; complete: {ctx.get('contacts_complete', False)}
   by_status (loaded sample only): {json.dumps(ctx['contacts_by_status'])}
   avg_health (loaded sample only): {ctx['avg_health']}
-  at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed):
+  {AT_RISK_HEADING}:
 {chr(10).join(at_risk_lines) if at_risk_lines else '  (none in this context sample)'}
   For complete Retention counts, names, repeat-payment rates and follow-up decisions, call growth_report section=client_health or section=retention. Do not treat this context sample as a complete report.
 
 QUEUE ({len(ctx['queue'])} loaded draft rows; sample, not a total):
 {chr(10).join(queue_lines) if queue_lines else '  (none in the loaded sample; check data availability)'}
 
-UPCOMING SESSIONS (next 7 days):
+{SESSIONS_HEADING}:
 {chr(10).join(session_lines) if session_lines else '  (none in the loaded sample; check data availability)'}
 
 PROJECTS (loaded sample; use list_projects for additional records):
