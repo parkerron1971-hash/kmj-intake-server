@@ -297,8 +297,56 @@ _ESTIMATE_WORDING = re.compile(
     r"benchmark\w*|similar|comparable|might|could|would|for example|e\.g\.|anywhere from|or so|"
     r"sweet spot|rule of thumb|ideal|best practice|tends? to|works best|most \w+ (?:run|charge|price))\b"
     # A hypothetical third party: "a coach charging $300 an hour", "a salon that ..."
-    r"|\b(?:a|an)\s+\w+\s+(?:charging|who|that|with|at)\b",
+    r"|\b(?:a|an)\s+\w+\s+(?:charging|who|that|with|at)\b"
+    # A range is an estimate by its shape: "$50-$150", "8 to 15 people".
+    r"|\$?\d[\d,]*(?:\.\d+)?\s*(?:-|–|—|to)\s*\$?\d[\d,]*",
     re.I)
+
+# Chief's own advice is not a claim about the world or the business:
+# "I'd price seats at $797-$1,197" is what it recommends, and nothing can
+# "prove" a recommendation. Held as a fact, every pricing answer was
+# "No action ran … try again?" (2026-09-23). A recommendation that leans on
+# a business figure ("below your $1,500 Founders' Table", "since your 11
+# clients …") still has that figure checked.
+_RECOMMENDATION = re.compile(
+    r"\b(?:I'?d|I would|I recommend|I suggest|my (?:pick|recommendation|suggestion|advice)|"
+    r"consider|aim for|go with|start (?:at|with|around)|price (?:it|them|each|the|seats?|tickets?)\b|"
+    r"charge|set (?:it|the price|the rate)|you could|you might|you should|you'?d|try|"
+    r"plan (?:for|on)|target|land (?:it|at|around)|shoot for|cap (?:it|the)|keep (?:it|the))\b",
+    re.I)
+_POSSESSIVE_FIGURE = re.compile(r"\b(?:your|our|my)\s+(?:\w+\s+)?\$?\d", re.I)
+
+
+def _sentence_containing(reply, text):
+    want = _squash(text).lower()
+    for s in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
+        if want and want in _squash(s).lower():
+            return s
+    return text or ''
+
+
+def _is_recommendation_text(sentence):
+    return (bool(_RECOMMENDATION.search(sentence or '')) and not _RECORD_NOUN.search(sentence)
+            and not _STATE_CLAIM.search(sentence) and not _POSSESSIVE_FIGURE.search(sentence))
+
+
+def _is_recommendation(claim, reply):
+    text = claim.get('text')
+    if not isinstance(text, str) or claim.get('kind') not in ('fact', 'estimate', 'reference'):
+        return False
+    return _is_recommendation_text(text) or (
+        not _RECORD_NOUN.search(text) and not _POSSESSIVE_FIGURE.search(text)
+        and _is_recommendation_text(_sentence_containing(reply, text)))
+
+
+# "In 2026", "for 2025": the year is the clock, not a figure to prove.
+_YEAR_CONTEXT = re.compile(r"\b(?:in|for|by|of|during|since|through|this|next|last)\s+(20\d\d)\b", re.I)
+
+
+def _free_figures(text):
+    import datetime as _dt
+    this = _dt.date.today().year
+    return {Decimal(y) for y in _YEAR_CONTEXT.findall(text or '') if abs(int(y) - this) <= 1}
 # A sentence about records is a business fact whatever its wording: "revenue
 # was roughly $900,000" must still be proved.
 _RECORD_NOUN = re.compile(
@@ -390,6 +438,10 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # knowledge. Held to the same bar as a business figure, every
             # filing question was answered "No action ran" (2026-09-22).
             # A reference claim WITH a citation is checked like a fact.
+            # Chief's own recommendation ("I'd price seats at $797-$1,197")
+            # is advice: delivered as said, not labeled and not proved.
+            if _unsourced(claim) and _is_recommendation(claim, reply):
+                continue
             if _is_reference(claim) and _unsourced(claim):
                 references.append(text_.strip()[:140])
                 continue
@@ -416,7 +468,10 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
                 if claim['kind'] == 'action':
                     return 'unsupported', [], 'action claim without a write receipt'
-                if _numbers(text_) - _practitioner_figures(sources):
+                # Chief's own recommendation is advice, not evidence-bound.
+                if _is_recommendation(claim, reply):
+                    continue
+                if _numbers(text_) - _practitioner_figures(sources) - _free_figures(text_):
                     return 'unsupported', [], _claim_fail('claim number has no evidence', text_)
                 gaps.append('claim without support: %s (%s)' % (text_.strip()[:80], why))
                 # A prose gap must not hide a bad citation/figure later in the
@@ -437,7 +492,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # A figure the claim did not quote is fine when it is the exact
             # sum of figures in the quote or in the cited source: arithmetic
             # over the records, not a new number.
-            missing = {n for n in _numbers(text_) - quoted
+            missing = {n for n in _numbers(text_) - quoted - _free_figures(text_)
                        if not (_is_sum_of(n, quoted_all) or _is_sum_of(n, source_all))}
             if claim['kind'] == 'estimate':
                 # The reviewer labels totals "estimate" more often than the
@@ -461,6 +516,8 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 if missing and _is_general_estimate(claim):
                     references.append(text_.strip()[:140])
                     continue
+                if missing and _is_recommendation(claim, reply):
+                    continue
                 if missing:
                     return 'unsupported', [], _claim_fail('claim number %s is not in the quote' % ','.join(
                         format(n, 'f') for n in sorted(missing)), text_)
@@ -469,7 +526,13 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
         # Numbered-list markers are presentation, not factual quantities.
         prose = re.sub(r'(?m)^\s*\d+[.)]\s+', '', reply)
         reviewed_numbers = set().union(*(_numbers(c['text']) for c in claims)) if claims else set()
-        unreviewed = _numbers(prose) - reviewed_numbers
+        # The clock's year and the figures of Chief's own recommendations
+        # are not facts a claim has to cover.
+        exempt = _free_figures(prose)
+        for s in re.split(r'(?<=[.!?])\s+|\n+', prose):
+            if _is_recommendation_text(s):
+                exempt |= _numbers(s)
+        unreviewed = _numbers(prose) - reviewed_numbers - exempt
         if unreviewed:
             return 'unsupported', [], 'draft number %s has no reviewed claim' % ','.join(
                 format(n, 'f') for n in sorted(unreviewed))
