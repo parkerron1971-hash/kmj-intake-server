@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from uuid import UUID, uuid5, NAMESPACE_URL
@@ -39,9 +40,14 @@ class WorkOrder:
     untrusted_taint: bool = False
     version: int = 1
     submission_fingerprint: str = ""
+    # The chat that asked for it, so the practitioner's recent chats can
+    # show where the work stands and the done message lands in the right
+    # place (2026-09-24). An id from the app; never trusted for authority.
+    conversation_id: str = ""
 
     @classmethod
-    def create(cls, payload, *, business_id, user_id, turn_id, surface, words, tainted=False):
+    def create(cls, payload, *, business_id, user_id, turn_id, surface, words, tainted=False,
+               conversation_id=''):
         kind = payload.get('kind')
         if kind not in KINDS:
             raise ValueError('Choose an event, a form, a flyer, or an events page for this build.')
@@ -61,8 +67,10 @@ class WorkOrder:
                 raise ValueError('Choose up to four reference images.')
             facts={**facts,'reference_ids':[str(UUID(str(ref))) for ref in refs]}
         # Authority and identity are supplied only by the server, never the model.
+        conversation_id = conversation_id if isinstance(conversation_id, str) else ''
         return cls(stable_id(business_id, turn_id), kind, str(payload.get('brief') or '')[:4000],
-                   dict(facts), str(UUID(str(user_id))), surface, words[:600], untrusted_taint=bool(tainted))
+                   dict(facts), str(UUID(str(user_id))), surface, words[:600], untrusted_taint=bool(tainted),
+                   conversation_id=conversation_id if _CONVERSATION_ID.fullmatch(conversation_id) else '')
 
     def payload(self):
         return asdict(self)
@@ -152,6 +160,46 @@ def plan(order):
             Step('site_link', 'connect_events', 'Your website links to Events.', requires=('events_page',))]
 
 
+_CONVERSATION_ID = re.compile(r'[A-Za-z0-9_-]{1,80}')
+
+
+def _lower_first(text):
+    return text[:1].lower() + text[1:] if text[:1].isupper() and not text[1:2].isupper() else text
+
+
+def progress_note(steps, i, state, stage):
+    """What Chief says about the build while step i runs (Kevin, 2026-09-24:
+    "just finished with ... now going on to ...", "I am almost done").
+    Built from the plan and the receipts only, never a model: "finished"
+    names only a step whose result was read back and verified."""
+    n = len(steps)
+    now = _lower_first(stage)
+    if n == 1:
+        return f'On it. {stage}.'
+    if i == 0:
+        return f'On it. {stage} (1 of {n}).'
+    finished = None
+    for s in steps[:i]:
+        r = state.get('steps', {}).get(s.name) or {}
+        if r.get('verified', {}).get('ok'):
+            finished = r.get('label')
+    lead = f'{finished.rstrip()} ' if finished else ''
+    if i == n - 1:
+        return f'{lead}Almost done: {now} ({n} of {n}).'
+    return f'{lead}Now {now} ({i + 1} of {n}).' if finished else f'{stage} ({i + 1} of {n}).'
+
+
+def closing_note(state, total):
+    receipts = list(state.get('steps', {}).values())
+    waiting = [r for r in receipts if r.get('outcome') == 'queued']
+    if waiting:
+        return f'Almost done. Still waiting on this: {waiting[0].get("label", "").rstrip()}'
+    checked = sum(1 for r in receipts if r.get('verified', {}).get('ok'))
+    if checked == total:
+        return 'All done. Every step is checked.'
+    return f'Finished what I could: {checked} of {total} steps checked.'
+
+
 def receipt(step, outcome, label=None, *, ids=None, verified=None, detail=''):
     return {'step': step.name, 'type': step.verb, 'outcome': outcome, 'label': label or step.label,
             'ids': ids or {}, 'verified': verified or {'ok': False, 'how': 'not performed'}, 'detail': detail}
@@ -234,7 +282,9 @@ async def run(order, adapter, previous=None):
             state['steps'][step.name] = receipt(step, 'uncertain', 'This action may already have happened. Check its history before trying again.')
             continue
         state['attempted'][step.name] = fingerprint
-        state['progress'] = {'pct': int(100*i/len(steps)), 'stage': adapter.stage(step)}
+        stage = adapter.stage(step)
+        state['progress'] = {'pct': int(100*i/len(steps)), 'stage': stage, 'step': i + 1,
+                             'steps': len(steps), 'say': progress_note(steps, i, state, stage)}
         if step.sensitive:
             sensitive_count += 1
             state['sensitive_count'] = sensitive_count
@@ -253,5 +303,6 @@ async def run(order, adapter, previous=None):
         state['steps'][step.name] = checked
         await adapter.save(finish(state))
     count = sum(1 for r in state['steps'].values() if r.get('verified',{}).get('ok'))
-    state['progress'] = {'pct': int(100*count/len(steps)), 'stage': 'Checked' if count==len(steps) else 'Waiting for remaining work'}
+    state['progress'] = {'pct': int(100*count/len(steps)), 'stage': 'Checked' if count==len(steps) else 'Waiting for remaining work',
+                         'step': count, 'steps': len(steps), 'say': closing_note(state, len(steps))}
     return finish(state)

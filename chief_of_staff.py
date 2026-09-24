@@ -13231,6 +13231,9 @@ class ChatRequest(BaseModel):
     # closed set — anything else is ignored — so it steers the turn
     # without ever carrying free text into the prompt.
     intent: Optional[str] = None
+    # The app's id for this chat. Work Chief starts in the background is
+    # tied to it, so recent chats can show where that work stands.
+    conversation_id: Optional[str] = None
 
 
 # What each dial position asks of the turn. Appended to the uncached
@@ -13667,7 +13670,8 @@ async def chief_chat(
     from chief_code import turn_scope
     _build_turn_token = turn_scope.set({'user_id':str(user_session.user.id),
         'turn_id': image_studio.turn_id.get(), 'words':req.message or '',
-        'surface':'desktop','submitted':False})
+        'surface':'desktop','submitted':False,
+        'conversation_id':str(req.conversation_id or '')[:80]})
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
