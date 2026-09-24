@@ -1043,8 +1043,16 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
     )
     if method.upper() == 'GET' and result is None:
         import chief_truth
-        chief_truth.record('lookup:' + path, None)
+        # The failed read's id, minus the clock in its query: listed in
+        # DATA QUALITY (cached prompt) and in the answer check's records,
+        # a path with "created_at=gte.<now>" changed both on every message
+        # and forced ~48k tokens of cache writes per reply (2026-09-24).
+        chief_truth.record('lookup:' + _READ_CLOCK.sub('<time>', path), None)
+        logger.info("chief read unavailable: %s", path.split('?', 1)[0])
     return result
+
+
+_READ_CLOCK = re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?')
 
 
 async def _sb_service(client: httpx.AsyncClient, method: str, path: str, body=None):
