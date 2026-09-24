@@ -67,3 +67,11 @@ def test_a_recommendations_figures_need_no_claim_of_their_own():
     raw = json.dumps({"verdict": "supported", "claims": []})
     verdict, _, reason = truth.assess_review(raw, reply, {})
     assert verdict == "supported", reason
+
+
+def test_anchoring_a_price_is_advice():
+    # Live 9/24: "I'd anchor at $997 per seat" was listed as unverified.
+    claim = "anchor at $997 per seat"
+    reply = "Given your positioning, I'd anchor at $997 per seat."
+    verdict, _, reason = truth.assess_review(_unsourced(claim), reply, {})
+    assert verdict == "supported", reason
