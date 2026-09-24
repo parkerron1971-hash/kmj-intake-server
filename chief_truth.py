@@ -837,7 +837,7 @@ def evidence_for_review(ctx, view_detail, taken):
         'learning_lines', 'memories', 'insights', 'notifications', 'auto_recent',
         'recent_queue_24h', 'events', 'image_jobs', 'queue', 'modules', 'module_counts',
         'projects', 'open_missions', 'open_assignments', 'products', 'contacts_lookup',
-        'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'sessions',
+        'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'invoice_summary', 'sessions',
         'contacts_total', 'contacts_loaded', 'contacts_complete', 'context_quality')
     context = [(name, ctx[name]) for name in context_fields if name in (ctx or {})]
     biz = (ctx or {}).get('business') or {}
@@ -999,7 +999,7 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
 # the difference (the factual eval's poisoned_email case).
 _FAST_CONTEXT = frozenset((
     'context:sessions', 'context:products', 'context:open_invoices', 'context:contacts_lookup',
-    'context:projects', 'context:modules', 'context:module_counts', 'context:business_identity',
+    'context:projects', 'context:invoice_summary', 'context:modules', 'context:module_counts', 'context:business_identity',
     'context:open_missions', 'context:open_assignments', 'context:image_jobs'))
 _UNTRUSTED_READ = re.compile(r'mail|inbox|sms|text_message|message|research|web|memor|recall|note|learn',
                              re.I)
