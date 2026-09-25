@@ -194,7 +194,7 @@ def evaluate(business_id: str, *, verb: str, surface: str,
     if not business_id or not verb:
         return Verdict(False, "policy:invalid", "Missing business or verb.")
 
-    if verb == 'link_wallet_pilot' and (not prompted or surface != 'chat'):
+    if verb in {'link_wallet_pilot', 'lane_wallet'} and (not prompted or surface != 'chat'):
         return Verdict(False, 'link-pilot:chat-required', 'The private Link pilot requires the owner\'s current chat turn.')
 
     if verb=='approve_errand' and (not prompted or surface not in ('chat','notification')):

@@ -286,6 +286,16 @@ def _link_pilot_offered() -> bool:
             and action_registry.effect('link_wallet_pilot') == action_registry.WRITE)
 
 
+def _lane_wallet_offered() -> bool:
+    import os
+    from chief_of_staff import _TURN_USER_ID
+    return (_writes_allowed.get() and _turn_surface.get() == 'chat' and _turn_prompted.get()
+            and os.getenv('LANE_PILOT_ENABLED') == 'true'
+            and os.getenv('LANE_PURCHASES_ENABLED') == 'true'
+            and bool(_TURN_USER_ID.get()) and _TURN_USER_ID.get() == os.getenv('LANE_PILOT_USER_ID')
+            and action_registry.effect('lane_wallet') == action_registry.WRITE)
+
+
 def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
     """Reads always; writes when the turn allows them; PROPOSALS — the
     reviewed class C verbs, filed for the practitioner's approval rather
@@ -298,6 +308,9 @@ def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
         tools += write_tool_definitions()
         if _image_tool_offered():
             tools.append(image_tool_definition())
+        if _lane_wallet_offered():
+            from chief_lane_wallet import tool_definition as lane_definition
+            tools.append(lane_definition())
         if _link_pilot_offered():
             from chief_link_pilot import tool_definition
             tools.append(tool_definition())
@@ -437,7 +450,8 @@ async def _execute_write(client, biz: Dict[str, Any],
         return True, (f"'{name}' changes records and is not a mid-turn tool on "
                       f"this turn. Operations go through [ACTION:] tags in your reply.")
     if not (_write_verb_offered(name) or (name == "generate_image" and _image_tool_offered())
-            or (name == 'link_wallet_pilot' and _link_pilot_offered())):
+            or (name == 'link_wallet_pilot' and _link_pilot_offered())
+            or (name == 'lane_wallet' and _lane_wallet_offered())):
         # Class C, bulk, unreviewed, or sensitive. The same flat sentence
         # the agent surface uses, so a refusal is never a hint that a
         # scope or a retry would help.

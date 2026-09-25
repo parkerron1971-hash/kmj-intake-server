@@ -215,6 +215,7 @@ from chief_offering_actions import (
 )
 # The browser hand (2026-09-04) — proposes; the approval starts the job.
 from chief_link_pilot import handle_link_wallet_pilot
+from chief_lane_wallet import handle_lane_wallet
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -11027,6 +11028,7 @@ ACTION_HANDLERS = {
     "queue_build_request":   handle_queue_build_request,
     "use_browser_hand":      handle_use_browser_hand,
     "link_wallet_pilot":     handle_link_wallet_pilot,
+    "lane_wallet":           handle_lane_wallet,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,
@@ -12175,7 +12177,11 @@ async def _execute_actions(client, biz, actions: List[Dict],
             resolved["_unattended"] = True
 
         try:
-            if atype == 'link_wallet_pilot':
+            if atype == 'lane_wallet':
+                import chief_lane_wallet
+                res = await chief_lane_wallet.dispatch(client, biz, resolved,
+                    surface=surface, prompted=prompted, user_id=user_id)
+            elif atype == 'link_wallet_pilot':
                 import chief_link_pilot
                 res = await chief_link_pilot.dispatch(client, biz, resolved,
                     surface=surface, prompted=prompted, user_id=user_id)
