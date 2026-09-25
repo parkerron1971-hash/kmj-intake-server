@@ -67,11 +67,13 @@ class Backend:
         self.browser=browser
         self.context=None
         self.final_quantity=None
+        self.terms_checked=None
     def open(self):
         self.context=self.browser.new_context(viewport=VIEWPORT,service_workers='block')
         self.context.set_default_timeout(1000)
         self.context.route('**/*',lambda route:route.fulfill(status=200,content_type='text/html',
-            body=(FIXTURES/('cancellation.html' if '/cancel' in route.request.url else 'checkout.html' if '/checkout' in route.request.url else 'supplier.html')).read_text()))
+            body=(FIXTURES/('cancellation.html' if '/cancel' in route.request.url else 'checkout.html' if '/checkout' in route.request.url
+                  else 'signup.html' if '/signup' in route.request.url else 'supplier.html')).read_text()))
     def page(self):
         return self.context.new_page()
     def close(self):
@@ -79,6 +81,8 @@ class Backend:
             pages=self.context.pages
             if pages and pages[0].locator('[name="quantity"]').count():
                 self.final_quantity=pages[0].locator('[name="quantity"]').input_value()
+            if pages and pages[0].locator('[name="terms"]').count():
+                self.terms_checked=pages[0].locator('[name="terms"]').is_checked()
             self.context.close()
 
 
@@ -114,6 +118,8 @@ class ScriptedClient:
                         if 'Card number' in line and ' input ' in line: self.refs['card']=ref
                         if ' article ' in line and 'TEST-1' in line: self.refs['cancel_row']=ref
                         if ' button ' in line and 'Cancel order' in line: self.refs['cancel']=ref
+                        if ' input email' in line: self.refs['email']=ref
+                        if ' input checkbox' in line and 'terms' not in self.refs: self.refs['terms']=ref
         def use(name,args=None,browser=True):
             return {'content':[{'type':'tool_use','id':'tool_'+str(turn),'name':name,'input':args or {},
                                **({'toolset_name':'browser'} if browser else {})}],
@@ -130,6 +136,14 @@ class ScriptedClient:
             if turn==3:
                 return use('left_click',{'target':{'type':'ref','ref':self.refs['cancel']}})
             return {'content':[{'type':'text','text':json.dumps({'cancelled_order_number':'TEST-1'})}]}
+        if self.mode=='form':
+            if turn==2:
+                return use('hand_form_to_owner',{'ref':self.refs['email'],'reason':'Needs your sign-up details'},False)
+            if turn==3:
+                return use('read_page',{'filter':'all'})
+            return {'content':[{'type':'text','text':json.dumps({'evidence':'Create your account'})}]}
+        if self.mode=='consent':
+            return use('left_click',{'target':{'type':'ref','ref':self.refs['terms']}})
         if self.mode=='injection':
             return use('form_input',{'target':{'type':'ref','ref':self.refs['qty']},'value':40})
         if self.mode=='offdomain':
@@ -376,3 +390,40 @@ def test_spend_limit_drop_while_continue_is_queued_requires_fresh_stepup(browser
     assert not result['ok'] and not driver.submitted
     assert commands[0].result.exception().status_code==409
     writer.assert_not_called()
+
+
+def signup_portal(browser,monkeypatch,mode):
+    parts=setup_driver(browser,monkeypatch,mode)
+    driver,store=parts[0],parts[1]
+    for row in (store.row,driver.row):
+        row['kind']='portal'
+        row['plan']['__start_url']='https://supplier.test/signup'
+    return parts
+
+
+def test_portal_hands_a_signup_form_to_the_owner_and_never_sees_it(browser,monkeypatch):
+    driver,store,backend,client,writer,frames=signup_portal(browser,monkeypatch,'form')
+    private={'name':'PRIVATE OWNER','email':'owner@private.test','password':'N3w-pass!'}
+    def answer(hold):
+        f={x['label']:x['id'] for x in hold['fields']}
+        driver.mailbox.put(ce.Command('secret',UID,hold_id=hold['id'],fields={
+            f['Full name']:private['name'],f['Email']:private['email'],f['Password']:private['password'],
+            f['Confirm password']:private['password'],f['I agree to the Terms of Service']:True}))
+    store.on_hold=answer
+    result=driver.run()
+    assert result['ok'] and result['report']=='Create your account',result
+    hold=store.holds[0]
+    assert hold['field_kind']=='form' and hold['reason']=='Needs your sign-up details'
+    assert not hold['allow_save'] and not hold['saved_options'] and hold['label']=='Your details are needed'
+    sent=json.dumps(client.requests)
+    assert all(v not in sent for v in private.values()) and 'filled' in sent
+    assert any(t.get('name')=='hand_form_to_owner' for t in client.requests[0]['tools'])
+    assert all(v not in json.dumps(store.events) for v in private.values())
+    assert backend.terms_checked  # The owner ticked it, in the handed form.
+
+
+def test_worker_cannot_tick_terms_itself(browser,monkeypatch):
+    driver,store,backend,client,writer,frames=signup_portal(browser,monkeypatch,'consent')
+    result=driver.run()
+    assert not result['ok'] and not store.holds
+    assert backend.terms_checked is False

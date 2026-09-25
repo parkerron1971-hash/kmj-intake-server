@@ -319,3 +319,51 @@ resource hosts remained blocked. This verifies product-page access, not checkout
 No guard was weakened, account opened, cart changed or purchase made. The first
 purchase still requires the owner's presence, delivery details, Secure Entry and
 approval of the final total.
+
+## Pilot switch, handed-over forms and seeing pages (2026-09-25)
+
+Kevin asked for sign-ins and sign-ups handed to him in the chat (fields shown
+there, filled by him, handed back without Chief seeing them, "for anything"),
+for something in the chat to look in on when Chief searches, and for Chief to
+be able to see any site it is sent to.
+
+- **Pilot switch.** `ERRANDS_BUSINESS_IDS` (comma-separated UUIDs) keeps
+  `ERRANDS_ENABLED=on` to named businesses; unset means every business.
+  `GET /computer/settings` returns `execution_enabled` for the caller's business.
+- **Handed-over forms.** Only the classic one-username, one-password form keeps
+  the login card (and the vault). Any other form that trips a sensitive field
+  (a sign-up, a two-step login, a password-only page) becomes a `field_kind:
+  "form"` hold: the controller reads the form's visible fields (labels, types,
+  required, select and radio choices; never values, hidden fields or the
+  model's guess), keeps live element handles and signatures, and the owner's
+  Secure Entry answers are keyed by field id. `fill_form` re-checks the hold,
+  host, every element's signature and each answer's type, fills the page, adds
+  typed text to the scrubber and keeps the screenshot curtain, exactly like a
+  login. Forms are never saved. A form with payment fields is refused (cards keep
+  their own Secure Entry). At most 25 fields, 300 options per select.
+- **Deliberate hand-off.** The worker has `hand_form_to_owner(ref, reason)` for a
+  form that needs the owner's own details or anything the plan does not give
+  it. The owner sees the reason on the card.
+- **Terms are the owner's.** `_guard` refuses any click, keypress or
+  form_input on a checkbox or radio whose label reads as terms, consent,
+  privacy or conditions (`BrowserController.consent_control`); the worker must
+  hand the form over, and the owner ticks it there.
+- **Seeing a page.** `view_website` (chief_site_view.py) is a Chief-only read:
+  the guarded public-only capture context from website_image_references, a
+  sign-in page refused, one screen per call (desktop or phone, screens 1-4),
+  three per turn. The model gets the screenshot as an image block (the one
+  read tool whose result is not text, handled in `run_tool_round`) and the
+  page's visible text through `untrusted_text.defuse`, so an instruction-shaped
+  page taints the turn. The owner gets the same picture as a work-log step
+  (`view`), stored privately under `proposals/{business}/chief-view/` with a
+  week-long signed link. The `[ACTION:]` tag path returns text only.
+- **Looking in on searches.** Chief's streamed web searches become work-log
+  steps (`search`: the query while it runs, the pages found when it lands),
+  from `chief_search_steps.py` in the stream loop. Titles and links are
+  shown to the owner only; nothing is added to what the model reads.
+
+Known limits: the screenshot curtain after any secure fill also covers the
+owner's live view for the rest of that run (a deliberate privacy trade, not
+changed here); on a voice or taint-held turn the class-C gate holds first, so
+a hand-off can take one more go-ahead; view screenshots are not yet pruned.
+

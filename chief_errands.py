@@ -495,7 +495,7 @@ async def approve(row, user, request, *, via_chat=False):
         raise HTTPException(403,{'code':'ledger_locked','scope':'danger','message':'Approve this errand on its card.'})
     if stepup:
         require_unlock(request,str(user.id),SCOPE_DANGER)
-    if os.environ.get('ERRANDS_ENABLED','off').lower()!='on':
+    if not execution_enabled(row['business_id']):
         raise HTTPException(503,'Chief computer execution is not enabled yet. Your plan is saved.')
     prepared=await asyncio.to_thread(rpc,'chief_errand_approve',p_business_id=row['business_id'],
         p_id=row['id'],p_user_id=str(user.id),p_scope='stepup:danger' if stepup else ('chat' if via_chat else 'button'))
@@ -563,6 +563,48 @@ async def approve_errand(errand_id:str,request:Request,session:UserSession=Depen
     return {'errand':outward(await approve(row,session.user,request))}
 
 
+def form_answers(hold,fields):
+    """The owner's answers for a handed-over form, checked against the fields the
+    page actually has. Blank optional answers are dropped; nothing is echoed."""
+    specs={f['id']:f for f in hold.get('fields') or [] if isinstance(f,dict) and isinstance(f.get('id'),str)}
+    if not isinstance(fields,dict) or not fields or set(fields)-set(specs):
+        raise HTTPException(422,'The answers do not match this form.')
+    answers={}
+    for fid,spec in specs.items():
+        value=fields.get(fid)
+        if spec.get('type')=='checkbox':
+            if value is not None and type(value) is not bool:
+                raise HTTPException(422,'The answers do not match this form.')
+            if spec.get('required') and value is not True:
+                raise HTTPException(422,'Tick every required box.')
+        elif spec.get('type') in ('select','choice'):
+            if value is not None and value not in {o.get('id') for o in spec.get('options') or []}:
+                raise HTTPException(422,'The answers do not match this form.')
+            if spec.get('required') and value is None:
+                raise HTTPException(422,'Answer every required question.')
+        else:
+            if value is not None and (not isinstance(value,str) or len(value)>4096):
+                raise HTTPException(422,'The answers do not match this form.')
+            if spec.get('required') and not (isinstance(value,str) and value.strip()):
+                raise HTTPException(422,'Fill in every required field.')
+            if value=='':
+                value=None
+        if value is not None:
+            answers[fid]=value
+    if not answers:
+        raise HTTPException(422,'Fill in the form first.')
+    return answers
+
+
+def execution_enabled(business_id):
+    """ERRANDS_ENABLED turns Chief's computer on; ERRANDS_BUSINESS_IDS, when set,
+    keeps it to those businesses (the pilot). Unset list = every business."""
+    if os.environ.get('ERRANDS_ENABLED','off').lower()!='on':
+        return False
+    pilot={b.strip() for b in os.environ.get('ERRANDS_BUSINESS_IDS','').split(',') if b.strip()}
+    return not pilot or str(business_id) in pilot
+
+
 @router.post('/errands/{errand_id}/secret')
 async def secure_entry(errand_id:str,request:Request,session:UserSession=Depends(sb_clients.authed_request)):
     try:
@@ -588,6 +630,15 @@ async def _secure_entry(errand_id,request,session):
         raise HTTPException(400,'Virtual card issuing is not enabled yet.')
     save=body.get('save',False)
     saved=body.get('use_saved')
+    if hold.get('field_kind')=='form':
+        # The site's own form, handed over by Chief: filled once, never saved.
+        if save or saved:
+            raise HTTPException(422,'A handed-over form is filled once and never saved.')
+        fields=form_answers(hold,body.get('fields'))
+        command=Command('secret',str(session.user.id),hold_id=hold['id'])
+        command.fields=fields
+        await send_command(row['id'],command)
+        return {'ok':True}
     if save or saved:
         require_unlock(request,str(session.user.id),SCOPE_DANGER)
     if saved and (body.get('fields') or save):
@@ -671,7 +722,8 @@ async def get_settings(business_id:str,session:UserSession=Depends(sb_clients.au
     biz=await asyncio.to_thread(business,business_id,session.user)
     rows=await asyncio.to_thread(db,'GET',f'/business_secrets?business_id=eq.{biz["id"]}'
         f'&status=eq.active&select={secret_vault.METADATA_COLUMNS}&order=created_at.desc&limit=100') or []
-    return {'settings':settings_of(biz),'secrets':[secret_vault.secret_metadata(r) for r in rows]}
+    return {'settings':settings_of(biz),'secrets':[secret_vault.secret_metadata(r) for r in rows],
+            'execution_enabled':execution_enabled(biz['id'])}
 
 
 @router.put('/computer/settings')
