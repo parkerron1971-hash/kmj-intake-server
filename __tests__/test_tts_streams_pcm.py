@@ -105,7 +105,13 @@ class _FakeClient:
 @pytest.fixture
 def tts_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("TTS_KEEP_WARM", "off")
     monkeypatch.setattr(wp.httpx, "AsyncClient", _FakeClient)
+    # Each test talks to its own fake provider: no shared connection or
+    # remembered phrase audio carried over from the test before.
+    monkeypatch.setattr(wp, "_TTS_HTTP", None)
+    wp._PHRASE_AUDIO.clear()
+    wp._PHRASE_AUDIO_BYTES["n"] = 0
     monkeypatch.setattr(wp.rate_limit, "allow", lambda *a, **k: True)
     monkeypatch.setattr(wp.rate_limit, "client_ip", lambda r: "203.0.113.1")
 

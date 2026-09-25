@@ -36,7 +36,8 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional
+from collections import OrderedDict
+from typing import AsyncIterator, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -156,6 +157,136 @@ def _openai_key() -> str:
 
 def _elevenlabs_key() -> str:
     return os.environ.get("ELEVENLABS_API_KEY", "")
+
+
+# ── A warm connection to the speech providers (2026-09-25) ───────────
+# Every spoken sentence group used to open its own AsyncClient: a fresh
+# TCP + TLS handshake to OpenAI or ElevenLabs per group, paid before the
+# first byte of audio (Dev Desk, the voice output brief: "a warm persistent
+# connection ... so no handshake cost is paid per turn"). One keep-alive
+# pool per event loop now serves every request, and while a call is going
+# (speech in the last ten minutes) a free request every 45s keeps the
+# connection from idling shut between turns. Neither provider offers a
+# plain streaming-TTS socket both can share, and a pooled HTTP/1.1
+# connection removes exactly the cost the brief names — the handshake.
+_TTS_HTTP: Optional[httpx.AsyncClient] = None
+_TTS_HTTP_LOOP = None
+_TTS_LAST_USE = {"openai": 0.0, "elevenlabs": 0.0}
+_TTS_WARM_TASK = None
+TTS_WARM_EVERY_S = 45
+TTS_WARM_FOR_S = 600
+
+
+def _tts_http(provider: str = "openai") -> httpx.AsyncClient:
+    """The shared keep-alive client. Callers close their RESPONSE, never
+    this client."""
+    global _TTS_HTTP, _TTS_HTTP_LOOP, _TTS_WARM_TASK
+    loop = asyncio.get_running_loop()
+    if (_TTS_HTTP is None or getattr(_TTS_HTTP, "is_closed", False)
+            or _TTS_HTTP_LOOP is not loop):
+        _TTS_HTTP = httpx.AsyncClient(
+            timeout=TTS_TIMEOUT,
+            limits=httpx.Limits(max_keepalive_connections=16, max_connections=48,
+                                keepalive_expiry=120.0))
+        _TTS_HTTP_LOOP = loop
+    _TTS_LAST_USE[provider] = time.monotonic()
+    if (os.environ.get("TTS_KEEP_WARM") or "on").lower() != "off" and (
+            _TTS_WARM_TASK is None or _TTS_WARM_TASK.done()):
+        try:
+            _TTS_WARM_TASK = loop.create_task(_keep_tts_warm())
+        except Exception:  # pragma: no cover
+            _TTS_WARM_TASK = None
+    return _TTS_HTTP
+
+
+async def _keep_tts_warm() -> None:
+    while True:
+        await asyncio.sleep(TTS_WARM_EVERY_S)
+        now = time.monotonic()
+        live = {p for p, t in _TTS_LAST_USE.items() if now - t < TTS_WARM_FOR_S}
+        c = _TTS_HTTP
+        if not live or c is None or getattr(c, "is_closed", False):
+            return
+        try:
+            if "openai" in live and _openai_key():
+                await c.get("https://api.openai.com/v1/models",
+                            headers={"Authorization": f"Bearer {_openai_key()}"}, timeout=5.0)
+            if "elevenlabs" in live and _elevenlabs_key():
+                await c.get("https://api.elevenlabs.io/v1/models",
+                            headers={"xi-api-key": _elevenlabs_key()}, timeout=5.0)
+        except Exception:
+            pass
+
+
+# ── Short phrases, already spoken (2026-09-25) ───────────────────────
+# The words that start a call turn are a small fixed set: the call's own
+# openers ("Let me take a look."), the leads the reply's first track sends
+# ("One second.", "On it.") and a few pleasantries. Their audio is the
+# same every time for the same voice, so it is kept once rendered and
+# served from memory — no provider call, no provider wait, no provider
+# charge. Only short texts are kept (a reply sentence is not a phrase),
+# bounded by count and bytes.
+PHRASE_AUDIO_MAX_CHARS = 60
+PHRASE_AUDIO_MAX_ENTRIES = 400
+PHRASE_AUDIO_MAX_BYTES = 32 * 1024 * 1024
+_PHRASE_AUDIO: "OrderedDict[tuple, bytes]" = OrderedDict()
+_PHRASE_AUDIO_BYTES = {"n": 0}
+
+
+def _phrase_key(provider: str, voice: str, model: str, fmt: str, spoken: str):
+    if (os.environ.get("TTS_PHRASE_CACHE") or "on").lower() == "off":
+        return None
+    if not spoken or len(spoken) > PHRASE_AUDIO_MAX_CHARS:
+        return None
+    return (provider, voice, model, fmt, " ".join(spoken.split()).lower())
+
+
+def _phrase_get(key) -> Optional[bytes]:
+    if key is None:
+        return None
+    audio = _PHRASE_AUDIO.get(key)
+    if audio is not None:
+        _PHRASE_AUDIO.move_to_end(key)
+    return audio
+
+
+def _phrase_put(key, audio: bytes) -> None:
+    if key is None or not audio or len(audio) > 2 * 1024 * 1024:
+        return
+    old = _PHRASE_AUDIO.pop(key, None)
+    if old is not None:
+        _PHRASE_AUDIO_BYTES["n"] -= len(old)
+    _PHRASE_AUDIO[key] = audio
+    _PHRASE_AUDIO_BYTES["n"] += len(audio)
+    while _PHRASE_AUDIO and (len(_PHRASE_AUDIO) > PHRASE_AUDIO_MAX_ENTRIES
+                             or _PHRASE_AUDIO_BYTES["n"] > PHRASE_AUDIO_MAX_BYTES):
+        _, gone = _PHRASE_AUDIO.popitem(last=False)
+        _PHRASE_AUDIO_BYTES["n"] -= len(gone)
+
+
+def _phrase_response(audio: bytes, fmt: str) -> Response:
+    headers = tts_response_headers(fmt)
+    headers["X-TTS-Cache"] = "hit"
+    return Response(content=audio, media_type=TTS_MEDIA_TYPES[fmt], headers=headers)
+
+
+def _relay(upstream: httpx.Response, key) -> "AsyncIterator[bytes]":
+    """Forward the provider's audio as it arrives; keep a copy of a short
+    phrase's bytes once the stream has ended cleanly."""
+    async def _stream():
+        kept: Optional[list] = [] if key is not None else None
+        complete = False
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=4096):
+                if kept is not None:
+                    kept.append(chunk)
+                yield chunk
+            complete = True
+        finally:
+            await upstream.aclose()
+            if complete and kept:
+                _phrase_put(key, b"".join(kept))
+    return _stream()
 
 
 # ── Per-business voice metering helpers ──────────────────────────────
@@ -405,9 +536,17 @@ async def text_to_speech(req: TTSRequest, request: Request,
     # app do not, and they reach this endpoint too.
     spoken = normalize_for_speech(text)[:TTS_MAX_CHARS]
 
+    # A short phrase already rendered in this voice: no provider call.
+    phrase_key = _phrase_key("openai", voice, model, fmt, spoken)
+    cached = _phrase_get(phrase_key)
+    if cached is not None:
+        logger.info(f"TTS phrase cache hit: chars={len(spoken)} voice={voice} format={fmt}")
+        return _phrase_response(cached, fmt)
+
     # Use httpx streaming so we forward chunks as OpenAI produces them,
-    # instead of buffering the entire mp3 in memory first.
-    client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
+    # instead of buffering the entire mp3 in memory first — over the shared
+    # keep-alive connection (no handshake per sentence).
+    client = _tts_http("openai")
 
     try:
         upstream = await client.send(
@@ -428,18 +567,15 @@ async def text_to_speech(req: TTSRequest, request: Request,
             stream=True,
         )
     except httpx.TimeoutException:
-        await client.aclose()
         logger.warning("TTS request timed out")
         raise HTTPException(504, "TTS API timed out")
     except httpx.HTTPError as e:
-        await client.aclose()
         logger.error(f"TTS request failed: {e}")
         raise HTTPException(502, f"TTS request failed: {e}")
 
     if upstream.status_code >= 400:
         body = (await upstream.aread()).decode("utf-8", errors="replace")[:300]
         await upstream.aclose()
-        await client.aclose()
         logger.warning(f"TTS {upstream.status_code}: {body}")
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
@@ -464,16 +600,8 @@ async def text_to_speech(req: TTSRequest, request: Request,
     except Exception:
         pass
 
-    async def _stream():
-        try:
-            async for chunk in upstream.aiter_bytes(chunk_size=4096):
-                yield chunk
-        finally:
-            await upstream.aclose()
-            await client.aclose()
-
     return StreamingResponse(
-        _stream(),
+        _relay(upstream, phrase_key),
         media_type=TTS_MEDIA_TYPES[fmt],
         headers=tts_response_headers(fmt),
     )
@@ -488,7 +616,7 @@ _EL_OUTPUT_FORMATS = {"mp3": "mp3_44100_128", "pcm": "pcm_24000"}
 async def _elevenlabs_speak(text: str, voice_id: str, key: str,
                             business_id: Optional[str] = None,
                             user_id: Optional[str] = None,
-                            fmt: str = "mp3") -> Optional[StreamingResponse]:
+                            fmt: str = "mp3") -> Optional[Response]:
     """Stream ElevenLabs TTS back to the client — same audio-over-HTTP
     contract as the OpenAI path (mp3 or raw PCM, chosen by `fmt`), so
     the frontend audio pipeline doesn't know or care which provider
@@ -504,7 +632,15 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
     # note below.
     spoken = normalize_for_speech(text)[:ELEVENLABS_MAX_CHARS]
 
-    client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
+    # A short phrase already rendered in this voice: served from memory. No
+    # ElevenLabs characters are spent, so none count against the cap.
+    phrase_key = _phrase_key("elevenlabs", voice_id, ELEVENLABS_MODEL, fmt, spoken)
+    cached = _phrase_get(phrase_key)
+    if cached is not None:
+        logger.info(f"ElevenLabs phrase cache hit: chars={len(spoken)} voice={voice_id}")
+        return _phrase_response(cached, fmt)
+
+    client = _tts_http("elevenlabs")
     try:
         upstream = await client.send(
             client.build_request(
@@ -516,18 +652,15 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
             stream=True,
         )
     except httpx.TimeoutException:
-        await client.aclose()
         logger.warning("ElevenLabs TTS timed out")
         raise HTTPException(504, "TTS API timed out")
     except httpx.HTTPError as e:
-        await client.aclose()
         logger.error(f"ElevenLabs TTS failed: {e}")
         raise HTTPException(502, f"TTS request failed: {e}")
 
     if upstream.status_code >= 400:
         body = (await upstream.aread()).decode("utf-8", errors="replace")[:300]
         await upstream.aclose()
-        await client.aclose()
         logger.warning(f"ElevenLabs TTS {upstream.status_code}: {body}")
         # Busy or broken upstream: None tells the caller to speak with the
         # included voice instead. A 4xx that is about THIS request (a bad
@@ -562,16 +695,8 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
     if business_id:
         _note_el_chars(business_id, len(text))
 
-    async def _stream():
-        try:
-            async for chunk in upstream.aiter_bytes(chunk_size=4096):
-                yield chunk
-        finally:
-            await upstream.aclose()
-            await client.aclose()
-
     return StreamingResponse(
-        _stream(),
+        _relay(upstream, phrase_key),
         media_type=TTS_MEDIA_TYPES[fmt],
         headers=tts_response_headers(fmt),
     )
