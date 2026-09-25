@@ -174,6 +174,6 @@ def probe(api_key, *, transport=None):
 
 def call(api_key, tool, arguments, *, transport=None):
     """Internal buyer transport; no arbitrary tools, approval, wallet funding or credentials."""
-    if tool not in {"intent_submit", "intent_get_status", "find_products", "start_session", "get_session_status"}:
+    if tool not in {"intent_submit", "intent_get_status", "intent_list", "find_products", "start_session", "get_session_status"}:
         raise LaneError("This Lane action is not supported.")
     return _exchange(api_key, tool=tool, arguments=arguments, transport=transport)

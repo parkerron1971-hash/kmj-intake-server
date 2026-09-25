@@ -2970,6 +2970,12 @@ def _is_about_own_data(message: str) -> bool:
 def _web_search_allowed(message: str) -> bool:
     """The one switch: off for an instruction turn and off for a turn
     about the practitioner's own data. On for everything else."""
+    # Buying needs public merchant discovery even when phrased as a short
+    # instruction ("Chief, buy ..."). Account records and confirmations do not.
+    buying = re.search(r"\b(?:buy|purchase|shop for)\s+\S", message or "", re.I)
+    records = re.search(r"\b(?:cancel|refund|receipt|history|status|approve|confirm|invoice|invoices|inbox|email|emails|contacts)\b", message or "", re.I)
+    if buying and not records:
+        return True
     return not (_is_plain_instruction(message) or _is_about_own_data(message))
 
 

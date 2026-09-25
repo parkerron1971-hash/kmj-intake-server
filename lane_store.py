@@ -51,11 +51,12 @@ class Purchase:
         self.claimed = False
         self.lease = str(uuid4())
 
-    def create(self, prompt):
-        state = {"phase": "new", "request": prompt}
+    def create(self, prompt, details=None):
+        state = {"phase": "new", "request": prompt, "purchase_details": details}
+        digest = json.dumps({"prompt": prompt, "details": details}, sort_keys=True)
         result = rpc("lane_purchase_create", **self.args,
                      p_encrypted_state=seal(self.identity, state),
-                     p_request_hash=hashlib.sha256(prompt.encode()).hexdigest())
+                     p_request_hash=hashlib.sha256(digest.encode()).hexdigest())
         if not result:
             raise LaneError("Another purchase is still open. Refresh the wallet before starting another.")
         return result
