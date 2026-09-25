@@ -29,6 +29,11 @@ Lanes:
               so it gets the strongest model.
   background  mechanical work: classification, consolidation,
               summarization. Cheap and fast.
+  fast        the two-track reply's first track: the opening words of
+              every streamed turn, and whole answers for turns that need
+              no records and no action (chief_fast_track).
+  route       the router's tie-breaker for requests its heuristics
+              cannot place (model_router).
 
 Override any lane with CHIEF_MODEL_<LANE>, e.g. CHIEF_MODEL_DEEP.
 NOTE: Sonnet 5 / Opus 4.8 / Fable reject the `temperature` param
@@ -50,6 +55,15 @@ _LANE_DEFAULTS = {
     # review=15509ms of total=37576ms). Its own lane, so it can be
     # moved and measured on its own.
     "review":     "claude-sonnet-5",
+    # The two-track reply (chief_fast_track, 2026-09-25). `fast` writes the
+    # opening that goes out in the first half-second of every streamed
+    # turn, and answers alone the turns that need no records and no action
+    # (model_router). `route` is the tie-breaker the router asks only when
+    # its heuristics are unsure. Both are small prompts on the fastest
+    # model: measured first token 383ms median, 433ms p95.
+    # Same model id as `background`, so metering and pricing already know it.
+    "fast":       "claude-haiku-4-5-20251001",
+    "route":      "claude-haiku-4-5-20251001",
 }
 
 # Per-lane reply budgets. Voice is deliberately tight: replies are read

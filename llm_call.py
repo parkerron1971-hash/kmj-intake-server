@@ -87,6 +87,7 @@ _SELF_METERING = frozenset({
     "doc_templates_router", "passes", "platform_console", "site_composer",
     "site_concierge", "sourcing_engine", "spec_author", "vision_grader",
     "errand_driver",  # logs each browser-toolset turn under task=errand
+    "chief_fast_track",  # the two-track reply's Haiku calls (/chief/opener …)
 })
 
 # Frames to walk past when deciding who the caller is. model_ladder
@@ -141,6 +142,15 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
         usage = (data or {}).get("usage") or {}
         if not usage:
             return
+        # The routed request's own cost view (route_ledger). Here, after the
+        # self-metering skip, so a call is tallied by exactly one of the two
+        # places that meter it; a no-op outside a routed request.
+        try:
+            import route_ledger
+            route_ledger.tally_usage(str((data or {}).get("model")
+                                         or (payload or {}).get("model") or "unknown"), usage)
+        except Exception:
+            pass
         from api_usage_logger import log_api_usage_sync
         log_api_usage_sync(
             endpoint=f"llm:{caller}",
