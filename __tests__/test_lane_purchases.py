@@ -20,6 +20,7 @@ BID = "00000000-0000-4000-8000-000000000001"
 UID = "00000000-0000-4000-8000-000000000002"
 KEY = "lane_test_synthetic_only"
 PROMPT = "Buy one cable from example.com under 20 dollars"
+DETAILS = {"merchant_name": "Example Store", "merchant_url": "https://example.com/cable", "max_amount_cents": 2000, "account": "Not account-based"}
 DRAFT = {"kind": "draft_ready", "session_id": "sess_test", "approval_url": "https://wallet.getonlane.com/approve/lint_test",
          "draft": {"intent_id": "lint_test", "mandates": [{"mandate_id": "mand_test", "merchant": "example.com", "summary": "One cable", "max_amount_cents": 2000}]}}
 
@@ -69,9 +70,11 @@ def env(monkeypatch):
         monkeypatch.setenv(key, val)
     journal = Journal()
     monkeypatch.setattr(store, "rpc", journal)
+    monkeypatch.setattr(p.merchant, "inspect", lambda url: {"url": url, "status": "page_read", "excerpt": "One cable", "note": "Final total is not verified."})
     calls = []
     responses = {
-        "intent_submit": DRAFT,
+        "intent_list": {"intents": [{"id": "lint_test", "amount": "20.00", "currency": "USD", "merchants": ["example.com"]}]},
+        "intent_submit": copy.deepcopy(DRAFT),
         "intent_get_status": {"kind": "complete", "lane_intent_id": "lint_test"},
         "find_products": {"outcome": "ok", "products": [{"item": "One cable", "url": "https://example.com/cable"}], "unresolved": []},
         "start_session": {"outcome": "running", "intent_id": "lint_test"},
@@ -91,24 +94,26 @@ def env(monkeypatch):
 
 
 def prepared(env):
-    row = p.draft(BID, UID, uuid4(), PROMPT)
+    row = p.draft(BID, UID, uuid4(), PROMPT, **DETAILS)
+    row = p.prepare(BID, UID, row["id"], row["revision"])
     return p.refresh(BID, UID, row["id"])
 
 
 def test_draft_is_idempotent_encrypted_and_bound(env):
     pid = str(uuid4())
-    first = p.draft(BID, UID, pid, PROMPT)
-    second = p.draft(BID, UID, pid, PROMPT)
+    first = p.draft(BID, UID, pid, PROMPT, **DETAILS)
+    second = p.draft(BID, UID, pid, PROMPT, **DETAILS)
     assert first == second
-    assert [c[0] for c in env.calls] == ["intent_submit"]
+    assert env.calls == []
+    assert first["phase"] == "new" and first["purchase_details"] == dict(DETAILS, currency="USD")
     raw = next(iter(env.journal.rows.values()))
     assert PROMPT not in raw["encrypted_state"] and KEY not in raw["encrypted_state"]
     with pytest.raises(mcp.LaneError):
         store.unpack(store.binding(BID, UID, "lane_different_synthetic", pid), raw)
     with pytest.raises(mcp.LaneError):
-        p.draft(BID, UID, pid, "Changed request")
+        p.draft(BID, UID, pid, "Changed request", **DETAILS)
     with pytest.raises(mcp.LaneError):
-        p.draft(BID, str(uuid4()), uuid4(), PROMPT)
+        p.draft(BID, str(uuid4()), uuid4(), PROMPT, **DETAILS)
 
 
 def test_approval_is_not_an_order_and_checkout_claim_survives_replay(env):
@@ -148,9 +153,10 @@ def test_timeout_after_start_keeps_claim_and_reconciles(env):
 def test_timeout_drafting_never_resubmits(env):
     pid = str(uuid4())
     env.responses["intent_submit"] = mcp.LaneError("Timeout")
+    row = p.draft(BID, UID, pid, PROMPT, **DETAILS)
     with pytest.raises(mcp.LaneError):
-        p.draft(BID, UID, pid, PROMPT)
-    result = p.draft(BID, UID, pid, PROMPT)
+        p.prepare(BID, UID, row["id"], row["revision"])
+    result = p.draft(BID, UID, pid, PROMPT, **DETAILS)
     assert result["phase"] == "submitting"
     assert len(env.calls) == 1
 
@@ -183,7 +189,8 @@ def test_unresolved_products_and_rejected_approval_block_checkout(env):
 def test_questions_preserve_all_choices_and_resume_same_draft(env):
     env.responses["intent_submit"] = {"kind": "needs_info", "session_id": "sess_test",
                                      "questions": [{"prompt": "Which length?", "suggestions": ["1 meter", "2 meters"]}]}
-    row = p.draft(BID, UID, uuid4(), PROMPT)
+    row = p.draft(BID, UID, uuid4(), PROMPT, **DETAILS)
+    row = p.prepare(BID, UID, row["id"], row["revision"])
     assert row["questions"][0]["suggestions"] == ["1 meter", "2 meters"]
     env.responses["intent_submit"] = DRAFT
     result = p.answer(BID, UID, row["id"], p.Answer(revision=row["revision"], answer="2 meters"))
@@ -220,7 +227,7 @@ def test_http_owner_and_stepup_boundary(env, monkeypatch):
     checked = Mock(side_effect=HTTPException(403, "Confirm account"))
     monkeypatch.setattr(p, "require_unlock", checked)
     with TestClient(app) as client:
-        row = client.post(f"/lane/wallet/{BID}/purchases", json={"request_id": str(uuid4()), "prompt": PROMPT}).json()
+        row = client.post(f"/lane/wallet/{BID}/purchases", json={"request_id": str(uuid4()), "prompt": PROMPT, **DETAILS}).json()
         response = client.post(f"/lane/wallet/{BID}/purchases/{row['id']}/checkout", json={"revision": row["revision"]})
         assert response.status_code == 403 and response.headers["cache-control"] == "no-store"
         assert not any(c[0] == "start_session" for c in env.calls)
@@ -238,15 +245,15 @@ def test_chief_never_exposes_checkout_or_allows_unattended_calls(env, monkeypatc
     monkeypatch.setattr(chief.business_access, "assert_access", Mock())
     try:
         for surface, prompted in [("agent", True), ("chat", False)]:
-            result = asyncio.run(chief.dispatch(None, {"id": BID}, {"operation": "draft", "prompt": PROMPT},
+            result = asyncio.run(chief.dispatch(None, {"id": BID}, {"operation": "draft", "prompt": PROMPT, **DETAILS},
                                                surface=surface, prompted=prompted, user_id=UID))
             assert result["failed"]
         for operation in ["approve", "checkout", "wallet_load_credits"]:
             assert asyncio.run(chief.dispatch(None, {"id": BID}, {"operation": operation},
                                               surface="chat", prompted=True, user_id=UID))["failed"]
-        result = asyncio.run(chief.dispatch(None, {"id": BID}, {"operation": "draft", "prompt": PROMPT},
+        result = asyncio.run(chief.dispatch(None, {"id": BID}, {"operation": "draft", "prompt": PROMPT, **DETAILS},
                                            surface="chat", prompted=True, user_id=UID))
-        assert result["lane"]["phase"] == "review"
+        assert result["lane"]["phase"] == "new"
         assert not action_registry.may_expose_to_agent("lane_wallet", allow_writes=True)
         assert asyncio.run(chief.handle_lane_wallet(None, {"id": BID}, {}))["failed"]
     finally:
@@ -291,10 +298,10 @@ def test_native_chief_tool_runs_through_permission_door(env, monkeypatch):
         assert any(t["name"] == "lane_wallet" for t in loop.tool_definitions_for_turn(True))
         async def native():
             error, result = await loop.execute_tool_use(None, {"id": BID, "owner_id": UID, "settings": {}},
-                                                       "lane_wallet", {"operation": "draft", "prompt": PROMPT})
+                                                       "lane_wallet", {"operation": "draft", "prompt": PROMPT, **DETAILS})
             assert not error, result
         asyncio.run(native())
-        assert len([c for c in env.calls if c[0] == "intent_submit"]) == 1
+        assert not env.calls
         assert not any(c[0] == "start_session" for c in env.calls)
     finally:
         cos._TURN_USER_ID.reset(token)
@@ -319,3 +326,95 @@ def test_incomplete_receipt_does_not_claim_order_placed(env):
     env.responses["get_session_status"] = {"outcome": "ok", "data": {}}
     row = p.checkout(BID, UID, row["id"], row["revision"])
     assert row["phase"] == "checkout_unknown" and "order_number" not in row
+
+
+def test_overbudget_draft_is_durable_without_approval_link(env):
+    env.responses["intent_submit"]["draft"]["mandates"][0]["max_amount_cents"] = 2600
+    row = p.draft(BID, UID, uuid4(), PROMPT, **dict(DETAILS, max_amount_cents=1000))
+    row = p.prepare(BID, UID, row["id"], row["revision"])
+    assert row["phase"] == "attention" and "approval_url" not in row
+    assert "exceeds" in row["message"]
+    state = store.listing(BID, UID, KEY)[0]
+    assert state["session_id"] == "sess_test" and state["intent_id"] == "lint_test"
+    with pytest.raises(mcp.LaneError):
+        p.checkout(BID, UID, row["id"], row["revision"])
+    env.responses["intent_get_status"] = {"kind": "rejected"}
+    assert p.refresh(BID, UID, row["id"])["phase"] == "rejected"
+    assert not any(c[0] == "start_session" for c in env.calls)
+
+
+@pytest.mark.parametrize("change", [
+    {"amount": "26.00"}, {"amount": "NaN"}, {"amount": "Infinity"},
+    {"currency": "EUR"}, {"merchants": ["other.example"]}, {"id": "lint_other"},
+])
+def test_fresh_provider_limits_block_changed_purchase(env, change):
+    row = prepared(env)
+    env.responses["intent_list"]["intents"][0].update(change)
+    with pytest.raises(mcp.LaneError):
+        p.checkout(BID, UID, row["id"], row["revision"])
+    assert not any(c[0] == "start_session" for c in env.calls)
+
+
+def test_wrong_resolved_product_blocks_checkout(env):
+    row = prepared(env)
+    env.responses["find_products"]["products"][0]["url"] = "https://example.com/different"
+    row = p.checkout(BID, UID, row["id"], row["revision"])
+    assert row["phase"] == "products_needed" and not row["checkout_claimed"]
+
+
+def test_missing_budget_and_account_never_submit(env):
+    for details in ({}, dict(DETAILS, max_amount_cents=True), dict(DETAILS, account="")):
+        with pytest.raises(mcp.LaneError):
+            p.draft(BID, UID, uuid4(), PROMPT, **details)
+    assert not env.calls
+
+
+def test_dismiss_unsent_proposal_and_changed_details(env):
+    pid = uuid4()
+    row = p.draft(BID, UID, pid, PROMPT, **DETAILS)
+    with pytest.raises(mcp.LaneError):
+        p.draft(BID, UID, pid, PROMPT, **dict(DETAILS, max_amount_cents=3000))
+    assert p.close_proposal(BID, UID, str(pid), row["revision"])["phase"] == "closed"
+    assert not env.calls
+
+
+def test_schema_failure_retains_session_and_never_resubmits(env):
+    env.responses["intent_submit"] = {"kind": "draft_ready", "session_id": "sess_test",
+                                    "draft": {"intent_id": "lint_test", "mandates": []}}
+    row = p.draft(BID, UID, uuid4(), PROMPT, **DETAILS)
+    row = p.prepare(BID, UID, row["id"], row["revision"])
+    assert row["phase"] == "attention"
+    with pytest.raises(mcp.LaneError):
+        p.prepare(BID, UID, row["id"], row["revision"])
+    assert len([c for c in env.calls if c[0] == "intent_submit"]) == 1
+
+
+def test_provider_display_name_matches_only_reviewed_name(env):
+    env.responses["intent_submit"]["draft"]["mandates"][0]["merchant"] = "Example Store"
+    env.responses["intent_list"]["intents"][0]["merchants"] = ["Example Store"]
+    row = prepared(env)
+    assert p.checkout(BID, UID, row["id"], row["revision"])["phase"] == "running"
+
+
+@pytest.mark.parametrize("bad_draft", [[], {"currency": "EUR", "mandates": []}, {"mandates": ["unexpected"]}])
+def test_malformed_draft_retains_reconciliation_session(env, bad_draft):
+    env.responses["intent_submit"] = {"kind": "draft_ready", "session_id": "sess_test", "draft": bad_draft}
+    row = p.draft(BID, UID, uuid4(), PROMPT, **DETAILS)
+    row = p.prepare(BID, UID, row["id"], row["revision"])
+    assert row["phase"] == "attention" and "approval_url" not in row
+    env.responses["intent_get_status"] = {"kind": "rejected"}
+    assert p.refresh(BID, UID, row["id"])["phase"] == "rejected"
+
+
+@pytest.mark.parametrize("message, allowed", [
+    ("Chief, buy $10 in Claude API credits", True),
+    ("Please purchase one USB-C cable under $20", True),
+    ("Can you shop for printer paper for the app team?", True),
+    ("Approve this purchase", False),
+    ("Cancel my purchase", False),
+    ("Show my purchase history in the app", False),
+    ("Find my invoice in my emails", False),
+])
+def test_buying_can_search_but_account_records_and_consent_do_not(message, allowed):
+    import chief_of_staff as cos
+    assert cos._web_search_allowed(message) is allowed

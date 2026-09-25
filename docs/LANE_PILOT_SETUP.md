@@ -1,9 +1,9 @@
 # Lane private pilot setup
 
-Status: implemented locally and tested with provider fixtures. Kevin created his
-Lane wallet and reported adding a card. A read-only MCP connection check on
-2026-09-24 verified the personal key and all required buyer tools. No purchase
-or payment tool was called. Deployment and live draft acceptance remain pending.
+Status: merchant-review workflow implemented and covered by offline tests.
+Live checkout must remain disabled until a bounded live-provider acceptance
+test verifies merchant, currency, ceiling, account and receipt. Passing fixtures
+or a connection check does not establish successful payment.
 
 ## Account setup (Kevin)
 
@@ -43,16 +43,29 @@ by an operator. Do not silently rebind past approvals to a new key.
 ## What is implemented
 
 - Wallet connection check, private pilot availability and setup link.
-- Owner-bound draft creation, clarification questions with every choice, secure
-  approval popup plus a fallback link, saved purchase list and order status.
+- Chief uses web search to locate the merchant product or billing page, then saves
+  an owner-bound local proposal with the explicit USD spending limit and intended
+  account. A DNS-pinned public fetch records source text without account cookies.
+  Public text is untrusted evidence and never a verified final checkout quote.
+- Wallet shows the source, limit and account before the owner explicitly prepares
+  the request in Lane. Unsent proposals can be dismissed without provider calls.
+- Provider drafts exceeding the total ceiling or changing merchants are blocked.
+  Known provider identifiers survive unsupported draft responses for reconciliation.
+- Clarification questions preserve every choice. Hosted approval has a popup and
+  fallback link. Saved purchases distinguish approval from confirmed order status.
 - Chief lane_wallet tool: draft/status only through the authenticated chat action door.
-  Model output cannot approve or execute checkout. Identical Chief draft text for
-  the same owner/business reuses its deterministic request ID; use the Wallet form
+  Model output cannot submit to Lane, approve or execute checkout. Identical Chief
+  requests and purchase details for the same owner/business reuse a deterministic ID; use the Wallet form
   for an intentional repeat purchase.
 - Exact financial terms and funding choice are reviewed in Lane's hosted approval
   flow. No iframe/embedded approval claim; provider support for that is unconfirmed.
 - Starting checkout requires the owner, current revision, account step-up, explicit
   UI confirmation, and a freshly checked matching Lane approval.
+- Immediately before execution, read Lane's current intent amount, currency and
+  merchant and enforce the saved limit. Missing or unmatched terms block checkout.
+  Product resolution must return the exact reviewed URL; changed links block.
+  The merchant must match the owner-reviewed name or domain. Unsupported currencies and unrecognized provider
+  schemas fail closed. This private pilot currently supports one merchant per request.
 - Product resolution precedes execution. A permanent database checkout claim is
   written before start_session. It is not an expiring lock and is never cleared
   by a timeout, restart, failed poll or a browser refresh.
