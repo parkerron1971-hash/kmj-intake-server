@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
 from uuid import uuid4
@@ -25,12 +26,47 @@ DRAFT = {"kind": "draft_ready", "session_id": "sess_test", "approval_url": "http
          "draft": {"intent_id": "lint_test", "mandates": [{"mandate_id": "mand_test", "merchant": "example.com", "summary": "One cable", "max_amount_cents": 2000}]}}
 
 
+@contextmanager
+def owner_says(words):
+    """The owner's own message this turn, as the chat handler records it."""
+    from chief_code import turn_scope
+    token = turn_scope.set({"words": words})
+    try:
+        yield
+    finally:
+        turn_scope.reset(token)
+
+
 class Journal:
     """Shared storage test double. SQL claim/lease semantics are also tested in PGlite."""
     def __init__(self):
         self.rows = {}
+        self.links = {}
+
+    def link(self, name, a):
+        owner = (a["p_business_id"], a["p_user_id"])
+        rows = self.links.setdefault(owner, {}) if name == "lane_link_save" else self.links.get(owner, {})
+        if name == "lane_link_save":
+            if a["p_link_hash"] in rows:
+                rows[a["p_link_hash"]]["encrypted_state"] = a["p_encrypted_state"]
+                return rows[a["p_link_hash"]]["id"]
+            if len(rows) >= 20:
+                return None
+            rows[a["p_link_hash"]] = {"id": a["p_id"], "link_hash": a["p_link_hash"], "encrypted_state": a["p_encrypted_state"]}
+            return a["p_id"]
+        if name == "lane_link_list":
+            return [copy.deepcopy(r) for r in rows.values()]
+        if name == "lane_link_delete":
+            for digest, row in list(rows.items()):
+                if row["id"] == a["p_id"]:
+                    del rows[digest]
+                    return True
+            return False
+        raise AssertionError(name)
 
     def __call__(self, name, **a):
+        if name.startswith("lane_link_"):
+            return self.link(name, a)
         identity = (a["p_business_id"], a["p_user_id"], a.get("p_id"))
         if name == "lane_purchase_list":
             return [dict(copy.deepcopy(v), id=k[2]) for k, v in self.rows.items() if k[:2] == identity[:2]]
@@ -70,6 +106,8 @@ def env(monkeypatch):
         monkeypatch.setenv(key, val)
     journal = Journal()
     monkeypatch.setattr(store, "rpc", journal)
+    import chief_holds
+    chief_holds.clear()
     monkeypatch.setattr(p.merchant, "inspect", lambda url: {"url": url, "status": "page_read", "excerpt": "One cable", "note": "Final total is not verified."})
     calls = []
     responses = {
@@ -253,6 +291,10 @@ def test_chief_never_exposes_checkout_or_allows_unattended_calls(env, monkeypatc
                                               surface="chat", prompted=True, user_id=UID))["failed"]
         result = asyncio.run(chief.dispatch(None, {"id": BID}, {"operation": "draft", "prompt": PROMPT, **DETAILS},
                                            surface="chat", prompted=True, user_id=UID))
+        assert result["failed"] and result["needs_confirmation"] and not env.journal.rows
+        with owner_says("Go ahead"):
+            result = asyncio.run(chief.dispatch(None, {"id": BID}, {"operation": "draft", "prompt": PROMPT, **DETAILS},
+                                               surface="chat", prompted=True, user_id=UID))
         assert result["lane"]["phase"] == "new"
         assert not action_registry.may_expose_to_agent("lane_wallet", allow_writes=True)
         assert asyncio.run(chief.handle_lane_wallet(None, {"id": BID}, {}))["failed"]
@@ -296,11 +338,18 @@ def test_native_chief_tool_runs_through_permission_door(env, monkeypatch):
     try:
         loop.reset_turn(writes_allowed=True)
         assert any(t["name"] == "lane_wallet" for t in loop.tool_definitions_for_turn(True))
-        async def native():
-            error, result = await loop.execute_tool_use(None, {"id": BID, "owner_id": UID, "settings": {}},
-                                                       "lane_wallet", {"operation": "draft", "prompt": PROMPT, **DETAILS})
-            assert not error, result
-        asyncio.run(native())
+        def native(args):
+            return asyncio.run(loop.execute_tool_use(None, {"id": BID, "owner_id": UID, "settings": {}}, "lane_wallet", args))
+        error, result = native({"operation": "look", "merchant_url": DETAILS["merchant_url"]})
+        assert not error and "nothing was saved" in result
+        error, result = native({"operation": "draft", "prompt": PROMPT, **DETAILS})
+        assert error and "HELD" in result and not env.journal.rows
+        # The held write closes this turn's writes; the owner's go-ahead is the next turn.
+        loop.reset_turn(writes_allowed=True)
+        with owner_says("save it"):
+            error, result = native({"operation": "draft", "prompt": PROMPT, **DETAILS})
+        assert not error, result
+        assert len(env.journal.rows) == 1
         assert not env.calls
         assert not any(c[0] == "start_session" for c in env.calls)
     finally:
@@ -418,3 +467,148 @@ def test_malformed_draft_retains_reconciliation_session(env, bad_draft):
 def test_buying_can_search_but_account_records_and_consent_do_not(message, allowed):
     import chief_of_staff as cos
     assert cos._web_search_allowed(message) is allowed
+
+
+# Look first, then ask; saved merchant links.
+import lane_links as links
+
+
+@pytest.fixture
+def chief_turn(env, monkeypatch):
+    import chief_of_staff as cos
+    monkeypatch.setattr(chief.business_access, "assert_access", Mock())
+    token = cos._TURN_USER_ID.set(UID)
+    yield env
+    cos._TURN_USER_ID.reset(token)
+
+
+def chief_call(action, words=None):
+    def run():
+        return asyncio.run(chief.dispatch(None, {"id": BID}, action, surface="chat", prompted=True, user_id=UID))
+    if words is None:
+        return run()
+    with owner_says(words):
+        return run()
+
+
+def wallet_client(monkeypatch):
+    monkeypatch.setattr(p, "owner", lambda bid, session: (bid, UID))
+    app = FastAPI()
+    app.include_router(p.router)
+    app.dependency_overrides[p.sb_clients.authed_request] = lambda: SimpleNamespace(user=SimpleNamespace(id=UID))
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("words, operation, released", [
+    ("save it", "draft", True), ("Go ahead.", "draft", True), ("yes, save it for review", "draft", True),
+    ("go ahead and remember it", "draft", True), ("save it and remember the link", "draft", True),
+    ("ok do it", "draft", True), ("remember it", "remember", True), ("yes remember the link too", "remember", True),
+    ("yes", "draft", False), ("ok", "draft", False), ("remember it", "draft", False), ("don't save it", "draft", False),
+    ("save it?", "draft", False), ("go ahead and buy two more", "draft", False), ("", "draft", False),
+])
+def test_only_the_owners_whole_message_go_ahead_releases(words, operation, released):
+    assert chief.owner_go_ahead(words, operation) is released
+
+
+def test_look_reads_the_page_and_saves_nothing(chief_turn):
+    result = chief_call({"operation": "look", "merchant_url": DETAILS["merchant_url"]})
+    assert not result.get("failed") and result["label"] == "Looked at example.com"
+    assert "One cable" in result["result"] and result["lane"]["look"]["status"] == "page_read"
+    assert not chief_turn.journal.rows and not chief_turn.journal.links and not chief_turn.calls
+    assert chief_call({"operation": "look", "merchant_url": "http://example.com/cable"})["failed"]
+
+
+def test_draft_is_read_back_and_saved_only_on_the_go_ahead(chief_turn):
+    action = {"operation": "draft", "prompt": PROMPT, **DETAILS}
+    held = chief_call(action)
+    assert held["failed"] and held["needs_confirmation"] and held["label"].startswith("Held for your go-ahead")
+    assert "$20.00" in held["result"] and DETAILS["merchant_url"] in held["result"] and "One cable" in held["result"]
+    assert chief_call(action, "yes")["needs_confirmation"]  # A bare yes answers too many questions.
+    assert not chief_turn.journal.rows
+    saved = chief_call(action, "save it")
+    assert saved["lane"]["phase"] == "new" and saved["label"] == "Proposal saved for review"
+    again = chief_call(action, "save it")  # A duplicate emission on the go-ahead turn
+    assert "already saved" in again["result"] and len(chief_turn.journal.rows) == 1
+    assert not chief_turn.calls  # Nothing reached Lane.
+
+
+def test_go_ahead_releases_only_the_limit_that_was_read_back(chief_turn):
+    chief_call({"operation": "draft", "prompt": PROMPT, **DETAILS})
+    changed = chief_call({"operation": "draft", "prompt": PROMPT, **dict(DETAILS, max_amount_cents=3000)}, "go ahead")
+    assert changed["needs_confirmation"] and "$30.00" in changed["result"] and not chief_turn.journal.rows
+
+
+def test_reworded_request_still_matches_what_was_read_back(chief_turn):
+    chief_call({"operation": "draft", "prompt": PROMPT, **DETAILS})
+    saved = chief_call({"operation": "draft", "prompt": "One USB cable from Example Store",
+                        **dict(DETAILS, merchant_name="example store", account="not account-based")}, "go ahead")
+    assert saved["lane"]["phase"] == "new"
+
+
+def test_remembered_link_is_held_then_encrypted_listed_and_forgotten(chief_turn):
+    action = {"operation": "remember", "merchant_url": DETAILS["merchant_url"], "merchant_name": "Example Store",
+              "account": "Not account-based"}
+    assert chief_call(action)["needs_confirmation"] and not chief_turn.journal.links
+    assert chief_call(action, "remember it")["label"] == "Saved link: Example Store"
+    raw = json.dumps(list(chief_turn.journal.links.values()))
+    assert "example.com" not in raw and "Not account-based" not in raw
+    assert chief_call(action)["label"] == "Link already saved"  # No second hold for a link already kept.
+    status = chief_call({"operation": "status"})
+    assert [s["merchant_url"] for s in status["lane"]["saved_links"]] == [DETAILS["merchant_url"]]
+    look = chief_call({"operation": "look", "merchant_url": DETAILS["merchant_url"]})
+    assert "Already in the owner's saved links" in look["result"]
+    assert chief_call({"operation": "forget", "merchant_url": DETAILS["merchant_url"]})["label"] == "Removed saved link"
+    assert links.listing(BID, UID) == []
+    assert chief_call({"operation": "forget", "merchant_url": DETAILS["merchant_url"]})["failed"]
+    assert not chief_turn.calls
+
+
+def test_draft_with_remember_keeps_the_link_after_the_go_ahead(chief_turn):
+    action = {"operation": "draft", "prompt": PROMPT, **DETAILS, "remember": True}
+    held = chief_call(action)
+    assert "remember this link" in held["result"] and not chief_turn.journal.links
+    saved = chief_call(action, "go ahead and remember it")
+    assert "merchant link remembered" in saved["result"]
+    assert [s["account"] for s in links.listing(BID, UID)] == ["Not account-based"]
+
+
+def test_links_stay_with_their_owner_and_one_page_account_is_one_entry(env):
+    links.save(BID, UID, DETAILS["merchant_url"], "Acme org")
+    links.save(BID, UID, DETAILS["merchant_url"], "ACME ORG", "Example Store")
+    assert [(s["account"], s["merchant_name"]) for s in links.listing(BID, UID)] == [("ACME ORG", "Example Store")]
+    other = "00000000-0000-4000-8000-000000000009"
+    assert links.listing(BID, other) == []
+    assert not links.remove(BID, other, links.listing(BID, UID)[0]["id"])
+    # A row copied under another owner cannot be opened, so it is never shown or used.
+    env.journal.links[(BID, other)] = copy.deepcopy(env.journal.links[(BID, UID)])
+    assert links.listing(BID, other) == []
+
+
+def test_link_cap_never_costs_the_owner_their_proposal(env, monkeypatch):
+    for n in range(links.LIMIT):
+        links.save(BID, UID, f"https://example.com/item-{n}", "Not account-based")
+    with pytest.raises(mcp.LaneError):
+        links.save(BID, UID, "https://example.com/one-more", "Not account-based")
+    links.save(BID, UID, "https://example.com/item-0", "Not account-based", "Renamed")  # Refreshing one still works.
+    with wallet_client(monkeypatch) as client:
+        row = client.post(f"/lane/wallet/{BID}/purchases",
+                          json={"request_id": str(uuid4()), "prompt": PROMPT, **DETAILS, "remember": True}).json()
+    assert row["phase"] == "new" and "20 saved merchant links" in row["link_message"]
+
+
+def test_wallet_lists_remembers_and_removes_links(env, monkeypatch):
+    with wallet_client(monkeypatch) as client:
+        body = {"request_id": str(uuid4()), "prompt": PROMPT, **DETAILS}
+        assert client.post(f"/lane/wallet/{BID}/purchases", json=dict(body, remember="yes")).status_code == 422
+        row = client.post(f"/lane/wallet/{BID}/purchases", json=dict(body, remember=True)).json()
+        assert row["phase"] == "new" and "link_message" not in row
+        listed = client.get(f"/lane/wallet/{BID}/purchases").json()
+        assert [s["merchant_name"] for s in listed["links"]] == ["Example Store"]
+        gone = client.post(f"/lane/wallet/{BID}/links/{listed['links'][0]['id']}/remove")
+        assert gone.status_code == 200 and gone.headers["cache-control"] == "no-store"
+        assert gone.json() == {"removed": True, "links": []}
+        assert client.post(f"/lane/wallet/{BID}/links/{uuid4()}/remove").json()["removed"] is False
+        monkeypatch.setattr(p.links, "listing", Mock(side_effect=RuntimeError("store down")))
+        listed = client.get(f"/lane/wallet/{BID}/purchases").json()
+        assert listed["purchases"] and "links" not in listed  # Unavailable, not "none saved".
+    assert not env.calls

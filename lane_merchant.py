@@ -87,14 +87,18 @@ def matches_merchant(name, details):
         return False
 
 
-def details(url, max_amount_cents, account, merchant_name=None):
-    if type(max_amount_cents) is not int or not 1 <= max_amount_cents <= 100000000:
-        raise LaneError("Provide the user's explicit maximum total in USD cents, including taxes and fees.")
+def link(url, account, merchant_name=None):
+    """The merchant page, its name and the intended account; never an amount."""
     if not isinstance(account, str) or not 1 <= len(account.strip()) <= 200:
         raise LaneError("Specify the intended merchant account, or 'Not account-based'. Never include credentials.")
     url = merchant_url(url)
     name = host(url) if merchant_name is None else merchant_name
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 253:
         raise LaneError("Provide the merchant name shown on the reviewed page.")
-    return {"merchant_url": url, "merchant_name": name.strip(), "max_amount_cents": max_amount_cents,
-            "currency": "USD", "account": account.strip()}
+    return {"merchant_url": url, "merchant_name": name.strip(), "account": account.strip()}
+
+
+def details(url, max_amount_cents, account, merchant_name=None):
+    if type(max_amount_cents) is not int or not 1 <= max_amount_cents <= 100000000:
+        raise LaneError("Provide the user's explicit maximum total in USD cents, including taxes and fees.")
+    return {**link(url, account, merchant_name), "max_amount_cents": max_amount_cents, "currency": "USD"}
