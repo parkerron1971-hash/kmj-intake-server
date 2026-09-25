@@ -69,7 +69,8 @@ async def submit(client, biz, payload):
     ctx['submitted'] = True
     await owned_business(client, biz['id'], ctx['user_id'])
     order = WorkOrder.create(payload, business_id=biz['id'], user_id=ctx['user_id'],
-        turn_id=ctx['turn_id'], surface=ctx['surface'], words=ctx['words'], tainted=ctx.get('tainted'))
+        turn_id=ctx['turn_id'], surface=ctx['surface'], words=ctx['words'], tainted=ctx.get('tainted'),
+        conversation_id=ctx.get('conversation_id') or '')
     if order.kind == 'flyer' or order.facts.get('wants_flyer'):
         import image_studio
         if not order.facts.get('reference_ids') and image_studio.turn_references.get():
@@ -105,7 +106,7 @@ async def submit(client, biz, payload):
         job = rows[0]
     if job['status'] in ('queued','running'):
         launch(job)
-    summary = (job.get('result') or {}).get('summary_label') or 'Your build is queued. Its progress will appear here.'
+    summary = (job.get('result') or {}).get('summary_label') or QUEUED_LABEL
     return {'type':'submit_work_order','result':summary,'label':summary,'nav':None,'job_id':job['id'],
             'build':public_job(job),'frontend_event':{'name':'solutionist-builds-changed'}}
 
@@ -122,6 +123,13 @@ async def handle_submit_work_order(client, biz, action):
         return {'type':'submit_work_order','result':label,'label':label,'failed':True,'nav':None}
 
 
+# Said when a build starts (Kevin, 2026-09-24): the work runs on the
+# server, so the practitioner can leave; a notification and a message in
+# this chat say when it is done or needs them.
+QUEUED_LABEL = ("I'm on it and working in the background. You can leave this chat; "
+                "I'll let you know here when it's done or if I need you.")
+
+
 def public_job(job):
     result = job.get('result') or {}
     safe = {k:result.get(k) for k in ('status','summary_label','progress','question','held')}
@@ -134,7 +142,8 @@ def public_job(job):
     params=job.get('params') or {}
     facts=params.get('facts') or {}
     return {k:job.get(k) for k in ('id','kind','status','created_at','build_revision')} | {
-        'result':safe,'build_kind':params.get('kind'),'title':str(facts.get('title') or facts.get('name') or '')[:120]}
+        'result':safe,'build_kind':params.get('kind'),'title':str(facts.get('title') or facts.get('name') or '')[:120],
+        'conversation_id':params.get('conversation_id') or None,'finished_at':job.get('finished_at')}
 
 
 async def context(client, bid, uid):
@@ -226,6 +235,8 @@ async def worker(job_id):
             # Child jobs are observed on later ticks; no long-lived polling loop.
             terminal = 'running' if result['status']=='waiting' else 'done'
             await adapter.save(result, terminal)
+            if terminal == 'done':
+                await announce(client, job, result)
             if terminal == 'running':
                 # Release the lease; the next scheduler tick reconciles the child.
                 await db(client,'PATCH',f'/chief_jobs?id=eq.{job_id}&build_lease_token=eq.{token}',
@@ -242,6 +253,7 @@ async def worker(job_id):
                     failed['status'] = 'failed'
                     failed['summary_label'] = 'The build stopped before it could finish. Completed steps have been kept; review and retry the remaining work.'
                     await adapter.save(failed, 'failed')
+                    await announce(client, job, failed)
             # Keep the durable intent/checkpoints. A later lease holder reconciles.
         finally:
             if execution and not execution.done():
@@ -252,6 +264,86 @@ async def worker(job_id):
                 heartbeat.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await heartbeat
+
+
+_KIND_NAMES = {'event_setup': 'your event', 'form_and_link': 'your form', 'flyer': 'your flyer',
+               'site_door': 'your events page'}
+
+
+def outcome_message(job, result):
+    """(headline, body, priority) for a build that stopped working, or None
+    when there is nothing to tell (cancelled, still running)."""
+    params = job.get('params') or {}
+    facts = params.get('facts') or {}
+    title = str(facts.get('title') or facts.get('name') or _KIND_NAMES.get(params.get('kind'), 'your build'))[:80]
+    summary = str(result.get('summary_label') or '').strip()
+    status = result.get('status')
+    if status == 'done':
+        return f'Done: {title}', summary, 'normal'
+    if status == 'done_with_gaps':
+        return f'Mostly done: {title}', f'{summary} Some of it needs a look.'.strip(), 'normal'
+    if status == 'failed':
+        return f"Couldn't finish: {title}", summary, 'normal'
+    if status == 'held':
+        held = (result.get('held') or {}).get('label') or summary
+        return f'Waiting on you: {title}', str(held), 'high'
+    if status == 'needs_answer':
+        ask = (result.get('question') or {}).get('text') or summary
+        return f'One detail needed: {title}', str(ask), 'high'
+    return None
+
+
+NOTIFY_AFTER_S = 20
+
+
+def ran_long_enough(job, now=None):
+    """Did the practitioner have time to leave? A build that stopped within
+    seconds (a question up front, a quick form) is still on their screen."""
+    try:
+        started = datetime.fromisoformat(str(job.get('created_at')).replace('Z', '+00:00'))
+    except (TypeError, ValueError):
+        return True
+    return ((now or datetime.now(timezone.utc)) - started).total_seconds() > NOTIFY_AFTER_S
+
+
+async def announce(client, job, result):
+    """Tell the practitioner a build finished or needs them, once per
+    outcome: a notification that opens the chat that asked for it, a line
+    in "while you were away", and a phone push. Never fails the build."""
+    message = outcome_message(job, result)
+    if not message:
+        return
+    headline, body, priority = message
+    import sb_clients
+    bid, uid = job.get('business_id'), job.get('user_id')
+    cid = (job.get('params') or {}).get('conversation_id') or None
+    key = f"{job.get('id')}:{result.get('status')}:{job.get('build_revision')}"
+    with contextlib.suppress(Exception):
+        if await sb_clients.sb_as_service(client, 'GET',
+                f"/chief_notifications?business_id=eq.{bid}&data->>key=eq.{quote(key)}&select=id&limit=1"):
+            return
+    with contextlib.suppress(Exception):
+        await sb_clients.sb_as_service(client, 'POST', '/chief_activity', {
+            'user_id': uid, 'business_id': bid, 'source': 'system', 'action_type': f"build_{result.get('status')}",
+            'label': headline[:120], 'summary': body[:240], 'nav': None})
+    if not ran_long_enough(job):
+        # Still on their screen: the card and this chat's own message say it.
+        return
+    try:
+        await sb_clients.sb_as_service(client, 'POST', '/chief_notifications', {
+            'business_id': bid, 'type': 'chief_work', 'title': headline[:120], 'body': body[:300],
+            'priority': priority, 'suggested_action': 'open_conversation' if cid else None,
+            'action_payload': {'conversation_id': cid, 'job_id': job.get('id')},
+            'data': {'key': key, 'job_id': job.get('id'), 'conversation_id': cid, 'status': result.get('status')}})
+    except Exception as exc:
+        log.warning('build notification failed: %s', type(exc).__name__)
+        return
+    if uid:
+        with contextlib.suppress(Exception):
+            import push_notifications
+            await asyncio.to_thread(push_notifications.send_to_user, str(uid), title=headline[:80],
+                                    body=body[:160], nav='home', tag=f"build-{job.get('id')}",
+                                    data={'conversation_id': cid, 'job_id': job.get('id')})
 
 
 class Adapter:

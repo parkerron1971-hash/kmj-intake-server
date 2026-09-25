@@ -159,3 +159,13 @@ def test_accounting_failure_blocks_even_when_soft_guard_disabled(monkeypatch):
     monkeypatch.setattr(auth,'db',AsyncMock(side_effect=RuntimeError('offline')))
     with pytest.raises(HTTPException) as error:run(auth.require_budget())
     assert error.value.status_code==503
+
+def test_codex_is_kept_only_where_it_can_run(store):
+    local=run(auth.propose(OWNER.id,uuid4(),0,{'type':'send_to_solution_space','title':'A','agent':'codex'}))
+    assert local['action']['agent']=='codex'
+    plain=run(auth.propose(OWNER.id,uuid4(),0,{'type':'send_to_solution_space','title':'A','agent':'claude'}))
+    assert 'agent' not in plain['action']
+    cloud=run(auth.propose(OWNER.id,uuid4(),0,{'type':'queue_build','title':'A','agent':'codex'}))
+    assert 'agent' not in cloud['action']
+    with pytest.raises(HTTPException): run(auth.propose(OWNER.id,uuid4(),0,
+        {'type':'send_to_solution_space','title':'A','agent':'grok'}))
