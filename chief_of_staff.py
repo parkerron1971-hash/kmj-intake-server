@@ -14676,7 +14676,11 @@ async def chief_chat_stream(
             pass
 
     import chief_fast_track
-    track = chief_fast_track.plan(req, user_session)
+    try:
+        track = chief_fast_track.plan(req, user_session)
+    except Exception as e:  # pragma: no cover — the router may only ever add
+        logger.warning(f"[chat/stream] router plan failed, plain stream: {e}")
+        track = None
     turn: "Optional[asyncio.Task]" = None
 
     def _start_turn() -> "asyncio.Task":

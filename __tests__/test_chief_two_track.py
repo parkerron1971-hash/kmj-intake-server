@@ -350,6 +350,15 @@ def test_stats_bands_show_where_escalations_happen():
     assert s["slo_met_pct"] == pytest.approx(66.7)
 
 
+def test_a_router_that_fails_to_plan_leaves_the_plain_stream(monkeypatch, restore_chat, _router_on):
+    def boom(req, session):
+        raise RuntimeError("router bug")
+    monkeypatch.setattr(cft, "plan", boom)
+    events, turns = asyncio.run(_run(_req("Did Maria pay?"), turn_reply="She paid."))
+    assert [d["text"] for d in _deltas(events)] == ["She paid."]
+    assert events[-1][1]["payload"]["response"] == "She paid."
+
+
 def test_the_stream_endpoint_still_registers_the_turn_for_replay():
     src = pathlib.Path(chief.__file__).read_text(encoding="utf-8")
     tail = src[src.index('@router.post("/agents/chief/chat/stream")'):]
