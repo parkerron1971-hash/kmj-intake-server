@@ -1,9 +1,10 @@
 # Lane private pilot setup
 
 Status: merchant-review workflow implemented and covered by offline tests.
-Live checkout must remain disabled until a bounded live-provider acceptance
-test verifies merchant, currency, ceiling, account and receipt. Passing fixtures
-or a connection check does not establish successful payment.
+LANE_CHECKOUT_ENABLED was switched on 2026-09-25, with Kevin's approval, for the
+agreed small pilot purchase (step 4 of the live acceptance below). Set it back to
+false to stop checkout. Passing fixtures or a connection check does not establish
+successful payment; only that bounded live test does.
 
 ## Account setup (Kevin)
 
@@ -23,8 +24,9 @@ Official account guide: https://docs.getonlane.com/buy/keys-and-wallet
 ## Operator configuration
 
 Apply supabase/APPLY-2026-09-24-lane-wallet.sql to the intended database before
-enabling purchase drafting. All tables and functions are service-role only.
-The migration is repeatable; the local database test runs it twice.
+enabling purchase drafting, and supabase/APPLY-2026-09-25-lane-saved-links.sql
+before saved merchant links. All tables and functions are service-role only.
+The migrations are repeatable; the local database tests run each twice.
 
 Backend secret variables:
 - LANE_PILOT_ENABLED=true
@@ -43,17 +45,27 @@ by an operator. Do not silently rebind past approvals to a new key.
 ## What is implemented
 
 - Wallet connection check, private pilot availability and setup link.
-- Chief uses web search to locate the merchant product or billing page, then saves
-  an owner-bound local proposal with the explicit USD spending limit and intended
-  account. A DNS-pinned public fetch records source text without account cookies.
-  Public text is untrusted evidence and never a verified final checkout quote.
+- Chief finds the merchant product or billing page from a fitting saved link or web
+  search, then looks at it (read-only; nothing saved) and tells the owner what it
+  found, or that the page needs their sign-in. A DNS-pinned public fetch records
+  source text without account cookies. Public text is untrusted evidence and never
+  a verified final checkout quote. Chief never signs in to a merchant page.
+- Chief's proposal (and a saved link) is HELD through chief_holds: Chief reads back
+  the merchant, page, USD limit and account, and nothing is saved until the owner's
+  own next message is a go-ahead ("save it", "go ahead", "go ahead and remember
+  it"; a bare "yes" does not count). The go-ahead releases only that page, account
+  and limit; a changed limit is held and read back again.
+- Saved merchant links (lane_links.py): page, merchant name and account only, never
+  a limit, password or code; encrypted like purchases, keyed-hash deduplicated per
+  page and account, 20 per owner, listed and removable in Wallet. A saved link is a
+  starting point: every look and proposal reads the page again.
 - Wallet shows the source, limit and account before the owner explicitly prepares
   the request in Lane. Unsent proposals can be dismissed without provider calls.
 - Provider drafts exceeding the total ceiling or changing merchants are blocked.
   Known provider identifiers survive unsupported draft responses for reconciliation.
 - Clarification questions preserve every choice. Hosted approval has a popup and
   fallback link. Saved purchases distinguish approval from confirmed order status.
-- Chief lane_wallet tool: draft/status only through the authenticated chat action door.
+- Chief lane_wallet tool: look/draft/remember/forget/status only through the authenticated chat action door.
   Model output cannot submit to Lane, approve or execute checkout. Identical Chief
   requests and purchase details for the same owner/business reuse a deterministic ID; use the Wallet form
   for an intentional repeat purchase.
@@ -113,6 +125,7 @@ PayPal integration is added here.
   __tests__/test_action_registry.py __tests__/test_tool_loop.py
   __tests__/test_policy_engine.py -q -p no:cacheprovider
 - PGLITE_MODULE=<local PGlite module URL> node scripts/lane-wallet-db-check.mjs
+- PGLITE_MODULE=<local PGlite module URL> node scripts/lane-saved-links-db-check.mjs
 - Frontend: npm run typecheck; npm run build
 - With the local Vite fixture on port 8799:
   python -B scripts/lane-wallet-ui-check.py

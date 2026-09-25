@@ -1,4 +1,5 @@
 """Private pilot purchases. Only the authenticated wallet UI can start checkout."""
+import logging
 import os
 import re
 from contextlib import contextmanager
@@ -12,12 +13,14 @@ from pydantic import BaseModel, ConfigDict, Field
 import lane_mcp as mcp
 import lane_store as store
 import lane_merchant as merchant
+import lane_links as links
 from decimal import Decimal, InvalidOperation
 from lane_wallet import router, owner, eligible, NO_STORE
 import sb_clients
 from auth_supabase import UserSession
 from ledger_unlock import require_unlock, SCOPE_DANGER
 
+logger = logging.getLogger(__name__)
 OPAQUE = re.compile(r"[A-Za-z0-9_-]{1,160}")
 
 
@@ -29,6 +32,7 @@ class Draft(BaseModel):
     max_amount_cents: int = Field(strict=True, ge=1, le=100000000)
     account: str = Field(min_length=1, max_length=200)
     merchant_name: str | None = Field(default=None, min_length=1, max_length=253)
+    remember: bool = Field(default=False, strict=True)
 
 
 class Revision(BaseModel):
@@ -398,15 +402,39 @@ def purchases(business_id: str, response: Response, session: UserSession = Depen
     with guarded(response):
         bid, uid = owner(business_id, session)
         key = credentials(bid, uid)
-        return {"purchases": [snapshot(r) for r in store.listing(bid, uid, key)],
-                "checkout_enabled": checkout_enabled()}
+        result = {"purchases": [snapshot(r) for r in store.listing(bid, uid, key)],
+                  "checkout_enabled": checkout_enabled()}
+        try:
+            result["links"] = links.listing(bid, uid)
+        except Exception:
+            # Saved links are a convenience; their store failing must not hide
+            # purchases. No "links" key tells the Wallet the list is unavailable,
+            # which an empty list would misstate.
+            logger.exception("[lane] saved links unavailable")
+        return result
 
 
 @router.post("/{business_id}/purchases")
 def create(business_id: str, body: Draft, response: Response, session: UserSession = Depends(sb_clients.authed_request)):
     with guarded(response):
         bid, uid = owner(business_id, session)
-        return draft(bid, uid, body.request_id, body.prompt, body.merchant_url, body.max_amount_cents, body.account, body.merchant_name)
+        row = draft(bid, uid, body.request_id, body.prompt, body.merchant_url, body.max_amount_cents, body.account, body.merchant_name)
+        if body.remember:
+            # The proposal stands even when the link cannot be kept (the 20-link cap).
+            try:
+                links.save(bid, uid, body.merchant_url, body.account, body.merchant_name)
+            except mcp.LaneError as exc:
+                row = dict(row, link_message=str(exc))
+        return row
+
+
+@router.post("/{business_id}/links/{link_id}/remove")
+def remove_link(business_id: str, link_id: UUID, response: Response,
+                session: UserSession = Depends(sb_clients.authed_request)):
+    with guarded(response):
+        bid, uid = owner(business_id, session)
+        credentials(bid, uid)
+        return {"removed": links.remove(bid, uid, str(link_id)), "links": links.listing(bid, uid)}
 
 
 @router.post("/{business_id}/purchases/{purchase_id}/{operation}")

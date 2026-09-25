@@ -99,6 +99,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 
 EXPORT_EXCLUDED: Dict[str, str] = {
     "lane_purchases": "encrypted wallet-bound purchase journal; never portable, cascade on user/business deletion",
+    "lane_saved_links": "owner-saved Lane merchant links encrypted under the server key; never portable, cascade on user/business deletion",
     "link_wallet_sessions": "encrypted Link OAuth credentials and pending authorization; never portable, cascade on user/business deletion",
     "chief_link_pilot_sessions": "encrypted private Link OAuth credentials and test journal; never portable, cascade on user/business deletion",
     "business_card_connections": "encrypted third-party OAuth credentials and card preferences; never portable, cascade on business deletion",
