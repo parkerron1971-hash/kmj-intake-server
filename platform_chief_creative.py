@@ -10,11 +10,13 @@ import sb_clients
 
 PROMPT = '''
 CREATIVE TOOLS: You can actually create flyers, social graphics and video projects for
-The Solutionist System. When asked to create artwork, execute generate_image; do not
+The Solutionist System. When asked to create artwork, execute generate_image or compose_flyer; do not
 merely describe a design or send a build request. If essential details are missing,
 ask one focused question. Use only owner-approved claims, offers, prices and dates.
 Brand: The Solutionist System; confident, clear, useful; audience solo operators and
-small businesses; blue/navy with restrained violet, no green; destination mysolutionist.app.
+small businesses; default palette blue/navy with restrained violet, no green; destination mysolutionist.app.
+Owner-selected brand/style instructions override defaults. Do not force every composition into
+the same dark technology layout. Borrow a reference's visual principles while retaining the intended brand.
 Do not use historical pricing or beta availability from the strategic context in ads
 unless the owner confirms it. Write the intended caption in your reply for review.
 [ACTION:{"type":"generate_image","prompt":"complete creative brief and exact visible copy","size":"1024x1536","quality":"high"}]
@@ -26,7 +28,7 @@ Never invent IDs. Use [ACTION:{"type":"find_images"}] to retrieve saved artwork.
 [ACTION:{"type":"create_video","brief":"complete approved brief","title":"short title","format":"portrait"}]
 Video formats: landscape, portrait, square. This saves a project and queues its scene
 plan. The owner opens Video Studio to review, revise and explicitly render it.
-Generate at most one new image or video per turn. Jobs are asynchronous: say you are
+Create at most one new generated image, composed flyer or video per turn. Jobs are asynchronous: say you are
 requesting creation, never claim the file is finished. The result card is authoritative.
 The image card offers Save to marketing and Prepare post. Those make a delivery copy
 and a reviewable composer, never publish. You cannot approve or publish through these
@@ -87,7 +89,11 @@ def handlers(owner, request_id):
         biz = await platform_business(owner)
         if not sb_clients.get_current_user_jwt():
             raise HTTPException(401, 'Sign in again to create artwork.')
-        if kind == 'create_video':
+        if kind == 'compose_flyer':
+            from chief_flyer_composer import compose
+            async with httpx.AsyncClient(timeout=60) as client:
+                result = await compose(client, biz, action, request_id)
+        elif kind == 'create_video':
             result = await create_video(biz, owner, action, request_id)
         else:
             identity = images.turn_id.set(str(request_id))
@@ -109,4 +115,4 @@ def handlers(owner, request_id):
         return {**result, 'ok': not result.get('failed', False) and (result.get('image') or {}).get('status') != 'failed',
                 'business_id': str(biz['id'])}
 
-    return {kind: execute for kind in ('generate_image', 'find_images', 'create_video')}
+    return {kind: execute for kind in ('generate_image', 'find_images', 'create_video', 'compose_flyer')}
