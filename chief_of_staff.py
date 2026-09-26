@@ -9686,7 +9686,11 @@ async def handle_recall_conversation(client, biz, action) -> Dict:
     """
     query = (action.get("query") or "").strip()
     days = _parse_time_range_days(action.get("time_range"))
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    # _ts, not isoformat(): its '+00:00' decodes to a space in the query
+    # string, the read 400s (22007) and fails soft, so "what did we talk
+    # about last week?" found nothing (seen 2026-09-26, "chief read
+    # unavailable: /chief_conversations").
+    since = _ts(datetime.now(timezone.utc) - timedelta(days=days))
 
     rows = await _sb(
         client, "GET",
