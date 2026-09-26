@@ -129,6 +129,14 @@ async def handle_submit_work_order(client, biz, action):
 QUEUED_LABEL = ("I'm on it and working in the background. You can leave this chat; "
                 "I'll let you know here when it's done or if I need you.")
 
+# Why the website link step stopped, said plainly (first live build,
+# 2026-09-26: a business with no built site got only "could not be
+# verified yet"). The events page itself is verified before this step runs.
+NO_SITE_LABEL = ("Your website isn't built yet, so there's no menu to add an Events link to. "
+                 "Your events page works on its own.")
+SITE_LINK_REFUSED_LABEL = ("The Events link couldn't be added to your website automatically. "
+                           "Your events page works on its own.")
+
 
 def public_job(job):
     result = job.get('result') or {}
@@ -458,6 +466,11 @@ class Adapter:
             import site_adopt
             if await asyncio.to_thread(site_adopt.hand_built_block_for,self.bid):
                 return {'manual':True}
+            # The link is an edit to a composed page. With none (the site was
+            # never built), the edit job can only come back "compose first",
+            # and the card used to say nothing but "could not be verified".
+            if not await self.rows('business_sites','&site_config->page_spec=not.is.null&select=id&limit=1'):
+                return {'no_site':True}
             import chief_jobs
             import spend_guard
             if await asyncio.to_thread(spend_guard.over_budget,business_id=self.bid):
@@ -574,8 +587,17 @@ class Adapter:
         elif step.name=='site_link':
             if (result or {}).get('manual'):
                 return receipt(step,'needs_hand','Your hand-built website needs an Events link added in its code.')
+            if (result or {}).get('no_site'):
+                return receipt(step,'needs_hand',NO_SITE_LABEL)
             if (result or {}).get('status') in ('queued','running'):
                 return receipt(step,'queued','Your website link is being added.')
+            # The edit job finished and said no. Its reason is the receipt,
+            # in plain words; the job's own text is for the logs.
+            child=(result or {}).get('result') if (result or {}).get('status')=='done' else None
+            if isinstance(child,dict) and child.get('ok') is False:
+                if 'no composed page' in str(child.get('error') or ''):
+                    return receipt(step,'needs_hand',NO_SITE_LABEL)
+                return receipt(step,'failed',SITE_LINK_REFUSED_LABEL)
             import offering_profiles
             info=await asyncio.to_thread(offering_profiles.business_state,self.bid)
             url=info.get('events_url') or ''
@@ -598,7 +620,8 @@ class Adapter:
         if not ok:
             label={'events_page':'The events page could not be verified yet.',
                    'form':'The form could not be verified yet.', 'flyer':'The flyer could not be verified. Check Media Library before creating another.',
-                   'send':'The send could not be verified. Check its history before sending again.'}.get(step.name,'This part of the build could not be verified yet.')
+                   'send':'The send could not be verified. Check its history before sending again.',
+                   'site_link':'The Events link on your website could not be verified yet. Your events page works on its own.'}.get(step.name,'This part of the build could not be verified yet.')
         checked=receipt(step,outcome if ok else 'failed',label,ids=ids,verified={'ok':bool(ok),'how':'read-back and public page' if step.name in ('events_page','form','registration','site_link') else 'read-back'})
         for key in ('nav','frontend_event'):
             if isinstance(result,dict) and result.get(key): checked[key]=result[key]

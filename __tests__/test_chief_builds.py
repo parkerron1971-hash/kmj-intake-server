@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 import pytest
-from chief_code import WorkOrder, Step, run, receipt, question, digest, stable_id
+from chief_code import WorkOrder, Step, run, receipt, question, digest, stable_id, finish
 import chief_build_runtime as runtime
 
 BIZ='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
@@ -391,3 +391,48 @@ def test_pending_build_has_status_evidence_without_claiming_a_write():
     state=sources['result:build:pending:state']
     assert state['kind']=='record' and 'Your flyer is generating.' in state['text']
     assert not chief_truth.wrote_anything(sources)
+
+
+def test_receipts_keep_plan_order_after_a_database_round_trip():
+    # jsonb keeps object keys shortest-first; the first live build's summary
+    # read "Your workshop is saved" before "Events is ready" (2026-09-26).
+    a=MemoryAdapter()
+    result=asyncio.run(run(order(wants_flyer=False),a))
+    names=[r['step'] for r in result['receipts']]
+    assert names[0]=='events_module' and names[-1]=='site_link'
+    stored=copy.deepcopy(result)
+    stored['steps']=dict(sorted(stored['steps'].items(),key=lambda kv:(len(kv[0]),kv[0])))
+    assert [r['step'] for r in finish(stored)['receipts']]==names
+    assert finish(stored)['summary_label'].startswith('Events is ready')
+    assert [r['step'] for r in asyncio.run(run(order(wants_flyer=False),a,stored))['receipts']]==names
+
+
+def test_site_link_without_a_built_website_says_why_and_starts_no_edit(monkeypatch):
+    import chief_jobs
+    import site_adopt
+    o=order(wants_flyer=False)
+    a=runtime.Adapter(None,{'id':o.order_id,'business_id':BIZ,'user_id':USER},'lease',o)
+    monkeypatch.setattr(site_adopt,'hand_built_block_for',lambda bid:None)
+    async def database(client,method,path,body=None):
+        assert path.startswith('/business_sites?business_id=eq.'+BIZ) and 'page_spec' in path
+        return []
+    async def enqueue(*args,**kwargs): pytest.fail('an edit was started for a website that does not exist')
+    monkeypatch.setattr(runtime,'db',database)
+    monkeypatch.setattr(chief_jobs,'enqueue',enqueue)
+    step=Step('site_link','connect_events','Your website links to Events.')
+    result=asyncio.run(a.execute(step,{},{}))
+    checked=asyncio.run(a.verify(step,{},result,{}))
+    assert checked['outcome']=='needs_hand' and checked['label']==runtime.NO_SITE_LABEL
+
+
+def test_a_finished_website_edit_that_said_no_gives_its_reason():
+    o=order(wants_flyer=False)
+    a=runtime.Adapter(None,{'id':o.order_id,'business_id':BIZ,'user_id':USER},'lease',o)
+    step=Step('site_link','connect_events','Your website links to Events.')
+    no_page={'status':'done','result':{'ok':False,'error':'no composed page yet — compose first'}}
+    checked=asyncio.run(a.verify(step,{},no_page,{}))
+    assert checked['outcome']=='needs_hand' and checked['label']==runtime.NO_SITE_LABEL
+    refused={'status':'done','result':{'ok':False,'error':'validator rejected section hero'}}
+    checked=asyncio.run(a.verify(step,{},refused,{}))
+    assert checked['outcome']=='failed' and checked['label']==runtime.SITE_LINK_REFUSED_LABEL
+    assert 'validator' not in checked['label'] and not checked['verified']['ok']
