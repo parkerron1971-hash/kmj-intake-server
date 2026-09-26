@@ -54,7 +54,7 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 
 | File | What | Status |
 |---|---|---|
-| `supabase/APPLY-2026-09-26-marketing-campaigns.sql` | Owner campaign briefs, revision/audit history, bounded plan requests, stable post relationships and Buffer metric snapshots. | **PENDING. Apply after merge.** Existing publishing remains usable before migration. Enable `MARKETING_METRICS_ENABLED` on the worker only after verification. |
+| `supabase/APPLY-2026-09-26-marketing-campaigns.sql` | Owner campaign briefs, revision/audit history, bounded plan requests, stable post relationships and Buffer metric snapshots. | **APPLIED 2026-09-26 15:35 UTC**, with the Chief local-work migration in one transaction through the Supabase Management API, explicitly authorized by Kevin. RLS/grants and rollback-only campaign audit/revision checks passed. Automatic metrics refresh remains unchanged. |
 | `supabase/APPLY-2026-09-25-voice-turn-log.sql` | `voice_turn_log`: one row per spoken call turn, measured by the app (time to first audio vs its 1s budget, first reply audio, where the time went, barge-in, underruns, TTS cache hits). Joins `model_route_log` on `request_id`. Service-role only: RLS on, no policies, no anon/authenticated grants. | **APPLIED 2026-09-25 via the SQL editor, after #1041 merged.** Verified: RLS on, 0 policies, anon/authenticated SELECT denied, service_role INSERT granted, 21 columns, 3 indexes; PostgREST sees it (service GET returns `[]`). |
 | `supabase/APPLY-2026-09-25-model-route-log.sql` | `model_route_log`: one row per streamed Chief request from the two-track reply (lane, complexity, model, escalation, time to first token vs its budget, total time, cost across every model call). Service-role only: RLS on, no policies, no anon/authenticated grants. | **APPLIED 2026-09-25 via the SQL editor, after #1040/#1041 merged** (same batch as voice_turn_log). Verified: RLS on, 0 policies, anon/authenticated SELECT denied, service_role INSERT granted, 34 columns, 3 indexes; PostgREST sees it (service GET returns `[]`). |
 | `supabase/APPLY-2026-09-25-lane-saved-links.sql` | `lane_saved_links`: owner-saved Lane merchant links (page, name, account), application-encrypted, keyed-hash unique per page and account, 20 per owner; `lane_link_save/list/delete`. | **APPLIED 2026-09-25 via the Management API, before the code.** Verified: RLS on, 3 functions, no anon/authenticated table or function access, service_role executes. A rolled-back `DO` probe saved and listed a row on the live database; 0 rows after. |
@@ -187,7 +187,14 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 
 ## Chief subscription work (2026-09-26)
 
-`supabase/APPLY-2026-09-26-chief-local-work.sql` ? **pending, not applied**.
+`supabase/APPLY-2026-09-26-chief-local-work.sql` - **APPLIED 2026-09-26 15:35 UTC**.
+Kevin explicitly authorized the assistant to apply both migrations, overriding
+the manual-application rule for this operation. All prerequisites were verified.
+Six new tables have RLS with no browser-role access; all seven new RPCs are
+service-role only. Rollback-only service-role checks passed for both agents:
+atomic claims, duplicate-request/reply handling, note acknowledgements and
+report-key rotation. No test campaigns, work, tasks or devices remain.
+The API health and readiness endpoints returned HTTP 200 after application.
 Requires Dev Bridge, September 16 authority, September 24 agents and September 26
 marketing campaigns. Service-only conversations and atomic create/claim/reply/ack
 RPCs. See `docs/CHIEF_LOCAL_WORK.md` for the paired desktop/frontend release.
