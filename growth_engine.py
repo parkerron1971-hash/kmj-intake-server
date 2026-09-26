@@ -443,11 +443,15 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
     at_risk = await _sb(client, "GET",
         f"/contacts?business_id=eq.{biz_id}&health_score=lt.40"
         f"&status=in.(active,lead,vip)&order=health_score.asc&limit={ACTION_CAP_AT_RISK}"
-        f"&select=id,name,role,health_score,last_interaction"
+        f"&select=id,name,role,health_score,last_interaction,metadata"
     ) or []
 
+    import contact_fields
     for c in at_risk:
         if _cap_reached(): break
+        # An unsubscribe holds: no automated check-in is drafted for them.
+        if contact_fields.email_opted_out(c):
+            continue
         existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
         if existing:
             actions.append({
@@ -489,11 +493,13 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
         f"&status=in.(active,lead,vip)"
         f"&last_interaction=lt.{inactive_cutoff}"
         f"&order=last_interaction.asc&limit={ACTION_CAP_INACTIVE}"
-        f"&select=id,name,role,health_score,last_interaction"
+        f"&select=id,name,role,health_score,last_interaction,metadata"
     ) or []
 
     for c in inactive:
         if _cap_reached(): break
+        if contact_fields.email_opted_out(c):
+            continue
         existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
         if existing:
             actions.append({

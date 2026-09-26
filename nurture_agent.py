@@ -293,8 +293,15 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
     drafts_created = 0
     flagged = []
 
+    import contact_fields
     for contact in contacts:
         cid = contact["id"]
+
+        # Someone who unsubscribed gets no automated re-engagement mail —
+        # the sweep does not even draft it (contact_fields.email_opted_out;
+        # the query above reads every column, metadata included).
+        if contact_fields.email_opted_out(contact):
+            continue
 
         # Check if we already reached out recently
         recent_outreach = await _sb(client, "GET",

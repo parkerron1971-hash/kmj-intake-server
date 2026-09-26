@@ -4102,6 +4102,14 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
         body = f"Hi {contact.get('name')}, just thinking of you. Wanted to check in. — {practitioner}"
 
     subject = "Checking in"   # client-facing subject — not the internal "Check-in for X" label
+    # The practitioner asked for this one check-in, so it is drafted — but
+    # an imported unsubscribe is written on the draft, and autopilot holds
+    # it for them rather than sending (_process_autopilot_for_draft).
+    import contact_fields
+    unsub = contact_fields.email_opted_out(contact)
+    reasoning = f"Chief of Staff requested: {reason}"
+    if unsub:
+        reasoning += f" Note: {contact_fields.UNSUBSCRIBED_NOTE} ({unsub})."
     inserted = await _sb(client, "POST", "/agent_queue", {
         "business_id": biz["id"], "contact_id": contact["id"],
         "agent": "nurture", "action_type": "check_in",
@@ -4109,7 +4117,7 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
         "body": body,
         "channel": "email" if contact.get("email") else "in_app",
         "status": "draft", "priority": "medium",
-        "ai_reasoning": f"Chief of Staff requested: {reason}",
+        "ai_reasoning": reasoning,
         "ai_model": DRAFT_MODEL,
     })
     if not inserted:
@@ -4129,8 +4137,10 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
 
     return {
         "type": "draft_nurture",
-        "result": "auto_approved" if auto_label_suffix else "queued for approval",
-        "label": f"Check-in for {contact.get('name')}{auto_label_suffix}",
+        "result": ("auto_approved" if auto_label_suffix else "queued for approval")
+                  + (f"; note: {contact_fields.UNSUBSCRIBED_NOTE}" if unsub else ""),
+        "label": f"Check-in for {contact.get('name')}{auto_label_suffix}"
+                 + (f" · note: {contact_fields.UNSUBSCRIBED_NOTE}" if unsub else ""),
         "nav": _nav("operate", "queue"),
         "queue_id": queue_id,
         "draft_preview": {"subject": subject, "body": (body or "")[:200]},
@@ -4169,6 +4179,15 @@ async def handle_draft_email(client, biz, action) -> Dict:
         if not body:
             body = f"Hi {name},\n\nReaching out from {biz.get('name')}. — {practitioner}"
 
+    # One email to one person, asked for by the practitioner: an imported
+    # unsubscribe does not block it, but the draft says so where they
+    # review it (ai_reasoning shows in the approval queue) and in the
+    # action label Chief narrates from.
+    import contact_fields
+    unsub = contact_fields.email_opted_out(contact) if contact else None
+    reasoning = f"Chief of Staff drafted: {action.get('reason', 'conversational request')}"
+    if unsub:
+        reasoning += f" Note: {contact_fields.UNSUBSCRIBED_NOTE} ({unsub})."
     inserted = await _sb(client, "POST", "/agent_queue", {
         "business_id": biz["id"],
         "contact_id": contact["id"] if contact else None,
@@ -4176,7 +4195,7 @@ async def handle_draft_email(client, biz, action) -> Dict:
         "subject": subject, "body": body,
         "channel": "email" if (contact and contact.get("email")) else "in_app",
         "status": "draft", "priority": action.get("priority", "medium"),
-        "ai_reasoning": f"Chief of Staff drafted: {action.get('reason', 'conversational request')}",
+        "ai_reasoning": reasoning,
         "ai_model": DRAFT_MODEL,
     })
     if not inserted:
@@ -4184,13 +4203,16 @@ async def handle_draft_email(client, biz, action) -> Dict:
 
     queue_id = inserted[0].get("id") if isinstance(inserted, list) and inserted else None
     label = f"Email: {subject}" + (f" → {contact.get('name')}" if contact else "")
+    if unsub:
+        label += f" · note: {contact_fields.UNSUBSCRIBED_NOTE}"
     return {
         "type": "draft_email",
-        "result": "queued for approval",
+        "result": "queued for approval" + (f"; note: {contact_fields.UNSUBSCRIBED_NOTE}" if unsub else ""),
         "label": label,
         "nav": _nav("operate", "queue"),
         "queue_id": queue_id,
         "draft_preview": {"subject": subject, "body": (body or "")[:200]},
+        **({"unsubscribed": unsub} if unsub else {}),
     }
 
 
@@ -4243,11 +4265,16 @@ async def handle_draft_and_send(client, biz, action) -> Dict:
         result_str = "drafted (email provider not configured)"
     else:
         result_str = "drafted and approved"
+    label = _approve_label(item.get("subject"), delivery)
+    if delivery.get("unsubscribed") or draft_result.get("unsubscribed"):
+        import contact_fields
+        result_str += f"; note: {contact_fields.UNSUBSCRIBED_NOTE}"
+        label += f" · note: {contact_fields.UNSUBSCRIBED_NOTE}"
 
     return {
         "type": "draft_and_send",
         "result": result_str,
-        "label": _approve_label(item.get("subject"), delivery),
+        "label": label,
         "nav": _nav("operate", "queue"),
         "queue_id": queue_id,
         "email_sent": bool(delivery.get("sent")),
@@ -6367,11 +6394,19 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
         return out
 
     rows = await _sb(client, "GET",
-        f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=id,name,email")
+        f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=id,name,email,metadata")
     if not rows:
         out["reason"] = "no_contact"
         return out
     contact = rows[0]
+    # A person approving ONE email to ONE contact is never blocked by an
+    # imported unsubscribe — but the result says so, where they see it.
+    # (The unattended sender holds marketing drafts before reaching here:
+    # _process_autopilot_for_draft.)
+    import contact_fields
+    _unsub = contact_fields.email_opted_out(contact)
+    if _unsub:
+        out["unsubscribed"] = _unsub
     email = (contact.get("email") or "").strip()
     if expected_email is not None and email.lower() != expected_email.lower():
         return {**out, "reason": "recipient_changed"}
@@ -6587,6 +6622,34 @@ async def _should_auto_approve(
     return False, "default_manual"
 
 
+# Agents whose drafts are marketing-shaped outreach (re-engagement
+# check-ins, growth nudges) rather than mail about the person's own
+# bookings, invoices or documents.
+_MARKETING_AGENTS = frozenset({"nurture", "growth"})
+
+
+async def _unsubscribed_for_autopilot(client, biz_id: str, contact_id: Optional[str],
+                                      contact: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why the unattended sender must NOT mail this contact, or None.
+    Uses the contact row when it was read with metadata; otherwise reads
+    it. A read that fails holds the draft — an unsubscribe we could not
+    check is not permission to send (the same fail-closed rule as the
+    policy check in _should_auto_approve)."""
+    import contact_fields
+    if not contact_id:
+        return None
+    if isinstance(contact, dict) and "metadata" in contact:
+        return contact_fields.email_opted_out(contact)
+    try:
+        rows = await _sb(client, "GET",
+            f"/contacts?id=eq.{contact_id}&business_id=eq.{biz_id}&select=id,metadata&limit=1")
+    except Exception:
+        rows = None
+    if rows is None:
+        return "unsubscribe check unavailable"
+    return contact_fields.email_opted_out(rows[0]) if rows else None
+
+
 async def _process_autopilot_for_draft(
     client,
     biz: Dict[str, Any],
@@ -6600,6 +6663,15 @@ async def _process_autopilot_for_draft(
     agent_name = (draft_row.get("agent") or "").strip().lower()
     if not agent_name:
         return None
+    # An imported unsubscribe holds on the unattended sender: a nurture or
+    # growth draft to someone who unsubscribed waits for the practitioner,
+    # who sees it (with the note) and can still choose to send it.
+    if agent_name in _MARKETING_AGENTS:
+        why = await _unsubscribed_for_autopilot(
+            client, biz["id"], draft_row.get("contact_id"), contact)
+        if why:
+            print(f"[Chief Autopilot] Queued for review: {agent_name} -- unsubscribed ({why})", flush=True)
+            return None
     should_auto, reason = await _should_auto_approve(client, biz, agent_name, draft_row, contact)
     if not should_auto:
         print(f"[Chief Autopilot] Queued for review: {agent_name} -- {reason}", flush=True)
@@ -8560,10 +8632,13 @@ async def handle_batch_email(client, biz, action) -> Dict:
     try:
         contacts = await _sb(
             client, "GET",
-            f"/contacts?id=in.({id_filter})&business_id=eq.{biz['id']}&select=id,name,email"
+            # metadata: the unsubscribe the client-list import recorded
+            # lives there, and a row read without it reads as mailable.
+            f"/contacts?id=in.({id_filter})&business_id=eq.{biz['id']}&select=id,name,email,metadata"
         ) or []
     except Exception as e:
         return _fail("batch_email", f"contact lookup failed: {e}")
+    import contact_fields
 
     settings = biz.get("settings") or {}
     et = (settings.get("email_templates") or {}) if isinstance(settings.get("email_templates"), dict) else {}
@@ -8574,6 +8649,7 @@ async def handle_batch_email(client, biz, action) -> Dict:
 
     sent = 0
     skipped: List[str] = []
+    unsubscribed: List[str] = []
     failures: List[str] = []
     sample_subject = subject_tpl
 
@@ -8583,6 +8659,11 @@ async def handle_batch_email(client, biz, action) -> Dict:
         name = c.get("name") or "there"
         if not email:
             skipped.append(cid)
+            continue
+        # A batch is bulk mail: someone who unsubscribed is left out,
+        # whatever list Chief was handed (contact_fields.email_opted_out).
+        if contact_fields.email_opted_out(c):
+            unsubscribed.append(name)
             continue
         subj = subject_tpl.replace("{contact_name}", name).replace("{business_name}", biz_name)
         body_personal = body_tpl.replace("{business_name}", biz_name)
@@ -8624,16 +8705,21 @@ async def handle_batch_email(client, biz, action) -> Dict:
     parts = [f"📧 Batch email: {sent}/{len(contacts)} delivered"]
     if skipped:
         parts.append(f"{len(skipped)} skipped (no email)")
+    if unsubscribed:
+        parts.append(f"{len(unsubscribed)} left out (unsubscribed from your emails)")
     if failures:
         parts.append(f"{len(failures)} failed")
 
     return {
         "type": "batch_email",
-        "result": f"sent {sent} of {len(contacts)}",
+        "result": f"sent {sent} of {len(contacts)}"
+                  + (f"; {len(unsubscribed)} left out because they unsubscribed" if unsubscribed else ""),
         "label": " · ".join(parts),
         "subject": sample_subject,
         "sent_count": sent,
         "skipped_count": len(skipped),
+        "unsubscribed_count": len(unsubscribed),
+        "unsubscribed": unsubscribed[:20],
         "failure_count": len(failures),
     }
 
