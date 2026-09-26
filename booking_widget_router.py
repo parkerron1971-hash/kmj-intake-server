@@ -870,8 +870,8 @@ async def book_anon(
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
-    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
-                                 business=biz):
+    if not _check_public_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
+                                        business=biz):
         raise HTTPException(
             status_code=409,
             detail="Sorry — that time was just booked. Please pick another.",
@@ -966,8 +966,8 @@ async def book(
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
-    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
-                                 business=biz):
+    if not _check_public_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
+                                        business=biz):
         raise HTTPException(
             status_code=409,
             detail="Sorry — that time was just booked. Please pick another.",
@@ -1204,6 +1204,38 @@ def _find_or_create_customer(
     return created[0]["id"]
 
 
+def _check_public_slot_available(
+    business_id: str,
+    appointment_at_iso: str,
+    duration_min: int,
+    business: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """The guard for bookings a CLIENT makes (book-anon, book, and the
+    agent site + Site Concierge, which ride book-anon): busy on the
+    practitioner's other calendar (outside_calendar) is a conflict at any
+    capacity, then the usual double-book guard.
+
+    Practitioner-made bookings (Chief, the calendar's New booking, weekly
+    series) call _check_slot_available directly and are NOT refused on
+    an outside-busy time: someone moving in from Calendly already has
+    "Jane, Tue 3pm" on the Google Calendar they linked, because Calendly
+    wrote it there, and re-entering Jane must not clash with Jane. Those
+    paths book and say "that time is also busy on your other calendar".
+
+    The outside check fails soft (nothing connected, not set up, a read
+    error) to "no conflict", and runs first because a feed can gain a
+    busy block between the slot list and the submit."""
+    if appointment_at_iso and duration_min > 0:
+        try:
+            import outside_calendar
+            if outside_calendar.busy_overlap(business_id, appointment_at_iso, duration_min):
+                return False
+        except Exception as e:  # pragma: no cover — never break a booking on a read
+            logger.warning(f"outside busy re-check failed: {type(e).__name__}")
+    return _check_slot_available(business_id, appointment_at_iso, duration_min,
+                                 business=business)
+
+
 def _check_slot_available(
     business_id: str,
     appointment_at_iso: str,
@@ -1211,6 +1243,10 @@ def _check_slot_available(
     business: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Phase D.4 — submit-side double-book guard.
+
+    Bookings only (this business's own calendar). Client-made bookings go
+    through _check_public_slot_available, which also refuses times that
+    are busy on the practitioner's other calendar.
 
     The customer's UI shows slots that were free at config-anon snapshot
     time, but two customers can race the same slot. This re-verifies at
@@ -1262,18 +1298,6 @@ def _check_slot_available(
         # If we can't parse the slot, don't block the booking; the
         # check is opportunistic.
         return True
-
-    # Outside calendar (2026-09-26): busy on the practitioner's other
-    # calendar is a conflict at ANY capacity — the practitioner is not
-    # here. Checked first because a feed can gain a busy block between
-    # the slot list and the submit (it re-syncs every 15 minutes).
-    # Fails soft: nothing connected / not set up → no conflict.
-    try:
-        import outside_calendar
-        if outside_calendar.conflicts_with_outside_calendar(business_id, slot_start, slot_end):
-            return False
-    except Exception as e:  # pragma: no cover — never break a booking on a read
-        logger.warning(f"outside busy re-check failed: {type(e).__name__}")
 
     rows = sb_clients.sb_get_as_service(
         f"/module_entries?business_id=eq.{business_id}"

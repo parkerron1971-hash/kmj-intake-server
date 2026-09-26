@@ -751,6 +751,50 @@ def conflicts_with_outside_calendar(business_id: str, start: datetime,
     return False
 
 
+# What a practitioner-made booking says when it lands on an outside-busy
+# time. Those bookings go through (the busy block is often the very
+# appointment being moved in, e.g. one Calendly wrote to their Google
+# Calendar); client bookings are refused instead.
+HEADS_UP = "Heads up: that time is also busy on your other calendar."
+
+
+def busy_overlap(business_id: str, start_iso: str, duration_min: int) -> bool:
+    """Does [start, start + duration) overlap an outside busy block?
+    False for anything unparseable or unavailable."""
+    start = _parse_ts(start_iso)
+    try:
+        minutes = int(duration_min or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+    if start is None or minutes <= 0:
+        return False
+    return conflicts_with_outside_calendar(
+        business_id, start, start + timedelta(minutes=minutes))
+
+
+def busy_overlaps_many(business_id: str, starts: List[str],
+                       duration_min: int) -> List[str]:
+    """The subset of `starts` (ISO) whose [start, start + duration)
+    overlaps an outside busy block. One read for the whole span, so a
+    weekly series costs one query, not one per week."""
+    parsed = [(s, _parse_ts(s)) for s in starts or []]
+    parsed = [(s, dt) for s, dt in parsed if dt is not None]
+    try:
+        minutes = int(duration_min or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+    if not parsed or minutes <= 0:
+        return []
+    span = timedelta(minutes=minutes)
+    lo = min(dt for _, dt in parsed)
+    hi = max(dt for _, dt in parsed) + span
+    busy = busy_intervals(busy_blocks_between(business_id, lo, hi))
+    if not busy:
+        return []
+    return [s for s, dt in parsed
+            if any(b0 < dt + span and dt < b1 for b0, b1 in busy)]
+
+
 # ─── Feeds: list / connect / remove ──────────────────────────────────
 
 class NotSetUp(Exception):

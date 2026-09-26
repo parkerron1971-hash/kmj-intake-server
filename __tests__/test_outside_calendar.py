@@ -616,17 +616,133 @@ def test_busy_ignores_capacity_and_all_day_closes_the_day():
     assert len(_mon_slots(_nyc(), [])) == 9       # nothing connected: unchanged
 
 
-def test_a_busy_time_cannot_be_booked(db, monkeypatch):
-    import booking_widget_router as bw
-    import sb_clients
+def _busy_1430(db):
+    """One outside busy block, Mon Sep 14 2026 14:30-15:15Z."""
     feed = _feed(db)
     db.blocks[(feed["id"], "h", "2026-09-14T14:30:00Z")] = {
         "business_id": BIZ, "feed_id": feed["id"], "uid_hash": "h",
         "starts_at": "2026-09-14T14:30:00Z", "ends_at": "2026-09-14T15:15:00Z", "all_day": False}
+    return feed
+
+
+def test_a_client_cannot_book_a_busy_time(db, monkeypatch):
+    import booking_widget_router as bw
+    import sb_clients
+    _busy_1430(db)
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [])  # no bookings at all
-    assert bw._check_slot_available(BIZ, "2026-09-14T14:00:00Z", 60) is False
-    assert bw._check_slot_available(BIZ, "2026-09-14T15:15:00Z", 60) is True   # touches, no overlap
-    assert bw._check_slot_available("other-biz", "2026-09-14T14:00:00Z", 60) is True
+    assert bw._check_public_slot_available(BIZ, "2026-09-14T14:00:00Z", 60) is False
+    assert bw._check_public_slot_available(BIZ, "2026-09-14T15:15:00Z", 60) is True  # touches only
+    assert bw._check_public_slot_available("other-biz", "2026-09-14T14:00:00Z", 60) is True
+
+
+def test_every_client_booking_door_uses_the_public_guard():
+    """book-anon (which the agent site and Site Concierge ride) and the
+    known-customer book both refuse outside-busy times."""
+    import inspect
+    import agent_site
+    import booking_widget_router as bw
+    for fn in (bw.book_anon, bw.book):
+        src = inspect.getsource(fn)
+        assert "_check_public_slot_available(" in src, fn.__name__
+        assert "_check_slot_available(" not in src.replace("_check_public_slot_available(", ""), fn.__name__
+    assert "book_anon(" in inspect.getsource(agent_site.walkin_book)
+
+
+# ─── Practitioner-made bookings go through, and say so ───────────────
+#
+# Someone moving in from Calendly already has "Jane, Tue 3pm" on the
+# Google Calendar they linked, because Calendly wrote it there. Entering
+# Jane here (by hand, through Chief, or as a weekly series) must not
+# clash with Jane.
+
+def test_the_practitioner_guard_ignores_outside_busy(db, monkeypatch):
+    import booking_widget_router as bw
+    import sb_clients
+    _busy_1430(db)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [])
+    assert bw._check_slot_available(BIZ, "2026-09-14T14:00:00Z", 60) is True
+
+
+def _chief_booking_env(monkeypatch):
+    import booking_widget_router as bw
+    import chief_booking_actions as cba
+    import sb_clients
+    created = []
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [])   # no bookings
+    monkeypatch.setattr(bw, "_bookings_module", lambda b: {"id": "mod1", "archetype_params": {}})
+    monkeypatch.setattr(bw, "_maybe_denormalize_offering",
+                        lambda b, m, oid, qp, data: {**data, "duration_min_at_booking": 60})
+    monkeypatch.setattr(bw, "_create_appointment",
+                        lambda b, m, data, created_by="x": created.append(data) or {"id": "bk1", "data": data})
+    monkeypatch.setattr(cba, "_resolve_offering", lambda b, a: {"offering": {
+        "id": "off1", "name": "Cut", "duration_min": 60, "is_active": True}})
+    monkeypatch.setattr(cba, "_resolve_contact", lambda b, a: {"contact": {"id": "c1", "name": "Jane"}})
+    return cba, created
+
+
+def test_chief_books_over_an_outside_busy_time_and_says_so(db, monkeypatch):
+    _busy_1430(db)
+    cba, created = _chief_booking_env(monkeypatch)
+    out = cba._create_booking_sync({"id": BIZ}, {
+        "contact_id": "c1", "offering_id": "off1", "appointment_at": "2026-09-14T14:30:00Z"})
+    assert created, "the practitioner's own booking must go through"
+    assert out["result"] and out["label"]
+    assert "also busy on your other calendar" in out["result"]
+    assert out["outside_calendar_busy"] is True
+
+    quiet = cba._create_booking_sync({"id": BIZ}, {
+        "contact_id": "c1", "offering_id": "off1", "appointment_at": "2026-09-14T17:00:00Z"})
+    assert "other calendar" not in quiet["result"] and quiet["outside_calendar_busy"] is False
+
+
+def test_chief_reschedules_onto_an_outside_busy_time_and_says_so(db, monkeypatch):
+    import booking_widget_router as bw
+    import sb_clients
+    _busy_1430(db)
+    cba, _ = _chief_booking_env(monkeypatch)
+    monkeypatch.setattr(bw, "_mirror_booking_session", lambda b, e: None)
+    monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
+        "id": "bk1", "status": "active",
+        "data": {"appointment_at": "2026-09-14T18:00:00Z", "customer_name": "Jane",
+                 "duration_min_at_booking": 60}}})
+    moved = []
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda p, b: moved.append(p) or [{"id": "bk1"}])
+    out = cba._reschedule_booking_sync({"id": BIZ}, {
+        "booking_id": "bk1", "new_appointment_at": "2026-09-14T14:30:00Z"})
+    assert any("module_entries" in p for p in moved)
+    assert out["label"] == "Jane"
+    assert out["result"].startswith("moved to") and "also busy on your other calendar" in out["result"]
+
+
+def test_a_weekly_series_books_busy_weeks_and_names_them(db, monkeypatch):
+    from datetime import time as _t
+    import booking_series as bs
+    cba, created = _chief_booking_env(monkeypatch)
+    from availability import BusinessAvailability
+    monkeypatch.setattr(bs, "_business_availability",
+                        lambda b: (BusinessAvailability(), "UTC"))
+    monkeypatch.setattr(bs, "_series_entries",
+                        lambda b, s, active_only=True, from_iso=None: [])
+    feed = _feed(db)
+    # Busy the 2nd and 3rd Tuesdays at 15:00Z (Calendly already wrote Jane there).
+    for day in ("2027-04-13", "2027-04-20"):
+        db.blocks[(feed["id"], "jane", f"{day}T15:00:00Z")] = {
+            "business_id": BIZ, "feed_id": feed["id"], "uid_hash": "jane",
+            "starts_at": f"{day}T15:00:00Z", "ends_at": f"{day}T16:00:00Z", "all_day": False}
+    res = bs.create_series(BIZ, offering={"id": "off1", "name": "Cut", "duration_min": 60},
+                           contact=None, customer_name="Jane", weekday=1, at=_t(15, 0),
+                           tz_name="UTC", start_from=date(2027, 4, 6), count=4)
+    assert res["ok"] and len(res["booked"]) == 4 and res["skipped"] == []
+    assert len(created) == 4
+    assert res["also_busy_elsewhere"] == ["Apr 13", "Apr 20"]
+    assert res["summary"] == ("4 booked. Heads up: Apr 13 and Apr 20 are also busy "
+                              "on your other calendar.")
+
+    single = bs.create_series(BIZ, offering={"id": "off1", "name": "Cut", "duration_min": 60},
+                              contact=None, customer_name="Jane", weekday=1, at=_t(15, 0),
+                              tz_name="UTC", start_from=date(2027, 4, 13), count=1)
+    assert single["summary"] == "1 booked. Heads up: that time is also busy on your other calendar."
 
 
 def test_the_public_slot_endpoint_subtracts_busy_times(db, monkeypatch):
