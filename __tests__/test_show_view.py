@@ -256,6 +256,8 @@ def test_no_loaded_invoices_does_not_claim_no_open_invoices():
     block = cos._format_context_for_prompt(ctx)
     assert "(none in the loaded sample; check data availability)" in block
     assert "(none open)" not in block
+    # The totals block said "(no open invoices)" here until 2026-09-26.
+    assert "(no open invoices" not in block
 
 
 # ─────────────────────────────────────────────────────────────────────
