@@ -38,6 +38,8 @@ class FakeSupabase:
                     ok = ok and str(r.get(k)) == v[3:]
                 elif v.startswith("in."):
                     ok = ok and str(r.get(k)) in v[4:-1].split(",")
+                elif v.startswith("lt."):
+                    ok = ok and str(r.get(k) or "") < v[3:]
             if ok:
                 out.append(dict(r))
         return out
@@ -276,3 +278,214 @@ class TestReplyReopens:
                                              _Owner()))
         assert got["reopened"] is False
         assert fake.rows["t-working"]["status"] == "working"
+
+
+# ─── Desktop sessions and Kevin's phone (2026-09-26) ────────────────────
+
+def _ago(seconds):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+
+DESKTOP = {"id": "t-desk", "lane": "local", "origin": "desktop", "device_id": "dev-1",
+           "status": "working", "title": "kmj-intake-server", "agent": "claude",
+           "repo": "backend", "project_path": r"C:\Users\kmccl\kmj-intake-server",
+           "report_key": "k6", "updated_at": _ago(600), "notes": []}
+
+
+def _pushes(monkeypatch):
+    sent = []
+
+    async def tell(_c, task, title, body):
+        sent.append((task["id"], title, body))
+        return 1
+    monkeypatch.setattr(dev_bridge, "_tell_kevin", tell)
+    return sent
+
+
+class TestDesktopSessions:
+    def test_opening_one_by_hand_puts_it_on_the_desk(self, monkeypatch):
+        _wire(monkeypatch, [])
+        inserted = []
+
+        async def insert(_c, path, body):
+            inserted.append(body)
+            return dict(body, id="new-desk")
+        monkeypatch.setattr(dev_bridge, "_sb_insert", insert)
+        got = _run(dev_bridge.bridge_open_session(dev_bridge.DesktopSessionBody(
+            project_path=r"C:\Users\kmccl\KMJ-Intake-Server", agent="Codex"),
+            authorization="Bearer x"))
+        assert got == {"ok": True, "task_id": "new-desk"}
+        row = inserted[0]
+        assert row["origin"] == "desktop" and row["device_id"] == "dev-1"
+        assert row["status"] == "working" and row["agent"] == "codex"
+        # The known repos are recognised whatever the path's case; the title
+        # is the folder when the pane has no name.
+        assert row["repo"] == "backend"
+        assert row["title"] == "KMJ-Intake-Server"
+        assert row["report_key"]
+
+    def test_an_unknown_agent_is_refused(self, monkeypatch):
+        _wire(monkeypatch, [])
+        with pytest.raises(dev_bridge.HTTPException) as e:
+            _run(dev_bridge.bridge_open_session(dev_bridge.DesktopSessionBody(
+                project_path=r"C:\x", agent="grok"), authorization="Bearer x"))
+        assert e.value.status_code == 422
+
+    def test_screens_replace_each_other_between_messages(self, monkeypatch):
+        fake = _wire(monkeypatch, [DESKTOP])
+        _pushes(monkeypatch)
+        for text in ("screen one", "screen two"):
+            _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+                status="working", note=text, sender="session"), authorization="Bearer x"))
+        assert [n["text"] for n in fake.rows["t-desk"]["notes"]] == ["screen two"]
+        # A message in between keeps the screen that came before it.
+        _run(dev_bridge.add_owner_note("t-desk", dev_bridge.NoteBody(text="Ship it"), _Owner()))
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="screen three", sender="session"), authorization="Bearer x"))
+        assert [n["text"] for n in fake.rows["t-desk"]["notes"]] == \
+            ["screen two", "Ship it", "screen three"]
+
+    def test_a_dispatched_task_still_keeps_every_screen(self, monkeypatch):
+        fake = _wire(monkeypatch, [dict(WORKING, notes=[])])
+        for text in ("one", "two"):
+            _run(dev_bridge.bridge_status("t-working", dev_bridge.StatusBody(
+                status="working", note=text, sender="session"), authorization="Bearer x"))
+        assert [n["text"] for n in fake.rows["t-working"]["notes"]] == ["one", "two"]
+
+    def test_closing_the_pane_ends_it_and_only_a_desktop_session(self, monkeypatch):
+        fake = _wire(monkeypatch, [DESKTOP, WORKING])
+        got = _run(dev_bridge.bridge_close_session("t-desk", authorization="Bearer x"))
+        assert got["closed"] is True
+        assert fake.rows["t-desk"]["status"] == "done" and fake.rows["t-desk"]["finished_at"]
+        assert "closed" in fake.rows["t-desk"]["notes"][-1]["text"]
+        # A dispatched task ends with its own report, never with a pane.
+        got = _run(dev_bridge.bridge_close_session("t-working", authorization="Bearer x"))
+        assert got["closed"] is False
+        assert fake.rows["t-working"]["status"] == "working"
+
+    def test_the_sweep_closes_what_the_device_lost_and_nothing_fresh(self, monkeypatch):
+        lost = dict(DESKTOP, id="t-lost")
+        live = dict(DESKTOP, id="t-live")
+        fresh = dict(DESKTOP, id="t-fresh", updated_at=_ago(10))
+        other = dict(DESKTOP, id="t-other", device_id="dev-2")
+        fake = _wire(monkeypatch, [lost, live, fresh, other, WORKING])
+        got = _run(dev_bridge.bridge_sweep_sessions(
+            dev_bridge.SweepBody(live=["t-live"]), authorization="Bearer x"))
+        assert got["closed"] == 1
+        assert {k: r["status"] for k, r in fake.rows.items()} == {
+            "t-lost": "done", "t-live": "working", "t-fresh": "working",
+            "t-other": "working", "t-working": "working"}
+
+    def test_a_reply_after_it_closed_reopens_it_with_its_last_screen(self, monkeypatch):
+        closed = dict(DESKTOP, status="done", notes=[
+            {"from": "session", "at": _ago(900), "text": "> Want me to open the PR?"},
+            {"from": "device", "at": _ago(800), "text": "The session was closed in Solution Space."},
+        ])
+        _wire(monkeypatch, [closed])
+        _run(dev_bridge.add_owner_note("t-desk", dev_bridge.NoteBody(text="Yes, open it"), _Owner()))
+        got = _run(dev_bridge.bridge_queue(authorization="Bearer x"))
+        brief = got["followups"][0]["reopen_brief"]
+        assert brief.startswith("Kevin had a Claude Code session open in this project")
+        assert "> Want me to open the PR?" in brief
+        assert "- Kevin: Yes, open it" in brief
+        assert "/dev-bridge/tasks/t-desk/report" in brief and "key: k6" in brief
+
+
+class TestDeskRead:
+    def _reads(self, monkeypatch, has_origin):
+        reads = []
+
+        async def get(_c, path, params):
+            reads.append((path, dict(params)))
+            if path == "dev_bridge_devices":
+                return []
+            if "origin" in params["select"] and not has_origin:
+                raise dev_bridge.HTTPException(502, "column dev_tasks.origin does not exist")
+            origin = params.get("origin", "")
+            return [{"id": f"row-{origin or 'all'}"}]
+        monkeypatch.setattr(dev_bridge, "_sb_get", get)
+        return reads
+
+    def test_desktop_sessions_get_their_own_window(self, monkeypatch):
+        reads = self._reads(monkeypatch, has_origin=True)
+        got = _run(dev_bridge.dev_desk(lite=True, _owner=_Owner()))
+        assert [t["id"] for t in got["tasks"]] == ["row-eq.dev_desk", "row-eq.desktop"]
+        desktop = [p for path, p in reads if p.get("origin") == "eq.desktop"][0]
+        assert desktop["order"] == "updated_at.desc"
+
+    def test_the_desk_still_opens_before_the_migration(self, monkeypatch):
+        self._reads(monkeypatch, has_origin=False)
+        got = _run(dev_bridge.dev_desk(lite=True, _owner=_Owner()))
+        assert [t["id"] for t in got["tasks"]] == ["row-all"]
+
+
+class TestKevinsPhone:
+    def test_a_quiet_session_pings_only_when_kevin_is_away(self, monkeypatch):
+        _wire(monkeypatch, [DESKTOP])
+        sent = _pushes(monkeypatch)
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="screen", sender="session", away=False), authorization="Bearer x"))
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="screen", sender="session"), authorization="Bearer x"))
+        assert sent == []
+        got = _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="screen", sender="session", away=True), authorization="Bearer x"))
+        assert got["pushed"] == 1
+        assert sent[0][0] == "t-desk" and "your turn" in sent[0][1]
+
+    def test_a_session_that_just_reported_is_not_talked_over(self, monkeypatch):
+        _wire(monkeypatch, [dict(WORKING, notes=[
+            {"from": "dev", "at": _ago(30), "text": "Should the rail be amber?"}])])
+        sent = _pushes(monkeypatch)
+        _run(dev_bridge.bridge_status("t-working", dev_bridge.StatusBody(
+            status="working", note="screen", sender="session", away=True), authorization="Bearer x"))
+        assert sent == []
+
+    def test_a_finished_task_does_not_ping_for_its_last_screen(self, monkeypatch):
+        _wire(monkeypatch, [DONE])
+        sent = _pushes(monkeypatch)
+        _run(dev_bridge.bridge_status("t-done", dev_bridge.StatusBody(
+            status="working", note="screen", sender="session", away=True), authorization="Bearer x"))
+        assert sent == []
+
+    @pytest.mark.parametrize("status,note,title,body", [
+        ("done", "Shipped the fix in #12.", "Done — In flight", "Shipped the fix in #12."),
+        ("failed", None, "Stopped — In flight", "It stopped with a failure."),
+        ("working", "Blue or amber?", "In flight", "Blue or amber?"),
+    ])
+    def test_every_report_reaches_the_phone_in_its_own_words(self, monkeypatch, status, note, title, body):
+        _wire(monkeypatch, [WORKING])
+        sent = _pushes(monkeypatch)
+        _run(dev_bridge.bridge_report("t-working", dev_bridge.ReportBody(
+            key="k2", status=status, note=note)))
+        assert sent == [("t-working", title, body)]
+
+    def test_the_push_opens_that_thread_and_replaces_its_last_one(self, monkeypatch):
+        import platform_watchdog
+        import push_notifications
+        calls = []
+
+        async def owner(_c, _h):
+            return "owner-uid"
+        monkeypatch.setattr(dev_bridge, "_service_headers", lambda: {})
+        monkeypatch.setattr(platform_watchdog, "_owner_user_id", owner)
+        monkeypatch.setattr(push_notifications, "push_enabled", lambda: True)
+        monkeypatch.setattr(push_notifications, "send_to_user",
+                            lambda uid, **kw: calls.append((uid, kw)) or 1)
+        got = _run(dev_bridge._tell_kevin(None, {"id": "t-9"}, "Title", "Body"))
+        assert got == 1
+        uid, kw = calls[0]
+        assert uid == "owner-uid"
+        assert kw["nav"] == "studio:platform-dev-desk:t-9"
+        assert kw["tag"] == "dev-task-t-9"
+
+    def test_a_push_failure_never_fails_the_report(self, monkeypatch):
+        import platform_watchdog
+        import push_notifications
+
+        async def boom(_c, _h):
+            raise RuntimeError("auth down")
+        monkeypatch.setattr(push_notifications, "push_enabled", lambda: True)
+        monkeypatch.setattr(platform_watchdog, "_owner_user_id", boom)
+        assert _run(dev_bridge._tell_kevin(None, {"id": "t-9"}, "T", "B")) == 0
