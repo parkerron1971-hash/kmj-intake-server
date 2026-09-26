@@ -554,8 +554,10 @@ def test_what_the_reply_already_did_reaches_the_plan_and_its_check(monkeypatch):
     token = runtime.turn_scope.set(ctx)
     try:
         runtime.note_done_in_turn([{'type': 'create_task', 'label': 'Call Plan Test A'},
-                                   {'type': 'submit_work_order', 'label': runtime.QUEUED_LABEL}])
-        assert ctx['done'] == ['Added Plan Test D', 'Call Plan Test A']
+                                   {'type': 'submit_work_order', 'label': runtime.QUEUED_LABEL,
+                                    'build': {'build_kind': 'form_and_link', 'title': 'Plan Test Signup'}}])
+        assert ctx['done'] == ['Added Plan Test D', 'Call Plan Test A',
+                               'Started in the background: a form (Plan Test Signup)']
         saved = []
 
         async def database(client, method, path, body=None):
@@ -573,8 +575,19 @@ def test_what_the_reply_already_did_reaches_the_plan_and_its_check(monkeypatch):
     finally:
         runtime.turn_scope.reset(token)
     facts = saved[0]['params']['facts']
-    assert facts['done_in_turn'] == ['Added Plan Test D', 'Call Plan Test A']
+    assert facts['done_in_turn'][:2] == ['Added Plan Test D', 'Call Plan Test A']
     o = WorkOrder(**saved[0]['params'])
     brief = chief_plans._brief(o, {'order': [], 'steps': {}}, None, closing=True)
     assert 'ALREADY DONE IN THE CHAT REPLY' in brief and '- Call Plan Test A' in brief
     assert 'THE PLAN HAS FINISHED' in brief
+
+
+def test_a_check_that_wants_a_form_is_not_alarming(door, monkeypatch):
+    # The form is its own job (started from the same message); the plan is complete.
+    o = plan_order([ADD_ADA])
+    form = {'type': 'plan_decision', 'choice': 'continue', 'note': 'I made the form.',
+            'steps': [{'title': 'Signup', 'action': {'type': 'create_client_form', 'name': 'Signup'}}]}
+    monkeypatch.setattr(chief_plans, 'look', looks(closing=form))
+    state = asyncio.run(chief_plans.run_plan(o, Adapter(o)))
+    assert state['status'] == 'done' and state['looks'][-1]['choice'] == 'checked'
+    assert 'notes' not in runtime.public_job({'status': 'done', 'result': state, 'params': o.payload()})['result']

@@ -136,12 +136,31 @@ def note_done_in_turn(results_so_far):
     for r in list(chief_tool_loop.writes_this_turn()) + list(results_so_far or []):
         if not isinstance(r, dict) or chief._action_failed(r):
             continue
-        if r.get('type') in ('submit_work_order', 'respond_work_order'):
+        if r.get('type') == 'respond_work_order':
+            continue
+        if r.get('type') == 'submit_work_order':
+            # Another job this message started: done by it, not missing.
+            build = r.get('build') or {}
+            what = STARTED_NAMES.get(build.get('build_kind'), 'a job')
+            title = str(build.get('title') or '').strip()
+            labels.append(f"Started in the background: {what}" + (f" ({title})" if title else ""))
             continue
         label = str(r.get('label') or r.get('result') or '').strip()[:200]
         if label and label not in labels:
             labels.append(label)
     ctx['done'] = labels[:12]
+
+
+STARTED_NAMES = {'event_setup': 'a workshop setup', 'form_and_link': 'a form', 'flyer': 'a flyer',
+                 'site_door': 'an events page', 'plan': 'a plan'}
+
+# Read by the model, never shown: the moment it has just queued a job is
+# the moment it decides what else to do (live 2026-09-26: a form and three
+# changes went out, "call Plan Test H" went nowhere, and the reply said
+# "the rest of what you asked for isn't done yet").
+LEFTOVER_NOTE = ("Queued. Before you reply: if anything else the owner asked for in this message is "
+                 "neither done in this reply nor inside a work order, submit ONE plan with all of it "
+                 "now. Never tell them the rest will happen later or in a next pass.")
 
 
 async def handle_submit_work_order(client, biz, action):
@@ -150,10 +169,13 @@ async def handle_submit_work_order(client, biz, action):
     if ctx:
         ctx['tainted'] = bool(chief.untrusted_taint())
     try:
-        return await submit(client, biz, action)
+        out = await submit(client, biz, action)
     except (ValueError, HTTPException) as exc:
         label = str(getattr(exc, 'detail', str(exc)))
         return {'type':'submit_work_order','result':label,'label':label,'failed':True,'nav':None}
+    if ctx and int(ctx.get('submitted') or 0) < MAX_ORDERS_PER_TURN:
+        out['for_chief'] = LEFTOVER_NOTE
+    return out
 
 
 # Said when a build starts (Kevin, 2026-09-24): the work runs on the

@@ -506,6 +506,12 @@ def apply(order, state: Dict[str, Any], decision: Optional[Dict[str, Any]], *, a
         except ValueError as exc:
             logger.info("[plans] a look's plan was refused: %s", exc)
             revised = None
+        if revised is None and closing:
+            # What the check wanted to add can't be a plan step (a form, a
+            # workshop): the plan itself is complete, so nothing alarming.
+            entry.update(choice="checked", refused=True)
+            looks.append(entry)
+            return False
         if revised is not None:
             note = str(decision.get("note") or "").strip()[:300] or (
                 "I added what was missing from your request." if closing
