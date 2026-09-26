@@ -106,7 +106,9 @@ def owner_quote(biz: dict, content: str) -> bool:
                 and not re.search(r'\b(?:what if|suppose|imagine|hypothetically)\b', turn.message, re.I))
 
 
-def record(source_id: str, value: Any, *, kind='record', complete=False):
+def record(source_id: str, value: Any, *, kind='record', complete=False, effect=None):
+    """`effect` rides on a receipt that is not a write (a page Chief looked at is
+    effect 'ui', like a navigation), so wrote_anything still tells it apart."""
     turn = _turn.get()
     if turn is None:
         return
@@ -118,7 +120,8 @@ def record(source_id: str, value: Any, *, kind='record', complete=False):
     # Assignment replaces a previous value for the same source. The read
     # after a write must not compete with the pre-write version.
     turn.sources[source_id] = {'kind': kind, 'text': text[:MAX_SOURCE_CHARS],
-                               'complete': bool(complete and len(text) <= MAX_SOURCE_CHARS)}
+                               'complete': bool(complete and len(text) <= MAX_SOURCE_CHARS),
+                               **({'effect': effect} if effect else {})}
     turn.unavailable.discard(source_id)
     # Keep memory bounded even on tool-heavy turns.
     while len(turn.sources) > 80:
@@ -162,6 +165,8 @@ executed action: classify any capability assertion as fact and check capability 
 An explicit statement that no action ran is a fact supported by turn execution state.
 Every executed action claim needs a matching receipt: a draft/queued/running/held/failed receipt
 does NOT establish sent/published/completed. Navigation and reads do not prove a write.
+A view: receipt records a web page Chief looked at: it supports "I looked at / I can see"
+that page, and its "What the screenshot shows" text is the evidence for how the page looks.
 Earlier assistant prose is NEVER evidence of execution. Receipts override older context.
 Conversation sources establish what was said, requested or reported in this chat only.
 They can support references to the discussion (including back-and-forth messages),
