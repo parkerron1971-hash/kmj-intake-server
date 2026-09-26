@@ -371,3 +371,52 @@ def test_orphan_reconciliation_happens_before_job_is_removed_from_sweep(monkeypa
     monkeypatch.setattr(ce,'interrupt_job',Mock(side_effect=HTTPException(503,'Storage unavailable.')))
     assert chief_jobs.sweep_orphans()==0
     patch.assert_not_called()
+
+
+def form_hold(state):
+    hold(state,'form')
+    state['row']['hold']['fields']=[
+        {'id':'f0','label':'Full name','type':'text','required':True},
+        {'id':'f1','label':'Password','type':'password','required':True},
+        {'id':'f2','label':'Country','type':'select','required':False,'options':[{'id':'o0','text':'US'},{'id':'o1','text':'CA'}]},
+        {'id':'f3','label':'I agree to the Terms','type':'checkbox','required':True},
+        {'id':'f4','label':'News','type':'checkbox','required':False},
+        {'id':'f5','label':'Company','type':'text','required':False}]
+
+
+def test_handed_over_form_answers_match_the_page_and_are_never_saved(api):
+    client,state=api
+    form_hold(state)
+    path=f'/agents/chief/errands/{EID}/secret'
+    good={'f0':'NEVER-LOG-NAME','f1':'NEVER-LOG-PASS','f2':'o1','f3':True}
+    for bad in ({**good,'f9':'x'},{**good,'f3':False},{**good,'f2':'o7'},{**good,'f4':'yes'},
+                {k:v for k,v in good.items() if k!='f1'},{**good,'f0':'x'*4097},{},'not-a-dict'):
+        ce._attempts.clear()  # Each shape on its own; the rate limit is tested elsewhere.
+        response=client.post(path,json={'hold_id':'hold-1','fields':bad})
+        assert response.status_code==422 and 'NEVER-LOG' not in response.text
+    ce._attempts.clear()
+    response=client.post(path,json={'hold_id':'hold-1','fields':good,'save':True},headers={'X-Ledger-Unlock':'fixture-stepup'})
+    assert response.status_code==422
+    ce.send_command.assert_not_called()
+    ce._attempts.clear()
+    response=client.post(path,json={'hold_id':'hold-1','fields':{**good,'f5':''}})
+    assert response.status_code==200 and response.json()=={'ok':True}
+    command=ce.send_command.call_args.args[1]
+    assert command.fields==good  # A blank optional answer is dropped, not typed.
+    assert 'NEVER-LOG' not in repr(command) and not state['stepup']
+    assert not any('NEVER-LOG' in str(call) for call in state['db'])
+
+
+@pytest.mark.parametrize('enabled,pilot,allowed', [
+    ('on','',True),('on',BID,True),('on','00000000-0000-4000-8000-00000000abcd',False),
+    ('on',' 00000000-0000-4000-8000-00000000abcd , '+BID,True),('off',BID,False),('',BID,False)])
+def test_pilot_switch_keeps_the_computer_to_named_businesses(api,monkeypatch,enabled,pilot,allowed):
+    client,state=api
+    monkeypatch.setenv('ERRANDS_ENABLED',enabled)
+    monkeypatch.setenv('ERRANDS_BUSINESS_IDS',pilot)
+    assert ce.execution_enabled(BID) is allowed
+    response=client.post(f'/agents/chief/errands/{EID}/approve',json={})
+    assert response.status_code==(200 if allowed else 503)
+    assert (chief_jobs.enqueue.await_count==1)==allowed
+    settings=client.get(f'/agents/chief/computer/settings?business_id={BID}').json()
+    assert settings['execution_enabled'] is allowed

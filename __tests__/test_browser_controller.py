@@ -25,7 +25,8 @@ class FixtureBackend:
         self.context.set_default_timeout(1000)
         self.context.route('**/*', lambda route: route.fulfill(
             status=200, content_type='text/html', body=(FIXTURES / (
-                'checkout.html' if '/checkout' in route.request.url else 'supplier.html')).read_text()))
+                'checkout.html' if '/checkout' in route.request.url else
+                'signup.html' if '/signup' in route.request.url else 'supplier.html')).read_text()))
 
     def page(self):
         return self.context.new_page()
@@ -274,3 +275,115 @@ def test_ref_node_repurposed_is_rejected(controller):
     result=run(controller,'left_click',target=ref)
     assert result['is_error']
     assert controller.tabs[controller.active].locator('#result').inner_text()==''
+
+
+# Handing a whole form to the owner (sign-ups and anything that needs their details).
+def signup(c):
+    assert not run(c, 'navigate', url='https://supplier.test/signup').get('is_error')
+    return c.tabs[c.active]
+
+
+def ref_of(c, kind):
+    result = run(c, 'read_page', filter='interactive')
+    line = next(s for s in result['content'][0]['text'].splitlines() if f' {kind}' in s)
+    return {'type': 'ref', 'ref': line.split()[0]}
+
+
+def signup_hold(c):
+    run(c, 'form_input', target=ref_of(c, 'input email'), value='model-guess@example.test')
+    return c.hold
+
+
+def good_answers(hold):
+    f = {x['label']: x for x in hold['fields']}
+    return {f['Full name']['id']: 'PRIVATE OWNER', f['Email']['id']: 'owner@private.test',
+            f['Password']['id']: 'N3w-pass!', f['Confirm password']['id']: 'N3w-pass!',
+            f['Country']['id']: 'o2', f['Plan']['id']: f['Plan']['options'][1]['id'],
+            f['I agree to the Terms of Service']['id']: True}
+
+
+def test_signup_is_handed_over_as_the_form_it_is(controller):
+    page = signup(controller)
+    result = run(controller, 'form_input', target=ref_of(controller, 'input email'), value='model-guess@example.test')
+    assert 'Secure Entry is required' in result['content'][0]['text']
+    hold = controller.hold
+    assert hold['field_kind'] == 'form' and hold['host'] == 'supplier.test'
+    assert [(f['label'], f['type'], f['required']) for f in hold['fields']] == [
+        ('Full name', 'text', True), ('Email', 'email', True), ('Password', 'password', True),
+        ('Confirm password', 'password', True), ('Country', 'select', False), ('Plan', 'choice', False),
+        ('I agree to the Terms of Service', 'checkbox', True), ('Send me product news', 'checkbox', False)]
+    f = {x['label']: x for x in hold['fields']}
+    assert [o['text'] for o in f['Country']['options']] == ['Choose', 'United States', 'Canada']
+    assert [o['text'] for o in f['Plan']['options']] == ['Free', 'Pro']
+    # Labels and choices only: never the site's values, hidden fields or the model's guess.
+    shown = json.dumps(controller.on_secret.call_args.args[0])
+    assert 'prefilled-by-site' not in shown and 'HIDDEN-TOKEN' not in shown and 'model-guess' not in shown
+    assert page.locator('#email').input_value() == 'prefilled-by-site@example.test'
+
+
+def test_form_answers_fill_the_page_privately(controller):
+    page = signup(controller)
+    hold = signup_hold(controller)
+    assert controller.fill_form(hold['id'], good_answers(hold)) == 'filled'
+    assert page.locator('[name=full_name]').input_value() == 'PRIVATE OWNER'
+    assert page.locator('#email').input_value() == 'owner@private.test'
+    assert page.locator('[name=password2]').input_value() == 'N3w-pass!'
+    assert page.locator('[name=country]').input_value() == 'CA'
+    assert page.locator('[name=plan][value=pro]').is_checked()
+    assert page.locator('[name=terms]').is_checked() and not page.locator('[name=news]').is_checked()
+    assert controller.hold is None
+    page.evaluate("() => document.body.insertAdjacentHTML('beforeend','<p>Welcome PRIVATE OWNER owner@private.test</p>')")
+    for name in ('get_page_text', 'read_page', 'find'):
+        text = json.dumps(run(controller, name, query='Welcome'))
+        assert 'PRIVATE OWNER' not in text and 'owner@private.test' not in text and 'N3w-pass!' not in text
+    result = run(controller, 'screenshot')
+    img = Image.open(io.BytesIO(base64.b64decode(result['content'][0]['source']['data'])))
+    assert img.getextrema() == ((16, 16), (36, 36), (58, 58))  # The curtain stays for the rest of the run.
+
+
+def test_form_answers_must_match_the_handed_form(controller):
+    page = signup(controller)
+    hold = signup_hold(controller)
+    good = good_answers(hold)
+    f = {x['label']: x['id'] for x in hold['fields']}
+    for bad in (dict(good, f99='x'), {**good, f['I agree to the Terms of Service']: False},
+                {**good, f['Country']: 'o9'}, {**good, f['Send me product news']: 'yes'},
+                {k: v for k, v in good.items() if k != f['Full name']}, {**good, f['Full name']: 'x' * 4097}, {}):
+        with pytest.raises(bc.BrowserStopped):
+            controller.fill_form(hold['id'], bad)
+    with pytest.raises(bc.BrowserStopped):
+        controller.fill_form('wrong-id', good)
+    assert page.locator('[name=full_name]').input_value() == ''  # Nothing typed on a refusal.
+    controller.clock = lambda: controller.hold['expires'] + 1
+    with pytest.raises(bc.BrowserStopped, match='expired'):
+        controller.fill_form(hold['id'], good)
+
+
+def test_form_changed_after_hand_off_is_not_filled(controller):
+    page = signup(controller)
+    hold = signup_hold(controller)
+    page.evaluate("() => { document.querySelector('[name=full_name]').name = 'renamed'; }")
+    with pytest.raises(bc.BrowserStopped, match='changed'):
+        controller.fill_form(hold['id'], good_answers(hold))
+    assert page.locator('#email').input_value() == 'prefilled-by-site@example.test'
+
+
+def test_deliberate_hand_off_and_terms_boxes_are_the_owners(controller):
+    page = signup(controller)
+    terms, news = page.query_selector('[name=terms]'), page.query_selector('[name=news]')
+    assert controller.consent_control(terms) and controller.consent_control(page.query_selector('label:has([name=terms])'))
+    assert not controller.consent_control(news) and not controller.consent_control(page.query_selector('#email'))
+    ref = ref_of(controller, 'input checkbox')['ref']
+    assert controller.hold_form(ref, 'Needs your sign-up details') == 'held'
+    assert controller.hold['field_kind'] == 'form' and controller.hold['reason'] == 'Needs your sign-up details'
+    controller.on_secret.assert_called_once()
+    assert run(controller, 'read_page')['is_error']  # Paused: nothing runs while the owner has the form.
+    with pytest.raises(bc.BrowserStopped):
+        controller.hold_form(ref)
+
+
+def test_payment_fields_never_ride_a_handed_over_form(controller):
+    run(controller, 'navigate', url='https://supplier.test/checkout')
+    with pytest.raises(bc.BrowserStopped, match='payment'):
+        controller.hold_form(find_ref(controller, 'Card number')['ref'])
+    assert controller.hold is None

@@ -151,6 +151,8 @@ def reset_turn(writes_allowed: bool = False, *, surface: str = "chat",
     _writes_closed.set(False)
     _turn_surface.set(surface or "chat")
     _turn_prompted.set(bool(prompted))
+    import chief_site_view
+    chief_site_view.reset()
 
 
 def calls_this_turn() -> int:
@@ -189,6 +191,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [_anthropic_shape({"name": n, "description": d, "inputSchema": s})
             for n, (d, s) in agent_coordination.CHIEF_TOOLS.items()
             if action_registry.effect(n) == action_registry.READ]
+    import chief_site_view
+    out.append(chief_site_view.TOOL)  # Chief's own read: its image comes back via run_tool_round.
     return out
 
 
@@ -598,8 +602,14 @@ async def run_tool_round(client, biz: Dict[str, Any],
                 "content": "Lookup budget for this turn is spent — answer from what you have.",
             })
             continue
-        is_error, text = await execute_tool_use(
-            client, biz, b.get("name") or "", b.get("input") or {})
+        if b.get("name") == "view_website":
+            # The one read whose result carries an image, not only text.
+            import chief_site_view
+            _calls_this_turn.set(_calls_this_turn.get() + 1)
+            is_error, text = await chief_site_view.tool_result(biz, b.get("input") or {})
+        else:
+            is_error, text = await execute_tool_use(
+                client, biz, b.get("name") or "", b.get("input") or {})
         entry: Dict[str, Any] = {
             "type": "tool_result", "tool_use_id": b.get("id"), "content": text,
         }
