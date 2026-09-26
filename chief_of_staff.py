@@ -519,6 +519,15 @@ class _SentenceStreamer:
         self.open = False
         self._buf = ""
 
+    def reopen(self) -> None:
+        """A second writer's turn (chief_headline: Haiku's headline, then the
+        main model): what is said stays said, the new writer starts clean.
+        Only while a prover is in place — the lane's switch still holds."""
+        self._filt = _ActionTagFilter()
+        self._buf = ""
+        self._raw_tail = ""
+        self.open = self._prover is not None and self._sink is not None
+
     @property
     def text(self) -> str:
         return "".join(self.sent)
@@ -14252,13 +14261,13 @@ async def chief_chat(
             # _SentenceStreamer). Only this first call streams: retries,
             # corrections and second passes stay private until checked.
             _sentence_streamer = None
+            _evidence = None
             if _STREAM_SINK.get() is not None:
                 try:
                     import mailbox_policy as _mp
-                    _prover = chief_truth.stream_prover(
-                        chief_truth.evidence_for_review(
-                            ctx, _format_view_block(req.current_context, view_detail), []),
-                        _mp.email_clock(ctx)['timezone'])
+                    _evidence = chief_truth.evidence_for_review(
+                        ctx, _format_view_block(req.current_context, view_detail), [])
+                    _prover = chief_truth.stream_prover(_evidence, _mp.email_clock(ctx)['timezone'])
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] sentence streaming unavailable: {e}")
                     _prover = None
@@ -14275,6 +14284,26 @@ async def chief_chat(
                     system += _cft.continuation_block(_opening)
             except Exception as e:  # pragma: no cover — never cost the turn
                 logger.warning(f"[chief] opener handoff failed: {e}")
+            # Haiku's headline (chief_headline, 2026-09-25): on a question
+            # about the records, the first real sentence comes from Haiku,
+            # from the records just read, proven sentence by sentence by this
+            # turn's own streamer — then the main model continues from it.
+            _headline_said = ""
+            if isinstance(_sentence_streamer, _SentenceStreamer) and _evidence:
+                try:
+                    import chief_headline as _hl
+                    _prior_reply = next((m.content for m in reversed(history)
+                                         if m.role == "assistant"), "")
+                    if _hl.eligible(req.message or "", _prior_reply, lane=lane,
+                                    is_greeting=is_greeting, is_coach_mode=is_coach_mode):
+                        _headline_said = await _hl.say(
+                            req.message or "", _sentence_streamer, _evidence,
+                            history=api_messages[:-1], voice=(lane == "voice"),
+                            business_id=biz.get("id"))
+                        if _headline_said.strip():
+                            system += _hl.continuation_block(_headline_said)
+                except Exception as e:  # pragma: no cover — never cost the turn
+                    logger.warning(f"[chief] headline skipped: {e}")
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
@@ -14568,7 +14597,20 @@ async def chief_chat(
             response_text = clean if clean else _scrub_response_text(raw or "")
             # What streamed was already shown and said: the reply on file,
             # on screen and in history continues it rather than repeating it.
-            if isinstance(_sentence_streamer, _SentenceStreamer) and _sentence_streamer.text:
+            if _headline_said.strip() and isinstance(_sentence_streamer, _SentenceStreamer):
+                # Two writers streamed: Haiku's headline, then the main
+                # model's own sentences. The main reply continues ITS part;
+                # the headline leads it.
+                _main_streamed = _sentence_streamer.text[len(_headline_said):]
+                if _main_streamed:
+                    _rest = _stitch_after_stream(_main_streamed, response_text)
+                elif not response_text.strip() or any(
+                        response_text.strip().startswith(w) for w in _WITHHELD_REPLIES):
+                    _rest = "I couldn't confirm the rest of that from your records, so I stopped there."
+                else:
+                    _rest = response_text
+                response_text = _headline_said.rstrip() + " " + _rest.lstrip()
+            elif isinstance(_sentence_streamer, _SentenceStreamer) and _sentence_streamer.text:
                 response_text = _stitch_after_stream(_sentence_streamer.text, response_text)
 
             # The turn goes on file (2026-09-04) — every turn, every
