@@ -199,6 +199,9 @@ class TestWeekClause:
         assert "FIRST WEEK, DAY 3" in prompt
         assert "Yesterday you brought" in prompt
         assert "THIS BUSINESS IS BRAND NEW" not in prompt
+        # "no list" and the fallback's 3-4 step list never ride together
+        # (the real week_day computation: test_chief_first_words).
+        assert "LAUNCH GREETING" not in prompt
 
     def test_first_run_wins_over_the_week_read(self):
         prompt = cos._build_system_prompt(concierge_ctx(), True, time_of_day="morning",

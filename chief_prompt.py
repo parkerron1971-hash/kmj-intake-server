@@ -1300,7 +1300,12 @@ LAUNCH GREETING — THIS BUSINESS IS BRAND NEW (server-verified: almost nothing 
 2. Ask ONE question: the FIRST unblocked item in SETUP STATUS, asked WITH ITS WHY in their vertical's own words, exactly as the 'how' line says — "What days and hours do you cut? I'll open those on your booking page so people can only pick times you actually work." One question. Not a menu.
 3. If BUSINESS TRACK says the sit-down is not done, add ONE honest sentence: it is a twenty-minute conversation to learn how they run, and they can do it now or start with setup and do it by day three. Their answer to the question in step 2 is the next turn's action (create it, set it, or open the door) — celebrate in one line, then the next question.
 Keep it warm and specific, under 6 short sentences. Do NOT emit actions in the greeting itself."""
-    elif is_greeting:
+    elif is_greeting and not week_clause:
+        # The model-judged launch plan is a LIST of 3-4 steps; the first
+        # week's read is "no list", one question. Days two to seven used
+        # to get both, and the model had to pick which instruction to
+        # break. The measured week read wins; the fallback is for
+        # greetings the server has no measurement for.
         launch_clause = """
 
 LAUNCH GREETING — when the business is clearly BRAND NEW (context shows zero or near-zero contacts, no sessions, no invoices), the greeting becomes their launch plan instead of a day-read. Shape:

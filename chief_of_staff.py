@@ -1978,9 +1978,11 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             # reaches the prompt. Gating costs one column, not a PII dump.
             f"/contacts?business_id=eq.{biz_id}"
             f"&select=id,name,email,status,health_score,lead_score,role,last_interaction,created_at&limit=500"),
+        # ai_reasoning rides along only so the onboarding welcome note can
+        # be recognised and dropped (onboarding_welcome, after the gather).
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
-            f"&select=id,agent,action_type,subject,priority,contact_id,created_at"
+            f"&select=id,agent,action_type,subject,priority,contact_id,created_at,ai_reasoning"
             f"&order=priority.asc,created_at.desc&limit=10"),
         _sb(client, "GET",
             f"/events?business_id=eq.{biz_id}&order=created_at.desc&limit=20"
@@ -2013,7 +2015,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/agent_queue?business_id=eq.{biz_id}"
             f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat().replace('+00:00', 'Z')}"
             f"&order=created_at.desc&limit=30"
-            f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at"),
+            f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at,ai_reasoning"),
         _sb(client, "GET",
             f"/business_sites?business_id=eq.{biz_id}"
             f"&order=updated_at.desc&limit=1"
@@ -2178,6 +2180,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     )]
 
     biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = await asyncio.gather(*tasks)
+    # The onboarding welcome note sat in the draft queue like work: a new
+    # practitioner's first greeting said "1 waiting for your review" and
+    # pointed them at a system note. It is not a draft anyone owes a
+    # decision on, so it is not counted or shown here (onboarding_welcome).
+    import onboarding_welcome
+    queue = onboarding_welcome.without_welcome(queue)
+    recent_queue = onboarding_welcome.without_welcome(recent_queue)
 
     if not biz_rows:
         for t in early:
@@ -13179,6 +13188,50 @@ def _business_age_days(biz: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+def _first_week_day(biz: Dict[str, Any], arc: Optional[Dict[str, Any]]) -> int:
+    """Which day of their first week this is, as a whole number: the day
+    it started is day 1. 0 when it cannot be known.
+
+    The day-one arc is the anchor (first_run_arc.day_of): it starts when
+    the trial does, and a signup in March followed by a subscription in
+    April is one business with its first week in April. The business's
+    own age is the fallback for accounts that predate the arc or when the
+    arc read failed. Either way a whole day: the greeting used to say
+    "FIRST WEEK, DAY 3.4166…" because _business_age_days is a float.
+    """
+    try:
+        import first_run_arc as _fra
+        day = _fra.day_of(arc)
+    except Exception:  # pragma: no cover — the fallback still answers
+        day = 0
+    if day:
+        return day
+    age = _business_age_days(biz)
+    return int(age) + 1 if age is not None else 0
+
+
+def _intro_went_out(reply: str, grounding: Optional[Dict[str, Any]]) -> bool:
+    """Did the launch greeting actually reach the practitioner?
+
+    The introduction is said once, so it may only be spent on a reply
+    that went out. A turn that failed, came back empty, or had its words
+    withheld by the answer check ("I couldn't verify that") has not
+    introduced anyone — the next greeting must still be the launch."""
+    if not (reply or "").strip():
+        return False
+    return (grounding or {}).get("status") != "withheld"
+
+
+def _note_intro_delivered(business_id: Any) -> None:
+    """Stamp the day-one arc's introduction, off the event loop and off
+    the reply's critical path. Never raises."""
+    try:
+        import first_run_arc as _fra
+        asyncio.create_task(asyncio.to_thread(_fra.mark_intro_delivered, business_id))
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"first-run intro stamp not scheduled (non-fatal): {e}")
+
+
 def _setup_snapshot_wanted(biz: Dict[str, Any],
                            track: Optional[Dict[str, Any]]) -> bool:
     """Spend the plug-in probes on this turn?
@@ -13973,6 +14026,17 @@ async def chief_chat(
                     return None
                 return await asyncio.to_thread(_fetch_setup_snapshot, biz)
 
+            # The day-one arc (first_run_arc): whether the introduction
+            # has been said, and which day of their first week this is.
+            # Only a greeting in the setup phase reads it, and it rides
+            # the gather so it costs the turn nothing it was not already
+            # waiting for. None = no arc, or the read failed.
+            async def _arc_probe():
+                if not (is_greeting and want_setup):
+                    return None
+                import first_run_arc as _fra
+                return await asyncio.to_thread(_fra.state, biz.get("id"))
+
             sources = _context_sources(client, biz)
             _names = list(sources.keys())
             _results = await asyncio.gather(
@@ -13980,6 +14044,7 @@ async def chief_chat(
                 _enrich("vertical learned context", _learned(), ""),
                 _enrich("proactive emit (non-blocking)", _proactive(), None),
                 _enrich("setup snapshot", _setup_probe(), None),
+                _enrich("first-run arc", _arc_probe(), None),
             )
             _ctx_vals = dict(zip(_names, _results))
             for source_name, source_value in _ctx_vals.items():
@@ -13994,6 +14059,7 @@ async def chief_chat(
             bookkeeping_block = _ctx_vals["bookkeeping_block"]
             learned_block = _results[len(_names)]
             setup_snapshot = _results[len(_names) + 2]
+            first_run_arc_row = _results[len(_names) + 3]
             setup_block = _format_setup_block(setup_snapshot)
             chief_truth.record('context:setup', setup_block, kind='context')
             # First-run = the account is days old and nearly nothing is
@@ -14008,24 +14074,25 @@ async def chief_chat(
             # that it was (intro_delivered_at); before it existed, a
             # 20-day-old business with nothing connected heard "this
             # business is brand new" on every greeting.
+            # It is stamped only once the reply has actually gone out —
+            # after the answer check, at the end of the turn. Stamped
+            # here, a greeting that failed or was withheld spent the one
+            # introduction and the next greeting skipped it.
+            intro_owed = False
             if first_run and is_greeting:
-                try:
-                    import first_run_arc as _fra
-                    if _fra.intro_delivered(biz.get("id")):
-                        first_run = False
-                    else:
-                        asyncio.create_task(asyncio.to_thread(
-                            _fra.mark_intro_delivered, biz.get("id")))
-                except Exception as e:  # pragma: no cover
-                    logger.warning(f"first-run arc check failed (non-fatal): {e}")
+                if (first_run_arc_row or {}).get("intro_delivered_at"):
+                    first_run = False
+                else:
+                    intro_owed = True
             # Days two to seven: Chief's greeting knows the day. Not the
             # launch script, not the ordinary day-read — one line on what
             # is in so far, then the one next move with its why.
             week_day = 0
-            if (is_greeting and not first_run and setup_snapshot
-                    and _age_days is not None and 1 <= _age_days <= 6
-                    and setup_snapshot["done"] < setup_snapshot["total"]):
-                week_day = _age_days + 1
+            if is_greeting and not first_run and setup_snapshot \
+                    and setup_snapshot["done"] < setup_snapshot["total"]:
+                _day = _first_week_day(biz, first_run_arc_row)
+                if 2 <= _day <= 7:
+                    week_day = _day
 
             # Pure, no I/O — computed off what the gather returned.
             priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
@@ -14621,6 +14688,14 @@ async def chief_chat(
             # app talking to itself and are not a conversation.
             if not is_greeting:
                 await _archive_turn(client, biz, req.message, response_text, taken)
+
+            # The launch greeting went out, checked: now it has been said.
+            # Every earlier return (no model reply, an error) leaves the
+            # introduction owed. The stream path runs this same turn, and
+            # its result is kept for the client's re-POST if the stream
+            # drops, so this is the point the reply is delivered on both.
+            if intro_owed and _intro_went_out(response_text, grounding):
+                _note_intro_delivered(biz.get("id"))
 
             result = {
                 "response": response_text,
