@@ -201,6 +201,15 @@ async def original(client, row):
 
 async def present(client, row):
     result = {k: v for k, v in row.items() if k not in ('owner_id', 'storage_path')}
+    if row.get('prompt', '').startswith('EDITABLE_FLYER_V1\n'):
+        result['editable_master'] = True
+        import json
+        try:
+            result['display_prompt'] = json.loads(row['prompt'].split('\n', 1)[1]).get('title', 'Editable flyer')
+        except (ValueError, TypeError):
+            result['display_prompt'] = 'Editable flyer'
+    elif row.get('prompt', '').startswith('Create an original, professionally art-directed marketing composition.\nOWNER BRIEF:\n'):
+        result['display_prompt'] = row['prompt'].split('OWNER BRIEF:\n', 1)[1].split('\nCOMPOSITION DIRECTION:', 1)[0]
     if row['status'] in ('queued', 'working') and (datetime.now(timezone.utc) - datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))).total_seconds() > 600:
         result.update(status='failed', error='This generation was interrupted. Start a new request; the original may still have incurred provider charges.')
     if row.get('storage_path') and row['status'] == 'ready':
