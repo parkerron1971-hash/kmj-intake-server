@@ -80,3 +80,12 @@ class BufferClient:
         decl = ",".join(f"$i{i}: PostInput!" for i in range(len(ids)))
         fields = " ".join(f"p{i}: post(input: $i{i}) {{ id status externalLink channelId text }}" for i in range(len(ids)))
         return await self.query(f"query({decl}) {{ {fields} }}", variables, allow_partial=True)
+
+    async def metrics(self, ids):
+        """Personal-account performance reads, independently of delivery polling."""
+        if not ids or len(ids) > 25:
+            raise ValueError('Choose between 1 and 25 post IDs.')
+        variables = {f'i{i}': {'id': pid} for i, pid in enumerate(ids)}
+        decl = ','.join(f'$i{i}: PostInput!' for i in range(len(ids)))
+        fields = ' '.join(f'p{i}: post(input: $i{i}) {{ id channelId metrics {{ type name value unit }} metricsUpdatedAt }}' for i in range(len(ids)))
+        return await self.query(f'query({decl}) {{ {fields} }}', variables, allow_partial=True)

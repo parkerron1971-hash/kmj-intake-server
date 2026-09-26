@@ -448,6 +448,8 @@ from content_approval import router as content_approval_router
 app.include_router(content_approval_router)
 from platform_marketing import router as platform_marketing_router
 app.include_router(platform_marketing_router)
+from platform_marketing_campaigns import router as platform_marketing_campaigns_router
+app.include_router(platform_marketing_campaigns_router)
 # Arc 25 - practitioner referral loop (codes + attribution + rewards)
 from referrals import router as referrals_router
 app.include_router(referrals_router)
@@ -559,6 +561,8 @@ app.include_router(billing_rehearsal_router)
 # (owner JWT) + /dev-bridge/* (device token / per-task report key).
 from dev_bridge import router as dev_bridge_router
 app.include_router(dev_bridge_router)
+from chief_local_work import router as chief_local_work_router
+app.include_router(chief_local_work_router)
 # The fix queue (2026-09-02) — support tickets ranked, dispatched into dev
 # tasks, walked back when the fix ships, and answered by email.
 # /platform/support/* (owner JWT) + /dev-bridge/tickets* (device token, so
@@ -1437,6 +1441,9 @@ async def startup():
         import platform_marketing as _marketing
         scheduler.add_job(g("platform_marketing_due", _marketing.due_tick),
                           "interval", minutes=1, id="platform_marketing_due", max_instances=1)
+        from platform_marketing_campaigns import metrics_tick
+        scheduler.add_job(g("platform_marketing_metrics", metrics_tick),
+                          "interval", hours=1, id="platform_marketing_metrics", max_instances=1)
         scheduler.add_job(g("platform_marketing_status", _marketing.reconcile_tick),
                           "interval", minutes=10, id="platform_marketing_status", max_instances=1)
     except Exception as e:
