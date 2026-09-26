@@ -349,6 +349,12 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     "list_scheduled": (
         "Actions Chief has queued to run later, with their run times.",
         _NO_ARGS),
+    "list_tasks": (
+        "The owner's open tasks by when they are due (the business's own "
+        "days): overdue, today, the next seven days (overdue included), or "
+        "all open. Each with its due date, priority and the person it is for.",
+        _obj({"due": {"type": "string", "enum": ["overdue", "today", "week", "all"],
+                      "description": "Which tasks: overdue, today, week (default) or all."}})),
     "offering_readiness": (
         "Per-offering readiness report: which offerings are actually "
         "sellable and what is blocking the ones that are not.",
