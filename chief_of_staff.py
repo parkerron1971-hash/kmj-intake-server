@@ -13253,16 +13253,28 @@ def _business_age_days(biz: Dict[str, Any]) -> Optional[float]:
 
 
 def _setup_snapshot_wanted(biz: Dict[str, Any],
-                           track: Optional[Dict[str, Any]]) -> bool:
+                           track: Optional[Dict[str, Any]],
+                           greeting_on_empty: bool = False) -> bool:
     """Spend the plug-in probes on this turn?
 
     Yes while the coached track is unfinished (that IS the setup phase),
     or while the business is young enough that setup talk is plausible.
     A dismissed checklist is the practitioner saying stop — honored here
-    the same way the BUILD banner honors it."""
+    the same way the BUILD banner honors it.
+
+    Yes too for a greeting on a business that is still nearly empty,
+    whatever its age. That greeting takes the launch shape, and without
+    measured setup Chief guessed the steps and stated their premises ("your
+    booking hours aren't set", "the site is booking-only"). The answer check
+    could not confirm them, so the greeting came back as "I couldn't verify
+    my proposed answer" or behind a block of unverified lines (2026-09-26, a
+    four-month-old empty business). Measured, the steps are real and
+    citeable (context:setup)."""
     settings = biz.get("settings") or {}
     if settings.get("checklist_dismissed"):
         return False
+    if greeting_on_empty:
+        return True
     if track is not None and (track.get("status") or "in_progress") != "completed":
         return True
     age = _business_age_days(biz)
@@ -14038,8 +14050,11 @@ async def chief_chat(
             # (off-thread) and only while setup is plausibly in progress.
             # Coach modes never see operational setup nudges (2026-07-16
             # isolation rule), so they never pay for the probes either.
+            _looks_empty = (ctx.get("contacts_total") is not None
+                            and ctx.get("contacts_total") <= 3 and not ctx.get("sessions"))
             want_setup = (not is_coach_mode) and _setup_snapshot_wanted(
-                biz, ctx.get("business_track"))
+                biz, ctx.get("business_track"),
+                greeting_on_empty=bool(is_greeting and _looks_empty))
 
             async def _setup_probe():
                 if not want_setup:
