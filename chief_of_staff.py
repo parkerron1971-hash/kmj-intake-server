@@ -1976,6 +1976,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             # it builds the known-sender allowlist in Python and is
             # deliberately NOT copied into contacts_lookup, so it never
             # reaches the prompt. Gating costs one column, not a PII dump.
+            # The allowlist rides in ctx as email_known_senders (see
+            # mailbox_policy.split_for_prompt), which no prompt or review
+            # evidence renders.
             f"/contacts?business_id=eq.{biz_id}"
             f"&select=id,name,email,status,health_score,lead_score,role,last_interaction,created_at&limit=500"),
         _sb(client, "GET",
