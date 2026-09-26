@@ -136,3 +136,19 @@ def test_chief_is_told_it_can_start_one_job_per_piece(monkeypatch):
     text = runtime.routing_instructions()
     assert 'one order per piece' in text and 'up to four orders per turn' in text
     assert 'only one work order per turn' not in text
+
+
+def test_queuing_a_job_reminds_chief_to_plan_the_leftovers(saving):
+    # Live 2026-09-26: three changes and a form went out; "call Plan Test H" went nowhere.
+    token = _turn()
+    try:
+        first = asyncio.run(runtime.handle_submit_work_order(None, {'id': BIZ}, {'kind': 'form_and_link', 'facts': {'name': 'Signup'}}))
+    finally:
+        runtime.turn_scope.reset(token)
+    assert 'ONE plan' in first['for_chief'] and 'for_chief' not in first['label']
+    token = _turn(submitted=runtime.MAX_ORDERS_PER_TURN - 1)
+    try:
+        last = asyncio.run(runtime.handle_submit_work_order(None, {'id': BIZ}, PLAN))
+    finally:
+        runtime.turn_scope.reset(token)
+    assert 'for_chief' not in last and not last.get('failed')
