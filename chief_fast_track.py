@@ -527,6 +527,13 @@ class TwoTrack:
         self.finished = False
         client_opener = (getattr(req, "spoken_opener", None) or "").strip()
         self.client_opener = bool(client_opener)
+        if self.client_opener:
+            # The call spoke its cached opener the moment the transcript
+            # landed; the practitioner's first word is already out. Marked
+            # here, at planning, not when the stream's generator first runs
+            # (a live turn logged ttft=898ms for a first word that was
+            # already being heard). Time to first AUDIO is voice_metrics'.
+            rec.mark_first_token("client")
         # The app talking to itself (greeting pulls, coach sentinels) is not
         # a practitioner waiting on a reply: no opening, and no SLO verdict.
         self.system_turn = str(getattr(req, "message", "") or "").lstrip().startswith("[SYSTEM:")
