@@ -1146,9 +1146,47 @@ def _asserted_text(reply):
     return ' '.join(out)
 
 
+# First-person future and offer phrasing names work still to come, never
+# work done: "I'll add them", "I will", "I can", "want me to", "shall I",
+# "let me know and I'll". A new business's setup turns are nothing but
+# offers ("Give me a name and a phone or email and I'll add them", and
+# the greeting example in Chief's own prompt, "I'll open those on your
+# booking page"), and each read as a claim of work done: an answer the
+# reviewer returned no verdict on was withheld as "couldn't verify"
+# (2026-09-26, the new-business turn eval). The lead-in becomes "could"
+# before the completion detector reads the sentence. The rest of the
+# sentence is still read, so "I've added Jane, and I'll add Tom" is a
+# claim.
+#
+# Two promises stay claims. "I'll create the invoice now" says the work
+# is starting (#974), unless the sentence is itself an offer. "Let me
+# open it" is the navigation promise #1009 catches, and has no lead-in
+# here.
+_PROMISE = re.compile(
+    r"\b(?:i(?:['’]ll| will| would| can| could| shall| should)"
+    r"|i(?:['’]m| am) (?:going|happy|glad) to"
+    r"|(?:want|would you like|do you want|like) me to"
+    r"|(?:shall|should|can|may) i)\b", re.I)
+_UNDER_WAY = re.compile(r"\b(?:now|right away|immediately)\b", re.I)
+_LET_ME_KNOW = re.compile(r"\blet me know\b", re.I)
+
+
+def _without_promises(reply):
+    """The reply with each promise's lead-in replaced by "could"."""
+    def lead(m):
+        return m.group(0) if _UNDER_WAY.search(m.string[m.end():]) else 'could'
+    out = []
+    for sentence in re.split(r'(?<=[.!?])\s+', reply or ''):
+        offer = _OFFER_MARK.search(sentence) or _LET_ME_KNOW.search(sentence)
+        out.append(_PROMISE.sub('could' if offer else lead, sentence))
+    return ' '.join(out)
+
+
 def has_completion_claim(reply):
+    """Does the reply say work is done, or under way, that a receipt has
+    to back? An offer or a promise of work to come does not."""
     import chief_of_staff as chief
-    asserted = _asserted_text(reply)
+    asserted = _asserted_text(_without_promises(reply))
     return chief._looks_like_completed_action(asserted) or bool(re.search(
         r'\b(?:appointment is booked|changes have been saved|payment recorded successfully)\b',
         asserted, re.IGNORECASE))
@@ -1761,6 +1799,15 @@ class _SentenceProver:
             return False, None
         if has_completion_claim(sentence) or _DONE_CLAIM.search(_asserted_text(sentence)):
             return False, None
+        # A sentence said early cannot be taken back, and the missing-action
+        # retry runs after the stream, on the draft as written: "...and I'll
+        # add them" goes back for its action there, and the reply is
+        # replaced when none comes. The stream holds whatever that retry
+        # would catch, offers included.
+        if stream:
+            import chief_of_staff as chief
+            if chief._looks_like_completed_action(sentence):
+                return False, None
         # A count said in words is a figure like any other: "Five invoices"
         # must match a record's 5, and "Six invoices" must not.
         figures = _numbers(_counts_as_digits(sentence))
