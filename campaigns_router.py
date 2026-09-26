@@ -134,9 +134,12 @@ def _opted_out(contact: Dict[str, Any], channel: str) -> bool:
     (contacts_import_router). Email has no per-business suppression list
     (email_suppressions is platform-wide), so this is the one that holds
     campaigns back. Texts are ALSO held by sms_opt_outs via
-    has_sms_consent; this is the belt to that brace."""
-    md = contact.get("metadata")
-    return isinstance(md, dict) and bool(md.get(f"{channel}_opt_out"))
+    has_sms_consent; this is the belt to that brace. The predicate is
+    contact_fields' — the one every bulk and automated sender asks."""
+    import contact_fields
+    if channel == "email":
+        return bool(contact_fields.email_opted_out(contact))
+    return bool(contact_fields.sms_opted_out(contact))
 
 
 def _audience_summary(contacts: List[Dict[str, Any]]) -> Dict[str, Any]:

@@ -610,3 +610,86 @@ def column_report(headers: Sequence[Any], rows: Sequence[Sequence[Any]],
         out.append({"index": i, "header": header, "field": f, "label": LABELS[f],
                     "lands": line, "filled": filled, "opted_out": count})
     return out
+
+
+# ─── Is this person opted out? The one question every sender asks ───
+#
+# An imported unsubscribe must HOLD, not just be recorded. Every path that
+# sends commercial or bulk email to a business's contacts asks
+# email_opted_out() before it sends: campaigns, Chief's batch_email, rules
+# automations, the nurture/growth drafting sweeps and autopilot. Mail
+# about the person's own business with you — receipts, invoices, booking
+# confirmations, signed documents — does not ask, and is not blocked.
+#
+# A one-to-one email the practitioner asks for themselves is never
+# blocked either; it carries UNSUBSCRIBED_NOTE where they will see it.
+
+UNSUBSCRIBED_NOTE = "this person unsubscribed from your emails"
+
+
+def _escape_ilike(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _opt_out(contact: Any, key: str) -> Optional[str]:
+    if not isinstance(contact, dict):
+        return None
+    md = contact.get("metadata")
+    if not isinstance(md, dict):
+        return None
+    rec = md.get(key)
+    if not rec:
+        return None
+    if isinstance(rec, dict):
+        return str(rec.get("reason") or "unsubscribed")[:60]
+    return "unsubscribed"
+
+
+def email_opted_out(contact: Any) -> Optional[str]:
+    """The plain reason this contact must not get commercial or bulk email
+    from the business (contacts.metadata.email_opt_out), or None. Pass a
+    contact row that was read WITH `metadata` — a row without it reads as
+    not opted out, so every caller's select must include it."""
+    return _opt_out(contact, "email_opt_out")
+
+
+def sms_opted_out(contact: Any) -> Optional[str]:
+    """Same, for texts. The binding record for texts is sms_opt_outs (every
+    text path checks it); this is the copy on the contact."""
+    return _opt_out(contact, "sms_opt_out")
+
+
+def lookup_email_opt_out(business_id: str, *, contact_id: Optional[str] = None,
+                         email: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    """(checked, reason) for a sender that holds only an id or an address.
+
+    checked=False means the read FAILED — the caller cannot know, and an
+    unattended sender must then hold the mail rather than guess. A person
+    who is simply not in contacts is checked=True, reason=None.
+    """
+    import urllib.parse
+    import sb_clients
+    rows: List[Dict[str, Any]] = []
+    if contact_id:
+        got = sb_clients.sb_get_as_service(
+            f"/contacts?id=eq.{urllib.parse.quote(str(contact_id), safe='')}"
+            f"&business_id=eq.{business_id}&select=id,metadata&limit=1")
+        if got is None:
+            return False, None
+        rows.extend(got)
+    addr = (email or "").strip().lower()
+    if addr and "@" in addr:
+        # '_' is a one-character wildcard to ilike and emails contain it,
+        # so jo_n@x.com must not match joan@x.com (contacts_import_router).
+        pattern = urllib.parse.quote(_escape_ilike(addr), safe="")
+        got = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{business_id}&email=ilike.{pattern}"
+            f"&select=id,metadata&limit=10")
+        if got is None:
+            return False, None
+        rows.extend(got)
+    for r in rows:
+        why = email_opted_out(r)
+        if why:
+            return True, why
+    return True, None
