@@ -13,6 +13,7 @@ import logging
 import os
 import asyncio
 import re
+from datetime import datetime
 from decimal import Decimal
 from dataclasses import dataclass, field
 from typing import Any
@@ -500,7 +501,9 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                     or not (isinstance(quote, str) and quote.strip()):
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
                 if claim['kind'] == 'action':
-                    return 'unsupported', [], 'action claim without a write receipt'
+                    # Named, so the one false "done" can be cut and the rest
+                    # delivered (see _trim_unsupported).
+                    return 'unsupported', [], _claim_fail(ACTION_WITHOUT_RECEIPT, text_)
                 # Chief's own recommendation is advice, not evidence-bound.
                 if _is_recommendation(claim, reply):
                     continue
@@ -538,7 +541,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                     return 'unsupported', [], _claim_fail('estimate without an explicit label', text_)
                 missing = set()
             if claim['kind'] == 'action' and source['kind'] != 'receipt':
-                return 'unsupported', [], 'action claim without a write receipt'
+                return 'unsupported', [], _claim_fail(ACTION_WITHOUT_RECEIPT, text_)
             # A reviewer cannot bless a fabricated number with an unrelated
             # real quote.
             if claim['kind'] != 'estimate':
@@ -637,6 +640,52 @@ def _squash(text):
 
 
 _LEFT_OUT = "I left the rest of my answer out because I couldn't confirm it from your records."
+_NOT_ALL_DONE = "That's what's done so far; the rest of what you asked for isn't done yet."
+
+
+def _not_done_line(claims):
+    """One honest line for the work a reply said was done and was not."""
+    # The excerpts are the draft's own words, usually past tense ("saved the
+    # plan to your notes"), which is why the line is phrased around them.
+    parts = [re.sub(r"\s+", " ", c).strip(" .,;") for c in claims if c and c.strip()]
+    if not parts:
+        return _NOT_ALL_DONE
+    lead = "This part didn't happen: " if len(parts) == 1 else "These parts didn't happen: "
+    return lead + "; ".join(parts[:3]) + "."
+
+
+_TASK_LABEL = re.compile(r"^\W*Task:\s*(?P<title>.+?)(?:\s+[—-]+\s+due\s+(?P<due>\d{4}-\d{2}-\d{2}))?\s*$")
+
+
+def _say_date(iso):
+    try:
+        d = datetime.strptime(iso, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return iso
+    return d.strftime("%A, %B ") + str(d.day)
+
+
+def _receipts_said(labels):
+    """The turn's write/UI receipt labels as plain sentences: tasks are
+    gathered ("I added three tasks: …"), anything else keeps its
+    server-written label without the leading emoji."""
+    tasks, rest = [], []
+    for label in labels:
+        m = _TASK_LABEL.match(label or "")
+        if m:
+            tasks.append(m.group("title").strip() + (
+                f", due {_say_date(m.group('due'))}" if m.group("due") else ""))
+        else:
+            rest.append(re.sub(r"^[^\w$]+", "", label or "").strip())
+    out = []
+    if tasks:
+        n = len(tasks)
+        count = {1: "a task", 2: "two tasks", 3: "three tasks", 4: "four tasks",
+                 5: "five tasks", 6: "six tasks", 7: "seven tasks"}.get(n, f"{n} tasks")
+        listed = tasks[0] if n == 1 else "; ".join(tasks[:-1]) + "; and " + tasks[-1]
+        out.append(f"I added {count}: {listed}.")
+    out.extend(r if r.endswith((".", "!", "?")) else r + "." for r in rest if r)
+    return " ".join(out)
 
 
 def _above(labels, text):
@@ -644,15 +693,24 @@ def _above(labels, text):
     return '\n\n'.join(list(labels) + [text]) if labels else text
 
 
+ACTION_WITHOUT_RECEIPT = 'action claim without a write receipt'
+# A reply that says one thing was done that was not ("…and saved the plan to
+# your notes") used to be withheld whole; on a write turn what reached the
+# practitioner was the bare receipt labels, read aloud on a call as "check
+# mark Task colon … due two thousand twenty-six…" (2026-09-25). The false
+# sentence is cut instead, the rest re-checked, and the reply says a part
+# is not done.
 _TRIMMABLE = re.compile(r"^(?:claim number [^:]*|quote is not in the cited source|"
-                        r"cited source does not exist) :: (.+)$", re.S)
+                        r"cited source does not exist|" + ACTION_WITHOUT_RECEIPT + r") :: (.+)$",
+                        re.S)
 _UNREVIEWED_FIGURE = re.compile(r"^draft number ([\d.,]+) has no reviewed claim$")
 
 
-def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4):
+def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4, undone=None):
     """(draft, verdict, cited, reason, cuts) with the failing claims'
     sentences cut and the rest re-checked against the same review, or None
-    when cutting cannot save enough of the answer."""
+    when cutting cannot save enough of the answer. Pass a list as `undone`
+    to be told which cut claims said something was done that was not."""
     try:
         review = _review_json(raw)
     except ValueError:
@@ -662,6 +720,11 @@ def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4):
     claims = [c for c in review['claims'] if isinstance(c, dict)]
     draft, cuts = reply or '', 0
     while cuts < max_cuts:
+        if (reason or '').startswith(ACTION_WITHOUT_RECEIPT) and not wrote_anything(sources):
+            # A claim of work on a turn that did none: the whole draft rests
+            # on it ("I filed your 990-N"), so it is withheld, not trimmed.
+            # Trimming is for a turn that did real work and over-claimed.
+            return _no_trim('an action claim on a turn that wrote nothing', reason)
         m = _TRIMMABLE.match(reason or '')
         if m:
             head = m.group(1).strip()
@@ -671,6 +734,8 @@ def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4):
                 return _no_trim('failed claim not found in the review', reason)
             sentence = _sentence_containing(draft, bad['text'])
             claims = [c for c in claims if c is not bad]
+            if undone is not None and (reason or '').startswith(ACTION_WITHOUT_RECEIPT):
+                undone.append(bad['text'].strip())
         else:
             u = _UNREVIEWED_FIGURE.match(reason or '')
             if not u:
@@ -684,11 +749,17 @@ def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4):
         cuts += 1
         if len(draft) < keep_ratio * len(reply or ''):
             return _no_trim('too little left after %d cut(s)' % cuts, reason)
-        if has_completion_claim(draft):
-            return _no_trim('the rest claims unexecuted work', reason)
         claims = [c for c in claims if isinstance(c.get('text'), str)
                   and _squash(c['text']) in _squash(draft)]
         verdict, cited, reason = assess_review(json.dumps({**review, 'claims': claims}), draft, sources)
+        # What is left may still say work is done — "I added the three
+        # tasks" is true on a turn whose tasks were written. That stands
+        # only when the re-check tied it to a write receipt that went
+        # through; otherwise any done-sounding rest is unexecuted work.
+        if has_completion_claim(draft) and not (
+                verdict == 'supported' and wrote_anything(sources)
+                and any((sources.get(s) or {}).get('kind') == 'receipt' for s in cited)):
+            return _no_trim('the rest claims unexecuted work', reason)
         if verdict == 'supported' or reason.startswith(('claim without support', 'general rule')):
             return draft, verdict, cited, reason, cuts
         if verdict == 'invalid':
@@ -1839,11 +1910,19 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     # over one "$750", the repair timed out, and the owner waited 66 s for
     # "try again" (2026-09-24).
     if verdict == 'unsupported' and not any(isinstance(r, dict) and r.get('failed') for r in receipts):
-        trimmed = _trim_unsupported(raw, reply, sources, reason)
+        undone: list = []
+        trimmed = _trim_unsupported(raw, reply, sources, reason, undone=undone)
         if trimmed:
             t_reply, t_verdict, t_cited, t_reason, cuts = trimmed
-            note = ("\n\nI left out %s I couldn't confirm from your records."
-                    % ("one figure" if cuts == 1 else "a few figures"))
+            figures = cuts - len(undone)
+            note = ""
+            if undone:
+                # Said as not done, because it is not: the practitioner asked
+                # for it and must not walk away thinking it happened.
+                note += "\n\n" + _not_done_line(undone)
+            if figures > 0:
+                note += ("\n\nI left out %s I couldn't confirm from your records."
+                         % ("one figure" if figures == 1 else "a few figures"))
             if t_verdict == 'supported':
                 logger.info('reply review trimmed %d claim(s); rest supported', cuts)
                 return t_reply.rstrip() + note, {'status': 'trimmed', 'sources': t_cited, 'cuts': cuts}
@@ -1922,7 +2001,13 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                     for r in receipts)
         can_repair = bool(repairer) and verdict == 'unsupported' and _left() >= 8.0
         if bits and wrote:
-            return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
+            # What was done, said as a sentence — the bare labels were read
+            # aloud verbatim on a call (emoji, "Task:", ISO dates) — and, when
+            # the doubt was a claim of work, that the rest is not done.
+            said = _receipts_said(bits)
+            if reason.startswith(ACTION_WITHOUT_RECEIPT):
+                said += " " + _NOT_ALL_DONE
+            return said, {'status': 'receipts', 'sources': []}
         if bits and not can_repair:
             # When all the turn did was open a page or pull up a view, the
             # labels are not an answer: asked for pricing advice, Kevin got
