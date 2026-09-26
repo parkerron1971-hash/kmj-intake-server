@@ -64,7 +64,7 @@ def budget_ms() -> int:
 WINDOW = route_ledger.SloWindow(metric="ttfa_ms", budget=budget_ms, env="VOICE_SLO")
 
 _FIRST_AUDIO = {"opener", "lead", "reply", "phrase", "none"}
-_OUTCOMES = {"spoken", "interrupted", "failed", "silent", "superseded"}
+_OUTCOMES = {"spoken", "interrupted", "failed", "silent", "superseded", "queued"}
 _ENGINES = {"openai", "elevenlabs", "browser", "unknown"}
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
@@ -115,8 +115,11 @@ def row_for(body: VoiceTurn, user_id: str, business_id: Optional[str]) -> Dict[s
     outcome = _pick(body.outcome, _OUTCOMES, "spoken")
     # A turn that ended without a sound (the stream failed, or it was
     # superseded before speaking) is not a sample of how fast Chief speaks;
-    # it is kept on the row but out of the SLO.
-    applies = ttfa is not None and outcome not in ("superseded",)
+    # it is kept on the row but out of the SLO. Nor is a QUEUED turn: words
+    # said while Chief was still thinking go out after its reply, so their
+    # clock ran through that whole reply (72 s and 112 s on the first live
+    # calls) and would page the owner for nothing.
+    applies = ttfa is not None and outcome not in ("superseded", "queued")
     return {
         "request_id": (body.request_id or "")[:80] or None,
         "business_id": business_id,
