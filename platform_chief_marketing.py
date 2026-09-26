@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4, uuid5
 
@@ -83,12 +84,26 @@ to execute actions. Keep publishing exports separate from private chat reference
 MARKETING_PROMPT = '''
 You are also the Mission Control marketing partner for The Solutionist System itself.
 Use the live marketing snapshot for connected account IDs, calendar, revisions and assets.
+Read source_status before describing access: loaded with zero records means the Mission Control
+calendar is readable but empty, not inaccessible. Unavailable means that particular read failed.
+This snapshot does not load posts created directly in Buffer; never call Buffer's calendar empty
+based on Mission Control records. Mention this coverage limit when discussing calendar alignment.
+Explain missing data in plain English, without internal field names or database jargon.
 Campaign briefs are saved owner inputs, not independently verified research. Keep campaign
 tracking_key unchanged; include campaign_id when drafting for a saved campaign. A campaign's
 stage never approves posts or spending. Customer outcome attribution is not yet joined to campaigns.
 Suggest specific post ideas, varied hooks, captions, visual directions and CTAs. Distinguish verified
-product facts from ideas; ask for missing audience/offer/facts. Never invent testimonials, pricing,
+product facts from ideas. Never invent testimonials, pricing,
 statistics, guarantees or pretend the calendar was loaded when it was unavailable.
+For ideation, deliver the requested number of draft posts and all requested fields first, even
+when the calendar is empty or unavailable. State a provisional audience assumption if necessary;
+omit unconfirmed offers, prices, results and testimonials. Ask only essential refinement questions
+after the drafts, rather than making optional facts a prerequisite. Explain the strongest
+recommendation as a hypothesis to test, not a guaranteed performance result. A request for a
+detailed deliverable takes precedence over the general short-answer preference.
+Use product_context for current configured signup policy and pricing; these are server settings,
+not verification of live checkout or plan entitlements. Never infer a tool-replacement count,
+savings, customer results, promotional availability or launch stage from product positioning.
 When asked for suggestions or image comparison, only discuss; do not emit mutation actions.
 When the owner explicitly asks to save or edit a post, use:
 [ACTION:{"type":"marketing_save_draft","draft":{"campaign":"...","text":"...","channel_id":"...","run_at":"ISO timestamp with timezone","landing_url":"https://mysolutionist.app/","asset_id":null}}]
@@ -103,27 +118,61 @@ as successful in the conversation. Do not expose internal IDs in prose.
 '''
 
 
+def product_context():
+    """Use the same runtime settings as signup and billing, not stale prompt copy."""
+    from launch_access import access_open
+    from pricing_config import tier_price_cents, PROMOTIONAL_TIERS
+
+    policy = access_open()
+    return {
+        'source': 'Current server configuration: launch_access.access_open and pricing_config.tier_price_cents',
+        'invite_only': policy['invite_only'],
+        'trial_days': policy['trial_days'],
+        'standard_monthly_prices_usd_cents': {
+            tier: cents for tier, cents in tier_price_cents().items() if tier not in PROMOTIONAL_TIERS
+        },
+        'limits': 'Configured terms only; live Stripe checkout, plan entitlements, promotional availability and customer outcomes have not been verified.',
+    }
+
+
 async def marketing_snapshot():
     import platform_marketing as marketing
-    try:
-        cfg = await marketing.config()
-        rows = await marketing.db('GET', '/platform_marketing_posts?order=run_at.desc&limit=30')
-        assets = await marketing.assets()
+    result = {
+        'fetched_at': datetime.now(timezone.utc).isoformat(),
+        'source_status': {'buffer_calendar': {'status': 'not_loaded',
+            'note': 'Posts created directly in Buffer are not included in this snapshot.'}},
+        'post_limit': 30,
+        'note': 'Mission Control records only. Posts ordered by run_at descending, not a complete publishing history.',
+    }
+
+    async def read(key, fetch, limit=None):
         try:
-            campaign_rows = await marketing.db('GET', '/platform_marketing_campaigns?select=id,name,tracking_key,revision,stage,brief,brief_hash,plan_brief_hash&order=updated_at.desc&limit=10')
-            briefs = [{'id':c['id'],'name':c['name'],'tracking_key':c['tracking_key'],
+            data = await fetch()
+        except HTTPException as error:
+            result[key] = {'unavailable': str(error.detail)}
+            result['source_status'][key] = {'status': 'unavailable'}
+            return None
+        status = {'status': 'loaded', 'source': 'Mission Control'}
+        if limit is not None:
+            status.update(returned_count=min(len(data), limit), truncated=len(data) > limit)
+            data = data[:limit]
+        result[key] = data
+        result['source_status'][key] = status
+        return data
+
+    await read('config', marketing.config)
+    await read('recent_posts', lambda: marketing.db('GET', '/platform_marketing_posts?order=run_at.desc&limit=31'), 30)
+    await read('assets', marketing.assets)
+    campaign_rows = await read('campaign_briefs', lambda: marketing.db('GET', '/platform_marketing_campaigns?select=id,name,tracking_key,revision,stage,brief,brief_hash,plan_brief_hash&order=updated_at.desc&limit=11'), 10)
+    if campaign_rows is not None:
+        result['campaign_briefs'] = [{'id':c['id'],'name':c['name'],'tracking_key':c['tracking_key'],
                 'revision':c['revision'],'stage':c['stage'],
                 'brief':{**c['brief'],'facts':c['brief'].get('facts','')[:2500],
                          'evidence':c['brief'].get('evidence',[])[:3]},
                 'snapshot_note':'Facts limited to 2500 characters and the first three references; open the saved campaign for its complete brief.',
                 'plan_current':c.get('plan_brief_hash') is not None and c.get('plan_brief_hash')==c['brief_hash']}
                 for c in campaign_rows]
-        except HTTPException:
-            briefs = {'unavailable':'Campaign operations have not been configured.'}
-        return {'config': cfg, 'recent_posts': rows, 'assets': assets, 'post_limit': 30, 'campaign_briefs':briefs,
-                'note': 'Recent 30 posts only; not the complete publishing history.'}
-    except HTTPException as error:
-        return {'unavailable': str(error.detail)}
+    return result
 
 
 async def save_draft(action):

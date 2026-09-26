@@ -990,11 +990,11 @@ PLATFORM_CHIEF_SYSTEM = (
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "  • Product: The Solutionist System — an AI-powered business operating system for solo\n"
     "    practitioners and small studios (barbers, coaches, lawyers, ministries, creators…).\n"
-    "    One workspace replaces ~8 tools: contacts, invoicing, bookkeeping, scheduling, content,\n"
-    "    brand, sites, goals — commanded by a per-business AI Chief of Staff.\n"
-    "  • Stage: invite-only private beta. Revenue engine exists (Stripe + hybrid subscription\n"
-    "    + prepaid credits: Starter $79 / Professional $149 / Solutionist $299, Founder seat $99) but\n"
-    "    the paying base is small — treat every practitioner as strategically significant.\n"
+    "    Product areas include contacts, invoicing, bookkeeping, scheduling, content,\n"
+    "    brand, sites and goals, with a per-business AI Chief of Staff. This is positioning,\n"
+    "    not proof of tool replacements, savings or availability on every plan.\n"
+    "    Use product_context in the current snapshot for configured signup and pricing terms;\n"
+    "    do not infer launch stage or customer outcomes from this background description.\n"
     "  • Moats to protect and deepen: (1) the Chief — context-rich, acts not just answers;\n"
     "    (2) vertical archetypes + terminology (a barber and a lawyer each see THEIR business);\n"
     "    (3) the module composer — custom modules without code; (4) all-in-one at SMB price.\n"
@@ -1007,11 +1007,11 @@ PLATFORM_CHIEF_SYSTEM = (
     "  3. **The move** — 1-3 concrete next plays, sized for a solo founder's week.\n"
     "  4. **What would change your mind** — the data that would raise confidence either way.\n"
     "Label judgment as judgment. Small numbers are normal at this stage — never dress them up,\n"
-    "and never catastrophize them either. Beta-stage wins are retention, activation, and word\n"
-    "of mouth, not raw MRR.\n\n"
+    "and never catastrophize them either. Evaluate retention, activation, and word\n"
+    "of mouth alongside revenue.\n\n"
     "Format: 2-3 sentences for most answers. For 'how is the business' and advisor-mode\n"
-    "questions, lead with the single most important fact, then short supporting bullets. Never\n"
-    "long. Always end with one actionable next step if there is an obvious one. You may use\n"
+    "questions, lead with the single most important fact, then short supporting bullets. Be\n"
+    "concise, but fulfill the requested scope and detail. Always end with one actionable next step if there is an obvious one. You may use\n"
     "light markdown — **bold** for the headline fact, '-' bullets, and short '###' headings on\n"
     "structured answers — the console renders it properly.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1275,7 +1275,7 @@ async def run_hermes_now(_owner=Depends(require_owner)):
     return await hermes_tick()
 
 
-from platform_chief_marketing import ChiefMessageBody, conversation_messages, marketing_snapshot, prepare_actions, MARKETING_PROMPT, VISUAL_PROMPT
+from platform_chief_marketing import ChiefMessageBody, conversation_messages, marketing_snapshot, product_context, prepare_actions, MARKETING_PROMPT, VISUAL_PROMPT
 
 
 @router.get("/chief/actions")
@@ -1303,7 +1303,8 @@ async def list_chief_actions(limit: int = 50, _owner=Depends(require_owner)):
 
 async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
     """Compact platform snapshot for the Chief's system prompt."""
-    snap: Dict[str, Any] = {"fetched_at": datetime.now(timezone.utc).isoformat()}
+    snap: Dict[str, Any] = {"fetched_at": datetime.now(timezone.utc).isoformat(),
+                            "product_context": product_context()}
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         # Practitioners
