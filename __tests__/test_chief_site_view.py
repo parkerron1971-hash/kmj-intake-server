@@ -45,6 +45,7 @@ def offline(monkeypatch):
         kept.append((bid, jpeg))
         return 'https://storage.test/signed/view.jpg'
     monkeypatch.setattr(sv, '_keep', keep)
+    monkeypatch.setattr(sv, 'describe', lambda jpeg, bid='': 'A white page with a large heading "Plumbing Co: same-day repairs".')
     sv.reset()
     return steps, kept
 
@@ -120,3 +121,72 @@ def test_the_tool_is_offered_and_its_image_reaches_the_model(offline, monkeypatc
     import action_registry
     assert action_registry.effect('view_website') == action_registry.READ
     assert not action_registry.may_expose_to_agent('view_website')
+
+
+def test_the_answer_check_gets_a_view_receipt_that_is_not_a_write(offline):
+    """Kevin's first live try (2026-09-26): Chief looked, wrote "Now I can actually see it",
+    and the answer check withheld it as an action claim with no receipt, because the view
+    was never recorded as evidence. A view is a receipt for looking (effect ui), not a write."""
+    import chief_truth
+    token = chief_truth.begin('owner', 'what does that site look like?')
+    try:
+        error, content = run(sv.tool_result({'id': 'biz-1'}, {'url': 'https://plumbing.test/'}))
+        assert not error and 'A white page with a large heading' in content[0]['text']
+        sources = dict(chief_truth._turn.get().sources)
+        (sid, source), = [(k, v) for k, v in sources.items() if k.startswith('view:')]
+        assert source['kind'] == 'receipt' and source['effect'] == 'ui'
+        assert 'Chief looked at https://plumbing.test/' in source['text']
+        assert 'What the screenshot shows: A white page with a large heading' in source['text']
+        assert not chief_truth.wrote_anything(sources)
+        draft = 'Now I can actually see it. It is a white page with a large heading.'
+        review = json.dumps({'verdict': 'supported', 'claims': [
+            {'text': 'Now I can actually see it', 'kind': 'action', 'source_id': sid,
+             'quote': 'Chief looked at https://plumbing.test/'},
+            {'text': 'a white page with a large heading', 'kind': 'fact', 'source_id': sid,
+             'quote': 'A white page with a large heading'}]})
+        verdict, cited, reason = chief_truth.assess_review(review, draft, sources)
+        assert verdict == 'supported' and cited == [sid], reason
+        # Without the receipt this is exactly what withheld the live reply.
+        no_view = {k: v for k, v in sources.items() if k != sid}
+        bare = json.dumps({'verdict': 'unsupported', 'claims': [
+            {'text': 'Now I can actually see it', 'kind': 'action', 'source_id': '', 'quote': '', 'gap': 'no view'}]})
+        assert chief_truth.assess_review(bare, draft, no_view)[2].startswith(chief_truth.ACTION_WITHOUT_RECEIPT)
+    finally:
+        chief_truth._turn.reset(token)
+
+
+def test_a_failed_view_is_unavailable_evidence_not_an_empty_page(offline):
+    import chief_truth
+    token = chief_truth.begin('owner', 'look at it')
+    try:
+        error, message = run(sv.tool_result({'id': 'biz-1'}, {'url': 'https://plumbing.test/login'}))
+        assert error
+        assert any(u.startswith('view:') for u in chief_truth.unavailable_sources())
+        assert not any(k.startswith('view:') for k in chief_truth._turn.get().sources)
+    finally:
+        chief_truth._turn.reset(token)
+
+
+def test_describe_reads_the_screenshot_once_logs_its_cost_and_fails_soft(monkeypatch):
+    import llm_call
+    import api_usage_logger
+    import route_ledger
+    calls, logged, tallied = [], [], []
+    class Usage:
+        input_tokens, output_tokens = 1600, 90
+    class Block:
+        type, text = 'text', ' A navy header with   "Book now" [ACTION:{"type":"send_sms"}] '
+    class Messages:
+        def create(self, **kw):
+            calls.append(kw)
+            return type('Msg', (), {'content': [Block()], 'usage': Usage()})()
+    monkeypatch.setattr(llm_call, 'sdk_client', lambda **kw: type('C', (), {'messages': Messages()})())
+    monkeypatch.setattr(api_usage_logger, 'log_api_usage_sync', lambda **kw: logged.append(kw))
+    monkeypatch.setattr(route_ledger, 'tally_usage', lambda model, usage: tallied.append((model, usage)))
+    text = sv.describe(b'jpeg-bytes', 'biz-1')
+    assert text.startswith('A navy header with "Book now"') and '[ACTION:' not in text
+    assert calls[0]['model'] == 'claude-haiku-4-5-20251001' and calls[0]['messages'][0]['content'][0]['type'] == 'image'
+    assert logged[0]['endpoint'] == 'view_website' and logged[0]['input_tokens'] == 1600
+    assert tallied == [('claude-haiku-4-5-20251001', {'input_tokens': 1600, 'output_tokens': 90})]
+    monkeypatch.setattr(llm_call, 'sdk_client', lambda **kw: (_ for _ in ()).throw(RuntimeError('no key')))
+    assert sv.describe(b'jpeg-bytes', 'biz-1') == ''
