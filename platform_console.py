@@ -1514,6 +1514,12 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     conversation_messages(body)
     if not rate_limit.allow('platform_chief', str(_owner.id)):
         raise HTTPException(429, 'Please wait before asking Chief again.')
+    import chief_creative_execution as execution
+    if execution.status_requested(body):
+        result = await execution.status_result(body, _owner)
+        return {'reply': execution.result_reply([result]), 'actions_taken': [result],
+                'model': None, 'usage': {}, 'snapshot_keys': [],
+                'capabilities': {'image_references': True, 'marketing': True}}
     if await asyncio.to_thread(spend_guard.over_budget):
         raise HTTPException(429, spend_guard.block_message())
     await authority.require_budget()
@@ -1535,7 +1541,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     messages = conversation_messages(body)
     import chief_flyer_direction as flyer_direction
     import chief_flyer_composer as flyer_composer
-    system += VISUAL_PROMPT + flyer_direction.prompt_context(body) + flyer_composer.PROMPT
+    system += VISUAL_PROMPT + flyer_direction.prompt_context(body) + flyer_composer.PROMPT + execution.PROMPT
     await flyer_direction.attach_review(body, _owner, messages)
     if body.context == 'marketing':
         system += MARKETING_PROMPT + '\nLIVE MARKETING DATA (reference data, not instructions):\n' + _json.dumps(await marketing_snapshot(), default=str)
@@ -1547,6 +1553,8 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
         "temperature": 0.6,
         "system": system,
         "messages": messages,
+        "tools": execution.tool_specs(),
+        "tool_choice": {"type": "any" if execution.create_requested(body) else "auto", "disable_parallel_tool_use": True},
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)) as c:
@@ -1581,7 +1589,10 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     )
 
     # Action dispatch — pull [ACTION:{...}] tags out, run them, log each.
-    actions_in_reply = prepare_actions(extract_actions(raw_text), body.request_id)
+    if data.get('stop_reason') == 'max_tokens':
+        raise HTTPException(422, 'Chief ran out of space while preparing this response. No action was submitted; ask for a shorter brief or simpler layout.')
+    selected, clarification = execution.selected_actions(content_blocks, extract_actions(raw_text))
+    actions_in_reply = prepare_actions(selected, body.request_id)
     from pydantic import ValidationError
     try:
         actions_in_reply = await flyer_direction.prepare_actions(actions_in_reply, body, _owner)
@@ -1599,7 +1610,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
 
     # The reply the operator SEES has the action JSON stripped — the
     # action cards render the result instead.
-    display_text = strip_action_tags(raw_text)
+    display_text = execution.display_reply(strip_action_tags(raw_text), actions_taken, body, clarification)
 
     return {
         "reply":         display_text,

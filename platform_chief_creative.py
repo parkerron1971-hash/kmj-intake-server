@@ -74,6 +74,10 @@ def handlers(owner, request_id):
     async def execute(action):
         nonlocal generated
         kind = action['type']
+        if kind == 'find_images':
+            from chief_creative_execution import status_result
+            from platform_chief_marketing import ChiefMessageBody
+            return await status_result(ChiefMessageBody(message=('Check image ' + str(UUID(action['image_id']))) if action.get('image_id') else 'Check image status'), owner)
         if kind != 'find_images':
             if generated:
                 raise HTTPException(422, 'Create one asset at a time. Ask Chief for the next variation when ready.')

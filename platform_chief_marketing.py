@@ -107,6 +107,14 @@ detailed deliverable takes precedence over the general short-answer preference.
 Use product_context for current configured signup policy and pricing; these are server settings,
 not verification of live checkout or plan entitlements. Never infer a tool-replacement count,
 savings, customer results, promotional availability or launch stage from product positioning.
+Use founder_offer for the actual founder billing interval, monthly credit allowance and live seat
+availability. A lifetime-locked monthly rate is NOT a one-time lifetime purchase. Never convert
+"for life" into "one-time". If owner wording conflicts with billing, flag the discrepancy before
+creating price-led artwork; do not change billing or invent replacement terms. The seat limit is
+not the number remaining. If availability is unavailable, omit remaining-seat scarcity.
+Do not claim most businesses spend $200/month, replace 6-8 tools, setup in minutes, no feature
+walls, no per-user fees or no card required unless that exact claim has a verified source.
+Treat prior assistant marketing copy as unverified drafts, never as evidence for new claims.
 When asked for suggestions or image comparison, only discuss; do not emit mutation actions.
 When the owner explicitly asks to save or edit a post, use:
 [ACTION:{"type":"marketing_save_draft","draft":{"campaign":"...","text":"...","channel_id":"...","run_at":"ISO timestamp with timezone","landing_url":"https://mysolutionist.app/","asset_id":null}}]
@@ -138,6 +146,34 @@ def product_context():
     }
 
 
+async def founder_offer():
+    """Read billing facts without turning a failed seat count into zero seats sold."""
+    import stripe_billing as billing
+    import pricing_config
+    import platform_marketing as marketing
+    ids = billing._founder_price_ids()
+    facts = {'configured': bool(ids), 'plan': 'professional',
+             'credits_monthly': pricing_config.founder_credits(),
+             'seat_limit': billing._founder_seat_limit(),
+             'rate_terms': 'Recurring rate locked while the founding seat is held; not a one-time lifetime purchase.',
+             'claim_url': 'https://mysolutionist.app/start?plan=founder'}
+    if not ids:
+        return facts
+    display = await billing._price_display(ids[0])
+    facts['price_status'] = 'verified' if display and display.get('interval') else 'unavailable'
+    if display:
+        facts.update(display)
+    try:
+        seats = await marketing.db('GET', '/businesses?select=id&subscription_plan=in.('
+            + ','.join(billing._founder_seat_price_ids())
+            + ')&subscription_status=in.(active,trialing,past_due)&limit='
+            + str(max(1, facts['seat_limit']) + 1))
+        facts.update(availability_status='verified', seats_left=max(0, facts['seat_limit'] - len(seats)))
+    except HTTPException:
+        facts.update(availability_status='unavailable', seats_left=None)
+    return facts
+
+
 async def marketing_snapshot():
     import platform_marketing as marketing
     result = {
@@ -163,6 +199,7 @@ async def marketing_snapshot():
         result['source_status'][key] = status
         return data
 
+    await read('founder_offer', founder_offer)
     await read('config', marketing.config)
     await read('recent_posts', lambda: marketing.db('GET', '/platform_marketing_posts?order=run_at.desc&limit=31'), 30)
     await read('assets', marketing.assets)

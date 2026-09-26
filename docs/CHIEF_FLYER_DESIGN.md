@@ -51,3 +51,21 @@ composition retry behavior and download authorization. A real Chromium render ch
 SVG/PNG pair and text overflow. Frontend checks cover composition cards, review prefills,
 master downloads and mobile layout. Paid live generation is evaluated separately from
 these deterministic checks; creativity still requires the owner's visual judgment.
+
+## Execution and status reliability
+
+Creative generation and composition are exposed as native model tools. Direct creation requests
+require a tool response (with an essential-facts clarification escape); legacy tags remain
+compatible but cannot duplicate a native creative call. Truncated responses execute no actions.
+The existing owner approval ledger, budget and one-asset limits still govern execution.
+
+Creation replies are derived from the returned approval/job state, not the model's pre-execution
+narration. Simple image-status follow-ups read owned records and return actual cards without a
+model call or new generation. A conversation without a job receipt is explicitly unconfirmed;
+older gallery work is labeled as potentially belonging to earlier requests. Uploaded style
+benchmarks and chat references are excluded from the generated-work fallback.
+
+The live marketing snapshot includes the founder offer's Stripe amount and billing interval,
+monthly credit allowance, seat limit and remaining seats. Failed availability reads produce
+unknown availability, never a fabricated full allocation. A lifetime-locked recurring rate must
+not be described as a one-time purchase, and prior assistant copy is not evidence for claims.
