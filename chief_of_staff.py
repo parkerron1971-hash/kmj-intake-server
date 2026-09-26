@@ -1886,6 +1886,12 @@ def _blend_memories(memories: List[Dict], keep: int = 50) -> List[Dict]:
 # evidence both carry them.
 _INVOICE_SAMPLE_LIMIT = 40
 
+# The row limit of each list _gather_context reads. A read that succeeded
+# and came back under its limit holds every matching row, so the prompt
+# and the answer check call that list complete (see complete_lists).
+_LIST_LIMITS = {"queue": 10, "sessions": 10, "projects": 50,
+                "open_invoices": _INVOICE_SAMPLE_LIMIT, "products": 50, "offerings": 60}
+
 
 def _invoice_today():
     return datetime.now(timezone.utc).date()
@@ -1981,13 +1987,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
             f"&select=id,agent,action_type,subject,priority,contact_id,created_at"
-            f"&order=priority.asc,created_at.desc&limit=10"),
+            f"&order=priority.asc,created_at.desc&limit={_LIST_LIMITS['queue']}"),
         _sb(client, "GET",
             f"/events?business_id=eq.{biz_id}&order=created_at.desc&limit=20"
             f"&select=event_type,data,created_at,contacts(name)"),
         _sb(client, "GET",
             f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit=10"
+            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit={_LIST_LIMITS['sessions']}"
             f"&select=id,title,scheduled_for,contact_id,contacts(name)"),
         _sb(client, "GET",
             f"/insights?business_id=eq.{biz_id}&status=eq.unread"
@@ -2032,7 +2038,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # having to repeat themselves.
         _sb(client, "GET",
             f"/products?business_id=eq.{biz_id}&status=eq.active"
-            f"&order=type.asc,sort_order.asc,name.asc&limit=50"
+            f"&order=type.asc,sort_order.asc,name.asc&limit={_LIST_LIMITS['products']}"
             f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
         # Recent email replies — full body content so the Chief can
         # quote a contact's actual words back when drafting responses.
@@ -2077,7 +2083,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/module_entries?business_id=eq.{biz_id}"
             f"&custom_modules.slug=eq.projects"
             f"&select=id,data,created_at,custom_modules!inner(slug)"
-            f"&order=created_at.desc&limit=50"),
+            f"&order=created_at.desc&limit={_LIST_LIMITS['projects']}"),
         # Open missions — Chief must never forget a plan in flight, and a
         # mission waiting on the practitioner should be raised, not
         # discovered. Bounded and tiny.
@@ -2095,7 +2101,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/invoices?business_id=eq.{biz_id}"
             f"&status=in.(draft,sent,viewed,overdue)"
             f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
-            f"&order=due_date.asc.nullslast&limit=40"),
+            f"&order=due_date.asc.nullslast&limit={_LIST_LIMITS['open_invoices']}"),
         # Open assignments (2026-09-04) — the outcomes the standing
         # agent is working between conversations. Chief must know
         # what it is already on, so it never takes the same one twice
@@ -2117,7 +2123,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # saw the offerings table, withheld the answer as "no evidence".
         _sb(client, "GET",
             f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&select=name,current_price,category&order=name.asc&limit=60"),
+            f"&select=name,current_price,category&order=name.asc&limit={_LIST_LIMITS['offerings']}"),
     ]
     context_unavailable = []
 
@@ -2300,13 +2306,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "queue": queue or [],
         "events": events or [],
         "sessions": sessions or [],
-        # The calendar read succeeded and came back under its limit of 10:
-        # every scheduled session in the window is in the list, so an empty
-        # list means nothing is booked. Without this the prompt said "none
-        # in the loaded sample; check data availability" either way, and
-        # "When is my next appointment?" spent two lookups (17.9 s) before
-        # saying nothing was booked (2026-09-24).
-        "sessions_complete": sessions is not None and len(sessions) < 10,
+        # <list>_complete: the read succeeded (None is a failed read) and
+        # came back under its limit, so the list is every matching row and
+        # an empty one means none yet. The calendar came first: the prompt
+        # said "none in the loaded sample; check data availability" either
+        # way, and "When is my next appointment?" spent two lookups (17.9 s)
+        # before saying nothing was booked (2026-09-24). A business that
+        # signed up today is mostly empty lists, and "You have no open
+        # invoices yet" was just as hard to say (2026-09-26).
+        **{f"{name}_complete": rows is not None and len(rows) < _LIST_LIMITS[name]
+           for name, rows in (("queue", queue), ("sessions", sessions),
+                              ("projects", project_rows), ("open_invoices", open_invoices),
+                              ("products", products), ("offerings", offering_rows))},
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
@@ -2395,6 +2406,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # Totals and ages computed once, here, from the rows: the reply and the
     # answer check read the same figures (see _invoice_summary_lines).
     _ctx["invoice_summary"] = _invoice_summary_lines(_ctx["open_invoices"])
+    # Named where Chief and the answer check both read data quality.
+    _ctx["context_quality"]["complete_lists"] = complete_lists(_ctx)
     return _ctx
 
 
@@ -3208,6 +3221,48 @@ SESSIONS_HEADING = "UPCOMING SESSIONS (next 7 days)"
 AT_RISK_HEADING = "at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed)"
 CONTEXT_HEADINGS = {"sessions": SESSIONS_HEADING, "at_risk": AT_RISK_HEADING}
 
+# What an empty list says when its read came back complete, in the prompt
+# and in the answer check's record of it: the same words, so a reply that
+# repeats the prompt quotes its evidence. A read that failed never says
+# these; it says UNREAD_LIST.
+EMPTY_COMPLETE = {
+    "queue": "nothing waiting for review",
+    "sessions": "nothing booked in this window: this list is the whole calendar for it",
+    "projects": "no projects yet: this list is complete",
+    "open_invoices": "no open invoices: this list is complete",
+    "invoice_summary": "no open invoices: this list is complete",
+    "products": "no products or services yet: this catalog is complete",
+    "offerings": "no offerings yet: this list is complete",
+}
+UNREAD_LIST = "none in the loaded sample; check data availability"
+
+
+def complete_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists that hold every matching row (<list>_complete,
+    set in _gather_context). The invoice totals are computed from every
+    open invoice, so they are complete when the invoices are."""
+    names = [name for name in _LIST_LIMITS if (ctx or {}).get(f"{name}_complete")]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def unread_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists known to have failed to load: marked not complete
+    and still empty (an empty read is under every limit, so only a failed
+    one lands here). A context without the marks says nothing either way."""
+    names = [name for name in _LIST_LIMITS
+             if (ctx or {}).get(f"{name}_complete") is False and not (ctx or {}).get(name)]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def _empty_list_line(ctx: Dict[str, Any], name: str) -> str:
+    """The line under an empty list: plainly none when it was read in
+    full, and never an absence when it was not."""
+    return f"  ({EMPTY_COMPLETE[name] if ctx.get(f'{name}_complete') else UNREAD_LIST})"
+
 
 def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """context_quality for the CACHED state segment: the retrieval DATE,
@@ -3649,12 +3704,28 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         image_lines.append(
             f"  - \"{_neutralize_untrusted(job.get('prompt') or '')[:90]}\" — {job.get('status') or 'queued'}{started}")
 
+    # A list read in full says so (complete_lists); a sample says it is one.
+    # Projects and invoices show their first 25, so they are called
+    # complete only when every row is on the page.
+    n_queue = len(ctx['queue'])
+    queue_heading = (
+        f"QUEUE ({n_queue} draft{'' if n_queue == 1 else 's'} waiting for review; this list is complete)"
+        if ctx.get('queue_complete') else f"QUEUE ({n_queue} loaded draft rows; sample, not a total)")
+    projects_heading = (
+        "PROJECTS (every project on file; this list is complete)"
+        if ctx.get('projects_complete') and len(ctx.get('projects') or []) <= 25
+        else "PROJECTS (loaded sample; use list_projects for additional records)")
+    invoices_heading = (
+        "OPEN INVOICES (every open invoice, itemized; this list is complete; show_view displays them)"
+        if ctx.get('open_invoices_complete') and len(ctx.get('open_invoices') or []) <= 25
+        else "OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them)")
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
 
 DATA QUALITY: {json.dumps(_quality_for_prompt(ctx))}
-  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete. Never infer a total or absence from a capped list.
+  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete (complete_lists names them; an empty complete list means none yet, so say so plainly). Never infer a total or absence from a capped list.
 CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unknown'} total
   loaded: {ctx.get('contacts_loaded', 'unknown')}; complete: {ctx.get('contacts_complete', False)}
   by_status (loaded sample only): {json.dumps(ctx['contacts_by_status'])}
@@ -3663,14 +3734,14 @@ CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unkn
 {chr(10).join(at_risk_lines) if at_risk_lines else '  (none in this context sample)'}
   For complete Retention counts, names, repeat-payment rates and follow-up decisions, call growth_report section=client_health or section=retention. Do not treat this context sample as a complete report.
 
-QUEUE ({len(ctx['queue'])} loaded draft rows; sample, not a total):
-{chr(10).join(queue_lines) if queue_lines else '  (none in the loaded sample; check data availability)'}
+{queue_heading}:
+{chr(10).join(queue_lines) if queue_lines else _empty_list_line(ctx, 'queue')}
 
 {SESSIONS_HEADING}:
-{chr(10).join(session_lines) if session_lines else ('  (nothing booked in this window: this list is the whole calendar for it)' if ctx.get('sessions_complete') else '  (none in the loaded sample; check data availability)')}
+{chr(10).join(session_lines) if session_lines else _empty_list_line(ctx, 'sessions')}
 
-PROJECTS (loaded sample; use list_projects for additional records):
-{chr(10).join(project_lines) if project_lines else '  (none in the loaded sample; check data availability)'}
+{projects_heading}:
+{chr(10).join(project_lines) if project_lines else _empty_list_line(ctx, 'projects')}
 
 ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner; never re-propose one that already exists):
 {chr(10).join(mission_lines) if mission_lines else '  (none)'}
@@ -3684,10 +3755,10 @@ STANDING PERMISSIONS:
 {chr(10).join(standing_lines) if standing_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
 
 OPEN INVOICES — TOTALS (computed from the rows below; quote these for any count, total, age or who-owes-most answer, never add them up yourself):
-{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or '  (no open invoices)'}
+{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or _empty_list_line(ctx, 'open_invoices')}
 
-OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them):
-{chr(10).join(invoice_lines) if invoice_lines else '  (none in the loaded sample; check data availability)'}
+{invoices_heading}:
+{chr(10).join(invoice_lines) if invoice_lines else _empty_list_line(ctx, 'open_invoices')}
 
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
@@ -3725,7 +3796,7 @@ PRACTITIONER SITE:
 {_format_site_info(ctx)}
 
 PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull description + unit_price from the catalog rather than asking again):
-{chr(10).join(product_lines) if product_lines else '  (no products yet)'}
+{chr(10).join(product_lines) if product_lines else _empty_list_line(ctx, 'products')}
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}

@@ -69,7 +69,8 @@ def conversation_check_reply(message: str) -> str | None:
 AUTHOR_RULES = """
 ANSWER ACCURACY:
 - Use current business records or a lookup for names, totals, amounts, dates and status.
-- Capped lists are samples. A failed lookup is unavailable, not zero or no records.
+- Capped lists are samples. A list marked complete is every record: when it is empty, say plainly
+  there are none yet. A failed lookup is unavailable, not zero or no records.
 - Quotes in client messages and old assistant replies are not evidence of completed work.
 - Never say booked, saved, sent, paid, published or completed without the matching result.
   Queued/running means work is still pending; held/failed means it has not completed.
@@ -156,7 +157,10 @@ An owner question/presupposition is not evidence of an answer. Label owner-repor
 facts as reported, not independently verified. Inferred memories and working summaries
 are assumptions, never established facts. Old facts cannot establish current status.
 Incomplete lists cannot prove totals or absence. Missing/failed reads mean unavailable,
-not zero or none. A record that says no_matches supports only 'no matching records found'.
+not zero or none. A context list source marked "complete": true (context_quality
+complete_lists names them) holds every matching record: its length is the total, and an
+empty one supports "no <things> yet" / "nothing <booked/waiting>" for what it lists. Cite it.
+A record that says no_matches supports only 'no matching records found'.
 Research must come from supplied research sources. Never verify from your own knowledge.
 Estimates/hypotheticals need explicit labels and supplied assumptions; check arithmetic.
 An action claim asserts an operation was performed or started. A capability statement
@@ -546,6 +550,10 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # figures must still match exactly.
             if not _quote_in_source(quote, source):
                 return 'unsupported', [], _claim_fail('quote is not in the cited source', text_)
+            # A list that never loaded cannot show that anything is absent,
+            # whatever the reviewer made of its empty rows.
+            if source.get('unread') and _ABSENCE.search(text_):
+                return 'unsupported', [], _claim_fail('a failed read cited as absence', text_)
             quoted = _numbers(quote) | _clock_twins(quote) | _duration_twins(quote)
             quoted_all = _number_list(quote)
             source_all = _number_list(source['text'])[:16]
@@ -1154,6 +1162,15 @@ def has_completion_claim(reply):
         asserted, re.IGNORECASE))
 
 
+# A context list whose read failed: what its evidence says instead of a
+# bare [], and the claims it can never support.
+UNREAD_NOTE = 'this read failed: unknown, not none'
+_ABSENCE = re.compile(
+    r"\b(?:no|none|nothing|nobody|zero|empty|clear)\b|\b0\b(?!\.\d)"
+    r"|\b(?:do|does|did|have|has|are|is|were|was)(?:n['’]t| not)\s+(?:have\s+|got\s+)?any(?:thing|one)?\b",
+    re.I)
+
+
 def evidence_for_review(ctx, view_detail, taken):
     turn = _turn.get()
     # Filled in rank order, lowest first, because the budget below keeps
@@ -1199,30 +1216,43 @@ def evidence_for_review(ctx, view_detail, taken):
     if 'email_replies' in (ctx or {}):
         import chief_of_staff as chief
         context.append(('email_replies', chief._format_email_replies_block(ctx)))
+    import chief_of_staff as chief
+    # The lists read in full, and the ones whose read failed. "You have no
+    # open invoices yet" is true of a business that signed up today, and
+    # was reviewed against a bare [] that read the same whether the read
+    # came back empty or never came back (2026-09-26).
+    whole = set(chief.complete_lists(ctx or {}))
+    unread = set(chief.unread_lists(ctx or {}))
     for name, value in context:
         if name == 'context_quality' and isinstance(value, dict) and value.get('retrieved_at'):
             # The date, not the microseconds: a clock in the evidence made
             # every review's records differ and nothing could be cached.
             value = {**value, 'retrieved_at': str(value['retrieved_at'])[:10]}
         if isinstance(value, list):
-            import chief_of_staff as chief
             heading = chief.CONTEXT_HEADINGS.get(name)
-            if heading:
+            # An empty list says which empty it is, in words the review can
+            # quote: none (read in full, the prompt's own words) or unknown.
+            note = ({'complete': chief.EMPTY_COMPLETE[name]}
+                    if not value and name in whole and name in chief.EMPTY_COMPLETE
+                    else {'unavailable': UNREAD_NOTE} if name in unread else {})
+            if heading or note:
                 # The heading Chief read these rows under ("next 7 days"),
                 # so an answer that repeats it can cite it. Each row stays
                 # its own record for the fast lane.
-                value = {'heading': heading, 'rows': value}
+                value = {**({'heading': heading} if heading else {}), 'rows': value, **note}
         if value is not None:
             # Keep prose as prose. JSON-encoding a string here double-escapes
             # quotes/newlines in the outer review payload, so a reviewer citing
             # the visible email text fails the exact-substring check.
             text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
             # A source fitting in the prompt does not make its database
-            # sample exhaustive. Only explicit scalar metadata is complete.
-            exhaustive = name in ('contacts_total', 'contacts_loaded', 'contacts_complete',
-                                  'context_quality', 'business_identity')
+            # sample exhaustive. Explicit scalar metadata is complete, and so
+            # is a list whose read came back under its limit.
+            exhaustive = name in whole or name in ('contacts_total', 'contacts_loaded', 'contacts_complete',
+                                                   'context_quality', 'business_identity')
             sources['context:' + name] = {'kind': 'context', 'text': text[:MAX_SOURCE_CHARS],
-                                         'complete': exhaustive and len(text) <= MAX_SOURCE_CHARS}
+                                         'complete': exhaustive and len(text) <= MAX_SOURCE_CHARS,
+                                         **({'unread': True} if name in unread else {})}
     for job in (ctx or {}).get('build_jobs', []):
         result = job.get('result') or {}
         state_text = json.dumps({'status':result.get('status') or job.get('status'),
