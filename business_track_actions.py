@@ -78,8 +78,10 @@ TRUST-LAYER DISCIPLINE (feedback_chief_trust_layer_discipline):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -157,9 +159,10 @@ BUSINESS_PHASE_GOALS = {
         "who keeps the books, and what they chase hardest to collect."
     ),
     "operations": (
-        "The tools they already run on by name, what part of the week is "
-        "still manual, what falls through the cracks, and whether they "
-        "already have a website and where it lives."
+        "The tools they already run on by name, where their client list "
+        "lives today (their phone, a spreadsheet, a booking or email app, "
+        "paper), what part of the week is still manual, what falls through "
+        "the cracks, and whether they already have a website and where it lives."
     ),
     "growth": (
         "Where they want the business to be in a year in concrete terms, the "
@@ -175,6 +178,284 @@ BUSINESS_PHASE_GOALS = {
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# WHERE THEIR CLIENTS LIVE TODAY
+# ═══════════════════════════════════════════════════════════════════════
+# "Bring your client list over" used to be satisfied by typing one name,
+# and nothing in the system knew where the rest of the list was. Now the
+# practitioner can say where their people live (one tap each, in
+# onboarding, or out loud in the Business Session) and the import step
+# walks them through getting THAT list out, in that tool's own menus.
+#
+# THE ANSWER LIVES IN ONE PLACE: businesses.settings.client_sources =
+#   {"sources": [<keys below>], "other": <their words or None>,
+#    "via": "onboarding" | "business_session", "updated_at": <iso>}
+# Not on the business_tracks row next to tools_in_use: onboarding creates
+# that row at launch, a non-empty operations_map reads as "the operations
+# phase is covered" (completed_phases), and the coach overwrites the
+# column wholesale on every save. Both writers feed the settings key —
+# onboarding through PUT /business-track/{id}/client-sources, the coach
+# through save_business_phase(operations, client_sources=[...]) — and
+# tools_in_use the coach already captured is read too, so a practitioner
+# who said "we book everything through Vagaro" is never asked again.
+#
+# Every export line below was checked against published help pages
+# (2026-09-26). Where a tool does not hand the file over itself (Booksy)
+# the line says so rather than inventing a menu. "other" has no line on
+# purpose: Chief says "look for Export in your client list" instead of
+# guessing menu names for a tool nobody here has checked.
+CLIENT_SOURCES: Dict[str, Dict[str, Any]] = {
+    "phone": {
+        "label": "Phone contacts",
+        "export": ("Android: contacts.google.com, Export, Google CSV. iPhone: if the "
+                   "contacts sync to Gmail, the same; if they live in iCloud, "
+                   "icloud.com/contacts, select all, Export vCard, then Import that "
+                   "file at contacts.google.com and Export it as Google CSV."),
+        "match": ("phone contact", "iphone", "android", "icloud", "my phone", "cell phone"),
+    },
+    "spreadsheet": {
+        "label": "A spreadsheet",
+        "export": ("Excel: File, Save As, CSV. Google Sheets: File, Download, "
+                   "Comma-separated values (.csv)."),
+        "match": ("spreadsheet", "excel", "google sheet", "csv"),
+    },
+    "square": {
+        "label": "Square",
+        "export": ("in the Square Dashboard on the web: Customers, Customer directory, "
+                   "Import / Export, Export customers. It downloads a CSV."),
+        "match": ("square",),
+    },
+    "vagaro": {
+        "label": "Vagaro",
+        "export": ("signed in as the owner: More, Reports, Customers (the Customer "
+                   "List), Export, Excel. Open it and save it as a CSV."),
+        "match": ("vagaro",),
+    },
+    "booksy": {
+        "label": "Booksy",
+        "export": ("it does not hand over the file itself: ask Booksy support for a "
+                   "copy of the client list (the ? in the menu, then Support, opens "
+                   "their chat) and bring the file they send."),
+        "match": ("booksy",),
+    },
+    "acuity": {
+        "label": "Acuity",
+        "export": ("Clients, Import/export, Export client list, All clients. "
+                   "It downloads a CSV."),
+        "match": ("acuity",),
+    },
+    "calendly": {
+        "label": "Calendly",
+        "export": ("Contacts, select everyone, Export. The file downloads, and a "
+                   "link to it arrives by email too."),
+        "match": ("calendly",),
+    },
+    "mailchimp": {
+        "label": "Mailchimp",
+        "export": ("Audience, Export audience, Export CSV. It arrives by email as a "
+                   "ZIP; the CSV files inside are the list."),
+        "match": ("mailchimp",),
+    },
+    "honeybook": {
+        "label": "HoneyBook",
+        "export": ("Clients, Contacts, the three-dot menu, Download spreadsheet. "
+                   "It downloads a CSV."),
+        "match": ("honeybook", "honey book"),
+    },
+    "google_contacts": {
+        "label": "Google Contacts",
+        "export": "contacts.google.com: Export, Google CSV.",
+        "match": ("google contact", "gmail"),
+    },
+    "paper": {
+        "label": "Paper or memory",
+        "export": ("No file: take them a handful at a time — a name and a phone or "
+                   "email each — and create_contact every one (up to ten a turn)."),
+        "match": ("paper", "notebook", "memory", "in my head", "rolodex", "card file"),
+    },
+    "other": {
+        "label": "Somewhere else",
+        "export": "",
+        "match": (),
+    },
+}
+
+# The import step is about the list, not a name. One contact typed in
+# by hand does not mean the list came over; this many does. Ten: a solo
+# practice that has run for any length of time carries more than ten
+# people, so reaching ten means the list is actually arriving, and it
+# is low enough that someone typing their regulars in by hand (which
+# still counts — see business_track_router._done_import_contacts) gets
+# there in one sitting. Counted exactly the way maturity_engine counts
+# its contact_count signal: every contacts row, no source or status
+# filter, so the two can never disagree about how many people exist.
+REAL_CLIENT_LIST_MIN = 10
+
+
+def normalize_client_sources(raw: Any) -> List[str]:
+    """Known source keys, deduped, in the order given. Unknown entries
+    are dropped rather than stored: the export steps are keyed on these
+    and a key with no entry would tailor to nothing."""
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: List[str] = []
+    for item in raw:
+        key = str(item or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if key in CLIENT_SOURCES and key not in out:
+            out.append(key)
+    return out
+
+
+def match_client_sources(texts: Any) -> List[str]:
+    """Source keys named in free text — the coach's tools_in_use list
+    ("Square Appointments", "an Excel sheet"). Only the tools that hold
+    a client list count; "Instagram" matches nothing."""
+    if isinstance(texts, str):
+        texts = [texts]
+    if not isinstance(texts, (list, tuple)):
+        return []
+    out: List[str] = []
+    for t in texts:
+        low = str(t or "").lower()
+        if not low:
+            continue
+        for key, spec in CLIENT_SOURCES.items():
+            # Whole words (a plural is fine): "Squarespace" is a website,
+            # not Square, and "excellent" is not Excel.
+            if key not in out and any(
+                    re.search(r"(?<![a-z])" + re.escape(m) + r"s?(?![a-z])", low)
+                    for m in spec["match"]):
+                out.append(key)
+    return out
+
+
+def stored_client_sources(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """settings.client_sources, tolerant of a missing or malformed value."""
+    raw = (settings or {}).get("client_sources")
+    if isinstance(raw, list):  # a bare list is accepted as the sources
+        raw = {"sources": raw}
+    if not isinstance(raw, dict):
+        return {"sources": [], "other": None}
+    other = str(raw.get("other") or "").strip()[:120] or None
+    return {"sources": normalize_client_sources(raw.get("sources")), "other": other}
+
+
+def client_sources_for(settings: Optional[Dict[str, Any]],
+                       tools_in_use: Any = None) -> List[str]:
+    """Where this business's clients live: what they told us first, then
+    any list-holding tool the Business Session heard them name."""
+    out = list(stored_client_sources(settings)["sources"])
+    for key in match_client_sources(tools_in_use):
+        if key not in out:
+            out.append(key)
+    return out
+
+
+_IMPORT_HOW_TAIL = (
+    " Only when there is no list anywhere, take them by name: a name with a "
+    "phone or email, create_contact each, then 'Who else?' One name is a "
+    "start, not the list — the step is done when the list is in (an import, "
+    f"or {REAL_CLIENT_LIST_MIN} or more people)."
+)
+
+# The how-line when we do not yet know where their people are.
+IMPORT_HOW_GENERIC = (
+    "DO IT HERE, and aim for the whole list, not one name. Ask where their "
+    "{clients} live today (their phone, a spreadsheet, a booking app) and offer "
+    "the ways in: a file from any app or spreadsheet — Bring a file over "
+    "(navigate build/structure-import; it reads their columns and builds around "
+    "them) — their phone contacts saved as a file, or 'tell me where they live "
+    "and I'll walk you through the export'. If you do not know a tool's menus, "
+    "say 'look for Export in your client list' — never guess menu names."
+    + _IMPORT_HOW_TAIL
+)
+
+
+def import_contacts_how(sources: Optional[List[str]] = None,
+                        other: Optional[str] = None) -> str:
+    """The import step's how-line, tailored to where their clients live.
+
+    Leads with the whole list every time; one name is the fallback. With
+    a known source it carries that tool's export steps (at most three, so
+    a practitioner who ticked everything does not cost Chief a page of
+    prompt). Always starts "DO IT HERE" and always names create_contact
+    and structure-import — the setup block, the room card and the
+    morning brief all read those markers."""
+    keys = normalize_client_sources(sources or [])
+    if not keys:
+        return IMPORT_HOW_GENERIC
+    named = ", ".join(
+        (f"{CLIENT_SOURCES[k]['label']} ({other})" if k == "other" and other
+         else CLIENT_SOURCES[k]["label"]) for k in keys)
+    if keys == ["paper"]:
+        # Nothing to export. The list still comes over — by name, in
+        # batches — and a file is still the faster door if one turns up.
+        return (
+            "DO IT HERE, and aim for the whole list, not one name. They told us "
+            "their {clients} live on paper or in their head. "
+            + CLIENT_SOURCES["paper"]["export"] + " Ask for the "
+            "first handful now, and keep going until the list is in (an import, "
+            f"or {REAL_CLIENT_LIST_MIN} or more people). If a list turns up in a "
+            "spreadsheet after all, Bring a file over (navigate "
+            "build/structure-import) is faster than typing."
+        )
+    lines = [
+        "DO IT HERE, and aim for the whole list, not one name. They told us "
+        "their {clients} live in: " + named + ". Offer to walk them through "
+        "getting that out as a file, then Bring a file over (navigate "
+        "build/structure-import; it reads their columns and builds around "
+        "them). The export, short and exact — say only these steps:"
+    ]
+    shown = 0
+    for k in keys:
+        step = CLIENT_SOURCES[k]["export"]
+        if k == "other" or not step:
+            lines.append(f"  - {other or 'Their other tool'}: you do not know its menus; "
+                         "say 'look for Export in your client list or its settings' "
+                         "and never guess.")
+        else:
+            lines.append(f"  - {CLIENT_SOURCES[k]['label']}: {step}")
+        shown += 1
+        if shown >= 3:
+            break
+    return "\n".join(lines) + "\n " + _IMPORT_HOW_TAIL
+
+
+def save_client_sources(biz_id: str, sources: Any, other: Any = None, *,
+                        via: str = "", merge: bool = False) -> Dict[str, Any]:
+    """Write settings.client_sources (service role, re-read then merged,
+    so no other settings key is touched). Sync — call off-thread from
+    async code. `merge` unions with what is already stored (the coach
+    adds to the onboarding answer rather than replacing it). Returns the
+    stored value, or {} when nothing could be written."""
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz_id}&select=settings&limit=1") or []
+    if not rows:
+        return {}
+    settings = dict(rows[0].get("settings") or {})
+    keys = normalize_client_sources(sources)
+    other_s = str(other or "").strip()[:120] or None
+    if merge:
+        prior = stored_client_sources(settings)
+        keys = prior["sources"] + [k for k in keys if k not in prior["sources"]]
+        other_s = other_s or prior["other"]
+    if other_s and "other" not in keys:
+        keys.append("other")
+    value = {
+        "sources": keys,
+        "other": other_s,
+        "via": str(via or "")[:40] or None,
+        "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    settings["client_sources"] = value
+    res = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{biz_id}",
+                                         {"settings": settings})
+    return value if res is not None else {}
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # THE DAY-ONE PLUG-IN CATALOG
 # ═══════════════════════════════════════════════════════════════════════
 # Every key here is a surface a practitioner can actually reach and finish
@@ -187,7 +468,10 @@ BUSINESS_PHASE_GOALS = {
 # ("import your people first, then the campaign has somewhere to land").
 PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
     "import_contacts": {
-        "chief": ("DO IT HERE. Ask for ONE name to start (and a phone or email) and create_contact it; a list means Bring a file over — offer to take them there (navigate build/structure-import) and say it reads their columns and builds around them. After: 'That's your first {clients} in. Who else?'"),
+        # The default how-line. resolve_plugins hands Chief a version
+        # tailored to where this business said its clients live
+        # (import_contacts_how) as the item's "how".
+        "chief": IMPORT_HOW_GENERIC,
         "title": "Bring your client list over",
         "why": "Everything else — history, campaigns, invoices, the daily "
                "briefing — reads from your contacts. This is the first domino.",
@@ -210,8 +494,39 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         # switched tabs and dead-ended (found 8/18).
         "nav": {"tab": "operate", "sub": "offerings-manager"},
         "verticals": "*",
+        # A church or a food bank is not asked what it charges. Their
+        # money arrives as gifts (the giving step below), and a gift is
+        # deliberately never an offering (giving_router, point 3).
+        "not_verticals": ["ministry", "nonprofit"],
         "needs": [],
         "weight": 95,
+    },
+    "intake_form": {
+        "chief": ("DO IT HERE. Ask what they need to know from a new client before the first meeting — three to six questions, in their words — then create_client_form with them. A therapist's form stays admin: contact details, availability, how they will pay; nothing about symptoms, diagnosis, medication or history, and no open 'tell me what is going on' box — that belongs in their EHR. A lawyer's form asks for the other parties' names so conflicts can be checked. After: hand them the form's link and say it shows on their site too."),
+        "title": "Put your intake form online",
+        "why": "A new client answers your questions before you ever meet, and "
+               "the answers land on their record instead of in your inbox.",
+        "nav": {"tab": "build", "page": "intake-forms"},
+        # The verticals whose first sendable thing IS this form
+        # (SENDABLE_ARTIFACT). Before this entry their goal named a form
+        # no step tracked, so the first hour aimed at something the
+        # checklist could never tick.
+        "verticals": ["therapist", "lawyer"],
+        "needs": [],
+        "weight": 92,
+    },
+    "giving": {
+        "chief": ('DOOR. navigate build/settings, then Reaching people, then Giving. Stripe has to be connected first (the payments step) — gifts need somewhere to land; then they switch giving on and name the funds (General is already there). Their page is their site address with /give on the end. Ask them to tell you when it is on; you will see it next turn.'),
+        "title": "Turn on your giving page",
+        "why": "A link people can give through tonight, once or monthly, to "
+               "the fund they choose, with the thank-you receipt sent for you.",
+        # `section` lands the Settings sheet on the Giving panel (the app
+        # reads it the way it reads ?settings=giving); anything that
+        # ignores it still lands on Settings.
+        "nav": {"tab": "build", "page": "settings", "section": "giving"},
+        "verticals": ["ministry", "nonprofit"],
+        "needs": ["payments"],
+        "weight": 94,
     },
     "payments": {
         "chief": ('DOOR. navigate build/integrations, say what it unlocks (an invoice becomes money that arrives), and ask them to tell you when it is connected — you will see it on the next turn.'),
@@ -228,9 +543,12 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "why": "Without this, booking either offers times you don't want or "
                "offers nothing at all.",
         "nav": {"tab": "build", "page": "booking"},
+        # financial_educator's first sendable thing is a booking link
+        # (SENDABLE_ARTIFACT), which needs hours — it was missing here,
+        # so that goal could never become real from the checklist.
         "verticals": ["coach", "consultant", "therapist", "personal_services",
                       "fitness_wellness", "lawyer", "contractor",
-                      "service_provider"],
+                      "service_provider", "financial_educator"],
         "needs": ["offerings"],
         "weight": 85,
     },
@@ -332,14 +650,17 @@ SENDABLE_ARTIFACT: Dict[str, Dict[str, Any]] = {
                           "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
     "contractor":        {"label": "a booking link for an estimate visit",
                           "keys": ["offerings", "availability"], "nav": {"tab": "build", "page": "booking-share"}},
+    # The form and the giving page each have a step of their own now
+    # (intake_form, giving), so "real once X is done" names the thing
+    # itself rather than a neighbour of it.
     "therapist":         {"label": "the intake form a new client fills out",
-                          "keys": ["offerings"], "nav": {"tab": "build", "page": "intake-forms"}},
+                          "keys": ["intake_form"], "nav": {"tab": "build", "page": "intake-forms"}},
     "lawyer":            {"label": "the questionnaire a new client fills out",
-                          "keys": ["offerings"], "nav": {"tab": "build", "page": "intake-forms"}},
+                          "keys": ["intake_form"], "nav": {"tab": "build", "page": "intake-forms"}},
     "nonprofit":         {"label": "a giving page you can share",
-                          "keys": ["site"], "nav": {"tab": "build", "page": "my-site"}},
+                          "keys": ["giving"], "nav": {"tab": "build", "page": "settings", "section": "giving"}},
     "ministry":          {"label": "a giving page you can share",
-                          "keys": ["site"], "nav": {"tab": "build", "page": "my-site"}},
+                          "keys": ["giving"], "nav": {"tab": "build", "page": "settings", "section": "giving"}},
     "ecommerce":         {"label": "a product link you can post",
                           "keys": ["offerings", "site"], "nav": {"tab": "build", "page": "my-site"}},
     "course_creator":    {"label": "a link to your first course",
@@ -383,18 +704,41 @@ def plugins_for_vertical(business_type: Optional[str]) -> List[str]:
         canonical = vertical_registry.resolve(raw)
     except Exception:
         canonical = raw
-    keys = [
-        k for k, v in PLUGIN_CATALOG.items()
-        if v["verticals"] == "*" or raw in v["verticals"] or canonical in v["verticals"]
-    ]
+    def applies(v: Dict[str, Any]) -> bool:
+        # `not_verticals` carves a vertical out of an all-verticals step
+        # (a ministry is not asked what it charges).
+        if raw in v.get("not_verticals", ()) or canonical in v.get("not_verticals", ()):
+            return False
+        return v["verticals"] == "*" or raw in v["verticals"] or canonical in v["verticals"]
+
+    keys = [k for k, v in PLUGIN_CATALOG.items() if applies(v)]
     return sorted(keys, key=lambda k: -PLUGIN_CATALOG[k]["weight"])
+
+
+def needs_for(key: str, business_type: Optional[str]) -> List[str]:
+    """A step's prerequisites that exist for this vertical. The site
+    needs offerings for a barber; a ministry has no offerings step, so
+    its site must not wait on one ("best after: offerings" forever)."""
+    spec = PLUGIN_CATALOG.get(key) or {}
+    applicable = set(plugins_for_vertical(business_type))
+    return [n for n in spec.get("needs", []) if n in applicable]
+
+
+def plugin_how(key: str, sources: Optional[List[str]] = None,
+               other: Optional[str] = None) -> str:
+    """How Chief does this step. The catalog line, except the import
+    step, which is tailored to where this business's clients live."""
+    if key == "import_contacts":
+        return import_contacts_how(sources, other)
+    return str((PLUGIN_CATALOG.get(key) or {}).get("chief") or "")
 
 
 def _plugin_menu_for_prompt(business_type: Optional[str]) -> str:
     lines = []
     for k in plugins_for_vertical(business_type):
         spec = PLUGIN_CATALOG[k]
-        need = (" (only after: %s)" % ", ".join(spec["needs"])) if spec["needs"] else ""
+        needs = needs_for(k, business_type)
+        need = (" (only after: %s)" % ", ".join(needs)) if needs else ""
         lines.append(f"    {k} — {spec['title']}{need}")
     return "\n".join(lines)
 
@@ -465,6 +809,21 @@ async def handle_save_business_phase(client, biz, action) -> Dict:
 
     await _sb(client, "PATCH", f"/business_tracks?id=eq.{track['id']}",
               {column: data})
+
+    # Where their clients live has ONE home (settings.client_sources, see
+    # CLIENT_SOURCES). The coach names it inside the operations phase;
+    # mirror it there, adding to what onboarding stored rather than
+    # replacing it. Best-effort: the phase itself is already saved.
+    if phase == "operations" and isinstance(data, dict):
+        heard = normalize_client_sources(data.get("client_sources"))
+        heard += [k for k in match_client_sources(data.get("tools_in_use"))
+                  if k not in heard]
+        if heard:
+            try:
+                await asyncio.to_thread(save_client_sources, biz["id"], heard,
+                                        via="business_session", merge=True)
+            except Exception as e:
+                logger.warning(f"[save_business_phase] client sources mirror failed: {e}")
     return {
         "type": "save_business_phase",
         "result": "saved",
@@ -787,7 +1146,14 @@ def build_business_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
         known.append(f"operations: {json.dumps(ops)[:200]}")
     if growth:
         known.append(f"growth: {json.dumps(growth)[:200]}")
+    told = stored_client_sources(biz.get("settings"))
+    if told["sources"]:
+        where = ", ".join(CLIENT_SOURCES[k]["label"] for k in told["sources"])
+        if told["other"]:
+            where += f" ({told['other']})"
+        known.append(f"where their client list lives today: {where}")
     known_block = "\n".join(f"  {k}" for k in known) or "  (nothing captured yet)"
+    source_keys = "|".join(CLIENT_SOURCES)
 
     phase_goals = "\n".join(
         f"{i + 1}. {p.upper()} — {BUSINESS_PHASE_LABELS[p]}: {BUSINESS_PHASE_GOALS[p]}"
@@ -893,7 +1259,7 @@ Every answer that matters gets written down as you go, silently, mid-conversatio
     offerings  [{{"name","price","duration","description"}}]   <- an ARRAY
     clients    {{"who","how_they_find_you","their_worry","great_client_looks_like","roughly_how_many"}}
     money      {{"revenue_range","how_they_bill","how_they_get_paid","who_keeps_books","collection_pain"}}
-    operations {{"tools_in_use":["..."],"still_manual":["..."],"falls_through_cracks","has_website","website_url"}}
+    operations {{"tools_in_use":["..."],"client_sources":["<where their client list lives: {source_keys}>"],"still_manual":["..."],"falls_through_cracks","has_website","website_url"}}
     growth     {{"target","constraint","success_number"}}
     plan       {{"plugins":["<catalog keys, in order>"],"steps":[{{"title","why","nav_page"}}]}}
 
