@@ -10,6 +10,32 @@ Each order has a stable identity, durable checkpoints before effects, read-back 
 
 Leases serialize builds per business across replicas. A process runs at most eight workers. Heartbeats fence stale workers; scheduler recovery resumes interrupted work. Child image/site jobs are checked on later ticks instead of long polling loops. Cards poll every five seconds while active, thirty otherwise, and pause in hidden tabs. They reject stale approval revisions, refresh after responses, and clear old results on business changes. Voice stream fallback reuses one request ID.
 
+## Plans: several pieces of work from one message (2026-09-26)
+
+Kevin, from the Dev Desk: can someone "give a project such as schedule events, make flyer, etc... in one message and it all get worked on ... and conversation still go on?" He chose one brain with many hands over many agents, on the condition that Chief redirects when a worker stops.
+
+A **plan** is a work order of kind `plan` (`chief_plans.py`). Its facts are a title, a goal and up to 12 steps. Each step is an ordinary Chief action (`{"title", "action": {"type", ...}, "for_each"?, "approval"?}`). It runs on this same worker, with the same leases, checkpoints, card, chat message and push, so the chat is free while it works.
+
+- **Same steps as a mission.** `chief_missions.validate_steps` decides what a step may be. A later step can use an earlier result (`"@create_contact.contact_id"`) or repeat over a list (`for_each`). Not allowed as plan steps: work orders, form builds (`create_client_form`), event setup and permission verbs. A plan makes at most one image.
+- **Same door.** Every step runs through `chief_of_staff._execute_actions` inside `Adapter.handler_scope`, as the owner who asked. The policy, taint, class-C gate and spend guard are the chat's own.
+- **Sends, notifying bookings, charges and deletes (class C)** run on the owner's own ask on the desktop, as in chat. A spoken or tainted plan holds them for a yes. No order runs more than three of them without a go-ahead. A step marked `approval: true` always waits.
+- **Order.** Each step waits for the one before it, so a stop is never stepped over. The exception is an image, which only holds up a step that references it. A step waiting on a running image says so and is picked up on the next tick.
+- **Retries.** A write that may have happened (the handler raised or timed out) is `uncertain` and never repeated blind. A clean refusal can be retried.
+
+**Chief's first look at a stop.** When a step fails or is uncertain, the worker runs one model turn before the owner is bothered. That turn has read-only tools (`reset_turn(writes_allowed=False)`, `read_tool_definitions()`) and sees the plan, what each step did and why it stopped. Chief answers with one `plan_decision` tag:
+- `continue` rewrites the steps still to run and adds a plain note on what changed and why.
+- `ask` puts one question and a suggestion on the card (`needs_answer`, field `plan_answer`). The owner's answer, from the card or from chat through `respond_work_order`, is the input to the next look.
+
+The guard rails live in `apply()`/`_revise()`, not in the prompt:
+- A rewritten plan passes the same step rules.
+- Any class-C step in it that is not exactly one the owner already asked for (same action) waits for their go-ahead, and so does any class-C step when the look read third-party text.
+- Chief looks at most twice on its own per plan (and four times after answers).
+- Every look is recorded in `result.looks`. The latest change leads the summary, and `public_job` exposes the notes.
+
+A look costs one model turn, only when something stopped. It is skipped over the daily spend cap.
+
+**Not in this release:** more than one work order per message, and builds running side by side in one business. Those are the next step. A plan's image is found by its stable id on every run, so a redirect cannot pay for a second image; an image that fails still needs the owner.
+
 ## Important contract decisions
 
 - Owner-only first rollout; underlying action scope, policy, taint, spend and voice gates still run per step. No user JWT is stored in a job.

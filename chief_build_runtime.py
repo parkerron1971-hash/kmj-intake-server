@@ -147,6 +147,11 @@ def public_job(job):
         safe['held'] = {k:safe['held'].get(k) for k in ('step','say','label')}
     safe['receipts'] = [{k:r.get(k) for k in ('step','outcome','label','ids','verified','nav','frontend_event')}
                         for r in result.get('receipts', [])]
+    # What Chief changed at a plan's stops, in its own plain words.
+    notes = [str(l.get('note'))[:300] for l in (result.get('looks') or [])
+             if l.get('note') and l.get('choice') != 'ask'][-4:]
+    if notes:
+        safe['notes'] = notes
     params=job.get('params') or {}
     facts=params.get('facts') or {}
     return {k:job.get(k) for k in ('id','kind','status','created_at','build_revision')} | {
@@ -226,8 +231,12 @@ async def worker(job_id):
                     if not await rpc(client,'renew',{'p_id':job_id,'p_token':token}):
                         raise RuntimeError('Build lease lost')
             heartbeat = asyncio.create_task(renew())
-            adapter = Adapter(client, job, token, order)
-            execution = asyncio.create_task(run(order, adapter, job.get('result')))
+            import chief_plans
+            adapter = chief_plans.adapter_for(order)(client, job, token, order)
+            # A plan is run with Chief's first look at any stop; every other
+            # kind is the fixed recipe alone.
+            runner = chief_plans.run_plan if order.kind == 'plan' else run
+            execution = asyncio.create_task(runner(order, adapter, job.get('result')))
             done, _ = await asyncio.wait((heartbeat,execution), return_when=asyncio.FIRST_COMPLETED)
             if heartbeat in done:
                 execution.cancel()
@@ -275,7 +284,7 @@ async def worker(job_id):
 
 
 _KIND_NAMES = {'event_setup': 'your event', 'form_and_link': 'your form', 'flyer': 'your flyer',
-               'site_door': 'your events page'}
+               'site_door': 'your events page', 'plan': 'your plan'}
 
 
 def outcome_message(job, result):
@@ -487,6 +496,21 @@ class Adapter:
             action = {'type':'send_sms' if params['channel']=='sms' else 'draft_and_send',
                       'to':params['to'],'phone':params['to'],'email':params['to'],
                       'contact_id':params.get('contact_id'),'subject':self.order.facts.get('name','Your form'), 'body':params['url'],'message':params['url']}
+        with self.handler_scope(step, params):
+            if step.sensitive:
+                import spend_guard
+                if await asyncio.to_thread(spend_guard.over_budget,business_id=self.bid):
+                    return {'failed':True,'result':'Daily spending limit reached.'}
+            results = await chief._execute_actions(self.client,self.biz,[action],user_id=self.uid,surface='chat',prompted=True,owner_text=self.order.practitioner_words)
+            return results[-1] if results else None
+
+    @contextlib.contextmanager
+    def handler_scope(self, step, params):
+        """The trusted turn a step's handler runs in: this worker's business
+        and owner, the order's surface, taint and bound approval. Shared by
+        every kind, so a plan step is judged exactly as a build step is."""
+        import chief_of_staff as chief
+        import image_studio
         scope = worker_scope.set({'business_id':self.bid,'user_id':self.uid})
         actor = image_studio.build_actor.set({'business_id':self.bid,'user_id':self.uid})
         image_turn = image_studio.turn_id.set(self.order.order_id)
@@ -498,12 +522,7 @@ class Adapter:
         taint = chief._UNTRUSTED_TAINT.set(int(self.order.untrusted_taint))
         uid = chief._TURN_USER_ID.set(self.uid)
         try:
-            if step.sensitive:
-                import spend_guard
-                if await asyncio.to_thread(spend_guard.over_budget,business_id=self.bid):
-                    return {'failed':True,'result':'Daily spending limit reached.'}
-            results = await chief._execute_actions(self.client,self.biz,[action],user_id=self.uid,surface='chat',prompted=True,owner_text=self.order.practitioner_words)
-            return results[-1] if results else None
+            yield
         finally:
             worker_scope.reset(scope); entity_id.reset(eid); image_studio.build_actor.reset(actor)
             image_studio.turn_id.reset(image_turn); image_studio.turn_image_index.reset(image_index); image_studio.turn_references.reset(image_refs)
@@ -632,8 +651,8 @@ class Adapter:
 
 
 BUILD_TOOLS = {
- 'submit_work_order': ('Queue one background build. Use event_setup for a workshop, form_and_link for a form, flyer for an image, or site_door for Events. Never invent missing facts.',
-  {'type':'object','properties':{'kind':{'type':'string','enum':['event_setup','form_and_link','flyer','site_door']},'brief':{'type':'string'},'facts':{'type':'object'}},'required':['kind','facts'],'additionalProperties':False}),
+ 'submit_work_order': ('Queue one background build. Use event_setup for a workshop, form_and_link for a form, flyer for an image, site_door for Events, or plan for several pieces of work from one request. Never invent missing facts.',
+  {'type':'object','properties':{'kind':{'type':'string','enum':['event_setup','form_and_link','flyer','site_door','plan']},'brief':{'type':'string'},'facts':{'type':'object'}},'required':['kind','facts'],'additionalProperties':False}),
  'respond_work_order': ('Answer the one missing field of an existing build, or continue its held step only when the current user explicitly says go ahead. Use its existing job id.',
   {'type':'object','properties':{'job_id':{'type':'string'},'field':{'type':'string'},'answer':{},'approve':{'type':'boolean'},'cancel':{'type':'boolean'}},'required':['job_id'],'additionalProperties':False})}
 
@@ -671,7 +690,7 @@ def route_actions(actions):
 def context_block(jobs):
     if not enabled():
         return ''
-    return ('BUILD vs DO: For event setup, forms with links, flyers, and events pages, emit exactly one submit_work_order. '
+    return ('BUILD vs DO: For event setup, forms with links, flyers, events pages, and a request with several pieces of work (kind plan), emit exactly one submit_work_order. '
         'Do not execute their individual build steps inline. Read-only questions about an existing build never submit a new one. '
         'Use respond_work_order with its job id for a missing answer or an explicit go-ahead. '
         'Custom coding is not available through work orders. Do not promise it. '
@@ -735,8 +754,9 @@ Call submit_work_order exactly once. Do not plan or perform its component action
 - form_and_link: name, fields (form field objects with label/type/required), form_type, optional send_to and channel. An event registration must use form_type=event. For form_type=event, also supply description, starts_at (ISO date and time), timezone (IANA), location and admission. These event details are mandatory public page content, separate from visitor questions. Use the owner's confirmed facts; never invent them. Ask whether to include a flyer unless the owner has already chosen; include_flyer=true/false records that choice. If true, flyer_url must be the chosen public image URL. A flyer is optional and never substitutes for written event details. If the owner asks to create a flyer, prepare it through the flyer workflow, then attach its published image URL with update_client_form; never claim a private preview or pending image is attached. For an existing form, update_client_form accepts event_details and the same detail fields; include_flyer=false removes its flyer.
 - flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.
 - site_door: capability=events.
+- plan: a request with two or more separate pieces of work, or a job of several steps. It runs in the background and the owner keeps talking. facts: title, goal, steps: [{"title": "...", "action": {"type": "<action>", ...the same fields that action takes in chat}}]. Steps run in order. A later step can use an earlier step's result with "@type.field" (for example "@create_contact.contact_id"), or repeat over a list with "for_each": "@show_view.rows" and {{item.field}}. Put "approval": true on a step the owner wants to review first. A plan may include one generate_image step. Workshops, forms with links and events pages are never plan steps: only one work order per turn, so submit that one and do the other pieces directly in this turn. One quick action is done directly, not as a plan. Sends, bookings and charges in a plan run on the owner's ask, exactly as in chat.
 Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form or generate_image for those build steps.
 Questions about a job in BUILDS IN PROGRESS are read-only: answer with its summary_label verbatim, without extra execution claims or follow-up offers. Never create another build to check progress.
-An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer.
+An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer; a plan's question is answered with field plan_answer.
 After submitting or responding, read only the returned label; queued work is not finished work.
 '''
