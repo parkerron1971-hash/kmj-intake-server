@@ -59,9 +59,12 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
     exposed = set(mcp_server.exposed_tools())
     assert "show_view" not in names, "display stays an action"
     private_coordination = {"list_connected_agents", "connected_agent_assignments"}
-    assert all(not action_registry.may_expose_to_agent(n) for n in private_coordination)
-    assert names == (exposed - {"show_view"}) | private_coordination, (
-        "The only extra reads are Chief's private coordination tools; bots cannot see one another's briefs"
+    # view_website drives the server's browser: Chief's own, never an outside agent's.
+    chief_only = private_coordination | {"view_website"}
+    assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
+    assert names == (exposed - {"show_view"}) | chief_only, (
+        "The only extra reads are Chief's private ones: coordination tools (bots cannot see one "
+        "another's briefs) and view_website (the server's browser)"
     )
 
 

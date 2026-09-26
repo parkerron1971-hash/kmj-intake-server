@@ -49,7 +49,21 @@ For kind=cancel_order, never make a purchase. Use review_cancellation before one
 left click on the exact reviewed Cancel order button. Finish with
 {"cancelled_order_number":"the approved order number"} only after a visible
 cancellation confirmation. Do not infer a refund from a cancellation.
+When a form needs the owner's own details (a sign-up, an application, a profile)
+or anything the plan does not give you, call hand_form_to_owner with a reference
+to any field inside that form. The owner fills it privately in chat; you never
+see the values. Never make up personal details. Terms, consent and privacy boxes
+are the owner's to tick; they tick them in the handed form, never you.
 """
+OWNER_FORM_TOOL = {'name': 'hand_form_to_owner',
+    'description': ("Hand the form around a field to the owner in chat and pause. Use it for a sign-up, "
+                    "an application, a profile or any form that needs the owner's own details, and for "
+                    "terms or consent boxes. Pass a ref from read_page for any field inside the form, and "
+                    "a short reason the owner will read. You never see what they enter."),
+    'input_schema': {'type': 'object', 'properties': {
+        'ref': {'type': 'string'},
+        'reason': {'type': 'string', 'maxLength': 200}},
+        'required': ['ref'], 'additionalProperties': False}}
 
 
 def model_name():
@@ -187,6 +201,9 @@ class Driver:
                     'read_page','find','get_page_text','wait','scroll','scroll_to','hover','mouse_move','secure_fill'}:
             return
         element=action_element(self.controller,name,args)
+        if (element is not None and name in ('left_click','double_click','triple_click','form_input','key','hold_key',
+                'left_mouse_down','left_mouse_up') and self.controller.consent_control(element)):
+            raise BrowserStopped('Terms and consent are the owner\'s to accept. Use hand_form_to_owner.')
         if name in ('key','hold_key') and element is not None and re.search(r'enter|return|space',str(args.get('text','')),re.I):
             form=element.evaluate_handle('el=>el.form').as_element()
             if form and any(CANCEL.search(b.evaluate(VISIBLE_TEXT)) for b in form.query_selector_all('button,input[type=submit]')):
@@ -257,11 +274,14 @@ class Driver:
         seconds=min(300 if info['field_kind']=='otp' else 600,max(0,self.deadline-self.clock()))
         self.controller.hold['expires']=self.clock()+seconds
         rows=self.store.db('GET',f'/business_secrets?business_id=eq.{self.bid}&host=eq.{info["host"]}'
-            f'&status=eq.active&kind=eq.login&select={errands.secret_vault.METADATA_COLUMNS}&limit=100') or []
+            f'&status=eq.active&kind=eq.login&select={errands.secret_vault.METADATA_COLUMNS}&limit=100') or [] if info['field_kind']=='login' else []
+        form=info['field_kind']=='form'
         hold={'id':info['id'],'kind':'secret','field_kind':info['field_kind'],'host':info['host'],
-            'label':'Secure Entry required','form_hint':'Enter directly into the supplier form.',
+            'label':'Your details are needed' if form else 'Secure Entry required',
+            'form_hint':'Fill in the site\'s form here; Chief never sees it.' if form else 'Enter directly into the supplier form.',
             'saved_options':[errands.secret_vault.secret_metadata(r) for r in rows] if info['field_kind']=='login' else [],
             'allow_save':info['field_kind']=='login','needs_stepup':False,
+            **({'fields':info['fields'],'reason':info.get('reason') or ''} if form else {}),
             'expires_at':(datetime.now(timezone.utc)+timedelta(seconds=seconds)).isoformat()}
         # Section 7 saved option keys use secret_id, not the settings list's id.
         hold['saved_options']=[{'secret_id':r['id'],'label':r['label'],'display':r['display']} for r in hold['saved_options']]
@@ -307,6 +327,14 @@ class Driver:
         self.cancel_review=inspect_cancellation(self.controller,self.row['plan']['order_number'],args)
         return 'Cancellation matches the approved order. Click the reviewed control once.'
 
+    def _hand_form(self,args):
+        self._guard('read_page',{})
+        if set(args)-{'ref','reason'} or not isinstance(args.get('ref'),str):
+            raise BrowserStopped('Hand over a form with a field reference from read_page.')
+        reason=args.get('reason') if isinstance(args.get('reason'),str) else ''
+        self.controller.hold_form(args['ref'],reason[:200])
+        return 'Secure Entry is required. The run is paused.'
+
     def _secret_command(self,command):
         hold=self.row.get('hold') or {}
         if self.row['status']!='needs_you' or hold.get('kind')!='secret' or hold.get('id')!=command.hold_id:
@@ -322,7 +350,12 @@ class Driver:
             fields=errands.secret_vault.decrypt(saved['fields_ciphertext'],business_id=self.bid,
                 secret_id=command.saved_id,host=hold['host'],kind=saved['kind'])
         try:
-            self.controller.fill_secret(command.hold_id,fields)
+            if hold['field_kind']=='form':
+                if saved or command.save_row:
+                    raise BrowserStopped('A handed-over form is filled once and never saved.')
+                self.controller.fill_form(command.hold_id,fields)
+            else:
+                self.controller.fill_secret(command.hold_id,fields)
             if hold['field_kind']=='card':
                 self.last4=re.sub(r'\D','',fields['number'])[-4:]
             self.row=self.store.transition(self.row,('needs_you',),{'status':'running','hold':None},
@@ -440,7 +473,7 @@ class Driver:
         try:
             response=self.client.messages.create(model=self.model,max_tokens=8192,
                 system=[{'type':'text','text':SYSTEM,'cache_control':{'type':'ephemeral'}}],
-                tools=[tool_config(),CHECKOUT_TOOL,CANCEL_TOOL],messages=messages,
+                tools=[tool_config(),CHECKOUT_TOOL,CANCEL_TOOL,OWNER_FORM_TOOL],messages=messages,
                 timeout=min(60,max(1,self.deadline-self.clock())))
             data=response if isinstance(response,dict) else response.model_dump(exclude_none=True)
             self.meter(data,self.model,self.bid,started)
@@ -566,6 +599,8 @@ class Driver:
                                 result['content']=self._review_checkout(use.get('input') or {})
                             elif use.get('name')=='review_cancellation':
                                 result['content']=self._review_cancellation(use.get('input') or {})
+                            elif use.get('name')=='hand_form_to_owner':
+                                result['content']=self._hand_form(use.get('input') or {})
                             else:
                                 raise BrowserStopped('Unknown browser worker tool.')
                         except BrowserStopped as exc:
