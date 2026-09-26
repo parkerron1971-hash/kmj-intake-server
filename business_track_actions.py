@@ -359,22 +359,48 @@ _IMPORT_HOW_TAIL = (
     f"or {REAL_CLIENT_LIST_MIN} or more people)."
 )
 
-# The how-line when we do not yet know where their people are.
-IMPORT_HOW_GENERIC = (
-    "DO IT HERE, and aim for the whole list, not one name. Ask where their "
-    "{clients} live today (their phone, a spreadsheet, a booking app) and offer "
-    "the ways in: a file from any app or spreadsheet — Bring a file over "
-    "(navigate build/structure-import; it reads their columns and builds around "
-    "them) — their phone contacts saved as a file, or 'tell me where they live "
-    "and I'll walk you through the export'. If you do not know a tool's menus, "
-    "say 'look for Export in your client list' — never guess menu names."
-    + _IMPORT_HOW_TAIL
-)
+def people_word(business_type: Optional[str]) -> str:
+    """What this vertical calls the people it serves, lower-case plural:
+    "clients", "members" (ministry), "donors" (nonprofit), "students"
+    (course creator), "customers" (the generic word, e.g. a contractor).
+
+    Read from vertical_terminology — the backend mirror of the app's
+    dictionary.ts, alias-resolved — so Chief says the same word the app's
+    screens already say. Before 2026-09-26 the import step carried a
+    literal "{clients}" into Chief's prompt; nothing ever filled it."""
+    try:
+        import vertical_terminology
+        word = vertical_terminology.get_term(business_type, "customers")
+    except Exception:  # pragma: no cover — a lookup must never cost the step
+        word = ""
+    return (str(word or "").strip().lower()) or "clients"
+
+
+def _import_how_generic(people: str) -> str:
+    """The how-line when we do not yet know where their people are."""
+    return (
+        "DO IT HERE, and aim for the whole list, not one name. Ask where their "
+        f"{people} live today (their phone, a spreadsheet, a booking app) and offer "
+        "the ways in: a file from any app or spreadsheet — Bring a file over "
+        "(navigate build/structure-import; it reads their columns and builds around "
+        "them) — their phone contacts saved as a file, or 'tell me where they live "
+        "and I'll walk you through the export'. If you do not know a tool's menus, "
+        f"say 'look for Export in your list of {people}' — never guess menu names."
+        + _IMPORT_HOW_TAIL
+    )
+
+
+# The catalog's static line (read where no business is in hand). Every
+# per-business caller gets import_contacts_how(..., business_type) and so
+# the vertical's own word.
+IMPORT_HOW_GENERIC = _import_how_generic("clients")
 
 
 def import_contacts_how(sources: Optional[List[str]] = None,
-                        other: Optional[str] = None) -> str:
-    """The import step's how-line, tailored to where their clients live.
+                        other: Optional[str] = None,
+                        business_type: Optional[str] = None) -> str:
+    """The import step's how-line, tailored to where their clients live,
+    in the vertical's own word for them (people_word).
 
     Leads with the whole list every time; one name is the fallback. With
     a known source it carries that tool's export steps (at most three, so
@@ -382,9 +408,10 @@ def import_contacts_how(sources: Optional[List[str]] = None,
     prompt). Always starts "DO IT HERE" and always names create_contact
     and structure-import — the setup block, the room card and the
     morning brief all read those markers."""
+    people = people_word(business_type)
     keys = normalize_client_sources(sources or [])
     if not keys:
-        return IMPORT_HOW_GENERIC
+        return _import_how_generic(people)
     named = ", ".join(
         (f"{CLIENT_SOURCES[k]['label']} ({other})" if k == "other" and other
          else CLIENT_SOURCES[k]["label"]) for k in keys)
@@ -393,7 +420,7 @@ def import_contacts_how(sources: Optional[List[str]] = None,
         # batches — and a file is still the faster door if one turns up.
         return (
             "DO IT HERE, and aim for the whole list, not one name. They told us "
-            "their {clients} live on paper or in their head. "
+            f"their {people} live on paper or in their head. "
             + CLIENT_SOURCES["paper"]["export"] + " Ask for the "
             "first handful now, and keep going until the list is in (an import, "
             f"or {REAL_CLIENT_LIST_MIN} or more people). If a list turns up in a "
@@ -402,7 +429,7 @@ def import_contacts_how(sources: Optional[List[str]] = None,
         )
     lines = [
         "DO IT HERE, and aim for the whole list, not one name. They told us "
-        "their {clients} live in: " + named + ". Offer to walk them through "
+        f"their {people} live in: " + named + ". Offer to walk them through "
         "getting that out as a file, then Bring a file over (navigate "
         "build/structure-import; it reads their columns and builds around "
         "them). The export, short and exact — say only these steps:"
@@ -412,8 +439,8 @@ def import_contacts_how(sources: Optional[List[str]] = None,
         step = CLIENT_SOURCES[k]["export"]
         if k == "other" or not step:
             lines.append(f"  - {other or 'Their other tool'}: you do not know its menus; "
-                         "say 'look for Export in your client list or its settings' "
-                         "and never guess.")
+                         f"say 'look for Export in your list of {people}, or in its "
+                         "settings' and never guess.")
         else:
             lines.append(f"  - {CLIENT_SOURCES[k]['label']}: {step}")
         shown += 1
@@ -725,11 +752,13 @@ def needs_for(key: str, business_type: Optional[str]) -> List[str]:
 
 
 def plugin_how(key: str, sources: Optional[List[str]] = None,
-               other: Optional[str] = None) -> str:
+               other: Optional[str] = None,
+               business_type: Optional[str] = None) -> str:
     """How Chief does this step. The catalog line, except the import
-    step, which is tailored to where this business's clients live."""
+    step, which is tailored to where this business's clients live and
+    says the vertical's own word for them."""
     if key == "import_contacts":
-        return import_contacts_how(sources, other)
+        return import_contacts_how(sources, other, business_type)
     return str((PLUGIN_CATALOG.get(key) or {}).get("chief") or "")
 
 

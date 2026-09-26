@@ -179,11 +179,48 @@ def test_giving_reaches_only_the_organisations_that_can_take_gifts():
 
 
 def test_a_barber_sees_hours_and_clients_first():
-    # Barbers onboard as personal_services (the registry has no "barber"
-    # alias; the onboarding card writes the canonical key).
-    keys = bta.plugins_for_vertical("personal_services")
-    assert keys[0] == "import_contacts"
-    assert "availability" in keys and "intake_form" not in keys and "giving" not in keys
+    for btype in ("personal_services", "barber"):
+        keys = bta.plugins_for_vertical(btype)
+        assert keys[0] == "import_contacts"
+        assert "availability" in keys and "intake_form" not in keys and "giving" not in keys
+
+
+# ─── salons and barbers are personal_services (2026-09-26) ───────────
+# personal_services had no aliases, so a business stamped "barber" or
+# "salon" resolved to "custom" and never got the hours step, the
+# dictionary or the lens. Found by the new-business eval.
+
+SALON_ALIASES = ("barber", "barbershop", "salon", "hair_salon", "beauty",
+                 "Barber Shop", "hair-salon", "stylist", "spa", "nail_salon")
+
+
+@pytest.mark.parametrize("alias", SALON_ALIASES)
+def test_salon_and_barber_types_resolve_to_personal_services(alias):
+    assert vertical_registry.resolve(alias) == "personal_services"
+
+
+@pytest.mark.parametrize("alias", SALON_ALIASES)
+def test_salon_and_barber_types_get_the_hours_step(alias):
+    keys = bta.plugins_for_vertical(alias)
+    assert "availability" in keys
+    assert keys == bta.plugins_for_vertical("personal_services")
+    assert bta.sendable_artifact_for(alias)["nav"]["page"] == "booking-share"
+
+
+def test_a_barber_reads_the_personal_services_words_and_lens():
+    import chief_prompt
+    import vertical_terminology
+    assert vertical_terminology.terms_for("barber") == vertical_terminology.terms_for("personal_services")
+    assert chief_prompt._build_archetype_block({"type": "barbershop"}, {}) == \
+        chief_prompt._build_archetype_block({"type": "personal_services"}, {})
+
+
+def test_no_alias_is_claimed_by_two_verticals():
+    seen = {}
+    for key, meta in vertical_registry.CANONICAL.items():
+        for alias in [key] + list(meta.get("aliases", [])):
+            assert alias not in seen, f"{alias!r} is claimed by {seen[alias]} and {key}"
+            seen[alias] = key
 
 
 def test_every_first_hour_goal_is_on_its_own_verticals_list():
@@ -263,9 +300,9 @@ def test_a_stored_answer_brings_that_tools_export_steps():
 
 
 def test_an_unchecked_tool_gets_the_generic_line_not_a_guess():
-    how = bta.import_contacts_how(["other"], other="Fresha")
+    how = bta.import_contacts_how(["other"], other="Fresha", business_type="personal_services")
     assert "Fresha" in how
-    assert "look for Export in your client list" in how
+    assert "look for Export in your list of clients" in how and "never guess" in how
 
 
 def test_paper_is_taken_by_name_in_batches():
@@ -380,3 +417,52 @@ def test_an_alias_reads_its_verticals_lens():
         chief_prompt._build_archetype_block({"type": "therapist"}, {})
     generic = chief_prompt._build_archetype_block({"type": "mobile pet grooming"}, {})
     assert generic.startswith("ARCHETYPE LENS.")
+
+
+# ═══ 7. no unfilled placeholder ever reaches Chief ═══════════════════
+# The import step carried a literal "{clients}" into Chief's prompt from
+# the day it was written; nothing substituted it. Every rendered piece of
+# plug-in text is checked, for every vertical and alias, with and without
+# a known source.
+
+import re  # noqa: E402
+
+_PLACEHOLDER = re.compile(r"\{[A-Za-z_:]+\}")
+_ALL_TYPES = sorted(set(vertical_registry.canonical_keys())
+                    | set(vertical_registry.alias_to_canonical())
+                    | {"", "mobile pet grooming"})
+
+
+@pytest.mark.parametrize("btype", _ALL_TYPES)
+def test_no_rendered_plugin_text_has_a_placeholder(btype, db):
+    for settings in ({}, {"client_sources": {"sources": ["square", "phone", "other"],
+                                             "other": "Fresha"}},
+                     {"client_sources": {"sources": ["paper"]}}):
+        items = btr.resolve_plugins(_biz(btype, settings))
+        for p in items:
+            for field in ("title", "why", "how"):
+                assert "{" not in p[field] and "}" not in p[field], (btype, p["key"], field, p[field])
+        import chief_prompt
+        block = chief_prompt._format_setup_block(
+            {"items": items, "done": 0, "total": len(items),
+             "artifact": bta.sendable_artifact_for(btype)})
+        assert not _PLACEHOLDER.search(block), (btype, _PLACEHOLDER.search(block).group(0))
+
+
+def test_the_catalog_lines_have_no_placeholder_either():
+    for key, spec in bta.PLUGIN_CATALOG.items():
+        for field in ("chief", "title", "why"):
+            assert not _PLACEHOLDER.search(spec[field]), (key, field)
+    for v, art in bta.SENDABLE_ARTIFACT.items():
+        assert not _PLACEHOLDER.search(art["label"]), v
+
+
+@pytest.mark.parametrize("btype,word", [
+    ("ministry", "members"), ("church", "members"), ("nonprofit", "donors"),
+    ("course_creator", "students"), ("therapist", "clients"), ("barber", "clients"),
+    ("contractor", "customers"),
+])
+def test_the_import_step_says_the_verticals_own_word(btype, word):
+    for sources in ([], ["square"], ["paper"]):
+        how = bta.import_contacts_how(sources, business_type=btype)
+        assert f"their {word} live" in how, (btype, sources)

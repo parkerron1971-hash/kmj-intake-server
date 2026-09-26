@@ -350,7 +350,7 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
             # Added 2026-09-26 (existing keys unchanged): how Chief does
             # this step for THIS business — the catalog line, tailored for
             # the import step to where their clients live.
-            "how": bta.plugin_how(key, sources, other),
+            "how": bta.plugin_how(key, sources, other, biz.get("type")),
         })
 
     # Undone first, then blocked ones after the things that unblock them.
