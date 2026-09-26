@@ -124,12 +124,26 @@ def _resolve_audience(business_id: str, audience: Dict[str, Any]) -> List[Dict[s
     filt = _audience_filter(audience)
     return sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{business_id}&{filt}"
-        f"&select=id,name,email,phone,status,last_interaction&limit=500") or []
+        f"&select=id,name,email,phone,status,last_interaction,metadata&limit=500") or []
+
+
+def _opted_out(contact: Dict[str, Any], channel: str) -> bool:
+    """A per-business opt-out recorded on the contact — today written by
+    the client-list import when the old tool's export said the person
+    unsubscribed, was cleaned or bounced, or said no to marketing
+    (contacts_import_router). Email has no per-business suppression list
+    (email_suppressions is platform-wide), so this is the one that holds
+    campaigns back. Texts are ALSO held by sms_opt_outs via
+    has_sms_consent; this is the belt to that brace."""
+    md = contact.get("metadata")
+    return isinstance(md, dict) and bool(md.get(f"{channel}_opt_out"))
 
 
 def _audience_summary(contacts: List[Dict[str, Any]]) -> Dict[str, Any]:
-    emailable = [c for c in contacts if (c.get("email") or "").strip()]
-    textable = [c for c in contacts if (c.get("phone") or "").strip()]
+    emailable = [c for c in contacts if (c.get("email") or "").strip()
+                 and not _opted_out(c, "email")]
+    textable = [c for c in contacts if (c.get("phone") or "").strip()
+                and not _opted_out(c, "sms")]
     return {
         "count": len(contacts),
         "emailable": len(emailable),
@@ -615,6 +629,8 @@ async def _send_touch(biz, camp, idx, touch, contact,
         to_email = (contact.get("email") or "").strip()
         if not to_email:
             return "skipped"
+        if _opted_out(contact, "email"):
+            return "skipped"
         if await email_sender.is_suppressed(to_email):
             return "skipped"
         claimed = sb_clients.sb_post_as_service("/campaign_sends", {
@@ -639,6 +655,8 @@ async def _send_touch(biz, camp, idx, touch, contact,
     if channel == "sms":
         phone = normalize_phone(contact.get("phone") or "")
         if not phone:
+            return "skipped"
+        if _opted_out(contact, "sms"):
             return "skipped"
         if not sms_alerts.alerts_enabled():
             return "skipped"

@@ -185,24 +185,23 @@ def _validate_spec(spec: Dict[str, Any]) -> List[str]:
 
 
 def _contacts_rows(sheet: RunSheet, rows: List[List[Any]]) -> List[Dict[str, Any]]:
-    idx = {str(h or "").strip(): i for i, h in enumerate(sheet.headers)}
-    plan: Dict[str, int] = {}
+    """The confirmed column decisions → contact rows, through the SAME
+    contact_fields.rows_from_table the Contacts importer uses — so a
+    people sheet keeps last names, birthdays, addresses and unsubscribes
+    exactly as the dialog does. A column the proposal left out stays
+    out; a column with a field we do not know is kept as a detail."""
+    import contact_fields
+    by_header: Dict[str, str] = {}
     for col in sheet.columns:
-        if col.get("decision") != "map" or not col.get("field"):
+        h = str(col.get("header") or "").strip()
+        if h in by_header:
             continue
-        target = col["field"].get("name")
-        i = idx.get(str(col.get("header") or "").strip())
-        if target in ("name", "email", "phone", "status", "tags", "note") and i is not None:
-            plan.setdefault(target, i)
-    out = []
-    for r in rows:
-        def get(k: str) -> str:
-            i = plan.get(k)
-            return str(r[i] if i is not None and i < len(r) and r[i] is not None else "").strip()
-        tags = [t.strip() for t in get("tags").replace("|", ";").split(";") if t.strip()]
-        out.append({"name": get("name"), "email": get("email"), "phone": get("phone"),
-                    "status": get("status").lower(), "tags": tags, "note": get("note")})
-    return out
+        if col.get("decision") == "drop" or not col.get("field"):
+            by_header[h] = "skip"
+        else:
+            by_header[h] = str((col.get("field") or {}).get("name") or "detail")
+    fields = [by_header.get(str(h or "").strip(), "detail") for h in sheet.headers]
+    return contact_fields.rows_from_table(sheet.headers, rows, fields)
 
 
 def _run_contacts(business_id: str, user: AuthedUser, sheet: RunSheet,
@@ -213,7 +212,8 @@ def _run_contacts(business_id: str, user: AuthedUser, sheet: RunSheet,
         return {"sheet": sheet.sheet, "module_action": "n/a", "module_slug": "contacts",
                 "summary": {"to_create": 0, "matched": 0, "skipped": 0, "total": 0}, "results": []}
     res = import_contacts(business_id, ImportBody(rows=payload, dry_run=dry_run,
-                                                   on_duplicate=on_duplicate), user)
+                                                   on_duplicate=on_duplicate,
+                                                   source="structure_import"), user)
     return {"sheet": sheet.sheet, "module_action": "n/a", "module_slug": "contacts",
             "summary": res.get("summary") or {}, "results": res.get("results") or []}
 
