@@ -67,3 +67,11 @@ hiero-sdk-python>=0.1.0
 # MX/DMARC records itself so the UI can show expected vs FOUND instead
 # of Resend's bare "pending". Pure Python.
 dnspython>=2.6.0
+
+# Outside calendars (outside_calendar.py) — the practitioner pastes a
+# private iCal link (Google secret address, Outlook published calendar,
+# iCloud, Acuity) and its busy times block booking slots. icalendar
+# parses the feed; recurring-ical-events expands RRULE/RDATE/EXDATE and
+# RECURRENCE-ID overrides (and applies X-WR-TIMEZONE). Pure Python.
+icalendar==7.3.0
+recurring-ical-events==3.8.2

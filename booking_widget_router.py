@@ -653,6 +653,16 @@ def _slots_per_offering(
     if not isinstance(bookings, list):
         bookings = []
 
+    # Busy times from the practitioner's other calendar (outside_calendar).
+    # Read once for the window; fails soft to [] (nothing connected / not
+    # set up), which leaves the slots exactly as before.
+    try:
+        import outside_calendar
+        outside_busy = outside_calendar.busy_blocks_for_dates(business["id"], today, horizon)
+    except Exception as e:  # pragma: no cover — never break the widget
+        logger.warning(f"outside busy read failed: {type(e).__name__}")
+        outside_busy = []
+
     out: Dict[str, List[Dict[str, Any]]] = {}
     for off in offerings or []:
         oid = off.get("id")
@@ -667,6 +677,7 @@ def _slots_per_offering(
                 offering_duration_min=int(dur),
                 from_date=today,
                 to_date=horizon,
+                busy_blocks=outside_busy,
             )
             out[oid] = slots
         except Exception as e:  # pragma: no cover — never break widget
@@ -1251,6 +1262,18 @@ def _check_slot_available(
         # If we can't parse the slot, don't block the booking; the
         # check is opportunistic.
         return True
+
+    # Outside calendar (2026-09-26): busy on the practitioner's other
+    # calendar is a conflict at ANY capacity — the practitioner is not
+    # here. Checked first because a feed can gain a busy block between
+    # the slot list and the submit (it re-syncs every 15 minutes).
+    # Fails soft: nothing connected / not set up → no conflict.
+    try:
+        import outside_calendar
+        if outside_calendar.conflicts_with_outside_calendar(business_id, slot_start, slot_end):
+            return False
+    except Exception as e:  # pragma: no cover — never break a booking on a read
+        logger.warning(f"outside busy re-check failed: {type(e).__name__}")
 
     rows = sb_clients.sb_get_as_service(
         f"/module_entries?business_id=eq.{business_id}"

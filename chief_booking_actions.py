@@ -227,7 +227,9 @@ def _suggest_slots(business_id: str, offering: Dict[str, Any],
     list just means the failure message stays generic."""
     try:
         from availability_engine import BusinessAvailability, compute_slots
-        from availability_router import _bookings_in_window, _practitioner_timezone
+        from availability_router import (
+            _bookings_in_window, _outside_busy, _practitioner_timezone,
+        )
 
         rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}&select=id,owner_id,settings&limit=1") or []
@@ -250,6 +252,8 @@ def _suggest_slots(business_id: str, offering: Dict[str, Any],
             offering_duration_min=int(offering.get("duration_min") or 60),
             from_date=from_date,
             to_date=to_date,
+            # Busy on the practitioner's other calendar → not suggested.
+            busy_blocks=_outside_busy(business_id, from_date, to_date),
         ) or []
         return [_pretty(s.get("start_utc") or "") for s in slots[:_SUGGEST_LIMIT]]
     except Exception as e:

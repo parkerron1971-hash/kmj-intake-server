@@ -701,12 +701,17 @@ def slots_for(b: Dict[str, Any], off: Dict[str, Any],
             f"/module_entries?business_id=eq.{b['facts']['id']}"
             f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}&status=eq.active"
             "&select=appointment_at,duration_min_at_booking,duration_min&limit=2000") or []
+        # The practitioner's other calendar (outside_calendar) — busy there
+        # is busy here. Fails soft to [] when nothing is connected.
+        import outside_calendar
+        outside_busy = outside_calendar.busy_blocks_for_dates(b["facts"]["id"], start, end)
         return compute_slots(
             availability=av,
             practitioner_tz=b["facts"].get("timezone") or None,
             existing_bookings=bookings if isinstance(bookings, list) else [],
             offering_duration_min=int(off.get("duration_min") or 60),
-            from_date=start, to_date=end)
+            from_date=start, to_date=end,
+            busy_blocks=outside_busy)
     except HTTPException:
         raise
     except Exception as e:
