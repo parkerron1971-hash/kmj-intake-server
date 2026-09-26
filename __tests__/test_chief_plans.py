@@ -429,3 +429,61 @@ def test_a_look_that_ran_out_of_lookups_decides_once_more_without_tools(monkeypa
     assert decision['question'] == 'Who is Dana?'
     assert [c['tools'] for c in calls] == [True, False]
     assert calls[1]['messages'][1] == {'role': 'assistant', 'content': 'Still checking the contacts'}
+
+
+# ─── What's left after the direct-change limit ─────────────────────────
+
+def _tool_turn(monkeypatch, results, calls, *, submitted=False):
+    import chief_of_staff as cos
+    import chief_tool_loop as ctl
+    queue = list(results)
+
+    async def door(client, biz, actions, user_id=None, prior_results=None, surface='chat', prompted=True):
+        calls.append(actions[0]['type'])
+        return [queue.pop(0) if queue else {'type': actions[0]['type'], 'result': 'ok', 'label': 'x'}]
+    monkeypatch.setattr(cos, '_execute_actions', door)
+
+    async def main(names):
+        ctl.reset_turn(writes_allowed=True)
+        token = runtime.turn_scope.set({'user_id': USER, 'turn_id': 't', 'surface': 'desktop', 'words': 'w',
+                                        'submitted': submitted})
+        try:
+            return [await ctl.execute_tool_use(None, {'id': BIZ}, n, a) for n, a in names]
+        finally:
+            runtime.turn_scope.reset(token)
+    return main
+
+
+PLAN_ARGS = {'kind': 'plan', 'facts': {'steps': [ADD_ADA, CALL_ADA]}}
+TASK = ('create_task', {'title': 'x'})
+
+
+def test_after_three_direct_changes_the_rest_goes_out_as_one_plan(monkeypatch):
+    # Live 2026-09-26: nine changes asked, three made, "I'll finish the rest in the next pass".
+    monkeypatch.setenv('CHIEF_BUILDS', 'on')
+    calls = []
+    main = _tool_turn(monkeypatch, [], calls)
+    out = asyncio.run(main([TASK, TASK, TASK, TASK, ('submit_work_order', PLAN_ARGS)]))
+    assert [err for err, _ in out] == [False, False, False, True, False]
+    assert 'kind plan' in out[3][1] and 'next pass' in out[3][1]
+    assert calls == ['create_task'] * 3 + ['submit_work_order']
+
+
+def test_a_held_change_still_closes_the_turn(monkeypatch):
+    monkeypatch.setenv('CHIEF_BUILDS', 'on')
+    calls = []
+    held = {'type': 'create_task', 'failed': True, 'result': 'Failed: HELD for a spoken yes', 'label': 'Held'}
+    main = _tool_turn(monkeypatch, [held], calls)
+    out = asyncio.run(main([TASK, ('submit_work_order', PLAN_ARGS)]))
+    assert out[1][0] is True and 'HELD' in out[1][1] and calls == ['create_task']
+
+
+def test_without_builds_or_after_the_one_order_the_old_limit_stands(monkeypatch):
+    monkeypatch.setenv('CHIEF_BUILDS', 'off')
+    calls = []
+    out = asyncio.run(_tool_turn(monkeypatch, [], calls)([TASK] * 4))
+    assert out[3][0] is True and 'kind plan' not in out[3][1]
+    monkeypatch.setenv('CHIEF_BUILDS', 'on')
+    calls.clear()
+    out = asyncio.run(_tool_turn(monkeypatch, [], calls, submitted=True)([TASK] * 4))
+    assert out[3][0] is True and 'kind plan' not in out[3][1]
