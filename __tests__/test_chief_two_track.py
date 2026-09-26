@@ -297,6 +297,31 @@ def test_an_unsure_instruction_goes_to_the_full_turn_whatever_the_classifier_say
     assert _router_on[-1]["lane"] == "full" and _router_on[-1]["classifier"] == "haiku"
 
 
+def test_what_can_you_do_is_answered_by_the_full_turn(monkeypatch, restore_chat, _router_on):
+    """A new account's setup starter. The classifier would have rated it
+    low and sure, and Haiku alone knows neither the product nor this
+    business's setup. It skips the classifier and gets an opening, then
+    the full turn's answer."""
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+
+    def script(ep):
+        if ep == "/chief/route":
+            return [(0.05, '{"needs_records": false, "needs_action": false, '
+                           '"complexity": "low", "confidence": 0.95}')]
+        if ep == "/chief/opener":
+            return [(0.05, "Let me walk you through it.")]
+        return [(0.05, "I can do all sorts of things!")]
+    fake, calls = _fake_stream(script)
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, turns = asyncio.run(_run(_req("What can you do for me?"),
+                                     turn_reply="Your booking page is next."))
+    assert len(turns) == 1
+    endpoints = {c["endpoint"] for c in calls}
+    assert "/chief/backend" not in endpoints and "/chief/route" not in endpoints
+    row = _router_on[-1]
+    assert row["lane"] == "full" and row["reason"] == "product"
+
+
 def test_a_follow_up_never_goes_to_haiku_alone(monkeypatch, restore_chat, _router_on):
     cft.note_full_turn_ok(SESSION.user.id, BIZ)
     c = mr.score("what about for a salon?")
