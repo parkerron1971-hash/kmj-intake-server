@@ -151,6 +151,9 @@ class ImportBody(BaseModel):
 class ColumnsBody(BaseModel):
     headers: List[str]
     sample_rows: List[List[Any]] = Field(default_factory=list)
+    # Rows with a value, per column, across the whole file — so a column
+    # filled only far down the file is not mistaken for an empty one.
+    filled: Optional[List[int]] = None
 
 
 def _gate(biz_id: str, user: AuthedUser, min_role: str = "member") -> Dict[str, Any]:
@@ -288,7 +291,7 @@ def guess_columns(business_id: str, body: ColumnsBody,
               for r in body.sample_rows[:25]]
     return {"ok": True,
             "fields": [dict(f) for f in contact_fields.FIELDS],
-            "columns": contact_fields.guess_columns(headers, sample)}
+            "columns": contact_fields.guess_columns(headers, sample, body.filled)}
 
 
 @router.post("/{business_id}")

@@ -401,3 +401,30 @@ def test_structure_import_and_the_dialog_share_one_mapping():
     assert "contact_fields.guess_columns" in inspect.getsource(si._contacts_columns)
     assert "contact_fields.rows_from_table" in inspect.getsource(sir._contacts_rows)
     assert "contact_fields.rows_from_table" in inspect.getsource(cir.import_contacts)
+
+
+# ─── The frontend's phone-contacts table is read without guessing ────
+
+# solutionist-studio src/core/lib/clientFile.ts PHONE_HEADERS — a vCard or
+# the Android contact picker arrives as a table under these headers. If
+# either side renames one, this is where it shows.
+PHONE_HEADERS = ["Full name", "First name", "Last name", "Email", "Other emails", "Mobile phone",
+                 "Other phones", "Street address", "Address line 2", "City", "State",
+                 "ZIP or postal code", "Country", "Birthday", "Company", "Job title", "Note",
+                 "Nickname", "Website", "Groups"]
+
+
+def test_phone_contact_headers_map_to_the_intended_fields():
+    got = [c["field"] for c in cf.guess_columns(PHONE_HEADERS, [])]
+    assert got == ["name", "first_name", "last_name", "email", "detail", "phone", "detail",
+                   "address", "address2", "city", "region", "postal_code", "country",
+                   "birthday", "company", "title", "note", "detail", "detail", "tags"]
+
+
+def test_a_column_filled_only_far_down_the_file_is_not_called_empty():
+    headers = ["Name", "Email", "Last Visit"]
+    sample = [["A", "a@x.com", ""], ["B", "b@x.com", ""]]
+    assert cf.guess_columns(headers, sample)[2]["field"] == "skip"
+    kept = cf.guess_columns(headers, sample, filled=[2, 2, 1])[2]
+    assert kept["field"] == "detail"
+    assert cf.guess_columns(headers, sample, filled=[2, 2, 0])[2]["note"] == "Empty in every row."

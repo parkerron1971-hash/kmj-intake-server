@@ -244,11 +244,16 @@ def _is_phone(v: str) -> bool:
             and not _DATE_RE.match(v))
 
 
-def guess_columns(headers: Sequence[Any], sample_rows: Sequence[Sequence[Any]] = ()) -> List[Dict[str, Any]]:
+def guess_columns(headers: Sequence[Any], sample_rows: Sequence[Sequence[Any]] = (),
+                  filled: Optional[Sequence[int]] = None) -> List[Dict[str, Any]]:
     """headers (+ a sample of rows) → one decision per column:
     {index, header, field, label, note}. The header is read first; the
     VALUES settle what the header cannot (an unlabelled email column, a
-    "Status" column that is really Mailchimp's subscription state)."""
+    "Status" column that is really Mailchimp's subscription state).
+
+    `filled` — how many rows of the WHOLE file have a value in each
+    column, when the caller knows. Without it, emptiness is judged on
+    the sample, and a column filled only on row 57 would look empty."""
     hs = [str(h if h is not None else "").strip() for h in headers]
     samples = [[_cell(r, i) for r in (sample_rows or [])] for i in range(len(hs))]
     have_samples = any(any(v for v in col) for col in samples)
@@ -267,8 +272,11 @@ def guess_columns(headers: Sequence[Any], sample_rows: Sequence[Sequence[Any]] =
         {"index": i, "header": hs[i] or f"Column {i + 1}", "field": "detail", "note": ""}
         for i in range(len(hs))
     ]
-    # Empty columns — every sampled value blank — are left out, by name.
-    empty = {i for i in range(len(hs)) if have_samples and not any(samples[i])}
+    # Empty columns are left out, by name.
+    if filled is not None:
+        empty = {i for i in range(len(hs)) if i < len(filled) and int(filled[i] or 0) == 0}
+    else:
+        empty = {i for i in range(len(hs)) if have_samples and not any(samples[i])}
 
     # Single-claim fields: the best-scoring column wins, the rest are details.
     claimed: Dict[str, int] = {}
@@ -312,7 +320,8 @@ def guess_columns(headers: Sequence[Any], sample_rows: Sequence[Sequence[Any]] =
             out[i].update(field="name", note="Reads as people's names.")
 
     for i in empty:
-        out[i].update(field="skip", note="Empty in every row we looked at.")
+        out[i].update(field="skip", note=("Empty in every row." if filled is not None
+                                          else "Empty in every row we looked at."))
     for c in out:
         if c["field"] == "skip" and not c["note"]:
             c["note"] = ("Describes the column next to it." if _DESCRIBES_RE.match(norm_header(c["header"]))
