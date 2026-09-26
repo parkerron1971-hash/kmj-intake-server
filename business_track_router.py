@@ -25,9 +25,10 @@ ticked off, which is worse than not showing it at all.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
@@ -61,12 +62,36 @@ def _exists(path: str) -> bool:
 # PROBES
 # ═══════════════════════════════════════════════════════════════════════
 
+# An import leaves its mark on contacts.source: contacts_import_router
+# writes "csv_import", and a people sheet in the structure import is
+# handed to that same importer, so it does too. Matched as *import* so an
+# importer added later ("vcard_import", …) counts without a second edit.
+IMPORT_SOURCE_PATTERN = "*import*"
+
+
 def _done_import_contacts(biz: Dict[str, Any]) -> bool:
-    # Plain existence, matching maturity_engine's contact_count signal.
-    # Deliberately NOT filtered by contacts.source: a practitioner who
-    # typed their people in by hand has done this step just as much as
-    # one who uploaded a file.
-    return _exists(f"/contacts?business_id=eq.{biz['id']}&select=id&limit=1")
+    """The client list came over: an import ran, OR the business holds a
+    real list (bta.REAL_CLIENT_LIST_MIN people).
+
+    Until 2026-09-26 this was plain existence — ONE contact ticked "Bring
+    your client list over", so the step meant to bring the list was done
+    the moment someone typed a single name. Hand-typed people still count
+    exactly as much as imported ones (a practitioner who typed their
+    regulars in has brought them over); one of them is just not the list.
+    The count reads every contacts row with no source or status filter —
+    the same rows maturity_engine's contact_count signal counts."""
+    bid = biz["id"]
+    if _exists(f"/contacts?business_id=eq.{bid}"
+               f"&source=like.{IMPORT_SOURCE_PATTERN}&select=id&limit=1"):
+        return True
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{bid}&select=id"
+            f"&limit={bta.REAL_CLIENT_LIST_MIN}") or []
+    except Exception as e:  # a probe must never break the page
+        logger.warning(f"[plugins] contact count probe failed: {e}")
+        return False
+    return isinstance(rows, list) and len(rows) >= bta.REAL_CLIENT_LIST_MIN
 
 
 def _done_offerings(biz: Dict[str, Any]) -> bool:
@@ -170,6 +195,45 @@ def _done_brand(biz: Dict[str, Any]) -> bool:
                 or fonts.get("heading") or bk.get("font_heading"))
 
 
+# The generic form complete_strategy_track seeds for everyone
+# (chief_strategy_actions._seed_default_intake_form): a name/email/phone/
+# message contact form. Left exactly as seeded it is not the intake form
+# this step asks for, so it must not tick the step on its own.
+_SEEDED_FORM_FIELDS = frozenset({"name", "email", "phone", "message"})
+
+
+def _is_untouched_seed(form: Dict[str, Any]) -> bool:
+    fields = form.get("fields") or []
+    if not isinstance(fields, list):
+        return False
+    names = {str((f or {}).get("name") or "") for f in fields if isinstance(f, dict)}
+    return len(fields) == len(_SEEDED_FORM_FIELDS) and names == _SEEDED_FORM_FIELDS
+
+
+def _done_intake_form(biz: Dict[str, Any]) -> bool:
+    """An active client form the practitioner made or shaped — the same
+    is_active flag the public submit door and the composed site read."""
+    rows = sb_clients.sb_get_as_service(
+        f"/intake_forms?business_id=eq.{biz['id']}&is_active=eq.true"
+        f"&select=id,fields&limit=20") or []
+    return any(not _is_untouched_seed(r) for r in rows if isinstance(r, dict))
+
+
+def _done_giving(biz: Dict[str, Any]) -> bool:
+    """giving_router.giving_is_active, the ONE rubric the give page, the
+    checkout and the composer already share: the vertical can give,
+    giving is switched on, and Stripe is connected. Re-read here because
+    not every caller of resolve_plugins passes stripe_account_id, and a
+    missing column would read as "not connected" for everyone."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz['id']}"
+        f"&select=id,type,settings,stripe_account_id&limit=1") or []
+    if not rows:
+        return False
+    from giving_router import giving_is_active
+    return bool(giving_is_active(rows[0]))
+
+
 def _done_meta(biz: Dict[str, Any]) -> bool:
     return _exists(f"/social_accounts?business_id=eq.{biz['id']}"
                    f"&provider=eq.meta&status=eq.connected&select=page_id&limit=1")
@@ -186,6 +250,8 @@ def _done_concierge(biz: Dict[str, Any]) -> bool:
 PROBES = {
     "import_contacts": _done_import_contacts,
     "offerings":       _done_offerings,
+    "intake_form":     _done_intake_form,
+    "giving":          _done_giving,
     "payments":        _done_payments,
     "availability":    _done_availability,
     "site":            _done_site,
@@ -233,8 +299,17 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     rows = sb_clients.sb_get_as_service(
         f"/business_tracks?business_id=eq.{biz_id}"
-        f"&order=created_at.desc&limit=1&select=first_30_days") or []
+        f"&order=created_at.desc&limit=1&select=first_30_days,operations_map") or []
     plan = (rows[0].get("first_30_days") or {}) if rows else {}
+    ops = (rows[0].get("operations_map") or {}) if rows else {}
+    if not isinstance(ops, dict):
+        ops = {}
+    # Where their clients live — the onboarding answer plus any tool the
+    # Business Session heard — so the import step's "how" can walk them
+    # through THAT export instead of asking for one name.
+    settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else {}
+    sources = bta.client_sources_for(settings, ops.get("tools_in_use"))
+    other = bta.stored_client_sources(settings)["other"]
     for entry in (plan.get("plugins") or []):
         # Tolerate both a bare key and {key, why} — the coach writes keys,
         # but a richer shape is the obvious next thing someone adds.
@@ -260,7 +335,11 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
         # A prerequisite that isn't met yet is worth SAYING, not hiding —
         # "point your domain at your site" makes no sense before there is
         # a site, and silently dropping it looks like the list forgot.
-        blocked = [n for n in spec["needs"] if not done_map.get(n, _probe(n, biz))]
+        # Only prerequisites this vertical HAS count: a ministry has no
+        # offerings step, so its site never waits on one.
+        # (done_map first: .get(n, _probe(...)) ran the probe every time.)
+        blocked = [n for n in bta.needs_for(key, biz.get("type"))
+                   if not (done_map[n] if n in done_map else _probe(n, biz))]
         out.append({
             "key": key,
             "title": spec["title"],
@@ -268,6 +347,10 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
             "nav": spec["nav"],
             "done": done_map[key],
             "blocked_by": blocked,
+            # Added 2026-09-26 (existing keys unchanged): how Chief does
+            # this step for THIS business — the catalog line, tailored for
+            # the import step to where their clients live.
+            "how": bta.plugin_how(key, sources, other, biz.get("type")),
         })
 
     # Undone first, then blocked ones after the things that unblock them.
@@ -286,4 +369,32 @@ def plugins(business_id: str,
         "plugins": items,
         "done_count": sum(1 for p in items if p["done"]),
         "total": len(items),
+    }
+
+
+class ClientSourcesBody(BaseModel):
+    """Where this business's clients live today. `sources` are keys of
+    business_track_actions.CLIENT_SOURCES; anything else is dropped.
+    `other` is their own words for a tool not on the list."""
+    sources: List[str] = Field(default_factory=list, max_length=20)
+    other: Optional[str] = Field(default=None, max_length=120)
+    via: Optional[str] = Field(default="onboarding", max_length=40)
+
+
+@router.put("/{business_id}/client-sources")
+def put_client_sources(business_id: str, body: ClientSourcesBody,
+                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Store where the clients live (settings.client_sources). Owner only:
+    it is written once at onboarding, by the person who just created the
+    business, and it steers what Chief asks them to bring over. Replaces
+    the stored answer — this is the practitioner saying it themselves."""
+    _gate(business_id, user, "owner")
+    value = bta.save_client_sources(business_id, body.sources, body.other,
+                                    via=(body.via or "onboarding"))
+    if not value:
+        raise HTTPException(502, "could not save where your clients live")
+    return {
+        "ok": True,
+        "client_sources": value,
+        "labels": [bta.CLIENT_SOURCES[k]["label"] for k in value["sources"]],
     }

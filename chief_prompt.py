@@ -537,6 +537,15 @@ def _build_archetype_block(biz: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     blank line separates it cleanly from the instantiation line that follows.
     """
     bt = (biz.get("type") or "").lower().strip()
+    if bt not in CHIEF_ARCHETYPE_SHIFTS:
+        # businesses.type legitimately holds aliases ("church", "counselor",
+        # "law") — resolve them the way every other reader of the type
+        # does, or a church reads the generic lens beside the ministry desk.
+        try:
+            import vertical_registry
+            bt = vertical_registry.resolve(bt)
+        except Exception:
+            pass
     shift = CHIEF_ARCHETYPE_SHIFTS.get(bt)
     if shift:
         label = CHIEF_ARCHETYPE_LABELS.get(bt, bt.replace("_", " ").title())
@@ -1111,7 +1120,10 @@ def _format_setup_block(snapshot: Optional[Dict[str, Any]]) -> str:
             tail = f" [best after: {', '.join(blocked)}]" if blocked else ""
             lines.append(f"    {i}. {p['title']} — {str(p['why'])[:140]}"
                          f" — nav {nav}{tail}")
-            hint = (_catalog.get(p.get("key") or "") or {}).get("chief")
+            # The item's own "how" first: resolve_plugins tailors it to
+            # this business (the import step walks the export for the
+            # tool their clients live in). The catalog line otherwise.
+            hint = p.get("how") or (_catalog.get(p.get("key") or "") or {}).get("chief")
             if hint:
                 lines.append(f"       how: {hint}")
         artifact = snapshot.get("artifact") or {}
