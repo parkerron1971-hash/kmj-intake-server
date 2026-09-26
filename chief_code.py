@@ -49,7 +49,7 @@ class WorkOrder:
 
     @classmethod
     def create(cls, payload, *, business_id, user_id, turn_id, surface, words, tainted=False,
-               conversation_id=''):
+               conversation_id='', slot='build'):
         kind = payload.get('kind')
         if kind not in KINDS:
             raise ValueError('Choose an event, a form, a flyer, an events page, or a plan for this build.')
@@ -75,7 +75,9 @@ class WorkOrder:
             facts={**facts,'reference_ids':[str(UUID(str(ref))) for ref in refs]}
         # Authority and identity are supplied only by the server, never the model.
         conversation_id = conversation_id if isinstance(conversation_id, str) else ''
-        return cls(stable_id(business_id, turn_id), kind, str(payload.get('brief') or '')[:4000],
+        # One message may start several orders; each has its own slot, and
+        # the first keeps the original 'build' slot so replays still match.
+        return cls(stable_id(business_id, turn_id, slot), kind, str(payload.get('brief') or '')[:4000],
                    dict(facts), str(UUID(str(user_id))), surface, words[:600], untrusted_taint=bool(tainted),
                    conversation_id=conversation_id if _CONVERSATION_ID.fullmatch(conversation_id) else '')
 

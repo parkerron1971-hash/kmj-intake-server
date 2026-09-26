@@ -399,7 +399,8 @@ def test_a_plan_submitted_in_a_turn_is_saved_as_one_build(monkeypatch):
         result = asyncio.run(runtime.submit(None, {'id': BIZ}, {'kind': 'plan', 'facts': {'steps': [ADD_ADA, CALL_ADA]}}))
     finally:
         runtime.turn_scope.reset(token)
-    assert result['label'] == runtime.QUEUED_LABEL and saved[-1] == 'launched'
+    assert result['label'].startswith('Working on these in the background: Add Ada and Call Ada.')
+    assert saved[-1] == 'launched'
     assert saved[0]['params']['kind'] == 'plan' and saved[0]['params']['facts']['title'] == 'Add Ada'
 
 
@@ -491,7 +492,7 @@ def test_without_builds_or_after_the_one_order_the_old_limit_stands(monkeypatch)
     assert out[3][0] is True and 'kind plan' not in out[3][1]
     monkeypatch.setenv('CHIEF_BUILDS', 'on')
     calls.clear()
-    out = asyncio.run(_tool_turn(monkeypatch, [], calls, submitted=True)([TASK] * 4))
+    out = asyncio.run(_tool_turn(monkeypatch, [], calls, submitted=runtime.MAX_ORDERS_PER_TURN)([TASK] * 4))
     assert out[3][0] is True and 'kind plan' not in out[3][1]
 
 

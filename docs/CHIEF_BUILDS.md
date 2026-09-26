@@ -38,7 +38,14 @@ A look costs one model turn, only when something stopped. It is skipped over the
 
 **Overflow.** A reply can make three direct changes (`MAX_WRITE_CALLS`). Once those are spent (budget, not a hold), `submit_work_order` stays open for the turn's one order, and the refusal tells the model to put the rest into one plan instead of promising "the next pass".
 
-**Not in this release:** more than one work order per message, and builds running side by side in one business. Those are the next step. A plan's image is found by its stable id on every run, so a redirect cannot pay for a second image; an image that fails still needs the owner.
+A plan's image is found by its stable id on every run, so a redirect cannot pay for a second image; an image that fails still needs the owner.
+
+## Several jobs from one message, side by side (step 2, 2026-09-26)
+
+- **Up to four work orders per turn** (`MAX_ORDERS_PER_TURN`), one per piece: for example a workshop (`event_setup`), a flyer, and one plan for everything else. Each order has its own identity, `stable_id(business, turn, slot)`. The first keeps the original `build` slot, so a replayed turn still matches its order; later ones are `build:2`, `build:3` and so on. Answering a job (`respond_work_order`) and starting one stay in separate turns. The overflow after the three direct changes stays open until the turn's last order.
+- **Lanes** (`supabase/APPLY-2026-09-26-chief-build-lanes.sql`): one running build per business and lane, instead of per business. The lanes are `site` (workshops, forms with links, events pages, which share the Events collection, forms and the website), `image` (flyers) and `plan` (plans). A workshop, a flyer and a plan from one message run at once, and two workshops still take turns. Only `chief_build_claim` changes (same signature), so the server code runs before and after the migration; before it, jobs simply queue per business as they did. `scripts/chief-build-lanes-db-check.mjs` checks it in CI.
+- **No five-minute wait.** When a job finishes, the worker starts whatever was queued for that business (`_launch_waiting`), instead of waiting for the recovery tick.
+- **Starting a plan names its pieces**: "Working on these in the background: A, B and C. You can leave this chat..." Before, the reply and its receipts never said what went to the background.
 
 ## Important contract decisions
 

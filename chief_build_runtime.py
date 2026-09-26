@@ -17,6 +17,10 @@ from chief_code import WorkOrder, BuildQuestion, run, receipt, stable_id, worker
 log = logging.getLogger(__name__)
 _tasks = {}
 _slots = asyncio.Semaphore(8)
+# One message may start this many background jobs (a workshop, a flyer, a
+# plan for the rest...). They run side by side when their lanes differ
+# (APPLY-2026-09-26-chief-build-lanes.sql).
+MAX_ORDERS_PER_TURN = 4
 
 
 def enabled():
@@ -64,13 +68,18 @@ async def submit(client, biz, payload):
         raise ValueError('Background builds are not enabled yet.')
     if not ctx or not ctx.get('user_id'):
         raise ValueError('Start this build from your signed-in conversation.')
-    if ctx.get('submitted'):
-        raise ValueError('One build is already being handled in this turn.')
-    ctx['submitted'] = True
+    if ctx.get('responded'):
+        raise ValueError('This turn answered a build; start new work in the next message.')
+    count = int(ctx.get('submitted') or 0)
+    if count >= MAX_ORDERS_PER_TURN:
+        raise ValueError(f'{MAX_ORDERS_PER_TURN} background jobs is the most one message can start. '
+                         f'Put the rest into a plan, or start it in the next message.')
     await owned_business(client, biz['id'], ctx['user_id'])
     order = WorkOrder.create(payload, business_id=biz['id'], user_id=ctx['user_id'],
         turn_id=ctx['turn_id'], surface=ctx['surface'], words=ctx['words'], tainted=ctx.get('tainted'),
-        conversation_id=ctx.get('conversation_id') or '')
+        conversation_id=ctx.get('conversation_id') or '',
+        slot='build' if count == 0 else f'build:{count + 1}')
+    ctx['submitted'] = count + 1
     if order.kind == 'flyer' or order.facts.get('wants_flyer'):
         import image_studio
         if not order.facts.get('reference_ids') and image_studio.turn_references.get():
@@ -110,7 +119,7 @@ async def submit(client, biz, payload):
         job = rows[0]
     if job['status'] in ('queued','running'):
         launch(job)
-    summary = (job.get('result') or {}).get('summary_label') or QUEUED_LABEL
+    summary = (job.get('result') or {}).get('summary_label') or queued_label(order)
     return {'type':'submit_work_order','result':summary,'label':summary,'nav':None,'job_id':job['id'],
             'build':public_job(job),'frontend_event':{'name':'solutionist-builds-changed'}}
 
@@ -153,6 +162,21 @@ async def handle_submit_work_order(client, biz, action):
 QUEUED_LABEL = ("I'm on it and working in the background. You can leave this chat; "
                 "I'll let you know here when it's done or if I need you.")
 
+
+def queued_label(order):
+    """What starting a job says. A plan names its pieces, so the reply and
+    its receipts say what went to the background (live 2026-09-26: the reply
+    was a stitched list of labels that never said what the plan would do)."""
+    if order.kind != 'plan':
+        return QUEUED_LABEL
+    titles = [str(s.get('title') or '').strip() for s in order.facts.get('steps') or []]
+    titles = [t for t in titles if t][:8]
+    if not titles:
+        return QUEUED_LABEL
+    listed = titles[0] if len(titles) == 1 else ', '.join(titles[:-1]) + ' and ' + titles[-1]
+    return (f"Working on these in the background: {listed}. You can leave this chat; "
+            f"I'll let you know here when they're done or if I need you.")
+
 # Why the website link step stopped, said plainly (first live build,
 # 2026-09-26: a business with no built site got only "could not be
 # verified yet"). The events page itself is verified before this step runs.
@@ -191,6 +215,14 @@ async def context(client, bid, uid):
         if row['status'] in ('queued','running'):
             launch(row)
     return [public_job(r) for r in rows]
+
+
+async def _launch_waiting(client, business_id):
+    with contextlib.suppress(Exception):
+        rows = await db(client, 'GET', f"/chief_jobs?business_id=eq.{UUID(str(business_id))}"
+                                       f"&kind=eq.build&status=eq.queued&order=created_at.asc&limit=8")
+        for row in rows:
+            launch(row)
 
 
 async def recover():
@@ -278,6 +310,9 @@ async def worker(job_id):
             await adapter.save(result, terminal)
             if terminal == 'done':
                 await announce(client, job, result)
+                # Its lane is free: whatever waited behind it starts now, not
+                # at the next five-minute tick.
+                await _launch_waiting(client, job['business_id'])
             if terminal == 'running':
                 # Release the lease; the next scheduler tick reconciles the child.
                 await db(client,'PATCH',f'/chief_jobs?id=eq.{job_id}&build_lease_token=eq.{token}',
@@ -732,9 +767,9 @@ async def handle_respond_work_order(client,biz,action):
     import chief_of_staff as chief
     ctx=turn_scope.get()
     try:
-        if not enabled() or not ctx or ctx.get('submitted'):
+        if not enabled() or not ctx or ctx.get('submitted') or ctx.get('responded'):
             raise ValueError('One build response is allowed per conversation turn.')
-        ctx['submitted']=True
+        ctx['responded']=True
         rows=await db(client,'GET',f"/chief_jobs?id=eq.{UUID(str(action.get('job_id')))}&business_id=eq.{biz['id']}&user_id=eq.{ctx['user_id']}&kind=eq.build&limit=1")
         if not rows: raise ValueError('That build is not available in this business.')
         job=rows[0]
@@ -778,7 +813,7 @@ Call submit_work_order exactly once. Do not plan or perform its component action
 - form_and_link: name, fields (form field objects with label/type/required), form_type, optional send_to and channel. An event registration must use form_type=event. For form_type=event, also supply description, starts_at (ISO date and time), timezone (IANA), location and admission. These event details are mandatory public page content, separate from visitor questions. Use the owner's confirmed facts; never invent them. Ask whether to include a flyer unless the owner has already chosen; include_flyer=true/false records that choice. If true, flyer_url must be the chosen public image URL. A flyer is optional and never substitutes for written event details. If the owner asks to create a flyer, prepare it through the flyer workflow, then attach its published image URL with update_client_form; never claim a private preview or pending image is attached. For an existing form, update_client_form accepts event_details and the same detail fields; include_flyer=false removes its flyer.
 - flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.
 - site_door: capability=events.
-- plan: a request that needs more than three changes, includes a long piece (an image), or is a job of dependent steps. Submit it FIRST, before doing any of it directly: a reply can make only three direct changes. Up to three quick changes are done directly instead. It runs in the background and the owner keeps talking. facts: title, goal, steps: [{"title": "...", "action": {"type": "<action>", ...the same fields that action takes in chat}}]. Steps run in order. A later step can use an earlier step's result with "@type.field" (for example "@create_contact.contact_id"), or repeat over a list with "for_each": "@show_view.rows" and {{item.field}}. Put "approval": true on a step the owner wants to review first. A plan may include one generate_image step. Workshops, forms with links and events pages are never plan steps: only one work order per turn, so submit that one and do the other pieces directly in this turn. Sends, bookings and charges in a plan run on the owner's ask, exactly as in chat.
+- plan: a request that needs more than three changes, includes a long piece (an image), or is a job of dependent steps. Submit it FIRST, before doing any of it directly: a reply can make only three direct changes. Up to three quick changes are done directly instead. It runs in the background and the owner keeps talking. facts: title, goal, steps: [{"title": "...", "action": {"type": "<action>", ...the same fields that action takes in chat}}]. Steps run in order. A later step can use an earlier step's result with "@type.field" (for example "@create_contact.contact_id"), or repeat over a list with "for_each": "@show_view.rows" and {{item.field}}. Put "approval": true on a step the owner wants to review first. A plan may include one generate_image step. Workshops, forms with links and events pages are never plan steps: they are their own orders. A message with several pieces gets one order per piece (for example an event_setup for the workshop, a flyer, and one plan for everything else), up to four orders per turn; they run side by side. Sends, bookings and charges in a plan run on the owner's ask, exactly as in chat.
 Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form or generate_image for those build steps.
 Questions about a job in BUILDS IN PROGRESS are read-only: answer with its summary_label verbatim, without extra execution claims or follow-up offers. Never create another build to check progress.
 An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer; a plan's question is answered with field plan_answer.

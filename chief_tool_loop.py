@@ -205,13 +205,15 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
 def _overflow_to_plan_open() -> bool:
     """After the direct-write budget is spent, may the rest of the
     request still go out as one background plan? Only on the owner's own
-    turn, with builds on, when nothing was held, and before this turn has
-    submitted its one work order."""
+    turn, with builds on, when nothing was held, and while this turn can
+    still start another work order."""
     if _write_held.get() or not _write_verb_offered('submit_work_order'):
         return False
     from chief_code import turn_scope
+    import chief_build_runtime
     scope = turn_scope.get()
-    return bool(scope) and not scope.get('submitted')
+    return (bool(scope) and not scope.get('responded')
+            and int(scope.get('submitted') or 0) < chief_build_runtime.MAX_ORDERS_PER_TURN)
 
 
 def _write_verb_offered(name: str) -> bool:
