@@ -23,13 +23,15 @@ from auth_supabase import UserSession, require_user
 from lead_admin import PLATFORM_OWNER_EMAIL
 
 OWNER = SimpleNamespace(id=str(uuid4()), email=PLATFORM_OWNER_EMAIL)
-BIZ = {'id': str(uuid4()), 'name': 'The Solutionist System'}
+BIZ = {'id': str(uuid4()), 'owner_id': OWNER.id, 'name': 'The Solutionist System'}
 
 def run(coro): return asyncio.run(coro)
 
 @pytest.fixture
 def setup(monkeypatch):
     monkeypatch.setattr(creative, 'platform_business', AsyncMock(return_value=BIZ))
+    monkeypatch.setattr(creative.images, 'business', AsyncMock(return_value=BIZ))
+    monkeypatch.setattr(creative.images, 'db', AsyncMock(return_value=[]))
     monkeypatch.setattr(spend_guard, 'over_budget', lambda *a: False)
     monkeypatch.setattr(rate_limit, 'allow', lambda *a: True)
     monkeypatch.setattr(authority, 'require_budget', AsyncMock())
@@ -91,7 +93,7 @@ def test_quality_labels_match_engine_values(setup, monkeypatch, label, expected)
 
 
 def test_creative_tools_have_no_publish_or_approval(setup):
-    assert set(creative.handlers(OWNER, uuid4())) == {'generate_image','find_images','create_video'}
+    assert set(creative.handlers(OWNER, uuid4())) == {'generate_image','find_images','create_video','compose_flyer'}
 
 
 def test_budget_blocks_before_generation(setup, monkeypatch):

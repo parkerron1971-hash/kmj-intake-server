@@ -50,13 +50,16 @@ class ChiefMessageBody(BaseModel):
 def conversation_messages(body):
     if len(body.images) + sum(len(t.images) for t in body.history) > 8:
         raise HTTPException(422, 'Keep at most eight references across recent messages.')
+    reference_index = 0
     def content(text, images):
+        nonlocal reference_index
         if not images:
             return text
         blocks = []
         for i, image in enumerate(images):
             header, data = image.data_url.split(',', 1)
-            blocks.extend([{'type': 'text', 'text': f'Reference {i + 1}: {image.name}'},
+            reference_index += 1
+            blocks.extend([{'type': 'text', 'text': f'Reference chat:{reference_index}: {image.name}'},
                 {'type': 'image', 'source': {'type': 'base64', 'media_type': header[5:].split(';')[0], 'data': data}}])
         return blocks + [{'type': 'text', 'text': text}]
     messages = []
