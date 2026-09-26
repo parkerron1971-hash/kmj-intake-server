@@ -50,7 +50,7 @@ def _fake_stream(script):
     calls = []
 
     async def stream_text(system, messages, *, model, max_tokens, rec, endpoint, units,
-                          business_id, out):
+                          business_id, out, stop_sequences=None):
         calls.append({"system": system, "messages": messages, "endpoint": endpoint})
         for delay, piece in script(endpoint):
             await asyncio.sleep(delay)
@@ -262,7 +262,7 @@ def test_an_ambiguous_request_asks_the_classifier(monkeypatch, restore_chat, _ro
                                                    "and that is the hard part.")]
     fake, calls = _fake_stream(script)
     monkeypatch.setattr(cft, "stream_text", fake)
-    events, turns = asyncio.run(_run(_req("give me a pep talk")))
+    events, turns = asyncio.run(_run(_req("can you cheer me up?")))
     assert turns == []
     # No Haiku opening on an ambiguous request: the local lead holds the
     # budget while the classifier decides, and the answer follows it.
@@ -275,6 +275,26 @@ def test_an_ambiguous_request_asks_the_classifier(monkeypatch, restore_chat, _ro
     row = _router_on[-1]
     assert row["lane"] == "fast" and row["classifier"] == "haiku"
     assert row["reason"].startswith("ambiguous→")
+
+
+def test_an_unsure_instruction_goes_to_the_full_turn_whatever_the_classifier_says(
+        monkeypatch, restore_chat, _router_on):
+    """Live 2026-09-25: the classifier rated "We also put in the notes box in
+    a flyer as well." low, no action, 0.85 sure. Only a question may go to
+    Haiku alone on its word."""
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+
+    def script(ep):
+        if ep == "/chief/route":
+            return [(0.05, '"needs_records": false, "needs_action": false, '
+                           '"complexity": "low", "confidence": 0.95')]
+        return [(0.05, "Sure thing!")]
+    fake, calls = _fake_stream(script)
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, turns = asyncio.run(_run(_req("give me a pep talk"), turn_reply="You've got this."))
+    assert len(turns) == 1
+    assert "/chief/backend" not in {c["endpoint"] for c in calls}
+    assert _router_on[-1]["lane"] == "full" and _router_on[-1]["classifier"] == "haiku"
 
 
 def test_a_follow_up_never_goes_to_haiku_alone(monkeypatch, restore_chat, _router_on):

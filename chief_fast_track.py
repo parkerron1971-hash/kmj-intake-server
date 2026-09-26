@@ -360,9 +360,9 @@ _CLASSIFIER_SYSTEM = """Classify one message sent to Chief, an AI chief of staff
 
 Return only JSON: {"needs_records": true|false, "needs_action": true|false, "complexity": "low"|"medium"|"high", "confidence": 0.0-1.0}
 - needs_records: a good answer depends on their business data or on earlier conversation.
-- needs_action: they want something done, created, sent, changed or scheduled, including a "yes" / "go ahead" to something Chief proposed.
+- needs_action: they want something done, created, sent, saved, changed or scheduled, including a "yes" / "go ahead" to something Chief proposed. A message that adds to or finishes an earlier request ("for me to revisit", "and a flyer too", "in my notes as well") is part of that request: needs_action and needs_records are true.
 - complexity: high = multi-step reasoning, strategy, code, or a long written piece; medium = a normal question; low = a pleasantry or a quick general-knowledge answer.
-- confidence: how sure you are of the whole classification."""
+- confidence: how sure you are of the whole classification. When unsure, say needs_records true."""
 
 _VOICE_NOTE = "\nThis reply is spoken aloud: plain sentences, no lists, no markdown, no emoji."
 
@@ -394,6 +394,17 @@ def _prior_assistant(req: Any) -> str:
     return ""
 
 
+def _prior_user(req: Any) -> str:
+    """The owner's previous message — a fragment ("for me to revisit") is
+    only readable next to the sentence it finishes."""
+    for m in reversed(getattr(req, "conversation_history", None) or []):
+        if getattr(m, "role", "") == "user":
+            text = str(getattr(m, "content", "") or "")
+            if not text.startswith("[SYSTEM:"):
+                return text
+    return ""
+
+
 # ─── Model calls ─────────────────────────────────────────────────────
 
 def _log_usage(endpoint: str, model: str, usage: Dict[str, Any], *, business_id: Optional[str],
@@ -421,12 +432,15 @@ def _log_usage(endpoint: str, model: str, usage: Dict[str, Any], *, business_id:
 async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str,
                       max_tokens: int, rec: route_ledger.RouteRecord, endpoint: str,
                       units: Optional[int], business_id: Optional[str],
-                      out: Dict[str, Any]) -> AsyncIterator[str]:
+                      out: Dict[str, Any],
+                      stop_sequences: Optional[List[str]] = None) -> AsyncIterator[str]:
     """Stream a small Haiku call's text. Usage and stop_reason land in `out`,
     the request's tally and api_usage. Raises nothing: an error ends the
     stream with out["error"] set."""
-    payload = {"model": model, "max_tokens": max_tokens, "stream": True,
-               "system": system, "messages": messages}
+    payload: Dict[str, Any] = {"model": model, "max_tokens": max_tokens, "stream": True,
+                               "system": system, "messages": messages}
+    if stop_sequences:
+        payload["stop_sequences"] = stop_sequences
     started = time.perf_counter()
     usage: Dict[str, Any] = {}
     try:
@@ -470,20 +484,33 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
 
 
 async def classify(message: str, prior_assistant: str, *, rec: route_ledger.RouteRecord,
-                   business_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """The Haiku tie-breaker. None on any failure (the policy then goes up)."""
+                   business_id: Optional[str], prior_user: str = "") -> Optional[Dict[str, Any]]:
+    """The Haiku tie-breaker. None on any failure (the policy then goes up).
+
+    Measured live 2026-09-25: left to itself Haiku wrapped the JSON in a
+    code fence and added a "Reasoning:" paragraph — 734-1,158ms against a
+    900ms timeout, so it mostly timed out. The object is now opened for it
+    (a prefill, on Haiku only: later models reject one) and the reply ends
+    at its closing brace, about fifteen tokens."""
     model = chief_models.model_for("route")
-    content = (f"Chief's previous message: {prior_assistant[-300:]}\n\n" if prior_assistant else "") \
-        + f"The message: {message[:800]}"
+    content = ((f"The owner's previous message: {prior_user[-300:]}\n" if prior_user else "")
+               + (f"Chief's previous message: {prior_assistant[-300:]}\n" if prior_assistant else "")
+               + f"\nThe message to classify: {message[:800]}")
+    messages: List[Dict[str, Any]] = [{"role": "user", "content": content}]
+    prefill = model.startswith("claude-haiku")
+    if prefill:
+        messages.append({"role": "assistant", "content": "{"})
     out: Dict[str, Any] = {}
-    parts: List[str] = []
-    async for piece in stream_text(_CLASSIFIER_SYSTEM, [{"role": "user", "content": content}],
-                                   model=model, max_tokens=80, rec=rec,
+    parts: List[str] = ["{"] if prefill else []
+    async for piece in stream_text(_CLASSIFIER_SYSTEM, messages,
+                                   model=model, max_tokens=60, rec=rec,
                                    endpoint="/chief/route", units=0,
-                                   business_id=business_id, out=out):
+                                   business_id=business_id, out=out, stop_sequences=["}"]):
         parts.append(piece)
     raw = "".join(parts)
-    m = re.search(r"\{.*\}", raw, re.S)
+    if "{" in raw and "}" not in raw:
+        raw += "}"               # the stop sequence ate the closing brace
+    m = re.search(r"\{[^{}]*\}", raw, re.S)      # one flat object
     if not m:
         return None
     try:
@@ -704,7 +731,8 @@ class TwoTrack:
             t0 = time.perf_counter()
             verdict_task = asyncio.ensure_future(classify(
                 self.message, _prior_assistant(self.req), rec=self.rec,
-                business_id=self.business_id if self.verified else None))
+                business_id=self.business_id if self.verified else None,
+                prior_user=_prior_user(self.req)))
             verdict_task.add_done_callback(
                 lambda _t: setattr(self.rec, "classifier_ms", int((time.perf_counter() - t0) * 1000)))
         if not want_opener:
@@ -796,7 +824,12 @@ class TwoTrack:
         except (asyncio.TimeoutError, Exception):
             verdict = None
         c2 = mr.from_classifier(self.c, verdict)
-        allow_fast = _on("CHIEF_ROUTER_FAST_LANE") and self.verified
+        # Only a QUESTION may go to Haiku alone on the classifier's word.
+        # Asked live, it rated "We also put in the notes box in a flyer as
+        # well." (an instruction) low-complexity, no action, 0.85 sure; a
+        # statement or an instruction in the unsure band goes to the turn
+        # that can act on it.
+        allow_fast = _on("CHIEF_ROUTER_FAST_LANE") and self.verified and mr.is_question(self.message)
         r2 = mr.decide(c2, allow_fast=allow_fast)
         self.c = c2
         self.rec.complexity = c2.as_log()

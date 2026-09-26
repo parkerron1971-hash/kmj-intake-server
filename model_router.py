@@ -225,10 +225,23 @@ _ACTION = _rx([
     r"order", r"buy", r"purchase", r"reply", r"respond", r"follow ?up", r"undo", r"fix",
     r"turn (?:on|off)", r"enable", r"disable", r"connect", r"open", r"go to", r"take me",
     r"navigate", r"show me", r"pull up",
+    # Heard live 2026-09-25: "put this in my calendar", "set these in my
+    # notes", "put in the notes box … a flyer as well".
+    r"put", r"jot", r"notes?", r"calendar",
 ])
 _DRAFT = _rx([r"draft", r"write", r"rewrite", r"compose", r"word(?:ing)?", r"caption",
               r"tagline", r"headline", r"slogan", r"bio", r"script", r"newsletter",
-              r"announcement", r"blurb", r"description", r"copy"])
+              r"announcement", r"blurb", r"description", r"copy", r"flyers?", r"posters?",
+              r"brochures?", r"graphics?"])
+_QUESTION = re.compile(
+    r"\?\s*$|^\s*(?:what|what's|whats|who|whom|which|when|where|why|how|is|are|was|were|do|does|"
+    r"did|can|could|should|would|will|am)\b", re.I)
+
+
+def is_question(message: str) -> bool:
+    """Asked, not told. The only shape the classifier may send to Haiku
+    alone (chief_fast_track._decide_ambiguous)."""
+    return bool(_QUESTION.search(str(message or "").strip()))
 _RECORDS = _rx([
     r"my", r"our", r"mine", r"i have", r"i've got", r"we have", r"client", r"clients",
     r"customer", r"customers", r"invoice", r"invoices", r"booking", r"bookings",
@@ -270,7 +283,11 @@ _ASKS_ABOUT = re.compile(
     r"^\s*(?:did|does|do|is|are|was|were|has|have|had|when|who|what|which|where|how many|"
     r"how much|any|anything)\b(?!\s+you\s+(?:please\s+)?(?:send|make|create|book|add))", re.I)
 _FOLLOWUP = re.compile(r"^(?:and|also|what about|how about|same|then|but|so)\b|"
-                       r"\b(?:it|that|this|those|them|they|he|she|him|her)\b", re.I)
+                       r"\b(?:it|that|this|those|them|they|he|she|him|her)\b|"
+                       # About what was just said, not about the world — the
+                       # classifier rated "what do you think?" record-free.
+                       r"\b(?:what do you think|thoughts|make sense|sound good|agree|your take|"
+                       r"your opinion|you think)\b", re.I)
 _TIME_WORDS = _rx([r"today", r"tonight", r"now", r"current(?:ly)?", r"this (?:week|month|year)",
                    r"latest", r"right now", r"date", r"time", r"weather", r"news"])
 

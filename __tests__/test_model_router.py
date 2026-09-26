@@ -52,6 +52,11 @@ def test_record_free_requests_go_to_haiku_alone(msg):
     ("bye for now", "farewell"),
     ("what about for a salon?", "followup"),
     ("give me a pep talk", "ambiguous"),
+    # Heard live 2026-09-25 on a call.
+    ("You can put this in my calendar as well as set these in my notes.", "needs_action"),
+    ("We also put in the notes box in a flyer as well.", "needs_action"),
+    ("what do you think?", "followup"),
+    ("does that make sense?", "any"),
 ])
 def test_everything_that_needs_the_business_or_thought_goes_up(msg, why):
     c, r = _route(msg)
@@ -311,3 +316,10 @@ def test_the_local_lead_is_an_interjection_and_nothing_else():
         lead = mr.local_lead(kind)
         assert lead.endswith("—") and len(lead.split()) <= 3
         assert not any(ch.isdigit() for ch in lead)
+
+
+def test_only_a_question_counts_as_asked():
+    for q in ["can you cheer me up?", "What's a good tagline", "how do I word this", "is it true that"]:
+        assert mr.is_question(q), q
+    for s in ["give me a pep talk", "For me to revisit.", "We also put in the notes box in a flyer as well."]:
+        assert not mr.is_question(s), s
