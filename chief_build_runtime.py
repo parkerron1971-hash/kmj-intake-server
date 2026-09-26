@@ -80,6 +80,10 @@ async def submit(client, biz, payload):
         tz = (biz.get('settings') or {}).get('timezone')
         if tz:
             order.facts['timezone'] = tz
+    if order.kind == 'plan':
+        # Written by the server from this turn's own results, never by the
+        # model (normalize_facts keeps only title, goal and steps).
+        order.facts['done_in_turn'] = list(ctx.get('done') or [])[:12]
     order.submission_fingerprint = digest({"kind":order.kind,"facts":order.facts})
     query = f"/chief_jobs?business_id=eq.{biz['id']}&kind=eq.build&params->>order_id=eq.{order.order_id}&limit=1"
     existing = await db(client, 'GET', query)
@@ -109,6 +113,26 @@ async def submit(client, biz, payload):
     summary = (job.get('result') or {}).get('summary_label') or QUEUED_LABEL
     return {'type':'submit_work_order','result':summary,'label':summary,'nav':None,'job_id':job['id'],
             'build':public_job(job),'frontend_event':{'name':'solutionist-builds-changed'}}
+
+
+def note_done_in_turn(results_so_far):
+    """Record, on the turn, the labels of the changes this reply already made
+    (its tool writes and the tags before this one) as a plan is submitted."""
+    ctx = turn_scope.get()
+    if not ctx:
+        return
+    import chief_of_staff as chief
+    import chief_tool_loop
+    labels = []
+    for r in list(chief_tool_loop.writes_this_turn()) + list(results_so_far or []):
+        if not isinstance(r, dict) or chief._action_failed(r):
+            continue
+        if r.get('type') in ('submit_work_order', 'respond_work_order'):
+            continue
+        label = str(r.get('label') or r.get('result') or '').strip()[:200]
+        if label and label not in labels:
+            labels.append(label)
+    ctx['done'] = labels[:12]
 
 
 async def handle_submit_work_order(client, biz, action):
