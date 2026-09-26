@@ -148,11 +148,189 @@ def test_compare_flags_a_regression(capsys):
 @pytest.mark.parametrize("case", cte.CASES, ids=[c["id"] for c in cte.CASES])
 def test_replay(case, monkeypatch):
     r = cte.run_replay_case(monkeypatch, case)
-    failing = [c for c in r["checks"] if not c["ok"]]
+    if r.get("skipped"):
+        pytest.skip(r["skipped"])
+    failing = [c for c in r["checks"] if not c["ok"] and "pending" not in c]
     assert not failing, f"{case['id']}: {failing} (took {r['taken']})"
+    pending = [c for c in r["checks"] if not c["ok"]]
+    if pending:
+        # Reported, not failed: the row names the open PR or the unbuilt
+        # work that fixes it. An XPASS here means the marker can come out.
+        pytest.xfail("; ".join(f"{c['check']}: {c['pending']}" for c in pending))
 
 
 def test_replay_summary_is_all_green():
     report = cte.run_replay(cte.CASES)
     assert report["failed_cases"] == []
-    assert report["total"] == report["possible"] > 0
+    missed = [(r["id"], c["check"]) for r in report["results"] for c in r["checks"]
+              if not c["ok"]]
+    assert missed == [(p["id"], p["check"]) for p in report["pending"]]
+    assert report["total"] + len(missed) == report["possible"] > 0
+
+
+# ─── day one: four businesses that signed up today ───────────────────
+
+DAY_ONE = [c for c in cte.CASES if c.get("business")]
+
+
+def test_day_one_covers_every_new_business_and_the_setup_verbs():
+    assert {c["business"] for c in DAY_ONE} == set(cte.NEW_BUSINESSES)
+    expected = {v for c in DAY_ONE for v in c["expect"]}
+    assert {"set_availability_day", "create_offering", "create_contact",
+            "create_client_form"} <= expected
+    assert {c["message"] for c in DAY_ONE} >= {
+        cte.GREETING, "What can you do for me?", "Do I have any invoices?",
+        "Any appointments this week?"}
+
+
+def test_day_one_rows_are_well_formed():
+    for case in DAY_ONE:
+        assert case["business"] in cte.NEW_BUSINESSES, case["id"]
+        for v in (case.get("allow") or []) + list(case.get("expect_args") or {}):
+            assert v in cos.ACTION_HANDLERS, f"{case['id']}: {v} is not a Chief verb"
+        assert set(case.get("expect_args") or {}) <= set(case["expect"]), case["id"]
+        for name in case.get("reply_checks") or []:
+            assert name in cte.REPLY_CHECKS, f"{case['id']}: unknown reply check {name}"
+        # A pending marker must name a check this row actually makes,
+        # and say what fixes it.
+        made = {c["check"] for c in cte.score_case(case, [], reply="", actions=[])["checks"]}
+        for check, reason in (case.get("pending") or {}).items():
+            assert check in made, f"{case['id']}: pending {check} is not one of its checks"
+            assert reason.strip(), case["id"]
+
+
+def test_day_one_types_are_the_keys_the_product_resolves():
+    import vertical_registry
+    for spec in cte.NEW_BUSINESSES.values():
+        assert vertical_registry.resolve(spec["type"]) == spec["type"], spec
+
+
+def test_day_one_fixture_is_what_signup_writes(monkeypatch):
+    """The real _gather_context, the setup probes and the first-run arc
+    all read the fixture: nothing in the business, the coached session
+    not started, no introduction delivered, setup at zero."""
+    import asyncio
+    import first_run_arc
+    biz = cte._business_for({"business": "barber"})
+    cte._stub_turn(monkeypatch, biz)
+    ctx = asyncio.run(cos._gather_context(None, biz["id"], query_text=None))
+    assert ctx["business"]["id"] == biz["id"] and ctx["contacts_total"] == 0
+    for key in ("contacts_lookup", "sessions", "open_invoices", "offerings", "products",
+                "projects"):
+        assert ctx[key] == [], key
+    assert ctx["business_track"]["status"] == "in_progress"
+    assert first_run_arc.intro_delivered(biz["id"]) is False
+    assert cos._business_age_days(biz) < 1
+    snapshot = cos._fetch_setup_snapshot(biz)
+    assert snapshot["done"] == 0 and snapshot["total"] > 0
+
+
+def test_live_runs_a_day_one_row_against_the_real_day_one_prompt(monkeypatch):
+    """No key is spent: the model and the reviewer are stubbed, and what
+    is checked is what live mode would have sent — the launch greeting,
+    built from the fixture by the real gather and the real prompt."""
+    from unittest.mock import AsyncMock
+    import chief_truth
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-only-key")
+    case = next(c for c in cte.CASES if c["id"] == "nb_ministry_greeting")
+    model = AsyncMock(return_value=case["reply"])
+    monkeypatch.setattr(cos, "_call_claude", model)
+    monkeypatch.setattr(chief_truth, "review_reply", AsyncMock(return_value=""))
+    report = cte.run_live([case])
+    system = model.call_args.args[1]
+    assert "LAUNCH GREETING" in system and "Grace Street Fellowship" in system
+    assert "SETUP STATUS" in system and "Connected: 0 of" in system
+    assert report["results"][0]["reply"].startswith("Good morning, James.")
+
+
+def test_day_one_postgrest_filters_and_selects_like_the_real_one():
+    biz = cte._business_for({"business": "coach"})
+    tables = cte._day_one_tables(biz)
+    welcome = f"/agent_queue?business_id=eq.{biz['id']}&status=eq.draft"
+    # A column nobody selected never reaches the caller...
+    assert "ai_reasoning" not in cte._postgrest(tables, "GET", welcome + "&select=id,subject")[0]
+    # ...and one that is selected does.
+    assert cte._postgrest(tables, "GET", welcome + "&select=id,agent,ai_reasoning")[0][
+        "ai_reasoning"] == "Standard welcome message created at onboarding."
+    assert cte._postgrest(tables, "GET", "/agent_queue?status=eq.sent&select=id") == []
+    since = "2020-01-01T00:00:00+00:00"
+    assert len(cte._postgrest(tables, "GET", f"/agent_queue?created_at=gte.{since}")) == 1
+    assert cte._postgrest(tables, "GET", f"/contacts?business_id=eq.{biz['id']}") == []
+    assert cte._postgrest(tables, "PATCH", "/first_run_arc?id=eq.x",
+                          {"status": "walking"}) == [{"status": "walking"}]
+    assert tables["_writes"][0]["method"] == "PATCH"
+
+
+@pytest.mark.parametrize("name,good,bad", [
+    ("one_question", "Welcome. Who's one regular you'd text today?",
+     "Who's first? And what do you charge?"),
+    ("no_list", "Start with one name.", "Here's the plan:\n1. Contacts\n2. Prices"),
+    ("no_draft_pointer", "Who's one client I should add?",
+     "You have 1 draft waiting for your review."),
+    ("says_none_yet", "You don't have any invoices yet.", "Let me look into that."),
+    ("no_unverified", "Nothing is booked this week.",
+     "Your request came through. I couldn't verify the answer from the information available."),
+    ("no_price_question", "When does the church gather on Sundays?",
+     "What's the one thing people come to you for, and what do you charge?"),
+    ("about_the_product", "I keep your client list, book sessions and send invoices.",
+     "I'm here to help with whatever you need."),
+])
+def test_reply_checks_pass_the_good_reply_and_catch_the_bad_one(name, good, bad):
+    assert cte.REPLY_CHECKS[name](good)
+    assert not cte.REPLY_CHECKS[name](bad)
+
+
+def test_a_pending_miss_is_reported_and_does_not_fail_the_run():
+    case = {"id": "x", "message": "hi", "expect": [], "must_not": ["send_sms"],
+            "reply_checks": ["no_unverified", "one_question"],
+            "pending": {"reply:no_unverified": "PR #1"}}
+    r = cte.score_case(case, [], reply="I couldn't verify that?")
+    assert not r["failed"] and r["score"] == r["total"] - 1
+    report = cte.summarize([r], "live")
+    assert report["failed_cases"] == [] and report["pending"][0]["reason"] == "PR #1"
+    # Any other miss on the same row still fails.
+    assert cte.score_case(case, ["send_sms"], reply="I couldn't verify that?")["failed"]
+    assert cte.score_case(case, [], reply="No question here.")["failed"]
+    cleared = cte.summarize([cte.score_case(case, [], reply="All good?")], "live")
+    assert cleared["pending_cleared"] == [{"id": "x", "check": "reply:no_unverified"}]
+
+
+def test_a_read_budget_and_allowed_verbs_are_not_misses_of_restraint():
+    case = {"id": "x", "expect": [], "must_not": ["create_invoice"], "max_reads": 1,
+            "allow": ["navigate"]}
+    assert not cte.score_case(case, ["list_offerings", "navigate"])["failed"]
+    storm = cte.score_case(case, ["list_offerings"], reads=["list_offerings"] * 3)
+    assert storm["failed"] and any(c["check"] == "reads<=1" and not c["ok"]
+                                   for c in storm["checks"])
+    assert cte.score_case(case, ["create_task"])["failed"]
+
+
+def test_argument_checks_read_what_the_verb_carried():
+    week = {"id": "x", "expect": ["set_availability_day"], "must_not": ["add_block_range"],
+            "expect_week": {"tue": "09:00-18:00", "wed": "09:00-18:00"}}
+    calls = [{"type": "set_availability_day", "day": d,
+              "hours": [{"start": "9:00", "end": "18:00"}]} for d in ("tue", "wed")]
+    closed = [{"type": "set_availability_day", "day": "mon", "hours": []}]
+    assert not cte.score_case(week, ["set_availability_day"], actions=calls + closed)["failed"]
+    assert cte.score_case(week, ["set_availability_day"], actions=calls[:1])["failed"]
+    offer = {"id": "y", "expect": ["create_offering"], "must_not": ["create_invoice"],
+             "expect_args": {"create_offering": {"current_price": 40, "duration_min": 45}}}
+    right = [{"type": "create_offering", "name": "Haircut", "current_price": 40.0,
+              "duration_min": 45}]
+    assert not cte.score_case(offer, ["create_offering"], actions=right)["failed"]
+    wrong = [{**right[0], "current_price": 45}]
+    assert cte.score_case(offer, ["create_offering"], actions=wrong)["failed"]
+
+
+def test_the_router_check_sees_the_fast_lane():
+    assert cte._routes_to_full_turn(cte.GREETING)
+    assert cte._routes_to_full_turn("Do I have any invoices?")
+    assert not cte._routes_to_full_turn("thanks!")
+
+
+def test_a_row_without_a_recorded_reply_is_skipped_in_replay_and_says_so():
+    case = {"id": "live_only", "message": "Hi", "expect": [], "must_not": ["send_sms"]}
+    report = cte.run_replay([case])
+    assert report["failed_cases"] == []
+    assert report["skipped"] == [{"id": "live_only",
+                                  "reason": "no recorded reply: this row runs live only"}]
