@@ -22,7 +22,7 @@ import httpx
 
 import chief_errands as errands
 from browser_controller import BrowserController, ChromiumBackend, BrowserStopped, NOT_EXECUTED, VISIBLE_TEXT, store_frame, tool_config, host_allowed
-from checkout_guard import (CHECKOUT_TOOL, CANCEL_TOOL, CANCEL, inspect_cancellation, inspect_checkout,
+from checkout_guard import (CHECKOUT_TOOL, CANCEL_TOOL, CANCEL, MONEY_MOVE, inspect_cancellation, inspect_checkout,
     action_element, is_purchase_action, quantity_field, amount)
 
 SYSTEM = """You operate Chief's computer for one explicitly approved errand.
@@ -54,6 +54,8 @@ or anything the plan does not give you, call hand_form_to_owner with a reference
 to any field inside that form. The owner fills it privately in chat; you never
 see the values. Never make up personal details. Terms, consent and privacy boxes
 are the owner's to tick; they tick them in the handed form, never you.
+Never place trades or sell, short, flatten, transfer, withdraw, deposit or wire
+money on any site; the server stops the run if you try. The owner does those.
 """
 OWNER_FORM_TOOL = {'name': 'hand_form_to_owner',
     'description': ("Hand the form around a field to the owner in chat and pause. Use it for a sign-up, "
@@ -204,6 +206,8 @@ class Driver:
         if (element is not None and name in ('left_click','double_click','triple_click','form_input','key','hold_key',
                 'left_mouse_down','left_mouse_up') and self.controller.consent_control(element)):
             raise BrowserStopped('Terms and consent are the owner\'s to accept. Use hand_form_to_owner.')
+        if element is not None and self._moves_money(name,args,element):
+            raise BrowserStopped('Trades and money transfers are never done on Chief\'s computer. The owner does those on the site.')
         if name in ('key','hold_key') and element is not None and re.search(r'enter|return|space',str(args.get('text','')),re.I):
             form=element.evaluate_handle('el=>el.form').as_element()
             if form and any(CANCEL.search(b.evaluate(VISIBLE_TEXT)) for b in form.query_selector_all('button,input[type=submit]')):
@@ -252,6 +256,21 @@ class Driver:
                 self.row=self.store.transition(row,('running',),{'plan':{
                     **row['plan'],'__cancellation_attempted_at':errands.now()}})
                 self.cancel_submitted=True
+
+    @staticmethod
+    def _moves_money(name,args,element):
+        """A click on, or Enter/Space into a form holding, a trade or money-movement control."""
+        def label(el):
+            return ' '.join(x for x in (el.evaluate(VISIBLE_TEXT) or '', el.get_attribute('aria-label') or '',
+                                        el.get_attribute('value') or '') if x)
+        if name in ('left_click','double_click','triple_click','middle_click','right_click',
+                    'left_mouse_down','left_mouse_up','left_click_drag'):
+            control=element.evaluate_handle('el=>el.closest("button,a,input,[role=button]") || el').as_element()
+            return bool(control and MONEY_MOVE.search(label(control)))
+        if name in ('key','hold_key') and re.search(r'enter|return|space',str(args.get('text','')),re.I):
+            form=element.evaluate_handle('el=>el.form').as_element()
+            return bool(form and any(MONEY_MOVE.search(label(b)) for b in form.query_selector_all('button,input[type=submit]')))
+        return False
 
     def _record(self,jpeg,host,tool):
         self.frames+=1
