@@ -2159,8 +2159,10 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _soft(asyncio.to_thread(_lazy_sync, "growth_objective_agent",
                                 "growth_context_block", biz_id), ""),
         # Raw profile row — the JIT capture detector reads
-        # proactive_capture_enabled and brand_voice from it.
-        _soft(asyncio.to_thread(business_profile_agent.get_profile, biz_id), {}),
+        # proactive_capture_enabled and brand_voice from it. No row yet is
+        # {}, an answer; only a failed read is None, and "unavailable".
+        _soft(asyncio.to_thread(business_profile_agent.get_profile, biz_id,
+                                empty_if_missing=True), {}),
         _soft(asyncio.to_thread(brand_engine_chief_context_block, biz_id), ""),
         # Standing playbook (2026-07-13) — the distilled per-business brief.
         _soft(asyncio.to_thread(_lazy_sync, "chief_playbook",
@@ -2216,7 +2218,11 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     late = await asyncio.gather(
         _soft(asyncio.to_thread(pp_chief_context_block, owner_id_for_pp)
               if owner_id_for_pp else _const(""), ""),
-        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
+        # A practitioner who signed up today has no profile row: {}, not a
+        # failed read (2026-09-26: every day-one prompt said a context
+        # source was unavailable).
+        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp,
+                                empty_if_missing=True)
               if owner_id_for_pp else _const({}), {}),
         _soft(asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
               if owner_id_for_pp else _const(""), ""),

@@ -258,12 +258,20 @@ def list_archetypes() -> List[Dict[str, Any]]:
 # Profile CRUD
 # ──────────────────────────────────────────────────────────────
 
-def get_profile(business_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch the business_profiles row for a business, or None."""
+def get_profile(business_id: str, *, empty_if_missing: bool = False) -> Optional[Dict[str, Any]]:
+    """Fetch the business_profiles row for a business, or None.
+
+    By default None means either "no row" or "the read failed". With
+    empty_if_missing=True, {} is a read that worked and found no row, and
+    None is a read that failed, so Chief's context does not call a
+    business with no profile row yet an unavailable source (2026-09-26)."""
+    missing: Optional[Dict[str, Any]] = {} if empty_if_missing else None
     if not business_id:
+        return missing
+    rows = _sb_get(f"/business_profiles?business_id=eq.{business_id}")
+    if not isinstance(rows, list):
         return None
-    rows = _sb_get(f"/business_profiles?business_id=eq.{business_id}") or []
-    return rows[0] if rows else None
+    return rows[0] if rows else missing
 
 
 def upsert_profile(business_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
