@@ -172,7 +172,8 @@ class Complexity:
     confidence: float            # how sure the scorer is, 0 … 1
     kind: str                    # social | general | lookup | action | draft |
                                  # reasoning | code | synthesis | confirm |
-                                 # farewell | followup | system | unknown
+                                 # farewell | followup | system | product |
+                                 # unknown
     needs_records: bool = False
     needs_action: bool = False
     cacheable: bool = False
@@ -215,6 +216,22 @@ _AFFIRM = re.compile(
     r"confirm(?:ed)?|let'?s do it|absolutely|definitely|correct|right|exactly|"
     r"no|nope|nah|not now|cancel(?: that)?|stop|wait|hold on|never ?mind)\b", re.I)
 _SENTINEL = re.compile(r"^\s*\[SYSTEM:", re.I)
+# Questions about Chief itself, the app, or getting started. The fast lane
+# has no product context and no SETUP STATUS, so it can only answer these
+# from general knowledge — a generic assistant pitch or an invented feature.
+# "What can you do for me?" is one of the four setup starters a new
+# account's empty chat offers, and it routed as ambiguous, so the
+# classifier could send it to Haiku alone. The full turn knows the product
+# and this business's setup; these always go there.
+_ABOUT_CHIEF = re.compile(
+    r"\b(?:what|how) (?:else )?(?:can|could|do|would|will) you (?:do|help|offer|handle|manage)\b"
+    r"|\bhow (?:can|could|do|would|will) you help\b"
+    r"|\bcan you (?:help|do)\b|\bare you (?:able|capable)\b"
+    r"|\b(?:what|who)(?:'s| is| are) (?:you|chief)\b|\bwhat(?:'s| is) your (?:job|role|name)\b"
+    r"|\bhow (?:do|does) (?:you|chief) work\b"
+    r"|\bsolutionist\b|\b(?:this|the) (?:app|system|platform|software|dashboard)\b"
+    r"|\bhow (?:do|can|should) i (?:use|start|begin)\b|\bget(?:ting)? started\b"
+    r"|\bfirst steps?\b|\bonboarding\b|\bfeatures?\b|\bcapabilit(?:y|ies)\b", re.I)
 
 _ACTION = _rx([
     r"send", r"email", r"e-mail", r"text", r"message", r"call", r"book", r"schedule",
@@ -339,6 +356,10 @@ def score(message: str, prior_assistant: Optional[str] = None, *,
         # A bare "ok" with no question pending is still ambiguous — it may
         # answer something older than the last message.
         return Complexity(0.4, 0.5, "confirm", needs_action=True, signals=["bare_affirm"])
+    if _ABOUT_CHIEF.search(raw):
+        # The right answer depends on the product and on this business's
+        # setup, neither of which the fast lane can see.
+        return Complexity(0.5, 0.95, "product", needs_records=True, signals=["about_chief"])
 
     s = 0.3
     needs_records = False
@@ -461,7 +482,7 @@ def decide(c: Complexity, *, allow_fast: bool = True, dissatisfied_now: bool = F
         return Route(LANE_FULL, "dissatisfied")
     if sticky_up:
         return Route(LANE_FULL, "sticky_after_dissatisfaction")
-    if c.kind in ("system", "farewell", "confirm"):
+    if c.kind in ("system", "farewell", "confirm", "product"):
         return Route(LANE_FULL, c.kind)
     if c.needs_action:
         return Route(LANE_FULL, "needs_action")

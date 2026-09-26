@@ -65,6 +65,30 @@ def test_everything_that_needs_the_business_or_thought_goes_up(msg, why):
         why == "complexity" and r.reason.startswith("complexity")), (msg, r.reason)
 
 
+@pytest.mark.parametrize("msg", [
+    # A setup starter on a new account's empty chat (FE ChiefOfStaff
+    # SETUP_ASKS). It used to route "ambiguous", and a sure classifier sent
+    # it to Haiku alone, which cannot see the product or the setup list.
+    "What can you do for me?",
+    "what else can you help with?", "How can you help my business?",
+    "Can you help me?", "who are you?", "What is Chief?", "what's your name?",
+    "What is the Solutionist System?", "how does this app work?",
+    "How do I get started?", "how do I use this?", "what features do you have?",
+    "Are you able to run my payroll?",
+])
+def test_questions_about_chief_or_the_app_go_to_the_full_turn(msg):
+    c, r = _route(msg)
+    assert c.kind == "product" and not r.ambiguous, (msg, c, r)
+    assert r.lane == mr.LANE_FULL and r.reason == "product", (msg, r)
+    assert not c.cacheable
+
+
+def test_the_product_gate_leaves_general_and_social_questions_alone():
+    for msg in ["What does ROI mean?", "how are you?", "thanks chief", "define gross margin",
+                "what do you think?", "can you cheer me up?", "give me a pep talk"]:
+        assert mr.score(msg).kind != "product", msg
+
+
 @pytest.mark.parametrize("msg", ["yes", "sounds good", "perfect, thanks", "go ahead", "no"])
 def test_a_short_reply_to_a_question_is_the_go_ahead_not_small_talk(msg):
     c, r = _route(msg, prior="I've drafted the reminder to Maria. Shall I send it?")
