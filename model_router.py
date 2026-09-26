@@ -614,12 +614,16 @@ _MONEYISH = re.compile(r"[$€£%#@]|\d")
 _END = re.compile(r"[.!?…]\s*$")
 
 
-def strip_interjection(text: str) -> str:
+def strip_interjection(text: str, *, lower: bool = True) -> str:
     """Drop a leading 'Sure,' / 'Okay —' so it can follow a lead that
-    already said one, and lowercase what is left (never 'I')."""
+    already said one, and lowercase what is left (never 'I') — unless the
+    lead was a whole sentence ("One second."), which the next sentence
+    follows capitalised."""
     t = _INTERJECTION.sub("", text or "", count=1)
-    if t and t[0].isupper() and not re.match(r"I\b", t):
+    if lower and t and t[0].isupper() and not re.match(r"I\b", t):
         t = t[0].lower() + t[1:]
+    elif not lower and t and t[0].islower():
+        t = t[0].upper() + t[1:]
     return t
 
 
@@ -648,6 +652,7 @@ class OpenerGate:
         self._framed = False
         self._words = 0
         self.after_lead = after_lead
+        self.lower_after_lead = True     # False after a whole-sentence lead
         self.closed = False
         self.cut_reason: Optional[str] = None
         self.text = ""
@@ -662,7 +667,8 @@ class OpenerGate:
             return ""
         if not self._framed:
             self._pending += piece
-            probe = strip_interjection(self._pending) if self.after_lead else self._pending
+            probe = (strip_interjection(self._pending, lower=self.lower_after_lead)
+                     if self.after_lead else self._pending)
             words = re.findall(r"[A-Za-z']+(?=[\s,.!?;:—–-])", probe)   # whole words only
             enough = (len(words) >= self.LEAD_PROBE_WORDS + 1
                       or bool(re.search(r"[.!?]\s*$", probe)))
@@ -685,7 +691,7 @@ class OpenerGate:
         if self.after_lead and not self.text and self._buf:
             # Framed before the lead went out but not yet shown ("Pulling"
             # still growing when the deadline came): it now follows the lead.
-            self._buf = strip_interjection(self._buf.lstrip())
+            self._buf = strip_interjection(self._buf.lstrip(), lower=self.lower_after_lead)
         while not self.closed and self._buf:
             m = re.match(r"(\s*)(\S+)(\s|$)", self._buf)
             if not m or (not m.group(3) and not final):
@@ -882,8 +888,27 @@ _LEADS = {
 }
 
 
-def local_lead(kind: str) -> str:
+# On a call the lead is SPOKEN, and the full turn's words may be seconds
+# behind it — "Okay —" and then a long pause sounds like a dropped line. So
+# a call's lead is a whole sentence that stands on its own, and there is
+# none at all for thanks or a goodbye (Kevin's 2026-09-08 call rule: those
+# are answered directly). "On it." is also one of the call's own cached
+# openers (callOpeners.ts), and all of them are short enough for the
+# speech proxy's phrase cache, so a lead is audio at once.
+_VOICE_LEADS = {
+    "confirm": "Okay.",
+    "action": "On it.",
+    "draft": "On it.",
+    "social": "",
+    "farewell": "",
+    "system": "",
+}
+
+
+def local_lead(kind: str, *, voice: bool = False) -> str:
     """The words that go out when no model has spoken by the deadline. An
     interjection and nothing else: it composes with whatever follows it, and
-    it cannot be wrong."""
+    it cannot be wrong. On a call, a short sentence (or nothing)."""
+    if voice:
+        return _VOICE_LEADS.get(kind or "", "One second.")
     return _LEADS.get(kind or "", "Okay —")

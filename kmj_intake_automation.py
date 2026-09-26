@@ -166,6 +166,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=False,  # bearer tokens only — never cookie auth
+    # Response headers the app reads cross-origin. X-TTS-Cache says a phrase
+    # came from the speech proxy's memory (the call counts those hits).
+    expose_headers=["X-TTS-Cache"],
 )
 # Compression (2026-08-02, performance pass). Composed sites are single
 # documents with CSS + JS + JSON-LD inlined — routinely 100-250KB, and
@@ -544,6 +547,9 @@ app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
 from chief_fast_track import router as chief_routing_router
 app.include_router(chief_routing_router)
+# Time to first audio on a call: the app's per-turn report + the owner's stats (2026-09-25).
+from voice_metrics import router as voice_metrics_router
+app.include_router(voice_metrics_router)
 # What BILLING_ENFORCE=on would do today, without flipping it (2026-09-04). Owner-only.
 from billing_rehearsal import router as billing_rehearsal_router
 app.include_router(billing_rehearsal_router)

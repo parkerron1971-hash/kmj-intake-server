@@ -615,9 +615,23 @@ class TwoTrack:
         self.holder.said(text)
         yield {"type": "delta", "text": text, "checked": True, "lead": source}
 
+    def _lead(self, kind: Optional[str] = None) -> str:
+        """This turn's local lead: an interjection on screen, a whole short
+        sentence on a call (or none, for thanks and goodbyes)."""
+        return mr.local_lead(kind or self.c.kind, voice=self.voice)
+
+    def _lead_is_sentence(self) -> bool:
+        return bool(re.search(r"[.!?]\s*$", self.lead_text))
+
     def _lead_allowed(self) -> bool:
         return (_on("CHIEF_ROUTER_LOCAL_LEAD") and not self.lead_text
-                and not self.client_opener and not self.system_turn)
+                and not self.client_opener and not self.system_turn and bool(self._lead()))
+
+    def _joined(self, text: str) -> str:
+        """Model text that follows what the first track already said."""
+        if self.lead_text and not self.lead_text[-1:].isspace() and not text.startswith(" "):
+            return " " + text
+        return text
 
     def _lead_needed(self, deadline: float) -> bool:
         return self._lead_allowed() and time.perf_counter() >= deadline
@@ -635,7 +649,7 @@ class TwoTrack:
                     await task
                 return
             if now >= deadline:
-                async for ev in self._emit(mr.local_lead(self.c.kind), "local"):
+                async for ev in self._emit(self._lead(), "local"):
                     yield ev
                 if task is not None:
                     await task
@@ -729,20 +743,20 @@ class TwoTrack:
                     gate.close("timeout")
                     break
                 if piece == "LEAD":
+                    lead = self._lead()
                     gate.after_lead = True
-                    async for ev in self._emit(mr.local_lead(self.c.kind), "local"):
+                    gate.lower_after_lead = not re.search(r"[.!?]\s*$", lead)
+                    async for ev in self._emit(lead, "local"):
                         yield ev
                     continue
                 if piece is None:
                     tail = gate.finish()
-                    async for ev in self._emit(tail, "model"):
+                    async for ev in self._emit(self._joined(tail) if tail else "", "model"):
                         yield ev
                     break
                 text = gate.feed(piece)
                 if text:
-                    if self.lead_text.endswith(("—", "–")) and not text.startswith(" "):
-                        text = " " + text
-                    async for ev in self._emit(text, "model"):
+                    async for ev in self._emit(self._joined(text), "model"):
                         yield ev
             if gate.cut_reason and gate.cut_reason not in ("sentence_end", "model_end"):
                 self.rec.opener_cut = gate.cut_reason
@@ -821,7 +835,7 @@ class TwoTrack:
                     break
                 if piece == "LEAD":
                     after_lead = True
-                    async for ev in self._emit(mr.local_lead(self.c.kind), "local"):
+                    async for ev in self._emit(self._lead(), "local"):
                         yield ev
                     continue
                 text = gate.finish() if piece is None else gate.feed(piece)
@@ -836,7 +850,8 @@ class TwoTrack:
                         escalate = "guard"
                         break
                     if first_model_text and after_lead:
-                        text = " " + mr.strip_interjection(text.lstrip())
+                        text = " " + mr.strip_interjection(
+                            text.lstrip(), lower=not self._lead_is_sentence())
                     first_model_text = False
                     self.fast_answer += text
                     async for ev in self._emit(text, "answer"):
@@ -856,8 +871,8 @@ class TwoTrack:
             self.rec.answer_model = None
             if not self.lead_text and not self.client_opener:
                 # Nothing shown yet: the budget still holds with a lead.
-                async for ev in self._emit(mr.local_lead("general" if self.c.kind == "general"
-                                                          else "other"), "local"):
+                async for ev in self._emit(self._lead("general" if self.c.kind == "general"
+                                                      else "other"), "local"):
                     yield ev
             if self.lead_text and not re.search(r"[.!?…—–]\s*$", self.lead_text.rstrip()):
                 self.lead_text += " —"

@@ -49,6 +49,14 @@ from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("route_ledger")
+if not logger.handlers:
+    # Its own handler at INFO, like chief.truth: under the root's default
+    # level the per-request [route] line — the only record until
+    # model_route_log is applied — never reached the Railway logs.
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] route: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
 
 
 def budget_ms() -> int:
@@ -247,17 +255,28 @@ class RouteRecord:
 # ─── The SLO window ──────────────────────────────────────────────────
 
 class SloWindow:
-    """Recent first-token times, the p95 over them, and the page."""
+    """Recent latencies, the p95 over them, and the page.
 
-    def __init__(self) -> None:
+    One class for both hard latency SLOs: time to first TOKEN on every
+    streamed turn (this module, `ttft_ms`, ROUTER_SLO_*) and time to first
+    AUDIO on every spoken call turn (voice_metrics, `ttfa_ms`, VOICE_SLO_*).
+    Each has its own window, budget and page, so one cannot mask the other."""
+
+    def __init__(self, *, metric: str = "ttft_ms", budget=None, env: str = "ROUTER_SLO") -> None:
         self._lock = threading.Lock()
         self._samples: Deque[Tuple[float, int]] = deque(maxlen=5000)
         self._lanes: Deque[Tuple[float, str, bool, str, float]] = deque(maxlen=5000)
         self._alert_open = False
         self._alerted_at = 0.0
+        self.metric = metric
+        self._budget = budget or budget_ms
+        self._env = env
+
+    def budget(self) -> int:
+        return int(self._budget())
 
     def window_s(self) -> int:
-        return _int_env("ROUTER_SLO_WINDOW_S", 900, 60)
+        return _int_env(f"{self._env}_WINDOW_S", 900, 60)
 
     def _trim(self, now: float) -> None:
         cut = now - self.window_s()
@@ -271,7 +290,7 @@ class SloWindow:
         tipped the window over budget."""
         now = time.time() if now is None else now
         with self._lock:
-            ttft = row.get("ttft_ms")
+            ttft = row.get(self.metric)
             if row.get("slo_applies", True):
                 # A request that never produced a word (it errored first) is
                 # a miss, not a gap in the data: count it at its total time.
@@ -284,13 +303,13 @@ class SloWindow:
             self._trim(now)
             p95 = self._pct(95)
             n = len(self._samples)
-            budget = budget_ms()
-            if p95 is None or n < _int_env("ROUTER_SLO_MIN_SAMPLES", 20, 1):
+            budget = self.budget()
+            if p95 is None or n < _int_env(f"{self._env}_MIN_SAMPLES", 20, 1):
                 return None
             if p95 <= budget:
                 self._alert_open = False            # recovered: re-arm
                 return None
-            cooldown = _int_env("ROUTER_SLO_ALERT_COOLDOWN_S", 3600, 60)
+            cooldown = _int_env(f"{self._env}_ALERT_COOLDOWN_S", 3600, 60)
             if self._alert_open and now - self._alerted_at < cooldown:
                 return None
             self._alert_open = True
@@ -307,11 +326,12 @@ class SloWindow:
             self._trim(time.time())
             vals = sorted(v for _, v in self._samples)
             lanes = list(self._lanes)
-        budget = budget_ms()
+        budget = self.budget()
+        name = self.metric.replace("_ms", "")
         out: Dict[str, Any] = {
             "window_s": self.window_s(), "budget_ms": budget, "samples": len(vals),
-            "ttft_p50_ms": percentile(vals, 50), "ttft_p95_ms": percentile(vals, 95),
-            "ttft_p99_ms": percentile(vals, 99),
+            f"{name}_p50_ms": percentile(vals, 50), f"{name}_p95_ms": percentile(vals, 95),
+            f"{name}_p99_ms": percentile(vals, 99),
             "slo_met_pct": (round(100.0 * sum(1 for v in vals if v <= budget) / len(vals), 1)
                             if vals else None),
             "alert_open": self._alert_open,
@@ -422,6 +442,14 @@ def _page_owner(alert: Dict[str, Any]) -> None:
             f"are slow before the stream starts (auth, the event loop, the host) — read the "
             f"[route] log lines. Budget: ROUTER_TTFT_BUDGET_MS.")
     logger.warning("[route] SLO BREACH %s", alert)
+    page_owner("Chief first-word time over budget (p95)", note,
+               push_title="Chief is slow to start replying",
+               push_body=f"p95 first word {alert['p95_ms']}ms (budget {alert['budget_ms']}ms).")
+
+
+def page_owner(finding_title: str, note: str, *, push_title: str, push_body: str) -> None:
+    """One Mission Control finding + one push to the platform owner — the
+    spend guard's channel. Fire-and-forget; never raises."""
     try:
         import asyncio
         import httpx
@@ -432,14 +460,11 @@ def _page_owner(alert: Dict[str, Any]) -> None:
         async def _go():
             headers = _service_headers()
             async with httpx.AsyncClient(timeout=15) as c:
-                await wd._log_finding(c, headers, "Chief first-word time over budget (p95)",
-                                      note, pending=True)
+                await wd._log_finding(c, headers, finding_title, note, pending=True)
                 owner = await wd._owner_user_id(c, headers)
             if owner:
-                push_notifications.send_to_user(
-                    owner, title="Chief is slow to start replying",
-                    body=f"p95 first word {alert['p95_ms']}ms (budget {alert['budget_ms']}ms).",
-                    nav="studio")
+                push_notifications.send_to_user(owner, title=push_title, body=push_body,
+                                                nav="studio")
 
         try:
             asyncio.get_running_loop().create_task(_go())
