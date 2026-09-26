@@ -14,6 +14,10 @@ PROMPT = '''
 CREATIVE EXECUTION CONTRACT (takes precedence over creative ACTION-tag examples):
 Use the native generate_image, compose_flyer, create_video and find_images tools for creative
 work, not prose or ACTION tags. "Create it" after a visual brief means submit that brief now.
+"Revise", "redesign", "refine" and "edit" requests also require a real creative tool call.
+Use the existing artwork as edit_target and let the latest revision instructions override
+its original visual brief. Never echo [Image references: ...] or Action results history
+annotations in your response. Those describe earlier turns, not a new execution or approval.
 If essential copy/assets are missing or offer terms conflict with verified billing, call
 creative_clarification with one precise question instead. Do not ask permission already given.
 The server displays actual action status. Never claim a request was sent, an image exists,
@@ -49,13 +53,18 @@ def tool_specs():
 
 def create_requested(body):
     text = body.message.strip().lower().rstrip('.!')
-    if len(text) > 500 or re.search(r"\b(?:(?:don't|do not)\s+(?:create|generate|make|design|render)|not yet|before|if|suggest|ideas|concepts)\b", text):
+    verbs = r'(?:create|generate|make|design|render|revise|redesign|refine|edit)'
+    if re.search(r"\b(?:(?:don't|do not)\s+" + verbs + r"|not yet)\b", text):
         return False
-    short = re.fullmatch(r'(?:please )?(?:create|generate|make|design|render) (?:it|that|this)(?: now)?', text)
-    if short:
-        return any(re.search(r'\b(flyer|image|visual|artwork|poster|graphic|video)\b', t.text, re.I) for t in body.history[-2:])
-    return bool(re.match(r'(?:please )?(?:create|generate|make|design|render)\b', text)
-                and re.search(r'\b(flyer|image|visual|artwork|poster|graphic|video)\b', text))
+    # Match the direct instruction, not quoted verbs later in a discussion. Long
+    # production briefs must not silently fall back to narration-only mode.
+    instruction = re.match(r'(?:please\s+)?' + verbs + r'\s+(.+)', text, re.S)
+    if not instruction:
+        return False
+    target = instruction.group(1)
+    if re.match(r'(?:it|that|this)\b', target):
+        return bool(body.images) or any(re.search(r'\b(flyer|image|visual|artwork|poster|graphic|video)\b', t.text, re.I) for t in body.history[-2:])
+    return bool(re.match(r'(?:(?:a|an|the|my|our|one|new|original|portrait|square|landscape|founding-seat|latest|last|previous)\s+)*(?:flyer|image|visual|artwork|poster|graphic|video)\b', target))
 
 
 def status_requested(body):
@@ -166,6 +175,8 @@ def display_reply(text, results, body, question=None):
     # Fail visibly if an explicit creation turn still yielded only narration.
     if create_requested(body):
         return 'Chief did not return a valid creative command, so no image was submitted. Please retry the creation request.'
-    if not results and re.search(r'(?:\b(?:image|flyer|visual|artwork)\s+(?:is|was)\s+(?:ready|generated|generating|queued)|\b(?:requesting|generating|rendering) (?:the|your) (?:image|flyer|visual)|\b(?:you should see|card (?:is|appeared))\b)', text, re.I):
+    if re.search(r'\[Image references:|Action results:', text, re.I):
+        return 'Chief repeated an earlier image record without submitting a new creative request. No new generation or review card was created.'
+    if not results and re.search(r'(?:\b(?:image|flyer|visual|artwork)\s+(?:is|was)\s+(?:ready|generated|generating|queued)|\b(?:requesting|generating|rendering) (?:the|your) (?:image|flyer|visual)|\b(?:you should see|card (?:is|appeared))\b|\b(?:awaiting|pending) approval\b)', text, re.I):
         return 'I cannot verify that an image was submitted or completed from this reply. Ask me to check the image status; no new generation was started.'
     return text

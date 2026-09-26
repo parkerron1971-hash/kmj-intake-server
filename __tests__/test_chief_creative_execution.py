@@ -33,6 +33,23 @@ def test_creation_requires_current_direct_instruction_and_visual_context():
     assert not execution.create_requested(body('create it'))
 
 
+@pytest.mark.parametrize('verb', ['Revise', 'Redesign', 'Refine', 'Edit'])
+def test_revision_commands_require_tool_even_with_long_brief(verb):
+    message = f'{verb} artwork 38a3321a-80f9-5b59-b69d-1f1934055ef2: ' + 'Remove the building and keep the offer. ' * 30
+    assert execution.create_requested(body(message))
+    assert not execution.create_requested(body('Do not ' + message))
+    assert not execution.create_requested(body('What do you think? ' + message))
+
+
+def test_revision_echo_cannot_claim_approval_or_expose_old_receipt():
+    echo = 'Your revision request is awaiting approval in the review card. Generation has not started.\n[Image references: old-id: old brief]\nAction results: [{"type":"generate_image","ok":true}]'
+    reply = execution.display_reply(echo, [], body('Revise artwork 38a3321a-80f9-5b59-b69d-1f1934055ef2: simplify it'))
+    assert 'no image was submitted' in reply
+    assert 'Image references' not in reply and 'awaiting approval' not in reply
+    assert 'No new generation' in execution.display_reply(echo, [], body('Use a simpler background'))
+    assert 'cannot verify' in execution.display_reply('Your revision is awaiting approval.', [], body('Use a simpler background'))
+
+
 def test_native_tool_payload_has_priority_and_cannot_spoof_action_type():
     native = [{'type':'tool_use','name':'generate_image','input':{'type':'marketing_pause','prompt':'Approved brief'}}]
     selected, question = execution.selected_actions(native,[{'type':'generate_image','prompt':'duplicate'}])
@@ -105,11 +122,13 @@ def client_for(monkeypatch):
     return TestClient(app)
 
 
-def test_native_creation_endpoint_produces_review_card(setup, store, monkeypatch):
+@pytest.mark.parametrize('message', ['Create the flyer', 'Revise artwork 38a3321a-80f9-5b59-b69d-1f1934055ef2: remove the building'])
+def test_native_creation_endpoint_produces_review_card(setup, store, monkeypatch, message):
     call=AsyncMock(return_value=httpx.Response(200,json={'stop_reason':'tool_use','content':[{'type':'tool_use','name':'generate_image','input':{'prompt':'Approved abstract founder flyer'}}]}))
     monkeypatch.setattr(console.llm_call,'apost',call)
     generate=AsyncMock();monkeypatch.setattr(creative.images,'handle_generate_image',generate)
-    response=client_for(monkeypatch).post('/platform/chief/message',json={'message':'Create the flyer'})
+    monkeypatch.setattr('chief_flyer_direction.attach_review', AsyncMock())
+    response=client_for(monkeypatch).post('/platform/chief/message',json={'message':message})
     assert response.status_code==200,response.text
     assert response.json()['actions_taken'][0]['approval']['status']=='pending'
     assert 'Generation has not started' in response.json()['reply']
