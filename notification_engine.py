@@ -2,7 +2,10 @@
 notification_engine.py — Solutionist System proactive notifications
 
 Generates ambient notifications the Chief sends throughout the day:
-- morning_brief    (cron: ~7:30am local)
+- morning_brief    (cron: 13:05 UTC; a quiet morning in a business's
+                    launch window gets one setup step instead of a
+                    skip, on its local clock when it has one; see
+                    setup_brief.py)
 - midday_ping      (cron: ~12:30pm local — only if something urgent)
 - evening_summary  (cron: ~6:00pm local)
 - urgent_alert     (real-time, called from other agents)
@@ -215,9 +218,19 @@ def _midnight_iso() -> str:
 
 
 async def _settings_allow(client, biz: Dict, key: str, default: bool = True) -> bool:
-    """Check businesses.settings.notifications.<key>_enabled."""
+    """Check businesses.settings.notifications.<key>_enabled.
+
+    `<key>_enabled` is what the toggles in NotificationCenter and
+    Business Settings write (morning_brief_enabled, midday_ping_enabled,
+    evening_summary_enabled, urgent_alerts_enabled), and what the push
+    brief already reads. This read only the bare `<key>`, which nothing
+    in the app writes, so switching a brief off in Settings never
+    reached this engine. The bare key is still honored for rows that
+    carry it."""
     settings = (biz.get("settings") or {}).get("notifications") or {}
-    val = settings.get(key)
+    val = settings.get(f"{key}_enabled")
+    if val is None:
+        val = settings.get(key)
     if val is None:
         return default
     return bool(val)
@@ -400,7 +413,66 @@ async def _ai_generate_notification(
     }
 
 
-async def _generate_morning_brief(client, biz_id: str) -> Dict:
+async def _setup_brief_or_skip(client, biz: Dict, *,
+                               now: Optional[datetime] = None,
+                               on_demand: bool = False) -> Dict:
+    """Nothing to report. For a business in its launch window with setup
+    still to do, that is not nothing: it gets ONE next setup step
+    (setup_brief). For everyone else, the skip this always was.
+
+    No model call. The copy is assembled from the plug-in catalog, so an
+    empty morning stays free, which is the reason the skip exists."""
+    try:
+        import setup_brief
+        plan = await asyncio.to_thread(setup_brief.plan, biz,
+                                       now=now, on_demand=on_demand)
+    except Exception as e:
+        logger.warning(f"setup brief plan failed for {biz.get('id')}: {e}")
+        plan = {}
+    if not plan.get("send"):
+        out: Dict[str, Any] = {"skipped": "nothing_to_report"}
+        if plan.get("window"):
+            out["setup_brief"] = plan.get("reason")
+        return out
+
+    biz_id = str(biz.get("id") or "")
+    notif = plan["notification"]
+    inserted = await _insert_notification(client, biz_id, {
+        "type": "morning_brief", **notif,
+    })
+    pushed = 0
+    if inserted:
+        # The same morning on the phone. send_to_business is a no-op
+        # without VAPID keys or a subscribed device, and the tag is the
+        # push brief's, so the device keeps one morning card, not two.
+        push = plan.get("push") or {}
+        try:
+            import push_notifications
+            pushed = await asyncio.to_thread(
+                push_notifications.send_to_business, biz_id,
+                title=push.get("title") or "Good morning",
+                body=push.get("body") or notif["title"],
+                nav=push.get("nav") or "home", tag=push.get("tag"))
+        except Exception as e:
+            logger.warning(f"setup brief push failed for {biz_id}: {e}")
+    return {"created": bool(inserted),
+            "notification_id": inserted["id"] if inserted else None,
+            "setup_step": (plan.get("step") or {}).get("key"),
+            "pushed": pushed, "notif": notif}
+
+
+async def _generate_morning_brief(client, biz_id: str, *,
+                                  setup_only: bool = False,
+                                  on_demand: bool = False,
+                                  now: Optional[datetime] = None) -> Dict:
+    """The morning brief for one business.
+
+    setup_only: the local-morning tick is asking on behalf of a launching
+    business's own clock. It may send the setup brief; a morning that
+    has something to report is left to the ordinary brief at the
+    morning tick.
+    on_demand: a person asked for their brief now (the route), so the
+    setup brief does not wait for their local morning."""
     biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{biz_id}&select=*&limit=1")
     if not biz_rows:
         return {"skipped": "business_not_found"}
@@ -413,7 +485,9 @@ async def _generate_morning_brief(client, biz_id: str) -> Dict:
 
     data = await _gather_morning_data(client, biz_id)
     if not has_anything_to_report(data):
-        return {"skipped": "nothing_to_report"}
+        return await _setup_brief_or_skip(client, biz, now=now, on_demand=on_demand)
+    if setup_only:
+        return {"skipped": "left_to_the_morning_brief"}
     biz_name = biz.get("name", "")
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
     voice = biz.get("voice_profile") or {}
@@ -875,6 +949,44 @@ async def generate_morning_brief_for_all() -> Dict:
         return {"ran": len(ids), "results": results}
 
 
+async def setup_brief_local_morning_tick(now: Optional[datetime] = None) -> Dict:
+    """Hourly (:35). The setup brief on a launching business's own clock.
+
+    The morning tick is 13:05 UTC for everyone: 9am in New York, 6am in
+    Los Angeles, 3am in Honolulu. That compromise stands for the ordinary
+    brief. But a business in its first days that told us its timezone
+    gets its setup step in ITS morning, so this tick looks only at
+    launching businesses (created inside the window, or trialing) with a
+    timezone set, and asks for the setup brief of those whose local
+    morning it is. Businesses without a timezone are the morning tick's.
+
+    One platform read per hour when nobody is launching. The once-a-day
+    cap is the brief's own, so a business already briefed today (by the
+    morning tick or an earlier hour) costs one lookup and stops.
+    """
+    import setup_brief
+    if not setup_brief.enabled():
+        return {"skipped": "disabled"}
+    now = now or datetime.now(timezone.utc)
+    since = _z(now - timedelta(days=setup_brief.window_days() + 1))
+    async with httpx.AsyncClient() as client:
+        rows = await _sb(client, "GET",
+            f"/businesses?is_active=eq.true"
+            f"&or=(created_at.gte.{since},subscription_status.eq.trialing)"
+            f"&select=id,settings&limit=500") or []
+        due = [str(r["id"]) for r in rows
+               if r.get("id") and setup_brief.local_tz(r) is not None
+               and setup_brief.is_local_morning(r, now)]
+        results = []
+        for bid in due:
+            try:
+                results.append({"business_id": bid, **await _generate_morning_brief(
+                    client, bid, setup_only=True, now=now)})
+            except Exception as e:
+                logger.exception(f"setup brief failed for {bid}: {e}")
+        return {"candidates": len(rows), "due": len(due), "results": results}
+
+
 async def generate_midday_ping_for_all() -> Dict:
     async with httpx.AsyncClient() as client:
         ids = await _all_active_business_ids(client)
@@ -911,7 +1023,7 @@ async def morning_brief(req: NotifRequest,
                         user: AuthedUser = Depends(require_user)):
     _require_access(req.business_id, user)
     async with httpx.AsyncClient() as client:
-        return await _generate_morning_brief(client, req.business_id)
+        return await _generate_morning_brief(client, req.business_id, on_demand=True)
 
 
 @router.post("/agents/notifications/midday-ping")

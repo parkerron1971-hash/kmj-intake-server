@@ -1313,6 +1313,11 @@ async def startup():
                               id="notif_urgent_check")
             scheduler.add_job(g("notif_morning_brief", _notif.generate_morning_brief_for_all),
                               "cron", hour=13, minute=5, id="notif_morning_brief")
+            # The setup brief on a launching business's own clock
+            # (setup_brief.py). Hourly at :35, never :05, so it can't
+            # race the morning tick into writing two briefs.
+            scheduler.add_job(g("notif_setup_brief", _notif.setup_brief_local_morning_tick),
+                              "cron", minute=35, id="notif_setup_brief")
             scheduler.add_job(g("notif_midday_ping", _notif.generate_midday_ping_for_all),
                               "cron", hour=17, minute=5, id="notif_midday_ping")
             scheduler.add_job(g("notif_evening_summary", _notif.generate_evening_summary_for_all),
