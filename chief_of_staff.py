@@ -563,6 +563,18 @@ def _stitch_after_stream(prefix: str, final: str) -> str:
     return prefix.rstrip() + "\n\n" + final
 
 
+def _stitch_after_headline(headline: str, streamed: str, final: str) -> str:
+    """The reply on file when Haiku's headline (chief_headline) led the
+    turn. `streamed` is all the streamer said, headline first. When the
+    main model streamed too, the reply continues ITS part; when it did
+    not, the reply continues the headline itself, so a model that repeats
+    the headline despite being told not to still says it once."""
+    rest = streamed[len(headline):]
+    if rest:
+        return headline.rstrip() + " " + _stitch_after_stream(rest, final).lstrip()
+    return _stitch_after_stream(headline.strip(), final)
+
+
 def _stream_piece_events(piece: str, filt: "_ActionTagFilter") -> List[Dict[str, Any]]:
     """What one sink piece becomes on the wire: a status event, or the
     text the tag filter lets through as a delta (possibly nothing yet)."""
@@ -14598,18 +14610,8 @@ async def chief_chat(
             # What streamed was already shown and said: the reply on file,
             # on screen and in history continues it rather than repeating it.
             if _headline_said.strip() and isinstance(_sentence_streamer, _SentenceStreamer):
-                # Two writers streamed: Haiku's headline, then the main
-                # model's own sentences. The main reply continues ITS part;
-                # the headline leads it.
-                _main_streamed = _sentence_streamer.text[len(_headline_said):]
-                if _main_streamed:
-                    _rest = _stitch_after_stream(_main_streamed, response_text)
-                elif not response_text.strip() or any(
-                        response_text.strip().startswith(w) for w in _WITHHELD_REPLIES):
-                    _rest = "I couldn't confirm the rest of that from your records, so I stopped there."
-                else:
-                    _rest = response_text
-                response_text = _headline_said.rstrip() + " " + _rest.lstrip()
+                response_text = _stitch_after_headline(
+                    _headline_said, _sentence_streamer.text, response_text)
             elif isinstance(_sentence_streamer, _SentenceStreamer) and _sentence_streamer.text:
                 response_text = _stitch_after_stream(_sentence_streamer.text, response_text)
 
