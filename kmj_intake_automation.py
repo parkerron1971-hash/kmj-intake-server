@@ -166,6 +166,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=False,  # bearer tokens only — never cookie auth
+    # Response headers the app reads cross-origin. X-TTS-Cache says a phrase
+    # came from the speech proxy's memory (the call counts those hits).
+    expose_headers=["X-TTS-Cache"],
 )
 # Compression (2026-08-02, performance pass). Composed sites are single
 # documents with CSS + JS + JSON-LD inlined — routinely 100-250KB, and

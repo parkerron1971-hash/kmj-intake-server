@@ -225,8 +225,15 @@ BIZ = "22222222-2222-2222-2222-222222222222"
 @pytest.fixture
 def report(monkeypatch):
     monkeypatch.setenv("VOICE_LOG_DB", "off")
-    import whisper_proxy
-    monkeypatch.setattr(whisper_proxy, "_owns_business", lambda u, b: b == BIZ)
+    import business_access
+    from fastapi import HTTPException
+
+    def assert_access(business_id, user, min_role="viewer"):
+        if business_id != BIZ:
+            raise HTTPException(status_code=404, detail="business not found")
+        return "owner"
+    monkeypatch.setattr(business_access, "assert_access", assert_access)
+    vm._ACCESS_OK.clear()
     monkeypatch.setattr(vm, "WINDOW", route_ledger.SloWindow(
         metric="ttfa_ms", budget=vm.budget_ms, env="VOICE_SLO"))
     rows = []
@@ -254,7 +261,7 @@ def test_the_business_must_be_the_callers(report):
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as e:
         _post(business_id="33333333-3333-3333-3333-333333333333", ttfa_ms=500)
-    assert e.value.status_code == 403
+    assert e.value.status_code == 404          # business_access's one answer for "no"
     with pytest.raises(HTTPException):
         _post(business_id="not-an-id", ttfa_ms=500)
 

@@ -199,6 +199,26 @@ def record(row: Dict[str, Any]) -> None:
     _write(row)
 
 
+# Who may report against which business, remembered briefly: a call
+# reports every spoken turn, and the check is two blocking reads on the
+# loop that also serves Chief's streams.
+_ACCESS_OK: Dict[str, float] = {}
+ACCESS_TTL_S = 600
+
+
+def _gate(business_id: str, user: AuthedUser) -> None:
+    """The caller must have a role on the business (business_access's
+    rules and its indistinguishable 404)."""
+    key = f"{user.id}:{business_id}"
+    if time.time() - _ACCESS_OK.get(key, 0.0) < ACCESS_TTL_S:
+        return
+    from business_access import assert_access
+    assert_access(business_id, user)
+    _ACCESS_OK[key] = time.time()
+    if len(_ACCESS_OK) > 5000:
+        _ACCESS_OK.clear()
+
+
 @router.post("/agents/chief/voice/turn")
 async def report_voice_turn(body: VoiceTurn, user: AuthedUser = Depends(require_user)):
     """The call's own measurement of one spoken turn. Signed-in only; the
@@ -217,10 +237,7 @@ async def report_voice_turn(body: VoiceTurn, user: AuthedUser = Depends(require_
     if raw_biz:
         if not _UUID.match(raw_biz):
             raise HTTPException(status_code=400, detail="business_id is not an id")
-        from whisper_proxy import _owns_business
-        owned = await asyncio.to_thread(_owns_business, str(user.id), raw_biz)
-        if not owned:
-            raise HTTPException(status_code=403, detail="not authorized for this business")
+        _gate(raw_biz, user)
         business_id = raw_biz
     row = row_for(body, str(user.id), business_id)
     record(row)
