@@ -14,6 +14,13 @@ from browser_controller import BrowserStopped, FIELD, VISIBLE_TEXT
 PURCHASE = re.compile(r'\b(place\s+(?:the\s+)?order|pay(?:\s+now)?|buy(?:\s+now)?|confirm\s+(?:order|purchase)|complete\s+(?:order|purchase)|submit\s+order)\b',re.I)
 QUANTITY = re.compile(r'\bqty\b|quantity',re.I)
 CANCEL = re.compile(r'\bcancel\s+(?:this\s+|the\s+)?order\b',re.I)
+# Trades and money movement are never Chief's computer's to do, on any errand
+# (2026-09-26: Chief offered to place orders on the owner's brokerage). Buy and
+# pay are PURCHASE above; this is the rest a brokerage or bank shows.
+MONEY_MOVE = re.compile(r'\b(sell(?:\s+(?:mkt|market|limit|stop|now|all))?|short(?:\s+sell)?|flatten(?:\s+(?:all|everything|positions?))?|'
+                        r'close\s+(?:all\s+)?positions?|exit\s+(?:all\s+)?positions?|reverse(?:\s+position)?|liquidat\w*|'
+                        r'place\s+(?:a\s+)?trade|submit\s+(?:trade|transfer|withdrawal)|transfer\s+(?:funds|money|now)|'
+                        r'withdraw\w*|deposit\s+(?:funds|now)|wire\s+(?:funds|money|transfer)|send\s+(?:money|funds|payment))\b', re.I)
 CANCEL_TOOL={'name':'review_cancellation','description':'Before cancelling, identify the final cancel-order button and the containing order row showing the exact approved order number.',
     'input_schema':{'type':'object','properties':{'tab_id':{'type':'string'},'submit_ref':{'type':'string'},
         'order_ref':{'type':'string'}},'required':['submit_ref','order_ref'],'additionalProperties':False}}

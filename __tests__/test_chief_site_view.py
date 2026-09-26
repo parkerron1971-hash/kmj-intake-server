@@ -190,3 +190,21 @@ def test_describe_reads_the_screenshot_once_logs_its_cost_and_fails_soft(monkeyp
     assert tallied == [('claude-haiku-4-5-20251001', {'input_tokens': 1600, 'output_tokens': 90})]
     monkeypatch.setattr(llm_call, 'sdk_client', lambda **kw: (_ for _ in ()).throw(RuntimeError('no key')))
     assert sv.describe(b'jpeg-bytes', 'biz-1') == ''
+
+
+@pytest.mark.parametrize('enabled,pilot,on', [('on', 'biz-1', True), ('on', 'other', False), ('off', 'biz-1', False)])
+def test_the_answer_check_knows_what_chiefs_computer_can_do(monkeypatch, enabled, pilot, on):
+    """A true sentence about signing in through Chief's computer was marked
+    unverified (2026-09-26): the reviewer had no capability source for it."""
+    import chief_truth
+    monkeypatch.setenv('ERRANDS_ENABLED', enabled)
+    monkeypatch.setenv('ERRANDS_BUSINESS_IDS', pilot)
+    text = chief_truth.computer_capability('biz-1')
+    assert 'Secure Entry in the chat' in text and 'never places trades' in text
+    assert ('It is switched on for this business.' in text) is on
+    sources = {'system:chief_computer': {'kind': 'capability', 'text': text, 'complete': True}}
+    draft = "That's the kind of signed-in job Chief's computer is built for: it pauses for you to enter your own login."
+    review = json.dumps({'verdict': 'supported', 'claims': [{
+        'text': "it pauses for you to enter your own login", 'kind': 'fact', 'source_id': 'system:chief_computer',
+        'quote': 'the owner fills it in Secure Entry in the chat'}]})
+    assert chief_truth.assess_review(review, draft, sources)[0] == 'supported'

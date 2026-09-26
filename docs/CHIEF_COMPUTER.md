@@ -367,3 +367,17 @@ owner's live view for the rest of that run (a deliberate privacy trade, not
 changed here); on a voice or taint-held turn the class-C gate holds first, so
 a hand-off can take one more go-ahead; view screenshots are not yet pruned.
 
+### 2026-09-26: never trades, and sign-in errands on request
+
+- `checkout_guard.MONEY_MOVE` (sell, short, flatten, close/exit position, reverse,
+  liquidate, place trade, transfer, withdraw, deposit, wire, send money): the
+  driver refuses a click on such a control, or Enter/Space into a form that
+  holds one, on every errand kind. Buy and pay were already `PURCHASE`. Chief
+  had offered to place orders on the owner's brokerage.
+- Chief's prompt: "log me in / sign me up" plans a portal errand at once (start
+  on the sign-in page; report what the signed-in page shows). It never says it
+  cannot log in and never offers trades or money moves.
+- The answer check gets `system:chief_computer` (`chief_truth.computer_capability`),
+  which says whether the computer is switched on for the business, so true
+  statements about it are no longer marked unverified.
+

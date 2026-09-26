@@ -427,3 +427,27 @@ def test_worker_cannot_tick_terms_itself(browser,monkeypatch):
     result=driver.run()
     assert not result['ok'] and not store.holds
     assert backend.terms_checked is False
+
+
+BROKER = '''<!doctype html><body>
+<button id="sell">Sell Mkt</button><button id="flat">Flatten All</button><button id="close">Close Position</button>
+<a id="reverse" role="button">Reverse</a><button id="buy">Buy Mkt</button><button id="report">Show report</button>
+<form id="w"><input id="amt" aria-label="Amount"><button type="submit">Withdraw funds</button></form>
+<form id="q"><input id="search" aria-label="Search"><button type="submit">Search</button></form>
+<input type="submit" id="xfer" value="Transfer now"></body>'''
+
+
+@pytest.mark.parametrize('target,name,args,blocked', [
+    ('#sell', 'left_click', {}, True), ('#flat', 'left_click', {}, True), ('#close', 'double_click', {}, True),
+    ('#reverse', 'left_click', {}, True), ('#xfer', 'left_click', {}, True), ('#amt', 'key', {'text': 'Enter'}, True),
+    ('#report', 'left_click', {}, False), ('#search', 'key', {'text': 'Enter'}, False), ('#amt', 'key', {'text': 'a'}, False),
+])
+def test_trades_and_money_movement_are_never_the_computers(browser, target, name, args, blocked):
+    """Chief offered to place orders on the owner's brokerage (2026-09-26). Buy is
+    PURCHASE; sell, flatten, close, reverse, withdraw and transfer are MONEY_MOVE."""
+    page = browser.new_page()
+    try:
+        page.set_content(BROKER)
+        assert ed.Driver._moves_money(name, args, page.query_selector(target)) is blocked
+    finally:
+        page.close()
