@@ -122,6 +122,8 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     # business cascades employees → this table, so nothing lingers.
     "employee_tax_profiles":   "W-4 + encrypted SSN; never exported, cascades from employees on delete",
     "inference_gate_decisions": "Arc 20 gate decisions; platform-side learning about the gate, not practitioner records",
+    "model_route_log":         "Chief routing + first-token telemetry (no content); platform-side tuning data, like api_usage",
+    "voice_turn_log":          "call time-to-first-audio telemetry (durations only); platform-side tuning data, like api_usage",
     # Keyed to a person or to the platform, not to a business.
     "email_suppressions":      "recipient-keyed deliverability protection; deleting it re-mails bounces",
     "entity_groups":           "owner-keyed consolidation groups; die with the auth user",

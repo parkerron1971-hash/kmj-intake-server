@@ -64,6 +64,7 @@ from auth_supabase import UserSession, require_user_session
 import foundation_agent
 import business_profile_agent
 from api_usage_logger import log_api_usage, cache_write_1h
+import route_ledger
 from business_profile_agent import chief_context_block as bp_chief_context_block
 import practitioner_profile_agent
 from practitioner_profile_agent import chief_context_block as pp_chief_context_block
@@ -1507,6 +1508,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       cache_creation_1h_tokens=cache_write_1h_tok,
                       business_id=business_id, task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms)
+                  route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok)
                   from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
                   if stop_reason == 'max_tokens' and is_course_tool(blocks.values()):
                       # No tool from this truncated round was executed. Retry only
@@ -1679,6 +1681,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
           business_id=business_id, task_type=prompt_shape,
           duration_ms=int(time.time() * 1000) - started_ms,
       )
+      route_ledger.tally_usage(str((data.get("model") if isinstance(data, dict) else None) or model),
+                               usage)
       content = data.get("content", []) if isinstance(data, dict) else []
       from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
       if isinstance(data, dict) and data.get('stop_reason') == 'max_tokens' and is_course_tool(content):
@@ -1794,6 +1798,7 @@ async def _draft_short(
         business_id=business_id,
         duration_ms=int(time.time() * 1000) - started_ms,
     )
+    route_ledger.tally_usage(DRAFT_MODEL, usage)
     return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
 
 
@@ -6702,6 +6707,9 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
     as they did inline. The task opens its OWN http client because the
     request's client closes when the turn returns."""
     async def _body() -> None:
+        # Background bookkeeping, not this turn's reply: its model calls stay
+        # out of the turn's route cost (route_ledger). Task-local context.
+        route_ledger.TALLY.set(None)
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
                 auto_count = await _autopilot_sweep(c, biz_lite)
@@ -11695,6 +11703,10 @@ async def _compose_post_action_reply(
         max_tokens=600,
         enable_web_search=False,        # no need; we're just composing prose
         business_id=business_id,
+        # A rewrite, not a problem to solve. At the default effort, thinking
+        # counts against this 600-token cap (the 2026-09-12 lesson) and the
+        # rewrite comes back empty or late.
+        effort="low",
     )
     # C.1.5.3 F2b — defensive coercion. _call_claude returns str per its
     # code, but any future API-shape evolution (or already-shipped path
@@ -13520,9 +13532,29 @@ def _image_action_summary(results):
     return None
 
 
+def _completed_action_trigger(text: str) -> str:
+    """Which detector made _looks_like_completed_action fire — for the
+    RETRY log line. Names our own phrase list's entry, never the reply."""
+    low = (text or "").lower()
+    for p in _DESCRIBED_ACTION_PHRASES:
+        if p in low:
+            return f"phrase:{p!r}"
+    if re.search(r"(?:^|[.!?]\s+)(?:(?:i['’]m|i am)\s+)?"
+                 r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low):
+        return "doing_it_now"
+    if _promises_navigation(text):
+        return "navigation_promise"
+    return "none"
+
+
 async def _retry_missing_actions(client, system, api_messages, effective_message, turn_tokens, model,
-                                 *, read_tools=None, tool_biz=None):
-    """Retry once with recent asset context; never retain an unsupported success claim."""
+                                 *, read_tools=None, tool_biz=None, effort=None,
+                                 enable_web_search=True, stable_tools=False):
+    """Retry once with recent asset context; never retain an unsupported success claim.
+
+    `effort` / `enable_web_search` / `stable_tools` must match the turn's
+    first call: effort is part of the prompt-cache key, and the tool list
+    renders ahead of the system prompt."""
     correction = (
         "SYSTEM CORRECTION: The previous reply claimed an operation was queued or completed, "
         "but it emitted no [ACTION:{...}] command and no operation ran. Retry the user's "
@@ -13541,7 +13573,8 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
     messages = history + [{"role": "user", "content": correction}]
     before = len(chief_tool_loop.writes_this_turn())
     retry_raw = await _call_claude(client, system, messages, max_tokens=turn_tokens, model=model,
-                                 read_tools=read_tools, tool_biz=tool_biz)
+                                 read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                                 enable_web_search=enable_web_search, stable_tools=stable_tools)
     if not retry_raw:
         retry_raw = _image_action_summary(chief_tool_loop.writes_this_turn()[before:])
     if retry_raw:
@@ -13711,9 +13744,14 @@ async def chief_chat(
 
         # Per-user rate limit (beta-readiness audit) — one tester can't
         # fire thousands of Chief turns. Fail-open.
+        # These gates read the database with a SYNCHRONOUS client, so they
+        # run off the event loop (2026-09-25): on the loop they held every
+        # other request still — including this turn's own first track,
+        # whose opening waited 898ms behind them on a live voice turn
+        # against a 500ms budget.
         try:
             import rate_limit
-            if not rate_limit.allow("chief", str(user_session.user.id)):
+            if not await asyncio.to_thread(rate_limit.allow, "chief", str(user_session.user.id)):
                 raise HTTPException(status_code=429,
                     detail="You're sending messages very fast — give Chief a moment.",
                     headers={"Retry-After": str(rate_limit.retry_after("chief"))})
@@ -13732,8 +13770,8 @@ async def chief_chat(
             # is on. 429 (rate limit), never a 402 upsell — a human does
             # not reach 250 turns in a day, so this is a loop to stop,
             # not a customer to upsell. See require_chat_fair_use.
-            billing_limits.require_chat_fair_use(req.business_id)
-            billing_limits.require_units(req.business_id)
+            await asyncio.to_thread(billing_limits.require_chat_fair_use, req.business_id)
+            await asyncio.to_thread(billing_limits.require_units, req.business_id)
         except HTTPException:
             raise
         except Exception:
@@ -14226,6 +14264,17 @@ async def chief_chat(
                     _prover = None
                 _sentence_streamer = (_SentenceStreamer(_STREAM_SINK.get(), _prover)
                                       if _prover is not None else (lambda _piece: None))
+            # The two-track reply (chief_fast_track): the practitioner has
+            # already seen the opening the first track wrote, so this answer
+            # continues it. Uncached tail; "" (no change) on the plain
+            # endpoint and whenever the router is off.
+            try:
+                import chief_fast_track as _cft
+                _opening = await _cft.opener_for_turn()
+                if _opening:
+                    system += _cft.continuation_block(_opening)
+            except Exception as e:  # pragma: no cover — never cost the turn
+                logger.warning(f"[chief] opener handoff failed: {e}")
             raw = await _call_claude(client, system, api_messages,
                                      max_tokens=turn_tokens,
                                      model=chief_models.model_for(lane, _plan),
@@ -14308,12 +14357,23 @@ async def chief_chat(
             ):
                 print(
                     f"[Chief] RETRY — AI described action without tags. "
-                    f"Retrying with correction. raw_len={len(raw)}",
+                    f"Retrying with correction. raw_len={len(raw)} "
+                    f"trigger={_completed_action_trigger(clean)}",
                     flush=True,
                 )
+                # The retry rides the turn's own settings. It used to go out
+                # at the model's default effort with the tool list unpinned:
+                # a different effort is a different cache key, so a live voice
+                # turn re-wrote the 111k-token prompt from cold and thought at
+                # full depth through four tool rounds — 33 s and 78c for a
+                # reply that ended "I couldn't start that operation"
+                # (2026-09-25).
                 actions, clean, raw = await _retry_missing_actions(
                     client, system, api_messages, effective_message, turn_tokens,
-                    chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz)
+                    chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz,
+                    effort=chief_models.effort_for(lane),
+                    enable_web_search=_web_search_allowed(req.message or ""),
+                    stable_tools=True)
                 tool_taken = chief_tool_loop.writes_this_turn()
 
             # C.1.5.4 A-fix-2 — detect override from the practitioner's
@@ -14654,6 +14714,13 @@ async def chief_chat_stream(
       data: {"type":"delta","text":"..."}
       data: {"type":"final","payload":{...same JSON as /chat...}}
       data: {"type":"error","detail":"...","status":4xx}
+
+    Two-track reply (2026-09-25, chief_fast_track): the first words come
+    from a first track — a claim-free opening, or the whole answer for a
+    turn that needs no records and no action — inside the first-token
+    budget, as `delta` events with `lead` set. The turn's own deltas then
+    continue them, and the final payload's `response` is the whole reply
+    as it was shown. With no router in play this endpoint is unchanged.
     """
     q: "asyncio.Queue[str]" = asyncio.Queue()
 
@@ -14670,23 +14737,52 @@ async def chief_chat_stream(
         except Exception:
             pass
 
-    token = _STREAM_SINK.set(_sink)
+    import chief_fast_track
     try:
-        # create_task snapshots the current context, so the sink rides
-        # into the turn; resetting immediately keeps THIS request's
-        # context clean for anything that runs after.
-        turn = asyncio.create_task(chief_chat(req, user_session))
-        import chief_stream_replay
-        _uid = getattr(getattr(user_session, "user", None), "id", None)
-        if _uid:
-            chief_stream_replay.register(req, _uid, turn)
-    finally:
-        _STREAM_SINK.reset(token)
+        track = chief_fast_track.plan(req, user_session)
+    except Exception as e:  # pragma: no cover — the router may only ever add
+        logger.warning(f"[chat/stream] router plan failed, plain stream: {e}")
+        track = None
+    turn: "Optional[asyncio.Task]" = None
+
+    def _start_turn() -> "asyncio.Task":
+        """The full turn. Started at once unless the first track may answer
+        alone; then only if it escalates."""
+        nonlocal turn
+        if turn is not None:
+            return turn
+        token = _STREAM_SINK.set(_sink)
+        bound = track.bind_turn_context() if track is not None else []
+        try:
+            # create_task snapshots the current context, so the sink rides
+            # into the turn; resetting immediately keeps THIS request's
+            # context clean for anything that runs after.
+            turn = asyncio.create_task(chief_chat(req, user_session))
+            import chief_stream_replay
+            _uid = getattr(getattr(user_session, "user", None), "id", None)
+            if _uid:
+                chief_stream_replay.register(req, _uid, turn)
+        finally:
+            for _var, _tok in reversed(bound):
+                _var.reset(_tok)
+            _STREAM_SINK.reset(token)
+        return turn
+
+    if track is None or track.starts_turn_now():
+        _start_turn()
 
     def _evt(obj: Dict[str, Any]) -> str:
         return "data: " + json.dumps(jsonable_encoder(obj)) + "\n\n"
 
     async def _events():
+        try:
+            async for frame in _frames():
+                yield frame
+        finally:
+            if track is not None and not track.finished:
+                track.finish(error="stream closed early")
+
+    async def _frames():
         filt = _ActionTagFilter()
         # Buffer-breaking preamble (latency arc round 2, 2026-08-25).
         # Measured from the client, every delta of a voice turn arrived
@@ -14699,6 +14795,36 @@ async def chief_chat_stream(
         # The cost is 16KB per turn on a path whose whole purpose is to
         # ship a few hundred bytes EARLY.
         yield ":" + (" " * 16384) + "\n\n"
+        # The first track (chief_fast_track): a claim-free opening inside the
+        # first-token budget, or the whole answer when the turn needs no
+        # records and no action. The turn's words continue whatever it said.
+        lead = ""
+        if track is not None:
+            try:
+                async for ev in track.lead(_start_turn):
+                    lead += ev.get("text") or ""
+                    yield _evt(ev)
+            except Exception as e:  # pragma: no cover — the full turn still answers
+                logger.warning(f"[chat/stream] first track failed: {e}")
+            if turn is None and track.answered():
+                payload = track.final_payload()
+                track.finish(payload)
+                yield _evt({"type": "final", "payload": payload})
+                return
+            _start_turn()
+        # Between the first track's words and the turn's: one space, once.
+        owe_space = bool(lead) and not lead[-1:].isspace()
+
+        def _shown(ev: Dict[str, Any]) -> Dict[str, Any]:
+            nonlocal owe_space
+            if track is not None:
+                track.mark_turn_delta()
+            text = ev.get("text") or ""
+            if owe_space and text.strip():
+                owe_space = False
+                return {**ev, "text": " " + text.lstrip()}
+            return ev
+
         # What the client has already been given of the reply (checked
         # sentences only). The end of the turn sends the rest, never the
         # whole reply again: a spoken sentence said twice is the repetition
@@ -14720,6 +14846,7 @@ async def chief_chat_stream(
                     for ev in _stream_piece_events(getter.result(), filt):
                         if ev.get("type") == "delta":
                             sent.append(ev.get("text") or "")
+                            ev = _shown(ev)
                         yield _evt(ev)
                     continue
                 getter.cancel()
@@ -14731,18 +14858,25 @@ async def chief_chat_stream(
                         if ev.get("type") in ("status", "step") or ev.get("checked"):
                             if ev.get("type") == "delta":
                                 sent.append(ev.get("text") or "")
+                                ev = _shown(ev)
                             yield _evt(ev)
                 try:
                     payload = turn.result()
                 except HTTPException as e:
+                    if track is not None:
+                        track.finish(error=f"http {e.status_code}")
                     yield _evt({"type": "error", "status": e.status_code,
                                 "detail": str(e.detail)})
                     return
                 except Exception as e:  # pragma: no cover
                     logger.warning(f"[chat/stream] turn failed: {e}")
+                    if track is not None:
+                        track.finish(error="turn failed")
                     yield _evt({"type": "error", "detail": "turn failed"})
                     return
                 if not isinstance(payload, dict):
+                    if track is not None:
+                        track.finish(error="turn failed")
                     yield _evt({"type": "error", "detail": "turn failed"})
                     return
                 final_text = payload.get("response")
@@ -14759,7 +14893,13 @@ async def chief_chat_stream(
                         if rest:
                             yield _evt({"type": "delta", "text": rest})
                     else:
-                        yield _evt({"type": "delta", "text": final_text})
+                        yield _evt(_shown({"type": "delta", "text": final_text}))
+                if lead:
+                    # The reply on file is the reply as it was shown.
+                    payload = {**payload, "response": chief_fast_track.join_reply(
+                        lead, payload.get("response") or "")}
+                if track is not None:
+                    track.finish(payload)
                 yield _evt({"type": "final", "payload": payload})
                 return
         finally:
