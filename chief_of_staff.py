@@ -11682,6 +11682,10 @@ async def _compose_post_action_reply(
         max_tokens=600,
         enable_web_search=False,        # no need; we're just composing prose
         business_id=business_id,
+        # A rewrite, not a problem to solve. At the default effort, thinking
+        # counts against this 600-token cap (the 2026-09-12 lesson) and the
+        # rewrite comes back empty or late.
+        effort="low",
     )
     # C.1.5.3 F2b — defensive coercion. _call_claude returns str per its
     # code, but any future API-shape evolution (or already-shipped path
@@ -13507,9 +13511,29 @@ def _image_action_summary(results):
     return None
 
 
+def _completed_action_trigger(text: str) -> str:
+    """Which detector made _looks_like_completed_action fire — for the
+    RETRY log line. Names our own phrase list's entry, never the reply."""
+    low = (text or "").lower()
+    for p in _DESCRIBED_ACTION_PHRASES:
+        if p in low:
+            return f"phrase:{p!r}"
+    if re.search(r"(?:^|[.!?]\s+)(?:(?:i['’]m|i am)\s+)?"
+                 r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low):
+        return "doing_it_now"
+    if _promises_navigation(text):
+        return "navigation_promise"
+    return "none"
+
+
 async def _retry_missing_actions(client, system, api_messages, effective_message, turn_tokens, model,
-                                 *, read_tools=None, tool_biz=None):
-    """Retry once with recent asset context; never retain an unsupported success claim."""
+                                 *, read_tools=None, tool_biz=None, effort=None,
+                                 enable_web_search=True, stable_tools=False):
+    """Retry once with recent asset context; never retain an unsupported success claim.
+
+    `effort` / `enable_web_search` / `stable_tools` must match the turn's
+    first call: effort is part of the prompt-cache key, and the tool list
+    renders ahead of the system prompt."""
     correction = (
         "SYSTEM CORRECTION: The previous reply claimed an operation was queued or completed, "
         "but it emitted no [ACTION:{...}] command and no operation ran. Retry the user's "
@@ -13528,7 +13552,8 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
     messages = history + [{"role": "user", "content": correction}]
     before = len(chief_tool_loop.writes_this_turn())
     retry_raw = await _call_claude(client, system, messages, max_tokens=turn_tokens, model=model,
-                                 read_tools=read_tools, tool_biz=tool_biz)
+                                 read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                                 enable_web_search=enable_web_search, stable_tools=stable_tools)
     if not retry_raw:
         retry_raw = _image_action_summary(chief_tool_loop.writes_this_turn()[before:])
     if retry_raw:
@@ -13698,9 +13723,14 @@ async def chief_chat(
 
         # Per-user rate limit (beta-readiness audit) — one tester can't
         # fire thousands of Chief turns. Fail-open.
+        # These gates read the database with a SYNCHRONOUS client, so they
+        # run off the event loop (2026-09-25): on the loop they held every
+        # other request still — including this turn's own first track,
+        # whose opening waited 898ms behind them on a live voice turn
+        # against a 500ms budget.
         try:
             import rate_limit
-            if not rate_limit.allow("chief", str(user_session.user.id)):
+            if not await asyncio.to_thread(rate_limit.allow, "chief", str(user_session.user.id)):
                 raise HTTPException(status_code=429,
                     detail="You're sending messages very fast — give Chief a moment.",
                     headers={"Retry-After": str(rate_limit.retry_after("chief"))})
@@ -13719,8 +13749,8 @@ async def chief_chat(
             # is on. 429 (rate limit), never a 402 upsell — a human does
             # not reach 250 turns in a day, so this is a loop to stop,
             # not a customer to upsell. See require_chat_fair_use.
-            billing_limits.require_chat_fair_use(req.business_id)
-            billing_limits.require_units(req.business_id)
+            await asyncio.to_thread(billing_limits.require_chat_fair_use, req.business_id)
+            await asyncio.to_thread(billing_limits.require_units, req.business_id)
         except HTTPException:
             raise
         except Exception:
@@ -14306,12 +14336,23 @@ async def chief_chat(
             ):
                 print(
                     f"[Chief] RETRY — AI described action without tags. "
-                    f"Retrying with correction. raw_len={len(raw)}",
+                    f"Retrying with correction. raw_len={len(raw)} "
+                    f"trigger={_completed_action_trigger(clean)}",
                     flush=True,
                 )
+                # The retry rides the turn's own settings. It used to go out
+                # at the model's default effort with the tool list unpinned:
+                # a different effort is a different cache key, so a live voice
+                # turn re-wrote the 111k-token prompt from cold and thought at
+                # full depth through four tool rounds — 33 s and 78c for a
+                # reply that ended "I couldn't start that operation"
+                # (2026-09-25).
                 actions, clean, raw = await _retry_missing_actions(
                     client, system, api_messages, effective_message, turn_tokens,
-                    chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz)
+                    chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz,
+                    effort=chief_models.effort_for(lane),
+                    enable_web_search=_web_search_allowed(req.message or ""),
+                    stable_tools=True)
                 tool_taken = chief_tool_loop.writes_this_turn()
 
             # C.1.5.4 A-fix-2 — detect override from the practitioner's
