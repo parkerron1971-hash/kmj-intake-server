@@ -189,8 +189,20 @@ def progress_note(steps, i, state, stage):
     return f'{lead}Now {now} ({i + 1} of {n}).' if finished else f'{stage} ({i + 1} of {n}).'
 
 
-def closing_note(state, total):
+def ordered_receipts(state):
+    """The receipts in the order the plan runs them. The checkpoint is saved
+    as jsonb, which keeps object keys in its own order (shortest first), so
+    after any save and resume the steps came back shuffled and the summary
+    read "Your workshop is saved" before "Events is ready" (first live
+    build, 2026-09-26). The plan's own order is saved beside them."""
     receipts = list(state.get('steps', {}).values())
+    order = state.get('order') or []
+    rank = {name: i for i, name in enumerate(order)}
+    return sorted(receipts, key=lambda r: rank.get(r.get('step'), len(order)))
+
+
+def closing_note(state, total):
+    receipts = ordered_receipts(state)
     waiting = [r for r in receipts if r.get('outcome') == 'queued']
     if waiting:
         return f'Almost done. Still waiting on this: {waiting[0].get("label", "").rstrip()}'
@@ -206,7 +218,7 @@ def receipt(step, outcome, label=None, *, ids=None, verified=None, detail=''):
 
 
 def finish(state):
-    receipts = list(state.get('steps', {}).values())
+    receipts = ordered_receipts(state)
     state['receipts'] = receipts
     bad = [r for r in receipts if r['outcome'] in ('failed','needs_hand','uncertain','blocked')]
     if state.get('question'):
@@ -239,6 +251,7 @@ async def run(order, adapter, previous=None):
     steps = plan(order)
     if not steps or len(steps) > MAX_STEPS:
         raise ValueError('Invalid build plan')
+    state['order'] = [s.name for s in steps]
     sensitive_count = int(state.get('sensitive_count', 0))
     for i, step in enumerate(steps):
         try:
