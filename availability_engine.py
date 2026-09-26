@@ -20,6 +20,8 @@ Edge cases handled:
 - Date-specific overrides supersede weekly
 - Existing bookings remove any slot whose [start, start+duration) interval
   overlaps the booking's interval
+- Busy times from the practitioner's other calendar (outside_calendar)
+  remove any slot they overlap, regardless of concurrent capacity
 - Lead-time filter: slots with start < now + lead_time are removed
 - Past slots: slots with start < now are removed
 - Window clamp: only slots within [from, to] in business-TZ days
@@ -181,6 +183,41 @@ def _booking_intervals(
     return out
 
 
+def _busy_intervals(rows: List[Dict[str, Any]]) -> List[tuple]:
+    """Outside busy blocks → (start_utc, end_utc). Accepts the rows
+    outside_calendar returns ({starts_at, ends_at}) or (start, end)
+    tuples. Malformed rows are skipped; a naive time is read as UTC,
+    matching _booking_intervals."""
+    out = []
+    utc = _utc_zone()
+    for r in rows or []:
+        if isinstance(r, (tuple, list)) and len(r) == 2:
+            raw = r
+        elif isinstance(r, dict):
+            raw = (r.get("starts_at"), r.get("ends_at"))
+        else:
+            continue
+        pair = []
+        for v in raw:
+            if isinstance(v, datetime):
+                dt = v
+            else:
+                try:
+                    s = str(v or "")
+                    if s.endswith("Z"):
+                        s = s[:-1] + "+00:00"
+                    dt = datetime.fromisoformat(s)
+                except ValueError:
+                    dt = None
+            if dt is not None and dt.tzinfo is None and utc is not None:
+                dt = dt.replace(tzinfo=utc)
+            pair.append(dt)
+        if pair[0] is None or pair[1] is None or pair[1] <= pair[0]:
+            continue
+        out.append((pair[0], pair[1]))
+    return out
+
+
 def _overlaps(a_start, a_end, b_start, b_end) -> bool:
     """Inclusive overlap test: returns True iff the two intervals
     share any time (treating both as half-open [start, end))."""
@@ -232,6 +269,7 @@ def compute_slots(
     to_date: Optional[date] = None,
     now: Optional[datetime] = None,
     open_default_window: Optional[tuple] = None,
+    busy_blocks: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Compute available slots for an offering in a date window.
 
@@ -257,6 +295,11 @@ def compute_slots(
       open_default_window — when availability is open-default, the
                             (start_hour, end_hour) tuple within which
                             to emit slots. Default (0, 24) = full 24h.
+      busy_blocks — rows from the practitioner's OTHER calendar
+                    (outside_calendar: starts_at / ends_at, aware ISO).
+                    Unlike bookings these ignore concurrent capacity:
+                    the practitioner is busy elsewhere, so any slot that
+                    overlaps one is removed.
 
     Returns list of dicts:
         [
@@ -308,6 +351,9 @@ def compute_slots(
 
     # Booking intervals (already aware UTC)
     booked = _booking_intervals(existing_bookings or [])
+
+    # Outside busy times (2026-09-26): the practitioner's other calendar.
+    outside = _busy_intervals(busy_blocks or [])
 
     # Arrival windows (contractor scheduling): when the business quotes
     # windows, every emitted slot CARRIES the window so the widget can
@@ -379,6 +425,12 @@ def compute_slots(
                     if overlap_count >= capacity:
                         break
             if overlap_count >= capacity:
+                continue
+
+            # Busy on the practitioner's other calendar → never offered,
+            # whatever the capacity.
+            if any(_overlaps(slot_start_utc, slot_end_utc, o_start, o_end)
+                   for o_start, o_end in outside):
                 continue
 
             slot: Dict[str, Any] = {

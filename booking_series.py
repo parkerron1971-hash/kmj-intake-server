@@ -362,9 +362,47 @@ def create_series(
     if n_s:
         summary += (f", {n_s} skipped: "
                     + ", ".join(f"{s['date']} ({s['reason']})" for s in skipped))
+    # Busy on the practitioner's other calendar. This is always a
+    # practitioner-made booking (the calendar's New booking, or Chief), so
+    # those times are booked, not skipped: someone moving in from Calendly
+    # already has these very sessions on the Google Calendar they linked.
+    # Said plainly instead. The summary is what both the app and Chief show.
+    also_busy = _outside_busy_dates(business_id, booked, plan, duration)
+    if also_busy:
+        if len(plan) == 1:
+            summary += ". Heads up: that time is also busy on your other calendar."
+        else:
+            shown, extra = also_busy[:4], len(also_busy) - 4
+            if extra > 0:
+                named = ", ".join(shown) + f" and {extra} more"
+            elif len(shown) == 1:
+                named = shown[0]
+            else:
+                named = ", ".join(shown[:-1]) + " and " + shown[-1]
+            summary += (f". Heads up: {named} "
+                        f"{'is' if len(also_busy) == 1 else 'are'} also busy on your "
+                        "other calendar.")
     return {"ok": True, "series_id": sid, "already_existed": False,
             "booked": booked, "skipped": skipped, "summary": summary,
+            "also_busy_elsewhere": also_busy,
             "timezone": tz_name}
+
+
+def _outside_busy_dates(business_id: str, booked: List[Dict[str, Any]],
+                        plan: List[Dict[str, Any]], duration: int) -> List[str]:
+    """Pretty dates of booked occurrences that overlap a busy time on the
+    practitioner's other calendar (one read for the whole span). Fails
+    soft to []."""
+    if not booked:
+        return []
+    try:
+        import outside_calendar
+        hits = set(outside_calendar.busy_overlaps_many(
+            business_id, [b["appointment_at"] for b in booked], duration))
+    except Exception as e:
+        logger.info(f"[series] outside-busy check skipped: {type(e).__name__}")
+        return []
+    return [_pretty_date(o["date"]) for o in plan if o["utc_iso"] in hits]
 
 
 # ─── cancel_series ────────────────────────────────────────────────────

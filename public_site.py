@@ -4354,6 +4354,17 @@ async def booking_slots(slug: str, days: int = 14):
             except (ValueError, TypeError):
                 pass
 
+        # Busy times from the practitioner's other calendar
+        # (outside_calendar). Fails soft to [] — nothing connected or
+        # not set up leaves this page exactly as it was.
+        try:
+            import asyncio as _asyncio
+            import outside_calendar as _outside
+            outside_ranges = _outside.busy_intervals(await _asyncio.to_thread(
+                _outside.busy_blocks_between, biz_id, now, window_end + timedelta(days=1)))
+        except Exception:
+            outside_ranges = []
+
         # Generate slots
         slots = []
         for d in range(window):
@@ -4372,6 +4383,8 @@ async def booking_slots(slug: str, days: int = 14):
 
                 # Check conflicts
                 conflict = any(bs <= slot_start < be or bs < slot_end <= be for bs, be in booked_ranges)
+                conflict = conflict or any(
+                    os_ < slot_end and slot_start < oe for os_, oe in outside_ranges)
                 if not conflict:
                     day_slots.append(f"{t_h:02d}:{t_m:02d}")
 
@@ -4444,6 +4457,19 @@ async def booking_submit(slug: str, req: BookingSubmission,
             f"&select=id&limit=1")
         if conflicts:
             raise HTTPException(409, "Time slot no longer available")
+        # The practitioner's other calendar (outside_calendar): busy
+        # there since the slot list loaded → not bookable. Fails soft.
+        try:
+            import asyncio as _asyncio
+            import outside_calendar as _outside
+            if await _asyncio.to_thread(
+                    _outside.conflicts_with_outside_calendar, biz_id,
+                    scheduled, scheduled + timedelta(minutes=duration)):
+                raise HTTPException(409, "Time slot no longer available")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
         # ── Find or create the contact ────────────────────────────
         # THE FIFTH LEAD DOOR, and the one that was easiest to miss:

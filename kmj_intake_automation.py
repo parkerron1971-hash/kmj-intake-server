@@ -309,6 +309,10 @@ app.include_router(contacts_router)
 app.include_router(offerings_router)
 # Phase D.1.1 — availability + slot computation (customer-facing anon)
 app.include_router(availability_router)
+# The practitioner's other calendar (private iCal feed) → busy times that
+# block slots. Owner-gated; /availability/{biz}/calendar-feeds + busy-blocks.
+from calendar_feeds_router import router as calendar_feeds_router
+app.include_router(calendar_feeds_router)
 import booking_series; app.include_router(booking_series.router)  # weekly series (operator-side, authed) — one line by design
 # Phase D.2.1 — hosted booking page (practitioner-side config + URL resolver).
 # Registered BEFORE public_site_router so its /booking-page/... routes
@@ -1436,6 +1440,18 @@ async def startup():
                           "interval", minutes=10, id="booking_session_sync")
     except Exception as e:
         print(f"   [warn] booking-session sync not scheduled: {e}")
+    # Outside calendars (2026-09-26): re-read every connected private
+    # calendar feed so its busy times keep blocking slots. The tick looks
+    # every 5 minutes; each feed is due 15 minutes after its last sync
+    # (longer after failures). Leader-gated here, and each feed is also
+    # claimed row-by-row, so a "Sync now" on another replica never
+    # interleaves. Kill switch: CALENDAR_FEEDS_SYNC=off.
+    try:
+        import outside_calendar as _outside_calendar
+        scheduler.add_job(g("calendar_feed_sync", _outside_calendar.sync_due_tick),
+                          "interval", minutes=5, id="calendar_feed_sync", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] calendar feed sync not scheduled: {e}")
     # Owner-only marketing: local schedules, exact content approval, Buffer delivery.
     try:
         import platform_marketing as _marketing

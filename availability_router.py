@@ -102,6 +102,19 @@ def _bookings_in_window(
     return rows if isinstance(rows, list) else []
 
 
+def _outside_busy(business_id: str, start_date: date, end_date: date) -> list:
+    """Busy times from the practitioner's other calendar (Google,
+    Outlook, iCloud, Acuity ... via a private feed; outside_calendar.py).
+    Fails soft to [] so slots are exactly as before when nothing is
+    connected or the feature is not set up yet."""
+    try:
+        import outside_calendar
+        return outside_calendar.busy_blocks_for_dates(business_id, start_date, end_date)
+    except Exception as e:  # pragma: no cover — never break the widget
+        logger.warning("outside busy read failed: %s", type(e).__name__)
+        return []
+
+
 @router.get("/{business_id}/slots")
 def get_available_slots(
     business_id: str,
@@ -196,6 +209,7 @@ def get_available_slots(
         offering_duration_min=int(duration_min),
         from_date=fd,
         to_date=td,
+        busy_blocks=_outside_busy(business_id, fd, td),
     )
 
     out = {

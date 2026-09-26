@@ -227,7 +227,9 @@ def _suggest_slots(business_id: str, offering: Dict[str, Any],
     list just means the failure message stays generic."""
     try:
         from availability_engine import BusinessAvailability, compute_slots
-        from availability_router import _bookings_in_window, _practitioner_timezone
+        from availability_router import (
+            _bookings_in_window, _outside_busy, _practitioner_timezone,
+        )
 
         rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}&select=id,owner_id,settings&limit=1") or []
@@ -250,11 +252,28 @@ def _suggest_slots(business_id: str, offering: Dict[str, Any],
             offering_duration_min=int(offering.get("duration_min") or 60),
             from_date=from_date,
             to_date=to_date,
+            # Busy on the practitioner's other calendar → not suggested.
+            busy_blocks=_outside_busy(business_id, from_date, to_date),
         ) or []
         return [_pretty(s.get("start_utc") or "") for s in slots[:_SUGGEST_LIMIT]]
     except Exception as e:
         logger.info(f"[booking] slot suggestion skipped: {e}")
         return []
+
+
+_OUTSIDE_HEADS_UP = "Heads up: that time is also busy on your other calendar."
+
+
+def _outside_busy_at(business_id: str, when_iso: str, duration_min: int) -> bool:
+    """Is this time busy on the practitioner's other calendar
+    (outside_calendar)? Practitioner-made bookings still go through, and
+    say so. Fails soft to False."""
+    try:
+        import outside_calendar
+        return bool(outside_calendar.busy_overlap(business_id, when_iso, duration_min))
+    except Exception as e:
+        logger.info(f"[booking] outside-busy check skipped: {type(e).__name__}")
+        return False
 
 
 # ─── create_booking ───────────────────────────────────────────────────
@@ -330,7 +349,9 @@ def _create_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
     duration = int(entry_data.get("duration_min_at_booking")
                    or offering.get("duration_min") or 60)
 
-    # D.4 double-book guard — the same check the public widget runs.
+    # D.4 double-book guard — the widget's bookings check. Not the public
+    # one: an outside-busy time does not refuse a practitioner's own
+    # booking (see _outside_busy_at below).
     if not _check_slot_available(business_id, when, duration):
         alts = _suggest_slots(business_id, offering, when)
         if alts:
@@ -346,10 +367,16 @@ def _create_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
         return _fail("create_booking",
                      "I couldn't save that booking just now — try again in a moment.")
 
+    # The practitioner booked this, so an outside-busy time does not refuse
+    # it (it is often this very appointment, written to their Google
+    # Calendar by Calendly), but it is said out loud.
+    also_busy = _outside_busy_at(business_id, when, duration)
     return {
         "type": "create_booking",
-        "result": f"booked for {_pretty(when)}",
+        "result": f"booked for {_pretty(when)}"
+                  + (f". {_OUTSIDE_HEADS_UP}" if also_busy else ""),
         "label": f"{offering.get('name')} — {customer_name}",
+        "outside_calendar_busy": also_busy,
         "booking_id": entry.get("id"),
         "contact_id": (contact or {}).get("id"),
         "offering_id": offering["id"],
@@ -457,13 +484,16 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
         logger.warning(f"[booking] session re-mirror failed soft: {e}")
 
     who = data.get("customer_name") or data.get("name") or "Booking"
+    also_busy = _outside_busy_at(business_id, new_when, duration)
     return {
         "type": "reschedule_booking",
         "result": f"moved to {_pretty(new_when)}"
                   + (f" (was {_pretty(old_when)})" if old_when else "")
                   + (". This one now stands on its own — weekly-series changes "
-                     "won't move it again." if data.get("series_detached") else ""),
+                     "won't move it again." if data.get("series_detached") else "")
+                  + (f". {_OUTSIDE_HEADS_UP}" if also_busy else ""),
         "label": str(who),
+        "outside_calendar_busy": also_busy,
         "booking_id": booking["id"],
         "appointment_at": new_when,
         "nav": _nav_calendar(),
