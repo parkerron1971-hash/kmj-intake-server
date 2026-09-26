@@ -93,6 +93,7 @@ class Draft(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     revision: int | None = None
     campaign: str = Field(min_length=1, max_length=100)
+    campaign_id: UUID | None = None
     text: str = Field(min_length=1, max_length=5000)
     channel_id: str = Field(min_length=1, max_length=100)
     landing_url: str = Field(default='https://mysolutionist.app/', max_length=1500)
@@ -198,6 +199,7 @@ async def assets():
 
 class Week(BaseModel):
     id: UUID
+    campaign_id: UUID | None = None
     campaign: str = Field(min_length=1, max_length=100)
     audience: str = Field(min_length=3, max_length=400)
     facts: str = Field(min_length=20, max_length=6000)
@@ -221,7 +223,7 @@ async def draft_week(req: Week, owner=Depends(require_owner)):
     if await asyncio.to_thread(spend_guard.over_budget):
         raise HTTPException(429, spend_guard.block_message())
     # Preflight before spending. Instagram requires an export even for drafts.
-    seed = Draft(id=uuid5(req.id, '0'), campaign=req.campaign, text='Preflight',
+    seed = Draft(id=uuid5(req.id, '0'), campaign=req.campaign, campaign_id=req.campaign_id, text='Preflight',
         channel_id=req.channel_id, asset_id=req.asset_id, landing_url=req.landing_url,
         run_at=req.start_at, ai_assisted=True)
     await build_draft(seed)
@@ -332,6 +334,13 @@ async def save_asset(file: UploadFile, *, asset_id=None):
 
 
 async def build_draft(req):
+    if req.campaign_id:
+        from platform_marketing_campaigns import get_campaign
+        campaign_record = await get_campaign(req.campaign_id)
+        if campaign_record['stage'] == 'archived':
+            raise HTTPException(409, 'This campaign is archived. Reopen it before preparing posts.')
+        if req.campaign != campaign_record['tracking_key']:
+            raise HTTPException(422, 'Use the campaign’s permanent tracking key.')
     cfg = await config()
     channel = next((c for c in cfg['channels'] if c['id'] == req.channel_id), None)
     if not channel:
@@ -367,11 +376,23 @@ async def build_draft(req):
     row = {'id': str(req.id), 'campaign': req.campaign, 'payload': payload,
            'run_at': run_at.isoformat(), 'expires_at': expires.isoformat()}
     row['content_hash'] = digest(row)
+    # Relationship metadata stays outside the public-content hash so migration
+    # does not invalidate already reviewed legacy posts.
+    if req.campaign_id:
+        row['campaign_id'] = str(req.campaign_id)
     return row
 
 
 @router.post('/posts')
 async def save_draft(req: Draft):
+    if req.revision is not None:
+        # Preserve the campaign when legacy clients/Chief omit its ID on edit.
+        current = await db('GET', f'/platform_marketing_posts?id=eq.{req.id}&limit=1')
+        linked = current[0].get('campaign_id') if current else None
+        if linked:
+            if req.campaign_id and str(req.campaign_id) != linked:
+                raise HTTPException(409, 'A saved post cannot move between campaigns.')
+            req = req.model_copy(update={'campaign_id':UUID(linked)})
     row = await build_draft(req)
     if req.revision is None:
         # Caller-chosen UUID makes a retried save detectable, not a new post.

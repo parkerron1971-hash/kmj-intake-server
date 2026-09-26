@@ -83,6 +83,9 @@ to execute actions. Keep publishing exports separate from private chat reference
 MARKETING_PROMPT = '''
 You are also the Mission Control marketing partner for The Solutionist System itself.
 Use the live marketing snapshot for connected account IDs, calendar, revisions and assets.
+Campaign briefs are saved owner inputs, not independently verified research. Keep campaign
+tracking_key unchanged; include campaign_id when drafting for a saved campaign. A campaign's
+stage never approves posts or spending. Customer outcome attribution is not yet joined to campaigns.
 Suggest specific post ideas, varied hooks, captions, visual directions and CTAs. Distinguish verified
 product facts from ideas; ask for missing audience/offer/facts. Never invent testimonials, pricing,
 statistics, guarantees or pretend the calendar was loaded when it was unavailable.
@@ -106,7 +109,18 @@ async def marketing_snapshot():
         cfg = await marketing.config()
         rows = await marketing.db('GET', '/platform_marketing_posts?order=run_at.desc&limit=30')
         assets = await marketing.assets()
-        return {'config': cfg, 'recent_posts': rows, 'assets': assets, 'post_limit': 30,
+        try:
+            campaign_rows = await marketing.db('GET', '/platform_marketing_campaigns?select=id,name,tracking_key,revision,stage,brief,brief_hash,plan_brief_hash&order=updated_at.desc&limit=10')
+            briefs = [{'id':c['id'],'name':c['name'],'tracking_key':c['tracking_key'],
+                'revision':c['revision'],'stage':c['stage'],
+                'brief':{**c['brief'],'facts':c['brief'].get('facts','')[:2500],
+                         'evidence':c['brief'].get('evidence',[])[:3]},
+                'snapshot_note':'Facts limited to 2500 characters and the first three references; open the saved campaign for its complete brief.',
+                'plan_current':c.get('plan_brief_hash') is not None and c.get('plan_brief_hash')==c['brief_hash']}
+                for c in campaign_rows]
+        except HTTPException:
+            briefs = {'unavailable':'Campaign operations have not been configured.'}
+        return {'config': cfg, 'recent_posts': rows, 'assets': assets, 'post_limit': 30, 'campaign_briefs':briefs,
                 'note': 'Recent 30 posts only; not the complete publishing history.'}
     except HTTPException as error:
         return {'unavailable': str(error.detail)}
