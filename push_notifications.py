@@ -213,8 +213,10 @@ async def morning_brief_tick() -> None:
                      - timedelta(hours=24)).isoformat().replace("+00:00", "Z")
         for biz_id in biz_ids:
             try:
+                # The whole row: the setup-brief check below reads the
+                # same fields the plug-in probes do.
                 biz_rows = sb_clients.sb_get_as_service(
-                    f"/businesses?id=eq.{biz_id}&select=name,settings"
+                    f"/businesses?id=eq.{biz_id}&select=*"
                 ) or []
                 if not biz_rows:
                     continue
@@ -262,6 +264,17 @@ async def morning_brief_tick() -> None:
                 if drafts:
                     bits.append(f"{len(drafts)} draft{'s' if len(drafts) != 1 else ''} waiting")
                 if not bits:
+                    # "Clear runway" is the wrong thing to tell a business
+                    # in its first days with nothing plugged in. The
+                    # setup brief speaks for those mornings, with its own
+                    # push, on the business's own clock
+                    # (notification_engine + setup_brief).
+                    try:
+                        import setup_brief
+                        if setup_brief.owns_morning(biz_rows[0]):
+                            continue
+                    except Exception as e:
+                        log.warning("setup brief check for %s failed: %s", biz_id, e)
                     bits.append("clear runway — go do the deep work")
 
                 send_to_business(
