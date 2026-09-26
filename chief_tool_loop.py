@@ -115,6 +115,11 @@ _write_calls: contextvars.ContextVar[int] = contextvars.ContextVar(
 # turn, then the model asks instead of retrying.
 _writes_closed: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "chief_tool_loop.writes_closed", default=False)
+# Set only by a HELD write. The budget closing is different: what's left of
+# the request can still become one background plan (2026-09-26, live: nine
+# changes asked, three done, "I'll finish the rest in the next pass").
+_write_held: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "chief_tool_loop.write_held", default=False)
 
 
 # WHO IS ACTING (2026-09-04). A chat turn is a practitioner asking, so a
@@ -149,6 +154,7 @@ def reset_turn(writes_allowed: bool = False, *, surface: str = "chat",
     _writes_this_turn.set([])
     _write_calls.set(0)
     _writes_closed.set(False)
+    _write_held.set(False)
     _turn_surface.set(surface or "chat")
     _turn_prompted.set(bool(prompted))
     import chief_site_view
@@ -194,6 +200,18 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     import chief_site_view
     out.append(chief_site_view.TOOL)  # Chief's own read: its image comes back via run_tool_round.
     return out
+
+
+def _overflow_to_plan_open() -> bool:
+    """After the direct-write budget is spent, may the rest of the
+    request still go out as one background plan? Only on the owner's own
+    turn, with builds on, when nothing was held, and before this turn has
+    submitted its one work order."""
+    if _write_held.get() or not _write_verb_offered('submit_work_order'):
+        return False
+    from chief_code import turn_scope
+    scope = turn_scope.get()
+    return bool(scope) and not scope.get('submitted')
 
 
 def _write_verb_offered(name: str) -> bool:
@@ -461,7 +479,12 @@ async def _execute_write(client, biz: Dict[str, Any],
         # scope or a retry would help.
         return True, (f"'{name}' is not a tool. If it is an operation, emit its "
                       f"[ACTION:] tag in your reply; the usual rules apply.")
-    if _writes_closed.get():
+    if _writes_closed.get() and not (name == 'submit_work_order' and _overflow_to_plan_open()):
+        if _overflow_to_plan_open():
+            return True, ("That is this turn's limit of direct changes. Put everything still "
+                          "to do into ONE submit_work_order with kind plan now: it runs in the "
+                          "background and the owner is told here when it is done. Do not promise "
+                          "a next pass.")
         return True, ("The write budget for this turn is spent (or an earlier write "
                       "is HELD). Say what happened so far and what is still to do; "
                       "do not retry.")
@@ -514,6 +537,7 @@ async def _execute_write(client, biz: Dict[str, Any],
         # and the NEXT turn re-issues the same action. Retrying inside
         # this turn would be exactly the door the hold exists to close.
         _writes_closed.set(True)
+        _write_held.set(True)
         return True, _shrink(result)
     if chief_of_staff._action_failed(result):
         return True, _shrink(result)
