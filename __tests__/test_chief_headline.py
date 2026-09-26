@@ -153,7 +153,40 @@ def test_the_turn_runs_the_headline_before_the_main_model_and_stitches_after_it(
     head = src.index("_hl.say(")
     assert head < src.index("raw = await _call_claude(client, system, api_messages,")
     assert "system += _hl.continuation_block(_headline_said)" in src
-    assert 'response_text = _headline_said.rstrip() + " " + _rest.lstrip()' in src
+    assert "_stitch_after_headline(\n                    _headline_said, _sentence_streamer.text, response_text)" in src
+
+
+HEAD = "Maria Lopez still owes $400 on INV-2026-031.\n"
+
+
+@pytest.mark.parametrize("final", [
+    "Maria Lopez still owes $400 on INV-2026-031. It is 5 days past due.",
+    "Maria Lopez still owes  $400 on INV-2026-031.\nIt is 5 days past due.",   # whitespace differs
+])
+def test_a_headline_the_model_repeats_is_said_once(final):
+    """Told not to repeat it, the model sometimes does; on a turn where it
+    did not stream, the reply on file must not hold the headline twice."""
+    out = chief._stitch_after_headline(HEAD, HEAD, final)
+    assert out.count("Maria Lopez still owes") == 1 and out.endswith("It is 5 days past due.")
+
+
+def test_the_model_continuing_the_headline_follows_it():
+    out = chief._stitch_after_headline(HEAD, HEAD, "It is 5 days past due.")
+    assert out.startswith("Maria Lopez still owes $400") and out.endswith("It is 5 days past due.")
+
+
+@pytest.mark.parametrize("final", ["", "No action ran in this request. Want me to try again?"])
+def test_a_withheld_rest_keeps_the_headline_and_says_so(final):
+    out = chief._stitch_after_headline(HEAD, HEAD, final)
+    assert out.startswith("Maria Lopez still owes $400") and "No action ran" not in out
+    assert out.endswith("I couldn't confirm the rest of that from your records, so I stopped there.")
+
+
+def test_when_the_model_streamed_too_the_reply_continues_its_part():
+    streamed = HEAD + "It is 5 days past due. "
+    final = "It is 5 days past due. She usually pays on Fridays."
+    out = chief._stitch_after_headline(HEAD, streamed, final)
+    assert out == "Maria Lopez still owes $400 on INV-2026-031. " + final
 
 
 def test_the_continuation_tells_the_main_model_what_was_said():
