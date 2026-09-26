@@ -180,11 +180,22 @@ def get_phrasing(field_path: str, brand_voice: Optional[str]) -> str:
 
 # ─── Profile CRUD ──────────────────────────────────────────────
 
-def get_profile(owner_id: str) -> Optional[Dict[str, Any]]:
+def get_profile(owner_id: str, *, empty_if_missing: bool = False) -> Optional[Dict[str, Any]]:
+    """The practitioner_profiles row, or None.
+
+    By default None means either "no row yet" or "the read failed". A
+    caller that must tell them apart passes empty_if_missing=True: {} is a
+    read that worked and found no row, None is a read that failed. Chief's
+    context needs the difference. A practitioner who signed up today has
+    no row, and reading that as a failure put "a secondary context source
+    is unavailable" in every prompt from their first turn (2026-09-26)."""
+    missing: Optional[Dict[str, Any]] = {} if empty_if_missing else None
     if not owner_id:
+        return missing
+    rows = _sb_get(f"/practitioner_profiles?owner_id=eq.{owner_id}")
+    if not isinstance(rows, list):
         return None
-    rows = _sb_get(f"/practitioner_profiles?owner_id=eq.{owner_id}") or []
-    return rows[0] if rows else None
+    return rows[0] if rows else missing
 
 
 def _calculate_completeness(profile: Dict[str, Any]) -> float:
