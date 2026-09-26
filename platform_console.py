@@ -1514,14 +1514,14 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     conversation_messages(body)
     if not rate_limit.allow('platform_chief', str(_owner.id)):
         raise HTTPException(429, 'Please wait before asking Chief again.')
-    if await asyncio.to_thread(spend_guard.over_budget):
-        raise HTTPException(429, spend_guard.block_message())
     import chief_creative_execution as execution
     if execution.status_requested(body):
         result = await execution.status_result(body, _owner)
         return {'reply': execution.result_reply([result]), 'actions_taken': [result],
                 'model': None, 'usage': {}, 'snapshot_keys': [],
                 'capabilities': {'image_references': True, 'marketing': True}}
+    if await asyncio.to_thread(spend_guard.over_budget):
+        raise HTTPException(429, spend_guard.block_message())
     await authority.require_budget()
     headers = _service_headers()
     api_key = os.environ.get("ANTHROPIC_API_KEY")

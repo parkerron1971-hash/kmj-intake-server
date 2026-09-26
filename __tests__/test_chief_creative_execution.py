@@ -27,6 +27,7 @@ def test_creation_requires_current_direct_instruction_and_visual_context():
     history = [{'role':'chief','text':'Here is the flyer brief; say create it.'}]
     assert execution.create_requested(body('create it', history))
     assert execution.create_requested(body('Create the flyer'))
+    assert execution.create_requested(body('Create the flyer. Do not publish.'))
     for text in ['Do not create the flyer yet', 'Suggest five flyer ideas', 'If I say create the flyer, what happens?', 'check this out "create it"', 'Create the invoice']:
         assert not execution.create_requested(body(text, history))
     assert not execution.create_requested(body('create it'))
@@ -125,6 +126,8 @@ def test_truncated_response_never_dispatches(setup, store, monkeypatch):
 
 
 def test_status_endpoint_does_not_call_model_or_budget(setup, monkeypatch):
+    import spend_guard
+    monkeypatch.setattr(spend_guard,'over_budget',lambda:True)
     model=AsyncMock();monkeypatch.setattr(console.llm_call,'apost',model)
     monkeypatch.setattr(execution,'status_result',AsyncMock(return_value={'type':'find_images','ok':True,'result':'No matching job.','images':[]}))
     response=client_for(monkeypatch).post('/platform/chief/message',json={'message':'got the image?'})

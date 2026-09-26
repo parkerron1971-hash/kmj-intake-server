@@ -49,7 +49,7 @@ def tool_specs():
 
 def create_requested(body):
     text = body.message.strip().lower().rstrip('.!')
-    if len(text) > 500 or re.search(r"\b(don't|do not|not yet|before|if|suggest|ideas|concepts)\b", text):
+    if len(text) > 500 or re.search(r"\b(?:(?:don't|do not)\s+(?:create|generate|make|design|render)|not yet|before|if|suggest|ideas|concepts)\b", text):
         return False
     short = re.fullmatch(r'(?:please )?(?:create|generate|make|design|render) (?:it|that|this)(?: now)?', text)
     if short:
