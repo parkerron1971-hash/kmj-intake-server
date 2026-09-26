@@ -151,6 +151,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "list_offerings":      _r("lists offerings"),
     "list_products":       _r("lists products"),
     "list_projects":       _r("lists projects"),
+    "list_tasks":          _r("lists open tasks by when they are due"),
     "list_scheduled":      _r("reads queued chief_scheduled_actions"),
     "offering_readiness":  _r("offering_profiles.business_readiness — pure report"),
     "recall_conversation": _r("searches prior conversation"),

@@ -159,7 +159,11 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # 34 (9/8): inspect_course reads the owner's teaching content and keys,
     # never student responses. SQL checks auth.uid and business ownership;
     # missing creator JWT fails closed. Authoring has its own write scope.
-    assert len(tools) == 34, (
+    # 35 (9/26): list_tasks reads the owner's own open to-dos by due date
+    # (title, due date, priority, the contact's name). Same class as
+    # list_projects, which already shows client names; no message bodies.
+    # Creating, completing and deleting tasks are writes and stay off.
+    assert len(tools) == 35, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -571,7 +575,7 @@ SILENT_TOOLS = {
     "catch_up", "check_balance", "check_goals", "check_inventory",
     "inspect_module", "list_availability", "list_expenses",
     "list_module_entries", "list_offerings", "list_products",
-    "list_projects", "list_scheduled", "mission_status",
+    "list_projects", "list_scheduled", "list_tasks", "mission_status",
     "propose_brand_kit_from_context",
     "propose_voice_rule", "recall_conversation", "show_revenue",
     "show_view", "site_health", "summarize_module", "what_undo",

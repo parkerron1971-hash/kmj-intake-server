@@ -8194,6 +8194,70 @@ async def handle_complete_task(client, biz, action) -> Dict:
     }
 
 
+TASK_DUE_WINDOWS = ("overdue", "today", "week", "all")
+
+
+async def handle_list_tasks(client, biz, action) -> Dict:
+    """The practitioner's open tasks, by when they are due.
+
+    Asked "what tasks are due this week?" (2026-09-26), Chief could only open
+    the Tasks tab and say it had no way to read the list back: its context
+    carries no tasks and no read existed. `due`: overdue | today | week (the
+    next seven days, overdue included; the default) | all open. Days are the
+    business's own (its timezone), so "today" is the owner's today.
+    """
+    due = str(action.get("due") or "week").strip().lower()
+    if due not in TASK_DUE_WINDOWS:
+        due = "week"
+    import chief_assignments
+    tz = await asyncio.to_thread(chief_assignments._tz_for, str(biz["id"]))
+    today = datetime.now(tz).date()
+    q = (f"/tasks?business_id=eq.{biz['id']}&status=neq.done"
+         f"&select=id,title,due_date,priority,status,contact_id"
+         f"&order=due_date.asc.nullslast,created_at.asc&limit=50")
+    if due == "overdue":
+        q += f"&due_date=lt.{today.isoformat()}"
+    elif due == "today":
+        q += f"&due_date=eq.{today.isoformat()}"
+    elif due == "week":
+        q += f"&due_date=lte.{(today + timedelta(days=6)).isoformat()}"
+    rows = await _sb(client, "GET", q)
+    if rows is None:
+        return _fail("list_tasks", "the task list couldn't be read right now")
+    names: Dict[str, str] = {}
+    ids = sorted({r["contact_id"] for r in rows if r.get("contact_id")})
+    if ids:
+        people = await _sb(client, "GET", f"/contacts?business_id=eq.{biz['id']}"
+                                          f"&id=in.({','.join(ids)})&select=id,name") or []
+        names = {p["id"]: p.get("name") or "" for p in people}
+    tasks = []
+    for r in rows:
+        d = str(r.get("due_date") or "")[:10]
+        tasks.append({
+            "id": r.get("id"), "title": r.get("title") or "Untitled",
+            "due_date": d or None, "overdue": bool(d) and d < today.isoformat(),
+            "priority": r.get("priority") or "medium", "status": r.get("status") or "todo",
+            "contact": names.get(r.get("contact_id") or "", ""),
+        })
+    window = {"overdue": "overdue", "today": "due today", "week": "due in the next seven days or overdue",
+              "all": "open"}[due]
+    lines = []
+    for t in tasks[:25]:
+        when = f"due {t['due_date']}" + (" (overdue)" if t["overdue"] else "") if t["due_date"] else "no due date"
+        lines.append(f"- {t['title']}: {when}" + (f", {t['contact']}" if t["contact"] else "")
+                     + (f", {t['priority']} priority" if t["priority"] in ("urgent", "high") else ""))
+    n = len(tasks)
+    return {
+        "type": "list_tasks",
+        "result": f"{n} task{'s' if n != 1 else ''} {window} (as of {today.isoformat()})",
+        "label": f"✅ {n} task{'s' if n != 1 else ''} {window}",
+        "tasks": tasks,
+        "today": today.isoformat(),
+        "summary": "\n".join(lines) if lines else f"(no tasks {window})",
+        "nav": {"tab": "operate", "sub": "tasks"},
+    }
+
+
 async def handle_create_note(client, biz, action) -> Dict:
     note = (action.get("note") or action.get("content") or "").strip()
     contact_id = action.get("contact_id")
@@ -11140,6 +11204,7 @@ ACTION_HANDLERS = {
     "create_task":                handle_create_task,
     "delete_task":                handle_delete_task,
     "complete_task":              handle_complete_task,
+    "list_tasks":                 handle_list_tasks,
     "create_note":                handle_create_note,
     "log_activity":               handle_log_activity,
     "create_invoice":             handle_create_invoice,

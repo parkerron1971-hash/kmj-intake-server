@@ -2060,6 +2060,7 @@ When the practitioner says...                       You should emit...
   "Create/start/add a project for..."           →   create_project
   "Update/change/move the project..."           →   update_project
   "What projects do I have?" / "List projects"  →   list_projects
+  "What tasks are due this week / today?"        →   list_tasks (due: week|today|overdue|all)
   "Add/create a contact named..."               →   create_contact
   "Update/change [name]'s email/phone..."       →   update_contact
   "Delete/remove [name]..."                     →   delete_contact
