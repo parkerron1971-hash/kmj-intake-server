@@ -303,3 +303,12 @@ def test_voice_stats_aggregate_the_logged_turns():
     assert s["first_audio"] == {"opener": 1, "reply": 1}
     assert s["barge_in_rate"] == 0.5 and s["underruns"] == 2
     assert s["tts_cache_hit_rate"] == 0.2
+
+
+def test_the_per_request_lines_reach_the_logs():
+    """Until the two log tables are applied, the [route] and [voice] lines
+    are the only record — and a module logger under the root's default
+    level drops INFO silently (chief.truth's lesson)."""
+    import logging
+    for lg in (route_ledger.logger, vm.logger):
+        assert lg.isEnabledFor(logging.INFO) and lg.handlers

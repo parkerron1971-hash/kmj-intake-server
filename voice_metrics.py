@@ -45,6 +45,12 @@ import route_ledger
 from auth_supabase import AuthedUser, require_user
 
 logger = logging.getLogger("voice_metrics")
+if not logger.handlers:
+    # INFO reaches Railway only through a handler of its own (see chief.truth).
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] voice: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
 router = APIRouter()
 
 

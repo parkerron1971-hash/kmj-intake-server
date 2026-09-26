@@ -49,6 +49,14 @@ from datetime import datetime, timezone
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("route_ledger")
+if not logger.handlers:
+    # Its own handler at INFO, like chief.truth: under the root's default
+    # level the per-request [route] line — the only record until
+    # model_route_log is applied — never reached the Railway logs.
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] route: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
 
 
 def budget_ms() -> int:
