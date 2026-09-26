@@ -64,7 +64,7 @@ def test_the_home_is_the_second_edition():
 
 def test_the_film_is_an_asset():
     html = _home()
-    assert "/assets/film.mp4?v=2" in html and "/assets/film-poster.jpg?v=3" in html
+    assert "/assets/film.mp4?v=3" in html and "/assets/film-poster.jpg?v=4" in html
     assert "base64," not in html
     assert len(html) < 400_000, "the page should be well under half a megabyte without the film"
 
@@ -221,7 +221,7 @@ def test_the_stuck_nav_is_solid():
 def test_the_film_has_chapters():
     html = _home()
     ch = html[html.index('id="filmChapters"'):html.index("</div>", html.index('id="filmChapters"'))]
-    assert re.findall(r'data-t="(\d+)"', ch) == ["3", "12", "21", "27", "36", "42"]
+    assert re.findall(r'data-t="(\d+)"', ch) == ["5", "16", "26", "34", "42", "50"]
     for name in ("Sign in", "Say it", "Run the day", "Be found", "Bring what you have", "The night shift"):
         assert f"<b>{name}</b>" in ch, name
     assert html.index('id="filmInline"') < html.index('id="filmChapters"')

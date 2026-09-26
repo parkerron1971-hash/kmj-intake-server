@@ -1012,7 +1012,7 @@
   <main>
     <header class="hero">
       <span class="hero-blade" id="heroBlade" aria-hidden="true"></span>
-      <button type="button" class="hero-pill reveal" id="filmBtn" aria-haspopup="dialog" aria-controls="film"><span class="tag">New</span><b>See it move</b>· 58 seconds<span class="play" aria-hidden="true">&#9654;</span></button>
+      <button type="button" class="hero-pill reveal" id="filmBtn" aria-haspopup="dialog" aria-controls="film"><span class="tag">New</span><b>See it move</b>· 64 seconds<span class="play" aria-hidden="true">&#9654;</span></button>
       <h1 id="heroH1">Every problem<br>has a solution.</h1>
       <p class="reveal">A chief of staff for your business. It keeps the books, chases what is late, and asks before it acts. <b>Say what you do, or what’s wrong, and the room takes shape around the answer.</b></p>
       <form class="say reveal" id="sayForm" aria-label="Tell it what you do">
@@ -1077,19 +1077,19 @@
       <div class="hd reveal">
         <span class="eyebrow">What this is</span>
         <h2 style="margin-top:12px">One system runs the whole business. <em>Chief runs it with you.</em></h2>
-        <p>Clients, calendar, invoices, books, your site and your marketing in one place, in the words your trade uses. Inside it, a chief of staff who reads your real day and does the work. Fifty-eight seconds shows it.</p>
+        <p>Clients, calendar, invoices, books, your site and your marketing in one place, in the words your trade uses. Inside it, a chief of staff who reads your real day and does the work. Sixty-four seconds shows it.</p>
       </div>
-      <div class="filmwrap reveal" id="filmInline" role="button" tabindex="0" aria-label="Play the film, fifty-eight seconds">
+      <div class="filmwrap reveal" id="filmInline" role="button" tabindex="0" aria-label="Play the film, sixty-four seconds">
         <video id="filmV2" playsinline preload="none"></video>
-        <button type="button" class="playbig" tabindex="-1"><i><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></i>Watch the system at work<span>58 seconds · one photographer’s Tuesday</span></button>
+        <button type="button" class="playbig" tabindex="-1"><i><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></i>Watch the system at work<span>64 seconds · one photographer’s Monday</span></button>
       </div>
       <div class="hn-chapters reveal" id="filmChapters" role="group" aria-label="Jump to a part of the film">
-        <button type="button" data-t="3"><span class="bar"><i></i></span><b>Sign in</b><em>0:03</em></button>
-        <button type="button" data-t="12"><span class="bar"><i></i></span><b>Say it</b><em>0:12</em></button>
-        <button type="button" data-t="21"><span class="bar"><i></i></span><b>Run the day</b><em>0:21</em></button>
-        <button type="button" data-t="27"><span class="bar"><i></i></span><b>Be found</b><em>0:27</em></button>
-        <button type="button" data-t="36"><span class="bar"><i></i></span><b>Bring what you have</b><em>0:36</em></button>
-        <button type="button" data-t="42"><span class="bar"><i></i></span><b>The night shift</b><em>0:42</em></button>
+        <button type="button" data-t="5"><span class="bar"><i></i></span><b>Sign in</b><em>0:05</em></button>
+        <button type="button" data-t="16"><span class="bar"><i></i></span><b>Say it</b><em>0:16</em></button>
+        <button type="button" data-t="26"><span class="bar"><i></i></span><b>Run the day</b><em>0:26</em></button>
+        <button type="button" data-t="34"><span class="bar"><i></i></span><b>Be found</b><em>0:34</em></button>
+        <button type="button" data-t="42"><span class="bar"><i></i></span><b>Bring what you have</b><em>0:42</em></button>
+        <button type="button" data-t="50"><span class="bar"><i></i></span><b>The night shift</b><em>0:50</em></button>
       </div>
       <p class="cap reveal">Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</p>
       <div class="three-facts">
@@ -1289,11 +1289,11 @@
     </section>
 
   </main>
-  <div class="film" id="film" hidden role="dialog" aria-modal="true" aria-label="The Solutionist System, fifty-eight seconds of the product at work">
+  <div class="film" id="film" hidden role="dialog" aria-modal="true" aria-label="The Solutionist System, sixty-four seconds of the product at work">
     <div class="scrim" data-film-close></div>
     <div class="box">
       <button type="button" class="x" data-film-close aria-label="Close film">&times;</button>
-      <video id="filmVideo" controls playsinline preload="none" poster="/assets/film-poster.jpg?v=3"></video>
+      <video id="filmVideo" controls playsinline preload="none" poster="/assets/film-poster.jpg?v=4"></video>
       <div class="cap">One photographer’s Tuesday: Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</div>
     </div>
   </div>
@@ -1888,7 +1888,7 @@
   }
   document.querySelectorAll('.mode button').forEach(b=>b.onclick=()=>{const w=b.dataset.mode==='without';if(w===without)return;without=w;setMode()});
   /* v8: the film */
-  const FILM='/assets/film.mp4?v=2';
+  const FILM='/assets/film.mp4?v=3';
   const film=$('#film'), filmV=$('#filmVideo');
   function openFilm(){film.hidden=false;if(!filmV.src)filmV.src=FILM;filmV.play().catch(()=>{});}
   function closeFilm(){filmV.pause();film.hidden=true}

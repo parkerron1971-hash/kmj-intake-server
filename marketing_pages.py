@@ -3642,7 +3642,7 @@ def render_home_v1() -> str:
                 aria-haspopup="dialog" aria-controls="videoModal">
           <span class="tag">New</span>
           <b>See it move</b>
-          <span class="dur">&middot; 58 seconds</span>
+          <span class="dur">&middot; 64 seconds</span>
           <span class="play" aria-hidden="true">&#9654;</span>
         </button>
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
@@ -4106,14 +4106,14 @@ def render_home_v1() -> str:
      to bottom. ?v=2 since 2026-09-02: "The System" replaced "Takes Shape"
      at the same URL, and a cached poster would have shown the old film. -->
 <div class="vmodal" id="videoModal" role="dialog" aria-modal="true"
-     aria-label="The Solutionist System, fifty-eight seconds of the product at work">
+     aria-label="The Solutionist System, sixty-four seconds of the product at work">
   <div class="vmodal-box">
     <button type="button" class="vmodal-x" id="videoModalClose" aria-label="Close video">&times;</button>
     <video id="videoModalPlayer" controls playsinline preload="none"
-           poster="/assets/film-poster.jpg?v=2">
-      <source src="/assets/film.mp4?v=2" type="video/mp4">
+           poster="/assets/film-poster.jpg?v=4">
+      <source src="/assets/film.mp4?v=3" type="video/mp4">
       Your browser doesn&rsquo;t support embedded video.
-      <a href="/assets/film.mp4?v=2">Download the film</a>.
+      <a href="/assets/film.mp4?v=3">Download the film</a>.
     </video>
     <div class="vmodal-cap">One photographer&rsquo;s Tuesday: Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</div>
   </div>

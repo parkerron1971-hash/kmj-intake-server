@@ -48,7 +48,7 @@ def build(src: pathlib.Path) -> str:
     s = io.open(src, encoding="utf-8").read()
 
     # ── the film lives at /assets, not in the page ──
-    s = re.sub(r"const FILM='data:video/mp4;base64,[A-Za-z0-9+/=]+';", "const FILM='/assets/film.mp4?v=2';", s)
+    s = re.sub(r"const FILM='data:video/mp4;base64,[A-Za-z0-9+/=]+';", "const FILM='/assets/film.mp4?v=3';", s)
     s = re.sub(r'poster="data:image/jpeg;base64,[A-Za-z0-9+/=]+"', 'poster="/assets/film-poster.jpg?v=3"', s)   # v=3: the 9/22 poster (the current Workspace Home)
     assert "base64," not in s, "an embedded asset survived"
 
@@ -93,7 +93,7 @@ def build(src: pathlib.Path) -> str:
     # ── links ──
     s = s.replace('href="https://system.mysolutionist.app/"', 'href="{{APP_URL}}"')
     s = s.replace('href="https://mysolutionist.app/', 'href="/')
-    s = s.replace("href=\"https://mysolutionist.app/assets/film.mp4?v=2\" target=\"_blank\" rel=\"noopener\"", "href=\"/assets/film.mp4?v=2\" target=\"_blank\" rel=\"noopener\"")
+    s = s.replace("href=\"https://mysolutionist.app/assets/film.mp4?v=2\" target=\"_blank\" rel=\"noopener\"", "href=\"/assets/film.mp4?v=3\" target=\"_blank\" rel=\"noopener\"")
     assert "mysolutionist.app/" not in s.replace("mysolutionist.app/compare", "").replace("https://mysolutionist.app/'", ""), "an absolute link survived"
     s = rep(s, "7 days free · every action logged and reversible", "__TRIAL_FREE__ · every action logged and reversible")
     s = rep(s, "7 days free on every plan.", "__TRIAL_FREE__ on every plan.", 0) if "7 days free on every plan." in s else s
