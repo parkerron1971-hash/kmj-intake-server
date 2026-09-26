@@ -185,6 +185,13 @@ SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = '<table>';
 
 > When you apply one, change its status here and note the date.
 
+## Chief subscription work (2026-09-26)
+
+`supabase/APPLY-2026-09-26-chief-local-work.sql` ? **pending, not applied**.
+Requires Dev Bridge, September 16 authority, September 24 agents and September 26
+marketing campaigns. Service-only conversations and atomic create/claim/reply/ack
+RPCs. See `docs/CHIEF_LOCAL_WORK.md` for the paired desktop/frontend release.
+
 ## Rollback
 
 Most feature migrations ship a paired `*-rollback.sql` (grep the file's

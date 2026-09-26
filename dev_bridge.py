@@ -24,6 +24,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -98,6 +99,11 @@ async def _get_task(c: httpx.AsyncClient, task_id: str) -> Dict[str, Any]:
 
 async def _append_note(c: httpx.AsyncClient, task: Dict[str, Any],
                        sender: str, text: str) -> None:
+    if _is_work(task):
+        from chief_local_work import db
+        await db('POST', '/rpc/chief_work_note', {'task_id': task['id'], 'note': {
+            'id': str(uuid4()), 'from': sender, 'text': text[:4000], 'at': _now()}})
+        return
     notes = list(task.get("notes") or [])
     notes.append({"from": sender, "text": text[:4000], "at": _now()})
     await _sb_patch(c, "dev_tasks", {"id": f"eq.{task['id']}"},
@@ -152,6 +158,10 @@ def _compose_prompt(task: Dict[str, Any]) -> str:
     itself, plus how the conversation with Kevin works while he is away —
     his replies arrive in the session, and reports land in the Dev Desk."""
     body = (task.get("details") or "").strip() or task.get("title", "")
+    if _is_work(task):
+        body += ('\nYour final report may include work_result: {"summary":"What you produced and file paths", '
+                 '"plan":null}. For strategy work, plan must match the schema in the brief. '
+                 'Report editable output paths and any missing evidence. Never include credentials in reports.')
     report_url = f"{PUBLIC_BASE_URL}/dev-bridge/tasks/{task['id']}/report"
     return (
         f"{body}\n\n"
@@ -355,6 +365,10 @@ async def add_owner_note(task_id: str, body: NoteBody, _owner=Depends(require_ow
         raise HTTPException(422, "text required")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         task = await _get_task(c, task_id)
+        if _is_work(task):
+            from chief_local_work import reply, Reply
+            await reply(UUID(task_id), Reply(id=uuid4(), text=text), _owner)
+            return {'ok': True, 'posted_to_issue': False, 'reopened': task.get('status') in _FINISHED_STATUSES}
         await _append_note(c, task, "kevin", text)
         # Cloud-lane follow-ups go to the issue too, so the cloud builder
         # actually sees them — a note only the Dev Desk shows would dead-end.
@@ -436,22 +450,49 @@ class ReportBody(BaseModel):
     # passes the practitioner guard, so it must read like something a human
     # would say about their own business — never about the work.
     for_practitioner: Optional[str] = None
+    work_result: Optional[Dict[str, Any]] = None
+
+
+def _is_work(task):
+    return (task.get('authority_record') or {}).get('scope', {}).get('account_mode') == 'subscription'
+
+
+async def _bound_work(task, device):
+    if not _is_work(task):
+        return
+    from chief_local_work import db
+    rows = await db('GET', f"/platform_chief_work?id=eq.{UUID(task['id'])}&device_id=eq.{UUID(device['id'])}&limit=1")
+    if not rows:
+        raise HTTPException(409, 'This conversation is not claimed by this device.')
+
+
+@router.post('/dev-bridge/tasks/{task_id}/claim')
+async def bridge_claim(task_id: UUID, authorization: Optional[str] = Header(None)):
+    from chief_local_work import db
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        device = await _require_device(c, authorization)
+    claimed = await db('POST', '/rpc/chief_work_claim', {'task_id': str(task_id), 'device': device['id']})
+    if claimed is not True:
+        raise HTTPException(409, 'Conversation was already claimed or this desktop needs updating.')
+    return {'ok': True}
 
 
 @router.get("/dev-bridge/queue")
 async def bridge_queue(authorization: Optional[str] = Header(None),
-                       agents: Optional[str] = None):
+                       agents: Optional[str] = None, capabilities: Optional[str] = None):
     # Only work for an agent this device can open. The rest waits in the
     # queue for a device that can — see _device_agents.
     can_run = _device_agents(agents)
+    workbench = 'workbench-v1' in (capabilities or '').split(',')
     agent_filter = f"in.({','.join(can_run)})"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        await _require_device(c, authorization, can_run)
+        device = await _require_device(c, authorization, can_run + (['workbench-v1'] if workbench else []))
         rows = await _sb_get(c, "dev_tasks", {
             "lane": "eq.local",
             "status": "eq.queued",
             "agent": agent_filter,
-            "select": "id,title,details,repo,agent,project_path,report_key,created_at",
+            "select": "id,title,details,repo,agent,project_path,report_key,created_at,authority_record,notes",
+            **({} if workbench else {'authority_record->scope->>account_mode': 'is.null'}),
             "order": "created_at.asc",
             "limit": "5",
         })
@@ -463,12 +504,15 @@ async def bridge_queue(authorization: Optional[str] = Header(None),
             "lane": "eq.local",
             "status": f"in.({','.join(sorted(_ACTIVE_STATUSES))})",
             "agent": agent_filter,
-            "select": "id,title,details,repo,agent,project_path,report_key,notes",
+            "select": "id,title,details,repo,agent,project_path,report_key,notes,authority_record",
+            **({} if workbench else {'authority_record->scope->>account_mode': 'is.null'}),
             "order": "updated_at.asc",
             "limit": "20",
         })
     tasks = []
     for t in rows:
+        if _is_work(t) and not workbench:
+            continue
         # ntpath, not os.path: these are Windows paths and this runs on Linux,
         # where os.path.basename of a C: path is the whole string — which is
         # how Solution Space once gained a project named by its full path.
@@ -476,7 +520,9 @@ async def bridge_queue(authorization: Optional[str] = Header(None),
         tasks.append({
             "id": t["id"],
             "title": t.get("title"),
-            "prompt": _compose_prompt(t),
+            "prompt": _reopen_brief(t) if _is_work(t) and t.get('notes') else _compose_prompt(t),
+            "account_mode": 'subscription' if _is_work(t) else 'configured',
+            "reply_stamps": [n['at'] for n in _undelivered_replies(t)] if _is_work(t) else [],
             "project_path": t.get("project_path"),
             "project_name": name,
             "repo": t.get("repo"),
@@ -485,10 +531,20 @@ async def bridge_queue(authorization: Optional[str] = Header(None),
         })
     followups = []
     for t in active:
+        if _is_work(t):
+            if not workbench:
+                continue
+            try:
+                await _bound_work(t, device)
+            except HTTPException as e:
+                if e.status_code == 409:
+                    continue
+                raise
         pending = _undelivered_replies(t)
         if pending:
             followups.append({
                 "task_id": t["id"],
+                "account_mode": 'subscription' if _is_work(t) else 'configured',
                 "title": t.get("title"),
                 "project_path": t.get("project_path"),
                 "agent": t.get("agent") or "claude",
@@ -527,8 +583,13 @@ async def bridge_ack_notes(task_id: str, body: AckBody,
     if not wanted:
         raise HTTPException(422, "at required")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        await _require_device(c, authorization)
+        device = await _require_device(c, authorization)
         task = await _get_task(c, task_id)
+        await _bound_work(task, device)
+        if _is_work(task):
+            from chief_local_work import db
+            await db('POST', '/rpc/chief_work_ack', {'task_id': str(UUID(task_id)), 'stamps': list(wanted)})
+            return {'ok': True, 'acked': len(wanted)}
         notes = list(task.get("notes") or [])
         acked = 0
         for n in notes:
@@ -558,13 +619,16 @@ async def bridge_status(task_id: str, body: StatusBody,
     if sender not in _DEVICE_SENDERS:
         raise HTTPException(422, f"sender must be one of {sorted(_DEVICE_SENDERS)}")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        await _require_device(c, authorization)
+        device = await _require_device(c, authorization)
         task = await _get_task(c, task_id)
+        await _bound_work(task, device)
+        if _is_work(task) and status == 'picked_up':
+            raise HTTPException(409, 'Claim this conversation before opening it.')
         # A session's relayed output can arrive after its own 'done' report;
         # that must not flip a finished task back to 'working'. The note still
         # lands — it is the final answer Kevin wants to read.
         settled = task.get("status") in _FINISHED_STATUSES
-        if not (settled and status == "working"):
+        if not (settled and (status == "working" or _is_work(task))):
             patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
             if status == "picked_up" and not task.get("picked_up_at"):
                 patch["picked_up_at"] = _now()
@@ -591,6 +655,14 @@ async def bridge_report(task_id: str, body: ReportBody):
         key = task.get("report_key")
         if not key or not secrets.compare_digest(str(body.key or ""), str(key)):
             raise HTTPException(401, "Bad report key")
+        if _is_work(task):
+            if task.get('status') in ('queued', 'cancelled'):
+                raise HTTPException(409, 'This conversation is not active.')
+            if task.get('status') in ('done', 'failed') and status != task['status']:
+                raise HTTPException(409, 'This conversation is already settled. Send an owner reply to continue it.')
+            if body.work_result is not None:
+                from chief_local_work import save_result
+                await save_result(task, body.work_result)
         patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
         if status in ("done", "failed"):
             patch["finished_at"] = _now()

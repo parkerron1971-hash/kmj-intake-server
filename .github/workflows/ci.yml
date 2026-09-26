@@ -162,3 +162,4 @@ jobs:
           node scripts/lane-saved-links-db-check.mjs
           node scripts/chief-builds-db-check.mjs
           node __tests__/marketing_campaigns_db.mjs
+          node __tests__/chief_local_work_db.mjs

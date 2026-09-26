@@ -8,6 +8,11 @@ customer conversions yet. The interface labels those boundaries explicitly.
 
 ## Release order
 
+The paired Chief subscription workflow also requires the migration and desktop
+release in [CHIEF_LOCAL_WORK.md](CHIEF_LOCAL_WORK.md). Campaign strategy can use
+Codex or Claude Code through that route; the original Chief API plan button
+remains explicitly metered.
+
 1. Merge the backend PR. Apply this migration after merge:
    `supabase/APPLY-2026-09-26-marketing-campaigns.sql`.
    It requires the already-applied September 15 platform-marketing migration.
