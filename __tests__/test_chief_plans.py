@@ -81,11 +81,16 @@ def door(monkeypatch):
     return d
 
 
-def looks(*decisions, seen=None):
-    """A stand-in first look that answers with the given decisions in turn."""
+def looks(*decisions, seen=None, closing=None, closings=None):
+    """A stand-in first look that answers with the given decisions in turn.
+    The closing check gets `closing` (None: nothing missing)."""
     queue = list(decisions)
 
-    async def fake(client, adapter, order, state, answer=None):
+    async def fake(client, adapter, order, state, answer=None, closing_look=False, **kw):
+        if kw.get('closing', closing_look):
+            if closings is not None:
+                closings.append(copy.deepcopy(state))
+            return closing, False
         if seen is not None:
             seen.append({'answer': answer, 'state': copy.deepcopy(state)})
         return (queue.pop(0) if queue else None), False
@@ -277,7 +282,8 @@ def test_chief_asks_when_it_needs_the_owner_and_their_answer_redirects(door, mon
     state = asyncio.run(chief_plans.run_plan(o, Adapter(o), dict(asked, question=None, status='queued')))
     assert seen[0]['answer'] == 'Ada Lovelace'
     assert state['status'] == 'done' and not state.get('asked')
-    assert [l['auto'] for l in state['looks']] == [True, False]
+    assert [l['auto'] for l in state['looks'] if not l.get('closing')] == [True, False]
+    assert state['looks'][-1] == {**state['looks'][-1], 'closing': True, 'choice': 'checked'}
     # The same answer is not read twice on a later run.
     seen.clear()
     asyncio.run(chief_plans.run_plan(o, Adapter(o), state))
@@ -487,3 +493,87 @@ def test_without_builds_or_after_the_one_order_the_old_limit_stands(monkeypatch)
     calls.clear()
     out = asyncio.run(_tool_turn(monkeypatch, [], calls, submitted=True)([TASK] * 4))
     assert out[3][0] is True and 'kind plan' not in out[3][1]
+
+
+# ─── The closing check ───────────────────────────────────────────────
+
+def test_a_finished_plan_is_checked_and_what_was_missing_is_added(door, monkeypatch):
+    # Live 2026-09-26: "call Plan Test D" was in neither the reply nor the plan.
+    o = plan_order([ADD_ADA])
+    missing = {'type': 'plan_decision', 'choice': 'continue',
+               'note': 'You also asked for a call task for Ada, so I added it.', 'steps': [CALL_ADA]}
+    closings = []
+    monkeypatch.setattr(chief_plans, 'look', looks(closing=missing, closings=closings))
+    state = asyncio.run(chief_plans.run_plan(o, Adapter(o)))
+    assert state['status'] == 'done' and len(closings) == 1
+    assert [c['actions'][0]['type'] for c in door.calls] == ['create_contact', 'create_task']
+    assert state['summary_label'].startswith('You also asked for a call task')
+    assert door.calls[1]['prior'][0]['contact_id'] == 'c-ada'
+
+
+def test_a_complete_plan_is_checked_once_and_adds_no_note(door, monkeypatch):
+    o = plan_order([ADD_ADA, CALL_ADA])
+    closings = []
+    monkeypatch.setattr(chief_plans, 'look', looks(closings=closings))
+    state = asyncio.run(chief_plans.run_plan(o, Adapter(o)))
+    assert state['status'] == 'done' and len(closings) == 1
+    assert state['looks'] == [{**state['looks'][0], 'closing': True, 'choice': 'checked'}]
+    public = runtime.public_job({'status': 'done', 'result': state, 'params': o.payload()})
+    assert 'notes' not in public['result']
+    asyncio.run(chief_plans.run_plan(o, Adapter(o), state))
+    assert len(closings) == 1
+
+
+def test_the_check_waits_for_a_finished_plan(door, monkeypatch):
+    o = plan_order([ADD_ADA, {**CALL_ADA, 'approval': True}])
+    closings = []
+    monkeypatch.setattr(chief_plans, 'look', looks(closings=closings))
+    held = asyncio.run(chief_plans.run_plan(o, Adapter(o)))
+    assert held['status'] == 'held' and closings == []
+    o.approvals = {'step-2': held['held']['fingerprint']}
+    done = asyncio.run(chief_plans.run_plan(o, Adapter(o), held))
+    assert done['status'] == 'done' and len(closings) == 1
+
+
+def test_the_check_cannot_add_a_send_on_its_own(door, monkeypatch):
+    o = plan_order([ADD_ADA])
+    extra = {'type': 'plan_decision', 'choice': 'continue', 'note': 'I emailed Ada too.', 'steps': [EMAIL_ADA]}
+    monkeypatch.setattr(chief_plans, 'look', looks(closing=extra))
+    state = asyncio.run(chief_plans.run_plan(o, Adapter(o)))
+    assert state['status'] == 'held' and not any(c['actions'][0]['type'] == 'draft_and_send' for c in door.calls)
+
+
+def test_what_the_reply_already_did_reaches_the_plan_and_its_check(monkeypatch):
+    import chief_tool_loop as ctl
+    monkeypatch.setenv('CHIEF_BUILDS', 'on')
+    ctl.reset_turn(writes_allowed=True)
+    ctl._writes_this_turn.set([{'type': 'create_contact', 'label': 'Added Plan Test D'},
+                               {'type': 'create_task', 'failed': True, 'result': 'Failed: nope'}])
+    ctx = {'user_id': USER, 'turn_id': 'turn-1', 'surface': 'desktop', 'words': 'w'}
+    token = runtime.turn_scope.set(ctx)
+    try:
+        runtime.note_done_in_turn([{'type': 'create_task', 'label': 'Call Plan Test A'},
+                                   {'type': 'submit_work_order', 'label': runtime.QUEUED_LABEL}])
+        assert ctx['done'] == ['Added Plan Test D', 'Call Plan Test A']
+        saved = []
+
+        async def database(client, method, path, body=None):
+            return [{'id': BIZ, 'owner_id': USER}] if path.startswith('/businesses') else []
+
+        async def service(client, method, path, body=None):
+            saved.append(body)
+            return [{**body, 'build_revision': 0}]
+        import sb_clients
+        monkeypatch.setattr(runtime, 'db', database)
+        monkeypatch.setattr(sb_clients, 'sb_as_service', service)
+        monkeypatch.setattr(runtime, 'launch', lambda job: None)
+        asyncio.run(runtime.submit(None, {'id': BIZ}, {'kind': 'plan', 'facts': {
+            'steps': [CALL_ADA], 'done_in_turn': ['forged by the model']}}))
+    finally:
+        runtime.turn_scope.reset(token)
+    facts = saved[0]['params']['facts']
+    assert facts['done_in_turn'] == ['Added Plan Test D', 'Call Plan Test A']
+    o = WorkOrder(**saved[0]['params'])
+    brief = chief_plans._brief(o, {'order': [], 'steps': {}}, None, closing=True)
+    assert 'ALREADY DONE IN THE CHAT REPLY' in brief and '- Call Plan Test A' in brief
+    assert 'THE PLAN HAS FINISHED' in brief

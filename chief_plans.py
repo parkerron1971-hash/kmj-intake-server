@@ -320,14 +320,14 @@ def stopped(state: Dict[str, Any]) -> bool:
 
 
 def _auto_looks(state) -> int:
-    return sum(1 for l in state.get("looks") or [] if l.get("auto"))
+    return sum(1 for l in state.get("looks") or [] if l.get("auto") and not l.get("closing"))
 
 
 def _answer_looks(state) -> int:
-    return sum(1 for l in state.get("looks") or [] if not l.get("auto"))
+    return sum(1 for l in state.get("looks") or [] if not l.get("auto") and not l.get("closing"))
 
 
-_LOOK_SYSTEM = """You are Chief, the business assistant for {name}. You were running a plan for the owner in the background, and part of it stopped. The owner is not watching right now. Decide what happens next.
+_LOOK_SYSTEM = """You are Chief, the business assistant for {name}. You were running a plan for the owner in the background: part of it stopped, or it finished and you are checking it. The owner is not watching right now. Decide what happens next.
 
 You can read the business's records with your tools. You cannot change anything from here: whatever you decide runs afterwards, through the same checks as always.
 
@@ -349,12 +349,27 @@ or
 [ACTION:{{"type":"plan_decision","choice":"ask","question":"There are two contacts named Ada. Which one did you mean?","suggestion":"Ada Lovelace, who you saw last month.","steps":[{{"title":"Prep the room","action":{{"type":"create_task","title":"Prep the workshop room"}}}}]}}]"""
 
 
-def _brief(order, state: Dict[str, Any], answer: Optional[str]) -> str:
+# The closing check (2026-09-26, live: asked for nine changes, Chief made
+# three in the reply, planned two, and "call Plan Test D" was in neither).
+# A stop only catches a step that ran; this catches one nobody wrote.
+_CLOSING = (
+    "THE PLAN HAS FINISHED. Check it against the owner's words: everything they asked for "
+    "should now be done, either in the chat reply or in this plan. If something is missing, "
+    "choose continue and give only the missing steps, with a note naming what you added. If "
+    "everything is covered, choose continue with an empty steps list and no note. Ask only "
+    "if a missing piece needs the owner.")
+
+
+def _brief(order, state: Dict[str, Any], answer: Optional[str], closing: bool = False) -> str:
     raw = {s["id"]: s for s in current_steps(order, state)}
     lines = [f'THE OWNER\'S WORDS: "{order.practitioner_words}"',
              f'THE PLAN: {order.facts.get("title") or "Plan"}'
-             + (f' — {order.facts["goal"]}' if order.facts.get("goal") else ""),
-             "STEPS:"]
+             + (f' — {order.facts["goal"]}' if order.facts.get("goal") else "")]
+    done_here = order.facts.get("done_in_turn") or []
+    if done_here:
+        lines.append("ALREADY DONE IN THE CHAT REPLY, before this plan:")
+        lines += [f"- {d}" for d in done_here]
+    lines.append("STEPS:")
     for n, name in enumerate(state.get("order") or [], 1):
         r = (state.get("steps") or {}).get(name) or {}
         s = raw.get(name) or {}
@@ -374,6 +389,8 @@ def _brief(order, state: Dict[str, Any], answer: Optional[str]) -> str:
     if answer is not None:
         asked = (state.get("asked") or {}).get("question") or "your question"
         lines.append(f'YOU ASKED THE OWNER: "{asked}". THEIR ANSWER: "{answer}"')
+    if closing:
+        lines.append(_CLOSING)
     return "\n".join(lines)[:14000]
 
 
@@ -384,7 +401,8 @@ def _step_json(s: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-async def look(client, adapter, order, state: Dict[str, Any], answer: Optional[str] = None):
+async def look(client, adapter, order, state: Dict[str, Any], answer: Optional[str] = None,
+               closing: bool = False):
     """One model turn with read-only tools. Returns (decision, tainted) or
     (None, False) when there is no usable decision."""
     import asyncio
@@ -408,7 +426,7 @@ async def look(client, adapter, order, state: Dict[str, Any], answer: Optional[s
         with billing_context.bill_to(adapter.bid):
             raw = await cos._call_claude(
                 client, _LOOK_SYSTEM.format(name=biz.get("name") or "this business"),
-                [{"role": "user", "content": _brief(order, state, answer)}],
+                [{"role": "user", "content": _brief(order, state, answer, closing)}],
                 max_tokens=LOOK_MAX_TOKENS, enable_web_search=False, business_id=adapter.bid,
                 model=model, read_tools=ctl.read_tool_definitions(), tool_biz=biz,
                 effort=chief_models.effort_for("chat"))
@@ -420,7 +438,7 @@ async def look(client, adapter, order, state: Dict[str, Any], answer: Optional[s
         # The lookups ran out before a decision was written (the tool loop
         # stops after its last round). Once more, no tools: decide now.
         ctl.reset_turn(writes_allowed=False, surface="plan", prompted=False)
-        messages = [{"role": "user", "content": _brief(order, state, answer)}]
+        messages = [{"role": "user", "content": _brief(order, state, answer, closing)}]
         if (raw or "").strip():
             messages += [{"role": "assistant", "content": raw.strip()}]
             messages += [{"role": "user", "content": "Decide now, without more lookups: write the one plan_decision tag."}]
@@ -441,16 +459,24 @@ def _decision(cos, raw):
 
 
 def apply(order, state: Dict[str, Any], decision: Optional[Dict[str, Any]], *, auto: bool,
-          tainted: bool = False, answer: Optional[str] = None) -> bool:
+          tainted: bool = False, answer: Optional[str] = None, closing: bool = False) -> bool:
     """Write Chief's decision into the plan state. Returns True when the
     plan should run again. Every look is recorded, including one that
     changed nothing."""
     now = datetime.now(timezone.utc).isoformat()
     entry: Dict[str, Any] = {"at": now, "auto": auto}
+    if closing:
+        entry["closing"] = True
     if answer is not None:
         entry["answer"] = str(answer)[:600]
     looks = state.setdefault("looks", [])
     choice = (decision or {}).get("choice")
+    if closing and (choice is None or (choice == "continue" and not decision.get("steps"))):
+        # Everything asked for is covered (or the check had nothing to say):
+        # recorded, and nothing is added to the card.
+        entry.update(choice="checked")
+        looks.append(entry)
+        return False
     if choice == "ask":
         q = str(decision.get("question") or "").strip()[:400]
         tip = str(decision.get("suggestion") or "").strip()[:400]
@@ -481,7 +507,9 @@ def apply(order, state: Dict[str, Any], decision: Optional[Dict[str, Any]], *, a
             logger.info("[plans] a look's plan was refused: %s", exc)
             revised = None
         if revised is not None:
-            note = str(decision.get("note") or "").strip()[:300] or "I changed the plan to get around the stop."
+            note = str(decision.get("note") or "").strip()[:300] or (
+                "I added what was missing from your request." if closing
+                else "I changed the plan to get around the stop.")
             entry.update(choice="continue", note=note,
                          replaced=[r.get("label") for r in _unfinished(state)][:12])
             looks.append(entry)
@@ -559,18 +587,28 @@ async def run_plan(order, adapter, previous=None) -> Dict[str, Any]:
             # Chief asked, and ran what didn't depend on the answer first.
             state["question"] = {"field": ANSWER_FIELD, "text": state.pop("ask_after_run")}
             return _with_note(finish(state))
-        if not (stopped(state) and _auto_looks(state) < MAX_AUTO_LOOKS):
-            return _with_note(state)
-        decision, tainted = await _safe_look(adapter, order, state, None)
-        if not apply(order, state, decision, auto=True, tainted=tainted) or not current_steps(order, state):
-            # The stop stands, Chief asked, or nothing more should run.
+        if stopped(state) and _auto_looks(state) < MAX_AUTO_LOOKS:
+            decision, tainted = await _safe_look(adapter, order, state, None)
+            if not apply(order, state, decision, auto=True, tainted=tainted) or not current_steps(order, state):
+                # The stop stands, Chief asked, or nothing more should run.
+                return _with_note(finish(state))
+            await adapter.save(finish(state))
+            continue
+        if state.get("status") == "done" and not state.get("closing_checked"):
+            # Once per plan: everything asked for, done here or in the reply?
+            state["closing_checked"] = True
+            decision, tainted = await _safe_look(adapter, order, state, None, closing=True)
+            if (apply(order, state, decision, auto=True, tainted=tainted, closing=True)
+                    and current_steps(order, state) and not state.get("question")):
+                await adapter.save(finish(state))
+                continue
             return _with_note(finish(state))
-        await adapter.save(finish(state))
+        return _with_note(state)
 
 
-async def _safe_look(adapter, order, state, answer):
+async def _safe_look(adapter, order, state, answer, closing=False):
     try:
-        return await look(adapter.client, adapter, order, state, answer)
+        return await look(adapter.client, adapter, order, state, answer, closing=closing)
     except Exception as exc:
         # A look that could not happen changes nothing; the stop stands.
         logger.warning("[plans] first look failed: %s", type(exc).__name__)

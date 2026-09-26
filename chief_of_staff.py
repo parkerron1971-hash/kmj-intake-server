@@ -12138,6 +12138,10 @@ async def _execute_actions(client, biz, actions: List[Dict],
     for action in actions:
         _finish_pending()
         atype = action.get("type")
+        if atype == "submit_work_order" and turn_scope.get() and not worker_scope.get():
+            # What this reply already did, so a plan's closing check can tell
+            # a piece done here from a piece nobody did (2026-09-26, live).
+            chief_build_runtime.note_done_in_turn(results)
         if (chief_build_runtime.enabled() and turn_scope.get() and turn_scope.get().get("submitted")
                 and not worker_scope.get() and atype in ("ensure_module", "create_module_entry", "set_site_capability")):
             results.append(_fail(atype, "Your build is already handling those steps. Check its progress card."))

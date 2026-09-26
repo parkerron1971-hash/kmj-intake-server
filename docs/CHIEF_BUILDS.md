@@ -34,6 +34,10 @@ The guard rails live in `apply()`/`_revise()`, not in the prompt:
 
 A look costs one model turn, only when something stopped. It is skipped over the daily spend cap.
 
+**The closing check (2026-09-26, after the live test).** Asked for nine changes, Chief made three in its reply, planned two, and "call Plan Test D" was in neither. A stop only catches a step that ran, so a finished plan now gets one closing look, once per plan. It compares the owner's words with what the reply already did and with the plan's receipts. The reply's changes are recorded by the server in `facts.done_in_turn` (`note_done_in_turn`, called from `_execute_actions` just before `submit_work_order`); the model cannot write it. Anything missing goes through the same `continue` path and guards, and a send, charge or delete it adds waits for the owner. Nothing missing adds no note. The check runs only on a plan that finished `done`, never on one that is held, waiting or asking.
+
+**Overflow.** A reply can make three direct changes (`MAX_WRITE_CALLS`). Once those are spent (budget, not a hold), `submit_work_order` stays open for the turn's one order, and the refusal tells the model to put the rest into one plan instead of promising "the next pass".
+
 **Not in this release:** more than one work order per message, and builds running side by side in one business. Those are the next step. A plan's image is found by its stable id on every run, so a redirect cannot pay for a second image; an image that fails still needs the owner.
 
 ## Important contract decisions
