@@ -228,6 +228,35 @@ FIELD = r'''el => ({tag:el.tagName.toLowerCase(),type:(el.type||'').toLowerCase(
  label:el.getAttribute('aria-label')||'',placeholder:el.getAttribute('placeholder')||'',
  editable:el.isContentEditable,
  login:!!(el.form && el.form.querySelector('input[type="password"]'))})'''
+# The container a hand-off covers: the field's form, else the nearest dialog,
+# else the document. Shape decides login-card versus the general form.
+FORM_ROOT = r'''el => el.form || el.closest('form,[role="form"],dialog,[role="dialog"]') || el.ownerDocument.body'''
+FORM_SHAPE = r'''root => { const seen = [...root.querySelectorAll('input,textarea,select')].filter(el =>
+  !['hidden','submit','button','reset','image'].includes((el.type||'').toLowerCase()) && !el.disabled &&
+  el.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}));
+ const t = el => (el.type||'').toLowerCase();
+ return {passwords: seen.filter(el => t(el)==='password').length,
+  text: seen.filter(el => el.tagName!=='SELECT' && !['password','checkbox','radio'].includes(t(el))).length,
+  selects: seen.filter(el => el.tagName==='SELECT').length}; }'''
+# What the owner sees for one field: its visible label, never its value.
+DESCRIBE = r'''el => { const text = n => n ? (n.innerText || n.textContent || '').replace(/\s+/g,' ').trim() : '';
+ // A label's own words: a wrapped control (and a select's options) is not its name.
+ const own = l => { const c = l.cloneNode(true); c.querySelectorAll('input,select,textarea,button,option').forEach(n => n.remove());
+   return (c.textContent || '').replace(/\s+/g,' ').trim(); };
+ let label = el.getAttribute('aria-label') || '';
+ if (!label && el.labels && el.labels.length) label = own(el.labels[0]);
+ if (!label && el.getAttribute('aria-labelledby')) label = el.getAttribute('aria-labelledby').split(/\s+/)
+   .map(id => text(el.ownerDocument.getElementById(id))).join(' ');
+ if (!label) label = el.getAttribute('placeholder') || el.getAttribute('title') || '';
+ return {tag: el.tagName.toLowerCase(), type: (el.type||'').toLowerCase(), label,
+  name: el.name || '', required: !!(el.required || el.getAttribute('aria-required') === 'true'),
+  disabled: !!(el.disabled || el.readOnly), autocomplete: (el.autocomplete||'').toLowerCase(),
+  id: el.id || '', placeholder: el.getAttribute('placeholder') || '',
+  options: el.tagName === 'SELECT' ? [...el.options].map(o => (o.text||'').replace(/\s+/g,' ').trim()) : []}; }'''
+FORM_TEXT_TYPES = {'text', 'email', 'tel', 'password', 'number', 'date', 'url', 'search'}
+FORM_MAX_FIELDS = 25
+FORM_MAX_OPTIONS = 300
+CONSENT = re.compile(r'\b(agree|terms|consent|privacy|polic(?:y|ies)|conditions)\b', re.I)
 
 
 class BrowserController:
@@ -246,6 +275,7 @@ class BrowserController:
         self.active = None
         self.hold = None
         self._hold_element = None
+        self._form_fields = {}
         self._private_pixels = False
         self._closed = False
 
@@ -257,6 +287,7 @@ class BrowserController:
     def close(self):
         self._closed = True
         self.hold = self._hold_element = None
+        self._form_fields = {}
         self.refs.clear()
         self.scrubber = SecretScrubber()
         self.backend.close()
@@ -387,6 +418,15 @@ class BrowserController:
             haystack = ' '.join(str(v) for v in attrs.values()).lower()
             kind = 'otp' if re.search(r'one-time|otp|passcode', haystack) else (
                 'card' if re.search(r'cc-|card|cvc|cvv|expir', haystack) else 'login')
+            if kind == 'login':
+                # Only the classic one-username-one-password form uses the login
+                # card (and the vault). A sign-up, a two-step login or any other
+                # shape is handed to the owner as the form it actually is.
+                root = el.evaluate_handle(FORM_ROOT).as_element()
+                shape = root.evaluate(FORM_SHAPE) if root else {}
+                if not (shape.get('passwords') == 1 and shape.get('text') == 1 and not shape.get('selects')):
+                    self._hold_form(tid, el, host, '')
+                    return False
             self.hold = {'id': str(uuid4()), 'kind': 'secret', 'field_kind': kind,
                          'host': host, 'tab_id': tid, 'expires': self.clock() + 600}
             self._hold_element = el
@@ -443,6 +483,158 @@ class BrowserController:
         self._check_hosts()
         self.hold = self._hold_element = None
         return 'filled'
+
+    def _hold_form(self, tid, el, host, reason):
+        """Pause and hand the owner the form around `el`: labels, types and
+        choices only. Values never leave the owner's Secure Entry request."""
+        root = el.evaluate_handle(FORM_ROOT).as_element()
+        if root is None:
+            raise BrowserStopped('The form could not be read safely.')
+        fields, handles, groups = [], {}, {}
+        for node in root.query_selector_all('input,textarea,select'):
+            d = node.evaluate(DESCRIBE)
+            kind = d['type'] if d['tag'] == 'input' else d['tag']
+            if kind in ('hidden', 'submit', 'button', 'reset', 'image') or d['disabled'] or not node.is_visible():
+                continue
+            if kind == 'file':
+                raise BrowserStopped('File uploads are disabled.')
+            if re.search(r'cc-|card|cvc|cvv|expir', ' '.join((d['autocomplete'], d['name'], d['id'], d['label'])), re.I):
+                raise BrowserStopped('This form asks for payment details. Payment fields use their own Secure Entry.')
+            label = self.scrubber.text(d['label'] or d['placeholder'] or d['name'] or 'Field')[:120]
+            if kind == 'radio':
+                key = d['name'] or str(uuid4())
+                if key not in groups:
+                    fid = 'f%d' % len(fields)
+                    group_label = node.evaluate(r'''el => { const f = el.closest('fieldset');
+                        const l = f && f.querySelector('legend'); return l ? l.innerText.replace(/\s+/g,' ').trim() : ''; }''')
+                    fields.append({'id': fid, 'label': self.scrubber.text(group_label or d['name'] or 'Choose one')[:120],
+                                   'type': 'choice', 'required': d['required'], 'options': []})
+                    handles[fid] = ('choice', {}, {}, None)
+                    groups[key] = fid
+                fid = groups[key]
+                spec = next(f for f in fields if f['id'] == fid)
+                oid = 'o%d' % len(spec['options'])
+                spec['options'].append({'id': oid, 'text': label})
+                spec['required'] = spec['required'] or d['required']
+                handles[fid][1][oid] = node
+                handles[fid][2][oid] = self._signature(node)
+                continue
+            fid = 'f%d' % len(fields)
+            if kind == 'select':
+                options = [self.scrubber.text(o)[:80] for o in d['options']][:FORM_MAX_OPTIONS]
+                spec = {'id': fid, 'label': label, 'type': 'select', 'required': d['required'],
+                        'options': [{'id': 'o%d' % i, 'text': t or '—'} for i, t in enumerate(options)]}
+                handles[fid] = ('select', node, self._signature(node), {'o%d' % i: i for i in range(len(options))})
+            else:
+                owner_type = ('checkbox' if kind == 'checkbox' else 'textarea' if kind == 'textarea'
+                              else kind if kind in FORM_TEXT_TYPES - {'search'} else 'text')
+                spec = {'id': fid, 'label': label, 'type': owner_type, 'required': d['required']}
+                handles[fid] = ('input', node, self._signature(node), None)
+            fields.append(spec)
+            if len(fields) > FORM_MAX_FIELDS:
+                raise BrowserStopped('This form is too long to hand over safely.')
+        if not fields:
+            raise BrowserStopped('The form has no fields to fill.')
+        self.hold = {'id': str(uuid4()), 'kind': 'secret', 'field_kind': 'form', 'host': host,
+                     'tab_id': tid, 'fields': fields, 'reason': reason, 'expires': self.clock() + 600}
+        self._hold_element = el
+        self._form_fields = handles
+        self.on_secret({k: v for k, v in self.hold.items() if k != 'expires'})
+
+    def hold_form(self, ref: str, reason: str = '') -> str:
+        """The worker's deliberate hand-off: a form that needs the owner's own details."""
+        if self._closed or self.hold:
+            raise BrowserStopped('The run is paused or closed.')
+        self._check_hosts()
+        el = self._element(self.active, {'type': 'ref', 'ref': ref})
+        host = urlsplit(el.owner_frame().url).hostname
+        if not host or not host_allowed('https://' + host, self.hosts, self.deny_hosts):
+            raise BrowserStopped('Secure Entry requires an approved HTTPS frame.')
+        self._hold_form(self.active, el, host, self.scrubber.text(str(reason or ''))[:200])
+        return 'held'
+
+    def fill_form(self, hold_id: str, values: dict):
+        """Internal thread-only primitive, like fill_secret: the caller has
+        authenticated the owner; nothing typed is returned or emitted."""
+        hold, el = self.hold, self._hold_element
+        if (not hold or hold.get('field_kind') != 'form' or hold['id'] != hold_id
+                or self.clock() >= hold['expires'] or el is None or not el.evaluate('el => el.isConnected')):
+            raise BrowserStopped('Secure Entry expired. Start a new hold.')
+        self._check_hosts()
+        self.check_action('secure_fill', {'hold_id': hold_id})
+        frame = el.owner_frame()
+        if urlsplit(frame.url).hostname != hold['host']:
+            raise BrowserStopped('The Secure Entry host changed.')
+        specs = {f['id']: f for f in hold['fields']}
+        if not isinstance(values, dict) or not values or set(values) - set(specs):
+            raise BrowserStopped('Secure Entry fields do not match this hold.')
+        plan = []
+        for fid, spec in specs.items():
+            value = values.get(fid)
+            if spec['type'] == 'checkbox':
+                if value is not None and type(value) is not bool:
+                    raise BrowserStopped('Secure Entry fields do not match this hold.')
+                if spec['required'] and value is not True:
+                    raise BrowserStopped('Secure Entry is missing a required answer.')
+            elif spec['type'] in ('select', 'choice'):
+                if value is not None and value not in {o['id'] for o in spec['options']}:
+                    raise BrowserStopped('Secure Entry fields do not match this hold.')
+                if spec['required'] and value is None:
+                    raise BrowserStopped('Secure Entry is missing a required answer.')
+            else:
+                if value is not None and (not isinstance(value, str) or len(value) > 4096):
+                    raise BrowserStopped('Secure Entry fields do not match this hold.')
+                if spec['required'] and not (isinstance(value, str) and value.strip()):
+                    raise BrowserStopped('Secure Entry is missing a required answer.')
+                if value == '':
+                    value = None
+            if value is not None:
+                plan.append((fid, spec['type'], value))
+        for fid, _, _ in plan:
+            kind, target, signature, _ = self._form_fields[fid]
+            nodes = target.items() if kind == 'choice' else [(None, target)]
+            for oid, node in nodes:
+                expected = signature[oid] if kind == 'choice' else signature
+                if not node.evaluate('el => el.isConnected') or self._signature(node) != expected:
+                    raise BrowserStopped('The form changed. Hand it over again.')
+        # Everything typed is scrubbed from every later text surface; the
+        # screenshot curtain stays for the rest of the run, as for a login.
+        self.scrubber.remember({fid: v for fid, kind, v in plan if isinstance(v, str) and kind not in ('select', 'choice')})
+        self._private_pixels = True
+        try:
+            for fid, kind, value in plan:
+                self._check_hosts()
+                if urlsplit(frame.url).hostname != hold['host']:
+                    raise BrowserStopped('The Secure Entry host changed.')
+                entry = self._form_fields[fid]
+                if kind == 'checkbox':
+                    entry[1].set_checked(value)
+                elif kind == 'select':
+                    entry[1].select_option(index=entry[3][value])
+                elif kind == 'choice':
+                    entry[1][value].check()
+                else:
+                    entry[1].fill(value)
+        except Exception:
+            raise BrowserStopped('Secure Entry could not fill the current form.') from None
+        self._check_hosts()
+        self.hold = self._hold_element = None
+        self._form_fields = {}
+        return 'filled'
+
+    def consent_control(self, element) -> bool:
+        """Is this a terms/consent checkbox (or its label)? Those are the owner's."""
+        if element is None:
+            return False
+        try:
+            label = element.evaluate(r'''el => { const lab = el.closest('label');
+              const box = (el.tagName === 'INPUT' ? el : (lab && lab.control) || null);
+              if (!box || !['checkbox','radio'].includes((box.type||'').toLowerCase())) return '';
+              return (box.getAttribute('aria-label') || (box.labels && box.labels[0] && box.labels[0].innerText)
+                      || (lab && lab.innerText) || ''); }''')
+        except Exception:
+            return False
+        return bool(label and CONSENT.search(label))
 
     def _read(self, tid, page, args, query=None):
         # New references never reuse IDs; discard stale refs on each read.

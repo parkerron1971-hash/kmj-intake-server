@@ -217,6 +217,7 @@ from chief_offering_actions import (
 # The browser hand (2026-09-04) — proposes; the approval starts the job.
 from chief_link_pilot import handle_link_wallet_pilot
 from chief_lane_wallet import handle_lane_wallet
+from chief_site_view import handle_view_website
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -372,6 +373,16 @@ def _step_phrase(atype: str) -> str:
     t = str(atype or "").strip()
     p = _ACTION_PHRASES.get(t) or (t.replace("_", " ") if t else "working")
     return p[:1].upper() + p[1:]
+
+
+def _emit_stream_step(body: Dict[str, Any]) -> None:
+    """A step with its own shape (a search, a page view): nobody listening, no cost."""
+    try:
+        sink = _STREAM_SINK.get()
+    except LookupError:
+        sink = None
+    if sink:
+        sink(STEP_PREFIX + json.dumps(body))
 
 
 def _turn_step_start(atype: str, n0: int = 0) -> Optional[Dict[str, Any]]:
@@ -1381,6 +1392,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   await asyncio.sleep(1.5 * attempt)
               full_parts: List[str] = []
               blocks: Dict[int, Dict[str, Any]] = {}
+              import chief_search_steps
+              searches = chief_search_steps.SearchSteps(_emit_stream_step)
               stop_reason = ""
               in_tok = out_tok = 0
               cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
@@ -1426,6 +1439,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           if et == "content_block_start":
                               idx = int(evt.get("index") or 0)
                               cb = evt.get("content_block") or {}
+                              searches.block_start(idx, cb)
                               if cb.get("type") == "tool_use":
                                   blocks[idx] = {"type": "tool_use", "id": cb.get("id"),
                                                  "name": cb.get("name"), "_json": []}
@@ -1451,9 +1465,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   b = blocks.get(idx)
                                   if b is not None and b.get("type") == "tool_use":
                                       b["_json"].append(d.get("partial_json") or "")
+                                  else:
+                                      searches.delta(idx, d)
                               elif d.get("type") == "citations_delta":
                                   import chief_truth
                                   chief_truth.record_web_citations([{'citations': [d.get('citation')]}])
+                          elif et == "content_block_stop":
+                              searches.block_stop(int(evt.get("index") or 0))
                           elif et == "message_start":
                               u = ((evt.get("message") or {}).get("usage")) or {}
                               in_tok = int(u.get("input_tokens") or 0)
@@ -1467,6 +1485,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               u = evt.get("usage") or {}
                               out_tok = int(u.get("output_tokens") or out_tok)
               except httpx.HTTPError as e:
+                  searches.close()
                   logger.warning(f"Claude stream failed (attempt {attempt + 1}/3): {e}")
                   await log_api_usage(endpoint="/chief/backend", model=model,
                       input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
@@ -1480,6 +1499,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   fb_reason = f"stream drop: {e}"
                   continue                      # nothing arrived — retry
               else:
+                  searches.close()
                   text = "".join(full_parts).strip()
                   await log_api_usage(
                       endpoint="/chief/backend", model=model,
@@ -11043,6 +11063,7 @@ ACTION_HANDLERS = {
     "use_browser_hand":      handle_use_browser_hand,
     "link_wallet_pilot":     handle_link_wallet_pilot,
     "lane_wallet":           handle_lane_wallet,
+    "view_website":          handle_view_website,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,
