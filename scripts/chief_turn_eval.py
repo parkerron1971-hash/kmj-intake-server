@@ -37,6 +37,24 @@
 # mechanisms live, a set that covered only one would cover half the
 # surface.
 #
+# DAY ONE (2026-09-26). Every row above runs against one coach with
+# three clients. The `nb_*` rows run against four businesses that signed
+# up today (a barbershop, a therapist, a ministry, a business coach)
+# holding nothing but what signup itself writes: the business row, the
+# seeded business profile, the coached-session track, the onboarding
+# welcome note, the first-run arc with no introduction delivered. For
+# these the REAL _gather_context reads fixture tables (_day_one_tables),
+# so Chief is told what production would tell a new practitioner, and a
+# fix to that read shows up here without touching the harness.
+#
+# Some of what a day-one turn owes is prose, not verbs: one question,
+# not a list; "none yet", not "couldn't verify". Those rows carry
+# `reply_checks`: named, deterministic, regex-sized heuristics (the
+# factual eval's discipline), never a judge. A check that an open PR or
+# unbuilt work is meant to fix is listed in the row's `pending` with the
+# reason. It is reported and does not fail the run; when it passes live,
+# the report says so and the marker comes out.
+#
 #   python scripts/chief_turn_eval.py                  # replay, print
 #   python scripts/chief_turn_eval.py --live --out a.json
 #   python scripts/chief_turn_eval.py --compare a.json b.json
@@ -50,6 +68,7 @@ import os
 import sys
 import time
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
 from typing import Any, Dict, List, Optional
 
@@ -250,13 +269,332 @@ CASES: List[Dict[str, Any]] = [
 ]
 
 
+# ─── Day one: the first conversation of four new businesses ──────────
+# `business` names a NEW_BUSINESSES fixture. `route: full` asks the
+# two-track router whether the message reaches the turn that holds the
+# product prompt and SETUP STATUS at all (chief_chat, which this eval
+# drives, is only that turn). `max_reads` is a lookup budget: a read
+# within it is not a miss of restraint. `allow` names verbs a restraint
+# row may take without missing. `expect_args` / `expect_week` check the
+# facts the verb carried, not just its name.
+
+GREETING = "[SYSTEM:opening_greeting:morning]"
+
+PR_1053 = ("PR #1053 (open): the onboarding welcome note still counts as a draft "
+           "waiting for review, and the greeting rule says to mention pending drafts")
+PR_1054 = ("PR #1054 (open): an empty list read in full is not marked complete yet, "
+           "so 'none yet' reads as unverified and invites lookups")
+PR_1056 = ("PR #1056 (open): the router finds 'What can you do for me?' ambiguous, so "
+           "Haiku can answer it alone, without the product prompt or SETUP STATUS")
+OFFER_READS_AS_DONE = (
+    "product bug, no fix yet: chief_of_staff._looks_like_completed_action reads an "
+    "offer (\"...and I'll add them\", \"I'll open those on your booking page\") as "
+    "work already done. A turn with no action then goes to the missing-action retry, "
+    "and without a reviewer verdict the answer check withholds it as 'couldn't verify'")
+VERTICAL_SETUP = ("vertical-aware setup (being built, no PR yet): the offerings step "
+                  "asks every vertical what it charges, a ministry included")
+
+_DAY_ONE_GREETING = {
+    "message": GREETING, "expect": [], "route": "full",
+    "must_not": ["navigate", "create_contact", "approve_draft", "run_agent"],
+    "reply_checks": ["one_question", "no_list", "no_draft_pointer", "no_unverified"],
+    "pending": {"reply:no_draft_pointer": PR_1053},
+    "encoding": "tag",
+}
+_WHAT_CAN_YOU_DO = {
+    "message": "What can you do for me?", "expect": [], "route": "full",
+    "must_not": ["run_agent", "propose_mission", "create_task"],
+    "reply_checks": ["about_the_product", "no_unverified"],
+    "pending": {"routes_to_full_turn": PR_1056},
+    "encoding": "tag",
+}
+_ANY_INVOICES = {
+    "message": "Do I have any invoices?", "expect": [], "route": "full", "max_reads": 1,
+    "must_not": ["create_invoice", "send_invoice", "generate_payment_link"],
+    "reply_checks": ["says_none_yet", "no_unverified"],
+    "pending": {"reply:says_none_yet": PR_1054, "reply:no_unverified": PR_1054,
+                "reads<=1": PR_1054},
+    "encoding": "tag",
+    "reply": "You don't have any invoices yet. When you're ready to bill someone, tell me "
+             "who and for what and I'll put the first one together.",
+}
+_HOURS = {
+    "message": "I work Tuesday to Saturday, 9 to 6", "expect": ["set_availability_day"],
+    "route": "full",
+    "must_not": ["add_block_range", "set_availability_override", "remember",
+                 "set_business_policy"],
+    "expect_week": {d: "09:00-18:00" for d in ("tue", "wed", "thu", "fri", "sat")},
+    "encoding": "tag",
+    "reply": "Done. Your booking page is open Tuesday to Saturday, nine to six. "
+             + "".join(_tag("set_availability_day", day=d,
+                            hours=[{"start": "09:00", "end": "18:00"}])
+                       for d in ("tue", "wed", "thu", "fri", "sat")),
+}
+_FIRST_CLIENT = {
+    "message": "My first client is Jane Doe, jane@example.com", "expect": ["create_contact"],
+    "route": "full",
+    "must_not": ["draft_email", "draft_and_send", "send_sms", "create_invoice"],
+    "expect_args": {"create_contact": {"name": "Jane Doe", "email": "jane@example.com"}},
+    "encoding": "tool",
+    "tool_call": {"name": "create_contact",
+                  "input": {"name": "Jane Doe", "email": "jane@example.com",
+                            "status": "active"}},
+    "reply": "Jane Doe is in, your first client.",
+}
+
+
+def _row(base: Dict[str, Any], **fields: Any) -> Dict[str, Any]:
+    return {**base, **fields}
+
+
+DAY_ONE_CASES: List[Dict[str, Any]] = [
+    # ── a barbershop ─────────────────────────────────────────────────
+    _row(_DAY_ONE_GREETING, id="nb_barber_greeting", business="barber",
+         reply="Good morning, Dre. Fade Street Barbers is in as a barbershop, and by the "
+               "end of this first hour you'll have a booking link your regulars can use "
+               "tonight. Who's one regular you'd text today? A name and a phone or email "
+               "is enough to start. The twenty-minute sit-down where I learn how you run "
+               "the shop can happen now or any time before day three."),
+    {"id": "nb_barber_where_to_start", "business": "barber", "route": "full",
+     "message": "Where should I start?", "expect": [],
+     "must_not": ["create_contact", "send_sms"],
+     # The good answer names the first unblocked setup item and asks for
+     # it exactly the way SETUP STATUS's 'how' line says to.
+     "reply_checks": ["one_question", "no_list", "no_unverified"],
+     "pending": {"reply:one_question": OFFER_READS_AS_DONE,
+                 "reply:no_unverified": OFFER_READS_AS_DONE},
+     "encoding": "tag",
+     "reply": "Start with your people: everything else reads from that list. Who's one "
+              "regular you'd text today? Give me a name and a phone or email and I'll "
+              "add them."},
+    _row(_HOURS, id="nb_barber_hours", business="barber"),
+    {"id": "nb_barber_offering", "business": "barber", "route": "full",
+     "message": "A haircut is $40 and takes 45 minutes",
+     "expect": ["create_offering"],
+     "must_not": ["create_invoice", "create_product", "generate_payment_link"],
+     "expect_args": {"create_offering": {"current_price": 40, "duration_min": 45}},
+     "encoding": "tool",
+     "tool_call": {"name": "create_offering",
+                   "input": {"name": "Haircut", "category": "service",
+                             "current_price": 40, "duration_min": 45}},
+     "reply": "Haircut is on your menu at $40 for 45 minutes."},
+    {"id": "nb_barber_appointments", "business": "barber", "route": "full",
+     "message": "Any appointments this week?", "expect": [], "max_reads": 1,
+     "must_not": ["create_session", "create_booking", "add_block_range"],
+     # The calendar half of "nothing yet" shipped in #1034, so this row
+     # is the control for the invoice rows: it should pass today.
+     "reply_checks": ["says_none_yet", "no_unverified"],
+     "encoding": "tag",
+     "reply": "Nothing is booked this week. Once your hours are in, people can book "
+              "straight onto your calendar."},
+
+    # ── a therapist ──────────────────────────────────────────────────
+    _row(_DAY_ONE_GREETING, id="nb_therapist_greeting", business="therapist",
+         reply="Good morning, Maya. Harbor Counseling is set up as a counseling practice, "
+               "and by the end of this first hour you'll have a booking link a new client "
+               "can use. Who's one client you see now that I should add? A name and an "
+               "email or phone is enough, and sessions, notes and invoices all hang off "
+               "that list. The twenty-minute sit-down where I learn how you run your "
+               "practice can happen now or by day three."),
+    _row(_WHAT_CAN_YOU_DO, id="nb_therapist_what_can_you_do", business="therapist",
+         reply="I'm Chief, your chief of staff for Harbor Counseling. I keep your client "
+               "list, put sessions on your calendar, build intake forms, send invoices and "
+               "reminders, and draft emails for you to approve. The first step is your "
+               "client list: who's one client I should add?"),
+    {"id": "nb_therapist_intake", "business": "therapist", "route": "full",
+     "message": "I'd like new clients to fill out an intake form before their first "
+                "session. Can you set that up?",
+     "expect": ["create_client_form"],
+     "must_not": ["propose_module_from_intake", "ensure_module", "draft_and_send",
+                  "send_sms"],
+     "expect_args": {"create_client_form": {"form_type": "intake"}},
+     "encoding": "tag",
+     "reply": "Here's your intake form. " + _tag(
+         "create_client_form", name="New Client Intake", form_type="intake",
+         fields=[{"label": "Your Name", "type": "text", "required": True},
+                 {"label": "Email", "type": "email", "required": True},
+                 {"label": "Phone", "type": "phone"},
+                 {"label": "What brings you to counseling?", "type": "textarea",
+                  "required": True},
+                 {"label": "Have you seen a therapist before?", "type": "select",
+                  "options": ["Yes", "No"]}],
+         confirmation_message="Thank you. I'll be in touch before our first session.")},
+    _row(_ANY_INVOICES, id="nb_therapist_invoices", business="therapist"),
+
+    # ── a ministry ───────────────────────────────────────────────────
+    _row(_DAY_ONE_GREETING, id="nb_ministry_greeting", business="ministry",
+         reply_checks=["one_question", "no_list", "no_draft_pointer", "no_unverified",
+                       "no_price_question"],
+         reply="Good morning, James. Grace Street Fellowship is set up as a ministry, and "
+               "by the end of this first hour you'll have a giving page you can share. "
+               "Who's one member I should add first? A name and an email or phone is "
+               "enough, and every announcement and follow-up reads from that list. The "
+               "twenty-minute sit-down where I learn how the church runs can happen now "
+               "or by day three."),
+    _row(_WHAT_CAN_YOU_DO, id="nb_ministry_what_can_you_do", business="ministry",
+         reply_checks=["about_the_product", "no_unverified", "no_price_question"],
+         reply="I'm Chief, the chief of staff for Grace Street Fellowship. I keep your "
+               "member list, put services and events on your calendar, build connect "
+               "cards and forms, draft the emails and texts you send, and track giving. "
+               "It starts with your people: who's one member I should add first?"),
+    {"id": "nb_ministry_next_step", "business": "ministry", "route": "full",
+     "message": "Let's skip the member list for now. What else should I set up?",
+     "expect": [], "allow": ["navigate"],
+     "must_not": ["create_offering", "create_invoice", "generate_payment_link"],
+     "reply_checks": ["no_price_question"],
+     "pending": {"reply:no_price_question": VERTICAL_SETUP},
+     "encoding": "tag",
+     "reply": "No problem, we can bring your members over later. When does Grace Street "
+              "gather on Sundays, and is there a midweek service? I'll put them on your "
+              "site so a visitor knows when to come."},
+
+    # ── a business coach ─────────────────────────────────────────────
+    _row(_DAY_ONE_GREETING, id="nb_coach_greeting", business="coach",
+         reply="Good morning, Tasha. Northstar Business Coaching is set up as a coaching "
+               "practice, and by the end of this first hour you'll have a booking link a "
+               "client can use this week. Who's one person you're coaching now? A name and "
+               "an email is enough, and sessions, notes and invoices all hang off that "
+               "list. The twenty-minute sit-down where I learn how you coach can happen "
+               "now or by day three."),
+    _row(_WHAT_CAN_YOU_DO, id="nb_coach_what_can_you_do", business="coach",
+         reply="I'm Chief, your chief of staff for Northstar Business Coaching. I keep your "
+               "client list, book coaching sessions on your calendar, send invoices and "
+               "reminders, build intake forms, and draft follow-up emails for you to "
+               "approve. The first step is your client list: who's one client I should add?"),
+    _row(_ANY_INVOICES, id="nb_coach_invoices", business="coach"),
+    _row(_FIRST_CLIENT, id="nb_coach_first_client", business="coach"),
+    {"id": "nb_coach_offering", "business": "coach", "route": "full",
+     "message": "My 90-minute strategy session is $250",
+     "expect": ["create_offering"],
+     "must_not": ["create_invoice", "create_product", "generate_payment_link"],
+     "expect_args": {"create_offering": {"current_price": 250, "duration_min": 90}},
+     "encoding": "tool",
+     "tool_call": {"name": "create_offering",
+                   "input": {"name": "Strategy Session", "category": "session",
+                             "current_price": 250, "duration_min": 90}},
+     "reply": "Strategy Session is on your menu at $250 for 90 minutes."},
+]
+
+CASES += DAY_ONE_CASES
+
+
 # ─── Scoring ──────────────────────────────────────────────────────────
 
+# Reply checks: what a day-one reply owes that no verb can show. Each is
+# a named, deterministic heuristic sized to one sentence of regex, the
+# chief_factual_eval discipline. They read the reply the practitioner
+# actually got (after the answer check), so a good draft the answer
+# check withheld fails them too.
+
+_QUESTION_MARK = re.compile(r"\?+(?=[\s\"'”’)\]]|$)")
+_LIST_LINE = re.compile(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+\S")
+_DRAFT_POINTER = re.compile(
+    r"\bdrafts?\b|\bwelcome (?:note|message|email)\b|\bapprovals\b"
+    r"|waiting (?:for|on) (?:your )?(?:review|approval)|needs? your (?:review|approval)"
+    r"|\bin your queue\b", re.I)
+_NONE_YET = re.compile(
+    r"\b(?:no|zero)\b[^.?!]{0,30}\b(?:invoices?|appointments?|sessions?|bookings?)\b"
+    r"|\bnothing(?:'s|\s+is|\s+has\s+been)?\s+(?:booked|scheduled|billed|on\s+(?:the|your)\s+calendar)"
+    r"|\bnone\b|\bdon.t have any\b|\baren.t any\b|\bnot\s+(?:yet|any)\b|\bempty\b", re.I)
+_UNVERIFIED = re.compile(
+    r"(?:couldn.t|could not|can.t|cannot|unable to|wasn.t able to)\s+"
+    r"(?:verify|confirm|check|read|load|access|see)"
+    r"|check data availability|\bunavailable\b|\btry again\b", re.I)
+_PRICE_WORD = re.compile(r"\b(?:charge[sd]?|charging|prices?|pricing|rates?|fees?|costs?)\b", re.I)
+# A product answer names what Chief does, in more than one area.
+_CAPABILITY_AREAS = (
+    r"\bbook(?:s|ed|ing|ings)?\b|\bcalendar\b|\bschedul\w*|\bappointments?\b|\bsessions?\b",
+    r"\bcontacts?\b|\bclient list\b|\bmembers?\b|\bclients?\b",
+    r"\binvoic\w*|\bpayments?\b|\bgiving\b|\bbill(?:s|ing)?\b",
+    r"\bemails?\b|\btexts?\b|\bmessages?\b|\bdrafts?\b|\breminders?\b|\bfollow[- ]ups?\b",
+    r"\bforms?\b|\bintake\b|\bquestionnaires?\b|\bconnect cards?\b",
+    r"\bsite\b|\bwebsite\b|\bbooking (?:link|page)\b",
+)
+
+
+def _question_sentences(reply: str) -> List[str]:
+    return [s for s in re.split(r"(?<=[.!?])\s+", reply or "") if s.rstrip().endswith("?")]
+
+
+REPLY_CHECKS: Dict[str, Any] = {
+    # The launch greeting: ONE setup question, not a menu.
+    "one_question": lambda r: len(_QUESTION_MARK.findall(r or "")) == 1,
+    # Day one is not a list.
+    "no_list": lambda r: not _LIST_LINE.search(r or ""),
+    # The onboarding welcome note is not work waiting on a new practitioner.
+    "no_draft_pointer": lambda r: not _DRAFT_POINTER.search(r or ""),
+    # A list read in full and found empty is an answer: none yet.
+    "says_none_yet": lambda r: bool(_NONE_YET.search(r or "")),
+    # ...and not a hedge, a failed-read line, or the answer check's fallback.
+    "no_unverified": lambda r: not _UNVERIFIED.search(r or ""),
+    # A ministry is not asked what it charges.
+    "no_price_question": lambda r: not any(_PRICE_WORD.search(q)
+                                           for q in _question_sentences(r)),
+    "about_the_product": lambda r: sum(bool(re.search(p, r or "", re.I))
+                                       for p in _CAPABILITY_AREAS) >= 3,
+}
+
+
+def _is_read(verb: str) -> bool:
+    import action_registry
+    return action_registry.effect(verb) == action_registry.READ
+
+
+def _routes_to_full_turn(message: str) -> bool:
+    """Does this message reach the turn that holds the product prompt and
+    SETUP STATUS? chief_fast_track sends a clear fast verdict to Haiku
+    alone, and an ambiguous QUESTION wherever the Haiku classifier says
+    (_decide_ambiguous). Pure: the classifier is not called, because a
+    message that needs it can already miss the full turn."""
+    import model_router as mr
+    route = mr.decide(mr.score(message))
+    if route.lane != mr.LANE_FULL:
+        return False
+    return not (route.ambiguous and mr.is_question(message))
+
+
+def _same(have: Any, want: Any) -> bool:
+    if isinstance(want, (int, float)) and not isinstance(want, bool):
+        try:
+            return float(have) == float(want)
+        except (TypeError, ValueError):
+            return False
+    return str(have or "").strip().casefold() == str(want).strip().casefold()
+
+
+def _hhmm(value: Any) -> str:
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})", str(value or ""))
+    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else str(value)
+
+
+def _open_week(actions: List[Dict[str, Any]]) -> Dict[str, str]:
+    """The weekly hours the turn's set_availability_day calls leave open,
+    {day: "HH:MM-HH:MM"}. A day set to no hours is closed, not open."""
+    week: Dict[str, str] = {}
+    for a in actions:
+        if a.get("type") != "set_availability_day":
+            continue
+        day = str(a.get("day") or "")[:3].lower()
+        spans = sorted(f"{_hhmm(h.get('start'))}-{_hhmm(h.get('end'))}"
+                       for h in (a.get("hours") or []) if isinstance(h, dict))
+        if spans:
+            week[day] = ",".join(spans)
+        else:
+            week.pop(day, None)
+    return week
+
+
 def score_case(case: Dict[str, Any], taken_verbs: List[str],
-               extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+               extra: Optional[Dict[str, Any]] = None, *,
+               reply: Optional[str] = None,
+               actions: Optional[List[Dict[str, Any]]] = None,
+               reads: Optional[List[str]] = None) -> Dict[str, Any]:
     """Deterministic. `taken_verbs` are the verbs the turn actually
-    produced (actions_taken types, in order). Every check is one a human
-    would agree with on sight."""
+    produced (actions_taken types, in order); `actions` the action dicts
+    that reached the door, `reply` the text the practitioner got, and
+    `reads` every lookup the turn made, repeats included (default: the
+    read verbs in taken_verbs). Each is only checked when the row asks
+    for it. Every check is one a human would agree with on sight."""
     checks: List[Dict[str, Any]] = []
     got = set(taken_verbs)
     for v in case.get("expect") or []:
@@ -267,26 +605,80 @@ def score_case(case: Dict[str, Any], taken_verbs: List[str],
                        "detail": f"took {sorted(got) or '-'}"})
     if not case.get("expect"):
         # A row that expects nothing is testing restraint: any verb at
-        # all is a miss, not only the named neighbours.
-        checks.append({"check": "no_action", "ok": not got,
+        # all is a miss, not only the named neighbours — except a read
+        # inside the row's lookup budget, or a verb the row allows.
+        spare = set(case.get("allow") or [])
+        if "max_reads" in case:
+            spare |= {v for v in got if _is_read(v)}
+        checks.append({"check": "no_action", "ok": not (got - spare),
                        "detail": f"took {sorted(got) or '-'}"})
+    if "max_reads" in case:
+        reads = list(reads) if reads is not None else [v for v in taken_verbs if _is_read(v)]
+        checks.append({"check": f"reads<={case['max_reads']}",
+                       "ok": len(reads) <= case["max_reads"],
+                       "detail": f"read {reads or '-'}"})
+    if actions is not None:
+        for verb, want in (case.get("expect_args") or {}).items():
+            calls = [a for a in actions if a.get("type") == verb]
+            checks.append({"check": f"args:{verb}",
+                           "ok": any(all(_same(a.get(k), v) for k, v in want.items())
+                                     for a in calls),
+                           "detail": f"wanted {want}, sent {calls or '-'}"[:300]})
+        if case.get("expect_week"):
+            week = _open_week(actions)
+            checks.append({"check": "week:set_availability_day",
+                           "ok": week == case["expect_week"],
+                           "detail": f"open {week or '-'}"})
+    if case.get("route") == "full":
+        checks.append({"check": "routes_to_full_turn",
+                       "ok": _routes_to_full_turn(case["message"]), "detail": ""})
+    if reply is not None:
+        for name in case.get("reply_checks") or []:
+            checks.append({"check": f"reply:{name}", "ok": bool(REPLY_CHECKS[name](reply)),
+                           "detail": reply[:160]})
     if extra:
         for k, ok in extra.items():
             checks.append({"check": k, "ok": bool(ok), "detail": ""})
+    pending = case.get("pending") or {}
+    for c in checks:
+        if not c["ok"] and c["check"] in pending:
+            c["pending"] = pending[c["check"]]
     score = sum(1 for c in checks if c["ok"])
-    return {"id": case["id"], "encoding": case.get("encoding"),
-            "score": score, "total": len(checks), "checks": checks,
-            "taken": list(taken_verbs)}
+    out = {"id": case["id"], "encoding": case.get("encoding"),
+           "score": score, "total": len(checks), "checks": checks,
+           "taken": list(taken_verbs),
+           "failed": any(not c["ok"] and "pending" not in c for c in checks)}
+    if pending:
+        out["pending_cleared"] = [c["check"] for c in checks
+                                  if c["check"] in pending and c["ok"]]
+    return out
+
+
+def skipped_case(case: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    return {"id": case["id"], "encoding": case.get("encoding"), "score": 0, "total": 0,
+            "checks": [], "taken": [], "failed": False, "skipped": reason}
 
 
 def summarize(results: List[Dict[str, Any]], mode: str) -> Dict[str, Any]:
-    return {
+    report = {
         "mode": mode,
         "results": results,
         "total": sum(r["score"] for r in results),
         "possible": sum(r["total"] for r in results),
-        "failed_cases": [r["id"] for r in results if r["score"] < r["total"]],
+        # A pending check that misses is reported, never a failure.
+        "failed_cases": [r["id"] for r in results
+                         if r.get("failed", r["score"] < r["total"])],
+        "pending": [{"id": r["id"], "check": c["check"], "reason": c["pending"]}
+                    for r in results for c in r["checks"] if "pending" in c],
+        "skipped": [{"id": r["id"], "reason": r["skipped"]}
+                    for r in results if r.get("skipped")],
     }
+    if mode == "live":
+        # Replay's recorded replies pass every prose check by construction,
+        # so only a live pass says the fix has landed.
+        report["pending_cleared"] = [{"id": r["id"], "check": c}
+                                     for r in results for c in r.get("pending_cleared") or []]
+    return report
 
 
 # ─── Replay: the pipeline, with a recorded reply ──────────────────────
@@ -307,9 +699,12 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
     async def _instant(value=None):
         return value
 
-    context = _fixture_context(biz, case)
+    tables = _day_one_tables(biz) if biz.get("id") in _DAY_ONE_IDS else None
+    context = None if tables is not None else _fixture_context(biz, case)
 
     async def _fake_sb(client, method, path, body=None):
+        if tables is not None:
+            return _postgrest(tables, method, path)
         if path.startswith('/businesses?'):
             return [biz]
         if path.startswith('/contacts?'):
@@ -330,11 +725,14 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
     monkeypatch.setattr(practitioner_profile_agent, "_sb_get", lambda *a, **k: [])
     monkeypatch.setattr(voice_depth_agent, "_sb_get", lambda *a, **k: [])
     monkeypatch.setattr(cos, "_sb", _fake_sb)
+    if tables is not None:
+        _serve_day_one(monkeypatch, tables)
     monkeypatch.setattr(cos, "_generate_missing_recurring_instances", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_autopilot_sweep", lambda *a, **k: _instant(0))
     monkeypatch.setattr(cos, "_evaluate_escalations", lambda *a, **k: _instant(0))
-    monkeypatch.setattr(cos, "_gather_context",
-                        lambda *a, **k: _instant(context))
+    if tables is None:
+        monkeypatch.setattr(cos, "_gather_context",
+                            lambda *a, **k: _instant(context))
     monkeypatch.setattr(cos, "_fetch_view_detail", lambda *a, **k: _instant(""))
     for name in ["_get_voice_examples", "_get_session_context",
                  "_get_time_context", "_get_habit_insights"]:
@@ -413,41 +811,289 @@ def _fixture_select(rows, path):
     return selected
 
 
-def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
-    import chief_of_staff as cos
-    import chief_tool_loop as ctl
+# ─── Day one: four businesses that signed up today ────────────────────
+# Type keys are what the product stores and resolves (the census in
+# __tests__/test_workspace_archetypes.py, vertical_registry): a barbershop
+# is `personal_services` (the salon desk), a counseling practice
+# `therapist`, a church `ministry`, a business coach `coach`.
 
-    _stub_turn(monkeypatch, BIZ)
-    dispatched: List[str] = []
+NEW_BUSINESSES: Dict[str, Dict[str, str]] = {
+    "barber": {"id": "00000000-0000-4000-8000-000000000020", "name": "Fade Street Barbers",
+               "type": "personal_services", "practitioner": "Dre Carter"},
+    "therapist": {"id": "00000000-0000-4000-8000-000000000021", "name": "Harbor Counseling",
+                  "type": "therapist", "practitioner": "Maya Lin"},
+    "ministry": {"id": "00000000-0000-4000-8000-000000000022",
+                 "name": "Grace Street Fellowship", "type": "ministry",
+                 "practitioner": "James Cole"},
+    "coach": {"id": "00000000-0000-4000-8000-000000000023",
+              "name": "Northstar Business Coaching", "type": "coach",
+              "practitioner": "Tasha Reed"},
+}
+_DAY_ONE_IDS = {spec["id"] for spec in NEW_BUSINESSES.values()}
 
+
+def _business_for(case: Dict[str, Any]) -> Dict[str, Any]:
+    """The business a row runs against: Eval Co, or a day-one business
+    row exactly as /access/businesses/create writes it from onboarding,
+    stamped twenty minutes ago."""
+    key = case.get("business")
+    if not key:
+        return BIZ
+    spec = NEW_BUSINESSES[key]
+    settings: Dict[str, Any] = {"practitioner_name": spec["practitioner"],
+                                "priority_agents": ["intake"], "custom_type": None,
+                                "track": "purpose"}
+    if any(k in spec["type"] for k in ("law", "therap", "counsel")):
+        # launch_access: regulated verticals start with client-facing autonomy off.
+        settings["autonomy"] = {"client_facing_autonomy": "disabled",
+                                "disabled_reason": "regulated_vertical_default",
+                                "acknowledgment_required": True, "acknowledged_at": None}
+    signed_up = datetime.now(timezone.utc) - timedelta(minutes=20)
+    return {"id": spec["id"], "name": spec["name"], "type": spec["type"],
+            "owner_id": "user-eval", "tier": "starter", "settings": settings,
+            "voice_profile": {}, "stripe_account_id": None,
+            "created_at": signed_up.isoformat()}
+
+
+def _onboarding_profile(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """business_profiles as OnboardingFlow's seed-from-onboarding call
+    leaves it: the product's own seed (the archetype's defaults), captured
+    instead of written."""
+    import pytest
+    import business_profile_agent
+    written: List[Dict[str, Any]] = []
+
+    def post(path, body):
+        written.append(dict(body))
+        return [dict(body)]
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(business_profile_agent, "_sb_get", lambda path: [])
+        mp.setattr(business_profile_agent, "_sb_post", post)
+        business_profile_agent.seed_from_onboarding(biz["id"], biz["type"])
+    return written
+
+
+def _day_one_tables(biz: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """What signup writes, and nothing else: /access/businesses/create
+    (the business row, then first_run_arc.begin from the signup door) and
+    OnboardingFlow (the seeded business profile, the purpose-track row
+    the coached session opens, and the static welcome note it drops in
+    agent_queue). No contacts, sessions, invoices, offerings, products or
+    projects, and no practitioner profile: every table not named here is
+    empty."""
+    at = biz["created_at"]
+    name = biz["settings"]["practitioner_name"]
+    return {
+        "businesses": [biz],
+        "business_profiles": _onboarding_profile(biz),
+        "business_tracks": [{"id": biz["id"].replace("-8000-", "-8001-"),
+                             "business_id": biz["id"], "status": "in_progress",
+                             "current_phase": "owner", "phases": {},
+                             "created_at": at, "updated_at": at}],
+        "agent_queue": [{"id": biz["id"].replace("-8000-", "-8002-"),
+                         "business_id": biz["id"], "agent": "system",
+                         "action_type": "other",
+                         "subject": f"Welcome to The Solutionist System, {name}!",
+                         "body": (f"Welcome, {name} — everything for {biz['name']} is set "
+                                  "up and ready.\n\nChief is sitting down with you now to "
+                                  "learn the business properly. When you're done, you'll "
+                                  "have a short list of what to plug in first."),
+                         "channel": "in_app", "status": "draft", "priority": "medium",
+                         "contact_id": None,
+                         "ai_reasoning": "Standard welcome message created at onboarding.",
+                         "created_at": at}],
+        "first_run_arc": [{"id": biz["id"].replace("-8000-", "-8003-"),
+                           "business_id": biz["id"], "source": "signup", "started_at": at,
+                           "trial_ends_at": None, "status": "pending_intro",
+                           "intro_delivered_at": None, "completed_steps": [],
+                           "shared_links": [], "last_beat_day": 0, "last_beat_at": None}],
+    }
+
+
+_PG_RESERVED = {"select", "order", "limit", "offset", "or", "and", "on_conflict", "columns"}
+
+
+def _pg_order(value: Any) -> Any:
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _pg_match(row: Dict[str, Any], key: str, cond: str) -> bool:
+    op, _, val = cond.partition(".")
+    if op == "not":
+        return not _pg_match(row, key, val)
+    have = row.get(key)
+    if op == "is":
+        return {"null": have is None, "true": have is True,
+                "false": have is False}.get(val.lower(), True)
+    if op == "in":
+        return str(have) in {v.strip().strip('"') for v in val.strip("()").split(",")}
+    if op in ("eq", "neq"):
+        text = str(have).lower() if isinstance(have, bool) else str(have)
+        return (have is not None and text == val) == (op == "eq")
+    if op in ("gt", "gte", "lt", "lte"):
+        if have is None:
+            return False
+        a, b = _pg_order(have), _pg_order(val)
+        if type(a) is not type(b):
+            a, b = str(have), val
+        return {"gt": a > b, "gte": a >= b, "lt": a < b, "lte": a <= b}[op]
+    if op in ("like", "ilike"):
+        pattern = re.escape(val).replace(r"\*", ".*").replace("%", ".*")
+        return re.fullmatch(pattern, str(have or ""), re.I if op == "ilike" else 0) is not None
+    return True  # an operator this fixture does not model filters nothing
+
+
+def _pg_project(row: Dict[str, Any], select: str) -> Dict[str, Any]:
+    cols, depth, cur = [], 0, ""
+    for ch in select:
+        if ch == "," and depth == 0:
+            cols.append(cur)
+            cur = ""
+            continue
+        depth += (ch == "(") - (ch == ")")
+        cur += ch
+    cols.append(cur)
+    out: Dict[str, Any] = {}
+    for col in (c.strip() for c in cols):
+        head = col.split("(")[0]
+        alias, _, source = head.rpartition(":") if ":" in head else ("", "", head)
+        name = source.split("!")[0].strip()
+        if name == "*":
+            out.update(row)
+        elif name in row:
+            out[alias or name] = row[name]
+    return out
+
+
+def _postgrest(tables: Dict[str, List[Dict[str, Any]]], method: str, path: str,
+               body: Any = None) -> List[Dict[str, Any]]:
+    """A PostgREST that holds only `tables`. A GET filters (eq, neq, in,
+    is, gt/gte/lt/lte, like/ilike, not.) and projects `select` the way the
+    real one does, so a column nobody selected never reaches the caller.
+    A write is recorded under '_writes', answered as written, never sent."""
+    if method.upper() not in ("GET", "HEAD"):
+        tables.setdefault("_writes", []).append({"method": method.upper(), "path": path,
+                                                 "body": body})
+        # return=representation: the rows as written.
+        return [dict(body)] if isinstance(body, dict) else list(body or [])
+    table, _, qs = path.lstrip("/").partition("?")
+    query = parse_qs(qs.replace("+", "%2B"), keep_blank_values=True)
+    rows = [dict(r) for r in tables.get(table, [])
+            if all(_pg_match(r, k, v) for k, vals in query.items()
+                   if k not in _PG_RESERVED for v in vals)]
+    if query.get("limit"):
+        rows = rows[:int(query["limit"][0])]
+    return [_pg_project(r, query.get("select", ["*"])[0]) for r in rows]
+
+
+def _serve_day_one(monkeypatch, tables: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Every Supabase seam a turn reads through, answered from `tables`:
+    the real _gather_context, the setup probes, the first-run arc and the
+    lookups the model makes all read day one. Writes are recorded, never
+    sent. The semantic memory match (an embedding call) finds nothing,
+    which is the truth for a business with no memories."""
+    import sb_clients
+    import chief_invoice_actions
+    import chief_memory_semantic
+    import foundation_agent
+    import practitioner_profile_agent
+    import voice_depth_agent
+
+    def get(path, *a, **k):
+        return _postgrest(tables, "GET", path)
+
+    def write(path, body=None, *a, **k):
+        return _postgrest(tables, "WRITE", path, body)
+
+    async def request(client, method, path, body=None, *a, **k):
+        return _postgrest(tables, method, path, body)
+
+    async def as_user(client, method, path, user_jwt, body=None):
+        return _postgrest(tables, method, path, body)
+
+    async def count(client, path, *a, **k):
+        return len(_postgrest(tables, "GET", path))
+
+    async def module_get(client, path):
+        return _postgrest(tables, "GET", path)
+
+    for name in ("sb_get_as_service", "sb_get_current_context", "sb_get_as_user",
+                 "sb_get_as_anon"):
+        monkeypatch.setattr(sb_clients, name, get)
+    for name in ("sb_patch_as_service", "sb_post_as_service", "sb_patch_current_context",
+                 "sb_post_current_context", "sb_patch_as_user", "sb_post_as_user",
+                 "sb_patch_as_anon"):
+        monkeypatch.setattr(sb_clients, name, write)
+    def delete(path, *a, **k):
+        write(path)
+        return True
+
+    for name in ("sb_delete_as_service", "sb_delete_current_context", "sb_delete_as_user"):
+        monkeypatch.setattr(sb_clients, name, delete)
+    for name in ("sb_as_current_context", "sb_as_service", "sb_as_anon"):
+        monkeypatch.setattr(sb_clients, name, request)
+    monkeypatch.setattr(sb_clients, "sb_as_user", as_user)
+    monkeypatch.setattr(sb_clients, "sb_count_as_current_context", count)
+    monkeypatch.setattr(chief_invoice_actions, "sb_as_current_context", request)
+    monkeypatch.setattr(practitioner_profile_agent, "_sb_get", get)
+    monkeypatch.setattr(voice_depth_agent, "_sb_get", get)
+    monkeypatch.setattr(foundation_agent, "_sb_get", module_get)
+    monkeypatch.setattr(chief_memory_semantic, "match", lambda *a, **k: [])
+
+
+def _door_spy(dispatched: List[Dict[str, Any]]):
+    """_execute_actions, observed: each action that reaches the door is
+    recorded with its arguments and answered ok, never handled."""
     async def _door(client, biz, actions, user_id=None, prior_results=None,
                     owner_text=None):
         out = []
         for a in actions:
-            dispatched.append(a.get("type"))
+            dispatched.append(dict(a))
             out.append({"type": a.get("type"), "result": "ok",
                         "label": f"did {a.get('type')}"})
         return out
-    monkeypatch.setattr(cos, "_execute_actions", _door)
+    return _door
+
+
+def run_replay_case(monkeypatch, case: Dict[str, Any]) -> Dict[str, Any]:
+    import chief_of_staff as cos
+    import chief_tool_loop as ctl
+
+    if "reply" not in case:
+        return skipped_case(case, "no recorded reply: this row runs live only")
+    biz = _business_for(case)
+    _stub_turn(monkeypatch, biz)
+    dispatched: List[Dict[str, Any]] = []
+    monkeypatch.setattr(cos, "_execute_actions", _door_spy(dispatched))
 
     async def fake_claude(*a, **k):
         if case.get("encoding") == "tool":
             tc = case["tool_call"]
-            await ctl.execute_tool_use(None, BIZ, tc["name"], dict(tc.get("input") or {}))
+            await ctl.execute_tool_use(None, biz, tc["name"], dict(tc.get("input") or {}))
         return case["reply"]
     monkeypatch.setattr(cos, "_call_claude", fake_claude)
 
     out = asyncio.run(cos.chief_chat(
-        cos.ChatRequest(business_id=BIZ["id"], message=case["message"]), _Session()))
+        cos.ChatRequest(business_id=biz["id"], message=case["message"]), _Session()))
     taken = [a.get("type") for a in out.get("actions_taken", []) if isinstance(a, dict)]
+    names = [a.get("type") for a in dispatched]
     extra = {}
     if case.get("encoding") == "tool":
         # The tool row's own invariant: the verb reached the door through
         # the loop, and the turn did NOT also execute it as a tag.
-        extra["tool_went_through_the_door"] = case["tool_call"]["name"] in dispatched
-        extra["not_double_executed"] = dispatched.count(case["tool_call"]["name"]) == 1
+        extra["tool_went_through_the_door"] = case["tool_call"]["name"] in names
+        extra["not_double_executed"] = names.count(case["tool_call"]["name"]) == 1
         extra["reply_has_checked_outcome"] = (out.get('grounding') or {}).get('status') in ('supported', 'receipts')
-    return score_case(case, taken, extra)
+    return score_case(case, taken, extra, reply=out.get("response") or "",
+                      actions=dispatched)
 
 
 def run_replay(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -476,10 +1122,11 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
         mp = pytest.MonkeyPatch()
         try:
             real_prompt = cos._build_system_prompt
-            _stub_turn(mp, BIZ, case)
+            biz = _business_for(case)
+            _stub_turn(mp, biz, case)
             # The real prompt this time — that is what is being measured.
             mp.setattr(cos, "_build_system_prompt", real_prompt)
-            dispatched: List[str] = []
+            dispatched: List[Dict[str, Any]] = []
             import chief_tool_loop as ctl
             native_reads: List[str] = []
             execute_tool = ctl.execute_tool_use
@@ -491,31 +1138,24 @@ def run_live(cases: List[Dict[str, Any]]) -> Dict[str, Any]:
                 return await execute_tool(client, biz, name, args)
 
             mp.setattr(ctl, 'execute_tool_use', _observe_tool)
-
-            async def _door(client, biz, actions, user_id=None, prior_results=None,
-                            owner_text=None):
-                out = []
-                for a in actions:
-                    dispatched.append(a.get("type"))
-                    out.append({"type": a.get("type"), "result": "ok",
-                                "label": f"did {a.get('type')}"})
-                return out
-            mp.setattr(cos, "_execute_actions", _door)
+            mp.setattr(cos, "_execute_actions", _door_spy(dispatched))
             print(f"→ {case['id']} …", file=sys.stderr, flush=True)
             started = time.time()
             history = ([{'role': 'user', 'content': 'Create a task to review the draft'},
                         {'role': 'assistant', 'content': 'Created task: Review draft.'}]
                        if case['id'] == 'undo' else None)
             out = asyncio.run(cos.chief_chat(
-                cos.ChatRequest(business_id=BIZ["id"], message=case["message"],
+                cos.ChatRequest(business_id=biz["id"], message=case["message"],
                                 conversation_history=history),
                 _Session()))
             taken = [a.get("type") for a in out.get("actions_taken", [])
                      if isinstance(a, dict)]
             # Native reads return into the model, not actions_taken. They
             # still count as read selection in this verb-only evaluation.
+            reads = [v for v in taken if _is_read(v)] + native_reads
             taken = list(dict.fromkeys(taken + native_reads))
-            scored = score_case(case, taken)
+            scored = score_case(case, taken, reply=out.get("response") or "",
+                                actions=dispatched, reads=reads)
             scored["seconds"] = round(time.time() - started, 1)
             scored["reply"] = (out.get("response") or "")[:300]
             results.append(scored)
@@ -572,10 +1212,22 @@ def main() -> int:
     cases = [c for c in CASES if not args.only or c["id"] == args.only]
     report = run_live(cases) if args.live else run_replay(cases)
     for r in report["results"]:
-        flag = "  " if r["score"] == r["total"] else "!!"
+        if r.get("skipped"):
+            print(f"-- {r['id']:<34} skipped: {r['skipped']}")
+            continue
+        flag = ("  " if r["score"] == r["total"] else "!!" if r.get("failed", True)
+                else "~~")
         print(f"{flag} {r['id']:<34} {r['score']}/{r['total']}  took={r['taken'] or '-'}")
     print(f"\n{report['mode']}: {report['total']}/{report['possible']}"
           + (f"  failed: {report['failed_cases']}" if report["failed_cases"] else ""))
+    if report["pending"]:
+        print("\n~~ pending (reported, not failed; each names what fixes it):")
+        for p in report["pending"]:
+            print(f"   {p['id']} {p['check']}: {p['reason']}")
+    for p in report.get("pending_cleared") or []:
+        print(f"   now passing live: {p['id']} {p['check']}. Take the marker out once it holds.")
+    if report["skipped"]:
+        print(f"\n-- skipped in replay (no recorded reply): {[s['id'] for s in report['skipped']]}")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
