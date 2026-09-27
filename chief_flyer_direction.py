@@ -163,10 +163,14 @@ def compiled_prompt(brief, refs):
 async def prepare_actions(actions, body, owner):
     """Resolve pixels before approval so the reviewed action has durable, owned IDs."""
     from platform_chief_creative import platform_business
-    if len(actions) > 8 or sum(a.get('type') in ('generate_image', 'compose_flyer', 'create_video') for a in actions) > 1:
+    if len(actions) > 8 or sum(a.get('type') in ('design_flyer', 'generate_image', 'compose_flyer', 'create_video') for a in actions) > 1:
         raise HTTPException(422, 'Create one asset at a time. Choose one direction, then request the next variation.')
     prepared = []
     for action in actions:
+        if action.get('type') == 'design_flyer':
+            from creative_director import prepare
+            prepared.append(await prepare(action, body, owner))
+            continue
         if action.get('type') == 'compose_flyer':
             from chief_flyer_composer import prepare_action
             prepared.append(await prepare_action(action, body, owner))

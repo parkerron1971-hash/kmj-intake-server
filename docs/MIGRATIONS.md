@@ -206,3 +206,18 @@ Most feature migrations ship a paired `*-rollback.sql` (grep the file's
 header for `rollback`). RLS-policy changes: re-create the dropped policy
 from `pg_policies` output captured before the change. There is no undo
 for data deletions.
+
+
+## Creative Director (2026-09-27)
+
+`supabase/APPLY-2026-09-27-creative-director.sql` follows Image Studio. It adds
+server-owned job direction/review metadata and an owner-readable, service-written
+business style profile. Existing image reservation, ownership and publishing policies
+remain in force. Verify `image_artworks.director` and `creative_director_profiles`
+before enabling the director. The migration is additive and idempotent.
+
+Marketing uploads: both the project-wide Storage `fileSizeLimit` and the
+`platform-marketing` bucket must allow 104857600 bytes. The bucket already allowed
+100 MiB but the project was limited to 50 MiB; the project limit was corrected and
+a 60 MiB MP4 upload/read/cleanup was verified on 2026-09-27. SQL bucket migrations
+do not change the project-wide setting.

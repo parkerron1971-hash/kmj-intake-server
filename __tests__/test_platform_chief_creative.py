@@ -93,7 +93,7 @@ def test_quality_labels_match_engine_values(setup, monkeypatch, label, expected)
 
 
 def test_creative_tools_have_no_publish_or_approval(setup):
-    assert set(creative.handlers(OWNER, uuid4())) == {'generate_image','find_images','create_video','compose_flyer'}
+    assert set(creative.handlers(OWNER, uuid4())) == {'design_flyer','generate_image','find_images','create_video','compose_flyer'}
 
 
 def test_budget_blocks_before_generation(setup, monkeypatch):
