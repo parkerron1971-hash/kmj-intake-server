@@ -93,7 +93,11 @@ def handlers(owner, request_id):
         biz = await platform_business(owner)
         if not sb_clients.get_current_user_jwt():
             raise HTTPException(401, 'Sign in again to create artwork.')
-        if kind == 'compose_flyer':
+        if kind == 'design_flyer':
+            from creative_director import start
+            async with httpx.AsyncClient(timeout=60) as client:
+                result = await start(client, biz, action, request_id)
+        elif kind == 'compose_flyer':
             from chief_flyer_composer import compose
             async with httpx.AsyncClient(timeout=60) as client:
                 result = await compose(client, biz, action, request_id)
@@ -119,4 +123,4 @@ def handlers(owner, request_id):
         return {**result, 'ok': not result.get('failed', False) and (result.get('image') or {}).get('status') != 'failed',
                 'business_id': str(biz['id'])}
 
-    return {kind: execute for kind in ('generate_image', 'find_images', 'create_video', 'compose_flyer')}
+    return {kind: execute for kind in ('design_flyer', 'generate_image', 'find_images', 'create_video', 'compose_flyer')}

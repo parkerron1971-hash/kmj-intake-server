@@ -6,21 +6,15 @@ import httpx
 from fastapi import HTTPException
 
 import image_studio as images
-from chief_flyer_direction import FlyerBrief
-from chief_flyer_composer import Layout
+from creative_director_models import DesignRequest, CHIEF_PROMPT
 
-CREATIVE = {'generate_image', 'compose_flyer', 'create_video', 'find_images'}
+CREATIVE = {'design_flyer', 'generate_image', 'compose_flyer', 'create_video', 'find_images'}
 PROMPT = '''
 CREATIVE EXECUTION CONTRACT (takes precedence over creative ACTION-tag examples):
-Use the native generate_image, compose_flyer, create_video and find_images tools for creative
-work, not prose or ACTION tags. "Create it" after a visual brief means submit that brief now.
-Choose the tool for the requested visual finish. For a textured or dimensional style reference,
-use generate_image for artwork; compose_flyer alone only provides basic vector layout and owned
-image placement. If exact logos/UI must survive unchanged, generate key art without those assets
-and with space reserved for them, then finish with compose_flyer after the artwork is ready.
-This is two stages: report the first as key art, not a finished branded flyer. Do not claim the
-second stage has run until its action result exists. For a final generated poster, use the style
-reference directly and inspect the result; never claim pixel-exact brand fidelity from generation.
+Use design_flyer for images/flyers/posters, create_video for video projects and find_images
+for saved artwork status. Use native tools, not prose or ACTION tags. "Create it" after a
+visual brief means submit that brief now. The director handles generation, original
+brand-asset composition and visual review as one job. A private draft is not published.
 "Revise", "redesign", "refine" and "edit" requests also require a real creative tool call.
 Use the existing artwork as edit_target and let the latest revision instructions override
 its original visual brief. Never echo [Image references: ...] or Action results history
@@ -37,18 +31,12 @@ verified billing terms from ambiguous owner wording and earlier assistant invent
 '''
 
 
+# Shared with the selected subscription agents.
+PROMPT += '\nCREATIVE DIRECTOR DEFAULT (takes precedence):\n' + CHIEF_PROMPT
+
 def tool_specs():
-    image = FlyerBrief.model_json_schema()
-    image['properties'].update(size={'type': 'string', 'enum': ['1024x1024', '1024x1536', '1536x1024']},
-                               quality={'type': 'string', 'enum': ['low', 'medium', 'high']})
-    layout = Layout.model_json_schema()
-    # Composition resolves chat:N to an owned UUID before normal validation.
-    layout['$defs']['ImageLayer']['properties']['image_id'] = {'type': 'string', 'description': 'Owned artwork UUID or chat:N'}
-    compose = {'type': 'object', 'properties': {'layout': {k: v for k,v in layout.items() if k != '$defs'}},
-               'required': ['layout'], '$defs': layout['$defs']}
     return [
-        {'name': 'generate_image', 'description': 'Generate original artwork, including textured backgrounds, dimensional type, lighting and rich style-reference treatments. Can create key art for later exact-logo composition. Existing approval and budget rules apply.', 'input_schema': image},
-        {'name': 'compose_flyer', 'description': 'Finish ready artwork with exact owned logos/UI and editable text, or create intentionally flat vector graphics. Basic shapes alone cannot reproduce textured or dimensional style references; generate their key art first. Existing approval rules apply.', 'input_schema': compose},
+        {'name': 'design_flyer', 'description': 'Default for creating or revising flyers, posters and social graphics. Automatically directs the design from reference pixels, protects original logos/UI, generates artwork, inspects the finished result and can repair it once. Accepts plain user goals; existing approval and budget rules apply.', 'input_schema': DesignRequest.model_json_schema()},
         {'name': 'create_video', 'description': 'Create one video project and queue its scene plan for later owner review; does not render or publish.',
          'input_schema': {'type': 'object', 'properties': {'brief': {'type': 'string'}, 'title': {'type': 'string'}, 'format': {'type': 'string', 'enum': ['portrait','landscape','square']}}, 'required': ['brief']}},
         {'name': 'find_images', 'description': 'Read current owned artwork status and return real result cards. Does not create or retry an image.',
@@ -163,7 +151,7 @@ async def status_result(body, owner):
         try:
             approvals = await authority.db('GET', f'/platform_chief_authorizations?owner_id=eq.{UUID(str(owner.id))}'
                 + '&status=in.(pending,executing,uncertain)&order=created_at.desc&limit=10')
-            pending = [a for a in approvals if (a.get('action') or {}).get('type') in ('generate_image','compose_flyer')]
+            pending = [a for a in approvals if (a.get('action') or {}).get('type') in ('design_flyer','generate_image','compose_flyer')]
             if pending:
                 detail += ' There are unresolved image requests in Action History; check their approval/status before starting another.'
         except HTTPException:

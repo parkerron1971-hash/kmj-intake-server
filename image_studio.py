@@ -201,6 +201,10 @@ async def original(client, row):
 
 async def present(client, row):
     result = {k: v for k, v in row.items() if k not in ('owner_id', 'storage_path')}
+    if row.get('director'):
+        from creative_director import public_state
+        result['director'] = public_state(row['director'])
+        result['display_prompt'] = row['director']['goal']
     if row.get('prompt', '').startswith('EDITABLE_FLYER_V1\n'):
         result['editable_master'] = True
         import json
@@ -210,7 +214,7 @@ async def present(client, row):
             result['display_prompt'] = 'Editable flyer'
     elif row.get('prompt', '').startswith('Create an original, professionally art-directed marketing composition.\nOWNER BRIEF:\n'):
         result['display_prompt'] = row['prompt'].split('OWNER BRIEF:\n', 1)[1].split('\nCOMPOSITION DIRECTION:', 1)[0]
-    if row['status'] in ('queued', 'working') and (datetime.now(timezone.utc) - datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))).total_seconds() > 600:
+    if row['status'] in ('queued', 'working') and (datetime.now(timezone.utc) - datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))).total_seconds() > (1200 if row.get('director') else 600):
         result.update(status='failed', error='This generation was interrupted. Start a new request; the original may still have incurred provider charges.')
     if row.get('storage_path') and row['status'] == 'ready':
         r = await client.post(storage_url(f"object/sign/{BUCKET}/{row['storage_path']}"), headers=storage_headers(row['storage_path']), json={'expiresIn': 3600})
@@ -265,6 +269,12 @@ async def generate_worker(row):
             claimed = await db(client, 'PATCH', f'/image_artworks?id=eq.{image_id}&status=eq.queued', {'status': 'working'}, server_write=True)
             if not claimed:
                 return
+            if row.get('director'):
+                from creative_director import run
+                await run(client, row)
+                await db(client, 'PATCH', f'/image_artworks?id=eq.{image_id}',
+                    {'status': 'ready', 'updated_at': datetime.now(timezone.utc).isoformat()}, server_write=True)
+                return
             refs = [await original(client, await artwork(client, row['business_id'], ref)) for ref in row['reference_ids']]
             payload = {k: row[k] for k in ('model', 'prompt', 'quality', 'size')}
             payload.update(n=1, output_format='png')
@@ -305,7 +315,7 @@ async def generate_worker(row):
                     units=image_units(row['quality']) if completed else 0, ok=completed, error=message)
 
 
-async def create(req: CreateImage, client):
+async def create(req: CreateImage, client, *, director=None):
     biz = await business(client, req.business_id)
     if not os.environ.get('OPENAI_API_KEY'):
         raise HTTPException(503, 'Image generation needs the server OpenAI connection used by voice.')
@@ -317,6 +327,12 @@ async def create(req: CreateImage, client):
     if existing:
         if any(existing[0].get(k) != record.get(k) for k in ('business_id', 'prompt', 'model', 'quality', 'size', 'reference_ids')):
             raise HTTPException(409, 'That request ID already belongs to a different image request.')
+        if director:
+            row = await bind_director(client, existing[0], director)
+            launch_worker(row)
+            return await present(client, row)
+        if existing[0].get('director'):
+            raise HTTPException(409, 'That request belongs to a Creative Director job.')
         return await present(client, existing[0])
     # The model catalog can return 404 for models the Images API accepts.
     # Determine access from the actual generation/edit response in the worker.
@@ -331,11 +347,31 @@ async def create(req: CreateImage, client):
     row = rows[0]
     if any(row.get(k) != record.get(k) for k in ('business_id', 'prompt', 'model', 'quality', 'size', 'reference_ids')):
         raise HTTPException(409, 'That request ID already belongs to a different image request.')
+    if director:
+        row = await bind_director(client, row, director)
+    elif row.get('director'):
+        raise HTTPException(409, 'That request belongs to a Creative Director job.')
+    launch_worker(row)
+    return await present(client, row)
+
+
+async def bind_director(client, row, spec):
+    from creative_director import request_hash
+    digest = request_hash(spec)
+    if not row.get('director'):
+        bound = await db(client, 'PATCH', f"/image_artworks?id=eq.{row['id']}&business_id=eq.{row['business_id']}&status=eq.queued&director=is.null",
+            {'director': {**spec, 'request_hash': digest}}, server_write=True)
+        row = bound[0] if bound else await artwork(client, row['business_id'], row['id'])
+    if (row.get('director') or {}).get('request_hash') != digest:
+        raise HTTPException(409, 'That design request already started with different instructions.')
+    return row
+
+
+def launch_worker(row):
     if row['status'] == 'queued':
         task = asyncio.create_task(generate_worker(row))
         _tasks.add(task)
         task.add_done_callback(_tasks.discard)
-    return await present(client, row)
 
 
 @router.post('/generate', status_code=202)

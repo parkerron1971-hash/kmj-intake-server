@@ -755,7 +755,7 @@ async def _find_platform_business(c: httpx.AsyncClient, headers: Dict[str, str],
         params={
             "owner_id": f"eq.{owner_id}",
             "settings->>platform_books": "eq.true",
-            "select": "id,name,created_at,settings",
+            "select": "id,name,owner_id,created_at,settings",
             "limit": "1",
         },
     )

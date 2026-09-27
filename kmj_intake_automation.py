@@ -563,6 +563,8 @@ from dev_bridge import router as dev_bridge_router
 app.include_router(dev_bridge_router)
 from chief_local_work import router as chief_local_work_router
 app.include_router(chief_local_work_router)
+from creative_director import router as creative_director_router
+app.include_router(creative_director_router)
 # The fix queue (2026-09-02) — support tickets ranked, dispatched into dev
 # tasks, walked back when the fix ships, and answered by email.
 # /platform/support/* (owner JWT) + /dev-bridge/tickets* (device token, so

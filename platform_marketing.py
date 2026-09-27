@@ -315,12 +315,15 @@ async def save_asset(file: UploadFile, *, asset_id=None):
     aid = str(asset_id or uuid4())
     sha = hashlib.sha256(blob).hexdigest()
     path = f'platform-marketing/{aid}/{sha}.{ext}'
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(sb_clients.sb_url() + '/storage/v1/object/' + path,
-            headers={**sb_clients.sb_headers_service(), 'Content-Type': mime,
-                     'x-upsert': 'true' if asset_id else 'false'}, content=bytes(blob))
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(sb_clients.sb_url() + '/storage/v1/object/' + path,
+                headers={**sb_clients.sb_headers_service(), 'Content-Type': mime,
+                         'x-upsert': 'true' if asset_id else 'false'}, content=bytes(blob))
+    except httpx.HTTPError:
+        raise HTTPException(503, 'The upload connection was interrupted. Check Marketing assets before retrying.') from None
     if r.status_code >= 400:
-        raise HTTPException(503, 'Could not save the marketing export. Check storage configuration.')
+        raise storage_upload_error(r, len(blob), mime)
     row = {'id': aid, 'sha256': sha, 'url': sb_clients.sb_url() + '/storage/v1/object/public/' + path,
            'kind': kind, 'mime_type': mime, 'name': (file.filename or 'Marketing export')[:180]}
     try:
@@ -331,6 +334,27 @@ async def save_asset(file: UploadFile, *, asset_id=None):
             if existing:
                 return existing[0]
         raise
+
+
+def storage_upload_error(response, size, mime):
+    # Supabase can wrap a 413 in HTTP 400. Never expose raw provider details,
+    # file names, auth headers or payloads in browser errors/logs.
+    try:
+        detail = response.json()
+        if not isinstance(detail, dict): detail = {}
+    except ValueError:
+        detail = {}
+    code = str(detail.get('code') or detail.get('error') or '')
+    message = str(detail.get('message') or '').lower()
+    logger.warning('Marketing upload rejected: status=%s code=%s bytes=%s mime=%s',
+        response.status_code, ''.join(c for c in code if c.isalnum())[:80], size, mime)
+    if response.status_code == 413 or str(detail.get('statusCode')) == '413' or code.lower() in ('entitytoolarge', 'payloadtoolarge') or 'maximum allowed size' in message:
+        return HTTPException(413, 'Storage rejected this file as too large. Marketing supports up to 100 MB; the project and bucket storage limits must both allow 100 MB.')
+    if code.lower() == 'invalidmimetype' or response.status_code == 415 or 'mime type' in message:
+        return HTTPException(415, 'Storage rejected this file format. Marketing accepts PNG, JPEG and MP4; check the marketing bucket allows this format.')
+    if response.status_code in (401, 403):
+        return HTTPException(503, 'Marketing storage denied the upload. The server storage connection needs attention.')
+    return HTTPException(503, 'Marketing storage could not save this file. Please retry later; the upload failure has been logged.')
 
 
 async def build_draft(req):
