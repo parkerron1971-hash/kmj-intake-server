@@ -38,6 +38,11 @@ For an open exploration, describe three distinct concepts briefly (different vis
 composition and typography), recommend one, then wait for selection. When asked to create
 now, choose a strong direction, state it briefly and generate without a questionnaire.
 Carry forward explicit owner feedback and preserve approved details during revisions.
+The owner's latest explicit style reference takes priority over these general directions and
+older examples. Identify what makes it work: type proportions, density, alignment, color field,
+texture, material, lighting and depth. Matching a tilted price bar and a few circles alone does
+not match a dimensional, textured poster. Preserve the requested visual energy and hierarchy;
+do not automatically substitute a sparse dark corporate layout or earlier product-hero style.
 The available style keys and their composition principles follow below.
 Every generate_image action must include style_key and an art_direction object:
 {"concept":"visual idea and why it communicates the message","focal_point":"what is seen first",
@@ -61,7 +66,7 @@ logo preserves the exact mark; product preserves the actual supplied UI/product;
 edit_target is the existing composition to revise. Use edit_target first for revisions.
 When the owner supplied relevant images, select the intended images explicitly and describe
 what to borrow or preserve. Do not mistake a style example's portrait for the owner's subject.
-A selected style benchmark may be added automatically when there is room and no edit target.
+A style benchmark may be added only when there is no explicit style reference or edit target.
 If an exact logo/product/person is needed but missing, ask for that asset; never invent it.
 Never claim exact pixel preservation from an image-generation edit. For exact text and placement,
 use compose_flyer with owned image layers and editable text after a key visual is ready.
@@ -137,7 +142,7 @@ def compiled_prompt(brief, refs):
     if sum(len(s) for s in direction['exact_copy']) > 2200:
         raise HTTPException(422, 'Shorten the visible flyer copy; keep detailed information in the caption.')
     text = ('Create an original, professionally art-directed marketing composition.\n'
-            'OWNER BRIEF:\n' + brief.prompt + '\nCOMPOSITION DIRECTION:\n' + DIRECTIONS[brief.style_key]
+            'OWNER BRIEF:\n' + brief.prompt + '\nCOMPOSITION DIRECTION (secondary to the owner\'s explicit style reference):\n' + DIRECTIONS[brief.style_key]
             + '\nART DIRECTION (exact_copy is the only requested visible text when supplied):\n'
             + json.dumps(direction, ensure_ascii=False)
             + '\nREFERENCE ROLES (numbered in the exact image input order):\n' + json.dumps(refs, ensure_ascii=False)
@@ -210,7 +215,7 @@ async def prepare_actions(actions, body, owner):
                 ids.append(iid)
                 refs.append({'image': len(ids), 'role': ref.role, 'use': ref.use})
             # Optional owner-supplied benchmark; unavailability never discards selected references.
-            if not any(r['role'] == 'edit_target' for r in refs) and len(ids) < 4:
+            if not any(r['role'] in ('style', 'edit_target') for r in refs) and len(ids) < 4:
                 from urllib.parse import quote
                 try:
                     rows = await images.db(client, 'GET', '/image_artworks?business_id=eq.' + str(biz['id'])

@@ -14,6 +14,13 @@ PROMPT = '''
 CREATIVE EXECUTION CONTRACT (takes precedence over creative ACTION-tag examples):
 Use the native generate_image, compose_flyer, create_video and find_images tools for creative
 work, not prose or ACTION tags. "Create it" after a visual brief means submit that brief now.
+Choose the tool for the requested visual finish. For a textured or dimensional style reference,
+use generate_image for artwork; compose_flyer alone only provides basic vector layout and owned
+image placement. If exact logos/UI must survive unchanged, generate key art without those assets
+and with space reserved for them, then finish with compose_flyer after the artwork is ready.
+This is two stages: report the first as key art, not a finished branded flyer. Do not claim the
+second stage has run until its action result exists. For a final generated poster, use the style
+reference directly and inspect the result; never claim pixel-exact brand fidelity from generation.
 "Revise", "redesign", "refine" and "edit" requests also require a real creative tool call.
 Use the existing artwork as edit_target and let the latest revision instructions override
 its original visual brief. Never echo [Image references: ...] or Action results history
@@ -40,8 +47,8 @@ def tool_specs():
     compose = {'type': 'object', 'properties': {'layout': {k: v for k,v in layout.items() if k != '$defs'}},
                'required': ['layout'], '$defs': layout['$defs']}
     return [
-        {'name': 'generate_image', 'description': 'Submit one original image using the approved brief, exact copy, art direction and reference roles. Existing approval and budget rules apply.', 'input_schema': image},
-        {'name': 'compose_flyer', 'description': 'Create a PNG and editable SVG from a complete owned-image, text and shape layout. Existing approval rules apply.', 'input_schema': compose},
+        {'name': 'generate_image', 'description': 'Generate original artwork, including textured backgrounds, dimensional type, lighting and rich style-reference treatments. Can create key art for later exact-logo composition. Existing approval and budget rules apply.', 'input_schema': image},
+        {'name': 'compose_flyer', 'description': 'Finish ready artwork with exact owned logos/UI and editable text, or create intentionally flat vector graphics. Basic shapes alone cannot reproduce textured or dimensional style references; generate their key art first. Existing approval rules apply.', 'input_schema': compose},
         {'name': 'create_video', 'description': 'Create one video project and queue its scene plan for later owner review; does not render or publish.',
          'input_schema': {'type': 'object', 'properties': {'brief': {'type': 'string'}, 'title': {'type': 'string'}, 'format': {'type': 'string', 'enum': ['portrait','landscape','square']}}, 'required': ['brief']}},
         {'name': 'find_images', 'description': 'Read current owned artwork status and return real result cards. Does not create or retry an image.',

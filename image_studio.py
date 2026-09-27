@@ -233,7 +233,8 @@ def normalize_image(raw: bytes):
             image.load()
             # Strip metadata and normalize references without fetching a caller-supplied URL.
             out = io.BytesIO()
-            image.convert('RGBA' if 'A' in image.getbands() else 'RGB').save(out, 'PNG')
+            has_alpha = 'A' in image.getbands() or 'transparency' in image.info
+            image.convert('RGBA' if has_alpha else 'RGB').save(out, 'PNG')
             value = out.getvalue()
             if len(value) > MAX_BYTES:
                 raise ValueError('image too large')

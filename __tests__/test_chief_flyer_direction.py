@@ -125,6 +125,33 @@ def test_visual_review_loads_owned_pixels_and_complete_layout(owned, monkeypatch
     assert images.artwork.call_args.args[1:] == (BIZ['id'], iid)
 
 
+@pytest.mark.parametrize('source', ['chat:1', 'saved'])
+def test_explicit_style_never_receives_an_unrelated_benchmark(owned, monkeypatch, source):
+    iid = str(uuid4())
+    if source == 'saved':
+        source = 'artwork:' + iid
+    body = ChiefMessageBody(message='Follow this style', images=[attachment()])
+    result = run(direction.prepare_actions([{'type': 'generate_image', 'prompt': 'A textured poster',
+        'reference_inputs': [{'source': source, 'role': 'style', 'use': 'dimensional type and texture'}]}], body, OWNER))[0]
+    assert len(result['reference_ids']) == 1
+    assert 'dimensional type and texture' in result['prompt']
+    assert not any('prompt=eq.' in call.args[2] for call in images.db.await_args_list)
+
+
+def test_private_reference_upload_preserves_transparent_pixels(owned):
+    buffer = io.BytesIO()
+    logo = Image.new('RGBA', (3, 1), (255, 255, 255, 0))
+    logo.putpixel((1, 0), (100, 50, 200, 128))
+    logo.putpixel((2, 0), (255, 255, 255, 255))
+    logo.save(buffer, 'PNG')
+    image = ChiefMessageBody(message='Use my logo', images=[{
+        'name': 'logo.png', 'data_url': 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
+    }]).images[0]
+    run(direction.save_chat_reference(None, BIZ, image))
+    uploaded = Image.open(io.BytesIO(images.store.await_args.args[2]))
+    assert list(uploaded.getdata()) == list(logo.getdata())
+
+
 def test_review_failure_is_explicit_and_contains_no_pixels(owned, monkeypatch):
     monkeypatch.setattr(images, 'artwork', AsyncMock(side_effect=HTTPException(404, 'Not found')))
     body = ChiefMessageBody(message=f'Review artwork {uuid4()}')
