@@ -354,7 +354,7 @@ async def local_context(owner):
     from platform_chief_creative import platform_business
     from platform_chief_marketing import founder_offer, product_context
     biz = await platform_business(owner)
-    if str(biz['owner_id']) != str(owner.id):
+    if str(biz.get('owner_id')) != str(owner.id):
         raise HTTPException(403, 'Business access denied.')
     async with httpx.AsyncClient(timeout=30) as client:
         prefs = await profile(client, biz)

@@ -232,6 +232,20 @@ def test_native_creation_uses_director_contract():
     assert not names & {'generate_image','compose_flyer','publish','approve'}
 
 
+def test_platform_resolver_returns_verified_owner_for_subscription_context(monkeypatch):
+    import platform_console as console
+    owner=str(uuid4());biz={'id':str(uuid4()),'owner_id':owner};seen=[]
+    def respond(req):
+        seen.append(req); return httpx.Response(200,json=[biz])
+    monkeypatch.setattr(console,'SUPABASE_URL','https://storage.test')
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            return await console._find_platform_business(client,{},owner)
+    assert run(exercise())['owner_id']==owner
+    assert seen[0].url.params['owner_id']=='eq.'+owner
+    assert 'owner_id' in seen[0].url.params['select'].split(',')
+
+
 def test_planner_and_image_render_each_meter_once(monkeypatch):
     import base64
     import api_usage_logger
