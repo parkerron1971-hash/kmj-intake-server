@@ -17,6 +17,7 @@ from uuid import UUID, uuid5
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from PIL import Image
+from pydantic import ValidationError
 
 import image_studio as images
 import sb_clients
@@ -162,7 +163,32 @@ async def structured(client, row, schema, instruction, content):
     values = [b['input'] for b in data.get('content', []) if b.get('type') == 'tool_use' and b.get('name') == 'return_result']
     if len(values) != 1:
         raise HTTPException(422, 'The design service did not return a complete structured result.')
-    return schema.model_validate(values[0])
+    value = compact_art_direction(values[0]) if schema is Plan else values[0]
+    try:
+        return schema.model_validate(value)
+    except ValidationError:
+        raise HTTPException(422, 'The design service returned incomplete details. Try a new design request.') from None
+
+
+def compact_art_direction(value):
+    """Bound creative prose without another paid call or altering protected fields.
+
+    Tool models sometimes exceed JSON Schema maxLength. Copy, claim concerns and
+    asset placements must still validate exactly; only descriptive art prose is cut.
+    """
+    if not isinstance(value, dict): return value
+    result = dict(value)
+    properties = Plan.model_json_schema()['properties']
+    for name in ('concept', 'reference_analysis', 'typography', 'composition',
+                 'palette', 'materials_light', 'preserve', 'avoid'):
+        text = result.get(name)
+        limit = properties[name]['maxLength']
+        if isinstance(text, str) and len(text) > limit:
+            shortened = text[:limit]
+            boundary = shortened.rfind(' ')
+            if boundary >= limit // 2: shortened = shortened[:boundary]
+            result[name] = shortened.rstrip()
+    return result
 
 
 async def references(client, row, spec):
