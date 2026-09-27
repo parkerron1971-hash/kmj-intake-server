@@ -151,6 +151,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Connection metadata travels with the business; credentials never do.
     # Remove devices first so workers lose access before jobs are erased.
     "connected_ai_devices", "connected_ai_pairings",
+    "creative_director_profiles",  # preserve owner preferences before deleting their source artwork
     "image_publications", "image_artworks",  # publication records reference originals
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
     "media_assets",
@@ -571,6 +572,7 @@ _IMPORT_SKIP = {
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication
     # claims or private storage paths tied to the original business.
+    "creative_director_profiles",  # source/logo IDs belong to the original private gallery; remember again after restore
     "image_publications", "image_artworks",
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
     "media_assets",  # media files and review proofs need an explicit restore

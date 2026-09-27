@@ -24,6 +24,7 @@ import llm_call
 from auth_supabase import UserSession
 from lead_admin import require_owner
 from creative_director_models import DesignRequest, Plan, Review, WORKFLOW
+from creative_director_render import render
 
 router = APIRouter(prefix='/platform/chief/director', tags=['creative-director'])
 VERSION = 1
@@ -226,32 +227,6 @@ def render_prompt(plan, spec, repair=''):
         + ('\nTARGETED REPAIR: ' + repair + '\nPreserve all successful elements; the last image is the previous artwork to repair.' if repair else ''))
 
 
-async def render(client, row, prompt, raw_refs):
-    await guard(row['business_id'])
-    payload = {k: row[k] for k in ('model', 'quality', 'size')}
-    payload.update(prompt=prompt, n=1, output_format='png')
-    headers = {'Authorization': 'Bearer ' + os.environ.get('OPENAI_API_KEY', '')}
-    if raw_refs:
-        response = await client.post('https://api.openai.com/v1/images/edits', headers=headers, data=payload,
-            files=[('image[]', (f'reference-{i}.png', raw, 'image/png')) for i, raw in enumerate(raw_refs)])
-    else:
-        response = await client.post('https://api.openai.com/v1/images/generations', headers=headers, json=payload)
-    if not response.is_success:
-        raise images.provider_error(response, row['model'])
-    data = response.json(); usage = data.get('usage') or {}
-    cost = images.image_cost(usage)
-    estimate = cost if cost is not None else (usage.get('input_tokens', 0)*8 + usage.get('output_tokens', 0)*30)/1_000_000
-    decoded = False
-    try:
-        raw = images.normalize_image(base64.b64decode(data['data'][0]['b64_json'], validate=True))
-        decoded = True
-    finally:
-        # Record a returned paid render even if decoding, storage or review fails.
-        await images.log_api_usage(endpoint='/platform/chief/director/render', model=row['model'],
-            business_id=row['business_id'], input_tokens=usage.get('input_tokens', 0), output_tokens=usage.get('output_tokens', 0),
-            task_type='image_generation', cost_cents_override=estimate*100,
-            units=images.image_units(row['quality']) if decoded else 0, ok=decoded)
-    return raw, usage, cost
 
 
 async def compose(raw, plan, loaded, size):

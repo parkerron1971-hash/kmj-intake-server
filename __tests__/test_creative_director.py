@@ -232,6 +232,32 @@ def test_native_creation_uses_director_contract():
     assert not names & {'generate_image','compose_flyer','publish','approve'}
 
 
+def test_planner_and_image_render_each_meter_once(monkeypatch):
+    import base64
+    import api_usage_logger
+    from creative_director_render import render
+    r=row(); billed=[]
+    monkeypatch.setattr(d,'guard',AsyncMock())
+    monkeypatch.setattr(api_usage_logger,'log_api_usage_sync',lambda **kw:billed.append(kw))
+    async def record(**kw): billed.append(kw)
+    monkeypatch.setattr(images,'log_api_usage',record)
+    monkeypatch.setenv('ANTHROPIC_API_KEY','fake-test-key')
+    def respond(req):
+        if '/images/' in str(req.url):
+            return httpx.Response(200,json={'data':[{'b64_json':base64.b64encode(png()).decode()}],
+                'usage':{'input_tokens':10,'output_tokens':20}})
+        return httpx.Response(200,json={'model':'claude-sonnet-5','usage':{'input_tokens':10,'output_tokens':20},
+            'content':[{'type':'tool_use','name':'return_result','input':plan().model_dump(mode='json')}]})
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            await d.structured(client,r,Plan,'Plan this design',[{'type':'text','text':'owner brief'}])
+            await render(client,r,'approved art direction',[])
+    run(exercise())
+    assert len(billed)==2
+    assert all(x['business_id']==r['business_id'] for x in billed)
+    assert billed[0]['endpoint'] != billed[1]['endpoint']
+
+
 @pytest.mark.parametrize('status,body,expected', [(400,{'statusCode':'413','message':'exceeds maximum allowed size'},413),
     (400,{'code':'EntityTooLarge'},413),(413,{},413),(415,{},415),(400,{'code':'InvalidMimeType'},415),
     (403,{'message':'secret details'},503),(500,{},503)])
