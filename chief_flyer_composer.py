@@ -30,9 +30,12 @@ _slots = asyncio.Semaphore(2)
 
 PROMPT = '''
 EDITABLE FLYER FINISHING:
-Use compose_flyer when exact typography, logos or screenshot placement matters, or the owner
-asks for an editable flyer. It creates a PNG preview plus an SVG master with separate editable
+Use compose_flyer to finish ready artwork with exact typography, logos or screenshot placement,
+or to make a deliberately flat vector layout. It creates a PNG preview plus an SVG master with separate editable
 image, shape and text layers. It does not extract layers from an existing flattened design.
+It is not a substitute for generated art when a style reference depends on grain, lit materials,
+dimensional lettering, photography or depth of field. Do not downgrade those features to flat
+circles, generic rectangles and plain text merely because an exact logo must also be placed.
 For generated key art, first request an image without lettering, leaving the intended text areas
 clear; after it is ready, compose the final copy over that owned artwork. Never promise an editable
 master for a generate_image-only result. Existing photographs/logos/screenshots can be composed
@@ -58,6 +61,7 @@ Use larger body text for phone readability, safe margins and purposeful hierarch
 is a bundled bold condensed headline face (Anton); use weight 400, its native weight, for consistent
 rendering on every device. Other fonts use installed families; do not promise commercial fonts.
 PRODUCT AD ART DIRECTION:
+These product-ad defaults apply only when the owner has not requested a different composition.
 Lead with the customer-facing headline, then a focused REAL product view, then the offer and CTA.
 Keep the brand signature smaller than the headline. Do not default to a large brand name above
 a full unreadable dashboard and a separate rounded pricing card. Use a coherent composition with
