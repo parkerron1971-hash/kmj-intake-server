@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -78,6 +79,32 @@ def tracked_link(url, service, campaign, creative):
     tags.update(utm_source='x' if service == 'twitter' else service, utm_medium='organic_social',
                 utm_campaign=campaign, utm_content=creative)
     return urlunsplit((parts.scheme, parts.netloc, parts.path or '/', urlencode(tags), parts.fragment))
+
+
+def caption_with_landing_link(text, url):
+    """Keep public captions clean; attribution metadata is not public copy.
+
+    The caller validates the destination through tracked_link first. Preserve
+    functional query parameters (such as plan=founder) and section fragments.
+    """
+    parts = urlsplit(url)
+    query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                       if not k.lower().startswith('utm_')])
+    clean = urlunsplit((parts.scheme, parts.netloc, parts.path or '/', query, parts.fragment))
+
+    def destination(value):
+        try:
+            parsed = urlsplit(value if '://' in value else 'https://' + value)
+            return (parsed.hostname.removeprefix('www.'), parsed.path or '/',
+                    tuple(sorted(parse_qsl(parsed.query, keep_blank_values=True))), parsed.fragment)
+        except ValueError:
+            return None
+
+    # Match entire URLs, not substrings of another host, path or email address.
+    links = re.findall(r'(?<![\w@./-])(?:https?://)?(?:www\.)?mysolutionist\.app\b[^\s<>"\u201c\u201d]*', text, re.I)
+    if any(destination(link.rstrip('.,!;:)]}')) == destination(clean) for link in links):
+        return text
+    return text + '\n\n' + clean
 
 
 class Connection(BaseModel):
@@ -381,23 +408,26 @@ async def build_draft(req):
         asset = rows[0]
     if channel['service'] == 'instagram' and not asset:
         raise HTTPException(422, 'Instagram requires an image or video.')
-    link = tracked_link(req.landing_url, channel['service'], req.campaign, str(req.id))
+    campaign = req.campaign.strip()
+    if not campaign:
+        raise HTTPException(422, 'Enter a campaign name.')
+    link = tracked_link(req.landing_url, channel['service'], campaign, str(req.id))
     text = req.text.strip()
     if not text:
         raise HTTPException(422, 'Write a caption before saving.')
-    publish_text = text + '\n\n' + link
+    publish_text = caption_with_landing_link(text, req.landing_url)
     # Buffer performs final platform/media validation; local length catches
     # accidental long captions early. URLs count as 23 characters on X.
     if channel['service'] == 'twitter' and len(text) + 25 > 280:
         raise HTTPException(422, 'Keep the X caption at 255 characters or fewer, leaving room for its link.')
     limits = {'instagram':2200, 'linkedin':3000, 'facebook':5000}
     if len(publish_text) > limits.get(channel['service'], 10000):
-        raise HTTPException(422, 'Caption and tracking link exceed this channel’s limit.')
+        raise HTTPException(422, 'Caption and website link exceed this channel’s limit.')
     payload = {'organization_id': cfg['organization_id'], 'channel_id': channel['id'],
         'channel_name': channel.get('displayName') or channel['name'], 'service': channel['service'],
         'text': text, 'publish_text': publish_text, 'landing_url': req.landing_url,
         'tracked_url': link, 'asset': asset, 'ai_assisted': req.ai_assisted}
-    row = {'id': str(req.id), 'campaign': req.campaign, 'payload': payload,
+    row = {'id': str(req.id), 'campaign': campaign, 'payload': payload,
            'run_at': run_at.isoformat(), 'expires_at': expires.isoformat()}
     row['content_hash'] = digest(row)
     # Relationship metadata stays outside the public-content hash so migration

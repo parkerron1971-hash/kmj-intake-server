@@ -97,7 +97,33 @@ def test_asset_content_and_schedule_bound_into_review_hash(state):
     two=run(m.build_draft(d.model_copy(update={'text':'A changed caption'})))
     three=run(m.build_draft(d.model_copy(update={'run_at':d.run_at+timedelta(hours=1)})))
     assert len({one['content_hash'],two['content_hash'],three['content_hash']})==3
-    assert one['payload']['tracked_url'] in one['payload']['publish_text']
+    assert one['payload']['publish_text'].endswith('https://mysolutionist.app/')
+    assert 'utm_' not in one['payload']['publish_text']
+    assert 'utm_content=' in one['payload']['tracked_url']
+
+
+@pytest.mark.parametrize('website', ['mysolutionist.app', 'https://mysolutionist.app/',
+    'https://www.mysolutionist.app', '(mysolutionist.app).'])
+def test_existing_landing_link_is_not_duplicated_in_review_or_delivery(state, website):
+    text = 'Claim your founding seat → ' + website
+    row = run(m.build_draft(draft().model_copy(update={'text': text})))
+    assert row['payload']['publish_text'] == text
+    assert m.post_payload(row)['text'] == text
+
+
+@pytest.mark.parametrize('existing', ['mysolutionist.app/features',
+    'mysolutionist.app.evil.test', 'info@mysolutionist.app'])
+def test_other_destination_or_email_does_not_hide_landing_link(state, existing):
+    row = run(m.build_draft(draft().model_copy(update={'text': 'See ' + existing})))
+    assert row['payload']['publish_text'].endswith('\n\nhttps://mysolutionist.app/')
+
+
+def test_clean_link_preserves_functional_destination_and_trims_campaign(state):
+    row = run(m.build_draft(draft(landing_url='https://mysolutionist.app/start?plan=founder&utm_source=old#offer')
+        .model_copy(update={'campaign': ' Founding Seats Launch '})))
+    assert row['campaign'] == 'Founding Seats Launch'
+    assert row['payload']['publish_text'].endswith('https://mysolutionist.app/start?plan=founder#offer')
+    assert 'utm_' not in m.post_payload(row)['text']
 
 
 def test_rejects_cross_account_draft(state):
