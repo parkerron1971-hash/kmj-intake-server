@@ -173,6 +173,58 @@ def test_composition_never_reads_foreign_pixels(owned, monkeypatch):
     images.original.assert_not_called()
 
 
+@pytest.mark.parametrize('crop', [
+    {'x': .8, 'y': 0, 'width': .3, 'height': 1},
+    {'x': 0, 'y': .8, 'width': 1, 'height': .3},
+    {'x': 0, 'y': 0, 'width': 0, 'height': 1},
+    {'x': float('nan'), 'y': 0, 'width': 1, 'height': 1},
+])
+def test_source_crop_cannot_escape_image(crop):
+    with pytest.raises(ValidationError): composer.Crop.model_validate(crop)
+
+
+def test_crop_embeds_original_pixels_and_preserves_alpha(owned, monkeypatch):
+    out = io.BytesIO()
+    Image.new('RGBA', (200, 100), (80, 0, 160, 90)).save(out, 'PNG')
+    monkeypatch.setattr(images, 'original', AsyncMock(return_value=out.getvalue()))
+    spec = layout(layers=[{'kind': 'image', 'image_id': str(uuid4()), 'x': 20, 'y': 30,
+        'width': 300, 'height': 200, 'crop': {'x': .25, 'y': .1, 'width': .5, 'height': .8},
+        'radius': 12, 'shadow': {'blur': 15}}])
+    svg = run(composer.svg_document(None, BIZ['id'], spec))
+    assert 'viewBox="50.0 10.0 100.0 80.0"' in svg
+    encoded = svg.split('data:image/png;base64,')[1].split('"')[0]
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as embedded:
+        assert embedded.size == (200, 100) and embedded.getpixel((0, 0)) == (80, 0, 160, 90)
+    assert 'feDropShadow' in svg and 'clip-path="url(#clip-0)"' in svg
+    assert 'clip-path="url(#source-clip-0)"' in svg  # contain letterboxes cannot reveal excluded pixels
+    assert run(composer.svg_document(None, BIZ['id'], composer.decode_layout({'prompt': composer.encode_layout(spec)}))) == svg
+
+
+def test_gradient_and_shadow_cannot_load_external_content():
+    for value in [{'start': 'url(https://example.com)', 'end': '#ffffff'},
+                  {'start': '#000000', 'end': '#ffffff', 'direction': 'url(remote)'}]:
+        with pytest.raises(ValidationError): composer.Gradient.model_validate(value)
+    with pytest.raises(ValidationError): composer.Shadow(color='url(remote)')
+    with pytest.raises(ValidationError): composer.Shadow(blur=100000)
+
+
+def test_existing_layout_encoding_omits_new_optional_fields():
+    spec = layout(layers=[{'kind': 'image', 'image_id': str(uuid4()), 'x': 0, 'y': 0,
+        'width': 100, 'height': 100}, {'kind': 'shape', 'x': 0, 'y': 0, 'width': 100,
+        'height': 100, 'fill': '#000000'}])
+    encoded = composer.encode_layout(spec)
+    assert 'shadow' not in encoded and 'crop' not in encoded and 'gradient' not in encoded
+
+
+def test_display_font_is_self_contained_and_licensed():
+    spec = layout(layers=[{'kind': 'text', 'text': 'ONE SYSTEM.', 'x': 40, 'y': 60,
+        'width': 900, 'font_size': 100, 'font': 'display', 'weight': 400}])
+    svg = run(composer.svg_document(None, BIZ['id'], spec))
+    assert 'data:font/ttf;base64,' in svg and 'SIL OPEN FONT LICENSE' in svg
+    assert 'font-family="Flyer Anton"' in svg
+    assert 'data:font/ttf;base64,' not in run(composer.svg_document(None, BIZ['id'], layout()))
+
+
 def test_composition_chat_source_becomes_owned_reference(owned):
     body = ChiefMessageBody(message='Place this photo', images=[attachment()])
     result = run(composer.prepare_action({'layout': {'width': 1080, 'height': 1350, 'layers': [
