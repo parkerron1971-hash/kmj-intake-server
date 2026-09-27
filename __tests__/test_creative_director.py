@@ -232,6 +232,21 @@ def test_native_creation_uses_director_contract():
     assert not names & {'generate_image','compose_flyer','publish','approve'}
 
 
+def test_verbose_art_direction_is_bounded_without_changing_protected_fields():
+    value=plan().model_dump(mode='json')
+    value.update(typography='Use tightly stacked dimensional typography. '*100,
+        materials_light='Use subtle grain with deliberate directional light. '*100,
+        copy_concerns=['Confirm this unverified claim.'])
+    original=copy.deepcopy(value)
+    compact=d.compact_art_direction(value)
+    result=Plan.model_validate(compact)
+    assert len(result.typography)<=900 and len(result.materials_light)<=800
+    assert compact['placements']==original['placements']
+    assert compact['copy_concerns']==original['copy_concerns']
+    assert value==original
+    with pytest.raises(HTTPException): d.validate_plan(result,spec())
+
+
 def test_platform_resolver_returns_verified_owner_for_subscription_context(monkeypatch):
     import platform_console as console
     owner=str(uuid4());biz={'id':str(uuid4()),'owner_id':owner};seen=[]
@@ -260,8 +275,9 @@ def test_planner_and_image_render_each_meter_once(monkeypatch):
         if '/images/' in str(req.url):
             return httpx.Response(200,json={'data':[{'b64_json':base64.b64encode(png()).decode()}],
                 'usage':{'input_tokens':10,'output_tokens':20}})
+        verbose={**plan().model_dump(mode='json'),'typography':'Dimensional type with restrained highlights. '*100}
         return httpx.Response(200,json={'model':'claude-sonnet-5','usage':{'input_tokens':10,'output_tokens':20},
-            'content':[{'type':'tool_use','name':'return_result','input':plan().model_dump(mode='json')}]})
+            'content':[{'type':'tool_use','name':'return_result','input':verbose}]})
     async def exercise():
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
             await d.structured(client,r,Plan,'Plan this design',[{'type':'text','text':'owner brief'}])
