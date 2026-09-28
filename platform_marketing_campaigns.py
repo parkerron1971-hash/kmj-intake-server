@@ -10,7 +10,7 @@ import json
 import logging
 import math
 import os
-from datetime import date
+from datetime import date, timedelta
 from typing import Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4, uuid5
@@ -195,11 +195,34 @@ async def campaign_detail(campaign_id: UUID):
             f"/platform_marketing_metrics?post_id=in.({','.join(ids[i:i+100])})&limit=100")
             for i in range(0,len(ids),100)))
         measurements = [row for batch in batches for row in batch]
+    import marketing_outcomes
+    outcomes = await marketing_outcomes.for_posts([p for p in posts if p['status'] == 'published'])
     return {'campaign':campaign, 'posts':posts, 'metrics':measurements,
-            'truncated':len(rows)>500, 'performance':performance(posts, measurements)}
+            'truncated':len(rows)>500, 'performance':performance(posts, measurements, outcomes)}
 
 
-def performance(posts, measurements):
+@router.get('/results')
+async def results(days: int = 30):
+    """Every post published in the window and what came through its link.
+
+    The headline is the first thing the owner reads, so it is assembled
+    from counts — no model writes it and it cannot overstate."""
+    import marketing_outcomes
+    days = max(1, min(int(days), 365))
+    since = (marketing.now() - timedelta(days=days)).isoformat().replace('+00:00', 'Z')
+    rows = await db('GET', f'/platform_marketing_posts?status=eq.published&run_at=gte.{since}&order=run_at.desc&limit=201')
+    posts = rows[:200]
+    outcomes = await marketing_outcomes.for_posts(posts)
+    return {'days': days, 'truncated': len(rows) > 200,
+            'headline': marketing_outcomes.headline(outcomes['totals'], len(posts)),
+            'totals': outcomes['totals'], 'sources': outcomes['sources'],
+            'posts': [{'id': p['id'], 'campaign': p['campaign'], 'run_at': p['run_at'],
+                       'service': p['payload'].get('service'), 'channel_name': p['payload'].get('channel_name'),
+                       'text': p['payload'].get('text'), 'external_url': p.get('external_url'),
+                       'outcomes': outcomes['posts'].get(p['id'])} for p in posts]}
+
+
+def performance(posts, measurements, outcomes=None):
     """Sum additive per-post counts; never turn missing data into zero or unique reach."""
     published = {p['id'] for p in posts if p['status'] == 'published'}
     totals = {}
@@ -216,9 +239,14 @@ def performance(posts, measurements):
                     values.append(value)
                     break
         totals[kind] = {'value':sum(values) if values else None, 'covered_posts':len(values), 'published_posts':len(published)}
+    if outcomes is None:
+        return {'totals':totals, 'published_posts':len(published),
+                'customer_outcomes':None,
+                'outcome_note':'Customer outcomes were not read. Social activity is not a customer conversion.'}
     return {'totals':totals, 'published_posts':len(published),
-            'customer_outcomes':None,
-            'outcome_note':'Customer outcomes are not yet joined to campaigns. Social activity is not a customer conversion.'}
+            'customer_outcomes':outcomes['totals'], 'outcome_sources':outcomes['sources'],
+            'outcome_note':'Counted through each post’s own link: people who followed it, then left details, '
+                           'signed up or started paying. This records the path they took, not proof the post persuaded them.'}
 
 
 async def generate_strategy(brief):

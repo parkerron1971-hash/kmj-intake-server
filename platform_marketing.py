@@ -1,6 +1,7 @@
 """Solutionist's own approved marketing calendar, isolated from tenant publishing."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import asyncio
 import io
@@ -81,11 +82,32 @@ def tracked_link(url, service, campaign, creative):
     return urlunsplit((parts.scheme, parts.netloc, parts.path or '/', urlencode(tags), parts.fragment))
 
 
-def caption_with_landing_link(text, url):
+def link_code(post_id):
+    """The post's short-link code: 8 characters, derived from its id.
+
+    Derived rather than random so a retried save, an edit or a rebuilt
+    preview always lands on the same code \u2014 the link in an approved caption
+    can never drift away from the post it names."""
+    raw = hashlib.sha256(f'platform-marketing-go:{post_id}'.encode()).digest()[:5]
+    return base64.b32encode(raw).decode().lower()
+
+
+def short_link(code):
+    return f'https://mysolutionist.app/go/{code}'
+
+
+GO_CODE = re.compile(r'^[a-z2-7]{8}$')
+
+
+def caption_with_landing_link(text, url, link):
     """Keep public captions clean; attribution metadata is not public copy.
 
-    The caller validates the destination through tracked_link first. Preserve
-    functional query parameters (such as plan=founder) and section fragments.
+    The public text carries the post's short link, never a tagged URL. The
+    redirect behind the link adds the campaign tags, which is what lets a
+    visit be followed back to this post \u2014 the clean destination on its own
+    arrived untracked. A caption that already names the landing page has
+    that mention swapped for the short link; otherwise the link is appended
+    once. The caller validates the destination through tracked_link first.
     """
     parts = urlsplit(url)
     query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
@@ -101,10 +123,23 @@ def caption_with_landing_link(text, url):
             return None
 
     # Match entire URLs, not substrings of another host, path or email address.
-    links = re.findall(r'(?<![\w@./-])(?:https?://)?(?:www\.)?mysolutionist\.app\b[^\s<>"\u201c\u201d]*', text, re.I)
-    if any(destination(link.rstrip('.,!;:)]}')) == destination(clean) for link in links):
+    pattern = re.compile(r'(?<![\w@./-])(?:https?://)?(?:www\.)?mysolutionist\.app\b[^\s<>"\u201c\u201d]*', re.I)
+    if link in text:
         return text
-    return text + '\n\n' + clean
+    target = destination(clean)
+    found = False
+
+    def swap(match):
+        nonlocal found
+        value = match.group(0)
+        bare = value.rstrip('.,!;:)]}')
+        if destination(bare) != target:
+            return value
+        found = True
+        return link + value[len(bare):]
+
+    swapped = pattern.sub(swap, text)
+    return swapped if found else text + '\n\n' + link
 
 
 class Connection(BaseModel):
@@ -415,7 +450,8 @@ async def build_draft(req):
     text = req.text.strip()
     if not text:
         raise HTTPException(422, 'Write a caption before saving.')
-    publish_text = caption_with_landing_link(text, req.landing_url)
+    code = link_code(req.id)
+    publish_text = caption_with_landing_link(text, req.landing_url, short_link(code))
     # Buffer performs final platform/media validation; local length catches
     # accidental long captions early. URLs count as 23 characters on X.
     if channel['service'] == 'twitter' and len(text) + 25 > 280:
@@ -431,10 +467,30 @@ async def build_draft(req):
            'run_at': run_at.isoformat(), 'expires_at': expires.isoformat()}
     row['content_hash'] = digest(row)
     # Relationship metadata stays outside the public-content hash so migration
-    # does not invalidate already reviewed legacy posts.
+    # does not invalidate already reviewed legacy posts. The link code is
+    # already inside the hash through publish_text; the column is its index.
+    row['link_code'] = code
     if req.campaign_id:
         row['campaign_id'] = str(req.campaign_id)
     return row
+
+
+async def follow(code, *, count_click):
+    """The tagged destination behind a short link, or None for an unknown code."""
+    if not GO_CODE.match(code or ''):
+        return None
+    try:
+        url = await db('POST', '/rpc/platform_marketing_follow', {'code': code, 'count_click': count_click})
+    except HTTPException:
+        return None
+    # Never an open redirect: only a destination tracked_link would build.
+    try:
+        parts = urlsplit(url) if isinstance(url, str) else None
+    except ValueError:
+        parts = None
+    if not parts or parts.scheme != 'https' or parts.hostname not in {'mysolutionist.app', 'www.mysolutionist.app'}:
+        return None
+    return url
 
 
 @router.post('/posts')

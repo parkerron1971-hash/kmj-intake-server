@@ -94,7 +94,9 @@ based on Mission Control records. Mention this coverage limit when discussing ca
 Explain missing data in plain English, without internal field names or database jargon.
 Campaign briefs are saved owner inputs, not independently verified research. Keep campaign
 tracking_key unchanged; include campaign_id when drafting for a saved campaign. A campaign's
-stage never approves posts or spending. Customer outcome attribution is not yet joined to campaigns.
+stage never approves posts or spending. Every post carries its own short link (mysolutionist.app/go/...);
+link_results counts the visits, leads, signups and paying customers that came THROUGH each link. Say they
+came through the link, never that a post caused or brought them, and never read an unavailable count as zero.
 Suggest specific post ideas, varied hooks, captions, visual directions and CTAs. Distinguish verified
 product facts from ideas. Never invent testimonials, pricing,
 statistics, guarantees or pretend the calendar was loaded when it was unavailable.
@@ -174,6 +176,22 @@ async def founder_offer():
     return facts
 
 
+async def _link_results():
+    """The last 30 days of published posts and what came through their links."""
+    from platform_marketing_campaigns import results
+    try:
+        data = await results(30)
+    except HTTPException:
+        raise
+    except Exception:
+        # Results are an extra; a fault here must not take the calendar down with it.
+        raise HTTPException(503, 'Link results could not be read.') from None
+    return {'headline': data['headline'], 'totals': data['totals'], 'sources': data['sources'],
+            'posts': [{'campaign': p['campaign'], 'run_at': p['run_at'], 'service': p['service'],
+                       'caption_start': (p['text'] or '')[:120], 'outcomes': p['outcomes']}
+                      for p in data['posts'][:15]]}
+
+
 async def marketing_snapshot():
     import platform_marketing as marketing
     result = {
@@ -203,6 +221,7 @@ async def marketing_snapshot():
     await read('config', marketing.config)
     await read('recent_posts', lambda: marketing.db('GET', '/platform_marketing_posts?order=run_at.desc&limit=31'), 30)
     await read('assets', marketing.assets)
+    await read('link_results', _link_results)
     campaign_rows = await read('campaign_briefs', lambda: marketing.db('GET', '/platform_marketing_campaigns?select=id,name,tracking_key,revision,stage,brief,brief_hash,plan_brief_hash&order=updated_at.desc&limit=11'), 10)
     if campaign_rows is not None:
         result['campaign_briefs'] = [{'id':c['id'],'name':c['name'],'tracking_key':c['tracking_key'],
