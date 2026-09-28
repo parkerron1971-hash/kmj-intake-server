@@ -76,6 +76,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CHIEF_MODEL_CHAT: ${{ inputs.chief_model_chat }}
         run: python scripts/chief_factual_eval.py --live --out chief-factual-report.json
+      - name: Measure advice answers (did it answer, commit, offer a next step)
+        if: always()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CHIEF_MODEL_CHAT: ${{ inputs.chief_model_chat }}
+        run: python scripts/chief_advice_eval.py --live --out chief-advice-report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -83,6 +89,7 @@ jobs:
           path: |
             chief-eval-report.json
             chief-factual-report.json
+            chief-advice-report.json
 
   design-acceptance:
     if: github.event_name == 'workflow_dispatch' && inputs.fixture_business_id != ''
