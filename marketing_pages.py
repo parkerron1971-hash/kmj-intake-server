@@ -786,6 +786,30 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     sessionStorage.setItem(KEY, JSON.stringify(attr));
   }} catch (e) {{ /* attribution must never break the page */ }}
 }})();
+
+/* The signup door. /start hands its campaign params to the app, but the
+   buttons that link to it carry none — so a visitor who came from a post
+   and signed up arrived in the app untracked. At click time, give the
+   /start link the session's stashed params (never the referrer, and never
+   over a param the link already names). */
+(function () {{
+  try {{
+    var CARRY = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','ref'];
+    document.addEventListener('click', function (ev) {{
+      var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+      if (!a) return;
+      var url = new URL(a.getAttribute('href'), location.href);
+      if (url.origin !== location.origin || url.pathname !== '/start') return;
+      var attr = JSON.parse(sessionStorage.getItem('_sol_attr') || 'null');
+      if (!attr) return;
+      var added = false;
+      CARRY.forEach(function (k) {{
+        if (attr[k] && !url.searchParams.has(k)) {{ url.searchParams.set(k, attr[k]); added = true; }}
+      }});
+      if (added) a.setAttribute('href', url.pathname + url.search + url.hash);
+    }}, true);
+  }} catch (e) {{ /* attribution must never break the page */ }}
+}})();
 </script>
 
 <script>
@@ -811,7 +835,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       var a = JSON.parse(sessionStorage.getItem('_sol_attr') || 'null');
       if (a) {{
         camp = {{}};
-        ['utm_source','utm_medium','utm_campaign','gclid','fbclid','ref'].forEach(function (k) {{
+        ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','ref'].forEach(function (k) {{
           if (a[k]) camp[k] = a[k];
         }});
         if (!Object.keys(camp).length) camp = null;

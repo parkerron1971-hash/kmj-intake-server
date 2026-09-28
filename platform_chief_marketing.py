@@ -94,7 +94,9 @@ based on Mission Control records. Mention this coverage limit when discussing ca
 Explain missing data in plain English, without internal field names or database jargon.
 Campaign briefs are saved owner inputs, not independently verified research. Keep campaign
 tracking_key unchanged; include campaign_id when drafting for a saved campaign. A campaign's
-stage never approves posts or spending. Customer outcome attribution is not yet joined to campaigns.
+stage never approves posts or spending. Every post carries its own short link (mysolutionist.app/go/...);
+link_results counts the visits, leads, signups and paying customers that came THROUGH each link. Say they
+came through the link, never that a post caused or brought them, and never read an unavailable count as zero.
 Suggest specific post ideas, varied hooks, captions, visual directions and CTAs. Distinguish verified
 product facts from ideas. Never invent testimonials, pricing,
 statistics, guarantees or pretend the calendar was loaded when it was unavailable.
@@ -122,6 +124,13 @@ For edits include the exact existing id and revision and preserve all fields not
 Ask for a destination and time/timezone when unspecified; never guess among multiple channels.
 To cancel an explicitly identified post: [ACTION:{"type":"marketing_cancel_post","id":"UUID","revision":1}]
 To pause future delivery when requested: [ACTION:{"type":"marketing_pause"}]
+THE WEEKLY PLAN (this_week in the snapshot): every Monday the plan reads the live numbers, names ONE
+problem with the counted number that proves it, picks plays from a fixed library and saves the week as
+drafts for review. When the owner asks what you are pushing this week or why, answer from this_week's
+diagnosis evidence and each play's reason, in your own words; do not invent other reasons or numbers.
+If no plan exists or it was skipped, say so and say why (note). Only when the owner explicitly asks you to
+plan or draft this week: [ACTION:{"type":"marketing_run_week"}]. It saves drafts only; approval and
+publishing stay on the page. A week already planned is not redone; say so.
 Saved posts remain drafts for review. Approval/resume happen through the page's exact-post review and
 publishing controls. Do not claim approval or publication. Action result cards establish success;
 describe proposed actions as requests, not completed work. Do not repeat an action already recorded
@@ -174,6 +183,32 @@ async def founder_offer():
     return facts
 
 
+async def _link_results():
+    """The last 30 days of published posts and what came through their links."""
+    from platform_marketing_campaigns import results
+    try:
+        data = await results(30)
+    except HTTPException:
+        raise
+    except Exception:
+        # Results are an extra; a fault here must not take the calendar down with it.
+        raise HTTPException(503, 'Link results could not be read.') from None
+    return {'headline': data['headline'], 'totals': data['totals'], 'sources': data['sources'],
+            'posts': [{'campaign': p['campaign'], 'run_at': p['run_at'], 'service': p['service'],
+                       'caption_start': (p['text'] or '')[:120], 'outcomes': p['outcomes']}
+                      for p in data['posts'][:15]]}
+
+
+async def _this_week():
+    import marketing_engine
+    try:
+        return await marketing_engine.snapshot_summary()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503, 'The weekly plan could not be read.') from None
+
+
 async def marketing_snapshot():
     import platform_marketing as marketing
     result = {
@@ -203,6 +238,8 @@ async def marketing_snapshot():
     await read('config', marketing.config)
     await read('recent_posts', lambda: marketing.db('GET', '/platform_marketing_posts?order=run_at.desc&limit=31'), 30)
     await read('assets', marketing.assets)
+    await read('link_results', _link_results)
+    await read('this_week', _this_week)
     campaign_rows = await read('campaign_briefs', lambda: marketing.db('GET', '/platform_marketing_campaigns?select=id,name,tracking_key,revision,stage,brief,brief_hash,plan_brief_hash&order=updated_at.desc&limit=11'), 10)
     if campaign_rows is not None:
         result['campaign_briefs'] = [{'id':c['id'],'name':c['name'],'tracking_key':c['tracking_key'],
@@ -239,7 +276,23 @@ async def pause_marketing(action):
     return {'ok': True, 'label': 'Future marketing delivery paused.'}
 
 
-HANDLERS = {'marketing_save_draft': save_draft, 'marketing_cancel_post': cancel_post, 'marketing_pause': pause_marketing}
+async def run_week(action):
+    import marketing_engine
+    result = await marketing_engine.run_week('manual')
+    run = result.get('run') or {}
+    drafts = len(run.get('post_ids') or [])
+    if result['status'] == 'exists':
+        label = f"This week is already planned ({drafts} drafts). Review them in Mission Control."
+    elif result['status'] == 'skipped':
+        return {'ok': False, 'label': 'The week could not be planned: ' + result.get('reason', '')}
+    else:
+        label = f"This week's plan is saved: {drafts} drafts are waiting for your review."
+    return {'ok': True, 'label': label, 'run_id': run.get('id'),
+            'diagnosis': (run.get('diagnosis') or {}).get('evidence')}
+
+
+HANDLERS = {'marketing_save_draft': save_draft, 'marketing_cancel_post': cancel_post, 'marketing_pause': pause_marketing,
+            'marketing_run_week': run_week}
 
 
 def prepare_actions(actions, request_id):

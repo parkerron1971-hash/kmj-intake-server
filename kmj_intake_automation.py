@@ -450,6 +450,9 @@ from platform_marketing import router as platform_marketing_router
 app.include_router(platform_marketing_router)
 from platform_marketing_campaigns import router as platform_marketing_campaigns_router
 app.include_router(platform_marketing_campaigns_router)
+# The Monday plan: signals -> diagnosis -> plays -> a week of drafts for review.
+from marketing_engine import router as marketing_engine_router
+app.include_router(marketing_engine_router)
 # Arc 25 - practitioner referral loop (codes + attribution + rewards)
 from referrals import router as referrals_router
 app.include_router(referrals_router)
@@ -1448,6 +1451,10 @@ async def startup():
                           "interval", hours=1, id="platform_marketing_metrics", max_instances=1)
         scheduler.add_job(g("platform_marketing_status", _marketing.reconcile_tick),
                           "interval", minutes=10, id="platform_marketing_status", max_instances=1)
+        # Plans the week on Monday morning (ET); drafts only. MARKETING_ENGINE=off stops it.
+        from marketing_engine import engine_tick
+        scheduler.add_job(g("platform_marketing_engine", engine_tick),
+                          "interval", hours=1, id="platform_marketing_engine", max_instances=1)
     except Exception as e:
         print(f"   [warn] platform marketing not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:

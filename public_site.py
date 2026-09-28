@@ -7221,6 +7221,41 @@ async def public_news_post(request: Request, post_slug: str):
         request, lambda: _render_platform_news_post(post_slug))
 
 
+# ─── The platform's short marketing links ─────────────────────────────
+# mysolutionist.app/go/<code> is the link a Solutionist post carries. The
+# caption stays clean; the redirect adds the campaign tags, and the
+# landing page's attribution stash picks them up from there. An unknown
+# code lands on the home page rather than a 404 — a link someone copied
+# wrong is still a person who wanted to see the product.
+#
+# A click counts only from a person: link-preview fetchers (Facebook,
+# LinkedIn and X all fetch every link in a post) and Do Not Track are
+# redirected without being counted.
+
+# The analytics bot pattern misses the unfurlers that carry no "bot" in
+# their name; Facebook's is the one every Page post triggers.
+_LINK_PREVIEW = re.compile(
+    r"facebookexternalhit|facebookcatalog|whatsapp|telegram|discord|skypeuripreview"
+    r"|embedly|vkshare|redditbot|iframely|outbrain|quora link preview", re.I)
+
+
+@router.get("/go/{code}", include_in_schema=False)
+async def public_marketing_link(request: Request, code: str):
+    from fastapi.responses import RedirectResponse
+    site = await _site_response_or_none(request)
+    if site is not None:
+        return site
+    import platform_marketing
+    import site_analytics
+    agent = request.headers.get("user-agent") or ""
+    person = (bool(agent) and not site_analytics._BOT.search(agent)
+              and not _LINK_PREVIEW.search(agent)
+              and (request.headers.get("dnt") or "").strip() != "1")
+    url = await platform_marketing.follow(code.strip().lower(), count_click=person)
+    return RedirectResponse(url=url or "https://mysolutionist.app/", status_code=302,
+                            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
 # ─── robots.txt + sitemap.xml, for the apex ───────────────────────────
 # Practitioner sites have had both since the findability bundle; the
 # platform's own domain had neither — /robots.txt and /sitemap.xml both
