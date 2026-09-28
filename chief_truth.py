@@ -399,6 +399,176 @@ def _advice_math(text, reply, sources):
     return out
 
 
+# ─── Advice is not a claim about the records ────────────────────────
+# Kevin, 2026-09-28: "if people are asking for thoughts it should give some
+# level of direction advice that can really be helpful." On fifteen advice
+# questions not one answer came through clean: three were withheld whole
+# ("No action ran … try again?"), five carried an "unverified" block and
+# seven lost sentences. What tripped the check was never a false figure
+# about the business. It was the advice itself: plan math ("if a third of
+# discovery calls turn into clients, that's 18 calls a month"), a plan's
+# own shape ("Week 1", "40 minutes"), a suggested policy ("ask for 24
+# hours' notice"), an offer ("I can set that as a goal for October 28").
+#
+# The line: a sentence is ADVICE when it says nothing about this business's
+# records AND reads as reasoning — a condition or assumption, advice
+# wording, a hedge, a formula, an offer, a question, a plan's own labels,
+# or an instruction. Its figures are Chief's own and need no record.
+# Anything about the records (what they have, what came in, what is owed,
+# a period that already happened, a real client or offering by name) keeps
+# the full check, and so does a bare statement with no advice in it: "the
+# cohort sells at $750 per month", "the current market rate is $175",
+# "twelve seats gets you $9,999". Public rules the reviewer calls
+# `reference` keep their "check the official source" label, and claims of
+# work done keep theirs.
+_RECORD_STATE = re.compile(
+    r"\b(?:you (?:have|had|made|earned|collected|brought in|booked|billed|sold|lost)|"
+    r"you'?ve (?:got|had|made|earned|collected|brought in|booked|billed|sold|lost)|"
+    r"there(?:'s| is| are| was| were)|on file|on record|on (?:your|the) (?:calendar|books)|"
+    r"in your (?:books|records|catalog|calendar|pipeline|inbox|account)|"
+    r"your (?:records|books|calendar|catalog|numbers|data) (?:show|say|has|have)|"
+    r"so far|to date|year to date|last (?:week|month|quarter|year)|in the (?:last|past) \w+|"
+    r"(?:is|are|was|were|has been|have been) (?:booked|paid|overdue|due|owed|unpaid|scheduled|late|open|sent|"
+    r"cancell?ed|signed)|owes?|owed|overdue|unpaid|outstanding|came in|brought in)\b", re.I)
+# "Revenue was $900,000", "costs were $8,000", "attendance hit 140".
+_RECORD_BE = re.compile(
+    r"\b(?:revenue|income|sales|profits?|costs?|expenses?|collections?|balance|cash|payroll|bookings?|"
+    r"attendance|donations?|giving|spend|margin)\s+(?:is|was|were|are|came(?: in)?|totals?|totaled|"
+    r"hit|reached|grew|rose|fell|dropped|stands?|sits?)\b", re.I)
+_RECORD_COUNT = re.compile(
+    r"\b\d[\d,]*\s+(?:\w+\s+)?(?:clients?|customers?|contacts?|leads?|invoices?|sessions?|bookings?|"
+    r"appointments?|members?|subscribers?|donations?|orders?|jobs?|estimates?)\b", re.I)
+_CONDITIONAL = re.compile(r"\b(?:if|assuming|assume|suppose|say you|once you|when you|unless)\b", re.I)
+_ADVICE_WORDING = re.compile(
+    r"\b(?:would|you'?d|I'?d|could|might|should|you'?ll need|you need|need to|aim (?:for|to|at)|"
+    r"target|goal|plan (?:for|on)|try|consider|I recommend|I suggest|recommend|start (?:with|by)|"
+    r"focus on|let'?s|on average|rule of thumb|likely|probably|"
+    # "most coaches", "many salons": a general group. "Most of them are
+    # active" is about the records, and stays checked.
+    r"(?:most|many)\s+(?!of\b|are\b|were\b|have\b)[a-z]+|"
+    r"the (?:fastest|easiest|simplest|best|strongest|cheapest) (?:way|route|path|move|lever|place))\b", re.I)
+_FORMULA = re.compile(r"[=÷×≈]")
+# A plan's own labels: "Week 1", "Days 1-14", "Step 3", "Phase 2".
+_PLAN_LABEL = re.compile(
+    r"\b(?:weeks?|days?|steps?|phases?|months?|parts?|stages?|tiers?|options?|ideas?|moves?|priorit(?:y|ies)|"
+    r"levers?|blocks?|rounds?)\s+#?\d+(?:\s*(?:-|–|to|through)\s*\d+)?\b", re.I)
+# An instruction: the sentence (or the text after a label's colon) opens
+# with a verb. "Ask for 24 hours' notice." "Monday to Thursday, 40 minutes:
+# reach out to people."
+_INSTRUCTION = re.compile(
+    r"(?:^|:\s*)(?:ask|send|set|offer|add|block|raise|try|use|start|book|text|email|call|post|run|create|"
+    r"build|keep|make|give|follow|schedule|move|test|track|pick|write|reach|invite|host|share|put|hold|"
+    r"limit|cap|bundle|package|price|drop|cut|focus|spend|aim|plan|review|check|lead|open|close|charge|"
+    r"require|require|collect|confirm|remind|thank|record|list|batch|protect|reserve|save|decide|choose|"
+    r"name|define|draft|publish|launch|partner|join|sponsor|visit|survey|measure)\b", re.I)
+# An offer of work Chief can do asserts nothing about the records, even when
+# it names a client ("I can draft a short invitation to Ada").
+_OFFER_OF_WORK = re.compile(
+    r"\b(?:I can|I could|I'?d be happy to|happy to|want me to|should I|shall I|would you like me to)\s+"
+    r"(?:also\s+|then\s+|now\s+)?(?:draft|write|create|set(?: up)?|build|add|make|book|schedule|send|"
+    r"put|give|save|remind|prepare|update|open|turn|track|line up|invite|reach out|follow up|start|map|"
+    r"pull|run|plan|price|list|block)\b", re.I)
+_MONEY_STATE = re.compile(r"\$|\b(?:owes?|owed|overdue|unpaid|paid|balance|collected)\b", re.I)
+# Work stated as finished inside an offer ("I've set it up, and I can also…").
+_ALREADY_DONE = re.compile(r"\bI(?:'ve|’ve| have| just| already)\b|\b(?:all set|already|done)\b", re.I)
+_YOU_PAST = re.compile(
+    r"\b(?:you|we)(?:'ve|’ve| have)?\s+(?:\w+ed|made|sold|spent|paid|got|brought|took|won|lost|saw|had|"
+    r"grew|ran|did)\b[^.!?]*\d", re.I)
+_FIRST_PERSON_PROMISE = re.compile(r"\bI(?:'ll|’ll| will|'m going to|’m going to)\b.*\b(?:now|today|right away)\b",
+                                   re.I)
+_MARKUP = re.compile(r"^[\s>*_#\-•·]+|\*\*|__|`")
+
+
+def _plain(sentence):
+    return _MARKUP.sub('', (sentence or '').strip()).strip()
+
+
+def _record_names(sources):
+    """Capitalised words that name something in this business's records
+    (a client, an offering), so "Marcus" makes a sentence about the
+    records and "Facebook" does not."""
+    text = ' '.join((s or {}).get('text') or '' for s in (sources or {}).values()
+                    if (s or {}).get('kind') in ('record', 'context', 'count', 'receipt'))
+    return {w for w in _WORD.findall(text) if w[0].isupper() and w.lower() not in _NOT_NAMES}
+
+
+def _reads_as_advice(sentence):
+    s = _plain(sentence)
+    return bool(_CONDITIONAL.search(s) or _ADVICE_WORDING.search(s) or _ESTIMATE_WORDING.search(s)
+                or _FORMULA.search(s) or s.rstrip().endswith('?') or _PLAN_LABEL.search(s)
+                or _INSTRUCTION.search(s) or _OFFER_OF_WORK.search(s))
+
+
+def _about_the_records(sentence, sources, names=None):
+    """Does this sentence state something about THIS business's records?"""
+    s = _plain(sentence)
+    if _POSSESSIVE_FIGURE.search(s) or _RECORD_STATE.search(s) or _RECORD_BE.search(s):
+        return True
+    if names is None:
+        names = _record_names(sources)
+    if any(re.sub(r"['’]s$", '', w) in names for w in _fast_lane_names(s)):
+        return True
+    # "You raised $48,000", "we made about $4,000": the business's own past,
+    # unless the sentence says outright it is supposing ("if you raised…").
+    if _YOU_PAST.search(s) and not _CONDITIONAL.search(s):
+        return True
+    return bool(_RECORD_COUNT.search(s)) and not _reads_as_advice(s)
+
+
+def _advice_sentence(sentence, sources, names=None):
+    return _reads_as_advice(sentence) and not _about_the_records(sentence, sources, names)
+
+
+def _is_advice(claim, reply, sources):
+    """An unsourced claim the draft states as Chief's own reasoning, not as
+    something in the records."""
+    text = claim.get('text')
+    if not isinstance(text, str) or claim.get('kind') not in ('fact', 'estimate', 'reference'):
+        return False
+    sentence = _sentence_containing(reply, text)
+    if claim.get('kind') == 'reference' and not (_ESTIMATE_WORDING.search(sentence) or _FORMULA.search(sentence)):
+        # A public rule stated as one ("the 990-N is for gross receipts of
+        # $50,000 or less") keeps its "check the official source" label.
+        # A benchmark worded as one ("many coaches land around 30 to 50
+        # percent") or a formula is advice.
+        return False
+    if _FIRST_PERSON_PROMISE.search(sentence) and not _OFFER_MARK.search(sentence):
+        # "I'll set up the offerings right now" on a turn that set up
+        # nothing is a promise the turn did not keep, not advice.
+        return False
+    if (_OFFER_OF_WORK.search(sentence) and not _MONEY_STATE.search(sentence)
+            and not _POSSESSIVE_FIGURE.search(sentence) and not _ALREADY_DONE.search(sentence)):
+        # "I can create the package in your catalog", "I can add the quote
+        # to your site once you have their exact words": offers. One that
+        # carries money ("I can send Monica's $150 reminder") keeps the check.
+        return True
+    names = _record_names(sources)
+    if _about_the_records(text, sources, names) or _about_the_records(sentence, sources, names):
+        return False
+    if _reads_as_advice(text) or _reads_as_advice(sentence):
+        return True
+    # General know-how with no figure that says nothing about this business
+    # ("warm contacts convert far better than cold ones") is reasoning, not
+    # a record claim. Anything addressed to or about the business ("your
+    # site is down", "I don't have a baseline") or stating a state ("no
+    # invoices are overdue", "all clients have booked") keeps the check.
+    # A pronoun ("most of them are active") points back at the records.
+    return (not _numbers(sentence) and claim.get('kind') != 'reference'
+            and not _ABOUT_THE_BUSINESS.search(sentence) and not _STATE_CLAIM.search(sentence)
+            and not re.search(r"\b(?:they|them|those|these|their|theirs|it|its)\b", sentence, re.I))
+
+
+def _advice_sentence_figures(prose, sources):
+    """Figures in advice sentences: a plan's weeks and minutes, planning
+    math, a suggested policy, an offer's date."""
+    names = _record_names(sources)
+    out = set()
+    for s in re.split(r'(?<=[.!?])\s+|\n+', prose or ''):
+        if s.strip() and _advice_sentence(s, sources, names):
+            out |= _numbers(_counts_as_digits(s))
+    return out
+
+
 def _free_figures(text):
     import datetime as _dt
     this = _dt.date.today().year
@@ -498,6 +668,14 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # Chief's own recommendation ("I'd price seats at $797-$1,197")
             # is advice: delivered as said, not labeled and not proved.
             if _unsourced(claim) and _is_recommendation(claim, reply):
+                continue
+            # Chief's own reasoning with nothing to cite — plan math, a
+            # benchmark worded as one ("many coaches land around 30 to 50
+            # percent"), a suggested policy, an offer of work it can do — is
+            # advice, delivered as said (see _is_advice). A sentence about
+            # the records still needs one; a public rule the reviewer calls
+            # a `reference` keeps its label below.
+            if _unsourced(claim) and _is_advice(claim, reply, sources):
                 continue
             if _is_reference(claim) and _unsourced(claim):
                 references.append(text_.strip()[:140])
@@ -618,6 +796,9 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
         # The owner's own numbers ("fill 12 seats") and plain arithmetic on
         # them and on Chief's recommended figures are not new facts.
         exempt |= _practitioner_figures(sources) | _advice_math(prose, reply, sources)
+        # A plan's weeks and minutes, planning math, an offer's date: figures
+        # in sentences that say nothing about the records.
+        exempt |= _advice_sentence_figures(prose, sources)
         unreviewed = _numbers(prose) - reviewed_numbers - exempt
         if unreviewed:
             return 'unsupported', [], 'draft number %s has no reviewed claim' % ','.join(
@@ -1976,7 +2157,11 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     # "try again" (2026-09-24).
     if verdict == 'unsupported' and not any(isinstance(r, dict) and r.get('failed') for r in receipts):
         undone: list = []
-        trimmed = _trim_unsupported(raw, reply, sources, reason, undone=undone)
+        # A question turn (nothing written or opened) is usually a long
+        # answer; a few more cuts before giving it up whole. Cutting only
+        # ever removes words, and keep_ratio still guards what is left.
+        trimmed = _trim_unsupported(raw, reply, sources, reason, undone=undone,
+                                    max_cuts=3 if receipts else 6)
         if trimmed:
             t_reply, t_verdict, t_cited, t_reason, cuts = trimmed
             figures = cuts - len(undone)
