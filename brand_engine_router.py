@@ -101,6 +101,70 @@ def save(
     return JSONResponse({"ok": True, "bundle": bundle})
 
 
+# ─── The draft (Brand Studio) — see brand_engine "THE DRAFT" ──────────
+#
+# Reading a draft is `viewer`, like the bundle. Writing, discarding and
+# publishing one are `admin`, like /save: a draft is the brand someone
+# is about to ship.
+
+@router.get("/draft/{business_id}")
+def draft_get(
+    business_id: str,
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
+) -> JSONResponse:
+    return JSONResponse({"ok": True, **brand_engine.get_brand_draft(business_id)})
+
+
+@router.put("/draft/{business_id}")
+def draft_put(
+    business_id: str,
+    body: Dict[str, Any],
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
+) -> JSONResponse:
+    """Body: {kit: {...}} — the page's whole edit state."""
+    kit = body.get("kit") if isinstance(body, dict) else None
+    if not isinstance(kit, dict):
+        raise HTTPException(status_code=400, detail="missing or invalid kit in body")
+    try:
+        return JSONResponse({"ok": True, **brand_engine.save_brand_draft(business_id, kit)})
+    except brand_engine.BrandDraftError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+
+@router.delete("/draft/{business_id}")
+def draft_delete(
+    business_id: str,
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
+) -> JSONResponse:
+    try:
+        brand_engine.clear_brand_draft(business_id)
+    except brand_engine.BrandDraftError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    return JSONResponse({"ok": True})
+
+
+@router.post("/draft/{business_id}/publish")
+def draft_publish(
+    business_id: str,
+    body: Dict[str, Any],
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
+) -> JSONResponse:
+    """Body: {kit?: {...}} — what the page shows; falls back to the stored draft."""
+    kit = body.get("kit") if isinstance(body, dict) else None
+    try:
+        bundle = brand_engine.publish_brand_draft(business_id, kit if isinstance(kit, dict) else None)
+    except brand_engine.BrandDraftError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    # The brand is live; carrying it onto the website must never make the
+    # publish itself look failed.
+    try:
+        site = brand_engine.refresh_site_after_publish(business_id)
+    except Exception as e:
+        logger.warning(f"site refresh after publish failed for {business_id[:8]}: {e}")
+        site = "unknown"
+    return JSONResponse({"ok": True, "bundle": bundle, "site": site})
+
+
 @router.post("/snapshot/restore/{business_id}")
 def restore(
     business_id: str,
