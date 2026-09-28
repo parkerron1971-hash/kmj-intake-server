@@ -14061,6 +14061,15 @@ async def chief_chat(
                     return None
                 return await asyncio.to_thread(_fetch_setup_snapshot, biz)
 
+            # What is already on file from their records, so the Business
+            # Coach skips what the practitioner entered elsewhere. Coach
+            # mode only — every other turn would pay for a dozen reads.
+            async def _knowledge_probe():
+                if (req.mode or "") != "business_coach":
+                    return None
+                import business_knowledge
+                return await asyncio.to_thread(business_knowledge.knowledge_for, biz)
+
             sources = _context_sources(client, biz)
             _names = list(sources.keys())
             _results = await asyncio.gather(
@@ -14068,6 +14077,7 @@ async def chief_chat(
                 _enrich("vertical learned context", _learned(), ""),
                 _enrich("proactive emit (non-blocking)", _proactive(), None),
                 _enrich("setup snapshot", _setup_probe(), None),
+                _enrich("business knowledge", _knowledge_probe(), None),
             )
             _ctx_vals = dict(zip(_names, _results))
             for source_name, source_value in _ctx_vals.items():
@@ -14082,6 +14092,8 @@ async def chief_chat(
             bookkeeping_block = _ctx_vals["bookkeeping_block"]
             learned_block = _results[len(_names)]
             setup_snapshot = _results[len(_names) + 2]
+            if _results[len(_names) + 3] is not None:
+                ctx["business_knowledge"] = _results[len(_names) + 3]
             setup_block = _format_setup_block(setup_snapshot)
             chief_truth.record('context:setup', setup_block, kind='context')
             # First-run = the account is days old and nearly nothing is
