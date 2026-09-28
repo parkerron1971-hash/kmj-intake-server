@@ -448,6 +448,11 @@ _ADVICE_WORDING = re.compile(
     r"(?:most|many)\s+(?!of\b|are\b|were\b|have\b)[a-z]+|"
     r"the (?:fastest|easiest|simplest|best|strongest|cheapest) (?:way|route|path|move|lever|place))\b", re.I)
 _FORMULA = re.compile(r"[=÷×≈]")
+_YOUR_OUR = re.compile(r"\b(?:your|yours|our|ours)\b", re.I)
+_PLAN_MATH = re.compile(r"\b(?:takes?|means?|equals?|works out to|turns? into|converts?|comes? to|that'?s|"
+                        r"per (?:week|month|day|year))\b", re.I)
+_ADVICE_MODAL = re.compile(r"\b(?:would|you'?d|I'?d|could|should|you'?ll need|you need|need to|"
+                           r"aim (?:for|to|at)|target|plan (?:for|on)|try|consider)\b", re.I)
 # A plan's own labels: "Week 1", "Days 1-14", "Step 3", "Phase 2".
 _PLAN_LABEL = re.compile(
     r"\b(?:weeks?|days?|steps?|phases?|months?|parts?|stages?|tiers?|options?|ideas?|moves?|priorit(?:y|ies)|"
@@ -512,7 +517,20 @@ def _about_the_records(sentence, sources, names=None):
     # unless the sentence says outright it is supposing ("if you raised…").
     if _YOU_PAST.search(s) and not _CONDITIONAL.search(s):
         return True
-    return bool(_RECORD_COUNT.search(s)) and not _reads_as_advice(s)
+    if _numbers(s):
+        # A figure beside "your"/"our" is about the business ("your workshop
+        # would typically sell at $500 a seat"). A figure beside a record
+        # word is about the records ("similar invoices usually total $400")
+        # unless the sentence is plainly planning math: a condition, advice
+        # wording, or conversion wording ("five clients usually takes about
+        # 10 to 15 discovery calls").
+        if _YOUR_OUR.search(s):
+            return True
+        if _RECORD_NOUN.search(s) and not (_CONDITIONAL.search(s) or _PLAN_MATH.search(s)
+                                           or _ADVICE_MODAL.search(s) or _FORMULA.search(s)
+                                           or _INSTRUCTION.search(s)):
+            return True
+    return False
 
 
 def _advice_sentence(sentence, sources, names=None):
@@ -526,11 +544,15 @@ def _is_advice(claim, reply, sources):
     if not isinstance(text, str) or claim.get('kind') not in ('fact', 'estimate', 'reference'):
         return False
     sentence = _sentence_containing(reply, text)
-    if claim.get('kind') == 'reference' and not (_ESTIMATE_WORDING.search(sentence) or _FORMULA.search(sentence)):
-        # A public rule stated as one ("the 990-N is for gross receipts of
-        # $50,000 or less") keeps its "check the official source" label.
-        # A benchmark worded as one ("many coaches land around 30 to 50
-        # percent") or a formula is advice.
+    if claim.get('kind') == 'reference' and not _FORMULA.search(sentence):
+        # A public rule ("the 990-N is for gross receipts of $50,000 or
+        # less") keeps its "check the official source" label, and so does a
+        # benchmark the reviewer files as one. A formula is advice.
+        return False
+    if _is_general_estimate(claim):
+        # A benchmark with figures ("similar two-day intensives are
+        # typically $800-$1,500 a seat") is delivered labeled as general
+        # knowledge (2026-09-23), not silently.
         return False
     if _FIRST_PERSON_PROMISE.search(sentence) and not _OFFER_MARK.search(sentence):
         # "I'll set up the offerings right now" on a turn that set up

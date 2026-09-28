@@ -53,15 +53,13 @@ def _verdict(text, reply=None, kind="fact"):
     "Discovery calls per week = ($10k ÷ average client value) ÷ close rate ÷ 4.3 weeks.",
     # a suggested policy
     "Ask for 24 hours' notice, and charge the full session inside that window.",
-    # benchmarks worded as benchmarks
-    "Many coaches land somewhere around 30 to 50 percent.",
+    # general know-how worded as such
     "Most coaching packages run six to eight sessions.",
     # general know-how with no figure, not about the business
     "Warm contacts convert far better than cold ones.",
 ])
 def test_advice_sentences_are_delivered_as_said(sentence):
-    kind = "reference" if sentence.startswith("Many coaches") else "fact"
-    verdict, _, reason = _verdict(sentence.rstrip("."), sentence, kind)
+    verdict, _, reason = _verdict(sentence.rstrip("."), sentence)
     assert verdict == "supported", reason
 
 
@@ -98,10 +96,20 @@ def test_a_plans_own_shape_is_not_a_figure_to_prove():
     "I can send Monica's $150 reminder now.",       # an offer carrying money
     "Most of them are active.",                     # "them" is the records, not a general group
     "Many of your clients pay late.",
+    "Your workshop would typically sell at $500 a seat.",
+    "Similar invoices usually total $400.",
 ])
 def test_a_claim_about_the_records_still_needs_its_record(sentence):
     verdict, _, reason = _verdict(sentence.rstrip("."), sentence)
     assert verdict == "unsupported", (sentence, reason)
+
+
+def test_a_benchmark_with_figures_is_delivered_labeled_not_silent():
+    # 2026-09-23: benchmarks reach the owner marked as general knowledge.
+    for text, kind in (("Many coaches land somewhere around 30 to 50 percent", "reference"),
+                       ("Similar two-day intensives typically run $800 to $1,500 a seat", "fact")):
+        verdict, _, reason = _verdict(text, text + ".", kind)
+        assert reason.startswith("general rule"), (text, reason)
 
 
 def test_a_bare_public_rule_keeps_its_official_source_label():
