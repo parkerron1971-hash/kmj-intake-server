@@ -520,6 +520,14 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 if 'turn:execution' in sources:
                     cited.append('turn:execution')
                 continue
+            # "I checked your records first." narrates a READ, and the
+            # turn's own reads are the proof of it. The reviewer files it as
+            # an action, and with no write receipt it withheld whole answers
+            # (Sonnet 5.5 opens advice this way; 2026-09-28 bench). Only a
+            # bare read verb about the records clears, and only when this
+            # turn read something; any write verb in it keeps the old rule.
+            if claim['kind'] == 'action' and is_read_narration(text_) and read_anything(sources):
+                continue
             if (isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip()) \
                     or not (isinstance(quote, str) and quote.strip()):
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
@@ -1122,6 +1130,32 @@ def wrote_anything(sources):
     return False
 
 
+_READ_NARRATION = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|so|first|sure)\W+)?i(?:'ve|’ve| have)?\s+(?:just\s+|already\s+)?"
+    r"(?:checked|pulled(?:\s+up)?|looked(?:\s+(?:at|through|over|into))?|reviewed|went\s+through|"
+    r"read(?:\s+through)?|searched|scanned|dug\s+into|combed\s+through)\b", re.I)
+_WRITE_WORD = re.compile(
+    r"\b(?:sent|send|sending|created|booked|scheduled|added|saved|deleted|removed|updated|changed|"
+    r"charged|published|posted|emailed|texted|messaged|called|invoiced|cancell?ed|paid|refunded|"
+    r"moved|set\s+up|drafted|with)\b", re.I)
+
+
+def is_read_narration(text):
+    """"I checked your records first." / "I pulled your records and found
+    this:" -- a sentence that says only that Chief LOOKED. "with" is a write
+    word here on purpose: "I checked with Marcus" claims a conversation."""
+    t = (text or '').strip()
+    return bool(t) and len(t) <= 160 and bool(_READ_NARRATION.search(t)) \
+        and not _WRITE_WORD.search(t)
+
+
+def read_anything(sources):
+    """Did this turn read the business's records (context blocks, a count,
+    a read tool's rows)?"""
+    return any((s or {}).get('kind') in ('record', 'context', 'count')
+               for s in (sources or {}).values())
+
+
 # Words that turn a completion phrase into an offer: "once you say go
 # ahead, I'll create the invoice" promises nothing done. The completion
 # detector's phrase list ("i'll create", "i'll add", ...) exists for the
@@ -1411,9 +1445,11 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # in code (assess_review). Haiku 4.5 was not faster here and returned
     # two unusable reviews in six. CHIEF_REVIEW_THINKING=low restores the
     # previous setting without a deploy.
-    # Only where the API accepts it: Opus 5.5 rejects disabled thinking.
-    if _review_thinking() == 'off' and 'sonnet' in (model or '').lower():
-        payload['thinking'] = {'type': 'disabled'}
+    # Only where the API accepts it: Opus 5.5 cannot turn thinking off, and
+    # Sonnet 5.5 spells "off" as between_tools (disabled is a 400 there).
+    off = model_ladder.thinking_off_kwargs(model) if _review_thinking() == 'off' else {}
+    if off:
+        payload.update(off)
     else:
         payload.update(model_ladder.effort_kwargs(model, 'low'))
     if schema and _review_schema_on():

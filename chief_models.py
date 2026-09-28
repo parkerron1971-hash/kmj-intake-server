@@ -43,18 +43,25 @@ from __future__ import annotations
 
 import os
 
+# Sonnet 5.5 (2026-09-28): same price per token as Sonnet 5. Benched on
+# the Chief turn eval (2 runs each) it scored the same (67-68/69), ran
+# the median turn in 7.9-9.1 s vs 11.2 s and cost ~5% less per turn; the
+# factual eval passed 24/24 on both, answer drafts 2.7 s vs 3.9 s and the
+# answer check 2.6 s vs 3.2 s. The four conversational lanes move
+# together so they keep sharing one model (see "voice" above). Roll back
+# with CHIEF_MODEL_<LANE>=claude-sonnet-5.
 _LANE_DEFAULTS = {
-    "chat":       "claude-sonnet-5",
-    "voice":      "claude-sonnet-5",
+    "chat":       "claude-sonnet-5-5",
+    "voice":      "claude-sonnet-5-5",
     "deep":       "claude-opus-4-8",
-    "draft":      "claude-sonnet-5",
+    "draft":      "claude-sonnet-5-5",
     "insight":    "claude-opus-4-8",
     "background": "claude-haiku-4-5-20251001",
     # The answer check is a mechanical JSON task that ran on the chat
     # model and took 12-15s of every turn (2026-09-14 timing lines:
     # review=15509ms of total=37576ms). Its own lane, so it can be
     # moved and measured on its own.
-    "review":     "claude-sonnet-5",
+    "review":     "claude-sonnet-5-5",
     # The two-track reply (chief_fast_track, 2026-09-25). `fast` writes the
     # opening that goes out in the first half-second of every streamed
     # turn, and answers alone the turns that need no records and no action
@@ -187,8 +194,15 @@ def max_tokens_for(lane: str, default: int = 1600) -> int:
 # pause is felt most, at "low". The deep lane (coaches, heavy analysis)
 # keeps the model default. Override per lane with CHIEF_EFFORT_<LANE>
 # (low / medium / high / xhigh / max; "default" = the model's own).
+#
+# Chat moved medium -> low with Sonnet 5.5 (2026-09-28), whose levels are
+# recalibrated: at medium and up it thinks before nearly every reply. On
+# five advice questions (pricing, a 30-day client plan, rescheduling,
+# group vs 1:1, this week's focus) low gave full, specific answers in a
+# median 12.4-14.5 s vs 17.2 s at medium and 19.4 s at high, at 6.2c vs
+# 7.3c / 7.4c; the action eval scored the same at low and medium.
 _LANE_EFFORT = {
-    "chat": "medium",
+    "chat": "low",
     "voice": "low",
 }
 _EFFORTS = ("low", "medium", "high", "xhigh", "max")

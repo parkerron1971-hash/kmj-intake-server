@@ -96,6 +96,7 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # Sonnet 5 — $2/$10 is now permanent; the scheduled September increase
     # was cancelled. Verified 2026-09-09 against the official pricing page.
     "claude-sonnet-5":   (200.0, 1000.0),
+    "claude-sonnet-5-5": (200.0, 1000.0),   # same list price as Sonnet 5 (2026-09-28)
     # Sonnet 4.x — $3/MTok in, $15/MTok out
     "claude-sonnet-4":   (300.0, 1500.0),
     # Haiku 4.5 — $1/MTok in, $5/MTok out
