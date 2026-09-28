@@ -149,10 +149,18 @@ def vision(raw):
 async def structured(client, row, schema, instruction, content):
     from chief_models import model_for
     await guard(row['business_id'])
-    payload = {'model': model_for('review'), 'max_tokens': 4200, 'system': instruction,
+    import model_ladder
+    model = model_for('review')
+    # Sonnet 5.5 / Opus 5.5 reject a forced tool_choice (400); there the
+    # prompt names the tool and the single-result check below still holds.
+    forced = model_ladder.supports_forced_tool_choice(model)
+    if not forced:
+        instruction = (instruction + '\n\nReturn your answer by calling the return_result tool '
+                       'exactly once. Do not answer in plain text.')
+    payload = {'model': model, 'max_tokens': 4200, 'system': instruction,
         'messages': [{'role': 'user', 'content': content}],
         'tools': [{'name': 'return_result', 'description': 'Return the structured design result.', 'input_schema': schema.model_json_schema()}],
-        'tool_choice': {'type': 'tool', 'name': 'return_result'}}
+        'tool_choice': {'type': 'tool', 'name': 'return_result'} if forced else {'type': 'auto'}}
     response = await llm_call.apost(client, payload, key=os.environ.get('ANTHROPIC_API_KEY'), business_id=str(row['business_id']))
     # llm_call meters these planner/reviewer calls at the shared transport seam.
     if not response.is_success:

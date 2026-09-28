@@ -1194,6 +1194,23 @@ def _looks_like_beta_rejection(status: int, body: str) -> bool:
     return any(t in b for t in ("ttl", "extended-cache", "anthropic-beta", "beta"))
 
 
+def _refusal_fallback_model(model: Optional[str]) -> Optional[str]:
+    """The model a declined turn is asked again on, or None.
+
+    A decline is a 200 with stop_reason "refusal" and usually no text.
+    Before this, the stream read it as "returned empty", asked the SAME
+    model twice more (it declines the same request the same way) and then
+    handed the turn to the backup brain on another provider. Sonnet 5.5
+    declines in more categories than Sonnet 5 (general_harms among them,
+    which ordinary business requests can trip), so the turn is asked once
+    on the previous Sonnet instead. CHIEF_REFUSAL_FALLBACK_MODEL=off keeps
+    the old path; a fallback equal to the declining model is no fallback."""
+    fb = (os.environ.get("CHIEF_REFUSAL_FALLBACK_MODEL") or "claude-sonnet-5").strip()
+    if not fb or fb.lower() in ("off", "0", "false", "no") or fb == (model or ""):
+        return None
+    return fb
+
+
 async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
@@ -1416,6 +1433,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               import chief_search_steps
               searches = chief_search_steps.SearchSteps(_emit_stream_step)
               stop_reason = ""
+              stop_details: Dict[str, Any] = {}
               in_tok = out_tok = 0
               cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
               try:
@@ -1503,6 +1521,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               d = evt.get("delta") or {}
                               if d.get("stop_reason"):
                                   stop_reason = d["stop_reason"]
+                              if isinstance(d.get("stop_details"), dict):
+                                  stop_details = d["stop_details"]
                               u = evt.get("usage") or {}
                               out_tok = int(u.get("output_tokens") or out_tok)
               except httpx.HTTPError as e:
@@ -1530,6 +1550,22 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       business_id=business_id, task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms)
                   route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok)
+                  if stop_reason == "refusal":
+                      category = stop_details.get("category")
+                      logger.warning("[chief] %s declined the turn (category=%s)", model, category)
+                      if text or turn_streamed:
+                          # Words already reached the client; they are the reply.
+                          return "".join(turn_parts + [text]).strip()
+                      fb_model = _refusal_fallback_model(model)
+                      if fb_model:
+                          return await _call_claude(
+                              client, system, messages, max_tokens=max_tokens,
+                              enable_web_search=enable_web_search,
+                              business_id=business_id, model=fb_model,
+                              stream_sink=stream_sink, read_tools=read_tools,
+                              tool_biz=tool_biz, effort=effort, stable_tools=stable_tools)
+                      fb_reason = f"declined ({category})"
+                      break                      # the same model declines again
                   from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
                   if stop_reason == 'max_tokens' and is_course_tool(blocks.values()):
                       # No tool from this truncated round was executed. Retry only
@@ -1705,6 +1741,17 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
       route_ledger.tally_usage(str((data.get("model") if isinstance(data, dict) else None) or model),
                                usage)
       content = data.get("content", []) if isinstance(data, dict) else []
+      if isinstance(data, dict) and data.get("stop_reason") == "refusal":
+          category = (data.get("stop_details") or {}).get("category")
+          logger.warning("[chief] %s declined the turn (category=%s)", model, category)
+          fb_model = _refusal_fallback_model(model)
+          if fb_model:
+              return await _call_claude(
+                  client, system, messages, max_tokens=max_tokens,
+                  enable_web_search=enable_web_search,
+                  business_id=business_id, model=fb_model, stream_sink=stream_sink,
+                  read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                  stable_tools=stable_tools)
       from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
       if isinstance(data, dict) and data.get('stop_reason') == 'max_tokens' and is_course_tool(content):
           if _round < chief_tool_loop.MAX_TOOL_ROUNDS - 1 and allow_course_output(payload, content):
