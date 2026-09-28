@@ -304,28 +304,9 @@ _USAGE: List[Dict[str, Any]] = []
 def _capture_usage():
     """Meter in memory: the fixture businesses are not real rows, and a
     run should say what it cost per question."""
-    import api_usage_logger as aul
-    orig = {aul.log_api_usage_sync, aul.log_api_usage}
-
-    def _sync(**kw):
-        try:
-            kw["cents"] = kw.get("cost_cents_override") or aul._compute_cost_cents(
-                kw.get("model") or "", kw.get("input_tokens") or 0, kw.get("output_tokens") or 0,
-                kw.get("cache_read_tokens") or 0, kw.get("cache_creation_tokens") or 0,
-                kw.get("cache_creation_1h_tokens") or 0)
-        except Exception:
-            kw["cents"] = 0
-        _USAGE.append(kw)
-
-    async def _async(**kw):
-        _sync(**kw)
-    for mod in list(sys.modules.values()):
-        for name in ("log_api_usage_sync", "log_api_usage"):
-            try:
-                if getattr(mod, name, None) in orig:
-                    setattr(mod, name, _sync if name.endswith("sync") else _async)
-            except Exception:
-                pass
+    import api_usage_logger
+    global _USAGE
+    _USAGE = api_usage_logger.capture_in_memory()
 
 
 def run_live(cases: List[Dict[str, str]], with_grade: bool = False) -> Dict[str, Any]:

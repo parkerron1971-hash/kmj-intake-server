@@ -67,3 +67,14 @@ def test_the_established_businesses_carry_what_advice_should_use():
         biz, make_ctx = ev.BUSINESSES[key]
         ctx = make_ctx(biz)
         assert ctx["offerings"] and ctx["products"] and ctx["sessions"], key
+
+
+def test_usage_capture_keeps_fixture_turns_out_of_the_table():
+    # In a child process: the capture rebinds names process-wide by design.
+    import subprocess
+    code = ("import sys; sys.path.insert(0, '.'); import api_usage_logger as a, llm_call; "
+            "rows = a.capture_in_memory(); "
+            "a.log_api_usage_sync(endpoint='x', model='claude-sonnet-5-5', input_tokens=1000000, output_tokens=0); "
+            "print(len(rows), rows[0]['cents'])")
+    out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True, timeout=60)
+    assert out.stdout.split() == ["1", "200.0"], out.stderr[-500:]
