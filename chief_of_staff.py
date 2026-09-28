@@ -13534,9 +13534,41 @@ _DESCRIBED_ACTION_PHRASES = (
     "i've added", "i've created", "i've drafted", "in your system as a",
     "sent the", "queued", "invoice created", "is now in your",
     "added as a lead", "contact and", "email is on its way",
-    "done.", "done —", "done!", "i'll add", "i'll create",
+    "i'll add", "i'll create",
     "adding them now", "creating the", "sending the",
 )
+
+# "Done." claims work only as its own sentence ("Done.", "All done!",
+# "That's done — …"). Matched anywhere, it read advice as a finished
+# operation: a strategy answer that said "…once the testing is done." was
+# re-asked as an action, and Kevin, on a call asking how to relaunch his
+# business, heard "I couldn't start that operation" (2026-09-28).
+_BARE_DONE = re.compile(r"^(?:all |it['’]s |that['’]s )?done\s*(?:[.!—–-]|$)", re.I)
+# A completion phrase after one of these in the same sentence is a
+# condition or advice, not a report: "if you've sent the proposal", "when
+# you're creating the offer". A question that is not about Chief's own
+# work ("have you sent the invoice?") is not a claim either.
+_CONDITION_LEAD = re.compile(
+    r"\b(?:once|if|when|after|as soon as|before|unless|until|whether)\b", re.I)
+
+
+def _described_action_phrase(text: str) -> Optional[str]:
+    """The phrase-list entry (or "done") that reads as a claim that work
+    already happened, judged sentence by sentence; None when none does."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", (text or "").lower()):
+        s = sentence.strip().lstrip("*-•> ").strip()
+        if not s:
+            continue
+        if _BARE_DONE.search(s):
+            return "done"
+        for p in _DESCRIBED_ACTION_PHRASES:
+            at = s.find(p)
+            if at < 0 or _CONDITION_LEAD.search(s[:at]):
+                continue
+            if s.endswith("?") and not p.startswith("i"):
+                continue
+            return p
+    return None
 
 # A promise to open a page, said as a plain statement, is a navigation
 # with no tag (2026-09-23: "…The Academy is built to work through with
@@ -13618,7 +13650,7 @@ def _looks_like_completed_action(text: str) -> bool:
     low = (text or "").lower()
     if not low:
         return False
-    return any(p in low for p in _DESCRIBED_ACTION_PHRASES) or bool(re.search(
+    return bool(_described_action_phrase(text)) or bool(re.search(
         r"(?:^|[.!?]\s+)(?:(?:i['\u2019]m|i am)\s+)?"
         r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low)) \
         or _promises_navigation(text)
@@ -13642,9 +13674,9 @@ def _completed_action_trigger(text: str) -> str:
     """Which detector made _looks_like_completed_action fire — for the
     RETRY log line. Names our own phrase list's entry, never the reply."""
     low = (text or "").lower()
-    for p in _DESCRIBED_ACTION_PHRASES:
-        if p in low:
-            return f"phrase:{p!r}"
+    hit = _described_action_phrase(text)
+    if hit:
+        return f"phrase:{hit!r}"
     if re.search(r"(?:^|[.!?]\s+)(?:(?:i['’]m|i am)\s+)?"
                  r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low):
         return "doing_it_now"
@@ -13669,7 +13701,9 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
         "with the actual existing flyer image ID in reference_ids; "
         "use the recent conversation to resolve which image and preserve its format. "
         "Do not invent an image ID. Do not claim rendering or approval-queue placement "
-        "without an action. Never mention this internal correction. User request:\n\n"
+        "without an action. If the request needs no operation (a question, advice, a "
+        "conversation), answer it in full and claim nothing was done. "
+        "Never mention this internal correction. User request:\n\n"
         + effective_message
     )
     # The former empty-history retry discarded the artwork IDs needed for edits.
@@ -13687,6 +13721,12 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
         actions, clean = _extract_actions_and_clean(retry_raw)
         if actions or len(chief_tool_loop.writes_this_turn()) > before:
             return chief_tool_loop.remaining_tag_actions(actions), clean, retry_raw
+        # The retry answered without acting and without claiming anything
+        # done: the request needed no operation. Deliver that answer; the
+        # canned line below replaced a whole business-strategy answer on
+        # a call (2026-09-28). The answer check still reviews it.
+        if clean and clean.strip() and not _looks_like_completed_action(clean):
+            return [], clean, retry_raw
     # No action exists: replace optimistic prose instead of appending a contradiction.
     return [], ("I couldn't start that operation. Nothing was queued or sent from this request. "
                 "Please try the request again."), retry_raw or ''

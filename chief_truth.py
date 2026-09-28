@@ -751,8 +751,12 @@ def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4, u
         m = _TRIMMABLE.match(reason or '')
         if m:
             head = m.group(1).strip()
+            # _claim_fail cut the text at 80 characters; a cut that lands
+            # after a space left the stripped head one character short, so
+            # a trimmable "$750" sentence withheld a whole strategy answer
+            # (2026-09-28).
             bad = next((c for c in claims if isinstance(c.get('text'), str)
-                        and c['text'].strip()[:80] == head), None)
+                        and c['text'].strip()[:80].strip() == head), None)
             if bad is None:
                 return _no_trim('failed claim not found in the review', reason)
             sentence = _sentence_containing(draft, bad['text'])
