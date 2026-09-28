@@ -130,7 +130,8 @@ def test_launch_week_alternates_the_new_thing_with_support():
     assert all(plays.count(p) <= e.PLAYS[p]['max_per_week'] for p in set(plays))
     spot = plan['slots'][0]
     assert spot['subject_key'] == 'news:news-1' and spot['landing_url'] == 'https://mysolutionist.app/news/update-1'
-    assert plan['plays'][0]['reason'].startswith('Tell people about something new: "Update 1"')
+    assert plan['plays'][0]['reason'] == e.LEAD_REASON['feature_spotlight']
+    assert set(e.LEAD_REASON) == set(e.PLAYS)
 
 
 def test_founder_play_only_when_seats_and_price_are_verified():

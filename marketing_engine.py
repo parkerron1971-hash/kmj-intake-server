@@ -440,12 +440,23 @@ def pick_plays(diagnosis, signals, facts, times):
                       for p in chosen], 'slots': slots}
 
 
+LEAD_REASON = {
+    # Why the problem's own play answers it. The evidence sentence is the
+    # plan's headline already; repeating it here says nothing new.
+    'feature_spotlight': 'Leads the week because something shipped and nobody has been told.',
+    'founder_invitation': 'Leads the week because people are looking and not joining; a founding seat is the next step to offer them.',
+    'workflow_tip': 'Leads the week because useful posts are what get shared and found.',
+    'behind_the_build': 'Leads the week because a person behind the product is what makes a new name stick.',
+    'question_answered': 'Leads the week because answering the questions people ask before signing up clears the way.',
+}
+
+
 def _reason(play, diagnosis, signals):
     score = (signals.get('play_scores') or {}).get(play)
-    proven = (f' Your past posts of this kind averaged the best results of the plays tried.'
-              if score and score['samples'] >= 3 else '')
+    proven = (f' Posts like this have done well through their own links ({score["samples"]} so far).'
+              if score and score['samples'] >= PROVEN else '')
     if play in PREFERENCE[diagnosis['primary_problem']][:1]:
-        return f'{PROBLEMS[diagnosis["primary_problem"]]}: {diagnosis["evidence"]}{proven}'
+        return LEAD_REASON[play] + proven
     return {
         'feature_spotlight': 'Shows a real, shipped part of the product so the week is not all asks.',
         'founder_invitation': 'Gives interested visitors a direct next step while founding seats remain.',
