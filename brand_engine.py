@@ -1238,6 +1238,130 @@ def restore_snapshot(business_id: str, snapshot_idx: int = 0) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────
+# THE DRAFT — edits that survive leaving the page, until Publish
+# ─────────────────────────────────────────────────────────────
+#
+# Brand Studio used to hold every unsaved colour, face and word in the
+# browser tab. Navigate away, reload, or switch devices and an
+# afternoon's work was gone — the save bar could only warn.
+#
+# The draft lives in its OWN columns (businesses.brand_kit_draft +
+# brand_kit_draft_at), not in settings. save_brand_kit rewrites the
+# whole settings object, and a draft autosaves every few seconds; had
+# the draft lived in settings, every keystroke would have been a
+# read-modify-write of the assistant name, the theme and the site
+# brief, racing whatever else was editing them. A column written alone
+# can only ever overwrite itself.
+#
+# A draft is never live. Nothing reads it but Brand Studio. Publishing
+# is save_brand_kit (which snapshots the current kit into history, so
+# the live version is always restorable) followed by clearing the draft.
+
+BRAND_DRAFT_MAX_BYTES = 64_000
+
+
+class BrandDraftError(Exception):
+    """A draft write that did not land. Raised, never swallowed: a draft
+    that silently failed to save is the exact loss it exists to prevent.
+    `status` is the HTTP answer: 400 for a bad request, 502 when the
+    database did not take the write."""
+
+    def __init__(self, message: str, status: int = 502):
+        super().__init__(message)
+        self.status = status
+
+
+def _draft_path(business_id: str) -> str:
+    # select=id keeps the PATCH representation to one tiny column instead
+    # of echoing the whole business row back on every autosave.
+    return f"/businesses?id=eq.{business_id}&select=id"
+
+
+def get_brand_draft(business_id: str) -> Dict[str, Any]:
+    rows = _sb_get(f"/businesses?id=eq.{business_id}"
+                   f"&select=brand_kit_draft,brand_kit_draft_at&limit=1") or []
+    row = rows[0] if rows and isinstance(rows[0], dict) else {}
+    draft = row.get("brand_kit_draft")
+    if not isinstance(draft, dict) or not draft:
+        return {"draft": None, "draft_at": None}
+    return {"draft": draft, "draft_at": row.get("brand_kit_draft_at")}
+
+
+def save_brand_draft(business_id: str, kit: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(kit, dict):
+        raise BrandDraftError("draft must be an object", 400)
+    if len(json.dumps(kit)) > BRAND_DRAFT_MAX_BYTES:
+        raise BrandDraftError("draft is too large", 400)
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    res = _sb_patch(_draft_path(business_id),
+                    {"brand_kit_draft": kit, "brand_kit_draft_at": now})
+    # None = the request failed; [] = RLS filtered it (not your row).
+    if not res:
+        raise BrandDraftError("draft did not save")
+    return {"draft_at": now}
+
+
+def clear_brand_draft(business_id: str) -> None:
+    res = _sb_patch(_draft_path(business_id),
+                    {"brand_kit_draft": None, "brand_kit_draft_at": None})
+    if not res:
+        raise BrandDraftError("draft did not clear")
+
+
+def publish_brand_draft(business_id: str,
+                        kit: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Make the draft the live brand. `kit` is what the page is showing
+    — it wins over the stored draft, because the last keystroke may not
+    have autosaved yet. Without one, the stored draft is published."""
+    if not isinstance(kit, dict) or not kit:
+        kit = get_brand_draft(business_id).get("draft")
+    if not kit:
+        raise BrandDraftError("there is no draft to publish", 400)
+    bundle = save_brand_kit(business_id, kit)
+    try:
+        clear_brand_draft(business_id)
+    except BrandDraftError:
+        # Published but the draft lingers. It now equals the live kit, so
+        # the studio reads it as "no changes" — logged, not raised, since
+        # the thing the owner asked for did happen.
+        logger.warning(f"published {business_id[:8]} but the draft did not clear")
+    return bundle
+
+
+def refresh_site_after_publish(business_id: str) -> str:
+    """Carry a published brand onto the live website, and SAY whether it
+    did.
+
+    A composed site is a stored page. Nothing refreshed it on a brand
+    save — the new colours reached emails and the booking page, while the
+    website kept the old look until some unrelated edit re-rendered it.
+    This starts the same no-LLM re-render offerings and Media Library
+    already use (site_composer.refresh_if_composed_async).
+
+    Returns what the Publish sheet may truthfully say:
+      'refreshing'   — a composed or canvas site is re-rendering now
+      'not_composed' — the site is built another way (manual / legacy),
+                       and this refresh would be a no-op
+      'no_site'      — there is no site yet
+      'unknown'      — the site row could not be read
+    """
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=html_source:site_config->>html_source&limit=1") or []
+    except Exception as e:
+        logger.warning(f"site lookup after publish failed for {business_id[:8]}: {e}")
+        return "unknown"
+    if not rows:
+        return "no_site"
+    if (rows[0] or {}).get("html_source") not in ("module-composer", "canvas"):
+        return "not_composed"
+    import site_composer   # lazy: site_composer imports this module
+    site_composer.refresh_if_composed_async(business_id)
+    return "refreshing"
+
+
+# ─────────────────────────────────────────────────────────────
 # Generation paths (Claude-backed; do NOT save — frontend confirms)
 # ─────────────────────────────────────────────────────────────
 
