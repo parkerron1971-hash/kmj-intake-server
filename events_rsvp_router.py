@@ -144,11 +144,11 @@ def resolve_fields(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def occasion_roles(data: Dict[str, Any],
                    module_roles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The roles ONE occasion needs. The app lets each occasion carry its
-    own list in entry.data['roles'] (Christmas Eve needs more ushers than
+    own list in entry.data['_roles'] (Christmas Eve needs more ushers than
     a Wednesday class); an occasion without one uses the module's default
     list. An empty list the practitioner saved is respected. Mirrors the
     frontend's event_roster/types.ts occasionRoles."""
-    own = (data or {}).get("roles")
+    own = (data or {}).get("_roles")
     if not isinstance(own, list):
         return module_roles
     return [r for r in own

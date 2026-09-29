@@ -284,10 +284,10 @@ def test_full_role_refuses_409(fake_sb):
 
 
 def test_occasion_own_roles_govern_the_signup(fake_sb):
-    # The app can give one occasion its own roles (entry.data.roles). A
+    # The app can give one occasion its own roles (entry.data._roles). A
     # role only that occasion has is accepted; a default role it dropped
     # is refused — the page and the write read the same list.
-    fake_sb.entry["data"]["roles"] = [
+    fake_sb.entry["data"]["_roles"] = [
         {"id": "ushers", "label": "Ushers", "needed": 1}]
     out = _rsvp(_body(role="ushers"))
     assert out["ok"] is True
@@ -376,10 +376,10 @@ def test_occasion_roles_prefer_the_occasions_own_list():
     entries = {MOD: [
         {"id": "own", "module_id": MOD,
          "data": {"title": "Christmas Eve", "date": "2099-06-01",
-                  "roles": [{"id": "ushers", "label": "Ushers", "needed": 4}],
+                  "_roles": [{"id": "ushers", "label": "Ushers", "needed": 4}],
                   "signups": [{"name": "A", "status": "yes", "role": "ushers"}]}},
         {"id": "none", "module_id": MOD,
-         "data": {"title": "Quiet week", "date": "2099-06-02", "roles": [],
+         "data": {"title": "Quiet week", "date": "2099-06-02", "_roles": [],
                   "signups": []}},
         {"id": "default", "module_id": MOD,
          "data": {"title": "Sunday", "date": "2099-06-03", "signups": []}},

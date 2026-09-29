@@ -364,7 +364,7 @@ def test_roster_gaps_read_the_occasions_own_roles(monkeypatch):
         k: v for k, v in ROSTER_MODULE["archetype_params"].items() if k != "roles"}}
     entries = [{"id": "ev1", "updated_at": _ts_ago(1),
                 "data": {"title": "Christmas Eve", "date": _iso_in(5),
-                         "roles": [{"id": "ushers", "label": "Ushers", "needed": 3}],
+                         "_roles": [{"id": "ushers", "label": "Ushers", "needed": 3}],
                          "signups": [{"name": "Ana", "role": "ushers", "status": "yes"}]}}]
     sb = RecordingSB([
         (lambda p: p.startswith("/custom_modules") and "event_roster" in p, [no_default]),

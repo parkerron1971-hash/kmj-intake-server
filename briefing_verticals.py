@@ -593,7 +593,7 @@ async def _community(sb, client, biz: Dict[str, Any]) -> List[Dict[str, Any]]:
             # An occasion's own roles win over the module's default list
             # (events_rsvp_router.occasion_roles — the app sets them per
             # occasion). Headcount-only occasions have no roles to fill.
-            own = data.get("roles")
+            own = data.get("_roles")
             roles = ([r for r in own if isinstance(r, dict) and r.get("id")]
                      if isinstance(own, list) else module_roles)
             if not roles:
