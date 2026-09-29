@@ -347,3 +347,22 @@ def test_an_expired_prewarm_is_not_used(turn, monkeypatch):
         assert len(hits) == 8, "a stale prewarm must be refetched, not reused"
     finally:
         chief_prewarm.clear()
+
+
+@pytest.mark.parametrize('continuous, expected', [('on', 0), ('off', 1)])
+def test_continuous_turn_skips_the_serial_headline(turn, monkeypatch, continuous, expected):
+    import chief_headline
+    from unittest.mock import AsyncMock
+    monkeypatch.setenv('CHIEF_CONTINUOUS_STREAM', continuous)
+    monkeypatch.setattr(chief_headline, 'eligible', lambda *a, **kw: True)
+    headline = AsyncMock(return_value='')
+    monkeypatch.setattr(chief_headline, 'say', headline)
+    monkeypatch.setattr(chief_truth, 'evidence_for_review', lambda *a, **kw: {
+        'context:fixture': {'kind': 'record', 'text': 'Some context.', 'complete': True}})
+    token = cos._STREAM_SINK.set(lambda _: None)
+    try:
+        _, result = turn()
+        assert result['response'] == 'All good.'
+        assert headline.await_count == expected
+    finally:
+        cos._STREAM_SINK.reset(token)

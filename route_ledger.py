@@ -36,6 +36,7 @@ every field.
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import math
 import os
@@ -183,6 +184,9 @@ class RouteRecord:
     cache_hit: bool = False
     cache_similarity: Optional[float] = None
     first_token_at: Optional[float] = None
+    content_first_at: Optional[float] = None
+    content_last_at: Optional[float] = None
+    content_max_gap_ms: int = 0
     finished_at: Optional[float] = None
     error: Optional[str] = None
     slo_applies: bool = True       # False: the app talking to itself (sentinels)
@@ -193,6 +197,23 @@ class RouteRecord:
             self.first_token_at = time.perf_counter()
             if source:
                 self.opener_source = source
+
+    def mark_content(self) -> None:
+        """Useful answer text, excluding acknowledgments and progress phrases."""
+        now = time.perf_counter()
+        previous = self.content_last_at or self.first_token_at or self.arrived
+        self.content_max_gap_ms = max(self.content_max_gap_ms, int((now - previous) * 1000))
+        if self.content_first_at is None:
+            self.content_first_at = now
+        self.content_last_at = now
+
+    def flow_metrics(self) -> Dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "first_content_ms": (int((self.content_first_at - self.arrived) * 1000)
+                                 if self.content_first_at is not None else None),
+            "max_content_gap_ms": self.content_max_gap_ms,
+        }
 
     def escalate(self, reason: str) -> None:
         if not self.escalated:
@@ -395,6 +416,8 @@ def finish(rec: RouteRecord) -> Dict[str, Any]:
             _page_owner(alert)
     except Exception as e:  # pragma: no cover
         logger.warning("[route] slo window failed: %s", e)
+    # Log-only fields: compatible with the existing DB schema. No text or records.
+    logger.info("[chief flow] %s", json.dumps(rec.flow_metrics()))
     _write_row(row)
     return row
 
