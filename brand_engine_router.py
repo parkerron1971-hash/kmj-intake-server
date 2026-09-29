@@ -189,6 +189,20 @@ def generate(
     return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 
+@router.post("/directions/{business_id}")
+def directions(
+    business_id: str,
+    body: Dict[str, Any],
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
+) -> JSONResponse:
+    """Body: {essence?: {tagline, elevator_pitch, tone_words}}. Three
+    contrasting kits, not saved — Brand Studio lays the chosen mix into
+    the draft, and Publish is still the only door to live."""
+    essence = body.get("essence") if isinstance(body, dict) else None
+    result = brand_engine.generate_directions(business_id, essence)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+
+
 @router.post("/learn-from-url/{business_id}")
 def learn(
     business_id: str,

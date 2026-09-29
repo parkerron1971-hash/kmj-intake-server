@@ -1445,13 +1445,13 @@ def _call_claude_for_kit(system_prompt: str, user_message: str) -> Dict[str, Any
         return {"ok": False, "error": str(e)}
 
 
-def generate_from_context(business_id: str) -> Dict[str, Any]:
-    """Rich generation using FULL context: business name, archetype,
-    voice_profile, brand_voice, Strategy Track outputs, Practitioner Profile.
-    Returns a brand kit dict (not yet saved). Frontend confirms then calls save."""
+def _brand_context_lines(business_id: str) -> Optional[List[str]]:
+    """What the model is told about the business — shared by the single
+    kit (generate_from_context) and the three directions, so the two can
+    never be briefed differently. None when the business does not exist."""
     business = _safe_get_one("businesses", "id", business_id) or {}
     if not business or not business.get("id"):
-        return {"ok": False, "error": "Business not found"}
+        return None
 
     profile = _safe_get_one("business_profiles", "business_id", business_id) or {}
     archetype = _safe_get_one(
@@ -1485,7 +1485,140 @@ def generate_from_context(business_id: str) -> Dict[str, Any]:
             parts.append(f"Unique value: {disc['unique_value_proposition']}")
         if disc.get("target_audience"):
             parts.append(f"Audience detail: {disc['target_audience']}")
+    return parts
 
+
+# ─── THREE DIRECTIONS ────────────────────────────────────────────────
+#
+# "Rethink my brand" used to return ONE kit, all or nothing — take it
+# whole or discard it. Brand Studio now shows three contrasting
+# directions and lets the owner take the colours from one and the type
+# from another. One model call, not three: three separate calls would
+# drift toward the same safe answer, while one call asked for CONTRAST
+# is told outright that the three must differ.
+
+_DIRECTIONS_SYSTEM_PROMPT = """You are a brand designer. Propose THREE clearly different brand directions for one practitioner.
+Output ONLY valid JSON, no other text:
+{
+  "directions": [
+    {
+      "name": "two or three evocative words",
+      "why": "one plain sentence: the feeling, and who it suits",
+      "kit": {
+        "tagline": "one line, max 8 words",
+        "elevator_pitch": "2-3 sentences in the practitioner's voice",
+        "colors": {"primary": "#RRGGBB", "secondary": "#RRGGBB", "accent": "#RRGGBB", "background": "#RRGGBB", "text": "#RRGGBB"},
+        "font_pair": {"heading": "Google Font family", "body": "Google Font family"},
+        "tone_words": ["word", "word", "word", "word"],
+        "visual_style": "one sentence"
+      }
+    }
+  ]
+}
+
+Rules:
+- Exactly three directions, and they must genuinely differ: different primary hues, different heading faces, different moods (for example one grounded and calm, one clear and professional, one warm and bold).
+- Every font is a real Google Fonts family. Never use Inter, Roboto, Arial, Open Sans or Montserrat as a heading.
+- Background is light unless the direction is deliberately dark; text must be readable on the background.
+- If the practitioner gave a tagline, pitch or tone words, keep them at the heart of every direction; you may tighten the wording but never replace their meaning.
+- Match the voice they described. Don't invent a personality they didn't describe."""
+
+_HEX_RE = None
+
+
+def _clean_direction(d: Any) -> Optional[Dict[str, Any]]:
+    """One direction, or None when it can't be shown honestly: every
+    colour a real 6-digit hex, both faces named."""
+    global _HEX_RE
+    if _HEX_RE is None:
+        import re
+        _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+    if not isinstance(d, dict) or not isinstance(d.get("kit"), dict):
+        return None
+    kit = d["kit"]
+    colors = kit.get("colors") if isinstance(kit.get("colors"), dict) else {}
+    roles = ("primary", "secondary", "accent", "background", "text")
+    if not all(isinstance(colors.get(r), str) and _HEX_RE.match(colors[r].strip()) for r in roles):
+        return None
+    fonts = kit.get("font_pair") if isinstance(kit.get("font_pair"), dict) else {}
+    heading = str(fonts.get("heading") or "").strip()
+    body = str(fonts.get("body") or "").strip()
+    if not heading or not body:
+        return None
+    tone = [str(w).strip() for w in (kit.get("tone_words") or []) if str(w or "").strip()][:6]
+    return {
+        "name": str(d.get("name") or "").strip()[:40] or "A direction",
+        "why": str(d.get("why") or "").strip()[:200],
+        "kit": {
+            "tagline": str(kit.get("tagline") or "").strip()[:120],
+            "elevator_pitch": str(kit.get("elevator_pitch") or "").strip()[:600],
+            "colors": {r: colors[r].strip().upper() for r in roles},
+            "font_pair": {"heading": heading[:60], "body": body[:60]},
+            "tone_words": tone,
+            "visual_style": str(kit.get("visual_style") or "").strip()[:200],
+        },
+    }
+
+
+def generate_directions(business_id: str,
+                        essence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Three contrasting kits, not saved. `essence` is what the owner has
+    just told Brand Studio (tagline, pitch, tone words) — fresher than
+    anything stored, so it leads the brief."""
+    parts = _brand_context_lines(business_id)
+    if parts is None:
+        return {"ok": False, "error": "Business not found"}
+    ess = essence if isinstance(essence, dict) else {}
+    told: List[str] = []
+    if str(ess.get("tagline") or "").strip():
+        told.append(f"Their tagline: {str(ess['tagline']).strip()[:160]}")
+    if str(ess.get("elevator_pitch") or "").strip():
+        told.append(f"What they do, in their words: {str(ess['elevator_pitch']).strip()[:600]}")
+    tone = [str(w).strip() for w in (ess.get("tone_words") or []) if str(w or "").strip()][:8]
+    if tone:
+        told.append(f"How they want to sound: {', '.join(tone)}")
+    user_message = ("Propose three brand directions for:\n\n" + "\n".join(parts)
+                    + ("\n\nWhat the practitioner just told us:\n" + "\n".join(told) if told else ""))
+
+    api_key = _anthropic_key()
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
+    try:
+        with httpx.Client(timeout=90.0) as client:
+            r = llm_call.post_with(client, {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 3500,
+                "system": _DIRECTIONS_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_message}],
+            }, key=api_key, task="brand_directions", business_id=business_id)
+        if r.status_code != 200:
+            logger.warning(f"directions: Anthropic error {r.status_code}: {r.text[:200]}")
+            return {"ok": False, "error": "Kai couldn't sketch directions just now. Try again."}
+        text = _strip_code_fences("".join(
+            c.get("text", "") for c in r.json().get("content", []) if c.get("type") == "text"))
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            start, end = text.find("{"), text.rfind("}")
+            parsed = json.loads(text[start:end + 1]) if start >= 0 and end > start else {}
+    except Exception as e:
+        logger.warning(f"generate_directions failed: {e}")
+        return {"ok": False, "error": "Kai couldn't sketch directions just now. Try again."}
+
+    raw = parsed.get("directions") if isinstance(parsed, dict) else None
+    directions = [c for c in (_clean_direction(d) for d in (raw or [])) if c][:3]
+    if not directions:
+        return {"ok": False, "error": "The directions came back unusable. Try again."}
+    return {"ok": True, "directions": directions}
+
+
+def generate_from_context(business_id: str) -> Dict[str, Any]:
+    """Rich generation using FULL context: business name, archetype,
+    voice_profile, brand_voice, Strategy Track outputs, Practitioner Profile.
+    Returns a brand kit dict (not yet saved). Frontend confirms then calls save."""
+    parts = _brand_context_lines(business_id)
+    if parts is None:
+        return {"ok": False, "error": "Business not found"}
     user_message = "Generate a brand kit for:\n\n" + "\n".join(parts)
     return _call_claude_for_kit(_GEN_SYSTEM_PROMPT, user_message)
 
