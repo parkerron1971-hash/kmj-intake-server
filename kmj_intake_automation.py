@@ -337,6 +337,9 @@ app.include_router(member_portal_church_router)
 # server-only tables, seat-checked here. Kevin, 2026-09-29.
 from kids_router import router as kids_router
 app.include_router(kids_router)
+# Children's check-in and pickup (codes, texts, release) — Kevin, 2026-09-29.
+from kids_checkin import router as kids_checkin_router
+app.include_router(kids_checkin_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
