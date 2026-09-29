@@ -5,7 +5,6 @@ Only PCM and small status events leave the relay; the provider key stays here.
 import asyncio
 import base64
 import json
-import logging
 import os
 import re
 import time
@@ -19,7 +18,8 @@ import whisper_proxy as tts
 from auth_supabase import _verify_token
 
 router = APIRouter()
-logger = logging.getLogger("speech_stream")
+# Inherit the configured speech handler/level; root INFO can be disabled in production.
+logger = tts.logger.getChild("stream")
 MAX_CHARS = 16000
 MAX_FRAME = 20000
 SESSION_SECONDS = 180
