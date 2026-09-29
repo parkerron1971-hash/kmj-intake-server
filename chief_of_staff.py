@@ -12870,59 +12870,27 @@ def _looks_like_mentor_tip(text: str) -> bool:
 
 # ─── Sentiment detection ─────────────────────────────────────────────
 
-_FRUSTRATED_WORDS = (
-    "again", "still", "not working", "broken", "wrong", "didn't",
-    "did not", "failed", "fix", "ugh", "annoying", "frustrating",
-)
-_RELAXED_WORDS = (
-    "please", "thanks", "thank you", "when you get a chance",
-    "no rush", "appreciate",
-)
-
-
 def _detect_sentiment(history: List[Any], current_message: str) -> str:
-    """Return 'rushed' | 'frustrated' | 'relaxed'. Pure heuristic — best
-    effort on a single turn. `history` is the trimmed conversation history
-    (objects with .role + .content OR plain dicts)."""
-    msg = (current_message or "").strip()
-    if not msg:
+    """Conservative delivery hint from explicit signals in the current turn.
+
+    Conversation length is not pace: history has no reliable timing data,
+    and short replies often mean the practitioner is engaged. Let the model
+    read the full thread; only force a delivery override on a clear cue.
+    """
+    low = (current_message or "").strip().lower()
+    if not low:
         return "relaxed"
-
-    rushed = 0
-    frustrated = 0
-    relaxed = 0
-
-    if len(msg) < 20:
-        rushed += 1
-    if len(msg) > 100:
-        relaxed += 1
-
-    # Multiple user messages in quick succession → rushed
-    user_recent = []
-    for m in (history or [])[-6:]:
-        role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else None)
-        if role == "user":
-            user_recent.append(m)
-    if len(user_recent) >= 3:
-        rushed += 2
-
-    # Frustration signals
-    if msg.count("!") > 1:
-        frustrated += 2
-    # Mostly-uppercase 5+ letter messages — avoid catching short ALL-CAPS like "OK"
-    letters = [c for c in msg if c.isalpha()]
-    if len(letters) >= 5 and "".join(letters).isupper():
-        frustrated += 2
-
-    low = msg.lower()
-    if any(w in low for w in _FRUSTRATED_WORDS):
-        frustrated += 1
-    if any(w in low for w in _RELAXED_WORDS):
-        relaxed += 1
-
-    if frustrated >= 2:
+    # An excited 'WE DID IT!!' is not frustration. Punctuation and case alone
+    # must not suppress personality or force an apology.
+    if re.search(
+        r"\b(?:not working|still broken|doesn't work|does not work|"
+        r"didn't work|did not work|frustrat\w*|annoying|ugh)\b", low
+    ):
         return "frustrated"
-    if rushed >= 2:
+    if re.search(
+        r"\b(?:in a (?:rush|hurry)|short on time|keep (?:it|this) (?:short|brief)|"
+        r"just (?:the answer|tell me)|quick answer|quickly please|asap)\b", low
+    ):
         return "rushed"
     return "relaxed"
 
