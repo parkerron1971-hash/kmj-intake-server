@@ -1,6 +1,6 @@
 # Ministry readiness fixes — implementation and rollout
 
-Status: implemented and verified locally. Production has not been migrated or deployed.
+Status: code merged and production migration applied 2026-09-29 03:29 UTC. Schema, privacy permissions, archival integrity, and live API checks passed. See [production verification](MINISTRY_MIGRATION_VERIFICATION.md).
 
 ## Audit findings addressed
 
