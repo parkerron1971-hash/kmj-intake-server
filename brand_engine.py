@@ -1593,7 +1593,7 @@ def generate_directions(business_id: str,
             }, key=api_key, task="brand_directions", business_id=business_id)
         if r.status_code != 200:
             logger.warning(f"directions: Anthropic error {r.status_code}: {r.text[:200]}")
-            return {"ok": False, "error": "Kai couldn't sketch directions just now. Try again."}
+            return {"ok": False, "error": "Couldn't sketch directions just now. Try again."}
         text = _strip_code_fences("".join(
             c.get("text", "") for c in r.json().get("content", []) if c.get("type") == "text"))
         try:
@@ -1603,7 +1603,7 @@ def generate_directions(business_id: str,
             parsed = json.loads(text[start:end + 1]) if start >= 0 and end > start else {}
     except Exception as e:
         logger.warning(f"generate_directions failed: {e}")
-        return {"ok": False, "error": "Kai couldn't sketch directions just now. Try again."}
+        return {"ok": False, "error": "Couldn't sketch directions just now. Try again."}
 
     raw = parsed.get("directions") if isinstance(parsed, dict) else None
     directions = [c for c in (_clean_direction(d) for d in (raw or [])) if c][:3]

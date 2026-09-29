@@ -109,7 +109,8 @@ def test_a_model_error_says_so(model):
     _, reply = model
     reply["status"] = 529
     out = brand_engine.generate_directions("biz-1")
-    assert out["ok"] is False and "couldn't sketch" in out["error"]
+    assert out["ok"] is False and "couldn't sketch" in out["error"].lower()
+    assert "Kai" not in out["error"], "the assistant's name is per business; the server stays neutral"
 
 
 def test_the_single_kit_and_the_directions_share_one_brief(monkeypatch):
