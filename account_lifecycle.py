@@ -128,6 +128,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "email_suppressions":      "recipient-keyed deliverability protection; deleting it re-mails bounces",
     "entity_groups":           "owner-keyed consolidation groups; die with the auth user",
     "mcp_oauth_codes":         "user-keyed OAuth codes; short-lived",
+    "member_login_codes":      "member portal sign-in codes (hashed, 10-minute, pruned daily); credentials, not records, cascade on business deletion",
     "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
     "site_events":             "anonymous marketing-site traffic; no business_id by design",
     # The tamper-evident ledger has its own door. audit_log is exported

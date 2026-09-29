@@ -98,6 +98,19 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # and because the free lane is the one most likely to be called on a
     # schedule later. Per business, per minute.
     "grants_search": (int(os.environ.get("RL_GRANTS_SEARCH_PER_MIN", "30")), 60),
+    # Member sign-in (member_portal.py). Asking for a code mails a real
+    # person, so both the sender (per IP) and the inbox (per church +
+    # address) are capped; checking a code is capped per IP on top of the
+    # 5 tries each code allows.
+    # Per network (a church's own Wi-Fi is one address on a Sunday, so it
+    # is generous), then per address: a one-minute cooldown and a daily
+    # ceiling, rather than an hourly cap a stranger could spend to keep a
+    # member from ever receiving a code. Wrong codes have their own daily
+    # cap per address in member_portal (MAX_FAILED_PER_DAY).
+    "member_code_ip": (int(os.environ.get("RL_MEMBER_CODE_PER_HOUR", "40")), 3600),
+    "member_code_email_minute": (1, 60),
+    "member_code_email_day": (int(os.environ.get("RL_MEMBER_CODE_EMAIL_PER_DAY", "12")), 86400),
+    "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
 }
 _DEFAULT = (60, 60)
 

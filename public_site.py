@@ -7489,6 +7489,13 @@ async def subdomain_catch_all(request: Request, path: str):
     if request_path.startswith("/learn/"):
         return await _serve_learner(request_path)
 
+    # A member's own page (member_portal.py). It needs the request itself
+    # (its session cookie), so it is routed here rather than through the
+    # site renderers, and it resolves the church from the host on its own.
+    if request_path == "/my" or request_path.startswith("/my/"):
+        import member_portal
+        return await member_portal.serve(request, request_path)
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
