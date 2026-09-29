@@ -74,9 +74,13 @@ begin
                  where e.id = new.entry_id and e.business_id = new.business_id) then
     raise exception 'That occasion is not in this business';
   end if;
-  if tg_table_name = 'attendance' and new.contact_id is not null and not exists (
-       select 1 from public.contacts c where c.id = new.contact_id and c.business_id = new.business_id) then
-    raise exception 'That person is not in this business';
+  -- Nested, not `and`: PL/pgSQL does not promise to short-circuit, and a
+  -- headcount row has no contact_id field at all (it errored 42703).
+  if tg_table_name = 'attendance' then
+    if new.contact_id is not null and not exists (
+         select 1 from public.contacts c where c.id = new.contact_id and c.business_id = new.business_id) then
+      raise exception 'That person is not in this business';
+    end if;
   end if;
   return new;
 end $$;
