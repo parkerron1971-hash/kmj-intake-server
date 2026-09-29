@@ -574,10 +574,13 @@ def _is_advice(claim, reply, sources):
     # a record claim. Anything addressed to or about the business ("your
     # site is down", "I don't have a baseline") or stating a state ("no
     # invoices are overdue", "all clients have booked") keeps the check.
-    # A pronoun ("most of them are active") points back at the records.
+    # A pronoun ("most of them are active") or a definite thing ("the
+    # capacity report wouldn't load") points at this business or this turn;
+    # know-how is about a kind of thing ("warm contacts convert…").
     return (not _numbers(sentence) and claim.get('kind') != 'reference'
             and not _ABOUT_THE_BUSINESS.search(sentence) and not _STATE_CLAIM.search(sentence)
-            and not re.search(r"\b(?:they|them|those|these|their|theirs|it|its)\b", sentence, re.I))
+            and not re.search(r"\b(?:they|them|those|these|their|theirs|it|its|the|this|that)\b",
+                              sentence, re.I))
 
 
 def _advice_sentence_figures(prose, sources):
@@ -846,7 +849,7 @@ def _claim_fail(msg, text_):
     return '%s :: %s' % (msg, (text_ or '').strip()[:80])
 
 
-def unconfirmed_claims(raw, reason):
+def unconfirmed_claims(raw, reason, reply=None, sources=None):
     """The claim texts a review could not support: the reviewer's own gaps,
     or the one claim whose citation failed the check."""
     # Only the reviewer's own declared gaps qualify. A citation that fails
@@ -855,16 +858,16 @@ def unconfirmed_claims(raw, reason):
     # factual eval pins, and a wrong claim under "could not confirm" is
     # still a wrong claim on the screen. Those stay withheld.
     if reason.startswith(('claim without support', 'general rule')):
-        return _gap_claims(raw)
+        return _gap_claims(raw, reply=reply, sources=sources)
     return []
 
 
-def reference_claims(raw, reason):
+def reference_claims(raw, reason, reply=None, sources=None):
     """The public rules a review delivered as general knowledge. Only when
     nothing worse withheld the draft: the reason is the last word."""
     if not reason.startswith(('claim without support', 'general rule')):
         return []
-    return _gap_claims(raw, references=True)
+    return _gap_claims(raw, references=True, reply=reply, sources=sources)
 
 
 def _squash(text):
@@ -1059,7 +1062,7 @@ def _quote_in_source(quote, source):
     return False
 
 
-def _gap_claims(raw, references=False):
+def _gap_claims(raw, references=False, reply=None, sources=None):
     """The claims the reviewer listed without support, in draft order:
     the gaps, or with `references` the public rules stated from memory."""
     try:
@@ -1075,8 +1078,21 @@ def _gap_claims(raw, references=False):
         # A ballpark the reviewer tried to cite is still general knowledge.
         listed = _unsourced(c) or (references and _is_general_estimate(c))
         if listed and _is_reference(c) == references and isinstance(text, str) and text.strip():
+            if reply is not None and _cleared_by_the_check(c, reply, sources or {}):
+                # The check already cleared it (advice, a recommendation, a
+                # read narration): listing it as unverified would put back
+                # the doubt the verdict took away (live advice eval, 9/28).
+                continue
             out.append(text.strip()[:140])
     return out
+
+
+def _cleared_by_the_check(claim, reply, sources):
+    """Would assess_review have let this unsourced claim through on its own?"""
+    if _is_recommendation(claim, reply) or _is_advice(claim, reply, sources):
+        return True
+    return (claim.get('kind') == 'action' and is_read_narration(claim.get('text'))
+            and read_anything(sources))
 
 
 def conversation_for_review(message, history):
@@ -2198,8 +2214,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             if t_verdict == 'supported':
                 logger.info('reply review trimmed %d claim(s); rest supported', cuts)
                 return t_reply.rstrip() + note, {'status': 'trimmed', 'sources': t_cited, 'cuts': cuts}
-            t_gaps = [g for g in unconfirmed_claims(raw, t_reason) if _squash(g) in _squash(t_reply)]
-            t_refs = [r for r in reference_claims(raw, t_reason) if _squash(r) in _squash(t_reply)]
+            t_gaps = [g for g in unconfirmed_claims(raw, t_reason, t_reply, sources) if _squash(g) in _squash(t_reply)]
+            t_refs = [r for r in reference_claims(raw, t_reason, t_reply, sources) if _squash(r) in _squash(t_reply)]
             if (t_gaps or t_refs) and not has_completion_claim(t_reply):
                 logger.info('reply review trimmed %d claim(s); rest caveated', cuts)
                 return (t_reply.rstrip() + note + _caveat_text(t_gaps, t_refs)), {
@@ -2226,8 +2242,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             bits.append(value.strip())
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
-    gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
-    references = reference_claims(raw, reason) if verdict == 'unsupported' else []
+    gaps = unconfirmed_claims(raw, reason, reply, sources) if verdict == 'unsupported' else []
+    references = reference_claims(raw, reason, reply, sources) if verdict == 'unsupported' else []
     # A receipt in the turn does not change this: the work is real (the
     # failed-receipt report already won above) and the doubt is named.
     # With receipts excluded, "So there's already a workshop on file?"
@@ -2332,8 +2348,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 # first review does. A wrong figure or citation still fails.
                 # Withholding a checked invoice answer over one aside cost
                 # 41 s and ended in "try again" (2026-09-23).
-                r_gaps = unconfirmed_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
-                r_refs = reference_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
+                r_gaps = unconfirmed_claims(checked, checked_reason, repaired, sources) if checked_verdict == 'unsupported' else []
+                r_refs = reference_claims(checked, checked_reason, repaired, sources) if checked_verdict == 'unsupported' else []
                 if (r_gaps or r_refs) and not has_completion_claim(repaired):
                     logger.info('reply review recovered with %d gap(s), %d general rule(s)',
                                 len(r_gaps), len(r_refs))

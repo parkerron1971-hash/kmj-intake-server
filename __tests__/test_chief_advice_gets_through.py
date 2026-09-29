@@ -142,3 +142,25 @@ def test_a_question_turn_gets_more_cuts_before_it_is_given_up():
         repairer=AsyncMock(side_effect=AssertionError("no repair needed"))))
     assert meta["status"] == "trimmed", meta
     assert "901" not in out and "905" not in out and "warm yes" in out
+
+
+# ── the doubt list names only what is still in doubt ───────────────────
+# Live advice eval, 2026-09-28: answers caveated for one real doubt listed
+# the cleared advice too ("If about one in three discovery calls becomes a
+# client, five clients means roughly 12 to 15 calls" under "still
+# unverified"), undoing on screen what the verdict had decided.
+
+def test_a_caveat_lists_the_real_doubt_and_not_the_cleared_advice():
+    plan = "If about one in three discovery calls becomes a client, five clients means roughly 12 to 15 calls."
+    offer = "I can set this up as a tracked goal, so it shows on your dashboard each week."
+    doubt = "The capacity report wouldn't load."
+    draft = f"{plan} {offer} {doubt}"
+    raw = json.dumps({"verdict": "unsupported", "claims": [
+        {"text": t.rstrip("."), "kind": "fact", "source_id": "", "quote": "", "gap": "no source"}
+        for t in (plan, offer, doubt)]})
+    out, meta = asyncio.run(truth.finalize_reply(
+        None, draft, ctx={}, view_detail="", taken=[], message="How do I get five clients?",
+        business_id="biz", reviewer=AsyncMock(return_value=raw)))
+    assert meta["status"] == "caveated", meta
+    assert meta["gaps"] == [doubt.rstrip(".")], meta["gaps"]
+    assert out.startswith(draft)
