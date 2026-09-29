@@ -360,7 +360,7 @@ async def public_event_rsvp(
     entries = sb_clients.sb_get_as_service(
         f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}"
         f"&business_id=eq.{business_id}&status=eq.active"
-        f"&select=id,module_id,data&limit=1"
+        f"&select=id,module_id,data,updated_at&limit=1"
     ) or []
     if not entries:
         raise HTTPException(404, "that occasion wasn't found")
@@ -371,12 +371,11 @@ async def public_event_rsvp(
         raise HTTPException(404, "that occasion wasn't found")
 
     import hashlib
-    import json
     # Stable registration identity survives duplicate contact-create races and
     # contact lookup failures without placing an email address in public data.
     registration_key = hashlib.sha256(f'{business_id}:{entry_id}:{email}'.encode()).hexdigest()
     contact_id = None
-    for attempt in range(3):
+    for attempt in range(5):
         f = resolve_fields(module.get("archetype_params"))
         original_data = entry.get("data") or {}
         data = dict(original_data)
@@ -405,23 +404,26 @@ async def public_event_rsvp(
             new_signup['role'] = role_id
         data[f['signups_field']] = signups + [new_signup]
         data['_registration_keys'] = {**keys, registration_key: True}
-        # Compare-and-swap the JSON document: concurrent registrations cannot
-        # overwrite one another or both consume the last available seat.
-        expected = urllib.parse.quote(json.dumps(original_data, separators=(',', ':')), safe='')
+        # A compact revision avoids sending the whole roster in the URL.
+        revision = entry.get('updated_at')
+        if not revision:
+            raise HTTPException(503, 'Signup storage is not ready. Please retry later.')
+        expected = urllib.parse.quote(str(revision), safe='')
         updated = sb_clients.sb_patch_as_service(
             f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
-            f"&status=eq.active&data=eq.{expected}", {'data': data})
+            f"&status=eq.active&updated_at=eq.{expected}", {'data': data})
         if updated is None:
             raise HTTPException(503, 'Registration could not be saved. Please try again.')
         if updated:
             return {'ok': True, 'already': False, 'attending': attending_count(data[f['signups_field']])}
         rows = sb_clients.sb_get_as_service(
             f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
-            '&status=eq.active&select=id,module_id,data&limit=1') or []
+            '&status=eq.active&select=id,module_id,data,updated_at&limit=1') or []
         if not rows or str(rows[0].get('module_id')) != str(module['id']):
             raise HTTPException(404, "that occasion wasn't found")
         entry = rows[0]
     raise HTTPException(409, 'Registration changed while saving. Please try again.')
+
 
 
 

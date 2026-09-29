@@ -8,6 +8,7 @@ exists, the apply order, and how to check what's actually live.
 
 | Location | Naming | Order signal |
 |---|---|---|
+| `supabase/APPLY-2026-09-29-ministry-readiness.sql` | Explicit gift classification, ministry financial RLS, private-care archival/storage, gift correction audit and roster revisions. | **PENDING.** Apply in coordination with this release; new giving/private-care features require this schema. |
 | `__migrations__/` | `YYYY_MM_DD_name.sql` | date prefix = order |
 | `supabase/` (this repo) | feature-named + newer `APPLY-YYYY-MM-DD-*` | date prefix on recent ones |
 | `../solutionist-studio/supabase/` (frontend repo) | feature-named + `APPLY-YYYY-MM-DD-*` | date prefix on recent ones |
