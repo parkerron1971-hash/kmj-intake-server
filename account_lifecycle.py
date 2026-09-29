@@ -151,6 +151,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "ministry_care_requests", "ministry_gift_history",
     # Who was at each occasion; before module_entries and contacts.
     "attendance", "attendance_headcounts",
+    # Families and children: notes, pickups and children before their
+    # household, and the household's adult links before contacts.
+    "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
     "connected_agents",       # bot profiles; no live credentials in this table
@@ -601,6 +604,9 @@ _IMPORT_SKIP = {
     "growth_events", "growth_records",
     # Attendance cites original occasion and contact ids; same reason.
     "attendance", "attendance_headcounts",
+    # Families link contacts and each other by id; same reason. The export
+    # keeps them (children's allergies included) for the owner.
+    "households", "household_adults", "children", "household_pickups", "child_care_notes",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
