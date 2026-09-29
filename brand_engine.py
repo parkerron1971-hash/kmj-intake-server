@@ -1362,6 +1362,130 @@ def refresh_site_after_publish(business_id: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────
+# WHERE THE BRAND LIVES — which surfaces still wear an older look
+# ─────────────────────────────────────────────────────────────
+#
+# Brand Studio's Home shows, per surface, whether it is in step with the
+# current brand. Only surfaces with a real, dated record can be judged:
+#   website — business_sites.site_config.html_generated_at (every
+#             render_and_persist stamps it; updated_at is NOT a render
+#             time, /sites/{id}/invalidate bumps it without rendering)
+#   print   — settings.print_materials.<piece>.generated_at
+#   images  — image_artworks.created_at (flyers and generated images)
+# Emails, invoices, the store and the booking page render from the kit
+# at send / request time, so they are always in step and need no check.
+#
+# "When did the look last change" is NOT the last save: an override or
+# the font lock also goes through save_brand_kit. It is found by walking
+# brand_kit_history for the newest version whose colours, faces or
+# tagline differ from the current kit.
+
+def _ts(value: Any) -> Optional[datetime]:
+    try:
+        s = str(value or "").strip()
+        if not s:
+            return None
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _look_signature(kit: Any) -> str:
+    k = kit if isinstance(kit, dict) else {}
+    c = k.get("colors") if isinstance(k.get("colors"), dict) else {}
+    fp = k.get("font_pair") if isinstance(k.get("font_pair"), dict) else {}
+    look = {
+        role: str(c.get(role) or k.get(f"{role}_color") or "").strip().lower()
+        for role in ("primary", "secondary", "accent", "background", "text")
+    }
+    look["heading"] = str(fp.get("heading") or k.get("font_heading") or "").strip().lower()
+    look["body"] = str(fp.get("body") or k.get("font_body") or "").strip().lower()
+    look["tagline"] = str(k.get("tagline") or "").strip()
+    return json.dumps(look, sort_keys=True)
+
+
+def look_changed_at(business: Dict[str, Any]) -> Optional[str]:
+    """When the CURRENT look (colours, faces, tagline) took over. History is
+    newest first and history[i].saved_at is when history[i].kit was
+    replaced, so the first entry that looks different marks the change.
+    None when there is no kit or no older look on record."""
+    current = (business.get("settings") or {}).get("brand_kit")
+    if not current:
+        return None
+    sig = _look_signature(current)
+    for entry in business.get("brand_kit_history") or []:
+        if not isinstance(entry, dict):
+            continue
+        if _look_signature(entry.get("kit")) != sig:
+            return entry.get("saved_at")
+    return None
+
+
+_PRINT_LABEL = {
+    "business_card": "Business card",
+    "one_pager": "One-pager",
+    "connect_card": "Connect card",
+    "service_menu": "Service menu",
+}
+
+
+def where_it_lives(business_id: str) -> Dict[str, Any]:
+    business = _safe_get_one("businesses", "id", business_id) or {}
+    if not business:
+        return {"ok": False, "error": "Business not found"}
+    changed_raw = look_changed_at(business)
+    changed = _ts(changed_raw)
+
+    def older(when: Any) -> bool:
+        t = _ts(when)
+        return bool(changed and t and t < changed)
+
+    # Website
+    site: Dict[str, Any] = {"status": "unknown"}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=status,html_source:site_config->>html_source,"
+            "generated_at:site_config->>html_generated_at&limit=1") or []
+        if not rows:
+            site = {"status": "no_site"}
+        else:
+            r = rows[0] or {}
+            if r.get("html_source") not in ("module-composer", "canvas"):
+                site = {"status": "not_composed"}
+            else:
+                site = {"status": "behind" if older(r.get("generated_at")) else "in_step",
+                        "rendered_at": r.get("generated_at"),
+                        "published": r.get("status") == "published"}
+    except Exception as e:
+        logger.warning(f"where-it-lives site lookup failed for {business_id[:8]}: {e}")
+
+    # Print materials (Brand → Print Materials)
+    pm = (business.get("settings") or {}).get("print_materials") or {}
+    pieces = [(k, v.get("generated_at")) for k, v in pm.items()
+              if isinstance(v, dict) and (v.get("html") or v.get("generated_at"))]
+    print_block = {
+        "total": len(pieces),
+        "behind": [_PRINT_LABEL.get(k, k.replace("_", " ").capitalize())
+                   for k, g in pieces if older(g)],
+    }
+
+    # Flyers and generated images
+    images: Dict[str, Any] = {"total": 0, "behind": 0}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/image_artworks?business_id=eq.{business_id}&status=eq.ready"
+            "&select=created_at&order=created_at.desc&limit=500") or []
+        images = {"total": len(rows), "behind": sum(1 for r in rows if older((r or {}).get("created_at")))}
+    except Exception as e:
+        logger.warning(f"where-it-lives images lookup failed for {business_id[:8]}: {e}")
+
+    return {"ok": True, "look_changed_at": changed_raw, "website": site,
+            "print": print_block, "images": images}
+
+
+# ─────────────────────────────────────────────────────────────
 # Generation paths (Claude-backed; do NOT save — frontend confirms)
 # ─────────────────────────────────────────────────────────────
 

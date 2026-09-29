@@ -165,6 +165,26 @@ def draft_publish(
     return JSONResponse({"ok": True, "bundle": bundle, "site": site})
 
 
+@router.get("/where-it-lives/{business_id}")
+def where_it_lives(
+    business_id: str,
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
+) -> JSONResponse:
+    """Which surfaces still wear an older look. Read-only."""
+    result = brand_engine.where_it_lives(business_id)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 404)
+
+
+@router.post("/refresh-site/{business_id}")
+def refresh_site(
+    business_id: str,
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
+) -> JSONResponse:
+    """Re-render the website in the current brand (the same no-LLM refresh
+    Publish runs), and say what happened."""
+    return JSONResponse({"ok": True, "site": brand_engine.refresh_site_after_publish(business_id)})
+
+
 @router.post("/snapshot/restore/{business_id}")
 def restore(
     business_id: str,
