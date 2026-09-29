@@ -446,11 +446,11 @@ LEDGER_SELECT = ("id,actor_type,actor_id,verb,ok,error,summary,source,"
 # already contains the underlying contacts, invoices and sessions rows
 # that payload was a copy of.
 #
-# The three extra columns are the point of the export. Take your chain
+# The hash metadata columns are the point of the export. Take your chain
 # with you and its integrity is checkable off our infrastructure by
 # anyone you hand it to — which is worth considerably more to a
 # departing practitioner than a duplicate of their own tables.
-LEDGER_EXPORT_SELECT = LEDGER_SELECT + ",prev_hash,row_hash,redacted_at"
+LEDGER_EXPORT_SELECT = LEDGER_SELECT + ",prev_hash,row_hash,redacted_at,hash_version"
 
 
 def ledger_entries(biz: str, *, limit: int = 100, failed_only: bool = False,
