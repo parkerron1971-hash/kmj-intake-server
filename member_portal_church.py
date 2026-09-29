@@ -520,4 +520,15 @@ async def details(request: Request):
     if not _allowed(church, me):
         return _back("/my/details", err="slow")
     ok = await asyncio.to_thread(update_details, church["business"]["id"], me["id"], cleaned)
-    return _back("/my/details", **({"done": "details"} if ok else {"err": "error"}))
+    resp = _back("/my/details", **({"done": "details"} if ok else {"err": "error"}))
+    # Signed in by mobile number and changed it: the session follows the
+    # new number, or the save would sign them out mid-page.
+    if ok:
+        import member_portal as mp
+        biz = church["business"]
+        claims = mp.read_session(request.cookies.get(mp.SESSION_COOKIE) or "", biz["id"], epoch=mp._epoch(biz))
+        if claims and mp.is_phone(claims["em"]):
+            new = mp.norm_ident(cleaned["phone"]) if cleaned["phone"] else ""
+            if new and new != claims["em"]:
+                mp._set_session(resp, mp.mint_session(biz["id"], new, str(me["id"])))
+    return resp

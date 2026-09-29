@@ -118,6 +118,45 @@ def valid_email(value: str) -> bool:
     return bool(_EMAIL_RE.match(value or "")) and len(value) <= 254
 
 
+_PHONE_RE = re.compile(r"^\+\d{8,15}$")
+
+
+def norm_ident(value: Any) -> str:
+    """What a member signs in with: an email (lower-cased) or a mobile
+    number (E.164, "+15550102030"). "" when it is neither."""
+    raw = str(value or "").strip()
+    if "@" in raw:
+        return norm_email(raw)
+    import sms_service
+    # Spaces, dots, dashes and brackets out first: the shared normaliser
+    # passes anything starting with "+" through as typed.
+    phone = sms_service.normalize_phone(re.sub(r"[^\d+]", "", raw))
+    return phone if _PHONE_RE.match(phone or "") else ""
+
+
+def is_phone(ident: str) -> bool:
+    return str(ident or "").startswith("+")
+
+
+def valid_ident(value: str) -> bool:
+    return valid_email(value) or bool(_PHONE_RE.match(value or ""))
+
+
+def show_ident(ident: str) -> str:
+    """How to show it back: a US/Canada number as (555) 010-2030."""
+    if is_phone(ident) and len(ident) == 12 and ident.startswith("+1"):
+        d = ident[2:]
+        return f"({d[:3]}) {d[3:6]}-{d[6:]}"
+    return ident
+
+
+def _last10(phone: Any) -> str:
+    """The number itself, however it was typed: digits only, an extension
+    ("x2", "ext. 12") dropped, the last ten kept."""
+    raw = re.split(r"(?i)\s*(?:x|ext)", str(phone or ""), maxsplit=1)[0]
+    return re.sub(r"\D", "", raw)[-10:]
+
+
 def portal_settings(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = (settings or {}).get("member_portal") or {}
     return raw if isinstance(raw, dict) else {}
@@ -142,7 +181,7 @@ def _key(purpose: str, business_id: str) -> bytes:
 
 def code_hash(business_id: str, email: str, code: str) -> str:
     return hmac.new(_key("member-code", business_id),
-                    f"{norm_email(email)}|{code}".encode("utf-8"),
+                    f"{norm_ident(email)}|{code}".encode("utf-8"),
                     hashlib.sha256).hexdigest()
 
 
@@ -162,7 +201,7 @@ def mint_session(business_id: str, email: str, contact_id: str = "",
                  now: Optional[int] = None) -> str:
     now = int(now if now is not None else time.time())
     payload = _b64(json.dumps({
-        "biz": str(business_id), "em": norm_email(email), "cid": str(contact_id or ""),
+        "biz": str(business_id), "em": norm_ident(email), "cid": str(contact_id or ""),
         "iat": now, "exp": now + SESSION_TTL_SECONDS, "v": SESSION_VERSION,
     }, separators=(",", ":")).encode("utf-8"))
     sig = _b64(hmac.new(_key("member-session", business_id),
@@ -188,7 +227,7 @@ def read_session(value: str, business_id: str, now: Optional[int] = None,
             return None
         if int(claims.get("iat") or 0) < int(epoch or 0):
             return None
-        if not valid_email(str(claims.get("em") or "")):
+        if not valid_ident(str(claims.get("em") or "")):
             return None
         return claims
     except Exception:
@@ -228,13 +267,38 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
     return [r for r in rows if isinstance(r, dict) and norm_email(r.get("email")) == em]
 
 
+def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, Any]]]:
+    """Everyone at this church whose phone is this number, however the
+    office typed it ("(555) 010-2030", "555.010.2030 x2"). The database
+    narrows by the digits in order; the exact last-ten match is made here.
+    None when the read failed."""
+    digits = _last10(phone)
+    if len(digits) < 10:
+        return []
+    rows = sb_clients.sb_get_as_service(
+        f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
+        f"&phone=like.{quote('*' + '*'.join(digits) + '*', safe='')}"
+        f"&select=id,name,email,phone&order=created_at.asc&limit=20")
+    if not isinstance(rows, list):
+        return None
+    return [r for r in rows if isinstance(r, dict) and _last10(r.get("phone")) == digits]
+
+
+def contacts_for_ident(business_id: str, ident: str) -> Optional[List[Dict[str, Any]]]:
+    """The people an email or a mobile number belongs to at this church."""
+    ident = norm_ident(ident)
+    if is_phone(ident):
+        return contacts_for_phone(business_id, ident)
+    return contacts_for_email(business_id, ident)
+
+
 def failures_today(business_id: str, email: str) -> Optional[int]:
     """Wrong codes for this address in the last day, across every code.
     None when the read failed (the caller refuses rather than guesses)."""
     since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     rows = sb_clients.sb_get_as_service(
         f"/member_login_codes?business_id=eq.{quote(str(business_id), safe='')}"
-        f"&email=eq.{quote(norm_email(email), safe='')}&created_at=gt.{quote(since, safe='')}"
+        f"&email=eq.{quote(norm_ident(email), safe='')}&created_at=gt.{quote(since, safe='')}"
         f"&select=attempts,succeeded&limit=200")
     if not isinstance(rows, list):
         return None
@@ -244,7 +308,7 @@ def failures_today(business_id: str, email: str) -> Optional[int]:
 def _latest_code(business_id: str, email: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/member_login_codes?business_id=eq.{quote(str(business_id), safe='')}"
-        f"&email=eq.{quote(norm_email(email), safe='')}&consumed_at=is.null"
+        f"&email=eq.{quote(norm_ident(email), safe='')}&consumed_at=is.null"
         f"&select=id,code_hash,expires_at,attempts&order=created_at.desc&limit=1") or []
     return rows[0] if rows else None
 
@@ -265,10 +329,10 @@ def issue_code(business_id: str, email: str) -> str:
     # cannot come back to life (with fresh tries) once this one is used.
     sb_clients.sb_patch_as_service(
         f"/member_login_codes?business_id=eq.{quote(str(business_id), safe='')}"
-        f"&email=eq.{quote(norm_email(email), safe='')}&consumed_at=is.null",
+        f"&email=eq.{quote(norm_ident(email), safe='')}&consumed_at=is.null",
         {"consumed_at": datetime.now(timezone.utc).isoformat()})
     saved = sb_clients.sb_post_as_service("/member_login_codes", {
-        "business_id": str(business_id), "email": norm_email(email),
+        "business_id": str(business_id), "email": norm_ident(email),
         "code_hash": code_hash(business_id, email, code),
         "expires_at": expires.isoformat(),
     })
@@ -400,7 +464,7 @@ def _session_for(request: Request, church: Dict[str, Any]) -> Optional[Dict[str,
                           epoch=_epoch(biz))
     if not claims:
         return None
-    people = contacts_for_email(biz["id"], claims["em"])
+    people = contacts_for_ident(biz["id"], claims["em"])
     if people is None:
         return {"unavailable": True}
     if not people or len(people) > MAX_HOUSEHOLD:
@@ -509,10 +573,10 @@ def render_signin(biz: Dict[str, Any], site=None, *, error: str = "", email: str
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
     return _shell(biz, site, "Sign in", f"""
 <h1>Your giving, your way</h1>
-<p class="mp-muted">Sign in with the email the church has for you. We'll send a 6-digit code — there's no password to remember.</p>
+<p class="mp-muted">Sign in with the email or mobile number the church has for you. We'll send a 6-digit code — there's no password to remember.</p>
 <form class="mp-card mp-form" method="post" action="/my/code">
-  <label for="mp-email">Email</label>
-  <input class="mp-input" id="mp-email" name="email" type="email" autocomplete="email" inputmode="email" required value="{_e(email)}">
+  <label for="mp-email">Email or mobile number</label>
+  <input class="mp-input" id="mp-email" name="email" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required value="{_e(email)}">
   {err}
   <button class="mp-go" type="submit">Send my code</button>
 </form>""")
@@ -520,9 +584,10 @@ def render_signin(biz: Dict[str, Any], site=None, *, error: str = "", email: str
 
 def render_code(biz: Dict[str, Any], site=None, *, email: str, error: str = "") -> str:
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
+    texted = is_phone(email)
     return _shell(biz, site, "Enter your code", f"""
-<h1>Check your email</h1>
-<p class="mp-muted">If <strong>{_e(email)}</strong> is on {_e(biz.get('name') or 'the church')}'s list, a 6-digit code is on its way. It works for 10 minutes.</p>
+<h1>Check your {'texts' if texted else 'email'}</h1>
+<p class="mp-muted">If <strong>{_e(show_ident(email))}</strong> is on {_e(biz.get('name') or 'the church')}'s list, a 6-digit code is on its way{' by text' if texted else ''}. It works for 10 minutes.</p>
 <form class="mp-card mp-form" method="post" action="/my/verify">
   <input type="hidden" name="email" value="{_e(email)}">
   <label for="mp-code">6-digit code</label>
@@ -532,10 +597,10 @@ def render_code(biz: Dict[str, Any], site=None, *, email: str, error: str = "") 
 </form>
 <form method="post" action="/my/code" class="mp-noprint">
   <input type="hidden" name="email" value="{_e(email)}">
-  <p class="mp-muted">Nothing arrived? Check spam, or <button class="mp-link" type="submit">send a new code</button>.
-  Still nothing? Ask the church office which email they have for you.</p>
+  <p class="mp-muted">Nothing arrived? {'Give it a minute' if texted else 'Check spam'}, or <button class="mp-link" type="submit">send a new code</button>.
+  Still nothing? Ask the church office which {'number' if texted else 'email'} they have for you.</p>
 </form>
-<p class="mp-muted"><a href="/my">Use a different email</a></p>""")
+<p class="mp-muted"><a href="/my">Use a different email or number</a></p>""")
 
 
 def render_try_again(biz: Dict[str, Any], site=None) -> str:
@@ -751,15 +816,42 @@ async def _send_code_email(biz: Dict[str, Any], email: str, name: str, code: str
         logger.warning("member code email failed (%s) for business %s", type(e).__name__, biz.get("id"))
 
 
+async def _send_code_text(biz: Dict[str, Any], phone: str, code: str) -> None:
+    """Text the code. Deliberately NOT through sms_service.send_sms_core:
+    that stores every message in the church's text history, where anyone
+    on the team could read a live sign-in code. This goes straight to the
+    carrier from the church's own line (or the platform line), and never
+    to a number that texted STOP."""
+    church = (biz.get("name") or "Your church").strip()
+    try:
+        import httpx
+        import sms_service
+        import twilio_sms
+        from starlette.concurrency import run_in_threadpool
+        if not sms_service._twilio_configured():
+            logger.warning("member code text skipped: texting is not configured")
+            return
+        async with httpx.AsyncClient() as client:
+            if await sms_service.is_opted_out(client, phone, str(biz["id"])):
+                logger.info("member code text skipped: number opted out (business %s)", biz.get("id"))
+                return
+            sender = await sms_service.sender_for(client, str(biz["id"]))
+        body = (f"{church}: {code} is your sign-in code for your member page. "
+                f"It works for 10 minutes. Didn't ask for it? Ignore this. Reply STOP to opt out.")
+        await run_in_threadpool(twilio_sms.send_sms, phone, body, from_number=sender)
+    except Exception as e:
+        logger.warning("member code text failed (%s) for business %s", type(e).__name__, biz.get("id"))
+
+
 async def _issue_and_send(biz: Dict[str, Any], email: str) -> None:
     """Runs AFTER the response is sent, so a known address and an unknown
     one answer in the same time: the lookup, the stored code and the mail
     are all out of the reply's path."""
     try:
-        people = await asyncio.to_thread(contacts_for_email, biz["id"], email)
+        people = await asyncio.to_thread(contacts_for_ident, biz["id"], email)
         if not people or len(people) > MAX_HOUSEHOLD:
             if people:
-                logger.warning("member sign-in refused: an address is shared by more than %s people "
+                logger.warning("member sign-in refused: an email or number is on more than %s record "
                                "at business %s", MAX_HOUSEHOLD, biz.get("id"))
             return
         failed = await asyncio.to_thread(failures_today, biz["id"], email)
@@ -769,7 +861,10 @@ async def _issue_and_send(biz: Dict[str, Any], email: str) -> None:
     except Exception:
         logger.warning("member code could not be issued", exc_info=True)
         return
-    await _send_code_email(biz, email, people[0].get("name") or "", code)
+    if is_phone(email):
+        await _send_code_text(biz, email, code)
+    else:
+        await _send_code_email(biz, email, people[0].get("name") or "", code)
 
 
 @router.post("/my/code", include_in_schema=False)
@@ -778,10 +873,10 @@ async def request_code(request: Request):
     biz, site = church["business"], church["site"]
     import rate_limit
     form = await request.form()
-    email = norm_email(form.get("email"))
-    if not valid_email(email):
-        return _page(render_signin(biz, site, error="Enter the email address the church has for you.",
-                                   email=email), 400)
+    email = norm_ident(form.get("email"))
+    if not valid_ident(email):
+        return _page(render_signin(biz, site, error="Enter the email or mobile number the church has for you.",
+                                   email=str(form.get("email") or "").strip()[:120]), 400)
     # Flood control per network, and per address a short cooldown plus a
     # daily ceiling — not an hourly cap a stranger could spend to keep a
     # member from ever getting a code. None of these depend on whether the
@@ -794,7 +889,9 @@ async def request_code(request: Request):
     if not rate_limit.allow_strict("member_code_email_minute", key) or \
             not rate_limit.allow_strict("member_code_email_day", key):
         return _page(render_code(biz, site, email=email,
-                                 error="A code was just sent to this address. Give it a minute, and check spam."), 429)
+                                 error=("A code was just texted to this number. Give it a minute."
+                                        if is_phone(email) else
+                                        "A code was just sent to this address. Give it a minute, and check spam.")), 429)
     from starlette.background import BackgroundTask
     return HTMLResponse(content=render_code(biz, site, email=email), headers=_SECURE_HEADERS,
                         background=BackgroundTask(_issue_and_send, biz, email))
@@ -806,15 +903,15 @@ async def verify_code(request: Request):
     biz, site = church["business"], church["site"]
     import rate_limit
     form = await request.form()
-    email = norm_email(form.get("email"))
+    email = norm_ident(form.get("email"))
     if not rate_limit.allow_strict("member_verify", rate_limit.trusted_client_ip(request)):
         return _page(render_code(biz, site, email=email,
                                  error="Too many tries from this network. Wait a few minutes, then try again."), 429)
-    if not valid_email(email):
+    if not valid_ident(email):
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     # Read the people BEFORE spending the code: a failed read must not
     # burn a correct code.
-    people = await asyncio.to_thread(contacts_for_email, biz["id"], email)
+    people = await asyncio.to_thread(contacts_for_ident, biz["id"], email)
     if people is None:
         return _page(render_try_again(biz, site), 503)
     result = await asyncio.to_thread(check_code, biz["id"], email, str(form.get("code") or ""))
