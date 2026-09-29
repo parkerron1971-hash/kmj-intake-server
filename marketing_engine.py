@@ -91,9 +91,10 @@ PLAYS = {
         'needs': 'founder',
         'max_per_week': 2,
         'price': True,
-        'brief': 'Invite the reader to take a founding seat. State the founder rate and terms exactly as '
-                 'the founder facts give them. It is a monthly rate held while the seat is kept, never a '
-                 'one-time or lifetime purchase. Mention seats left only if seats_left is given.',
+        'brief': 'Invite the reader to take a founding seat. The founding price is facts.founder.monthly_price_usd '
+                 'a month; the standard plan prices are NOT the founding price and must not appear in this post. '
+                 'Describe it as a monthly rate that stays the same while the seat is kept; do not mention '
+                 'lifetime or one-time at all. Mention seats left only if seats_left is given.',
     },
     'workflow_tip': {
         'label': 'Teach a useful move',
@@ -342,7 +343,30 @@ def verified_facts(signals):
                                                          'rate_terms', 'unit_amount', 'currency', 'interval')}
         if isinstance(founder.get('unit_amount'), int):
             facts['founder']['monthly_price_usd'] = founder['unit_amount'] / 100
+        # "50 of 50 seats left" reads as nobody wanting one. Scarcity is only a
+        # fact once seats have actually been taken.
+        if founder.get('seats_left') is not None and founder.get('seats_left') >= (founder.get('seat_limit') or 0):
+            facts['founder'].pop('seats_left', None)
     return facts
+
+
+_DOLLARS = re.compile(r'\$\s?(\d[\d,]*(?:\.\d+)?)')
+
+
+def price_problem(text, play, facts):
+    """A founding-seat post may only ever quote the founding price.
+
+    The number rule alone cannot catch this: $149 is a real number in the
+    facts (the standard Professional price), so a founder post quoting it
+    passed — and said the wrong price for the offer it was selling. Found on
+    the first live plan, 2026-09-28."""
+    if play != 'founder_invitation':
+        return None
+    amounts = {float(a.replace(',', '')) for a in _DOLLARS.findall(text)}
+    founder = ((facts or {}).get('founder') or {}).get('monthly_price_usd')
+    if amounts and (founder is None or amounts != {float(founder)}):
+        return 'a price that is not the founding price'
+    return None
 
 
 # ── plays and slots ───────────────────────────────────────────────────
@@ -551,6 +575,7 @@ async def write_captions(slots, facts):
     captions = json.loads(raw)['captions']
     allowed = _numbers(json.dumps(facts, default=str))
     wanted = {s['slot'] for s in slots}
+    play_of = {s['slot']: s['play_id'] for s in slots}
     kept, flyers, dropped = {}, {}, []
     for item in captions if isinstance(captions, list) else []:
         if not isinstance(item, dict):
@@ -558,13 +583,15 @@ async def write_captions(slots, facts):
         slot, text = item.get('slot'), item.get('text')
         if slot not in wanted or slot in kept or not isinstance(text, str):
             continue
-        problem = check_caption(text, allowed)
+        problem = check_caption(text, allowed) or price_problem(text, play_of[slot], facts)
         if problem:
             dropped.append({'slot': slot, 'reason': problem})
             continue
         kept[slot] = text.strip()
         # A flyer that breaks a rule costs the slot its picture, not its caption.
-        flyer_problem = check_flyer(item.get('flyer'), allowed)
+        flyer = item.get('flyer')
+        flyer_problem = check_flyer(flyer, allowed) or price_problem(
+            ' '.join(str(v) for v in flyer.values()) if isinstance(flyer, dict) else '', play_of[slot], facts)
         if flyer_problem:
             dropped.append({'slot': slot, 'reason': flyer_problem, 'flyer_only': True})
         else:
@@ -590,9 +617,11 @@ async def get_run(run_id):
     return rows[0] if rows else None
 
 
-async def run_week(trigger, now=None):
+async def run_week(trigger, now=None, replan=False):
     """Plan one week and save it as drafts. Idempotent per week: the run id is
-    derived from the week, and a week already planned is returned, not redone."""
+    derived from the week, and a week already planned is returned, not redone —
+    unless the owner starts it over (replan), which the claim allows only while
+    nothing from the week has been approved, and which cancels its drafts."""
     import llm_call
     import spend_guard
     now = now or marketing.now()
@@ -600,13 +629,18 @@ async def run_week(trigger, now=None):
     run_id = run_id_for(week_of)
     try:
         claimed = await marketing.db('POST', '/rpc/platform_marketing_claim_run',
-                                     {'run_id': str(run_id), 'week': week_of.isoformat(), 'source': trigger})
+                                     {'run_id': str(run_id), 'week': week_of.isoformat(), 'source': trigger,
+                                      'replan': bool(replan and trigger == 'manual')})
     except HTTPException as exc:
         if exc.status_code == 503:
             raise HTTPException(503, MIGRATION) from None
         raise
     if claimed is not True:
         return {'status': 'exists', 'run': await get_run(run_id)}
+    # A started-over week writes new drafts beside the cancelled ones, so each
+    # attempt after the first gets its own ids.
+    attempts = int(((await get_run(run_id)) or {}).get('attempts') or 1)
+    prefix = f'{attempts}:' if attempts > 1 else ''
     try:
         cfg = await marketing.config()
         channels = [c for c in cfg.get('channels') or [] if c.get('service') in TEXT_SERVICES]
@@ -617,7 +651,7 @@ async def run_week(trigger, now=None):
             raise Skip('Chief\'s writing connection is not configured.')
         if await asyncio.to_thread(spend_guard.over_budget):
             raise Skip(spend_guard.block_message())
-        existing = await marketing.db('GET', f'/platform_marketing_posts?run_id=eq.{run_id}&select=id&limit=50')
+        existing = await marketing.db('GET', f'/platform_marketing_posts?run_id=eq.{run_id}&status=neq.cancelled&select=id&limit=50')
         signals = await read_signals(now)
         diagnosis = diagnose(signals)
         facts = verified_facts(signals)
@@ -650,7 +684,7 @@ async def run_week(trigger, now=None):
             asset = assets.get(slot['slot'])
             # Instagram refuses a post without a picture, so it joins only the slots that have one.
             for channel in channels + (picture_only if asset else []):
-                draft = marketing.Draft(id=uuid5(run_id, f"{slot['slot']}:{channel['id']}"),
+                draft = marketing.Draft(id=uuid5(run_id, f"{prefix}{slot['slot']}:{channel['id']}"),
                                         campaign=f'week-{week_of.isoformat()}', text=captions[slot['slot']],
                                         channel_id=channel['id'], landing_url=slot['landing_url'],
                                         asset_id=UUID(asset['id']) if asset else None,
@@ -743,7 +777,7 @@ async def preview():
 _running: set = set()
 
 
-def start_week():
+def start_week(replan=False):
     """Plan the week in the background. With a picture to make, a run takes a
     minute or two — longer than a request should wait — so the caller gets an
     answer at once and the Publishing Desk shows the plan when it lands."""
@@ -752,7 +786,7 @@ def start_week():
 
     async def job():
         try:
-            await run_week('manual')
+            await run_week('manual', replan=replan)
         except Exception:
             log.warning('marketing engine: manual run did not finish')
     task = asyncio.create_task(job())
@@ -761,12 +795,16 @@ def start_week():
     return True
 
 
+class RunRequest(BaseModel):
+    replan: bool = False      # start the week over: cancels its drafts, only while none is approved
+
+
 @router.post('/run', status_code=202)
-async def run_now(owner=Depends(require_owner)):
+async def run_now(req: RunRequest | None = None, owner=Depends(require_owner)):
     import rate_limit
     if not rate_limit.allow('platform_marketing_engine', str(owner.id)):
         raise HTTPException(429, 'Please wait a moment before planning again.')
-    started = start_week()
+    started = start_week(replan=bool(req and req.replan))
     return {'started': started, 'message': 'Planning the week. The drafts and their flyers appear here in a minute or two.'
             if started else 'The week is already being planned.'}
 

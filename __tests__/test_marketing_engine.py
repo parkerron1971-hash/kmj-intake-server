@@ -278,7 +278,7 @@ def test_with_no_flyers_a_week_is_drafts_for_text_channels_only(world, model):
     out = run(e.run_week('scheduled'))
     assert out['status'] == 'succeeded' and model['calls'] == 1
     assert world['claimed_with'] == {'run_id': str(e.run_id_for(e.week_window(MONDAY_8AM)[0])),
-                                     'week': '2026-09-28', 'source': 'scheduled'}
+                                     'week': '2026-09-28', 'source': 'scheduled', 'replan': False}
     rows = world['writes'][0]
     assert len(world['writes']) == 1 and len(rows) == 10                      # 5 slots x Facebook + X
     assert {r['payload']['service'] for r in rows} == {'facebook', 'twitter'}  # Instagram needs a picture
@@ -399,8 +399,8 @@ def test_a_failed_design_step_keeps_the_week_text_only(world, model, monkeypatch
 def test_plan_now_runs_in_the_background_once(monkeypatch):
     started = []
 
-    async def slow(trigger, now=None):
-        started.append(trigger)
+    async def slow(trigger, now=None, replan=False):
+        started.append((trigger, replan))
         await asyncio.sleep(0.05)
 
     async def scenario():
@@ -409,7 +409,7 @@ def test_plan_now_runs_in_the_background_once(monkeypatch):
         await asyncio.sleep(0.1)
         return first, second, e.start_week()
     first, second, third = run(scenario())
-    assert (first, second, third) == (True, False, True) and started[:1] == ['manual']
+    assert (first, second, third) == (True, False, True) and started[:1] == [('manual', False)]
 
 
 def test_when_every_caption_breaks_a_rule_nothing_is_saved(world, model):
@@ -469,3 +469,95 @@ def test_chief_can_ask_for_the_week_and_it_is_a_drafts_action():
     assert platform_chief_authority.GROUPS['marketing_run_week'] == 'drafts'
     assert 'marketing_run_week' in platform_chief_actions.HANDLERS
     assert '"marketing_run_week"' in platform_chief_marketing.MARKETING_PROMPT
+
+
+# ── the founding price (the first live plan quoted the standard price) ─
+
+FOUNDER_FACTS = {**FACTS, 'product': {**FACTS['product'], 'standard_monthly_prices_usd': {'professional': 149.0}},
+                 'founder': {'monthly_price_usd': 99.0, 'seat_limit': 50}}
+
+
+@pytest.mark.parametrize('text,play,problem', [
+    ('Take a founding seat on Professional at $149 a month, held while you keep it.', 'founder_invitation',
+     'a price that is not the founding price'),
+    ('Take a founding seat on Professional at $99 a month, held while you keep it.', 'founder_invitation', None),
+    ('Founding seats: $99 a month, versus $149 for everyone else later on.', 'founder_invitation',
+     'a price that is not the founding price'),
+    ('Take a founding seat and keep your rate as long as you keep the seat.', 'founder_invitation', None),
+    ('Professional is $149 a month and includes the whole workspace.', 'workflow_tip', None),
+])
+def test_a_founder_post_only_ever_quotes_the_founding_price(text, play, problem):
+    assert e.price_problem(text, play, FOUNDER_FACTS) == problem
+
+
+def test_the_wrong_founder_price_is_dropped_from_caption_and_flyer(model):
+    slots = [{'slot': 1, 'play_id': 'founder_invitation', 'subject': 'founding seat'},
+             {'slot': 2, 'play_id': 'founder_invitation', 'subject': 'founding seat'}]
+    model['captions'] = [
+        {'slot': 1, 'text': 'A founding seat on Professional is $149 a month while you keep it.', 'flyer': FLYER},
+        {'slot': 2, 'text': 'A founding seat on Professional is $99 a month while you keep it.',
+         'flyer': {**FLYER, 'line': 'Professional at $149 a month, locked while you keep your seat.'}}]
+    kept, flyers, dropped = run(e.write_captions(slots, FOUNDER_FACTS))
+    assert set(kept) == {2} and flyers == {}
+    assert {(d['slot'], d['reason']) for d in dropped} == {(1, 'a price that is not the founding price'),
+                                                           (2, 'a price that is not the founding price')}
+
+
+def test_seats_left_is_only_a_fact_once_seats_are_taken():
+    base = signals(founder_available=True)
+    full = {'plan': 'professional', 'seat_limit': 50, 'seats_left': 50, 'unit_amount': 9900}
+    assert 'seats_left' not in e.verified_facts({**base, 'founder': full})['founder']
+    assert e.verified_facts({**base, 'founder': {**full, 'seats_left': 38}})['founder']['seats_left'] == 38
+
+
+def test_the_founder_brief_names_the_trap():
+    brief = e.PLAYS['founder_invitation']['brief']
+    assert 'standard plan prices are NOT the founding price' in brief
+    assert 'do not mention lifetime or one-time' in brief
+
+
+# ── starting a week over ──────────────────────────────────────────────
+
+def test_start_over_asks_the_claim_to_replan_and_writes_new_ids(world):
+    run(e.run_week('scheduled'))
+    first = [r['id'] for r in world['writes'][0]]
+    world['writes'].clear()
+    world['run'].update(attempts=2)
+    run(e.run_week('manual', replan=True))
+    assert world['claimed_with']['replan'] is True
+    second = [r['id'] for r in world['writes'][0]]
+    assert not set(first) & set(second)                               # beside the cancelled drafts, not over them
+
+
+def test_only_the_owner_can_start_over():
+    assert run_body_replan('scheduled') is False
+
+
+def run_body_replan(trigger):
+    captured = {}
+
+    async def db(method, path, body=None):
+        captured.update(body or {})
+        return False
+
+    async def get_run(run_id):
+        return None
+    import unittest.mock as mock
+    with mock.patch.object(m, 'db', db), mock.patch.object(e, 'get_run', get_run):
+        run(e.run_week(trigger, now=MONDAY_8AM, replan=True))
+    return captured['replan']
+
+
+def test_crash_recovery_ignores_cancelled_drafts(world, model):
+    paths = []
+    original = m.db
+
+    async def spy(method, path, body=None):
+        paths.append(path)
+        return await original(method, path, body)
+    m.db = spy
+    try:
+        run(e.run_week('scheduled'))
+    finally:
+        m.db = original
+    assert any('run_id=eq.' in p and 'status=neq.cancelled' in p for p in paths)
