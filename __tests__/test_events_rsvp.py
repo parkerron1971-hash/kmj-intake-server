@@ -502,3 +502,37 @@ def test_double_tap_when_last_seat_was_taken_still_replays(fake_sb):
     fake_sb.entry['data']['capacity'] = 1
     assert _rsvp(_body())['already'] is False
     assert _rsvp(_body())['already'] is True
+
+
+# ─── visibility: public / private / invite ───────────────────────────
+
+
+def test_only_public_occasions_reach_the_public_page():
+    from datetime import date
+    entries = {MOD: [
+        {"id": "pub", "module_id": MOD, "data": {"title": "Sunday", "date": "2099-06-01", "signups": []}},
+        {"id": "prv", "module_id": MOD, "data": {"title": "Staff meeting", "date": "2099-06-02",
+                                                  "_visibility": "private", "signups": []}},
+        {"id": "inv", "module_id": MOD, "data": {"title": "Elders", "date": "2099-06-03",
+                                                  "_visibility": "invite", "_invited": ["c1"], "signups": []}},
+        {"id": "odd", "module_id": MOD, "data": {"title": "Old", "date": "2099-06-04",
+                                                  "_visibility": "whatever", "signups": []}},
+    ]}
+    out = er.build_occasions(_mods(), entries, today=date(2099, 5, 20))
+    assert [o["title"] for o in out] == ["Sunday", "Old"]     # unknown value = public, as before
+
+
+def test_public_signup_cannot_reach_a_private_occasion(fake_sb):
+    fake_sb.entry["data"]["_visibility"] = "private"
+    with pytest.raises(HTTPException) as exc:
+        _rsvp(_body())
+    assert exc.value.status_code == 404 and not fake_sb.patches
+
+
+def test_visible_to_member_rules():
+    d = {"_visibility": "invite", "_invited": ["c1"], "signups": [{"name": "B", "contact_id": "c2"}]}
+    assert er.visible_to_member(d, "c1", "signups")          # invited
+    assert er.visible_to_member(d, "c2", "signups")          # on the roster
+    assert not er.visible_to_member(d, "c3", "signups")
+    assert not er.visible_to_member({**d, "_visibility": "private"}, "c1", "signups")
+    assert er.visible_to_member({"signups": []}, "c3", "signups")

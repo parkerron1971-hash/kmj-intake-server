@@ -85,6 +85,18 @@ def is_mine(signup: Dict[str, Any], me: Dict[str, Any]) -> bool:
     return bool(mine) and _norm_name(signup.get("name")) == mine
 
 
+def can_see(data: Dict[str, Any], f: Dict[str, Any], me: Dict[str, Any]) -> bool:
+    """Public: yes. Private: never (the church only). Invite only: when it
+    was shared with them, or they are on its roster — by record, or by the
+    name the office typed before they had one."""
+    import events_rsvp_router as er
+    v = er.occasion_visibility(data)
+    if v != "invite":
+        return v == "public"
+    return er.visible_to_member(data, str(me["id"]), f["signups_field"]) or any(
+        is_mine(s, me) for s in er.read_signups(data, f["signups_field"]))
+
+
 def _roster_modules(business_id: str) -> Optional[List[Dict[str, Any]]]:
     """The church's active Services & Events rooms, or None when the read
     failed ("try again", never "that event is gone")."""
@@ -120,7 +132,7 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
         by_mod[str(m["id"])] = rows
         entries.update({str(r.get("id")): r for r in rows})
     fields = {str(m["id"]): er.resolve_fields(m.get("archetype_params")) for m in mods}
-    out = er.build_occasions(mods, by_mod)
+    out = er.build_occasions(mods, by_mod, include=lambda data, f: can_see(data, f, me))
     for o in out:
         entry = entries.get(str(o.get("entry_id"))) or {}
         f = fields.get(str(o.get("module_id")))
@@ -166,10 +178,14 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
             return False, "gone"
         f = er.resolve_fields(module.get("archetype_params"))
         data = dict(entry.get("data") or {})
+        signups = er.read_signups(data, f["signups_field"])
+        # Private, or invite-only and not shared with them: it does not
+        # exist as far as their page is concerned.
+        if not can_see(data, f, me):
+            return False, "gone"
         day = er._parse_day(data.get(f["date_field"]))
         if day is None or day < date.today():
             return False, "past"
-        signups = er.read_signups(data, f["signups_field"])
         old = next((s for s in signups if is_mine(s, me)), None) or {}
         others = [s for s in signups if not is_mine(s, me)]
         base = {k: v for k, v in old.items() if k != "role"}

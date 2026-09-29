@@ -308,3 +308,26 @@ def test_a_failed_read_says_try_again_not_sign_in(fake, monkeypatch):
     r = c.post("/my/rsvp", data={"entry_id": "e1", "action": "coming", "back": "/my/events"},
                headers=ORIGIN, follow_redirects=False)
     assert r.headers["location"] == "/my/events?err=error"
+
+
+# ─── visibility ──────────────────────────────────────────────────────
+
+
+def test_private_is_never_on_a_members_page_even_on_its_roster(fake):
+    fake.entries["e1"]["data"]["_visibility"] = "private"
+    fake.entries["e1"]["data"]["signups"].append({"name": "Ana Rivers", "status": "yes"})
+    assert mpc.upcoming_for(BIZ, ME) == []
+    assert mpc.member_rsvp(BIZ, ME, "e1", "coming") == (False, "gone")
+
+
+def test_invite_only_shows_to_the_invited_and_the_rostered(fake):
+    fake.entries["e1"]["data"]["_visibility"] = "invite"
+    assert mpc.upcoming_for(BIZ, ME) == []
+    assert mpc.member_rsvp(BIZ, ME, "e1", "coming") == (False, "gone")
+    fake.entries["e1"]["data"]["_invited"] = ["c1"]
+    assert len(mpc.upcoming_for(BIZ, ME)) == 1
+    assert mpc.member_rsvp(BIZ, ME, "e1", "coming") == (True, "coming")
+    # Ben is on its roster, so he sees it without an invitation.
+    ben = dict(ME, id="c2", name="Ben")
+    assert len(mpc.upcoming_for(BIZ, ben)) == 1
+
