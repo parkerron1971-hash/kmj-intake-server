@@ -329,6 +329,8 @@ app.include_router(events_rsvp_router)
 # …) and the owner switch (/member-portal/...). BEFORE public_site_router.
 from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
+from member_portal_church import router as member_portal_church_router
+app.include_router(member_portal_church_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.

@@ -461,6 +461,25 @@ label{{font-size:14px;font-weight:600;}}
 .mp-years a[aria-current]{{background:var(--accent);color:var(--accent-text);border-color:var(--accent);}}
 .mp-row{{display:flex;flex-direction:column;gap:10px;}}
 .mp-person{{width:100%;text-align:left;padding:14px 16px;min-height:52px;border:1.5px solid var(--border);border-radius:var(--radius);background:var(--input-surface);color:var(--text-primary);font:inherit;font-size:16px;cursor:pointer;}}
+.mp-sect{{font-family:var(--font-heading);font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-secondary);margin:22px 0 10px;}}
+.mp-flash{{padding:10px 12px;border-radius:var(--radius);border:1px solid var(--border);margin:12px 0;}}
+.mp-ok{{color:var(--text-primary);font-weight:600;font-size:14px;}}
+.mp-when{{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 4px;}}
+.mp-occ h2,.mp-occ h3{{font-family:var(--font-heading);font-size:18px;line-height:1.3;margin:0 0 4px;}}
+.mp-mine{{font-size:14px;font-weight:600;margin:6px 0 0;}}
+.mp-actions{{display:flex;flex-direction:column;gap:8px;margin-top:12px;}}
+.mp-serve{{display:flex;gap:8px;flex-wrap:wrap;}}
+.mp-serve select{{flex:1 1 180px;min-width:0;}}
+.mp-go-2{{width:auto;padding:14px 20px;background:transparent;color:var(--accent);border:1.5px solid var(--accent);}}
+.mp-text{{min-height:140px;resize:vertical;line-height:1.5;}}
+.mp-check{{display:flex;gap:10px;align-items:flex-start;font-weight:500;}}
+.mp-check input{{width:20px;height:20px;margin:2px 0 0;accent-color:var(--accent);}}
+.mp-tiles{{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px;}}
+.mp-tile{{display:flex;flex-direction:column;gap:4px;padding:14px;min-height:88px;border-radius:var(--radius);border:1px solid var(--border);color:var(--text-primary);text-decoration:none;}}
+.mp-tile span{{font-size:13px;color:var(--text-secondary);line-height:1.4;}}
+.mp-tile:focus-visible{{outline:2px solid var(--focus);outline-offset:2px;}}
+.mp-sr{{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}}
+@media (max-width:360px){{.mp-tiles{{grid-template-columns:1fr;}}}}
 .mp-foot{{text-align:center;font-size:12px;color:var(--text-muted);margin-top:28px;padding-top:14px;border-top:1px solid var(--border);}}
 .mp-go:focus-visible,.mp-input:focus-visible,.mp-link:focus-visible,.mp-person:focus-visible,.mp-years a:focus-visible{{outline:2px solid var(--focus);outline-offset:3px;}}
 table{{width:100%;border-collapse:collapse;font-size:14px;}}
@@ -548,7 +567,7 @@ anyone who reads it can see each of these people's giving. Choose yourself.</p>
 
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
                 year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
-                events_url: str, this_year: int) -> str:
+                this_year: int, part2: str = "", flash: str = "") -> str:
     hello = first_name(me.get("name") or "") or "there"
     years = "".join(
         f'<a href="/my?year={y}"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
@@ -568,20 +587,20 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[D
                   f'<ul class="mp-gifts">{items}</ul>'
                   f'<p style="margin-top:14px"><a class="mp-go" href="/my/statement?year={year}">Year-end statement for {year}</a></p>')
     give = (f'<a class="mp-go" href="{_e(give_url)}">Give</a>' if give_url else "")
-    events = (f'<div class="mp-card"><h2>Coming up</h2><p class="mp-muted">Services, classes and ways to serve.</p>'
-              f'<a class="mp-link" href="{_e(events_url)}">See what\'s coming up</a></div>' if events_url else "")
     switch = ('<form method="post" action="/my/person"><input type="hidden" name="cid" value="">'
               '<button class="mp-link" type="submit">Not you? Choose someone else in your household</button></form>'
               if len(people) > 1 else "")
     return _shell(biz, site, "My page", f"""
 <h1>Hi, {_e(hello)}</h1>
-<p class="mp-muted">Here's your giving with {_e(biz.get('name') or 'the church')}.</p>
-<section class="mp-card" aria-labelledby="mp-giving"><h2 id="mp-giving">My giving</h2>
+<p class="mp-muted">Your page at {_e(biz.get('name') or 'the church')}.</p>
+{flash}
+{part2}
+<h2 class="mp-sect" id="mp-giving">My giving</h2>
+<section class="mp-card" aria-labelledby="mp-giving">
   <nav class="mp-years" aria-label="Year">{years}</nav>
   {giving}
 </section>
 {('<div class="mp-card">' + give + '</div>') if give else ''}
-{events}
 <div class="mp-noprint">{switch}
 <form method="post" action="/my/signout"><button class="mp-link" type="submit">Sign out</button></form></div>""")
 
@@ -669,6 +688,18 @@ async def serve(request: Request, path: str) -> HTMLResponse:
                                 "couldn't load just now. Please try again in a moment.</p>"
                                 '<p><a href="/my">Back to my page</a></p>'), 503)
         return _page(render_statement(biz, site, stmt))
+    # Part 2 (member_portal_church.py): coming up, prayer, my details.
+    import member_portal_church as mpc
+    if sub == "/my/events":
+        occ = await asyncio.to_thread(mpc.upcoming_for, biz["id"], me)
+        return _page(mpc.render_events(biz, site, request, occ))
+    if sub == "/my/prayer":
+        return _page(mpc.render_prayer(biz, site, request))
+    if sub == "/my/details":
+        full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"])
+        if not full:
+            return _page(render_try_again(biz, site), 503)
+        return _page(mpc.render_details(biz, site, request, full))
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     try:
@@ -678,15 +709,10 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         gifts = None
     from giving_router import giving_is_active
     give_url = "/give" if giving_is_active(biz) else ""
-    events_url = ""
-    try:
-        from events_rsvp_router import events_public_is_active, roster_modules_for
-        if events_public_is_active(biz, await asyncio.to_thread(roster_modules_for, biz["id"])):
-            events_url = "/events"
-    except Exception:
-        pass
+    occ = await asyncio.to_thread(mpc.upcoming_for, biz["id"], me)
     return _page(render_home(biz, site, me=me, people=sess["people"], year=year, gifts=gifts,
-                             give_url=give_url, events_url=events_url, this_year=this_year))
+                             give_url=give_url, this_year=this_year,
+                             part2=mpc.home_cards(occ), flash=mpc._flash(request)))
 
 
 # ─── POST ────────────────────────────────────────────────────────────
