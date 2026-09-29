@@ -759,6 +759,12 @@ def _brand_css_vars(business: Dict[str, Any]) -> str:
     return _css_vars(_brand_kit(business))
 
 
+def _brand_font_links(business: Dict[str, Any]) -> str:
+    """The brand's faces, loaded — the partner of _brand_css_vars."""
+    from booking_page_renderer import _font_links, _brand_kit
+    return _font_links(_brand_kit(business))
+
+
 def render_give_page(
     business: Dict[str, Any],
     canonical_url: str,
@@ -818,6 +824,7 @@ def render_give_page(
 <meta property="og:url" content="{_esc(canonical_url)}">
 <meta property="og:type" content="website">
 {og_image_html}
+{_brand_font_links(business)}
 <style>{css_vars}</style>
 <style>
 html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);
@@ -988,6 +995,7 @@ def render_giving_unavailable_page(business: Dict[str, Any],
         f"<title>{_esc(name)}</title>",
         '<meta name="robots" content="noindex,nofollow">',
         f'<link rel="canonical" href="{_esc(canonical_url)}">',
+        _brand_font_links(business),
         f"<style>{css_vars}</style>",
         "<style>html,body{margin:0;padding:0;font-family:var(--font-body);"
         "color:var(--text-primary);background:var(--surface);min-height:100vh;}"

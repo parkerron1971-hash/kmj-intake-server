@@ -96,6 +96,20 @@ def _css_vars(brand: Dict[str, Any]) -> str:
     )
 
 
+def _font_links(brand: Dict[str, Any]) -> str:
+    """<link> tags that load the brand's two faces from Google Fonts.
+
+    _css_vars names the faces (--font-heading / --font-body) but nothing
+    loaded them, so every booking, event and giving page fell back to
+    Georgia / system-ui whatever the owner chose. Reuses the public forms'
+    loader, which skips generic families and escapes the URL."""
+    from public_form_theme import font_links
+    return font_links({
+        "font_heading": str(brand.get("font_heading") or "system-ui"),
+        "font_body": str(brand.get("font_body") or "system-ui"),
+    })
+
+
 def render_booking_page(
     business: Dict[str, Any],
     canonical_url: str,
@@ -151,6 +165,7 @@ def render_booking_page(
     # Brand kit → CSS variables. Shadow-DOM widget reads these via
     # theme_tokens but inheriting on the document root means the
     # surrounding page also matches the practitioner's brand.
+    parts.append(_font_links(brand))
     parts.append(f"<style>{css_vars}</style>")
     parts.append(
         "<style>"
@@ -227,6 +242,7 @@ def render_not_published_page(
         f"<title>{_esc(name)}</title>",
         '<meta name="robots" content="noindex,nofollow">',
         f'<link rel="canonical" href="{_esc(canonical_url)}">',
+        _font_links(brand),
         f"<style>{css_vars}</style>",
         "<style>html,body{margin:0;padding:0;font-family:var(--font-body);"
         "color:var(--text-primary);background:var(--surface);min-height:100vh;}"
