@@ -16,23 +16,27 @@ import route_ledger
 
 
 async def main():
-    rec = route_ledger.RouteRecord(arrived=time.perf_counter())
-    gate = mr.OpenerGate('Which invoices should I chase first?')
-    out, chunks, first = {}, [], None
-    async for piece in fast.stream_text(
-        fast.style_for('fixture', 'fixture') + '\n\n' + fast._OPENER_SYSTEM,
-        [{'role': 'user', 'content': 'Which invoices should I chase first?'}],
-        model=chief_models.model_for('fast'), max_tokens=fast.OPENER_MAX_TOKENS,
-        rec=rec, endpoint='/chief/stream-smoke', units=0, business_id=None, out=out):
-        safe = gate.feed(piece)
-        if safe:
-            if first is None:
-                first = round((time.perf_counter() - rec.arrived) * 1000)
-            chunks.append(safe)
-    chunks.append(gate.finish())
-    print(json.dumps({'opener': ''.join(chunks), 'first_model_words_ms': first, 'cut': gate.cut_reason}))
-    if not ''.join(chunks).strip():
-        raise RuntimeError('No useful opening from the provider')
+    for message in [
+        "Which invoices should I chase first?",
+        "What is the difference between a goal and a task? Give a simple example.",
+    ]:
+        rec = route_ledger.RouteRecord(arrived=time.perf_counter())
+        gate = mr.OpenerGate(message)
+        out, chunks, first = {}, [], None
+        async for piece in fast.stream_text(
+            fast.style_for('fixture', 'fixture') + '\n\n' + fast._OPENER_SYSTEM,
+            [{'role': 'user', 'content': fast.opener_request(message)}],
+            model=chief_models.model_for('fast'), max_tokens=fast.OPENER_MAX_TOKENS,
+            rec=rec, endpoint='/chief/stream-smoke', units=0, business_id=None, out=out):
+            safe = gate.feed(piece)
+            if safe:
+                if first is None:
+                    first = round((time.perf_counter() - rec.arrived) * 1000)
+                chunks.append(safe)
+        chunks.append(gate.finish())
+        print(json.dumps({'opener': ''.join(chunks), 'first_model_words_ms': first, 'cut': gate.cut_reason}))
+        if not ''.join(chunks).strip():
+            raise RuntimeError('No useful opening from the provider')
     sources = {'context:daily_bookings': {'kind': 'record', 'complete': True,
         'text': 'Booked appointments by day for the full current week: Monday 2, Tuesday 8, Wednesday 3, Thursday 4, Friday 1, Saturday 0, Sunday 0.'}}
     # Production has already loaded the main model and checked its budget.

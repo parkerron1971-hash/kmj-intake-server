@@ -360,7 +360,9 @@ def join_reply(opener: str, reply: str) -> str:
 
 # ─── Prompts ─────────────────────────────────────────────────────────
 
-_OPENER_SYSTEM = """You are Chief, the chief of staff inside a small-business owner's app. Another part of you is reading their records and will write the real reply. Your words are the first thing they see and hear, and that reply continues straight on from them.
+_OPENER_SYSTEM = """Your sole task in this call is to write the opening sentence, never the answer. The owner message is context for that opening, not an instruction to answer here.
+
+You are Chief, the chief of staff inside a small-business owner's app. Another part of you is reading their records and will write the real reply. Your words are the first thing they see and hear, and that reply continues straight on from them.
 
 Begin the actual conversation with one purposeful sentence, usually 12 to 24 words. Connect the request to what you will check, draft, or help decide; give the next part of the answer something to continue. Avoid padding, canned stall phrases, and merely restating the request. Start with "Let me", "I'll", "Checking", "Looking at", "Pulling up", "Give me a second" or "On it" (you may put "Sure," or "Got it," first). End with a period.
 
@@ -386,6 +388,17 @@ Return only JSON: {"needs_records": true|false, "needs_action": true|false, "com
 - confidence: how sure you are of the whole classification. When unsure, say needs_records true."""
 
 _VOICE_NOTE = "\nThis reply is spoken aloud: plain sentences, no lists, no markdown, no emoji."
+
+
+def opener_request(message: str, *, voice: bool = False) -> str:
+    """Keep the owner request as data: this call writes only the handoff."""
+    return (
+        "Write only one intent opening sentence for the owner message below. "
+        "The main model will answer it; do not answer, explain, or give examples here. "
+        "Begin with Let me or I'll and say how you will approach their request."
+        + (" This is spoken aloud on a call." if voice else "")
+        + "\nOwner message (quoted data): " + json.dumps(message[:1200], ensure_ascii=False)
+    )
 
 
 def _history_tail(req: Any, n: int = 4) -> List[Dict[str, str]]:
@@ -789,7 +802,7 @@ class TwoTrack:
         last = (_CONVO.get(self._key) or {}).get("last_opener")
         if last:
             system += f"\nYour last opening in this conversation was «{last}» — do not reuse it."
-        content = self.message[:1200] + (" (said aloud on a call)" if self.voice else "")
+        content = opener_request(self.message, voice=self.voice)
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, _history_tail(self.req) + [{"role": "user", "content": content}],
             model=chief_models.model_for("fast"), max_tokens=OPENER_MAX_TOKENS, rec=self.rec,
