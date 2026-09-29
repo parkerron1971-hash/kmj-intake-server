@@ -405,6 +405,22 @@ def create_business(body: CreateBusinessBody,
     return {"ok": True, "business": row}
 
 
+@router.post("/onboarding-started")
+def onboarding_started(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Enroll only this authenticated user when business onboarding opens.
+
+    Reopening or StrictMode mounting twice never resets the reminder clock.
+    The reminder query independently excludes staff and completed accounts.
+    """
+    result = sb_clients.sb_post_as_service(
+        "/lifecycle_signup_intents?on_conflict=user_id",
+        {"user_id": str(user.id)},
+        prefer="resolution=ignore-duplicates,return=representation")
+    if result is None:
+        raise HTTPException(503, "Setup reminder enrollment is temporarily unavailable")
+    return {"ok": True}
+
+
 @router.get("/open")
 def access_open() -> Dict[str, Any]:
     """Public: is the platform taking self-serve signups right now?
