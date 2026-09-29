@@ -283,6 +283,19 @@ def test_full_role_refuses_409(fake_sb):
     assert out["ok"] is True
 
 
+def test_occasion_own_roles_govern_the_signup(fake_sb):
+    # The app can give one occasion its own roles (entry.data._roles). A
+    # role only that occasion has is accepted; a default role it dropped
+    # is refused — the page and the write read the same list.
+    fake_sb.entry["data"]["_roles"] = [
+        {"id": "ushers", "label": "Ushers", "needed": 1}]
+    out = _rsvp(_body(role="ushers"))
+    assert out["ok"] is True
+    with pytest.raises(HTTPException) as exc:
+        _rsvp(_body(email="other@example.com", role="greeter"))
+    assert exc.value.status_code == 400
+
+
 def test_wrong_business_entry_is_404(fake_sb):
     fake_sb.entry = {"id": ENTRY, "module_id": "someone-elses-module",
                      "data": {}}
@@ -356,6 +369,25 @@ def test_occasion_capacity_and_role_math():
     assert greeter["full"] is False
     sound = next(r for r in o["roles"] if r["id"] == "sound")
     assert sound["filled"] == 0
+
+
+def test_occasion_roles_prefer_the_occasions_own_list():
+    from datetime import date
+    entries = {MOD: [
+        {"id": "own", "module_id": MOD,
+         "data": {"title": "Christmas Eve", "date": "2099-06-01",
+                  "_roles": [{"id": "ushers", "label": "Ushers", "needed": 4}],
+                  "signups": [{"name": "A", "status": "yes", "role": "ushers"}]}},
+        {"id": "none", "module_id": MOD,
+         "data": {"title": "Quiet week", "date": "2099-06-02", "_roles": [],
+                  "signups": []}},
+        {"id": "default", "module_id": MOD,
+         "data": {"title": "Sunday", "date": "2099-06-03", "signups": []}},
+    ]}
+    own, none, default = er.build_occasions(_mods(), entries, today=date(2099, 5, 20))
+    assert [(r["id"], r["filled"], r["needed"]) for r in own["roles"]] == [("ushers", 1, 4)]
+    assert none["roles"] == []          # a saved empty list is respected
+    assert {r["id"] for r in default["roles"]} == {"greeter", "sound"}
 
 
 def test_occasions_tolerate_junk():

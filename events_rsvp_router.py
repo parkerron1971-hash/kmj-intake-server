@@ -141,6 +141,20 @@ def resolve_fields(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def occasion_roles(data: Dict[str, Any],
+                   module_roles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The roles ONE occasion needs. The app lets each occasion carry its
+    own list in entry.data['_roles'] (Christmas Eve needs more ushers than
+    a Wednesday class); an occasion without one uses the module's default
+    list. An empty list the practitioner saved is respected. Mirrors the
+    frontend's event_roster/types.ts occasionRoles."""
+    own = (data or {}).get("_roles")
+    if not isinstance(own, list):
+        return module_roles
+    return [r for r in own
+            if isinstance(r, dict) and r.get("id") and r.get("label")]
+
+
 def read_signups(data: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
     raw = (data or {}).get(field)
     if not isinstance(raw, list):
@@ -221,7 +235,8 @@ def build_occasions(
                                if capacity is not None else None),
                 "full": full,
                 "occasion_noun": f["occasion_noun"],
-                "roles": [role_fill(r, signups) for r in f["roles"]],
+                "roles": [role_fill(r, signups)
+                          for r in occasion_roles(data, f["roles"])],
             })
     out.sort(key=lambda o: o["date"])
     return out[:MAX_OCCASIONS]
@@ -391,7 +406,8 @@ async def public_event_rsvp(
         if capacity is not None and attending_count(signups) >= capacity:
             raise HTTPException(409, 'this occasion is full')
         if role_id:
-            role = next((r for r in f['roles'] if r.get('id') == role_id), None)
+            role = next((r for r in occasion_roles(data, f['roles'])
+                         if r.get('id') == role_id), None)
             if not role:
                 raise HTTPException(400, 'unknown role')
             fill = role_fill(role, signups)
