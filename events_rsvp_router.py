@@ -155,6 +155,40 @@ def occasion_roles(data: Dict[str, Any],
             if isinstance(r, dict) and r.get("id") and r.get("label")]
 
 
+# Who may see one occasion (Kevin, 2026-09-29: "meetings that could be set
+# public or private or invite, so everything won't be shared").
+#   public   the public events page and every member's own page
+#   private  the church only: never listed outside the app
+#   invite   only the people it was shared with (entry.data._invited) or
+#            already on its roster, on their own member page; never public
+# An occasion that never chose is public — how every occasion behaved
+# before the choice existed. Mirrors event_roster/types.ts.
+VISIBILITIES = ("public", "private", "invite")
+
+
+def occasion_visibility(data: Dict[str, Any]) -> str:
+    v = (data or {}).get("_visibility")
+    return v if v in VISIBILITIES else "public"
+
+
+def is_public(data: Dict[str, Any]) -> bool:
+    return occasion_visibility(data) == "public"
+
+
+def visible_to_member(data: Dict[str, Any], contact_id: str, signups_field: str) -> bool:
+    """May this person see (and answer) this occasion on their own page?"""
+    v = occasion_visibility(data)
+    if v == "public":
+        return True
+    if v == "private" or not contact_id:
+        return False
+    invited = (data or {}).get("_invited")
+    if isinstance(invited, list) and str(contact_id) in {str(x) for x in invited}:
+        return True
+    return any(str(s.get("contact_id") or "") == str(contact_id)
+               for s in read_signups(data, signups_field))
+
+
 def read_signups(data: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
     raw = (data or {}).get(field)
     if not isinstance(raw, list):
@@ -204,6 +238,7 @@ def build_occasions(
     modules: List[Dict[str, Any]],
     entries_by_module: Dict[str, List[Dict[str, Any]]],
     today: Optional[date] = None,
+    include=None,
 ) -> List[Dict[str, Any]]:
     """The page's data: dated, upcoming occasions across every roster
     module, soonest first. Undated entries are skipped — internally an
@@ -215,6 +250,10 @@ def build_occasions(
         f = resolve_fields(mod.get("archetype_params"))
         for e in entries_by_module.get(str(mod.get("id"))) or []:
             data = e.get("data") or {}
+            # Who may see it: public ones only unless the caller says
+            # otherwise (the member page passes its own rule).
+            if not (include(data, f) if include else is_public(data)):
+                continue
             d = _parse_day(data.get(f["date_field"]))
             if d is None or d < today or (d - today).days > UPCOMING_WINDOW_DAYS:
                 continue
@@ -383,6 +422,10 @@ async def public_event_rsvp(
     module = next((m for m in modules
                    if str(m.get("id")) == str(entry.get("module_id"))), None)
     if not module:
+        raise HTTPException(404, "that occasion wasn't found")
+    # A private or invite-only occasion is not on the public page, so the
+    # public signup cannot reach it either — same answer as a wrong id.
+    if not is_public(entry.get("data") or {}):
         raise HTTPException(404, "that occasion wasn't found")
 
     import hashlib
