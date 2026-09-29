@@ -463,49 +463,84 @@ def _humanize_actions(actions: List[Dict[str, Any]]) -> str:
 # Now each finished sentence of the FIRST model call is checked the moment
 # it is complete (chief_truth.streamable_sentence: every figure and name in
 # one record, no claim anything was done, no state of a record, nothing
-# about the business unproved) and sent as it passes. The first sentence
-# that cannot be proved closes the stream for the turn; everything after
-# it waits for the full answer check exactly as before, and arrives as the
-# continuation of what was already said (_stitch_after_stream).
+# about the business unproved) and sent as it passes. A sentence that
+# needs more evidence gets a bounded check alongside the writer. Rejection
+# still holds the remaining prefix for final review; nothing is skipped or
+# reordered (_stitch_after_stream).
 PROSE_PREFIX = "\x00prose:"
 _SENTENCE_END = re.compile(r'(?<=[.!?])["”’)]?\s+|\n+')
 
 
 class _SentenceStreamer:
-    """The main model call's stream sink on a streamed turn."""
+    """Release an ordered, checked prefix while the main model is writing.
 
-    def __init__(self, sink, prover) -> None:
+    A sentence the local prover cannot settle gets a bounded asynchronous
+    check. Later sentences wait behind it; they are never skipped or reordered.
+    A rejected check/action tag still holds the rest for the final review.
+    """
+
+    def __init__(self, sink, prover, review=None) -> None:
         self._sink = sink
         self._prover = prover
+        self._review = review
         self._filt = _ActionTagFilter()
         self._buf = ""
         self._raw_tail = ""
+        self._review_task = None
+        self._closing_task = None
+        self._review_calls = 0
         self.open = prover is not None and sink is not None
         self.sent: List[str] = []
 
     def __call__(self, piece: str) -> None:
         if not self.open or not isinstance(piece, str):
             return
-        # An action tag means the reply is about to narrate work: stop
-        # before it. The tag filter hides the tag; this sees it coming.
         self._raw_tail = (self._raw_tail + piece)[-16:]
         if "[ACTION" in self._raw_tail.upper() or "[ACTION" in piece.upper():
             self.close()
             return
         self._buf += self._filt.feed(piece)
-        while self.open:
+        if len(self._buf) > 12000:
+            self.close()
+            return
+        self._drain()
+
+    def _drain(self) -> None:
+        while self.open and self._review_task is None:
             m = _SENTENCE_END.search(self._buf)
             if not m:
                 break
-            sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
-            if not sentence.strip():
+            sentence = self._buf[:m.end()]
+            import chief_truth as _truth
+            if not sentence.strip() or _truth.streamable_sentence(self._prover, sentence):
+                self._buf = self._buf[m.end():]
                 self._emit(sentence)
                 continue
-            import chief_truth as _truth
-            if not _truth.streamable_sentence(self._prover, sentence):
+            if self._review is None or self._review_calls >= 2:
                 self.close()
                 break
-            self._emit(sentence)
+            # The checker sees the whole prefix, so a pronoun or conclusion
+            # is assessed in context, not as an unrelated sentence.
+            prefix = self.text + sentence
+            self._review_calls += 1
+            self._review_task = asyncio.create_task(self._check(prefix, sentence))
+
+    async def _check(self, prefix: str, sentence: str) -> None:
+        try:
+            accepted = await asyncio.wait_for(self._review(prefix), timeout=4.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            accepted = False
+        self._review_task = None
+        if not self.open:
+            return
+        if not accepted:
+            self.close()
+            return
+        self._buf = self._buf[len(sentence):]
+        self._emit(sentence)
+        self._drain()
 
     def _emit(self, text: str) -> None:
         try:
@@ -515,14 +550,27 @@ class _SentenceStreamer:
             self.close()
 
     def close(self) -> None:
-        """Nothing more streams this turn; an unfinished sentence waits."""
+        """Stop before final review. No late checker may append to the reply."""
         self.open = False
         self._buf = ""
+        if self._review_task is not None:
+            self._closing_task = self._review_task
+            self._review_task.cancel()
+            self._review_task = None
+
+    def finish_input(self) -> None:
+        # Generation ended, but final review/actions may still be running.
+        # Release a complete final sentence; an unfinished thought stays held.
+        if self.open and self._buf.rstrip().endswith(('.', '!', '?')):
+            self(' ')
+
+    async def wait_closed(self) -> None:
+        if self._closing_task is not None:
+            await asyncio.gather(self._closing_task, return_exceptions=True)
+            self._closing_task = None
 
     def reopen(self) -> None:
-        """A second writer's turn (chief_headline: Haiku's headline, then the
-        main model): what is said stays said, the new writer starts clean.
-        Only while a prover is in place — the lane's switch still holds."""
+        """Legacy headline handoff: start a new writer after the old one ends."""
         self._filt = _ActionTagFilter()
         self._buf = ""
         self._raw_tail = ""
@@ -8111,7 +8159,11 @@ def _context_sources(client, biz: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
     }
 
 
-async def _resolve_source(warm: Dict[str, Any], name: str, factory, fallback):
+OPTIONAL_CONTEXT_BUDGET_S = 0.75
+_OPTIONAL_CONTEXT_SOURCES = {"mentor_active", "habit_block", "relationship_insights"}
+
+
+async def _resolve_source(warm: Dict[str, Any], name: str, factory, fallback, *, optional_deadline=True):
     """A warmed value if the prewarm left one, otherwise fetch it now.
 
     Failure isolation is identical either way: a source that raises
@@ -8119,9 +8171,13 @@ async def _resolve_source(warm: Dict[str, Any], name: str, factory, fallback):
     """
     if name in warm:
         return warm[name]
+    import chief_truth
     try:
+        if optional_deadline and name in _OPTIONAL_CONTEXT_SOURCES and chief_truth.continuous_stream_enabled():
+            return await asyncio.wait_for(factory(), timeout=OPTIONAL_CONTEXT_BUDGET_S)
         return await factory()
     except Exception as e:  # pragma: no cover
+        chief_truth.record("context:" + name, None)
         logger.warning(f"context source {name} failed: {e}")
         return fallback
 
@@ -13888,6 +13944,7 @@ async def chief_chat(
     _uid_token = _TURN_USER_ID.set(str(user_session.user.id))
     import chief_truth
     _truth_token = chief_truth.begin(str(user_session.user.id), req.message or '')
+    _sentence_streamer = None
     chief_truth.record('owner:message', req.message or '', kind='owner_report')
     import image_studio
     _image_turn_token = image_studio.turn_id.set(req.request_id or str(__import__('uuid').uuid4()))
@@ -14004,6 +14061,12 @@ async def chief_chat(
             if not ctx:
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
+            # Only after the scoped context read: share delivery preferences, never records.
+            try:
+                import chief_fast_track
+                chief_fast_track.remember_style(str(user_session.user.id), biz)
+            except Exception:
+                pass
             if chief_build_runtime.enabled():
                 ctx['build_jobs'] = await chief_build_runtime.context(client, biz['id'], str(user_session.user.id))
 
@@ -14136,7 +14199,8 @@ async def chief_chat(
             )
             _ctx_vals = dict(zip(_names, _results))
             for source_name, source_value in _ctx_vals.items():
-                chief_truth.record('context:' + source_name, source_value, kind='context')
+                if 'context:' + source_name not in chief_truth.unavailable_sources():
+                    chief_truth.record('context:' + source_name, source_value, kind='context')
             voice_examples = _ctx_vals["voice_examples"]
             session_context = _ctx_vals["session_context"]
             mentor_active = _ctx_vals["mentor_active"]
@@ -14438,8 +14502,18 @@ async def chief_chat(
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] sentence streaming unavailable: {e}")
                     _prover = None
-                _sentence_streamer = (_SentenceStreamer(_STREAM_SINK.get(), _prover)
-                                      if _prover is not None else (lambda _piece: None))
+                async def _review_stream_prefix(prefix):
+                    sources = chief_truth.evidence_for_review(
+                        ctx, _format_view_block(req.current_context, view_detail), [])
+                    sources.update(chief_truth.conversation_for_review(req.message, history))
+                    return await chief_truth.review_stream_prefix(
+                        client, prefix, sources=sources, message=req.message,
+                        business_id=biz.get("id"))
+
+                _sentence_streamer = (_SentenceStreamer(
+                    _STREAM_SINK.get(), _prover,
+                    review=_review_stream_prefix if chief_truth.continuous_stream_enabled() else None)
+                    if _prover is not None else (lambda _piece: None))
             # The two-track reply (chief_fast_track): the practitioner has
             # already seen the opening the first track wrote, so this answer
             # continues it. Uncached tail; "" (no change) on the plain
@@ -14451,12 +14525,13 @@ async def chief_chat(
                     system += _cft.continuation_block(_opening)
             except Exception as e:  # pragma: no cover — never cost the turn
                 logger.warning(f"[chief] opener handoff failed: {e}")
-            # Haiku's headline (chief_headline, 2026-09-25): on a question
+            # Legacy headline, retained behind the rollback switch: on a question
             # about the records, the first real sentence comes from Haiku,
             # from the records just read, proven sentence by sentence by this
             # turn's own streamer — then the main model continues from it.
             _headline_said = ""
-            if isinstance(_sentence_streamer, _SentenceStreamer) and _evidence:
+            if (not chief_truth.continuous_stream_enabled()
+                    and isinstance(_sentence_streamer, _SentenceStreamer) and _evidence):
                 try:
                     import chief_headline as _hl
                     _prior_reply = next((m.content for m in reversed(history)
@@ -14492,7 +14567,7 @@ async def chief_chat(
                                      tool_biz=biz,
                                      effort=chief_models.effort_for(lane))
             if isinstance(_sentence_streamer, _SentenceStreamer):
-                _sentence_streamer.close()
+                _sentence_streamer.finish_input()
             _t.mark("model")
             _t.tools = chief_tool_loop.calls_this_turn()
             if not raw:
@@ -14705,6 +14780,10 @@ async def chief_chat(
                 repairer=chief_truth.repair_reply,
                 # A spoken reply that arrives after a minute is no reply.
                 budget_s=20.0 if lane == "voice" else 45.0)
+            # Freeze the visible prefix before history/final-payload stitching.
+            if isinstance(_sentence_streamer, _SentenceStreamer):
+                _sentence_streamer.close()
+                await _sentence_streamer.wait_closed()
             _t.mark("review")
             _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
 
@@ -14796,6 +14875,9 @@ async def chief_chat(
             content={"error": str(e), "traceback": tb},
         )
     finally:
+        if isinstance(_sentence_streamer, _SentenceStreamer):
+            _sentence_streamer.close()
+            await _sentence_streamer.wait_closed()
         # Pass RLS-readiness — restore prior user_jwt context. Safe to call
         # even if set_user_jwt's prior call raised after binding (token
         # captured before the try block).
@@ -15219,15 +15301,17 @@ async def chief_prewarm_endpoint(
             # allowed, and it is keyed by user besides.
             rows = await _sb(client, "GET",
                              f"/businesses?id=eq.{req.business_id}"
-                             f"&select=id,name,type,settings,owner_id&limit=1")
+                             f"&select=id,name,type,settings,owner_id,voice_profile&limit=1")
             biz = (rows or [None])[0]
             if not biz:
                 return {"ok": True, "warmed": 0, "reason": "no such business"}
 
+            import chief_fast_track
+            chief_fast_track.remember_style(str(user_id or ""), biz)
             sources = _context_sources(client, biz)
             names = list(sources.keys())
             results = await asyncio.gather(
-                *[_resolve_source({}, n, *sources[n]) for n in names])
+                *[_resolve_source({}, n, *sources[n], optional_deadline=False) for n in names])
 
         payload = dict(zip(names, results))
         chief_prewarm.store(user_id, req.business_id, payload)

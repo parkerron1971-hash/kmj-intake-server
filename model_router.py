@@ -655,7 +655,7 @@ class OpenerGate:
     turn's checked answer carries on from what was said. `dangling` is True
     when the cut fell mid-sentence, so the caller can close it with a dash."""
 
-    MAX_WORDS = 14
+    MAX_WORDS = 28
     LEAD_PROBE_WORDS = 3
 
     def __init__(self, user_message: str, *, after_lead: bool = False) -> None:

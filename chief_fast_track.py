@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -66,6 +67,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, Depends
 
+from chief_conversation import conversation_style
 import chief_models
 import llm_call
 import model_router as mr
@@ -113,7 +115,7 @@ def _classifier_timeout_s() -> float:
 OPENER_HARD_CAP_S = 2.5
 FAST_ANSWER_CAP_S = 20.0
 FAST_MAX_TOKENS = 500
-OPENER_MAX_TOKENS = 40
+OPENER_MAX_TOKENS = 80
 
 
 # ─── When the request arrived ────────────────────────────────────────
@@ -204,6 +206,25 @@ CACHE = mr.SemanticCache()
 # establishes: that the business is this user's (the RLS read) and that
 # they are inside their allowance.
 _KNOWN_GOOD: Dict[str, float] = {}
+# Delivery preferences only, learned from an authorized full turn. Never records.
+_STYLES: Dict[str, tuple[float, str]] = {}
+
+
+def remember_style(user_id: str, biz: Dict[str, Any]) -> None:
+    if not user_id or not biz.get("id"):
+        return
+    _STYLES[_pair(user_id, str(biz["id"]))] = (time.time(), conversation_style(biz))
+    if len(_STYLES) > 5000:
+        for key in sorted(_STYLES, key=lambda k: _STYLES[k][0])[:1000]:
+            _STYLES.pop(key, None)
+
+
+def style_for(user_id: str, business_id: str) -> str:
+    saved = _STYLES.get(_pair(user_id, business_id))
+    if saved and time.time() - saved[0] < KNOWN_GOOD_TTL_S:
+        return saved[1]
+    return conversation_style({})
+
 KNOWN_GOOD_TTL_S = 1800
 # conversation → what the last turn was, for "that's not what I asked".
 _CONVO: Dict[str, Dict[str, Any]] = {}
@@ -341,7 +362,7 @@ def join_reply(opener: str, reply: str) -> str:
 
 _OPENER_SYSTEM = """You are Chief, the chief of staff inside a small-business owner's app. Another part of you is reading their records and will write the real reply. Your words are the first thing they see and hear, and that reply continues straight on from them.
 
-Write only the opening: 3 to 10 words saying what you are about to do with their request. Start with "Let me", "I'll", "Checking", "Looking at", "Pulling up", "Give me a second" or "On it" (you may put "Sure," or "Got it," first). End with a period.
+Begin the actual conversation with one purposeful sentence, usually 12 to 24 words. Connect the request to what you will check, draft, or help decide; give the next part of the answer something to continue. Avoid padding, canned stall phrases, and merely restating the request. Start with "Let me", "I'll", "Checking", "Looking at", "Pulling up", "Give me a second" or "On it" (you may put "Sure," or "Got it," first). End with a period.
 
 It has to stay true whatever the records turn out to say, so it contains:
 - no answer, no yes or no, and no facts about their business, clients, money, dates or records;
@@ -544,7 +565,10 @@ class TwoTrack:
         self.message = str(getattr(req, "message", "") or "")
         self.business_id = str(getattr(req, "business_id", "") or "")
         self.verified = known_good(user_id, self.business_id)
-        self.cache_scope = _pair(user_id, self.business_id)
+        self.style = style_for(user_id, self.business_id)
+        # A cached answer must not outlive a change to Chief's chosen tone.
+        style_key = hashlib.sha256(self.style.encode()).hexdigest()[:16]
+        self.cache_scope = _pair(user_id, self.business_id) + ":" + style_key
         self.cache_hit: Optional[mr.CacheHit] = None
         self.fast_answer = ""
         self.lead_text = ""                 # everything the first track sent
@@ -587,6 +611,7 @@ class TwoTrack:
     def mark_turn_delta(self) -> None:
         """A delta from the full turn went out."""
         self.rec.mark_first_token("turn" if not self.lead_text else None)
+        self.rec.mark_content()
 
     def answered(self) -> bool:
         """The first track gave the whole reply (fast lane or cache)."""
@@ -645,6 +670,8 @@ class TwoTrack:
         if self.holder.frozen and source not in ("cache", "answer"):
             return
         self.rec.mark_first_token(source)
+        if source in ("answer", "cache"):
+            self.rec.mark_content()
         self.lead_text += text
         self.holder.said(text)
         yield {"type": "delta", "text": text, "checked": True, "lead": source}
@@ -758,13 +785,13 @@ class TwoTrack:
         gate = mr.OpenerGate(self.message)
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
-        system = _OPENER_SYSTEM
+        system = self.style + "\n\n" + _OPENER_SYSTEM
         last = (_CONVO.get(self._key) or {}).get("last_opener")
         if last:
             system += f"\nYour last opening in this conversation was «{last}» — do not reuse it."
         content = self.message[:1200] + (" (said aloud on a call)" if self.voice else "")
         pump = asyncio.ensure_future(self._pump(stream_text(
-            system, [{"role": "user", "content": content}],
+            system, _history_tail(self.req) + [{"role": "user", "content": content}],
             model=chief_models.model_for("fast"), max_tokens=OPENER_MAX_TOKENS, rec=self.rec,
             endpoint="/chief/opener", units=0,
             business_id=self.business_id if self.verified else None, out=out), q))
@@ -850,7 +877,7 @@ class TwoTrack:
         gate = mr.AnswerGate()
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
-        system = _FAST_SYSTEM + (_VOICE_NOTE if self.voice else "")
+        system = self.style + "\n\n" + _FAST_SYSTEM + (_VOICE_NOTE if self.voice else "")
         if continuing and self.lead_text.strip():
             system += (f"\nYour reply has already begun with «{self.lead_text.strip()}»; continue "
                        "straight on from it without repeating it.")
