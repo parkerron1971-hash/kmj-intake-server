@@ -202,9 +202,9 @@ def test_bad_captions_are_dropped_not_saved(model):
              {'slot': 3, 'play_id': 'workflow_tip', 'subject': None}]
     model['captions'] = [{'slot': 1, 'text': 'Send the follow-up the same day. Solutionist keeps it on the contact.'},
                          {'slot': 2, 'text': 'Over 1,000 owners switched this month.'}]
-    kept, dropped = run(e.write_captions(slots, FACTS))
-    assert set(kept) == {1}
-    assert {d['slot']: d['reason'] for d in dropped} == {2: 'number not in the facts (1000)', 3: 'missing'}
+    kept, flyers, dropped = run(e.write_captions(slots, FACTS))
+    assert set(kept) == {1} and flyers == {}
+    assert {d['slot']: d['reason'] for d in dropped} == {1: 'no flyer copy', 2: 'number not in the facts (1000)', 3: 'missing'}
     assert 'Use ONLY the supplied facts' in model['payload']['system']
     sent = json.loads(model['payload']['messages'][0]['content'])
     assert [s['play'] for s in sent['slots']] == ['Teach a useful move'] * 3     # the model is handed the play
@@ -234,6 +234,8 @@ def world(monkeypatch, model):
             return s['claim']
         if method == 'GET' and path.startswith('/platform_marketing_posts?run_id'):
             return s['existing']
+        if method == 'GET' and path.startswith('/platform_marketing_assets'):
+            return [a for a in s['assets'].values() if a['id'] in path]
         if method == 'GET' and path.startswith('/platform_marketing_runs'):
             return [s['run']] if s['run'] else []
         if method == 'PATCH' and path.startswith('/platform_marketing_runs'):
@@ -252,12 +254,27 @@ def world(monkeypatch, model):
     monkeypatch.setattr(e, 'read_signals', fake_signals)
     monkeypatch.setattr(e, 'verified_facts', lambda sig: FACTS)
     monkeypatch.setattr(spend_guard, 'over_budget', lambda: False)
-    model['captions'] = [{'slot': i, 'text': f'Caption number {"one two three four five".split()[i - 1]} for a busy owner.'}
-                         for i in range(1, 6)]
+    model['captions'] = [{'slot': i, 'text': f'Caption number {"one two three four five".split()[i - 1]} for a busy owner.',
+                          'flyer': FLYER} for i in range(1, 6)]
+    import marketing_design
+    s['assets'] = {i: {'id': str(uuid4()), 'name': f'flyer {i}', 'kind': 'image', 'url': f'https://x/{i}.png', 'sha256': 'h'}
+                   for i in range(1, 6)}
+    s['design_calls'] = []
+
+    async def design_week(run_id, slots, copies, lead):
+        s['design_calls'].append({'slots': [x['slot'] for x in slots], 'copies': copies, 'lead': lead})
+        return ({k: v for k, v in s['assets'].items() if k in {x['slot'] for x in slots}},
+                {'flyers': {str(k): v['id'] for k, v in s['assets'].items()}, 'hero_id': None, 'request': None, 'failed': []})
+    monkeypatch.setattr(marketing_design, 'design_week', design_week)
+
+    async def asset_row(path):
+        return [a for a in s['assets'].values() if a['id'] in path]
+    s['asset_row'] = asset_row
     return s
 
 
-def test_a_week_becomes_drafts_for_text_channels_only(world, model):
+def test_with_no_flyers_a_week_is_drafts_for_text_channels_only(world, model):
+    world['assets'] = {}
     out = run(e.run_week('scheduled'))
     assert out['status'] == 'succeeded' and model['calls'] == 1
     assert world['claimed_with'] == {'run_id': str(e.run_id_for(e.week_window(MONDAY_8AM)[0])),
@@ -296,11 +313,103 @@ def test_drafts_saved_before_a_crash_are_kept_not_rewritten(world, model):
     assert world['run']['post_ids'] == ['p1', 'p2']
 
 
-def test_no_text_channel_skips_with_a_reason_and_no_spend(world, model):
-    world['channels'] = [c for c in CHANNELS if c['service'] == 'instagram']
+def test_no_channel_skips_with_a_reason_and_no_spend(world, model):
+    world['channels'] = []
     out = run(e.run_week('scheduled'))
-    assert out['status'] == 'skipped' and 'Instagram needs a picture' in out['reason']
+    assert out['status'] == 'skipped' and 'Connect a Facebook' in out['reason']
     assert model['calls'] == 0 and world['run']['status'] == 'skipped'
+
+
+def test_instagram_only_with_no_flyers_saves_nothing(world, model):
+    world['channels'] = [c for c in CHANNELS if c['service'] == 'instagram']
+    world['assets'] = {}
+    out = run(e.run_week('scheduled'))
+    assert out['status'] == 'skipped' and world['writes'] == []
+    assert 'no flyer' in world['run']['error']
+
+
+FLYER = {'headline': 'Follow up the same day', 'line': 'A quick note after every session keeps clients coming back.',
+         'cta': 'See how it works'}
+
+
+@pytest.mark.parametrize('copy,problem', [
+    (FLYER, None),
+    ({**FLYER, 'headline': 'x' * 43}, 'flyer headline length'),
+    ({**FLYER, 'cta': 'Visit mysolutionist.app'}, 'flyer cta length'),
+    ({**FLYER, 'line': 'Go to mysolutionist.app for the details.'}, 'link on the flyer'),
+    ({**FLYER, 'line': 'Trusted by 300 owners across the country.'}, 'number on the flyer not in the facts (300)'),
+    ({**FLYER, 'line': 'Seven days free: 7 of them, on the plan you pick.'}, None),
+    ({'headline': 'Only a headline here'}, 'flyer line length'),
+    (None, 'no flyer copy'),
+])
+def test_flyer_rules(copy, problem):
+    assert e.check_flyer(copy, ALLOWED) == problem
+
+
+def test_a_bad_flyer_costs_the_picture_not_the_caption(model):
+    slots = [{'slot': 1, 'play_id': 'workflow_tip', 'subject': None}, {'slot': 2, 'play_id': 'workflow_tip', 'subject': None}]
+    model['captions'] = [{'slot': 1, 'text': 'Send the follow-up the same day. Solutionist keeps it on the contact.', 'flyer': FLYER},
+                         {'slot': 2, 'text': 'Answer the question before they ask it, and the booking follows.',
+                          'flyer': {**FLYER, 'line': 'Trusted by 300 owners.'}}]
+    kept, flyers, dropped = run(e.write_captions(slots, FACTS))
+    assert set(kept) == {1, 2} and set(flyers) == {1}
+    assert dropped == [{'slot': 2, 'reason': 'number on the flyer not in the facts (300)', 'flyer_only': True}]
+    assert 'headline at most 42 characters' in model['payload']['system']
+
+
+def test_flyers_ride_on_every_channel_and_bring_instagram_in(world, model):
+    run(e.run_week('scheduled'))
+    rows = world['writes'][0]
+    by_slot = {}
+    for r in rows:
+        by_slot.setdefault(r['run_at'], []).append(r)
+    assert len(rows) == 15                                            # 5 slots x Facebook + X + Instagram
+    assert {r['payload']['service'] for r in rows} == {'facebook', 'twitter', 'instagram'}
+    slot_of = {str(e.uuid5(e.run_id_for(e.week_window(MONDAY_8AM)[0]), f'{i}:{c["id"]}')): i
+               for i in range(1, 6) for c in CHANNELS}
+    assert all(r['payload']['asset']['id'] == world['assets'][slot_of[r['id']]]['id'] for r in rows)
+    assert all(r['payload']['asset'] for r in rows)
+    assert world['design_calls'][0]['lead'] == world['run']['plays'][0]['play_id']
+    assert world['run']['design']['flyers']
+
+
+def test_a_slot_without_a_flyer_stays_off_instagram(world, model):
+    world['assets'].pop(2)
+    run(e.run_week('scheduled'))
+    rows = world['writes'][0]
+    assert len(rows) == 14
+    slot_two = [r for r in rows if r['id'] in {str(e.uuid5(e.run_id_for(e.week_window(MONDAY_8AM)[0]), f'2:{c["id"]}')) for c in CHANNELS}]
+    assert {r['payload']['service'] for r in slot_two} == {'facebook', 'twitter'}
+    assert all(r['payload']['asset'] is None for r in slot_two)
+
+
+def test_a_failed_design_step_keeps_the_week_text_only(world, model, monkeypatch):
+    import marketing_design
+
+    async def broken(*a, **kw):
+        raise RuntimeError('renderer down')
+    monkeypatch.setattr(marketing_design, 'design_week', broken)
+    out = run(e.run_week('scheduled'))
+    rows = world['writes'][0]
+    assert out['status'] == 'succeeded' and len(rows) == 10
+    assert {r['payload']['service'] for r in rows} == {'facebook', 'twitter'}
+    assert world['run']['design']['failed'][0]['what'] == 'design'
+
+
+def test_plan_now_runs_in_the_background_once(monkeypatch):
+    started = []
+
+    async def slow(trigger, now=None):
+        started.append(trigger)
+        await asyncio.sleep(0.05)
+
+    async def scenario():
+        monkeypatch.setattr(e, 'run_week', slow)
+        first, second = e.start_week(), e.start_week()
+        await asyncio.sleep(0.1)
+        return first, second, e.start_week()
+    first, second, third = run(scenario())
+    assert (first, second, third) == (True, False, True) and started[:1] == ['manual']
 
 
 def test_when_every_caption_breaks_a_rule_nothing_is_saved(world, model):
