@@ -769,9 +769,16 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 # The reviewer labels totals "estimate" more often than the
                 # rules ask; a total that adds up from the source is a fact
                 # and needs no hedge. A genuine estimate still does.
+                # Planning math on a real record labels itself in its own
+                # sentence: "If the package includes 12 weekly sessions,
+                # you're charging $100 per session", "which works out to about
+                # $400 a month" — withheld whole in the live advice eval
+                # (2026-09-28) for lacking the word "roughly".
                 if missing and not re.search(
                         r'\b(?:estimat\w*|assuming|assumption|hypothetic\w*|project\w*|approximately|roughly)\b',
-                        reply, re.I):
+                        reply, re.I) and not re.search(
+                        r'\b(?:if|about|around|works out to|comes to|assuming|would)\b',
+                        _sentence_containing(reply, text_), re.I):
                     return 'unsupported', [], _claim_fail('estimate without an explicit label', text_)
                 missing = set()
             if claim['kind'] == 'action' and source['kind'] != 'receipt':
@@ -938,7 +945,8 @@ ACTION_WITHOUT_RECEIPT = 'action claim without a write receipt'
 # sentence is cut instead, the rest re-checked, and the reply says a part
 # is not done.
 _TRIMMABLE = re.compile(r"^(?:claim number [^:]*|quote is not in the cited source|"
-                        r"cited source does not exist|" + ACTION_WITHOUT_RECEIPT + r") :: (.+)$",
+                        r"cited source does not exist|estimate without an explicit label|"
+                        + ACTION_WITHOUT_RECEIPT + r") :: (.+)$",
                         re.S)
 _UNREVIEWED_FIGURE = re.compile(r"^draft number ([\d.,]+) has no reviewed claim$")
 

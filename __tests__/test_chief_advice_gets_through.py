@@ -164,3 +164,36 @@ def test_a_caveat_lists_the_real_doubt_and_not_the_cleared_advice():
     assert meta["status"] == "caveated", meta
     assert meta["gaps"] == [doubt.rstrip(".")], meta["gaps"]
     assert out.startswith(draft)
+
+
+# ── planning math on a real record ─────────────────────────────────────
+# Live advice eval (2026-09-28): two answers withheld whole over
+# "estimate without an explicit label" — planning math the reviewer tied to
+# the $1,200 package, hedged with "if" and "works out to" rather than
+# "roughly".
+
+PACKAGE = {"context:offerings": {"kind": "context", "complete": False,
+                                  "text": json.dumps([{"name": "3-Month Coaching Package", "price": 1200}])}}
+
+
+def _estimate(text, quote="1200"):
+    return json.dumps({"verdict": "supported", "claims": [
+        {"text": text, "kind": "estimate", "source_id": "context:offerings", "quote": quote}]})
+
+
+def test_conditional_planning_math_on_a_record_labels_itself():
+    for text in ("If the package includes 12 weekly sessions, you're charging $100 per session",
+                 "Your $1200 package, spread over three months, which works out to about $400 a month"):
+        verdict, _, reason = truth.assess_review(_estimate(text), text + ".", PACKAGE)
+        assert verdict == "supported", (text, reason)
+
+
+def test_an_unlabeled_estimate_is_cut_not_the_whole_answer():
+    bad = "The package nets $950 after costs"
+    draft = bad + ". " + ADVICE
+    raw = _estimate(bad)
+    out, meta = asyncio.run(truth.finalize_reply(
+        None, draft, ctx={}, view_detail="", taken=[], message="How's my package doing?",
+        business_id="biz", reviewer=AsyncMock(return_value=raw)))
+    assert "$950" not in out and "warm yes" in out, meta
+    assert meta["status"] in ("trimmed", "caveated"), meta
