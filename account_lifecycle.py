@@ -145,6 +145,9 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # Owner-only account export includes private care and finance history.
+    # Erase children before their business, contact and invoice records.
+    "ministry_care_requests", "ministry_gift_history",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
     "connected_agents",       # bot profiles; no live credentials in this table
@@ -568,6 +571,10 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # documents live in S3. Stated here rather than discovered later.
 
 _IMPORT_SKIP = {
+    # Private archives retain original contact/form/invoice identifiers; the
+    # generic importer cannot safely remap them or recreate audit evidence.
+    # They remain in the owner archive and are explicitly reported as skipped.
+    "ministry_care_requests", "ministry_gift_history",
     "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication

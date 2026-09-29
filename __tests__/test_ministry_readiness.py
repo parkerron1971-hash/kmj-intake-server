@@ -98,7 +98,7 @@ def test_private_storage_error_and_nonowner_are_explicit(monkeypatch):
 @pytest.mark.parametrize("capacity,successes",[(2,2),(1,1)])
 def test_concurrent_rsvps_keep_every_success(monkeypatch,capacity,successes):
     import events_rsvp_router as rsvp
-    from test_events_rsvp import FakeSB,_entry,_body,_request
+    from __tests__.test_events_rsvp import FakeSB,_entry,_body,_request
     fake=FakeSB(entry=_entry(capacity=capacity))
     barrier=threading.Barrier(2);lock=threading.Lock();seen=threading.local()
     original_get=fake.sb_get_as_service
@@ -175,3 +175,12 @@ def test_manual_correction_requires_reason_version_and_auditable_actor(monkeypat
     for overrides in [{"updated_at":"stale"},{"reason":""},{"refund_amount_cents":1501}]:
         with pytest.raises(HTTPException):giving.correct_manual_gift("b",gid,{**body,**overrides},SimpleNamespace(id="finance-user"))
     assert len(writes)==1
+
+
+def test_private_ministry_records_follow_owner_archive_and_erasure():
+    import account_lifecycle as lifecycle
+    for table in ("ministry_care_requests", "ministry_gift_history"):
+        assert table in lifecycle.BUSINESS_CHILD_TABLES
+        assert lifecycle.BUSINESS_CHILD_TABLES.index(table) < lifecycle.BUSINESS_CHILD_TABLES.index("invoices")
+        assert table in lifecycle._IMPORT_SKIP
+        assert table not in lifecycle.EXPORT_EXCLUDED

@@ -26,6 +26,8 @@ Status: implemented and verified locally. Production has not been migrated or de
 
 Evidence: `output/ministry-readiness-verification/`.
 
+Private care records and gift correction history are included in owner-only account exports and account erasure. Generic imports explicitly skip these archives because their embedded identifiers and audit evidence cannot be safely recreated in a new business.
+
 ## Rollout order
 
 1. Use a coordinated intake/giving maintenance window and retain a database backup. Inspect existing `GIVE-` invoice numbers for duplicates before the new unique index; resolve any duplicates by reviewing the source payment, not by deleting financial history blindly.
