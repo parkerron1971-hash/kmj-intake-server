@@ -21,7 +21,7 @@ returns boolean language sql stable security definer set search_path=public as $
     ('ministry','ministries','church','churches','pastor','parachurch','faith','faith_based','religious','religious_org','synagogue','mosque','temple','congregation','nonprofit','non_profit','not_for_profit','nonprofit_org')
    or public.ministry_finance_access(b_id)));
 $$;
-revoke all on function public.ministry_finance_access(uuid), public.ministry_finance_guard(uuid) from public;
+revoke all on function public.ministry_finance_access(uuid), public.ministry_finance_guard(uuid) from public,anon;
 grant execute on function public.ministry_finance_access(uuid), public.ministry_finance_guard(uuid) to authenticated;
 -- Restrictive policies intersect existing permissive owner/team policies: no new grants.
 do $$ declare t text; begin
@@ -69,7 +69,7 @@ language plpgsql immutable set search_path=public as $$ declare k text; item jso
  end if;
  return false;
 end $$;
-revoke all on function public.has_private_care(jsonb) from public;
+revoke all on function public.has_private_care(jsonb) from public,anon,authenticated;
 -- Contact metadata is preserved as one private historical record; identity remains operational.
 insert into public.ministry_care_requests(business_id,submission,legacy_source)
  select business_id,jsonb_build_object('contact_id',id,'legacy_metadata',metadata),'contact:'||id||':'||md5(coalesce(metadata,'null'::jsonb)::text)
@@ -93,7 +93,7 @@ insert into public.ministry_care_requests(business_id,submission,legacy_source)
   select 1 from public.ministry_care_requests p where p.business_id=q.business_id
   and p.submission->>'contact_id'=q.contact_id::text)
  on conflict(legacy_source) do nothing;
-update public.agent_queue q set subject='Private care request',body='Archived to private care. Owner access required.',ai_reasoning=null,status='rejected'
+update public.agent_queue q set subject='Private care request',body='Archived to private care. Owner access required.',ai_reasoning=null,status='dismissed'
  where q.agent='intake' and exists(select 1 from public.ministry_care_requests p where p.legacy_source='draft:'||q.id||':'||md5(to_jsonb(q)::text));
 
 -- Keep financial notifications/events out of ordinary member activity reads.
