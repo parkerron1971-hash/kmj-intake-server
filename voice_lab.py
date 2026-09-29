@@ -90,10 +90,10 @@ def _ask(system: str, user: str, owner_id: str, task: str, max_tokens: int) -> D
             }, key=key, task=task)
     except Exception as e:
         logger.warning(f"voice lab {task} failed for {owner_id[:8]}: {e}")
-        raise VoiceLabError("Kai couldn't read your writing just now. Try again.")
+        raise VoiceLabError("Couldn't read your writing just now. Try again.")
     if r.status_code != 200:
         logger.warning(f"voice lab {task}: model error {r.status_code}")
-        raise VoiceLabError("Kai couldn't read your writing just now. Try again.")
+        raise VoiceLabError("Couldn't read your writing just now. Try again.")
     text = _strip_code_fences("".join(
         c.get("text", "") for c in r.json().get("content", []) if c.get("type") == "text"))
     try:
