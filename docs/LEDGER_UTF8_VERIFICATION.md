@@ -15,3 +15,9 @@ The migration keeps legacy canonicalization and hashes unchanged. Existing rows 
 ## Deployment
 
 Migration is already applied; deploy the backend export change afterwards. Do not restore the old writer/verifier over a ledger containing v2 rows. Forward fixes must preserve both frozen canonical versions. No frontend files are part of this change.
+
+## Live Church browser test
+
+The signed-in owner recorded a synthetic $12.34 gift, saved a $2.34 refund correction with Unicode, quotes and a backslash in the reason, and saw “Gift correction saved” and $10.00 net. Database checks confirmed the correction history and an intact mixed v1/v2 chain. The approved public prayer submission was visible in the owner-only care inbox; no contact, related automation draft, event or generic module record was created.
+
+Exact synthetic invoice, its unposted GL queue entry, private-care request and test form were removed after verification. Cleanup counts were zero and the Church audit chain remained intact (10 entries). Immutable audit and gift-correction evidence were retained. No frontend code changed.
