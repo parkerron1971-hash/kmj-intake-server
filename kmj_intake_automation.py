@@ -1636,18 +1636,22 @@ async def startup():
                           next_run_time=_dt.now(_tz.utc) + _td(minutes=5))
     except Exception as e:
         print(f"   [warn] ledger anchor sweep not scheduled: {e}")
-    # Lifecycle emails (2026-09-01) — the daily pass that tells a
+    # Lifecycle emails: hourly eligibility checks plus welcome recovery tell a
     # practitioner their trial ends soon / has ended. Once per business
     # per email, stamped in businesses.settings; quiet while enforcement
-    # is off. 14:30 UTC = a working-morning inbox across the US.
+    # is off. Hourly checks allow safe retries inside Resend's 24h key window.
     # Kill switch: LIFECYCLE_EMAILS=off.
     try:
         import lifecycle_emails as _lifecycle
         scheduler.add_job(g("lifecycle_emails", _lifecycle.sweep_tick),
-                          "cron", hour=14, minute=30, id="lifecycle_emails")
+                          "cron", minute=30, id="lifecycle_emails")
+        scheduler.add_job(g("welcome_retry", _lifecycle.welcome_retry_tick),
+                          "interval", minutes=15, id="welcome_retry")
+        scheduler.add_job(g("signup_reminders", _lifecycle.signup_reminders_tick),
+                          "cron", minute=5, id="signup_reminders")
         # The week (2026-09-02): day-three and day-seven beats, once each.
         scheduler.add_job(g("week_beats", _lifecycle.week_beats_tick),
-                          "cron", hour=14, minute=45, id="week_beats")
+                          "cron", minute=45, id="week_beats")
     except Exception as e:
         print(f"   [warn] lifecycle email sweep not scheduled: {e}")
 
