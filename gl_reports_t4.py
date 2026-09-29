@@ -127,12 +127,9 @@ def donor_report(biz: str, period: str = "this_year",
                  custom_from: Optional[str] = None,
                  custom_to: Optional[str] = None) -> Dict[str, Any]:
     start, end = reports_engine.period_bounds(period, custom_from, custom_to)
-    end_excl = end.isoformat()
-    invoices = sb_clients.sb_get_as_service(
-        f"/invoices?business_id=eq.{biz}&status=eq.paid"
-        f"&paid_at=gte.{start.isoformat()}&paid_at=lte.{end_excl}T23:59:59Z"
-        f"&select=id,total,paid_at,category,refund_amount_cents,contact_id,"
-        f"contacts(name,email)&limit=10000") or []
+    from datetime import timedelta
+    from giving_records import read_gifts
+    invoices = read_gifts(biz, start.isoformat(), (end + timedelta(days=1)).isoformat())
 
     donors: Dict[str, Dict[str, Any]] = {}
     restricted_gifts = 0.0
@@ -147,7 +144,7 @@ def donor_report(biz: str, period: str = "this_year",
         c = (inv.get("contacts") or {}) or {}
         name = c.get("name") or "(no donor on record)"
         is_restricted = (inv.get("category") or "").lower().strip() in gl_engine._RESTRICTED_HINTS
-        d = donors.setdefault(name, {"donor": name, "email": c.get("email"),
+        d = donors.setdefault(inv.get("contact_id") or "anonymous", {"contact_id": inv.get("contact_id"), "donor": name, "email": c.get("email"),
                                      "gifts": 0, "total": 0.0, "restricted": 0.0})
         d["gifts"] += 1
         d["total"] = round(d["total"] + amt, 2)

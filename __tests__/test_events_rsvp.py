@@ -57,7 +57,7 @@ def _entry(**data_over):
     data = {"title": "Church Picnic", "date": "2099-06-01",
             "location": "The park", "capacity": 3, "signups": []}
     data.update(data_over)
-    return {"id": ENTRY, "module_id": MOD, "data": data}
+    return {"id": ENTRY, "module_id": MOD, "data": data, "updated_at": "2026-01-01T00:00:00Z"}
 
 
 class FakeSB:
@@ -107,7 +107,11 @@ class FakeSB:
     def sb_patch_as_service(self, path, payload):
         self.patches.append((path, payload))
         if path.startswith("/module_entries") and self.entry:
-            self.entry = {**self.entry, **payload}
+            expected = urllib.parse.unquote(path.split("updated_at=eq.")[1].split("&")[0])
+            if expected != self.entry["updated_at"]:
+                return []
+            self.entry = {**self.entry, **payload, "updated_at": self.entry["updated_at"] + "1"}
+
             return [self.entry]
         return []
 
@@ -451,7 +455,7 @@ def test_concurrent_registration_rechecks_last_seat(fake_sb, monkeypatch):
     attempts = []
     def conflict(path, payload):
         attempts.append(path)
-        assert '&data=eq.' in path
+        assert '&updated_at=eq.' in path
         fake_sb.entry['data']['signups'] = [{'name':'Other attendee','status':'yes'}]
         return []
     monkeypatch.setattr(fake_sb,'sb_patch_as_service',conflict)

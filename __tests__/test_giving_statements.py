@@ -28,17 +28,19 @@ class FakeSB:
     def sb_get_as_service(self, path):
         if not path.startswith("/invoices"):
             return []
-        rows = self.invoices
+        rows = sorted(self.invoices, key=lambda r: r["id"])
         for part in path.split("&"):
             if part.startswith("contact_id=eq."):
                 cid = part.split("=eq.")[1]
                 rows = [r for r in rows if r.get("contact_id") == cid]
+            if part.startswith("id=gt."):
+                rows = [r for r in rows if r["id"] > part.split("=gt.")[1]]
         return rows
 
 
 def _inv(amount, when="2025-03-04", contact_id=CONTACT, name="Marcus Webb",
          category="", refund_cents=None):
-    return {"id": f"inv-{amount}-{when}", "total": amount,
+    return {"is_gift": True, "id": f"inv-{amount}-{when}", "total": amount,
             "paid_at": f"{when}T12:00:00Z", "category": category,
             "refund_amount_cents": refund_cents, "contact_id": contact_id,
             "contacts": {"name": name, "email": "m@example.com"}}
@@ -51,6 +53,8 @@ def sb(monkeypatch):
         mod = types.ModuleType("sb_clients")
         mod.sb_get_as_service = FakeSB(invoices).sb_get_as_service
         monkeypatch.setitem(sys.modules, "sb_clients", mod)
+        import giving_records
+        monkeypatch.setattr(giving_records, "sb_clients", mod)
     return _install
 
 

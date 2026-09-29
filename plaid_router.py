@@ -47,7 +47,7 @@ router = APIRouter(prefix="/plaid", tags=["plaid"])
 
 def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,name,owner_id&limit=1"
+        f"/businesses?id=eq.{business_id}&select=id,name,type,owner_id&limit=1"
     ) or []
     if not rows:
         raise HTTPException(404, "business not found")
@@ -63,11 +63,13 @@ def _require_reader(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     Every write (link, sync, categorize, match, delete) stays on
     _require_owner."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,name,owner_id&limit=1"
+        f"/businesses?id=eq.{business_id}&select=id,name,type,owner_id&limit=1"
     ) or []
     if not rows:
         raise HTTPException(404, "business not found")
     row = rows[0]
+    from giving_records import require_ministry_finance
+    require_ministry_finance(business_id, user, row)
     if str(row.get("owner_id")) == str(user.id):
         return row
     from business_collaborators_router import is_active_accountant
