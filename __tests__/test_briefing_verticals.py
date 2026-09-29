@@ -355,6 +355,28 @@ def test_ministry_roster_gaps_and_contact_growth(monkeypatch):
     assert growth and growth[0]["data"]["new_this_week"] == 2
 
 
+def test_roster_gaps_read_the_occasions_own_roles(monkeypatch):
+    """An occasion with its own roles (set in the app) is measured against
+    those, not the module's default — and one works even when the module
+    has no default roles at all."""
+    _no_service_reads(monkeypatch)
+    no_default = {**ROSTER_MODULE, "archetype_params": {
+        k: v for k, v in ROSTER_MODULE["archetype_params"].items() if k != "roles"}}
+    entries = [{"id": "ev1", "updated_at": _ts_ago(1),
+                "data": {"title": "Christmas Eve", "date": _iso_in(5),
+                         "roles": [{"id": "ushers", "label": "Ushers", "needed": 3}],
+                         "signups": [{"name": "Ana", "role": "ushers", "status": "yes"}]}}]
+    sb = RecordingSB([
+        (lambda p: p.startswith("/custom_modules") and "event_roster" in p, [no_default]),
+        (lambda p: p.startswith("/module_entries"), entries),
+        (lambda p: p.startswith("/contacts"), []),
+    ])
+    out = asyncio.run(bv.gather(sb, None, {"id": "b1", "type": "church"}))
+    gaps = [s for s in out["sections"] if s["key"] == "roster_gaps"]
+    assert len(gaps) == 1
+    assert gaps[0]["data"]["occasions"][0]["unfilled"] == ["Ushers needs 2 more"]
+
+
 def test_ministry_branch_never_touches_restricted_entries(monkeypatch):
     """The pastoral-care wall: giving lives in restricted_module_entries
     behind audited owner-only endpoints. The community branch must never
