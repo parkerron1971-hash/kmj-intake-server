@@ -149,6 +149,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Owner-only account export includes private care and finance history.
     # Erase children before their business, contact and invoice records.
     "ministry_care_requests", "ministry_gift_history",
+    # Who was at each occasion; before module_entries and contacts.
+    "attendance", "attendance_headcounts",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
     "connected_agents",       # bot profiles; no live credentials in this table
@@ -597,6 +599,8 @@ _IMPORT_SKIP = {
     # these would attach evidence to another business's records. Preserve the
     # full export, report the skipped restore, and keep fresh history coverage.
     "growth_events", "growth_records",
+    # Attendance cites original occasion and contact ids; same reason.
+    "attendance", "attendance_headcounts",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
