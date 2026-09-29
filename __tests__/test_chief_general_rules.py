@@ -102,7 +102,7 @@ def _rule_review(kind="reference", text=RULE, gap=None):
 def test_a_public_threshold_is_delivered_labeled_not_withheld():
     result, meta = _run(REPLY, _reviewer(_rule_review()))
     assert result.startswith(REPLY)
-    assert "general rules from what I know, not from your records" in result
+    assert "general guidance" in result and "official source" in result
     assert RULE in result
     assert meta["status"] == "caveated" and meta["references"] == [RULE]
     assert "still unverified" not in result
@@ -134,8 +134,8 @@ def test_a_rule_and_a_prose_gap_show_both_notes():
         {"text": "tell me roughly what came in last year", "kind": "fact", "source_id": "", "quote": "",
          "gap": "not a fact"}]})
     result, meta = _run(REPLY, _reviewer(raw))
-    assert "still unverified" in result and "general rules from what I know" in result
-    assert meta["gaps"] and meta["references"] == [RULE]
+    assert "still unverified" not in result and "tell me roughly" not in result
+    assert meta["status"] == "withheld"  # removing this sentence also removes its rule
 
 
 def test_a_rule_beside_a_completion_claim_is_not_delivered():
