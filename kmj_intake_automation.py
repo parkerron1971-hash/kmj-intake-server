@@ -333,6 +333,10 @@ from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# Families and children (households, children, pickups, care notes) —
+# server-only tables, seat-checked here. Kevin, 2026-09-29.
+from kids_router import router as kids_router
+app.include_router(kids_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
