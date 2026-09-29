@@ -300,17 +300,19 @@ def test_right_code_signs_in_once_with_a_host_cookie(fake):
     assert "Hi, Ana" in home.text and "$50.00" in home.text
 
 
-def test_household_email_asks_who_is_signing_in(fake):
-    fake.contacts.append({"id": "c2", "business_id": BIZ, "name": "Ben Rivers", "email": "ANA@example.com"})
+def test_one_person_per_email(fake):
+    # Kevin, 2026-09-29: one person per email. A signed-in session ends the
+    # moment a second record shares the address, and no code is sent to it.
     c = _client()
     _verify(c, _ask(c, fake))
+    assert "Hi, Ana" in c.get("/my").text
+    fake.contacts.append({"id": "c2", "business_id": BIZ, "name": "Ben Rivers", "email": "ANA@example.com"})
     page = c.get("/my")
-    assert "Who's signing in?" in page.text and "Ben Rivers" in page.text
-    # Someone outside the household can't be chosen.
-    c.post("/my/person", data={"cid": "stranger"}, headers=ORIGIN)
-    assert "Who's signing in?" in c.get("/my").text
-    c.post("/my/person", data={"cid": "c2"}, headers=ORIGIN)
-    assert "Hi, Ben" in c.get("/my").text
+    assert "Send my code" in page.text and "Ben Rivers" not in page.text
+    mailed = len(fake.mailed)
+    c.post("/my/code", data={"email": "ana@example.com"}, headers=ORIGIN)
+    assert len(fake.mailed) == mailed
+    assert mp.MAX_HOUSEHOLD == 1
 
 
 def test_over_shared_address_is_never_mailed(fake):
