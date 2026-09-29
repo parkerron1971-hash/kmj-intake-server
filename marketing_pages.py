@@ -6716,13 +6716,13 @@ async def handle_lead_intake(req: LeadIntakeRequest,
             logger.warning(f"owner email failed: {e}")
 
         # Lead confirmation
-        lead_subject = "Got your note — and the trial is open whenever you are"
+        lead_subject = "We got your note. Your trial is ready whenever you are"
         lead_body = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#222;padding:20px;max-width:600px;margin:0 auto;background:#fff;line-height:1.65;">
 <h2 style="color:#1D63E6;margin-bottom:14px;">Thanks for writing, {_html.escape(name.split()[0])}.</h2>
-<p style="font-size:15px;color:#333;">We got your note about the Solutionist System, and someone from the team will reply within 24 hours &mdash; usually faster.</p>
+<p style="font-size:15px;color:#333;">We got your note about the Solutionist System, and someone from the team will reply within 24 hours, usually faster.</p>
 <p style="font-size:15px;color:#333;">One thing worth saying now: <strong>you don't have to wait on us to start.</strong> The system is self-serve, every plan opens with a {_trial_days()}-day free trial, and your workspace is built around your trade the moment you name it.</p>
 <p style="text-align:center;margin:26px 0;"><a href="https://mysolutionist.app/start" style="display:inline-block;background:#1D63E6;color:#fff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:600;font-size:15px;">Start your free trial &rarr;</a></p>
-<p style="font-size:14px;color:#666;margin-top:18px;">Either way, just reply to this email &mdash; it comes straight to the team.</p>
+<p style="font-size:14px;color:#666;margin-top:18px;">Either way, just reply to this email. It comes straight to the team.</p>
 <p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>The Solutionist Team</strong><br>The Solutionist System LLC</p>
 </body></html>"""
         try:
