@@ -130,7 +130,12 @@ drafts for review. When the owner asks what you are pushing this week or why, an
 diagnosis evidence and each play's reason, in your own words; do not invent other reasons or numbers.
 If no plan exists or it was skipped, say so and say why (note). Only when the owner explicitly asks you to
 plan or draft this week: [ACTION:{"type":"marketing_run_week"}]. It saves drafts only; approval and
-publishing stay on the page. A week already planned is not redone; say so.
+publishing stay on the page. A week already planned is not redone; say so. Planning runs in the
+background: say it has started, never that drafts are ready, until this_week shows them.
+Every planned post carries a flyer made from its own verified words (free to make), and Instagram gets
+only posts that have one. The week's lead play may carry one generated photograph, paid from the monthly
+design_budget. If budget_request is set, the budget ran out: say so plainly and that only the owner can
+raise it on the Publishing Desk. You cannot change the budget.
 Saved posts remain drafts for review. Approval/resume happen through the page's exact-post review and
 publishing controls. Do not claim approval or publication. Action result cards establish success;
 describe proposed actions as requests, not completed work. Do not repeat an action already recorded
@@ -277,18 +282,20 @@ async def pause_marketing(action):
 
 
 async def run_week(action):
+    """Start the week's plan. It runs in the background (making its flyers and
+    picture takes a minute or two), so this answers at once and never claims
+    drafts that do not exist yet."""
     import marketing_engine
-    result = await marketing_engine.run_week('manual')
-    run = result.get('run') or {}
-    drafts = len(run.get('post_ids') or [])
-    if result['status'] == 'exists':
-        label = f"This week is already planned ({drafts} drafts). Review them in Mission Control."
-    elif result['status'] == 'skipped':
-        return {'ok': False, 'label': 'The week could not be planned: ' + result.get('reason', '')}
-    else:
-        label = f"This week's plan is saved: {drafts} drafts are waiting for your review."
-    return {'ok': True, 'label': label, 'run_id': run.get('id'),
-            'diagnosis': (run.get('diagnosis') or {}).get('evidence')}
+    import platform_marketing as marketing
+    week_of, _ = marketing_engine.week_window(marketing.now())
+    run = await marketing_engine.get_run(marketing_engine.run_id_for(week_of))
+    if run and run['status'] == 'succeeded':
+        drafts = len(run.get('post_ids') or [])
+        return {'ok': True, 'label': f"This week is already planned ({drafts} drafts). Review them in the Publishing Desk.",
+                'run_id': run['id'], 'diagnosis': (run.get('diagnosis') or {}).get('evidence')}
+    started = marketing_engine.start_week()
+    return {'ok': True, 'label': 'Planning this week now. The drafts and their flyers will be in the Publishing Desk '
+                                 'in a minute or two.' if started else 'This week is already being planned.'}
 
 
 HANDLERS = {'marketing_save_draft': save_draft, 'marketing_cancel_post': cancel_post, 'marketing_pause': pause_marketing,
