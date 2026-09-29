@@ -9,8 +9,8 @@ statement. Nothing else about anyone else: there is no member directory.
 
 WHO CAN SIGN IN. Only an email the church has on a contact. Asking for a
 code NEVER says whether an address is on the list — the same page comes
-back either way, and only a known address is mailed. Several people can
-share one household email; after the code they pick who is signing in.
+back either way, and only a known address is mailed. One person per
+email: an address on more than one record is never mailed a code.
 
 THE CODE. 6 digits from `secrets`, stored only as an HMAC under a key
 derived for this business (customer_token.derive_key, purpose
@@ -32,11 +32,11 @@ person's record and it stops working. The owner can also sign everyone
 out (settings.member_portal.epoch), and switching the page back on does
 the same.
 
-HOUSEHOLDS. Up to MAX_HOUSEHOLD people may share one email and switch
-between each other after signing in (the page says each can see the
-others' giving). An address on more records than that never signs in:
-a church that typed an office or placeholder address onto many people
-must not hand all of their giving to whoever reads that inbox.
+SHARED EMAILS (Kevin, 2026-09-29: "1 person per email is right"). An
+address on more than MAX_HOUSEHOLD (= 1) record never signs in, and the
+page tells them to ask the church office for their own. The chooser and
+/my/person remain for a session minted before this rule (it re-checks,
+and with one person per email it can only ever pick that one person).
 
 WHERE IT RUNS. GET /my and /my/statement are served from
 public_site.subdomain_catch_all (the church's host decides the church);
@@ -80,11 +80,11 @@ MAX_CODE_ATTEMPTS = 5
 # Wrong codes allowed per church + address per day, across every code
 # asked for. Without it the budget was 5 codes × 5 tries every hour.
 MAX_FAILED_PER_DAY = 15
-# People who may share one email and switch between each other (a couple,
-# a parent and a grown child). A church that typed one office or
-# placeholder address onto many records must not hand all of their giving
-# to whoever reads that inbox, so beyond this nobody signs in with it.
-MAX_HOUSEHOLD = 4
+# ONE PERSON PER EMAIL (Kevin, 2026-09-29). An email on more than one
+# record signs nobody in: whoever reads a shared inbox (a couple's, the
+# church office's, a placeholder) must never see another person's giving.
+# Each person needs their own address on their own record.
+MAX_HOUSEHOLD = 1
 SESSION_TTL_SECONDS = 180 * 24 * 60 * 60
 # __Host-: Secure, no Domain, Path=/ — so another church's subdomain can
 # never plant a cookie this page would read.
@@ -547,8 +547,8 @@ def render_try_again(biz: Dict[str, Any], site=None) -> str:
 
 def render_shared_address(biz: Dict[str, Any], site=None) -> str:
     return _shell(biz, site, "Ask the church office", f"""
-<div class="mp-card"><h1>This email is shared by several people</h1>
-<p class="mp-muted">To keep everyone's giving private, this address can't be used to sign in.
+<div class="mp-card"><h1>This email is on more than one person's record</h1>
+<p class="mp-muted">To keep everyone's giving private, each person signs in with their own email, so this one can't be used.
 Ask {_e(biz.get('name') or 'the church office')} to put your own email on your record, then sign in with that.</p>
 <p><a class="mp-link" href="/my">Back</a></p></div>""")
 
