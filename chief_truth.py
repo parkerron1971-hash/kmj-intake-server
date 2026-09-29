@@ -807,17 +807,47 @@ def _no_trim(why, reason):
     return None
 
 
-def _caveat_text(gaps, references):
-    """The doubts a delivered answer carries, named."""
-    caveat = ''
-    if gaps:
-        caveat += "\n\nThese parts of my answer are still unverified:\n" + '\n'.join(
-            '- “%s”' % g for g in gaps)
-    if references:
-        caveat += ("\n\nThese are general rules from what I know, not from your records. "
-                   "Check them against the official source before you rely on them:\n") + '\n'.join(
-            '- “%s”' % r for r in references)
-    return caveat
+def _clean_review_gaps(raw, reply, sources, gaps, references):
+    """Remove unsupported claims, not just their warning label. No extra model call.
+    Keep the review details in metadata; re-check remaining claims against
+    the original evidence before presenting the shorter answer.
+    """
+    draft = reply
+    cuts = 0
+    review = _review_json(raw)
+    for gap in gaps:
+        if _squash(gap) not in _squash(draft) and _squash(gap) in _squash(reply):
+            continue  # a prior cut removed both gaps in the same sentence
+        sentence = _sentence_containing(draft, gap)
+        if not sentence:
+            # A truncated/ambiguous reviewer excerpt must not clear a claim
+            # just because we could not locate it for removal.
+            return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps}
+        # A final aside can be removed without losing its verified main
+        # clause: "Invoice X is overdue, but those look like test invoices."
+        replacement = ''
+        for join in re.finditer(r',\s+(?:but|and|though|although)\s+', sentence, re.I):
+            tail = sentence[join.end():].strip().rstrip('.!?')
+            if _squash(gap).rstrip('.!?') == _squash(tail):
+                replacement = sentence[:join.start()].rstrip() + '.'
+                break
+        draft = draft.replace(sentence, replacement, 1).strip()
+        cuts += 1
+    if not draft:
+        return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps}
+    remaining = [c for c in review.get('claims', []) if isinstance(c, dict)
+                 and isinstance(c.get('text'), str) and _squash(c['text']) in _squash(draft)]
+    verdict, cited, reason = assess_review(json.dumps({**review, 'claims': remaining}), draft, sources)
+    refs = [r for r in references if _squash(r) in _squash(draft)]
+    if verdict != 'supported' and not (refs and reason.startswith('general rule')):
+        return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps, 'reason': reason}
+    if has_completion_claim(draft) and not (verdict == 'supported' and wrote_anything(sources)):
+        return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps}
+    draft = re.sub(r'\n{3,}', '\n\n', draft).strip()
+    if refs:
+        draft += "\n\nThis is general guidance; confirm the applicable rule with the official source before acting."
+    return draft, {'status': 'caveated' if refs else 'trimmed', 'sources': cited,
+                   'gaps': gaps, 'references': refs, 'cuts': cuts}
 
 
 def _words(text):
@@ -2052,15 +2082,11 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         trimmed = _trim_unsupported(raw, reply, sources, reason, undone=undone)
         if trimmed:
             t_reply, t_verdict, t_cited, t_reason, cuts = trimmed
-            figures = cuts - len(undone)
             note = ""
             if undone:
                 # Said as not done, because it is not: the practitioner asked
                 # for it and must not walk away thinking it happened.
                 note += "\n\n" + _not_done_line(undone)
-            if figures > 0:
-                note += ("\n\nI left out %s I couldn't confirm from your records."
-                         % ("one figure" if figures == 1 else "a few figures"))
             if t_verdict == 'supported':
                 logger.info('reply review trimmed %d claim(s); rest supported', cuts)
                 return t_reply.rstrip() + note, {'status': 'trimmed', 'sources': t_cited, 'cuts': cuts}
@@ -2068,9 +2094,10 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             t_refs = [r for r in reference_claims(raw, t_reason) if _squash(r) in _squash(t_reply)]
             if (t_gaps or t_refs) and not has_completion_claim(t_reply):
                 logger.info('reply review trimmed %d claim(s); rest caveated', cuts)
-                return (t_reply.rstrip() + note + _caveat_text(t_gaps, t_refs)), {
-                    'status': 'caveated', 'sources': [], 'gaps': t_gaps, 'references': t_refs,
-                    'cuts': cuts}
+                clean, metadata = _clean_review_gaps(raw, t_reply, sources, t_gaps, t_refs)
+                metadata['cuts'] = cuts + metadata.get('cuts', 0)
+                if metadata['status'] != 'withheld':
+                    return clean + note, metadata
     if verdict == 'supported':
         logger.info('reply review supported; citations=%d', len(cited))
         return reply, {'status': 'supported', 'sources': cited}
@@ -2105,13 +2132,14 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # practitioner WITH the doubt named, instead of a blank "couldn't
         # verify" that made Chief useless for a day (Kevin, 2026-09-14).
         # Fabricated figures and completion claims never take this path.
-        logger.info('reply review caveated (%d gap%s, %d general rule%s); draft delivered',
+        logger.info('reply review cleanup (%d gap%s, %d general rule%s)',
                     len(gaps), '' if len(gaps) == 1 else 's',
                     len(references), '' if len(references) == 1 else 's')
         # Label excerpts explicitly: the reviewer may quote a dependent clause,
         # which is not a useful standalone sentence after "I could not confirm".
-        return (reply.rstrip() + _caveat_text(gaps, references)), {
-            'status': 'caveated', 'sources': [], 'gaps': gaps, 'references': references}
+        clean, metadata = _clean_review_gaps(raw, reply, sources, gaps, references)
+        if metadata['status'] != 'withheld':
+            return clean, metadata
     if verdict == 'invalid':
         # The reviewer never delivered a usable verdict (timeout, budget stop,
         # truncated JSON). Nothing refuted the draft, so an ordinary answer
@@ -2203,9 +2231,10 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 if (r_gaps or r_refs) and not has_completion_claim(repaired):
                     logger.info('reply review recovered with %d gap(s), %d general rule(s)',
                                 len(r_gaps), len(r_refs))
-                    return _above(ui_bits, repaired.rstrip() + _caveat_text(r_gaps, r_refs)), {
-                        'status': 'caveated', 'sources': [], 'gaps': r_gaps,
-                        'references': r_refs, 'recovered': True}
+                    clean, metadata = _clean_review_gaps(checked, repaired, sources, r_gaps, r_refs)
+                    metadata['recovered'] = True
+                    if metadata['status'] != 'withheld':
+                        return _above(ui_bits, clean), metadata
                 logger.info('reply recovery rejected (%s)', checked_reason)
         except Exception as exc:
             logger.warning('reply recovery unavailable: %s', type(exc).__name__)

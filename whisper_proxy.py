@@ -126,7 +126,7 @@ def tts_response_headers(fmt: str) -> dict:
 # is empty and el: requests fall back to OpenAI nova (never a dead end).
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v1/voices"
-ELEVENLABS_MODEL = "eleven_turbo_v2_5"   # low-latency tier — right for conversation
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
 ELEVENLABS_MAX_CHARS = 4096              # match the OpenAI clamp
 # One short wait before giving up on ElevenLabs for a reply: the
 # concurrent-request cap is usually the previous sentence still playing out.
@@ -482,7 +482,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
     # the signed-in caller actually owns it (these rows feed the billing
     # rails; never trust a bare body field).
     biz_id = (req.business_id or "").strip() or None
-    metered_biz = biz_id if (user and biz_id and _owns_business(user.id, biz_id)) else None
+    metered_biz = biz_id if (user and biz_id and await asyncio.to_thread(_owns_business, user.id, biz_id)) else None
 
     # ElevenLabs routing — "el:<voice_id>" ids go to the ElevenLabs
     # streamer when the caller qualifies. EVERY deny falls back to the
@@ -497,7 +497,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
             logger.warning("ElevenLabs voice requested but key or voice id missing — falling back to OpenAI nova")
         elif not metered_biz:
             logger.warning("ElevenLabs voice requires a signed-in owner + business_id — falling back to OpenAI nova")
-        elif not _el_allowance_ok(metered_biz):
+        elif not await asyncio.to_thread(_el_allowance_ok, metered_biz):
             logger.info(f"ElevenLabs monthly char cap reached for business {metered_biz} — falling back to OpenAI nova")
         else:
             spoken = await _elevenlabs_speak(text, el_voice_id, el_key,
@@ -685,21 +685,24 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
     # true billed characters by the width of the expansion (money-bearing
     # text only, single digits of percent). If that ever needs to be
     # exact, the fix is a second field, not a bigger number here.
-    try:
-        await log_api_usage(
-            endpoint="/ai/tts-el", model=ELEVENLABS_MODEL,
-            input_tokens=len(text), output_tokens=0,
-            business_id=business_id, user_id=user_id)
-    except Exception:
-        pass
     if business_id:
         _note_el_chars(business_id, len(text))
 
-    return StreamingResponse(
-        _relay(upstream, phrase_key),
-        media_type=TTS_MEDIA_TYPES[fmt],
-        headers=tts_response_headers(fmt),
-    )
+    async def metered_audio():
+        try:
+            async for chunk in _relay(upstream, phrase_key):
+                yield chunk
+        finally:
+            # Do not hold ready audio behind a database round trip.
+            try:
+                await log_api_usage(endpoint="/ai/tts-el", model=ELEVENLABS_MODEL,
+                    input_tokens=len(text), output_tokens=0,
+                    business_id=business_id, user_id=user_id)
+            except Exception:
+                pass
+
+    return StreamingResponse(metered_audio(), media_type=TTS_MEDIA_TYPES[fmt],
+        headers=tts_response_headers(fmt))
 
 
 # In-process cache — the voice list changes rarely; don't hit the
