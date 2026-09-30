@@ -104,6 +104,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "chief_link_pilot_sessions": "encrypted private Link OAuth credentials and test journal; never portable, cascade on user/business deletion",
     "business_card_connections": "encrypted third-party OAuth credentials and card preferences; never portable, cascade on business deletion",
     "business_secrets": "encrypted browser credentials; never exported, cascade on business deletion",
+    "checkin_stations": "check-in station device tokens and PIN hashes; credentials, never portable — a restored church pairs its tablets again; cascade on business deletion",
     # Platform books and metering — the platform must keep these for its
     # own accounts, whatever a business does with theirs.
     "usage_grants":            "platform credit grants; platform billing record",

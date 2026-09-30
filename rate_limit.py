@@ -113,6 +113,12 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
     # A signed-in member's writes (RSVP, prayer, details), per person.
     "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
+    # Check-in stations (kids_station.py), all strict: pairing codes per
+    # network, PIN tries per station, and mobile-number lookups per
+    # self check-in kiosk — so neither a code nor a family can be guessed.
+    "station_pair": (int(os.environ.get("RL_STATION_PAIR_PER_10MIN", "10")), 600),
+    "station_pin": (int(os.environ.get("RL_STATION_PIN_PER_15MIN", "6")), 900),
+    "station_self_find": (int(os.environ.get("RL_STATION_SELF_PER_10MIN", "40")), 600),
 }
 _DEFAULT = (60, 60)
 
