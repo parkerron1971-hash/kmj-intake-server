@@ -155,6 +155,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
+    # Groups: who came to each meeting, the meetings, the roster, then
+    # the groups — all before contacts.
+    "group_meeting_attendance", "group_meetings", "group_members", "groups",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -610,6 +613,8 @@ _IMPORT_SKIP = {
     # keeps them (children's allergies included) for the owner.
     "households", "household_adults", "children", "household_pickups", "child_care_notes",
     "child_checkins",
+    # Groups link contacts and each other by id; same reason.
+    "groups", "group_members", "group_meetings", "group_meeting_attendance",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
