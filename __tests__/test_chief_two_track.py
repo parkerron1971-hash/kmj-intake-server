@@ -120,6 +120,62 @@ def test_the_opening_goes_out_first_and_the_turn_continues_it(monkeypatch, resto
     assert row["lane"] == "full" and row["opener_source"] == "model" and row["slo_met"]
 
 
+def test_voice_opener_continues_without_holding_back_the_main_model(monkeypatch, restore_chat):
+    first = "Let me check the invoices and look at what needs your attention. "
+    second = "I'll focus on the next useful step so we can work through it together."
+    fake, calls = _fake_stream(lambda ep: [(0.01, first), (0.4, second)])
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, turns = asyncio.run(_run(_req("Check my invoices", client_surface="voice"),
+                                     turn_reply="Here is the answer.", turn_delay=0.6))
+    # Main generation begins before Haiku, not after waiting for its new budget.
+    assert turns[0]["opening"] == ""
+    assert "being spoken in parallel" in turns[0]["block"]
+    shown = "".join(d["text"] for d in _deltas(events))
+    assert shown == first + second + " Here is the answer."
+    assert shown == events[-1][1]["payload"]["response"]
+    assert "30 to 44 words" in calls[0]["system"]
+
+
+def test_ready_answer_skips_a_slow_second_opener_sentence(monkeypatch, restore_chat):
+    fake, _ = _fake_stream(lambda ep: [(0.01, "Let me check your invoices. "),
+                                     (2, "I'll look for the next step.")])
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, _ = asyncio.run(_run(_req("Check my invoices", client_surface="voice"),
+                                 turn_prose="Here is the answer. ",
+                                 turn_reply="Here is the answer.", turn_delay=0.05))
+    assert "".join(d["text"] for d in _deltas(events)) == "Let me check your invoices. Here is the answer. "
+    assert events[-1][0] < 0.5  # never wait for the stalled Haiku provider
+
+
+def test_ready_answer_does_not_cut_an_opener_mid_sentence(monkeypatch, restore_chat):
+    fake, _ = _fake_stream(lambda ep: [(0.01, "Let me check "),
+                                     (0.1, "your invoices. I'll look for the next step.")])
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, _ = asyncio.run(_run(_req("Check my invoices", client_surface="voice"),
+                                 turn_reply="Here is the answer.", turn_delay=0.05))
+    assert "".join(d["text"] for d in _deltas(events)) == "Let me check your invoices. Here is the answer."
+
+
+def test_fast_main_answer_does_not_wait_for_any_opener(monkeypatch, restore_chat):
+    fake, _ = _fake_stream(lambda ep: [(2, "Let me check your invoices.")])
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, _ = asyncio.run(_run(_req("Check my invoices", client_surface="voice"),
+                                 turn_reply="Here is the answer.", turn_delay=0.02))
+    assert "".join(d["text"] for d in _deltas(events)) == "Here is the answer."
+    assert events[-1][0] < 0.5
+
+
+def test_voice_opener_deadline_still_bounds_a_stalled_provider(monkeypatch, restore_chat):
+    monkeypatch.setattr(cft, "VOICE_OPENER_HARD_CAP_S", 0.05)
+    fake, _ = _fake_stream(lambda ep: [(0.01, "Let me check your invoices. "),
+                                     (2, "I'll look for the next step.")])
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, _ = asyncio.run(_run(_req("Check my invoices", client_surface="voice"),
+                                 turn_reply="Here is the answer.", turn_delay=0.1))
+    assert "".join(d["text"] for d in _deltas(events)) == "Let me check your invoices. Here is the answer."
+    assert events[-1][0] < 0.5
+
+
 def test_when_the_model_is_late_the_local_lead_holds_the_budget(monkeypatch, restore_chat, _router_on):
     fake, _ = _fake_stream(lambda ep: [(0.75, "Sure, let me"), (0.02, " look into that.")])
     monkeypatch.setattr(cft, "stream_text", fake)

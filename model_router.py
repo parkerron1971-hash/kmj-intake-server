@@ -658,7 +658,8 @@ class OpenerGate:
     MAX_WORDS = 28
     LEAD_PROBE_WORDS = 3
 
-    def __init__(self, user_message: str, *, after_lead: bool = False) -> None:
+    def __init__(self, user_message: str, *, after_lead: bool = False,
+                 max_words: int = MAX_WORDS, max_sentences: int = 1) -> None:
         said = set()
         for w in re.findall(r"\S+", user_message or ""):
             w = w.lower().strip(".,!?;:\"()'").replace("’", "'")
@@ -668,6 +669,11 @@ class OpenerGate:
         self._buf = ""
         self._framed = False
         self._words = 0
+        self.max_words = max_words
+        self.max_sentences = max_sentences
+        self.sentences = 0
+        self.stop_after_sentence = False
+        self._sentence_start = True
         self.after_lead = after_lead
         self.lower_after_lead = True     # False after a whole-sentence lead
         self.closed = False
@@ -717,11 +723,11 @@ class OpenerGate:
             nxt = self._buf[m.end(2):]
             if word.endswith(",") and not final and not re.match(r"\s+\S+\s", nxt):
                 break                       # a comma: wait to see what joins it
-            why = self._word_problem(word, not self.text)
+            why = self._word_problem(word, self._sentence_start)
             if why:
                 self.close(why)
                 break
-            if self._words >= self.MAX_WORDS:
+            if self._words >= self.max_words:
                 self.close("length")
                 break
             # A second clause starting after this word ("…that, and she paid",
@@ -736,11 +742,25 @@ class OpenerGate:
                 r"\s*(?:" + _INTERJECTION_WORDS + r")\s*", self.text, re.I))
             chunk = (ws if self.text else "") + word
             self.text += chunk
+            self._sentence_start = False
             self._words += 0 if is_dash else 1
             out.append(chunk)
             self._buf = nxt
             if _END.search(word):
-                self.close("sentence_end")
+                self.sentences += 1
+                if self.sentences >= self.max_sentences or self.stop_after_sentence:
+                    self.close("sentence_end")
+                else:
+                    # Each extra sentence must establish intent again before
+                    # any words escape. The total word budget still spans both.
+                    rest, self._buf = self._buf, ""
+                    self._framed = False
+                    self._sentence_start = True
+                    self.after_lead = False
+                    out.append(self.feed(rest))
+                    if final and not self.closed and self._framed:
+                        out.append(self._release(final=True))
+                    break
             elif second_clause:
                 self.close("clause_break")
             elif is_dash and not lead_dash:
@@ -768,6 +788,9 @@ class OpenerGate:
         if self.closed:
             return ""
         if not self._framed:
+            if self.sentences and not self._pending.strip():
+                self.close("sentence_end")
+                return ""
             self.close("no_intent_lead")
             return ""
         out = self._release(final=True)

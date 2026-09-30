@@ -116,6 +116,9 @@ OPENER_HARD_CAP_S = 2.5
 FAST_ANSWER_CAP_S = 20.0
 FAST_MAX_TOKENS = 500
 OPENER_MAX_TOKENS = 80
+VOICE_OPENER_MAX_TOKENS = 140
+VOICE_OPENER_MAX_WORDS = 48
+VOICE_OPENER_HARD_CAP_S = 3.5
 
 
 # ─── When the request arrived ────────────────────────────────────────
@@ -272,9 +275,9 @@ def _remember_turn(key: str, lane: str, *, opener: str = "", dissatisfied: bool 
 class OpenerHolder:
     """What the first track has said, for the full turn to continue from.
 
-    The turn freezes it when it builds its prompt: from then on the first
-    track releases nothing more, so the words the turn is told about are
-    exactly the words the practitioner saw."""
+    Chat freezes it when building the prompt. Voice snapshots it without
+    waiting, so a bounded intent-only opening can finish while the main
+    model generates its substantive answer."""
 
     def __init__(self) -> None:
         self.text = ""
@@ -283,6 +286,8 @@ class OpenerHolder:
         self.done = asyncio.Event()
         self.closing = ""            # a dash the first track still owes
         self.deadline: Optional[float] = None   # when the local lead goes out
+        self.parallel_voice = False
+        self.answer_ready = asyncio.Event()
 
     def said(self, piece: str) -> None:
         if piece and not self.frozen:
@@ -313,11 +318,16 @@ OPENER: "contextvars.ContextVar[Optional[OpenerHolder]]" = contextvars.ContextVa
 
 async def opener_for_turn(wait_s: float = 0.35) -> str:
     """Called by chief_chat just before its model call: the opening already
-    shown, or "" when there is none. Waits briefly for an opening still
-    being written, then freezes it."""
+    shown, or "" when there is none. Chat briefly waits and freezes it;
+    parallel voice returns immediately and lets the opening finish."""
     holder = OPENER.get()
     if holder is None:
         return ""
+    if holder.parallel_voice:
+        # A voice opening may keep speaking while the answer is generated.
+        # Snapshot it without waiting or freezing: a longer opening must
+        # never postpone the model whose latency it is meant to cover.
+        return holder.text.strip()
     if not holder.done.is_set():
         # Never freeze before the first-word deadline: a turn that reached
         # its prompt that early would otherwise silence the lead that holds
@@ -334,6 +344,17 @@ def continuation_block(opener: str) -> str:
     """The uncached prompt tail that makes the turn continue the opening
     instead of starting over. Empty when nothing was said."""
     said = (opener or "").strip()
+    holder = OPENER.get()
+    if holder is not None and holder.parallel_voice:
+        return (
+            "\n\nVOICE HANDOFF: a short intent-only opening is being spoken in parallel "
+            "while you prepare this answer. It is limited to two sentences about what "
+            "you will check or help decide; it cannot supply facts or claim completed work. "
+            + (f"So far it has said: «{said}». " if said else "")
+            + "Begin directly with the substantive answer, not another acknowledgement, "
+            "greeting, promise to check, or restatement of the request. Do not repeat the "
+            "opening. Establish every fact from the records as usual."
+        )
     if not said:
         return ""
     return (
@@ -389,12 +410,24 @@ Return only JSON: {"needs_records": true|false, "needs_action": true|false, "com
 
 _VOICE_NOTE = "\nThis reply is spoken aloud: plain sentences, no lists, no markdown, no emoji."
 
+_VOICE_OPENER_SYSTEM = _OPENER_SYSTEM.replace(
+    "the opening sentence, never the answer", "a short conversational opening, never the answer"
+).replace(
+    "one purposeful sentence, usually 12 to 24 words",
+    "one or two connected, purposeful sentences, usually 30 to 44 words total"
+) + """\nFor this voice call, use the second sentence only to explain the useful next step or
+what you will compare, so the answer has a natural continuation. Begin EACH sentence
+with an intent such as "I'll" or "Let me". Never pad with waiting messages, repeat the
+first sentence, invent a finding, or promise an action the owner did not request.
+Keep a simple request short; two sentences are a maximum, not a quota."""
+
 
 def opener_request(message: str, *, voice: bool = False) -> str:
     """Keep the owner request as data: this call writes only the handoff."""
     return (
-        "Write only one intent opening sentence for the owner message below. "
-        "The main model will answer it; do not answer, explain, or give examples here. "
+        ("Write one or two connected intent opening sentences for the owner message below. "
+         if voice else "Write only one intent opening sentence for the owner message below. ")
+        + "The main model will answer it; do not answer, explain, or give examples here. "
         "Begin with Let me or I'll and say how you will approach their request."
         + (" This is spoken aloud on a call." if voice else "")
         + "\nOwner message (quoted data): " + json.dumps(message[:1200], ensure_ascii=False)
@@ -606,6 +639,9 @@ class TwoTrack:
         # "Let me check…" in front of "thanks" or "bye" reads as a machine that
         # did not listen; those get the one-word lead at the deadline instead.
         self.model_opener = complexity.kind not in ("social", "farewell") and not self.system_turn
+        self.holder.parallel_voice = (self.voice and self.model_opener and not passive
+                                      and route.lane == mr.LANE_FULL and not route.ambiguous
+                                      and not self.client_opener and _on("CHIEF_ROUTER_OPENER"))
 
     # -- what the endpoint asks ------------------------------------------------
 
@@ -795,23 +831,44 @@ class TwoTrack:
             self.holder.finish()
             return
 
-        gate = mr.OpenerGate(self.message)
+        gate = mr.OpenerGate(self.message, max_words=VOICE_OPENER_MAX_WORDS if self.voice else mr.OpenerGate.MAX_WORDS,
+                             max_sentences=2 if self.voice else 1)
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
-        system = self.style + "\n\n" + _OPENER_SYSTEM
+        system = self.style + "\n\n" + (_VOICE_OPENER_SYSTEM if self.voice else _OPENER_SYSTEM)
         last = (_CONVO.get(self._key) or {}).get("last_opener")
         if last:
             system += f"\nYour last opening in this conversation was «{last}» — do not reuse it."
         content = opener_request(self.message, voice=self.voice)
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, _history_tail(self.req) + [{"role": "user", "content": content}],
-            model=chief_models.model_for("fast"), max_tokens=OPENER_MAX_TOKENS, rec=self.rec,
+            model=chief_models.model_for("fast"),
+            max_tokens=VOICE_OPENER_MAX_TOKENS if self.voice else OPENER_MAX_TOKENS, rec=self.rec,
             endpoint="/chief/opener", units=0,
             business_id=self.business_id if self.verified else None, out=out), q))
-        hard_stop = self.rec.arrived + OPENER_HARD_CAP_S
+        hard_stop = self.rec.arrived + (VOICE_OPENER_HARD_CAP_S if self.voice else OPENER_HARD_CAP_S)
         try:
             while not gate.closed and not self.holder.frozen:
-                piece = await self._next(q, deadline, hard_stop)
+                if self.holder.parallel_voice and not gate.dangling:
+                    # If the answer wins, do not start another filler sentence
+                    # or wait on a stalled opener provider. Mid-sentence speech
+                    # is allowed to finish naturally within the hard deadline.
+                    incoming = asyncio.ensure_future(self._next(q, deadline, hard_stop))
+                    ready = asyncio.ensure_future(self.holder.answer_ready.wait())
+                    try:
+                        await asyncio.wait((incoming, ready), return_when=asyncio.FIRST_COMPLETED)
+                        if ready.done():
+                            gate.close("answer_ready")
+                            break
+                        piece = incoming.result()
+                    finally:
+                        for pending in (incoming, ready):
+                            if not pending.done():
+                                pending.cancel()
+                        await asyncio.gather(incoming, ready, return_exceptions=True)
+                else:
+                    piece = await self._next(q, deadline, hard_stop)
+                gate.stop_after_sentence = self.holder.parallel_voice and self.holder.answer_ready.is_set()
                 if piece == "AGAIN":
                     continue
                 if piece == "STOP":
