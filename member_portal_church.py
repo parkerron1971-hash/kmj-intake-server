@@ -393,7 +393,8 @@ def member_leave(business_id: str, me: Dict[str, Any], group_id: str) -> Tuple[b
     return (True, "left") if ok else (False, "error")
 
 
-def _group_card(g: Dict[str, Any], action: str) -> str:
+def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str]) -> str:
+    import member_app_ui as ui
     from member_portal import _e
     gid = _e(g["id"])
     title_id = f"mp-grp-{gid}"
@@ -412,31 +413,31 @@ def _group_card(g: Dict[str, Any], action: str) -> str:
                   f'<input type="hidden" name="action" value="leave">'
                   f'<button class="mp-link" type="submit" aria-describedby="{title_id}">Leave this group</button></form>')
     return f"""<article class="mp-card mp-occ" aria-labelledby="{title_id}">
-  <p class="mp-when">{_e(g.get('kind') or '')}</p>
-  <h3 id="{title_id}">{_e(g.get('name') or '')}</h3>
+  {ui.poster(g['id'], pal, g.get('name') or '', g.get('kind') or '', tag='div', cls='mb-band', title_tag='h3', title_id=title_id)}
   {f'<p class="mp-muted">{facts}</p>' if facts else ''}
   {led}{about}{you}
   <div class="mp-actions">{button}</div>
 </article>"""
 
 
-def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dict[str, Any]]]]) -> str:
-    from member_portal import _shell
+def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dict[str, Any]]]],
+                  who: Optional[Dict[str, Any]] = None) -> str:
+    from member_portal import _shell, palette_for
+    pal = palette_for(biz, site)
     if data is None:
         body = '<p class="mp-err" role="alert">Groups couldn\'t load just now. Please try again in a moment.</p>'
     else:
-        mine = "".join(_group_card(g, "leave") for g in data["mine"]) or \
-            '<p class="mp-muted">You\'re not in a group yet.</p>'
-        open_ = "".join(_group_card(g, "join") for g in data["open"]) or \
+        mine = "".join(_group_card(g, "leave", pal) for g in data["mine"]) or \
+            '<p class="mp-muted">You\'re not in a group yet. Find one below.</p>'
+        open_ = "".join(_group_card(g, "join", pal) for g in data["open"]) or \
             '<p class="mp-muted">No groups are taking new people right now. Ask the church office what\'s starting soon.</p>'
         body = (f'<section aria-labelledby="mp-mine-h"><h2 id="mp-mine-h" class="mp-sect">My groups</h2>{mine}</section>'
-                f'<section aria-labelledby="mp-open-h"><h2 id="mp-open-h" class="mp-sect">Groups you can join</h2>{open_}</section>')
+                f'<section aria-labelledby="mp-open-h"><h2 id="mp-open-h" class="mp-sect">Find a group</h2>{open_}</section>')
     return _shell(biz, site, "Groups", f"""
-<p><a class="mp-link" href="/my">← My page</a></p>
 <h1>Groups</h1>
 <p class="mp-muted">Smaller circles to belong to: small groups, serving teams and classes.</p>
 {_flash(request)}
-{body}""")
+{body}""", tab="groups", who=who)
 
 
 def _flash(request: Request) -> str:
@@ -487,7 +488,7 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
     if (not coming or serving_role) and can_join:
         label = "Just attend instead" if serving_role else "I'm coming"
         actions.append(f'<form method="post" action="/my/rsvp">{hidden}<input type="hidden" name="action" value="coming">'
-                       f'<button class="{"mp-link" if serving_role else "mp-go"}" type="submit" {about}>{label}</button></form>')
+                       f'<button class="{"mp-link" if serving_role else "mp-go mb-soft"}" type="submit" {about}>{label}</button></form>')
     open_roles = [r for r in o.get("roles") or [] if not r.get("full") and r.get("id") != serving_role]
     if open_roles and can_join:
         opts = "".join(f'<option value="{_e(r["id"])}">{_e(r["label"])} — {r["needed"] - r["filled"]} needed</option>'
@@ -509,7 +510,9 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
 </article>"""
 
 
-def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str, Any]]]) -> str:
+def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str, Any]]],
+                  who: Optional[Dict[str, Any]] = None) -> str:
+    import member_app_ui as ui
     from member_portal import _shell
     if occasions is None:
         body = '<p class="mp-err" role="alert">What\'s coming up couldn\'t load just now. Please try again in a moment.</p>'
@@ -518,18 +521,19 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     else:
         body = "".join(occasion_card(o, "/my/events") for o in occasions)
     return _shell(biz, site, "Coming up", f"""
-<p><a class="mp-link" href="/my">← My page</a></p>
+<a class="mb-back" href="/my">{ui.icon('back', 16)}Home</a>
 <h1>Coming up</h1>
 <p class="mp-muted">Let the church know you're coming, or sign up to serve.</p>
 {_flash(request)}
-{body}""")
+{body}""", tab="home", who=who)
 
 
-def render_prayer(biz, site, request: Request) -> str:
+def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = None) -> str:
+    import member_app_ui as ui
     from member_portal import _e, _shell
     church = _e(biz.get("name") or "the church")
     return _shell(biz, site, "Prayer", f"""
-<p><a class="mp-link" href="/my">← My page</a></p>
+<a class="mb-back" href="/my/me">{ui.icon('back', 16)}Me</a>
 <h1>How can we pray for you?</h1>
 <p class="mp-muted">Your request goes privately to the pastor at {church}. It isn't posted anywhere or shared with other members.</p>
 {_flash(request)}
@@ -538,10 +542,11 @@ def render_prayer(biz, site, request: Request) -> str:
   <textarea class="mp-input mp-text" id="mp-prayer" name="request" rows="6" maxlength="{PRAYER_MAX}" required></textarea>
   <label class="mp-check"><input type="checkbox" name="confidential" value="yes"> Keep this between me and the pastor</label>
   <button class="mp-go" type="submit">Send privately</button>
-</form>""")
+</form>""", tab="me", who=who)
 
 
 def render_details(biz, site, request: Request, me: Dict[str, Any]) -> str:
+    import member_app_ui as ui
     from member_portal import _e, _shell
     addr = (me.get("metadata") or {}).get("mailing_address") or {}
     if not isinstance(addr, dict):
@@ -550,7 +555,7 @@ def render_details(biz, site, request: Request, me: Dict[str, Any]) -> str:
         f'<label for="mp-{k}">{label}</label>'
         f'<input class="mp-input" id="mp-{k}" name="{k}" autocomplete="{auto}" maxlength="{FIELD_MAX}" value="{_e(addr.get(k) or "")}">')
     return _shell(biz, site, "My details", f"""
-<p><a class="mp-link" href="/my">← My page</a></p>
+<a class="mb-back" href="/my/me">{ui.icon('back', 16)}Me</a>
 <h1>My details</h1>
 <p class="mp-muted">Keep the church's records up to date, so they can reach you by phone or mail.</p>
 {_flash(request)}
@@ -564,26 +569,105 @@ def render_details(biz, site, request: Request, me: Dict[str, Any]) -> str:
   {field('state', 'State', 'address-level1')}
   {field('postal', 'ZIP code', 'postal-code')}
   <button class="mp-go" type="submit">Save my details</button>
-</form>""")
+</form>""", tab="me", who=me)
 
 
-def home_cards(occasions: Optional[List[Dict[str, Any]]]) -> str:
-    """The home page's part-2 cards: the next few occasions, prayer, details."""
+# ─── Home (member app, 2026-09-30) ────────────────────────────────────
+# Home answers "what's next, and what's mine this week": the next
+# gathering, the latest message (member_portal_sermons), the things this
+# person said yes to plus their groups, then what they haven't answered.
+
+
+def _day(iso: str) -> Optional[date]:
+    try:
+        return date.fromisoformat(str(iso)[:10])
+    except ValueError:
+        return None
+
+
+def _in_days(d: date, today: date) -> str:
+    n = (d - today).days
+    return "Today" if n <= 0 else ("Tomorrow" if n == 1 else f"in {n} days")
+
+
+def _my_answer(o: Dict[str, Any]) -> str:
+    """'Serving: Greeter' / 'Going' for an occasion they said yes to, else ''."""
+    mine = o.get("mine") or {}
+    if mine.get("status") != "yes":
+        return ""
+    role = next((r["label"] for r in o.get("roles") or [] if r.get("id") == mine.get("role")), "")
+    return f"Serving: {role}" if role else "Going"
+
+
+def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] = None) -> str:
+    """The first thing on the calendar: day, what, where, how soon, and
+    their answer. '' when nothing is coming (or the read failed; Coming up
+    says so)."""
+    import member_app_ui as ui
+    from member_portal import _e
+    if not occasions:
+        return ""
+    o = occasions[0]
+    d = _day(o.get("date") or "")
+    if not d:
+        return ""
+    facts = " · ".join(x for x in (o.get("location") or "", _in_days(d, today or date.today())) if x)
+    answer = _my_answer(o)
+    chip = f'<span class="mb-chip">{ui.icon("check", 12)}{_e(answer)}</span>' if answer else ""
+    return (f'<a class="mb-next" href="/my/events" aria-label="Next: {_e(o.get("title"))}, {_e(o.get("date_label"))}">'
+            f'<span class="mb-when" aria-hidden="true"><span>{d.strftime("%a")}</span><b>{d.day}</b></span>'
+            f'<span class="mb-what"><strong>{_e(o.get("title"))}</strong><span>{_e(facts)}</span>{chip}</span></a>')
+
+
+def week_cards(occasions: Optional[List[Dict[str, Any]]],
+               groups: Optional[Dict[str, List[Dict[str, Any]]]]) -> str:
+    """'Your week', a row of cards to swipe: what this person said yes to
+    (or serves at), then their groups and when they meet. No faces or
+    member names — a member never sees who else is in a group, only its
+    leaders' first names. '' when there is nothing of theirs."""
+    import member_app_ui as ui
+    from member_portal import _e
+    cards = []
+    for o in (occasions or []):
+        answer = _my_answer(o)
+        d = _day(o.get("date") or "")
+        if not answer or not d:
+            continue
+        cards.append(f'<a class="mb-wk" href="/my/events"><span class="mb-wk-d">{d.strftime("%a")} {d.day}</span>'
+                     f'<strong>{_e(o.get("title"))}</strong>'
+                     f'<span class="mb-wk-s">{_e(o.get("location") or o.get("date_label") or "")}</span>'
+                     f'<span class="mb-chip">{ui.icon("check", 12)}{_e(answer)}</span></a>')
+        if len(cards) == 3:
+            break
+    for g in (groups or {}).get("mine", [])[:3]:
+        led = ", ".join(g.get("leaders") or [])
+        cards.append(f'<a class="mb-wk" href="/my/groups"><span class="mb-wk-d">{_e(g.get("kind") or "Group")}</span>'
+                     f'<strong>{_e(g.get("name"))}</strong>'
+                     f'<span class="mb-wk-s">{_e(g.get("meets") or g.get("location") or "")}</span>'
+                     f'{f"<span class=mb-wk-s>Led by {_e(led)}</span>" if led and g.get("role") != "leader" else ""}'
+                     f'{"<span class=mb-chip>You lead</span>" if g.get("role") == "leader" else ""}</a>')
+    if not cards:
+        return ""
+    return (f'<section aria-labelledby="mb-week"><h2 id="mb-week" class="mp-sect">Your week</h2>'
+            f'<div class="mb-week">{"".join(cards)}</div></section>')
+
+
+def coming_up(occasions: Optional[List[Dict[str, Any]]]) -> str:
+    """The next two occasions this person hasn't answered, with the same
+    actions as the Coming up page."""
     if occasions is None:
-        coming = '<p class="mp-err" role="alert">What\'s coming up couldn\'t load just now.</p>'
-    elif not occasions:
-        coming = '<p class="mp-muted">Nothing is on the calendar yet.</p>'
+        body = '<p class="mp-err" role="alert">What\'s coming up couldn\'t load just now.</p>'
     else:
-        coming = "".join(occasion_card(o, "/my", level=3) for o in occasions[:2])
-        if len(occasions) > 2:
-            coming += f'<p><a class="mp-link" href="/my/events">See all {len(occasions)} coming up</a></p>'
-    return f"""
-<section aria-labelledby="mp-coming"><h2 id="mp-coming" class="mp-sect">Coming up</h2>{coming}</section>
-<div class="mp-card mp-tiles">
-  <a class="mp-tile" href="/my/prayer"><strong>Prayer</strong><span>Send a private request to the pastor</span></a>
-  <a class="mp-tile" href="/my/details"><strong>My details</strong><span>Phone and mailing address</span></a>
-  <a class="mp-tile" href="/my/groups"><strong>Groups</strong><span>Your groups, and ones you can join</span></a>
-</div>"""
+        open_ = [o for o in occasions if not o.get("mine")]
+        if not occasions:
+            body = '<p class="mp-muted">Nothing is on the calendar yet.</p>'
+        elif not open_:
+            body = '<p class="mp-muted">You\'ve answered everything on the calendar. <a href="/my/events">See it all</a></p>'
+        else:
+            body = "".join(occasion_card(o, "/my", level=3) for o in open_[:2])
+            if len(occasions) > 2:
+                body += f'<p><a class="mp-link" href="/my/events">See all {len(occasions)} coming up</a></p>'
+    return f'<section aria-labelledby="mp-coming"><h2 id="mp-coming" class="mp-sect">Coming up</h2>{body}</section>'
 
 
 # ─── POST ─────────────────────────────────────────────────────────────
@@ -606,7 +690,7 @@ async def _signed_in(request: Request):
 
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if target not in ("/my", "/my/events", "/my/prayer", "/my/details", "/my/groups"):
+    if target not in ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups"):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
