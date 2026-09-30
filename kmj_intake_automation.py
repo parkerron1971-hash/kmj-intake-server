@@ -340,6 +340,9 @@ app.include_router(kids_router)
 # Children's check-in and pickup (codes, texts, release) — Kevin, 2026-09-29.
 from kids_checkin import router as kids_checkin_router
 app.include_router(kids_checkin_router)
+# Check-in stations: a PIN-locked tablet and a family self check-in kiosk.
+from kids_station import router as kids_station_router
+app.include_router(kids_station_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.

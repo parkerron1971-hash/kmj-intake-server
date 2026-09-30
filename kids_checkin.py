@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -195,25 +195,29 @@ async def text_code(biz: Dict[str, Any], phone: str, code: str, names: List[str]
         return "failed"
 
 
-@router.post("/checkin")
-async def check_in(body: CheckinIn, user: AuthedUser = Depends(require_user)):
-    biz = _uuid(body.business_id, "business")
-    role = require(biz, user, "member")
-    entry = _occasion(biz, body.entry_id)
-    fam = _one(f"/households?id=eq.{_uuid(body.household_id, 'family')}&business_id=eq.{biz}"
+# The three actions below are shared by a team seat (this module's
+# routes), a check-in station and the family self check-in kiosk
+# (kids_station.py). Callers check who is asking; these enforce the rules.
+
+async def do_checkin(biz: str, entry: Dict[str, Any], household_id: str, children: List[Tuple[str, str]],
+                     adult_id: Optional[str], text: bool, method: str, by_user: Optional[str],
+                     private: bool, station_id: Optional[str] = None) -> Dict[str, Any]:
+    """Check children of one family in to one occasion. `children` is
+    [(child_id, room)]; an empty room falls back to the child's usual one."""
+    fam = _one(f"/households?id=eq.{_uuid(household_id, 'family')}&business_id=eq.{biz}"
                f"&select=id,name&limit=1", "That family isn't here any more")
     kids = {str(k["id"]): k for k in _get(
         f"/children?business_id=eq.{biz}&household_id=eq.{fam['id']}&active=eq.true&select=id,first_name,room")}
     wanted: Dict[str, str] = {}
-    for k in body.children:
-        cid = _uuid(k.child_id, "child")
+    for child_id, room in children:
+        cid = _uuid(child_id, "child")
         if cid not in kids:
             raise HTTPException(404, "One of those children isn't in this family any more. Reopen the family.")
-        wanted[cid] = _clean(k.room) or _clean(kids[cid].get("room"))
+        wanted[cid] = _clean(room) or _clean(kids[cid].get("room"))
 
     adult: Optional[Dict[str, Any]] = None
-    if body.dropped_off_by:
-        aid = _uuid(body.dropped_off_by, "person")
+    if adult_id:
+        aid = _uuid(adult_id, "person")
         link = _get(f"/household_adults?household_id=eq.{fam['id']}&contact_id=eq.{aid}&select=contact_id&limit=1")
         if not link:
             raise HTTPException(400, "That person isn't one of this family's adults.")
@@ -233,7 +237,7 @@ async def check_in(body: CheckinIn, user: AuthedUser = Depends(require_user)):
     new_rows = [{
         "business_id": biz, "entry_id": entry["id"], "child_id": c, "household_id": fam["id"],
         "room": room, "code": code, "dropped_off_by": adult["id"] if adult else None,
-        "method": "staff", "checked_in_by": str(user.id),
+        "method": method, "checked_in_by": by_user, **({"station_id": station_id} if station_id else {}),
     } for c, room in wanted.items() if c not in already]
     if new_rows:
         saved = sb_clients.sb_post_as_service("/child_checkins", new_rows)
@@ -242,11 +246,11 @@ async def check_in(body: CheckinIn, user: AuthedUser = Depends(require_user)):
 
     rows = _get(f"/child_checkins?business_id=eq.{biz}&entry_id=eq.{entry['id']}"
                 f"&child_id=in.({_in(list(wanted))})&select=*&order=checked_in_at.asc")
-    checkins = _shape(rows, biz, _RANK[role] >= _RANK["manager"])
+    checkins = _shape(rows, biz, private)
     code = checkins[0]["code"] if checkins else code
 
     texted, texted_to = "off", ""
-    if body.text_code:
+    if text:
         phone = mobile(adult.get("phone")) if adult else ""
         if not adult:
             texted = "no_adult"
@@ -264,10 +268,7 @@ async def check_in(body: CheckinIn, user: AuthedUser = Depends(require_user)):
             "checkins": checkins, "texted": texted, "texted_to": texted_to}
 
 
-@router.delete("/checkins/{checkin_id}")
-def undo_checkin(checkin_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
-    biz = _uuid(business_id, "business")
-    require(biz, user, "member")
+def do_undo(biz: str, checkin_id: str) -> Dict[str, Any]:
     row = _one(f"/child_checkins?id=eq.{_uuid(checkin_id, 'check-in')}&business_id=eq.{biz}"
                f"&select=id,checked_out_at&limit=1", "That check-in isn't here any more")
     if row.get("checked_out_at"):
@@ -275,14 +276,6 @@ def undo_checkin(checkin_id: str, business_id: str = Query(...), user: AuthedUse
     if not sb_clients.sb_delete_as_service(f"/child_checkins?id=eq.{row['id']}&business_id=eq.{biz}&checked_out_at=is.null"):
         raise HTTPException(503, "That didn't save. Nothing was changed — try again.")
     return {"removed": row["id"]}
-
-
-# ─── Pick up ─────────────────────────────────────────────────────────
-
-class LookupIn(BaseModel):
-    business_id: str
-    entry_id: str
-    code: str = Field(..., max_length=12)
 
 
 def _pickup_list(biz: str, household_id: str) -> List[Dict[str, Any]]:
@@ -302,25 +295,85 @@ def _waiting(biz: str, entry_id: str, code: str) -> List[Dict[str, Any]]:
                 f"&checked_out_at=is.null&select=*&order=checked_in_at.asc")
 
 
-@router.post("/checkout/lookup")
-def lookup(body: LookupIn, user: AuthedUser = Depends(require_user)):
-    biz = _uuid(body.business_id, "business")
-    role = require(biz, user, "member")
-    entry = _occasion(biz, body.entry_id)
-    code = norm_code(body.code)
+def _code(raw: str) -> str:
+    code = norm_code(raw)
     if not CODE_RE.match(code):
         raise HTTPException(400, "A pickup code is four letters and numbers.")
+    return code
+
+
+def do_lookup(biz: str, entry: Dict[str, Any], raw_code: str, manager: bool) -> Dict[str, Any]:
+    code = _code(raw_code)
     rows = _waiting(biz, entry["id"], code)
     if not rows:
         raise HTTPException(404, "No child is waiting with that code. Check the tag, or look them up in the room list.")
     household_id = str(rows[0]["household_id"])
     fam = _one(f"/households?id=eq.{household_id}&business_id=eq.{biz}&select=id,name&limit=1", "That family isn't here any more")
-    private = _RANK[role] >= _RANK["manager"]
-    children = _shape(rows, biz, private)
+    children = _shape(rows, biz, manager)
     custody = any(c["custody_alert"] for c in children)
     return {"code": code, "family": fam["name"], "children": children,
             "allowed": _pickup_list(biz, household_id), "custody_alert": custody,
-            "can_release": private or not custody, "can_release_to_anyone": private}
+            "can_release": manager or not custody, "can_release_to_anyone": manager}
+
+
+def do_release(biz: str, entry: Dict[str, Any], raw_code: str, checkin_ids: List[str], released_to: str,
+               manager: bool, by_user: Optional[str]) -> Dict[str, Any]:
+    code = _code(raw_code)
+    waiting = {str(r["id"]): r for r in _waiting(biz, entry["id"], code)}
+    ids = [_uuid(i, "check-in") for i in checkin_ids]
+    missing = [i for i in ids if i not in waiting]
+    if missing:
+        raise HTTPException(409, "Someone on that list has already gone home, or the code doesn't match. Look the code up again.")
+    household_id = str(waiting[ids[0]]["household_id"])
+    children = _shape([waiting[i] for i in ids], biz, manager)
+    if any(c["custody_alert"] for c in children) and not manager:
+        raise HTTPException(403, "This family has a custody note. A manager or the owner needs to release these children.")
+    to = _clean(released_to)
+    allowed = {a["name"].strip().lower() for a in _pickup_list(biz, household_id) if a["name"].strip()}
+    if to.lower() not in allowed and not manager:
+        raise HTTPException(403, f"{to} isn't on this family's pickup list. A manager or the owner can release to someone else.")
+    rows = sb_clients.sb_patch_as_service(
+        f"/child_checkins?business_id=eq.{biz}&entry_id=eq.{entry['id']}&code=eq.{code}"
+        f"&id=in.({_in(ids)})&checked_out_at=is.null",
+        {"checked_out_at": _now(), "checked_out_by": by_user, "released_to": to})
+    if rows is None:
+        raise HTTPException(503, "That didn't save. Nobody was released — try again.")
+    if len(rows) != len(ids):
+        # Someone else released one of them a moment ago.
+        raise HTTPException(409, "Someone else just released one of these children. Look the code up again.")
+    return {"released": [r["id"] for r in rows], "released_to": to}
+
+
+# ─── A team seat's routes ────────────────────────────────────────────
+
+@router.post("/checkin")
+async def check_in(body: CheckinIn, user: AuthedUser = Depends(require_user)):
+    biz = _uuid(body.business_id, "business")
+    role = require(biz, user, "member")
+    entry = _occasion(biz, body.entry_id)
+    return await do_checkin(biz, entry, body.household_id, [(k.child_id, k.room) for k in body.children],
+                            body.dropped_off_by, body.text_code, "staff", str(user.id),
+                            _RANK[role] >= _RANK["manager"])
+
+
+@router.delete("/checkins/{checkin_id}")
+def undo_checkin(checkin_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz = _uuid(business_id, "business")
+    require(biz, user, "member")
+    return do_undo(biz, checkin_id)
+
+
+class LookupIn(BaseModel):
+    business_id: str
+    entry_id: str
+    code: str = Field(..., max_length=12)
+
+
+@router.post("/checkout/lookup")
+def lookup(body: LookupIn, user: AuthedUser = Depends(require_user)):
+    biz = _uuid(body.business_id, "business")
+    role = require(biz, user, "member")
+    return do_lookup(biz, _occasion(biz, body.entry_id), body.code, _RANK[role] >= _RANK["manager"])
 
 
 class ReleaseIn(BaseModel):
@@ -335,31 +388,5 @@ class ReleaseIn(BaseModel):
 def release(body: ReleaseIn, user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.business_id, "business")
     role = require(biz, user, "member")
-    manager = _RANK[role] >= _RANK["manager"]
-    entry = _occasion(biz, body.entry_id)
-    code = norm_code(body.code)
-    if not CODE_RE.match(code):
-        raise HTTPException(400, "A pickup code is four letters and numbers.")
-    waiting = {str(r["id"]): r for r in _waiting(biz, entry["id"], code)}
-    ids = [_uuid(i, "check-in") for i in body.checkin_ids]
-    missing = [i for i in ids if i not in waiting]
-    if missing:
-        raise HTTPException(409, "Someone on that list has already gone home, or the code doesn't match. Look the code up again.")
-    household_id = str(waiting[ids[0]]["household_id"])
-    children = _shape([waiting[i] for i in ids], biz, manager)
-    if any(c["custody_alert"] for c in children) and not manager:
-        raise HTTPException(403, "This family has a custody note. A manager or the owner needs to release these children.")
-    to = _clean(body.released_to)
-    allowed = {a["name"].strip().lower() for a in _pickup_list(biz, household_id) if a["name"].strip()}
-    if to.lower() not in allowed and not manager:
-        raise HTTPException(403, f"{to} isn't on this family's pickup list. A manager or the owner can release to someone else.")
-    rows = sb_clients.sb_patch_as_service(
-        f"/child_checkins?business_id=eq.{biz}&entry_id=eq.{entry['id']}&code=eq.{code}"
-        f"&id=in.({_in(ids)})&checked_out_at=is.null",
-        {"checked_out_at": _now(), "checked_out_by": str(user.id), "released_to": to})
-    if rows is None:
-        raise HTTPException(503, "That didn't save. Nobody was released — try again.")
-    if len(rows) != len(ids):
-        # Someone else released one of them a moment ago.
-        raise HTTPException(409, "Someone else just released one of these children. Look the code up again.")
-    return {"released": [r["id"] for r in rows], "released_to": to}
+    return do_release(biz, _occasion(biz, body.entry_id), body.code, body.checkin_ids, body.released_to,
+                      _RANK[role] >= _RANK["manager"], str(user.id))

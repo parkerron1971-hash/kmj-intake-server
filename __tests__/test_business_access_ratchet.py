@@ -83,7 +83,13 @@ RESIDUAL = [h for h in UNGUARDED
 # active form's own fields (the composed site already exposes the same
 # list); the business is read only to brand the page. The residual
 # stays at ZERO; this raise records one deliberate public door.
-MAX_UNGUARDED_TOTAL = 46
+# 46 -> 47 (2026-09-30, check-in stations): kids_station.pair — a church
+# tablet typing the one-time pairing code a manager read out, before it
+# has any credential. Strictly rate-limited per network, the code lasts
+# 15 minutes and works once. Every other station route resolves its
+# device token through station_from_token (a HINT in ownership_sweep).
+# The residual stays at ZERO; one deliberate public door.
+MAX_UNGUARDED_TOTAL = 47
 MAX_UNGUARDED_RESIDUAL = 0
 
 
