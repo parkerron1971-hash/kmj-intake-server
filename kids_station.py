@@ -234,7 +234,11 @@ def revoke_station(station_id: str, business_id: str = Query(...), user: AuthedU
 
 # ─── The device's side ───────────────────────────────────────────────
 
-def station_from_token(x_station_token: Optional[str] = Header(None)) -> Dict[str, Any]:
+def station_from_token(x_station_token: Optional[str]) -> Dict[str, Any]:
+    """The one door for a paired device: the token names exactly one
+    station, and the business comes from that row — never from the
+    caller. Every station route calls this first (ownership_sweep
+    counts it as the ownership check it is)."""
     token = str(x_station_token or "")
     if len(token) < 30:
         raise HTTPException(401, "This station isn't paired. Ask a manager for a pairing code.")
@@ -327,7 +331,8 @@ def pair(body: PairIn, request: Request):
 
 
 @router.get("/station/me")
-def me(st: Dict[str, Any] = Depends(station_from_token)):
+def me(x_station_token: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     church = _church(st["business_id"])
     return {"station": {"id": st["id"], "name": st["name"], "mode": st["mode"]},
             "church": church.get("name") or "", "occasions": todays_occasions(st["business_id"])}
@@ -338,7 +343,8 @@ class PinIn(BaseModel):
 
 
 @router.post("/station/unlock")
-def unlock(body: PinIn, st: Dict[str, Any] = Depends(station_from_token)):
+def unlock(body: PinIn, x_station_token: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     if not rate_limit.allow_strict("station_pin", st["id"]):
         raise HTTPException(429, "Too many wrong PINs. The station is locked for 15 minutes — or a manager can reset the PIN.")
     if not hmac.compare_digest(pin_hash(st["business_id"], st["id"], str(body.pin or "")), st["pin_hash"]):
@@ -350,8 +356,9 @@ def unlock(body: PinIn, st: Dict[str, Any] = Depends(station_from_token)):
 # ─── Staff station (unlocked) ────────────────────────────────────────
 
 @router.get("/station/families")
-def station_families(q: str = Query(..., max_length=60), st: Dict[str, Any] = Depends(station_from_token),
+def station_families(q: str = Query(..., max_length=60), x_station_token: Optional[str] = Header(None),
                      x_station_unlock: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _unlocked(st, x_station_unlock)
     biz = st["business_id"]
     t = _clean(q).lower()
@@ -395,8 +402,9 @@ def station_families(q: str = Query(..., max_length=60), st: Dict[str, Any] = De
 
 
 @router.get("/station/checkins")
-def station_checkins(entry_id: str = Query(...), st: Dict[str, Any] = Depends(station_from_token),
+def station_checkins(entry_id: str = Query(...), x_station_token: Optional[str] = Header(None),
                      x_station_unlock: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _unlocked(st, x_station_unlock)
     entry = _station_occasion(st, entry_id)
     rows = _get(f"/child_checkins?business_id=eq.{st['business_id']}&entry_id=eq.{entry['id']}"
@@ -418,8 +426,9 @@ class StationCheckinIn(BaseModel):
 
 
 @router.post("/station/checkin")
-async def station_checkin(body: StationCheckinIn, st: Dict[str, Any] = Depends(station_from_token),
+async def station_checkin(body: StationCheckinIn, x_station_token: Optional[str] = Header(None),
                           x_station_unlock: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _unlocked(st, x_station_unlock)
     entry = _station_occasion(st, body.entry_id)
     return await do_checkin(st["business_id"], entry, body.household_id,
@@ -428,8 +437,9 @@ async def station_checkin(body: StationCheckinIn, st: Dict[str, Any] = Depends(s
 
 
 @router.delete("/station/checkins/{checkin_id}")
-def station_undo(checkin_id: str, st: Dict[str, Any] = Depends(station_from_token),
+def station_undo(checkin_id: str, x_station_token: Optional[str] = Header(None),
                  x_station_unlock: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _unlocked(st, x_station_unlock)
     return do_undo(st["business_id"], checkin_id)
 
@@ -440,8 +450,9 @@ class StationLookupIn(BaseModel):
 
 
 @router.post("/station/checkout/lookup")
-def station_lookup(body: StationLookupIn, st: Dict[str, Any] = Depends(station_from_token),
+def station_lookup(body: StationLookupIn, x_station_token: Optional[str] = Header(None),
                    x_station_unlock: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _unlocked(st, x_station_unlock)
     return do_lookup(st["business_id"], _station_occasion(st, body.entry_id), body.code, False)
 
@@ -454,8 +465,9 @@ class StationReleaseIn(BaseModel):
 
 
 @router.post("/station/checkout")
-def station_release(body: StationReleaseIn, st: Dict[str, Any] = Depends(station_from_token),
+def station_release(body: StationReleaseIn, x_station_token: Optional[str] = Header(None),
                     x_station_unlock: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _unlocked(st, x_station_unlock)
     # A station is never a manager: custody families and anyone not on
     # the list go to a manager in the app.
@@ -499,7 +511,8 @@ def _self_only(st: Dict[str, Any]) -> None:
 
 
 @router.post("/station/self/find")
-def self_find(body: SelfFindIn, st: Dict[str, Any] = Depends(station_from_token)):
+def self_find(body: SelfFindIn, x_station_token: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _self_only(st)
     if not rate_limit.allow_strict("station_self_find", st["id"]):
         raise HTTPException(429, "Please check in at the welcome desk.")
@@ -526,7 +539,8 @@ class SelfCheckinIn(BaseModel):
 
 
 @router.post("/station/self/checkin")
-async def self_checkin(body: SelfCheckinIn, st: Dict[str, Any] = Depends(station_from_token)):
+async def self_checkin(body: SelfCheckinIn, x_station_token: Optional[str] = Header(None)):
+    st = station_from_token(x_station_token)
     _self_only(st)
     if not rate_limit.allow_strict("station_self_find", st["id"]):
         raise HTTPException(429, "Please check in at the welcome desk.")
