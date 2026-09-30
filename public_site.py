@@ -5819,6 +5819,43 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLRe
     )
 
 
+async def _serve_sermons_page(client, biz_id: Optional[str], slug: str, path: str) -> HTMLResponse:
+    """The church's sermon library — /sermons and /sermons/<id> on its own
+    host (subdomain or custom domain), like /events. Published sermons
+    only; nothing published is a branded 404. Rendering is pure, in
+    sermons_public.py."""
+    if not biz_id:
+        raise HTTPException(404, "business not found")
+    biz_rows = await _sb_service(client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
+    if not biz_rows:
+        raise HTTPException(404, "business not found")
+    business = biz_rows[0]
+    import sermons_public as sp
+    from public_form_theme import SITE_SELECT
+    site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
+    site = site_rows[0] if site_rows else None
+    sermons = await _sb_service(
+        client,
+        f"/sermons?business_id=eq.{biz_id}&published=eq.true"
+        f"&select=id,series_id,title,preached_on,speaker,scripture,summary,questions,video_url,audio_url,published"
+        f"&order=preached_on.desc,created_at.desc&limit=500") or []
+    series = await _sb_service(client, f"/sermon_series?business_id=eq.{biz_id}&select=id,title,description&limit=200") or []
+    rest = path[len("/sermons"):].strip("/")
+    canonical = f"https://{slug}.mysolutionist.app/sermons" + (f"/{rest}" if rest else "")
+    if rest:
+        match = next((x for x in sermons if str(x["id"]) == rest), None) if sp.UUID_RE.match(rest) else None
+        if not match:
+            return HTMLResponse(content=sp.render_unavailable(business, canonical, site), status_code=404,
+                                media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+        return HTMLResponse(content=sp.render_sermon(business, match, sermons, series, canonical, site),
+                            media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+    if not sp.sermons_are_public(sermons):
+        return HTMLResponse(content=sp.render_unavailable(business, canonical, site), status_code=404,
+                            media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+    return HTMLResponse(content=sp.render_library(business, sermons, series, canonical, site),
+                        media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
 async def _render_offline_page(client: httpx.AsyncClient,
                                biz_id: Optional[str]) -> HTMLResponse:
     """A calm, branded 'temporarily offline' page shown while the practitioner
@@ -6556,6 +6593,10 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # (same always-wins sub-path contract as /book and /give).
         if normalized_path == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # The sermon library — /sermons and /sermons/<id> (same always-wins
+        # sub-path contract).
+        if normalized_path == "/sermons" or normalized_path.startswith("/sermons/"):
+            return await _serve_sermons_page(client, biz_id, slug, normalized_path)
         # A client form's own page — the link Chief hands out.
         if normalized_path.startswith(_FORM_PAGE_PREFIX):
             return await _serve_form_page(client, biz_id, slug, normalized_path[len(_FORM_PAGE_PREFIX):])
@@ -6714,6 +6755,9 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # reasoning as /give.
         if _norm == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # The sermon library works on custom domains too.
+        if _norm == "/sermons" or _norm.startswith("/sermons/"):
+            return await _serve_sermons_page(client, biz_id, slug, _norm)
         # A client form's page works on custom domains too.
         if _norm.startswith(_FORM_PAGE_PREFIX):
             return await _serve_form_page(client, biz_id, slug, _norm[len(_FORM_PAGE_PREFIX):])
