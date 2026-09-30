@@ -186,6 +186,10 @@ def _client():
     @app.get("/my/statement")
     async def _st(request: mp.Request):
         return await mp.serve(request, "/my/statement")
+
+    @app.get("/my/me")
+    async def _me(request: mp.Request):
+        return await mp.serve(request, "/my/me")
     return TestClient(app, base_url=f"https://{HOST}")
 
 
@@ -297,7 +301,9 @@ def test_right_code_signs_in_once_with_a_host_cookie(fake):
     assert "domain=" not in cookie
     assert _verify(c, code).status_code == 400           # single use
     home = c.get("/my")
-    assert "Hi, Ana" in home.text and "$50.00" in home.text
+    assert "Hi, Ana" in home.text
+    # Giving lives on Me (member app, 2026-09-30).
+    assert "$50.00" in c.get("/my/me").text
 
 
 def test_one_person_per_email(fake):
@@ -357,7 +363,7 @@ def test_failed_giving_read_is_said_not_zero(fake):
     c = _client()
     _verify(c, _ask(c, fake))
     fake.gifts_fail = True
-    page = c.get("/my").text
+    page = c.get("/my/me").text
     assert "couldn't load" in page and "$0" not in page
 
 

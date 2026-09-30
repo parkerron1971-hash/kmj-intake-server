@@ -104,6 +104,7 @@ _SECURE_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 
+UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
 _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,}$")
 
 
@@ -482,82 +483,39 @@ def _set_session(resp, value: str) -> None:
 
 
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
-           body: str, *, script: str = "") -> str:
+           body: str, *, script: str = "", tab: Optional[str] = None,
+           who: Optional[Dict[str, Any]] = None) -> str:
+    """Every member page. Signed-in pages pass `tab` (the bottom bar's
+    current tab) and `who` (their avatar, which opens Me); the sign-in
+    pages pass neither and get no bar. The look is member_app_ui's."""
+    import member_app_ui as ui
     from public_form_theme import resolve_theme, css_vars, font_links
     theme = resolve_theme(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
     logo = theme.get("logo_url") or ""
     logo_html = f'<img class="mp-logo" src="{_e(logo)}" alt="">' if logo else ""
+    avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me">{_e(ui.initials(who.get("name")))}</a>'
+              if who else "")
+    signed_in = tab is not None
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="{ui.GROUND}">
 <title>{_e(title)} — {_e(name)}</title>
 {font_links(theme)}
 <style>{css_vars(theme)}</style>
-<style>
-html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);background:var(--surface);min-height:100vh;}}
-*{{box-sizing:border-box;}}
-.mp-shell{{max-width:480px;margin:0 auto;padding:28px 16px 48px;}}
-.mp-head{{text-align:center;margin-bottom:24px;}}
-.mp-logo{{max-width:72px;max-height:72px;display:block;margin:0 auto 10px;}}
-.mp-church{{font-family:var(--font-heading);font-size:15px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-secondary);margin:0;}}
-h1{{font-family:var(--font-heading);font-size:26px;line-height:1.2;margin:8px 0 0;}}
-h2{{font-family:var(--font-heading);font-size:18px;margin:0 0 10px;}}
-p{{line-height:1.55;margin:0 0 12px;}}
-.mp-muted{{color:var(--text-secondary);font-size:14px;}}
-.mp-card{{border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;margin-bottom:16px;}}
-.mp-form{{display:flex;flex-direction:column;gap:10px;}}
-label{{font-size:14px;font-weight:600;}}
-.mp-input{{width:100%;padding:12px 14px;font-size:16px;border:1.5px solid var(--border);border-radius:var(--radius);background:var(--input-surface);color:var(--text-primary);min-height:48px;font-family:var(--font-body);}}
-.mp-code{{letter-spacing:.4em;text-align:center;font-size:24px;font-variant-numeric:tabular-nums;}}
-.mp-go{{width:100%;padding:14px 0;font-size:16px;font-weight:700;border:0;border-radius:var(--radius);background:var(--accent);color:var(--accent-text);cursor:pointer;min-height:48px;font-family:var(--font-body);text-align:center;text-decoration:none;display:inline-block;}}
-.mp-link{{background:none;border:0;padding:10px 0;min-height:44px;font:inherit;font-size:14px;color:var(--accent);cursor:pointer;text-decoration:underline;}}
-.mp-err{{color:var(--error);font-size:14px;font-weight:600;}}
-.mp-total{{font-family:var(--font-heading);font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;margin:2px 0 4px;}}
-.mp-gifts{{list-style:none;margin:8px 0 0;padding:0;}}
-.mp-gifts li{{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--border);font-size:15px;}}
-.mp-gifts li span:last-child{{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600;}}
-.mp-years{{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px;}}
-.mp-years a{{padding:8px 14px;min-height:40px;border:1px solid var(--border);border-radius:999px;color:var(--text-primary);text-decoration:none;font-size:14px;display:inline-flex;align-items:center;}}
-.mp-years a[aria-current]{{background:var(--accent);color:var(--accent-text);border-color:var(--accent);}}
-.mp-row{{display:flex;flex-direction:column;gap:10px;}}
-.mp-person{{width:100%;text-align:left;padding:14px 16px;min-height:52px;border:1.5px solid var(--border);border-radius:var(--radius);background:var(--input-surface);color:var(--text-primary);font:inherit;font-size:16px;cursor:pointer;}}
-.mp-sect{{font-family:var(--font-heading);font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-secondary);margin:22px 0 10px;}}
-.mp-flash{{padding:10px 12px;border-radius:var(--radius);border:1px solid var(--border);margin:12px 0;}}
-.mp-ok{{color:var(--text-primary);font-weight:600;font-size:14px;}}
-.mp-when{{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin:0 0 4px;}}
-.mp-occ h2,.mp-occ h3{{font-family:var(--font-heading);font-size:18px;line-height:1.3;margin:0 0 4px;}}
-.mp-mine{{font-size:14px;font-weight:600;margin:6px 0 0;}}
-.mp-actions{{display:flex;flex-direction:column;gap:8px;margin-top:12px;}}
-.mp-serve{{display:flex;gap:8px;flex-wrap:wrap;}}
-.mp-serve select{{flex:1 1 180px;min-width:0;}}
-.mp-go-2{{width:auto;padding:14px 20px;background:transparent;color:var(--accent);border:1.5px solid var(--accent);}}
-.mp-text{{min-height:140px;resize:vertical;line-height:1.5;}}
-.mp-check{{display:flex;gap:10px;align-items:flex-start;font-weight:500;}}
-.mp-check input{{width:20px;height:20px;margin:2px 0 0;accent-color:var(--accent);}}
-.mp-tiles{{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px;}}
-.mp-tile{{display:flex;flex-direction:column;gap:4px;padding:14px;min-height:88px;border-radius:var(--radius);border:1px solid var(--border);color:var(--text-primary);text-decoration:none;}}
-.mp-tile span{{font-size:13px;color:var(--text-secondary);line-height:1.4;}}
-.mp-tile:focus-visible{{outline:2px solid var(--focus);outline-offset:2px;}}
-.mp-sr{{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}}
-@media (max-width:360px){{.mp-tiles{{grid-template-columns:1fr;}}}}
-.mp-foot{{text-align:center;font-size:12px;color:var(--text-muted);margin-top:28px;padding-top:14px;border-top:1px solid var(--border);}}
-.mp-go:focus-visible,.mp-input:focus-visible,.mp-link:focus-visible,.mp-person:focus-visible,.mp-years a:focus-visible{{outline:2px solid var(--focus);outline-offset:3px;}}
-table{{width:100%;border-collapse:collapse;font-size:14px;}}
-th,td{{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);}}
-td.n,th.n{{text-align:right;font-variant-numeric:tabular-nums;}}
-@media print{{.mp-noprint{{display:none!important;}} body{{background:#fff;color:#000;}} .mp-shell{{max-width:none;}}}}
-</style>
+<style>{ui.css(theme)}</style>
 </head>
 <body>
-<main class="mp-shell">
-  <header class="mp-head">{logo_html}<p class="mp-church">{_e(name)}</p></header>
+<main class="mp-shell{' mb-has-nav' if signed_in else ''}">
+  <header class="mb-top"><span class="mb-brand">{logo_html}<p class="mp-church">{_e(name)}</p></span>{avatar}</header>
   {body}
   <footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>
 </main>
+{ui.nav(tab) if signed_in else ''}
 {script}
 </body>
 </html>"""
@@ -572,8 +530,9 @@ def render_unavailable(biz: Dict[str, Any], site=None) -> str:
 def render_signin(biz: Dict[str, Any], site=None, *, error: str = "", email: str = "") -> str:
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
     return _shell(biz, site, "Sign in", f"""
-<h1>Your giving, your way</h1>
-<p class="mp-muted">Sign in with the email or mobile number the church has for you. We'll send a 6-digit code — there's no password to remember.</p>
+<h1>Welcome</h1>
+<p class="mp-muted">Your page at {_e(biz.get('name') or 'the church')}: messages, your groups, what's coming up and your giving.
+Sign in with the email or mobile number the church has for you. We'll send a 6-digit code — there's no password to remember.</p>
 <form class="mp-card mp-form" method="post" action="/my/code">
   <label for="mp-email">Email or mobile number</label>
   <input class="mp-input" id="mp-email" name="email" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required value="{_e(email)}">
@@ -630,12 +589,37 @@ anyone who reads it can see each of these people's giving. Choose yourself.</p>
 <div class="mp-row">{buttons}</div>""")
 
 
-def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
-                year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
-                this_year: int, part2: str = "", flash: str = "") -> str:
+def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
+                give_url: str, flash: str = "") -> str:
+    """Home: what's next, the latest message, this person's week, what
+    they haven't answered yet, and three quick ways in."""
+    import member_app_ui as ui
+    import member_portal_church as mpc
+    import member_portal_sermons as mps
     hello = first_name(me.get("name") or "") or "there"
+    quick = []
+    if give_url:
+        quick.append(f'<a href="{_e(give_url)}">{ui.icon("heart", 18)}Give</a>')
+    quick.append(f'<a href="/my/prayer">{ui.icon("lock", 18)}Prayer</a>')
+    quick.append(f'<a href="/my/events">{ui.icon("calendar", 18)}Events</a>')
+    return _shell(biz, site, "Home", f"""
+<h1>Hi, {_e(hello)}</h1>
+{flash}
+{mpc.next_strip(occasions)}
+{mps.latest_hero(library)}
+{mpc.week_list(occasions, groups)}
+<nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
+{mpc.coming_up(occasions)}""", tab="home", who=me)
+
+
+def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
+              year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
+              this_year: int, flash: str = "") -> str:
+    """Me: this person's giving (and statements), and the ways to look
+    after their own record — prayer, details, groups, sign out."""
+    import member_app_ui as ui
     years = "".join(
-        f'<a href="/my?year={y}"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
+        f'<a href="/my/me?year={y}"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
         for y in range(this_year, this_year - 4, -1))
     if gifts is None:
         giving = ('<p class="mp-err" role="alert">Your giving couldn\'t load just now. Your gifts are safe — '
@@ -650,32 +634,45 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[D
         giving = (f'<p class="mp-muted">Given in {year}</p><p class="mp-total">{money(total)}</p>'
                   f'<p class="mp-muted">{len(gifts)} gift{"" if len(gifts) == 1 else "s"}</p>'
                   f'<ul class="mp-gifts">{items}</ul>'
-                  f'<p style="margin-top:14px"><a class="mp-go" href="/my/statement?year={year}">Year-end statement for {year}</a></p>')
-    give = (f'<a class="mp-go" href="{_e(give_url)}">Give</a>' if give_url else "")
+                  f'<p style="margin-top:14px"><a class="mp-go mp-go-2" style="width:100%" href="/my/statement?year={year}">Year-end statement for {year}</a></p>')
+    give = (f'<p style="margin-top:12px"><a class="mp-go" href="{_e(give_url)}">{ui.icon("heart", 16)}Give</a></p>'
+            if give_url else "")
     switch = ('<form method="post" action="/my/person"><input type="hidden" name="cid" value="">'
               '<button class="mp-link" type="submit">Not you? Choose someone else in your household</button></form>'
               if len(people) > 1 else "")
-    return _shell(biz, site, "My page", f"""
-<h1>Hi, {_e(hello)}</h1>
-<p class="mp-muted">Your page at {_e(biz.get('name') or 'the church')}.</p>
+    link = lambda href, ic, title, sub: (
+        f'<li><a href="{href}">{ui.icon(ic, 20)}<span class="mb-list-text"><strong>{title}</strong>'
+        f'<span>{sub}</span></span>{ui.icon("chevron", 16)}</a></li>')
+    return _shell(biz, site, "Me", f"""
+<div class="mb-profile"><span class="mb-avatar" aria-hidden="true">{_e(ui.initials(me.get('name')))}</span>
+  <span><h1 style="margin:0">{_e(me.get('name') or 'Me')}</h1>
+  <span class="mp-muted">Your page at {_e(biz.get('name') or 'the church')}</span></span></div>
 {flash}
-{part2}
 <h2 class="mp-sect" id="mp-giving">My giving</h2>
 <section class="mp-card" aria-labelledby="mp-giving">
   <nav class="mp-years" aria-label="Year">{years}</nav>
   {giving}
+  {give}
 </section>
-{('<div class="mp-card">' + give + '</div>') if give else ''}
-<div class="mp-noprint">{switch}
-<form method="post" action="/my/signout"><button class="mp-link" type="submit">Sign out</button></form></div>""")
+<h2 class="mp-sect">My church life</h2>
+<ul class="mb-list">
+  {link('/my/events', 'calendar', 'Coming up', 'Say you&#x27;re coming, or sign up to serve')}
+  {link('/my/groups', 'users', 'My groups', 'Your groups, and ones you can join')}
+  {link('/my/prayer', 'lock', 'Prayer', 'A private request to the pastor')}
+  {link('/my/details', 'user', 'My details', 'Phone and mailing address')}
+</ul>
+<div class="mp-noprint" style="margin-top:12px">{switch}
+<form method="post" action="/my/signout"><button class="mp-link" type="submit">Sign out</button></form></div>""",
+                  tab="me")
 
 
-def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any]) -> str:
+def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],
+                     who: Optional[Dict[str, Any]] = None) -> str:
     year = stmt.get("year")
     if stmt.get("empty"):
         body = (f'<h1>{_e(year)} statement</h1><p class="mp-muted">No gifts are recorded for you in {_e(year)}.</p>'
-                '<p><a href="/my">Back to my page</a></p>')
-        return _shell(biz, site, f"{year} statement", body)
+                '<p><a href="/my/me">Back to Me</a></p>')
+        return _shell(biz, site, f"{year} statement", body, tab="me", who=who)
     rows = "".join(
         f'<tr><td>{_e(_day(g["date"]))}</td><td>{_e(g["fund"])}{" (refunded)" if g.get("refunded") else ""}</td>'
         f'<td class="n">{money(g["amount"])}</td></tr>' for g in stmt.get("gifts") or [])
@@ -691,10 +688,10 @@ For {_e(donor.get('name') or '')}{(' · ' + _e(donor.get('email'))) if donor.get
 <p class="mp-muted">Prepared {_e(_day(stmt.get('generated_on') or ''))}.</p>
 <div class="mp-noprint mp-row">
   <button class="mp-go" type="button" id="mp-print">Print or save as PDF</button>
-  <a class="mp-link" href="/my?year={_e(year)}">Back to my page</a>
+  <a class="mp-link" href="/my/me?year={_e(year)}">Back to Me</a>
 </div>"""
     script = "<script>document.getElementById('mp-print').addEventListener('click',function(){window.print();});</script>"
-    return _shell(biz, site, f"{year} statement", body, script=script)
+    return _shell(biz, site, f"{year} statement", body, script=script, tab="me", who=who)
 
 
 def _day(iso: str) -> str:
@@ -751,36 +748,54 @@ async def serve(request: Request, path: str) -> HTMLResponse:
             logger.warning("member statement read failed", exc_info=True)
             return _page(_shell(biz, site, "Statement", '<p class="mp-err" role="alert">Your statement '
                                 "couldn't load just now. Please try again in a moment.</p>"
-                                '<p><a href="/my">Back to my page</a></p>'), 503)
-        return _page(render_statement(biz, site, stmt))
+                                '<p><a href="/my/me">Back to Me</a></p>', tab="me", who=me), 503)
+        return _page(render_statement(biz, site, stmt, who=me))
     # Part 2 (member_portal_church.py): coming up, prayer, my details.
     import member_portal_church as mpc
+    import member_portal_sermons as mps
     if sub == "/my/events":
         occ = await asyncio.to_thread(mpc.upcoming_for, biz["id"], me)
-        return _page(mpc.render_events(biz, site, request, occ))
+        return _page(mpc.render_events(biz, site, request, occ, who=me))
     if sub == "/my/prayer":
-        return _page(mpc.render_prayer(biz, site, request))
+        return _page(mpc.render_prayer(biz, site, request, who=me))
     if sub == "/my/groups":
         data = await asyncio.to_thread(mpc.groups_for, biz["id"], me)
-        return _page(mpc.render_groups(biz, site, request, data))
+        return _page(mpc.render_groups(biz, site, request, data, who=me))
     if sub == "/my/details":
         full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"])
         if not full:
             return _page(render_try_again(biz, site), 503)
         return _page(mpc.render_details(biz, site, request, full))
-    if sub != "/my":
-        return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
-    try:
-        gifts: Optional[List[Dict[str, Any]]] = await asyncio.to_thread(gifts_for, biz["id"], me["id"], year)
-    except Exception:
-        logger.warning("member giving read failed", exc_info=True)
-        gifts = None
+    # Sermons, inside the app (member_portal_sermons.py).
+    if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
+        lib = await asyncio.to_thread(mps.load_library, biz["id"])
+        rest = sub[len("/my/sermons"):].strip("/")
+        if not rest:
+            series = str(request.query_params.get("series") or "")
+            return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else ""),
+                         200 if lib is not None else 503)
+        page = mps.render_sermon(biz, site, me, lib, rest) if UUID_RE.match(rest) else None
+        if page is None:
+            return RedirectResponse("/my/sermons", status_code=303, headers=_SECURE_HEADERS)
+        return _page(page, 200 if lib is not None else 503)
     from giving_router import giving_is_active
     give_url = "/give" if giving_is_active(biz) else ""
-    occ = await asyncio.to_thread(mpc.upcoming_for, biz["id"], me)
-    return _page(render_home(biz, site, me=me, people=sess["people"], year=year, gifts=gifts,
-                             give_url=give_url, this_year=this_year,
-                             part2=mpc.home_cards(occ), flash=mpc._flash(request)))
+    if sub == "/my/me":
+        try:
+            gifts: Optional[List[Dict[str, Any]]] = await asyncio.to_thread(gifts_for, biz["id"], me["id"], year)
+        except Exception:
+            logger.warning("member giving read failed", exc_info=True)
+            gifts = None
+        return _page(render_me(biz, site, me=me, people=sess["people"], year=year, gifts=gifts,
+                               give_url=give_url, this_year=this_year, flash=mpc._flash(request)))
+    if sub != "/my":
+        return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+    occ, groups, lib = await asyncio.gather(
+        asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
+        asyncio.to_thread(mpc.groups_for, biz["id"], me),
+        asyncio.to_thread(mps.load_library, biz["id"]))
+    return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
+                             give_url=give_url, flash=mpc._flash(request)))
 
 
 # ─── POST ────────────────────────────────────────────────────────────
