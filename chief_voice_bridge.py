@@ -13,6 +13,7 @@ import re
 import chief_fast_track as cft
 import chief_headline as headline
 import chief_models
+from chief_turn_direction import direction_for
 
 SYSTEM = """You are Chief, answering the owner's current question in a voice conversation.
 Give a useful opening answer from the supplied business records, while the full answer is prepared.
@@ -87,6 +88,8 @@ class VoiceBridge:
         return (self.text.rstrip() + " " + main_final.lstrip()).strip()
 
     def start(self, message, evidence, *, history=None, business_id=None, timeout=4.0):
+        if direction_for(message).brief_opener:
+            return
         records = headline.evidence_text(evidence)
         if not records:
             return

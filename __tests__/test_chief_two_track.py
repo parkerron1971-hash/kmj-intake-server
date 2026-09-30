@@ -136,6 +136,34 @@ def test_voice_opener_continues_without_holding_back_the_main_model(monkeypatch,
     assert "30 to 44 words" in calls[0]["system"]
 
 
+def test_refocused_voice_has_one_opening_and_shared_direction(monkeypatch, restore_chat):
+    from chief_turn_direction import direction_for
+    message = "Review my invoices. Actually, let's go back to the vision we were talking about."
+    first = "Let me pick up the vision discussion where we left off. "
+    extra = "I'll also check your invoices and goals."
+    fake, calls = _fake_stream(lambda ep: [(0.01, first + extra)])
+    monkeypatch.setattr(cft, 'stream_text', fake)
+    # Keep this test on the full route: the classifier has its own tests.
+    real_score = mr.score
+    def score(*args, **kwargs):
+        c = real_score(*args, **kwargs)
+        c.score = 1.0
+        c.confidence = 1.0
+        c.needs_records = True
+        return c
+    monkeypatch.setattr(mr, 'score', score)
+    answer = "The vision we discussed was helping founders launch. Which next step feels unclear?"
+    events, turns = asyncio.run(_run(_req(message, client_surface='voice'),
+                                     turn_reply=answer, turn_delay=.05))
+    assert direction_for(message).prompt() in calls[0]['system']
+    assert 'Write only one intent opening sentence' in calls[0]['messages'][-1]['content']
+    shown = ''.join(d['text'] for d in _deltas(events))
+    assert extra not in shown
+    assert shown.strip() == first.strip() + ' ' + answer
+    assert shown == events[-1][1]['payload']['response']
+    assert turns[0]['opening'] == ''  # the main model still starts concurrently
+
+
 def test_ready_answer_skips_a_slow_second_opener_sentence(monkeypatch, restore_chat):
     fake, _ = _fake_stream(lambda ep: [(0.01, "Let me check your invoices. "),
                                      (2, "I'll look for the next step.")])

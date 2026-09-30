@@ -68,6 +68,7 @@ import httpx
 from fastapi import APIRouter, Depends
 
 from chief_conversation import conversation_style
+from chief_turn_direction import direction_for
 import chief_models
 import llm_call
 import model_router as mr
@@ -353,7 +354,9 @@ def continuation_block(opener: str) -> str:
             + (f"So far it has said: «{said}». " if said else "")
             + "Begin directly with the substantive answer, not another acknowledgement, "
             "greeting, promise to check, or restatement of the request. Do not repeat the "
-            "opening. Establish every fact from the records as usual."
+            "opening or add an agenda such as 'Here is the plan' or 'Here is how I would'. "
+            "Start with the relevant fact, explanation, or focused question itself. "
+            "Establish every fact from the records as usual."
         )
     if not said:
         return ""
@@ -831,15 +834,18 @@ class TwoTrack:
             self.holder.finish()
             return
 
-        gate = mr.OpenerGate(self.message, max_words=VOICE_OPENER_MAX_WORDS if self.voice else mr.OpenerGate.MAX_WORDS,
-                             max_sentences=2 if self.voice else 1)
+        direction = direction_for(self.message)
+        fuller_voice = self.voice and not direction.brief_opener
+        gate = mr.OpenerGate(self.message, max_words=VOICE_OPENER_MAX_WORDS if fuller_voice else mr.OpenerGate.MAX_WORDS,
+                             max_sentences=2 if fuller_voice else 1)
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
-        system = self.style + "\n\n" + (_VOICE_OPENER_SYSTEM if self.voice else _OPENER_SYSTEM)
+        system = self.style + "\n\n" + (_VOICE_OPENER_SYSTEM if fuller_voice else _OPENER_SYSTEM)
+        system += direction.prompt()
         last = (_CONVO.get(self._key) or {}).get("last_opener")
         if last:
             system += f"\nYour last opening in this conversation was «{last}» — do not reuse it."
-        content = opener_request(self.message, voice=self.voice)
+        content = opener_request(self.message, voice=fuller_voice)
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, _history_tail(self.req) + [{"role": "user", "content": content}],
             model=chief_models.model_for("fast"),
@@ -948,6 +954,7 @@ class TwoTrack:
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
         system = self.style + "\n\n" + _FAST_SYSTEM + (_VOICE_NOTE if self.voice else "")
+        system += direction_for(self.message).prompt()
         if continuing and self.lead_text.strip():
             system += (f"\nYour reply has already begun with «{self.lead_text.strip()}»; continue "
                        "straight on from it without repeating it.")
