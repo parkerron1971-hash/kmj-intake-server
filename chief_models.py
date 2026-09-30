@@ -222,6 +222,7 @@ def effort_for(lane: str) -> str | None:
 VOICE_DELIVERY_BLOCK = """
 VOICE DELIVERY — this message arrived by voice and your reply will be spoken aloud via text-to-speech:
 - Keep it under ~110 words: one or two short spoken paragraphs. No markdown, no bullet lists, no headers, no emoji — they sound broken when read aloud.
+- For a question with multiple parts, finish the useful answer before one optional follow-up. If a fact is missing, say so briefly and continue with what you know; save requests for that fact until the end. No repeated caveats or extra offers to refine/save what they only asked you to explain. Keep your natural warmth and contractions.
 - Say numbers and dates naturally ("about twelve hundred dollars", "next Tuesday").
 - [ACTION:{...}] tags still work exactly as normal and are stripped before speech — emit them whenever you act, same as ever. Tools that act work here too; a tool call is silent, so say aloud what its result says.
 - If the answer wants a screen (any list, table, or set of figures), PUT IT THERE — emit the show_view tag and say the headline aloud while it lands: "Collection's at seventy-six percent — here, look at this." Never say it is on their screen without emitting the tag that puts it there; on a voice surface there is no transcript behind you, so an unaccompanied "it's on your screen" points at nothing.
