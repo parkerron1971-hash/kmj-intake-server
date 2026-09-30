@@ -166,8 +166,20 @@ def assistant_name(biz: Dict[str, Any]) -> str:
 
 
 def _clip(s: Any, n: int) -> str:
+    """Shorten to n characters the way a person would: at the end of a
+    sentence when one ends past halfway, else at a word boundary. A cut
+    mid-word ("Whatever your contex…") reads as a broken page."""
     s = " ".join(str(s or "").split())
-    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+    if len(s) <= n:
+        return s
+    head = s[: n - 1]
+    stop = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if stop >= n * 0.5:
+        return head[: stop + 1]
+    space = head.rfind(" ")
+    if space >= n * 0.6:
+        head = head[:space]
+    return head.rstrip(" ,;:-—") + "…"
 
 
 # ═══════════════════════════════════════════════════════════════════════

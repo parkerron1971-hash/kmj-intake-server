@@ -192,3 +192,17 @@ def test_profile_enum_keys_never_reach_the_page(kmj):
     for a in k["areas"]:
         for f in a["facts"]:
             assert "_" not in f, f
+
+
+def test_long_notes_end_at_a_sentence_or_a_word_never_mid_word():
+    # Live on KMJ the audience note read "...Whatever your contex…".
+    note = ("I work with entrepreneurs from all walks of life, some coming from a faith "
+            "background, others not. Whatever your context, the coaching is the same: "
+            "practical strategy paired with real accountability.")
+    assert bk._clip(note, 120) == ("I work with entrepreneurs from all walks of life, some coming "
+                                   "from a faith background, others not.")
+    no_stop = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+    out = bk._clip(no_stop, 30)
+    assert out.endswith("…")
+    assert out[:-1] in no_stop and no_stop[len(out) - 1] == " ", out
+    assert bk._clip("short", 30) == "short"
