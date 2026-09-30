@@ -635,6 +635,12 @@ async def health():
         "scheduler": scheduler.running,
         "next_followup_check": str(scheduler.get_job("followup_check").next_run_time)
                                if scheduler.get_job("followup_check") else None,
+        # Which commit this process is running. Railway sets it on every
+        # GitHub-triggered deploy. The deploy check (.github/workflows/
+        # deploy-check.yml) compares it with each merge, because "merged"
+        # has twice not meant "live": an unpaid Railway bill silently
+        # skipped deploys while every health check stayed green.
+        "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA") or None,
     }
 
 
