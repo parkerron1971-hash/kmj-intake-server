@@ -259,6 +259,39 @@ def test_the_opening_goes_out_word_by_word_not_at_the_end():
     assert first.startswith("Let me") and not g.closed
 
 
+@pytest.mark.parametrize("chunk_size", [1, 4, 1000])
+def test_voice_opening_allows_two_intent_sentences_but_not_a_third(chunk_size):
+    text = "Let me check the invoices. I'll look for anything that needs your attention. Let me keep talking."
+    g = mr.OpenerGate("Check invoices", max_words=48, max_sentences=2)
+    out = "".join(g.feed(text[i:i + chunk_size]) for i in range(0, len(text), chunk_size)) + g.finish()
+    assert out == "Let me check the invoices. I'll look for anything that needs your attention."
+    assert g.sentences == 2
+
+
+@pytest.mark.parametrize("second", ["You have three invoices.", "Maria paid yesterday.",
+                                  "I'll check the $300 balance.", "I'll check what's already sent."])
+def test_extra_voice_sentence_keeps_the_intent_and_fact_guards(second):
+    g = mr.OpenerGate("Check invoices", max_words=48, max_sentences=2)
+    out = g.feed("Let me check the invoices. " + second) + g.finish()
+    assert "three" not in out and "Maria" not in out and "$300" not in out and "already" not in out
+    assert g.cut_reason in ("no_intent_lead", "figure", "already")
+
+
+def test_voice_word_limit_is_shared_across_both_sentences():
+    g = mr.OpenerGate("check invoices", max_words=48, max_sentences=2)
+    text = "Let me check the invoices. I'll " + "check " * 80
+    out = g.feed(text) + g.finish()
+    assert len(out.split()) == 48 and g.cut_reason == "length"
+
+
+def test_ready_answer_finishes_current_sentence_without_starting_another():
+    g = mr.OpenerGate("check invoices", max_words=48, max_sentences=2)
+    out = g.feed("Let me check ")
+    g.stop_after_sentence = True
+    out += g.feed("the invoices. I'll look for anything urgent.") + g.finish()
+    assert out == "Let me check the invoices."
+
+
 def test_a_cut_opening_is_marked_dangling():
     _, g = _gate("Let me pull up the 3 invoices.", "any unpaid invoices?")
     assert g.dangling
