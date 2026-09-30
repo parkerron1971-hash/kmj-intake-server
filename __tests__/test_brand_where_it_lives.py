@@ -101,6 +101,33 @@ def test_the_old_shape_still_wins_where_it_exists():
     assert "--accent: #ff8800" in bpr._css_vars(bpr._brand_kit(biz))
 
 
+def test_the_brand_faces_are_actually_loaded():
+    """The page named the faces but never loaded them, so it fell back to
+    Georgia / system-ui. Both faces must arrive in one Google Fonts link."""
+    biz = {"id": "b1", "name": "Harbor & Pine",
+           "settings": {"brand_kit": _kit(), "booking_page": {"published": True}}}
+    html = bpr.render_booking_page(biz, "https://hp.mysolutionist.app/book",
+                                   embed_origin="https://example.com")
+    assert "fonts.googleapis.com/css2?family=Fraunces" in html
+    assert "family=Work%20Sans" in html
+    unpublished = bpr.render_not_published_page(biz, "https://hp.mysolutionist.app/book")
+    assert "family=Fraunces" in unpublished
+
+
+def test_no_brand_fonts_means_no_font_request():
+    biz = {"id": "b1", "name": "X", "settings": {"brand_kit": {}, "booking_page": {"published": True}}}
+    html = bpr.render_booking_page(biz, "https://x.mysolutionist.app/book", embed_origin="https://example.com")
+    assert "fonts.googleapis.com" not in html
+
+
+def test_giving_and_events_pages_load_the_faces_too():
+    import events_rsvp_router
+    import giving_router
+    biz = {"id": "b1", "name": "Harbor & Pine", "settings": {"brand_kit": _kit()}}
+    assert "family=Fraunces" in giving_router._brand_font_links(biz)
+    assert "family=Fraunces" in events_rsvp_router._brand_font_links(biz)
+
+
 def test_a_font_name_never_puts_a_quote_into_the_stylesheet():
     biz = {"settings": {"brand_kit": {"font_pair": {"heading": "Owner's Font\"; x", "body": "Work Sans"}}}}
     css = bpr._css_vars(bpr._brand_kit(biz))
