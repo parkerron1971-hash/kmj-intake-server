@@ -14527,8 +14527,7 @@ async def chief_chat(
             try:
                 import chief_fast_track as _cft
                 _opening = await _cft.opener_for_turn()
-                if _opening:
-                    system += _cft.continuation_block(_opening)
+                system += _cft.continuation_block(_opening)
             except Exception as e:  # pragma: no cover — never cost the turn
                 logger.warning(f"[chief] opener handoff failed: {e}")
             # Legacy headline, retained behind the rollback switch: on a question
@@ -15020,6 +15019,8 @@ async def chief_chat_stream(
                 or piece.startswith(PROSE_PREFIX)):
             return
         try:
+            if track is not None and piece.startswith(PROSE_PREFIX):
+                track.holder.answer_ready.set()
             q.put_nowait(piece)
         except Exception:
             pass
@@ -15045,6 +15046,8 @@ async def chief_chat_stream(
             # into the turn; resetting immediately keeps THIS request's
             # context clean for anything that runs after.
             turn = asyncio.create_task(chief_chat(req, user_session))
+            if track is not None:
+                turn.add_done_callback(lambda _task: track.holder.answer_ready.set())
             import chief_stream_replay
             _uid = getattr(getattr(user_session, "user", None), "id", None)
             if _uid:
