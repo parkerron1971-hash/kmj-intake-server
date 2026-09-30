@@ -309,6 +309,7 @@ def prepare(w, request_id, ask):
     body = {'ask': ask}
     if continuing:
         body['conversation_id'] = p['conversation_id']
+        p['request'] = (p.get('request', '') + '\n\n' + ask)[-12000:]
     else:
         if p:
             w.state['history'] = (w.state.get('history', []) + [p])[-20:]
