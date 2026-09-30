@@ -52,6 +52,8 @@ DONE = {
     "cant": "Thanks for letting us know.",
     "prayer": "Your prayer request was sent privately to the pastor.",
     "details": "Your details are saved.",
+    "joined": "You're in. The group's leader will see you on the list.",
+    "left": "You've left that group.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -63,6 +65,10 @@ ERRORS = {
     "slow": "That's a lot at once. Wait a few minutes, then try again.",
     "empty": "Write your prayer request first.",
     "phone": "That phone number doesn't look right.",
+    "group_full": "That group is full now. Ask the church office about the next one.",
+    "group_closed": "That group isn't taking new people right now.",
+    "group_gone": "That group isn't running any more.",
+    "leader": "You lead this group, so to step down, talk to the church office.",
 }
 
 
@@ -287,6 +293,152 @@ def update_details(business_id: str, contact_id: str, details: Dict[str, Any]) -
 # ─── Pages ────────────────────────────────────────────────────────────
 
 
+# ─── Groups ───────────────────────────────────────────────────────────
+# "My groups": the groups this member belongs to, and the current ones
+# open to new people that they could join. A member sees when and where a
+# group meets and its leaders' FIRST names — never who else belongs (no
+# member directory in v1). Joining an open group adds them as a member at
+# once; the leader sees them on the Groups page. A leader can't leave
+# here (they talk to the office), so a group is never left leaderless by
+# a tap.
+
+GROUP_KINDS = {"small_group": "Small group", "team": "Serving team", "class": "Class", "ministry": "Ministry"}
+
+
+def _first(name: Any) -> str:
+    return (str(name or "").strip().split(" ") or [""])[0]
+
+
+def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[Dict[str, Any]]]]:
+    """{'mine': [...], 'open': [...]}, or None when the records couldn't be
+    read (the page says "try again" rather than showing no groups)."""
+    groups = sb_clients.sb_get_as_service(
+        f"/groups?business_id=eq.{business_id}&active=eq.true"
+        f"&select=id,name,kind,description,meets,location,capacity,open_to_join&order=name.asc&limit=500")
+    members = sb_clients.sb_get_as_service(
+        f"/group_members?business_id=eq.{business_id}&select=group_id,contact_id,role&limit=20000")
+    if groups is None or members is None:
+        return None
+    leader_ids = sorted({str(m["contact_id"]) for m in members if m.get("role") == "leader"})
+    names: Dict[str, str] = {}
+    for i in range(0, len(leader_ids), 150):
+        rows = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{business_id}&id=in.({','.join(leader_ids[i:i + 150])})&select=id,name")
+        if rows is None:
+            return None
+        names.update({str(r["id"]): _first(r.get("name")) for r in rows})
+    me_id = str(me["id"])
+    my_role = {str(m["group_id"]): m.get("role") for m in members if str(m["contact_id"]) == me_id}
+    count: Dict[str, int] = {}
+    for m in members:
+        count[str(m["group_id"])] = count.get(str(m["group_id"]), 0) + 1
+    mine, open_ = [], []
+    for g in groups:
+        gid = str(g["id"])
+        item = {
+            "id": gid, "name": g.get("name") or "", "kind": GROUP_KINDS.get(g.get("kind"), "Group"),
+            "about": g.get("description") or "", "meets": g.get("meets") or "", "location": g.get("location") or "",
+            "leaders": [names[str(m["contact_id"])] for m in members
+                        if str(m["group_id"]) == gid and m.get("role") == "leader" and str(m["contact_id"]) in names],
+            "full": bool(g.get("capacity")) and count.get(gid, 0) >= int(g["capacity"]),
+        }
+        if gid in my_role:
+            mine.append({**item, "role": my_role[gid]})
+        elif g.get("open_to_join") and not item["full"]:
+            open_.append(item)
+    return {"mine": mine, "open": open_}
+
+
+def member_join(business_id: str, me: Dict[str, Any], group_id: str) -> Tuple[bool, str]:
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?id=eq.{quote(group_id, safe='')}&business_id=eq.{business_id}"
+        f"&select=id,active,open_to_join,capacity&limit=1")
+    if rows is None:
+        return False, "error"
+    if not rows or not rows[0].get("active"):
+        return False, "group_gone"
+    g = rows[0]
+    if not g.get("open_to_join"):
+        return False, "group_closed"
+    if g.get("capacity"):
+        members = sb_clients.sb_get_as_service(f"/group_members?group_id=eq.{g['id']}&select=contact_id&limit=10001")
+        if members is None:
+            return False, "error"
+        if any(str(m["contact_id"]) == str(me["id"]) for m in members):
+            return True, "joined"
+        if len(members) >= int(g["capacity"]):
+            return False, "group_full"
+    saved = sb_clients.sb_post_as_service(
+        "/group_members?on_conflict=group_id,contact_id",
+        {"group_id": g["id"], "contact_id": str(me["id"]), "business_id": business_id, "role": "member"},
+        prefer="return=representation,resolution=ignore-duplicates")
+    if saved is None:
+        return False, "error"
+    return True, "joined"
+
+
+def member_leave(business_id: str, me: Dict[str, Any], group_id: str) -> Tuple[bool, str]:
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{quote(group_id, safe='')}&contact_id=eq.{me['id']}"
+        f"&business_id=eq.{business_id}&select=role&limit=1")
+    if rows is None:
+        return False, "error"
+    if not rows:
+        return True, "left"
+    if rows[0].get("role") == "leader":
+        return False, "leader"
+    ok = sb_clients.sb_delete_as_service(
+        f"/group_members?group_id=eq.{quote(group_id, safe='')}&contact_id=eq.{me['id']}"
+        f"&business_id=eq.{business_id}&role=eq.member")
+    return (True, "left") if ok else (False, "error")
+
+
+def _group_card(g: Dict[str, Any], action: str) -> str:
+    from member_portal import _e
+    gid = _e(g["id"])
+    title_id = f"mp-grp-{gid}"
+    facts = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
+    leaders = g.get("leaders") or []
+    led = f'<p class="mp-muted">Led by {_e(", ".join(leaders))}</p>' if leaders else ""
+    about = f'<p>{_e(g["about"])}</p>' if g.get("about") else ""
+    you = '<p class="mp-mine">You lead this group.</p>' if g.get("role") == "leader" else ""
+    button = ""
+    if action == "join":
+        button = (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
+                  f'<input type="hidden" name="action" value="join">'
+                  f'<button class="mp-go" type="submit" aria-describedby="{title_id}">Join</button></form>')
+    elif action == "leave" and g.get("role") != "leader":
+        button = (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
+                  f'<input type="hidden" name="action" value="leave">'
+                  f'<button class="mp-link" type="submit" aria-describedby="{title_id}">Leave this group</button></form>')
+    return f"""<article class="mp-card mp-occ" aria-labelledby="{title_id}">
+  <p class="mp-when">{_e(g.get('kind') or '')}</p>
+  <h3 id="{title_id}">{_e(g.get('name') or '')}</h3>
+  {f'<p class="mp-muted">{facts}</p>' if facts else ''}
+  {led}{about}{you}
+  <div class="mp-actions">{button}</div>
+</article>"""
+
+
+def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dict[str, Any]]]]) -> str:
+    from member_portal import _shell
+    if data is None:
+        body = '<p class="mp-err" role="alert">Groups couldn\'t load just now. Please try again in a moment.</p>'
+    else:
+        mine = "".join(_group_card(g, "leave") for g in data["mine"]) or \
+            '<p class="mp-muted">You\'re not in a group yet.</p>'
+        open_ = "".join(_group_card(g, "join") for g in data["open"]) or \
+            '<p class="mp-muted">No groups are taking new people right now. Ask the church office what\'s starting soon.</p>'
+        body = (f'<section aria-labelledby="mp-mine-h"><h2 id="mp-mine-h" class="mp-sect">My groups</h2>{mine}</section>'
+                f'<section aria-labelledby="mp-open-h"><h2 id="mp-open-h" class="mp-sect">Groups you can join</h2>{open_}</section>')
+    return _shell(biz, site, "Groups", f"""
+<p><a class="mp-link" href="/my">← My page</a></p>
+<h1>Groups</h1>
+<p class="mp-muted">Smaller circles to belong to: small groups, serving teams and classes.</p>
+{_flash(request)}
+{body}""")
+
+
 def _flash(request: Request) -> str:
     from member_portal import _e
     done = DONE.get(request.query_params.get("done") or "")
@@ -430,6 +582,7 @@ def home_cards(occasions: Optional[List[Dict[str, Any]]]) -> str:
 <div class="mp-card mp-tiles">
   <a class="mp-tile" href="/my/prayer"><strong>Prayer</strong><span>Send a private request to the pastor</span></a>
   <a class="mp-tile" href="/my/details"><strong>My details</strong><span>Phone and mailing address</span></a>
+  <a class="mp-tile" href="/my/groups"><strong>Groups</strong><span>Your groups, and ones you can join</span></a>
 </div>"""
 
 
@@ -453,7 +606,7 @@ async def _signed_in(request: Request):
 
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if target not in ("/my", "/my/events", "/my/prayer", "/my/details"):
+    if target not in ("/my", "/my/events", "/my/prayer", "/my/details", "/my/groups"):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
@@ -532,3 +685,23 @@ async def details(request: Request):
             if new and new != claims["em"]:
                 mp._set_session(resp, mp.mint_session(biz["id"], new, str(me["id"])))
     return resp
+
+
+@router.post("/my/groups", include_in_schema=False)
+async def groups(request: Request):
+    import asyncio
+    church, me, unavailable = await _signed_in(request)
+    if unavailable:
+        return _back("/my/groups", err="error")
+    if not me:
+        return _back("/my")
+    form = await request.form()
+    group_id = str(form.get("group_id") or "")
+    action = str(form.get("action") or "")
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", group_id) or action not in ("join", "leave"):
+        return _back("/my/groups", err="group_gone")
+    if not _allowed(church, me):
+        return _back("/my/groups", err="slow")
+    fn = member_join if action == "join" else member_leave
+    ok, code = await asyncio.to_thread(fn, church["business"]["id"], me, group_id)
+    return _back("/my/groups", **({"done": code} if ok else {"err": code}))

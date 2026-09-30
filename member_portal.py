@@ -760,6 +760,9 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         return _page(mpc.render_events(biz, site, request, occ))
     if sub == "/my/prayer":
         return _page(mpc.render_prayer(biz, site, request))
+    if sub == "/my/groups":
+        data = await asyncio.to_thread(mpc.groups_for, biz["id"], me)
+        return _page(mpc.render_groups(biz, site, request, data))
     if sub == "/my/details":
         full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"])
         if not full:
