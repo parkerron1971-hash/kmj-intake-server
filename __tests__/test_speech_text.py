@@ -26,6 +26,23 @@ import speech_text
 from speech_text import normalize_for_speech as n
 
 
+@pytest.mark.parametrize('raw, expected', [
+    ('Sept 30, 2026.', 'September 30, 2026.'),
+    ('Due Sept. 30 for $400.', 'Due September 30 for four hundred dollars.'),
+    ('30 Sep 2026', '30 September 2026'),
+    ('Back in sept.', 'Back in September.'),
+    ('Jan. 5 and Dec 12', 'January 5 and December 12'),
+    ('Feb 2027', 'February 2027'),
+    ('Jan Smith may call about the APR.', 'Jan Smith may call about the APR.'),
+    ('APR 12.5%', 'APR 12.5 percent'),
+    ('APR 12 percent', 'APR 12 percent'),
+    ('September and Septemberfest', 'September and Septemberfest'),
+])
+def test_months_are_spoken_in_full_without_changing_names(raw, expected):
+    assert n(raw) == expected
+    assert n(n(raw)) == expected
+
+
 # ── the shapes ───────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("raw,expected", [

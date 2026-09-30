@@ -90,7 +90,10 @@ async def relay(ws, up, business_id, user_id):
                 submitted_at = time.perf_counter()
             chars += len(text)
             tts._note_el_chars(business_id, len(text))
-            await up.send(json.dumps({"text": spoken + " ", "flush": True}))
+            # Complete sentences generate directly in auto_mode; a forced
+            # per-fragment flush is unnecessary. Empty text at finish drains
+            # the tail without closing between the opening and main answer.
+            await up.send(json.dumps({"text": spoken + " "}))
 
     async def read_audio():
         nonlocal first_audio

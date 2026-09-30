@@ -14535,6 +14535,24 @@ async def chief_chat(
             # from the records just read, proven sentence by sentence by this
             # turn's own streamer — then the main model continues from it.
             _headline_said = ""
+            _voice_bridge = None
+            if (lane == "voice" and chief_truth.continuous_stream_enabled()
+                    and isinstance(_sentence_streamer, _SentenceStreamer) and _evidence):
+                import chief_headline as _hl
+                import chief_voice_bridge as _vb
+                _prior_reply = next((m.content for m in reversed(history)
+                                     if m.role == "assistant"), "")
+                if _hl.eligible(req.message or "", _prior_reply, lane=lane,
+                                is_greeting=is_greeting, is_coach_mode=is_coach_mode):
+                    _voice_bridge = _vb.VoiceBridge(
+                        _STREAM_SINK.get(), _prover, _SentenceStreamer, prefix=PROSE_PREFIX)
+                    _sentence_streamer._sink = _voice_bridge.main
+                    _voice_bridge.start(req.message or "", _evidence,
+                                        history=api_messages[:-1], business_id=biz.get("id"))
+                    system += ("\nA short verified preview of relevant business records may be "
+                               "spoken concurrently. Begin directly with the answer and explanation. "
+                               "Still give the complete answer: do not assume the preview succeeded "
+                               "or omit any requested detail, qualification, or correction.")
             if (not chief_truth.continuous_stream_enabled()
                     and isinstance(_sentence_streamer, _SentenceStreamer) and _evidence):
                 try:
@@ -14551,36 +14569,41 @@ async def chief_chat(
                             system += _hl.continuation_block(_headline_said)
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] headline skipped: {e}")
-            raw = await _call_claude(client, system, api_messages,
-                                     max_tokens=turn_tokens,
-                                     model=chief_models.model_for(lane, _plan),
-                                     # A turn that is plainly an
-                                     # instruction — "you send that text
-                                     # for me", "yes", "go ahead" — has
-                                     # nothing to look up. Seen 2026-09-02:
-                                     # the model reached for web_search on
-                                     # exactly that turn, then spent its
-                                     # reply apologising for the search.
-                                     enable_web_search=_web_search_allowed(req.message or ""),
-                                     # Same tools every turn; the choice rides the
-                                     # uncached tail (cache: see _call_claude).
-                                     stable_tools=True,
-                                     # Voice streaming arc — set only when
-                                     # /chat/stream drives this turn.
-                                     stream_sink=_sentence_streamer,
-                                     read_tools=_read_tools,
-                                     tool_biz=biz,
-                                     effort=chief_models.effort_for(lane))
-            if isinstance(_sentence_streamer, _SentenceStreamer):
-                _sentence_streamer.finish_input()
+            try:
+                raw = await _call_claude(client, system, api_messages,
+                                         max_tokens=turn_tokens,
+                                         model=chief_models.model_for(lane, _plan),
+                                         # A turn that is plainly an
+                                         # instruction — "you send that text
+                                         # for me", "yes", "go ahead" — has
+                                         # nothing to look up. Seen 2026-09-02:
+                                         # the model reached for web_search on
+                                         # exactly that turn, then spent its
+                                         # reply apologising for the search.
+                                         enable_web_search=_web_search_allowed(req.message or ""),
+                                         # Same tools every turn; the choice rides the
+                                         # uncached tail (cache: see _call_claude).
+                                         stable_tools=True,
+                                         # Voice streaming arc — set only when
+                                         # /chat/stream drives this turn.
+                                         stream_sink=_sentence_streamer,
+                                         read_tools=_read_tools,
+                                         tool_biz=biz,
+                                         effort=chief_models.effort_for(lane))
+                if isinstance(_sentence_streamer, _SentenceStreamer):
+                    _sentence_streamer.finish_input()
+            finally:
+                if _voice_bridge is not None:
+                    await _voice_bridge.close()
             _t.mark("model")
             _t.tools = chief_tool_loop.calls_this_turn()
             if not raw:
                 raw = _image_action_summary(chief_tool_loop.writes_this_turn())
             if not raw:
                 _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
+                _unavailable = "I'm having trouble connecting right now — give me a moment and try again."
                 return {
-                    "response": "I'm having trouble connecting right now — give me a moment and try again.",
+                    "response": _voice_bridge.stitch(_unavailable) if _voice_bridge is not None else _unavailable,
                     "actions_taken": [],
                 }
 
@@ -14853,6 +14876,8 @@ async def chief_chat(
                     _headline_said, _sentence_streamer.text, response_text)
             elif isinstance(_sentence_streamer, _SentenceStreamer) and _sentence_streamer.text:
                 response_text = _stitch_after_stream(_sentence_streamer.text, response_text)
+            if _voice_bridge is not None and _voice_bridge.text:
+                response_text = _voice_bridge.stitch(response_text)
 
             # The turn goes on file (2026-09-04) — every turn, every
             # surface, no model call — so recall_conversation reads a
