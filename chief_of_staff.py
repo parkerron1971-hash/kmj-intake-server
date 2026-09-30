@@ -217,6 +217,7 @@ from chief_offering_actions import (
 # The browser hand (2026-09-04) — proposes; the approval starts the job.
 from chief_link_pilot import handle_link_wallet_pilot
 from chief_lane_wallet import handle_lane_wallet
+from chief_agentcard import handle_agentcard_wallet
 from chief_site_view import handle_view_website
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
@@ -11255,6 +11256,7 @@ ACTION_HANDLERS = {
     "use_browser_hand":      handle_use_browser_hand,
     "link_wallet_pilot":     handle_link_wallet_pilot,
     "lane_wallet":           handle_lane_wallet,
+    "agentcard_wallet":      handle_agentcard_wallet,
     "view_website":          handle_view_website,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
@@ -12413,7 +12415,11 @@ async def _execute_actions(client, biz, actions: List[Dict],
             resolved["_unattended"] = True
 
         try:
-            if atype == 'lane_wallet':
+            if atype == 'agentcard_wallet':
+                import chief_agentcard
+                res = await chief_agentcard.dispatch(client, biz, resolved,
+                    surface=surface, prompted=prompted, user_id=user_id)
+            elif atype == 'lane_wallet':
                 import chief_lane_wallet
                 res = await chief_lane_wallet.dispatch(client, biz, resolved,
                     surface=surface, prompted=prompted, user_id=user_id)

@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "agentcard_wallets": "encrypted customer OAuth credentials and wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_purchases": "encrypted wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_saved_links": "owner-saved Lane merchant links encrypted under the server key; never portable, cascade on user/business deletion",
     "link_wallet_sessions": "encrypted Link OAuth credentials and pending authorization; never portable, cascade on user/business deletion",
@@ -158,6 +159,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Groups: who came to each meeting, the meetings, the roster, then
     # the groups — all before contacts.
     "group_meeting_attendance", "group_meetings", "group_members", "groups",
+    "sermons", "sermon_series",   # sermons before the series they point at
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -615,6 +617,8 @@ _IMPORT_SKIP = {
     "child_checkins",
     # Groups link contacts and each other by id; same reason.
     "groups", "group_members", "group_meetings", "group_meeting_attendance",
+    # Sermons cite their series by id; same reason.
+    "sermon_series", "sermons",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
