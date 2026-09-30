@@ -320,6 +320,15 @@ def _lane_wallet_offered() -> bool:
             and action_registry.effect('lane_wallet') == action_registry.WRITE)
 
 
+def _agentcard_offered() -> bool:
+    import os
+    from chief_of_staff import _TURN_USER_ID
+    allowed = os.getenv('AGENTCARD_ALLOWED_USER_IDS', '')
+    return bool(_writes_allowed.get() and _turn_surface.get() == 'chat' and _turn_prompted.get()
+        and os.getenv('AGENTCARD_ENABLED') == 'true' and _TURN_USER_ID.get()
+        and (not allowed or _TURN_USER_ID.get() in allowed.split(',')))
+
+
 def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
     """Reads always; writes when the turn allows them; PROPOSALS — the
     reviewed class C verbs, filed for the practitioner's approval rather
@@ -335,6 +344,9 @@ def tool_definitions_for_turn(writes: bool) -> List[Dict[str, Any]]:
         if _lane_wallet_offered():
             from chief_lane_wallet import tool_definition as lane_definition
             tools.append(lane_definition())
+        if _agentcard_offered():
+            from chief_agentcard import tool_definition as agentcard_definition
+            tools.append(agentcard_definition())
         if _link_pilot_offered():
             from chief_link_pilot import tool_definition
             tools.append(tool_definition())
@@ -475,7 +487,8 @@ async def _execute_write(client, biz: Dict[str, Any],
                       f"this turn. Operations go through [ACTION:] tags in your reply.")
     if not (_write_verb_offered(name) or (name == "generate_image" and _image_tool_offered())
             or (name == 'link_wallet_pilot' and _link_pilot_offered())
-            or (name == 'lane_wallet' and _lane_wallet_offered())):
+            or (name == 'lane_wallet' and _lane_wallet_offered())
+            or (name == 'agentcard_wallet' and _agentcard_offered())):
         # Class C, bulk, unreviewed, or sensitive. The same flat sentence
         # the agent surface uses, so a refusal is never a hint that a
         # scope or a retry would help.

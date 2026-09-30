@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "agentcard_wallets": "encrypted customer OAuth credentials and wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_purchases": "encrypted wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_saved_links": "owner-saved Lane merchant links encrypted under the server key; never portable, cascade on user/business deletion",
     "link_wallet_sessions": "encrypted Link OAuth credentials and pending authorization; never portable, cascade on user/business deletion",

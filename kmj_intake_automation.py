@@ -249,6 +249,8 @@ app.include_router(link_wallet_router)
 import lane_purchases  # Register purchase routes before mounting the shared Lane router.
 from lane_wallet import router as lane_wallet_router
 app.include_router(lane_wallet_router)
+from agentcard_wallet import router as agentcard_wallet_router
+app.include_router(agentcard_wallet_router)
 from connected_ai import router as connected_ai_router
 app.include_router(connected_ai_router)
 # The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.
