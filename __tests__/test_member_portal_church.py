@@ -172,7 +172,7 @@ def test_upcoming_marks_my_answer(fake):
 def test_failed_read_is_not_nothing(monkeypatch):
     monkeypatch.setattr(mpc.sb_clients, "sb_get_as_service", lambda p: None)
     assert mpc.upcoming_for(BIZ, ME) is None
-    assert "couldn't load" in mpc.home_cards(None)
+    assert "couldn't load" in mpc.coming_up(None)
 
 
 # ─── 2. prayer ────────────────────────────────────────────────────────

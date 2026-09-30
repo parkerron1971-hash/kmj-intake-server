@@ -80,9 +80,13 @@ def player_html(s: Dict[str, Any]) -> str:
     parts = []
     video = (s.get("video_url") or "").strip()
     src = video_embed_src(video)
+    # The member app's pages send Referrer-Policy: no-referrer; YouTube's
+    # player refuses to play with no referrer at all, so the frame asks
+    # for the origin (never the path) on its own.
     if src:
         parts.append(f'<div class="sm-video"><iframe src="{_esc(src)}" title="{_esc(s.get("title"))}" '
-                     f'loading="lazy" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media">'
+                     f'loading="lazy" allowfullscreen referrerpolicy="strict-origin-when-cross-origin" '
+                     f'allow="autoplay; fullscreen; picture-in-picture; encrypted-media">'
                      f'</iframe></div>')
     elif video:
         parts.append(f'<p><a class="sm-go" href="{_esc(video)}" target="_blank" rel="noopener">Watch this message</a></p>')
