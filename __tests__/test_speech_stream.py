@@ -51,7 +51,8 @@ def test_audio_flows_before_finish_and_before_usage_logging(monkeypatch):
         await asyncio.wait_for(task,1)
         assert len(ws.audio)==2 and ws.events[-1]['type']=='done'
         assert len(logged)==1 and logged[0]['input_tokens']==43
-        assert up.inputs[0]['flush'] is True
+        assert all('flush' not in m for m in up.inputs)
+        assert up.inputs[-1] == {'text': ''}  # finish drains the provider buffer
     asyncio.run(run())
 
 def test_connection_requires_verified_business_owner(monkeypatch):
