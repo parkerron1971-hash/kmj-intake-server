@@ -482,6 +482,13 @@ def _set_session(resp, value: str) -> None:
 # ─── Pages (pure renderers) ─────────────────────────────────────────
 
 
+def palette_for(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """The member app's colours for this church (member_app_ui.palette)."""
+    import member_app_ui as ui
+    from public_form_theme import resolve_theme
+    return ui.palette(biz, resolve_theme(biz, site))
+
+
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None) -> str:
@@ -493,7 +500,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     theme = resolve_theme(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
     logo = theme.get("logo_url") or ""
-    logo_html = f'<img class="mp-logo" src="{_e(logo)}" alt="">' if logo else ""
+    mark = f'<img src="{_e(logo)}" alt="">' if logo else _e(ui.initials(name))
     avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me">{_e(ui.initials(who.get("name")))}</a>'
               if who else "")
     signed_in = tab is not None
@@ -503,15 +510,15 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="{ui.GROUND}">
+<meta name="theme-color" content="{ui.palette(biz, theme)['ground']}">
 <title>{_e(title)} — {_e(name)}</title>
 {font_links(theme)}
 <style>{css_vars(theme)}</style>
-<style>{ui.css(theme)}</style>
+<style>{ui.css(biz, theme)}</style>
 </head>
 <body>
 <main class="mp-shell{' mb-has-nav' if signed_in else ''}">
-  <header class="mb-top"><span class="mb-brand">{logo_html}<p class="mp-church">{_e(name)}</p></span>{avatar}</header>
+  <header class="mb-top"><span class="mb-brand"><span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p></span>{avatar}</header>
   {body}
   <footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>
 </main>
@@ -591,68 +598,101 @@ anyone who reads it can see each of these people's giving. Choose yourself.</p>
 
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
                 give_url: str, flash: str = "") -> str:
-    """Home: what's next, the latest message, this person's week, what
-    they haven't answered yet, and three quick ways in."""
+    """Home: a greeting with the date, the next gathering, four quick ways
+    in (Give is the one filled button), the latest message, this person's
+    week, then what they haven't answered yet. The greeting and date are
+    set by the phone's own clock (the server can't know the member's
+    time of day); without script it reads "Hi, Ana"."""
     import member_app_ui as ui
     import member_portal_church as mpc
     import member_portal_sermons as mps
+    pal = palette_for(biz, site)
     hello = first_name(me.get("name") or "") or "there"
     quick = []
     if give_url:
-        quick.append(f'<a href="{_e(give_url)}">{ui.icon("heart", 18)}Give</a>')
-    quick.append(f'<a href="/my/prayer">{ui.icon("lock", 18)}Prayer</a>')
-    quick.append(f'<a href="/my/events">{ui.icon("calendar", 18)}Events</a>')
+        quick.append(f'<a class="mb-main" href="{_e(give_url)}"><span>{ui.icon("heart")}</span>Give</a>')
+    quick.append(f'<a href="/my/prayer"><span>{ui.icon("lock")}</span>Prayer</a>')
+    quick.append(f'<a href="/my/events"><span>{ui.icon("calendar")}</span>Events</a>')
+    quick.append(f'<a href="/my/groups"><span>{ui.icon("users")}</span>Groups</a>')
+    script = """<script>(function(){var d=new Date(),h=d.getHours();
+var g=h<12?'Good morning':(h<17?'Good afternoon':'Good evening');
+var t=document.querySelector('.mb-date');if(t){t.textContent=d.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});}
+var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+',',document.createElement('br'),e.getAttribute('data-first'));}
+})();</script>"""
     return _shell(biz, site, "Home", f"""
-<h1>Hi, {_e(hello)}</h1>
+<p class="mb-date" aria-hidden="true"></p>
+<h1 class="mb-hello" data-first="{_e(hello)}">Hi, {_e(hello)}</h1>
 {flash}
-{mpc.next_strip(occasions)}
-{mps.latest_hero(library)}
-{mpc.week_list(occasions, groups)}
+{mpc.next_card(occasions)}
 <nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
-{mpc.coming_up(occasions)}""", tab="home", who=me)
+{mps.latest_card(library, pal)}
+{mpc.week_cards(occasions, groups)}
+{mpc.coming_up(occasions)}""", tab="home", who=me, script=script)
+
+
+def _month_bars(gifts: List[Dict[str, Any]], year: int, this_year: int) -> str:
+    """Twelve bars, one per month of the year shown; the current month
+    (or, for a past year, the biggest) is the bright one."""
+    totals = [0.0] * 12
+    for g in gifts:
+        try:
+            m = int(str(g.get("date") or "")[5:7]) - 1
+        except ValueError:
+            continue
+        if 0 <= m < 12:
+            totals[m] += max(0.0, float(g.get("amount") or 0))
+    top = max(totals) or 1.0
+    hi = date.today().month - 1 if year == this_year else totals.index(max(totals))
+    bars = "".join(f'<i{" class=\"mb-on\"" if i == hi else ""} style="height:{max(6, round(v / top * 100))}%"></i>'
+                   for i, v in enumerate(totals))
+    months = "".join(f"<span>{m}</span>" for m in "JFMAMJJASOND")
+    return f'<div class="mb-bars" aria-hidden="true">{bars}</div><div class="mb-months" aria-hidden="true">{months}</div>'
 
 
 def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
               year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
               this_year: int, flash: str = "") -> str:
-    """Me: this person's giving (and statements), and the ways to look
-    after their own record — prayer, details, groups, sign out."""
+    """Me: this person's giving (a year's total, month by month, each gift
+    and the statement), then the ways to look after their own record."""
     import member_app_ui as ui
     years = "".join(
         f'<a href="/my/me?year={y}"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
         for y in range(this_year, this_year - 4, -1))
+    statement = ""
     if gifts is None:
         giving = ('<p class="mp-err" role="alert">Your giving couldn\'t load just now. Your gifts are safe — '
                   'please try again in a moment.</p>')
     elif not gifts:
-        giving = f'<p class="mp-muted">No gifts recorded for {year}.</p>'
+        giving = f'<p class="mp-muted" style="margin-top:10px">No gifts recorded for {year}.</p>'
     else:
         total = sum(g["amount"] for g in gifts)
         items = "".join(
             f'<li><span>{_e(_day(g["date"]))} · {_e(g["fund"])}{" (refunded)" if g["refunded"] else ""}</span>'
             f'<span>{money(g["amount"])}</span></li>' for g in gifts)
-        giving = (f'<p class="mp-muted">Given in {year}</p><p class="mp-total">{money(total)}</p>'
-                  f'<p class="mp-muted">{len(gifts)} gift{"" if len(gifts) == 1 else "s"}</p>'
-                  f'<ul class="mp-gifts">{items}</ul>'
-                  f'<p style="margin-top:14px"><a class="mp-go mp-go-2" style="width:100%" href="/my/statement?year={year}">Year-end statement for {year}</a></p>')
-    give = (f'<p style="margin-top:12px"><a class="mp-go" href="{_e(give_url)}">{ui.icon("heart", 16)}Give</a></p>'
-            if give_url else "")
+        giving = (f'<p class="mp-muted" style="margin:10px 0 0">Given in {year}</p><p class="mp-total">{money(total)}</p>'
+                  f'{_month_bars(gifts, year, this_year)}'
+                  f'<details class="mb-each"><summary>See each gift ({len(gifts)})</summary><ul class="mp-gifts">{items}</ul></details>')
+        statement = (f'<a class="mp-go mp-go-2" href="/my/statement?year={year}">{ui.icon("doc", 16)}'
+                     f'{year} statement</a>')
+    give = f'<a class="mp-go" href="{_e(give_url)}">{ui.icon("heart", 16)}Give</a>' if give_url else ""
+    buttons = f'<div class="mb-give-row">{give}{statement}</div>' if give and statement else (
+        f'<div style="margin-top:14px">{give or statement}</div>' if (give or statement) else "")
     switch = ('<form method="post" action="/my/person"><input type="hidden" name="cid" value="">'
               '<button class="mp-link" type="submit">Not you? Choose someone else in your household</button></form>'
               if len(people) > 1 else "")
     link = lambda href, ic, title, sub: (
-        f'<li><a href="{href}">{ui.icon(ic, 20)}<span class="mb-list-text"><strong>{title}</strong>'
+        f'<li><a href="{href}"><span class="mb-list-ic">{ui.icon(ic, 18)}</span><span class="mb-list-text"><strong>{title}</strong>'
         f'<span>{sub}</span></span>{ui.icon("chevron", 16)}</a></li>')
     return _shell(biz, site, "Me", f"""
 <div class="mb-profile"><span class="mb-avatar" aria-hidden="true">{_e(ui.initials(me.get('name')))}</span>
-  <span><h1 style="margin:0">{_e(me.get('name') or 'Me')}</h1>
+  <span><h1>{_e(me.get('name') or 'Me')}</h1>
   <span class="mp-muted">Your page at {_e(biz.get('name') or 'the church')}</span></span></div>
 {flash}
 <h2 class="mp-sect" id="mp-giving">My giving</h2>
 <section class="mp-card" aria-labelledby="mp-giving">
   <nav class="mp-years" aria-label="Year">{years}</nav>
   {giving}
-  {give}
+  {buttons}
 </section>
 <h2 class="mp-sect">My church life</h2>
 <ul class="mb-list">
@@ -766,6 +806,8 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         if not full:
             return _page(render_try_again(biz, site), 503)
         return _page(mpc.render_details(biz, site, request, full))
+    from giving_router import giving_is_active
+    give_url = "/give" if giving_is_active(biz) else ""
     # Sermons, inside the app (member_portal_sermons.py).
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
         lib = await asyncio.to_thread(mps.load_library, biz["id"])
@@ -774,12 +816,10 @@ async def serve(request: Request, path: str) -> HTMLResponse:
             series = str(request.query_params.get("series") or "")
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else ""),
                          200 if lib is not None else 503)
-        page = mps.render_sermon(biz, site, me, lib, rest) if UUID_RE.match(rest) else None
+        page = mps.render_sermon(biz, site, me, lib, rest, give_url) if UUID_RE.match(rest) else None
         if page is None:
             return RedirectResponse("/my/sermons", status_code=303, headers=_SECURE_HEADERS)
         return _page(page, 200 if lib is not None else 503)
-    from giving_router import giving_is_active
-    give_url = "/give" if giving_is_active(biz) else ""
     if sub == "/my/me":
         try:
             gifts: Optional[List[Dict[str, Any]]] = await asyncio.to_thread(gifts_for, biz["id"], me["id"], year)
