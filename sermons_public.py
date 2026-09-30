@@ -157,6 +157,7 @@ html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-prim
 .sm-video iframe{{position:absolute;inset:0;width:100%;height:100%;border:0;}}
 .sm-audio{{width:100%;margin:10px 0;}}
 .sm-card{{border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;margin-bottom:16px;}}
+.sm-card>:first-child{{margin-top:0;}}.sm-card>:last-child{{margin-bottom:0;}}
 .sm-text{{font-size:16px;line-height:1.65;white-space:pre-line;}}
 .sm-list{{list-style:none;margin:0;padding:0;border-top:1px solid var(--border);}}
 .sm-row{{display:flex;flex-direction:column;gap:2px;padding:14px 4px;border-bottom:1px solid var(--border);color:inherit;text-decoration:none;min-height:48px;}}
