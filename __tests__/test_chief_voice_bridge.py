@@ -114,6 +114,12 @@ def test_no_trusted_records_means_no_extra_model_call(monkeypatch):
     assert b._task is None and not out
 
 
+def test_redirect_or_resumed_discussion_never_launches_a_record_preview():
+    b, out = bridge()
+    b.start("Did Maria pay? Actually, let's go back to the vision we discussed.", EVIDENCE)
+    assert b._task is None and not out
+
+
 def test_changed_fact_or_correction_is_never_suppressed():
     b, out = bridge()
     b._preview(P + FACT)

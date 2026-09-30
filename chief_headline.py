@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 import chief_models
 import model_router as mr
 import route_ledger
+from chief_turn_direction import direction_for
 
 logger = logging.getLogger("chief_headline")
 if not logger.handlers:
@@ -63,6 +64,10 @@ def eligible(message: str, prior_assistant: str = "", *, lane: str, is_greeting:
              is_coach_mode: bool) -> bool:
     """A question about the records that asks for nothing to be done."""
     if not enabled() or is_greeting or is_coach_mode or lane not in ("chat", "voice"):
+        return False
+    if direction_for(message).brief_opener:
+        # The main answer owns resumed discussions and explicit refocusing.
+        # A parallel records summary can pull the conversation back off course.
         return False
     if not mr.is_question(message):
         return False

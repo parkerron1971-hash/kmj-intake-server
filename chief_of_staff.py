@@ -14452,6 +14452,10 @@ async def chief_chat(
                 system = system + _spoken_opener_block(req.spoken_opener)
             # The phone's Ask · Do · Build dial — any lane, uncached tail.
             system = system + _intent_block(req.intent)
+            # Every writer follows the same latest conversational direction;
+            # keep the original message intact for constraints and permissions.
+            from chief_turn_direction import direction_for
+            system += direction_for(req.message or "").prompt()
             # The voice confirmation grammar. Set from the SURFACE, not
             # the lane, so a coach turn spoken aloud is still treated as
             # spoken (coaches ride the deep lane and would otherwise slip
