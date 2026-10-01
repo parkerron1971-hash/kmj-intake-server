@@ -518,7 +518,8 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
     complete = False
     try:
         async with llm_call.astream(client(), payload, timeout=httpx.Timeout(
-                connect=3.0, read=15.0, write=5.0, pool=2.0)) as resp:
+                connect=3.0, read=15.0, write=5.0, pool=2.0),
+                task=endpoint, timing_trace=getattr(rec, "trace", None)) as resp:
             if resp.status_code >= 400:
                 body = (await resp.aread())[:200]
                 out["error"] = f"{resp.status_code} {body!r}"
@@ -681,7 +682,9 @@ class TwoTrack:
 
     def bind_turn_context(self) -> List[Any]:
         """Context the full turn task must be created with (reset after)."""
-        return [(OPENER, OPENER.set(self.holder)),
+        import chief_request_timing as _crt
+        return [(_crt.CURRENT, _crt.CURRENT.set(self.rec.trace)),
+                (OPENER, OPENER.set(self.holder)),
                 (route_ledger.TALLY, route_ledger.TALLY.set(self.rec.tally))]
 
     def mark_turn_delta(self) -> None:
@@ -1120,6 +1123,7 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
         # The app's id for this turn: what a client-side measurement (time
         # to first audio on a call) is reported against.
         rec.request_id = str(req.request_id)[:80]
+        rec.trace.request_id = rec.request_id
     message = str(getattr(req, "message", "") or "")
     c = mr.score(message, _prior_assistant(req),
                  has_images=bool(getattr(req, "image_ids", None)),

@@ -58,6 +58,7 @@ import time
 from typing import Any, Dict, Mapping, Optional
 
 import httpx
+import chief_request_timing
 
 logger = logging.getLogger(__name__)
 
@@ -284,12 +285,16 @@ async def apost(client: httpx.AsyncClient,
     _route(task)
     body = {"content": content} if content is not None else {"json": payload}
     caller, started = _caller_module(), time.time()
-    resp = await client.post(
+    operation = client.post(
         messages_url(),
         headers=headers(extra_headers, key=key),
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
         **body,
     )
+    trace = chief_request_timing.CURRENT.get()
+    resp = (await chief_request_timing.post_response(operation, trace,
+                chief_request_timing.role_for(task, caller), (payload or {}).get("model"))
+            if trace is not None else await operation)
     _meter(resp, payload, caller, started, business_id=business_id, units=units, background=True)
     return resp
 
@@ -349,18 +354,23 @@ def astream(client: httpx.AsyncClient,
             timeout: Any = None,
             extra_headers: Optional[Mapping[str, str]] = None,
             key: Optional[str] = None,
-            task: Optional[str] = None):
-    """Streaming POST. Returns httpx's async context manager unchanged, so
-    `async with astream(...) as resp:` reads exactly like the client.stream
-    call it replaced."""
+            task: Optional[str] = None,
+            timing_trace=None):
+    """Streaming POST with content-free timing only for an active Chief trace.
+    Response operations and SSE lines retain their original behavior."""
     _route(task)
-    return client.stream(
+    context = client.stream(
         "POST",
         messages_url(),
         headers=headers(extra_headers, key=key),
         json=payload,
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
     )
+    trace = timing_trace or chief_request_timing.CURRENT.get()
+    if trace is None:
+        return context
+    return chief_request_timing.stream(context, trace,
+        chief_request_timing.role_for(task, _caller_module()), payload.get("model"))
 
 
 # ──────────────────────────────────────────────────────────────

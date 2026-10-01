@@ -1288,7 +1288,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        read_tools: Optional[List[Dict[str, Any]]] = None,
                        tool_biz: Optional[Dict[str, Any]] = None,
                        effort: Optional[str] = None,
-                       stable_tools: bool = False) -> str:
+                       stable_tools: bool = False,
+                       timing_role: str = "chief_auxiliary") -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
     # turns once this business crosses its daily-dollar ceiling, or the
     # platform crosses its own. Fail-open — a bookkeeping hiccup must
@@ -1506,7 +1507,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
               try:
                   async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                              extra_headers=_beta_headers(_extended)) as resp:
+                                              extra_headers=_beta_headers(_extended),
+                                              task=timing_role) as resp:
                       if resp.status_code >= 400:
                           body = await resp.aread()
                           # If the API is rejecting the extended-ttl beta, stop
@@ -1523,7 +1525,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   client, system, messages, max_tokens=max_tokens,
                                   enable_web_search=enable_web_search,
                                   business_id=business_id, model=model,
-                                  stream_sink=stream_sink)
+                                  stream_sink=stream_sink, timing_role=timing_role)
                           logger.warning(
                               f"Claude stream error (attempt {attempt + 1}/3): "
                               f"{resp.status_code} {body[:300]}")
@@ -1630,7 +1632,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               client, system, messages, max_tokens=max_tokens,
                               enable_web_search=enable_web_search,
                               business_id=business_id, model=fb_model,
-                              stream_sink=stream_sink, read_tools=read_tools,
+                              stream_sink=stream_sink, timing_role=timing_role, read_tools=read_tools,
                               tool_biz=tool_biz, effort=effort, stable_tools=stable_tools)
                       fb_reason = f"declined ({category})"
                       break                      # the same model declines again
@@ -1721,7 +1723,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               await asyncio.sleep(1.5 * attempt)
           try:
               resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                          extra_headers=_beta_headers(_extended))
+                                          extra_headers=_beta_headers(_extended), task=timing_role)
           except httpx.HTTPError as e:
               last_err = str(e)
               logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
@@ -1741,7 +1743,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   return await _call_claude(
                       client, system, messages, max_tokens=max_tokens,
                       enable_web_search=enable_web_search,
-                      business_id=business_id, model=model, stream_sink=stream_sink,
+                      business_id=business_id, model=model, stream_sink=stream_sink, timing_role=timing_role,
                       read_tools=read_tools, tool_biz=tool_biz)
               if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
                   resp = None
@@ -1817,7 +1819,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               return await _call_claude(
                   client, system, messages, max_tokens=max_tokens,
                   enable_web_search=enable_web_search,
-                  business_id=business_id, model=fb_model, stream_sink=stream_sink,
+                  business_id=business_id, model=fb_model, stream_sink=stream_sink, timing_role=timing_role,
                   read_tools=read_tools, tool_biz=tool_biz, effort=effort,
                   stable_tools=stable_tools)
       from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
@@ -8132,6 +8134,10 @@ class _TurnClock:
     def log(self, **fields: Any) -> None:
         try:
             total = int((time.perf_counter() - self._t0) * 1000)
+            import chief_request_timing as _crt
+            trace = _crt.CURRENT.get()
+            if trace is not None:
+                fields["request_id"] = trace.request_id
             parts = " ".join(f"{n}={ms}" for n, ms in self.stages)
             parts += f" tools={getattr(self, 'tools', 0)}"
             extra = " ".join(
@@ -14610,7 +14616,7 @@ async def chief_chat(
                                          stream_sink=_sentence_streamer,
                                          read_tools=_read_tools,
                                          tool_biz=biz,
-                                         effort=chief_models.effort_for(lane))
+                                         effort=chief_models.effort_for(lane), timing_role="chief_main")
                 if isinstance(_sentence_streamer, _SentenceStreamer):
                     _sentence_streamer.finish_input()
             finally:
@@ -15093,6 +15099,8 @@ async def chief_chat_stream(
             # create_task snapshots the current context, so the sink rides
             # into the turn; resetting immediately keeps THIS request's
             # context clean for anything that runs after.
+            if track is not None:
+                track.rec.trace.work_started()
             turn = asyncio.create_task(chief_chat(req, user_session))
             if track is not None:
                 turn.add_done_callback(lambda _task: track.holder.answer_ready.set())
