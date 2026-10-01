@@ -175,6 +175,25 @@ def test_business_owner_cannot_read_another_business_coupons(monkeypatch):
     call.assert_not_called()
 
 
+def test_apply_discount_rejects_non_platform_owner_before_reading_business(monkeypatch):
+    import lead_admin
+    import stripe_billing
+    app = FastAPI()
+    app.include_router(discounts.router)
+    client = TestClient(app)
+    payload = {"business_id": str(uuid4()), "code": "WELCOME20", "request_id": str(uuid4())}
+    load = AsyncMock()
+    call = AsyncMock()
+    monkeypatch.setattr(stripe_billing, "_load_business", load)
+    monkeypatch.setattr(discounts, "stripe_request", call)
+    assert client.post("/billing/apply-discount", json=payload).status_code in (401, 403)
+    app.dependency_overrides[lead_admin.require_user] = lambda: SimpleNamespace(
+        id="business_owner", email="another-business@example.com")
+    assert client.post("/billing/apply-discount", json=payload).status_code == 403
+    load.assert_not_called()
+    call.assert_not_called()
+
+
 def test_apply_discount_checks_customer_and_keeps_existing_discounts(monkeypatch):
     import stripe_billing
     monkeypatch.setattr(stripe_billing, "_load_business", AsyncMock(return_value={"stripe_subscription_id": "sub_1", "stripe_customer_id": "cus_1"}))

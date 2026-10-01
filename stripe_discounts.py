@@ -246,8 +246,8 @@ class ApplyDiscount(BaseModel):
     request_id: UUID
 
 
-@router.post("/billing/apply-discount", dependencies=[Depends(require_owner)])
-async def apply_discount(body: ApplyDiscount):
+@router.post("/billing/apply-discount")
+async def apply_discount(body: ApplyDiscount, _owner=Depends(require_owner)):
     from stripe_billing import _load_business
     biz = await _load_business(str(body.business_id))
     sub_id = biz.get("stripe_subscription_id")
