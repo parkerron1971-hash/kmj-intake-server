@@ -72,17 +72,31 @@ def conversation_check_reply(message: str) -> str | None:
 
 
 def elementary_arithmetic_reply(message: str) -> str | None:
-    """Exact, bounded integer arithmetic only; never consume a mixed request."""
-    match = re.fullmatch(
-        r"\s*(?:(?:what(?: is|'s)|calculate|compute)\s+)?"
-        r"(-?\d{1,9})\s*([+*\-])\s*(-?\d{1,9})\s*[?=.!]?\s*",
-        message or "", re.I)
-    if not match:
-        return None
-    left, right = int(match[1]), int(match[3])
-    value = {"+": lambda: left + right, "-": lambda: left - right,
-             "*": lambda: left * right}[match[2]]()
-    return f"{value}."
+    """Exact, bounded integer arithmetic only; never consume a mixed request.
+
+    Voice transcripts spell out small numbers, so the same narrow grammar
+    accepts zero through twenty without handing a simple sum to the models.
+    """
+    words = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+    values = {word: value for value, word in enumerate(words)}
+    number = r"(?:-?\d{1,9}|" + '|'.join(words) + ')'
+    prefix = r"\s*(?:(?:what(?: is|'s)|calculate|compute)\s+)?"
+    ending = r"\s*[?=.!]?\s*"
+    match = re.fullmatch(prefix + '(' + number + r")\s*(\+|\*|-|plus|minus|times|multiplied by)\s*(" + number + ')' + ending,
+                         message or '', re.I)
+    def value(text):
+        return values[text.lower()] if text.lower() in values else int(text)
+    if match:
+        left, right = value(match[1]), value(match[3])
+        op = match[2].lower()
+        result = left + right if op in ('+', 'plus') else (
+            left - right if op in ('-', 'minus') else left * right)
+        return f"{result}."
+    subtraction = re.fullmatch(r"\s*subtract\s+(" + number + r")\s+from\s+(" + number + ')' + ending,
+                               message or '', re.I)
+    if subtraction:
+        return f"{value(subtraction[2]) - value(subtraction[1])}."
+    return None
 
 
 AUTHOR_RULES = """
@@ -1233,10 +1247,19 @@ def _asserted_text(reply):
     return ' '.join(out)
 
 
+# Literal delivery/completion idioms still imply an outcome when they avoid
+# verbs such as "sent". They need a receipt, never an early prose shortcut.
+_DELIVERY_COMPLETION = re.compile(
+    r"\b(?:message|email|text|invoice|reminder|booking|update|payment|request|change|it|that|this)"
+    r"(?:\s+(?:is|was)|['\u2019]s)\s+(?:on (?:its|the) way|taken care of|handled)\b"
+    r"|\b(?:message|email|text|invoice|reminder|booking|update|payment|request|change)"
+    r"\s+(?:went|has gone) through\b", re.I)
+
+
 def has_completion_claim(reply):
     import chief_of_staff as chief
     asserted = _asserted_text(reply)
-    return chief._looks_like_completed_action(asserted) or bool(re.search(
+    return bool(_DELIVERY_COMPLETION.search(asserted)) or chief._looks_like_completed_action(asserted) or bool(re.search(
         r'\b(?:appointment is booked|changes have been saved|payment recorded successfully)\b',
         asserted, re.IGNORECASE))
 

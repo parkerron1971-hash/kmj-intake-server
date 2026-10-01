@@ -121,3 +121,26 @@ def test_large_relevant_record_is_never_truncated_or_falsely_marked_complete(mon
                                    'text': 'Tuesday bookings. ' * 1200}}
     assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
         sources=sources, message='Which day is busiest?', business_id=None))
+
+
+@pytest.mark.parametrize('sentence', [
+    'The message is on its way. ', 'The text is on the way. ', 'It is on its way. ',
+    'That is taken care of. ', 'It is handled. ', 'The booking went through. ',
+    'The update went through. ', 'The payment has gone through. ',
+])
+def test_delivery_idioms_require_receipts_and_never_enter_early_review(monkeypatch, sentence):
+    assert truth.has_completion_claim(sentence)
+    assert not truth.streamable_sentence(truth.stream_prover({}), sentence)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('receipt-free completion must not call an early reviewer')
+    monkeypatch.setattr(truth, 'review_reply', forbidden)
+    assert not asyncio.run(truth.review_stream_prefix(None, sentence, sources={},
+        message='Please send the message.', business_id=None))
+
+
+@pytest.mark.parametrize('sentence', [
+    "Let's keep the conversation moving. ", 'The plan is taking shape. ',
+    'I would send a personal invitation. ', 'The message is not on its way. ',
+])
+def test_non_completion_language_is_not_caught_by_delivery_idioms(sentence):
+    assert not truth._DELIVERY_COMPLETION.search(sentence)

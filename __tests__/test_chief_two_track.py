@@ -520,3 +520,46 @@ def test_interrupted_fast_answer_hands_off_and_is_not_cached(monkeypatch, restor
     assert _router_on[-1]["escalation_reason"] == "error:incomplete_stream"
     assert len(cft.CACHE) == 0
     assert "".join(d["text"] for d in _deltas(events)) == events[-1][1]["payload"]["response"]
+
+
+@pytest.mark.parametrize("message,answer", [("What is 1+1?", "2."), ("What is one plus one?", "2."), ("12-5", "7."), ("-3*4", "-12.")])
+def test_exact_arithmetic_uses_no_model_and_no_filler(monkeypatch, restore_chat, message, answer):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("exact arithmetic needs no model")
+        yield ""
+    monkeypatch.setattr(cft, 'stream_text', forbidden)
+    monkeypatch.setattr(cft, 'classify', forbidden)
+    events, turns = asyncio.run(_run(_req(message, client_surface='voice')))
+    assert turns == []
+    assert [d['text'] for d in _deltas(events)] == [answer]
+    assert events[-1][1]['payload']['response'] == answer
+    assert events[-1][1]['payload']['grounding']['status'] == 'calculated'
+    assert next(t for t,e in events if e['type'] == 'delta') < .5
+    assert len(cft.CACHE) == 0
+
+
+@pytest.mark.parametrize('options', [{}, {'mode':'strategy_coach'}, {'image_ids':['image']}])
+def test_exact_arithmetic_keeps_authorization_and_mode_boundaries(options):
+    req = _req('1+1', **options)
+    assert cft.plan(req, SESSION).calculated_answer is None
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    if options:
+        assert cft.plan(req, SESSION).calculated_answer is None
+    else:
+        assert cft.plan(req, SESSION).calculated_answer == '2.'
+
+
+def test_exact_arithmetic_still_obeys_current_guard_denial(monkeypatch, restore_chat):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    monkeypatch.setattr(cft, '_fast_guards', lambda *args: False)
+    events, turns = asyncio.run(_run(_req('1+1'), turn_reply='Your current allowance is used.'))
+    assert len(turns) == 1
+    assert events[-1][1]['payload']['response'] == 'Your current allowance is used.'
+    assert not any(d['text'] == '2.' for d in _deltas(events))
+
+
+@pytest.mark.parametrize('message', ['1+1 and send the invoice', 'We have 1+1 leads', '1/0', '1+1 million'])
+def test_mixed_requests_never_take_the_exact_arithmetic_route(message):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    assert cft.plan(_req(message), SESSION).calculated_answer is None

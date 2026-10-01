@@ -643,6 +643,7 @@ class TwoTrack:
         self.cache_scope = _pair(user_id, self.business_id) + ":" + context_key
         self.cache_hit: Optional[mr.CacheHit] = None
         self.fast_answer = ""
+        self.calculated_answer = None
         self.lead_text = ""                 # everything the first track sent
         self.turn_started = False
         self._key = _convo_key(user_id, req)
@@ -715,7 +716,8 @@ class TwoTrack:
         """The fast lane's (or the cache's) answer, in /chat's shape."""
         text = self.lead_text
         return {"response": text, "actions_taken": [],
-                "grounding": {"status": "unchecked", "reason": "no records needed",
+                "grounding": {"status": "calculated" if self.calculated_answer else "unchecked",
+                              "reason": "exact arithmetic" if self.calculated_answer else "no records needed",
                               "sources": []},
                 "routing": {"lane": self.rec.lane, "model": self.rec.answer_model}}
 
@@ -728,6 +730,28 @@ class TwoTrack:
             return
         deadline = self.rec.arrived + route_ledger.budget_ms() / 1000.0 - _deadline_margin_s()
         self.holder.deadline = deadline
+        if self.calculated_answer is not None:
+            # This uses the same previously authorized user/business pair as
+            # the fast lane, and still checks its current rate/spend guards.
+            # No model/context read is needed to prove a bounded calculation.
+            try:
+                allowed = await asyncio.wait_for(asyncio.to_thread(
+                    _fast_guards, self.user_id, self.business_id), timeout=0.25)
+            except Exception:
+                allowed = False
+            if not allowed:
+                self.calculated_answer = None
+                self.rec.escalate("guard")
+                self.rec.lane = mr.LANE_FULL
+                self.holder.finish()
+                start_turn()
+                self.turn_started = True
+                return
+            self.rec.answer_model = "deterministic"
+            async for ev in self._emit(self.calculated_answer, "answer"):
+                yield ev
+            self.holder.finish()
+            return
         if self.rec.lane == mr.LANE_CACHE and self.cache_hit is not None:
             async for ev in self._emit(self.cache_hit.answer, "cache"):
                 yield ev
@@ -1112,11 +1136,21 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
     business_id = str(getattr(req, "business_id", "") or "")
     allow_fast = (_on("CHIEF_ROUTER_FAST_LANE") and known_good(user_id, business_id))
     route = mr.decide(c, allow_fast=allow_fast, dissatisfied_now=unhappy, sticky_up=sticky)
+    calculated = None
+    if (allow_fast and not getattr(req, "image_ids", None)
+            and (getattr(req, "mode", None) or "") in ("", "chief")):
+        from chief_truth import elementary_arithmetic_reply
+        calculated = elementary_arithmetic_reply(message)
+        if calculated is not None:
+            # The complete message is an integer expression; prior conversational
+            # complexity cannot turn it into a business lookup or an action.
+            route = mr.Route(mr.LANE_FAST, "exact_arithmetic")
     if unhappy and st.get("lane") == mr.LANE_FAST:
         rec.escalate("dissatisfied_after_fast")
     rec.lane, rec.reason = route.lane, route.reason
     track = TwoTrack(req, user_id, rec, c, route)
-    if route.lane == mr.LANE_FAST and c.cacheable and _on("CHIEF_ROUTER_CACHE"):
+    track.calculated_answer = calculated
+    if calculated is None and route.lane == mr.LANE_FAST and c.cacheable and _on("CHIEF_ROUTER_CACHE"):
         hit = CACHE.get(track.cache_scope, message)
         if hit is not None:
             track.cache_hit = hit

@@ -119,3 +119,22 @@ def test_a_pure_thank_you_ends_without_reopening_business_review(message):
 @pytest.mark.parametrize("message", ["Thanks, did you send it?", "Thank you, move Ada to inactive", "Thanks for nothing", "Thanks, but that is wrong"])
 def test_mixed_or_negative_thanks_are_not_treated_as_simple_acknowledgments(message):
     assert truth.conversation_check_reply(message) is None
+
+
+@pytest.mark.parametrize('message,answer', [
+    ('What is one plus one?', '2.'), ('one plus one', '2.'),
+    ('Calculate twenty minus seven.', '13.'), ('Three times four', '12.'),
+    ("What's six multiplied by two?", '12.'), ('Subtract five from twelve', '7.'),
+    ('zero plus 8', '8.'),
+])
+def test_spoken_integer_arithmetic_is_exact_and_bounded(message, answer):
+    assert truth.elementary_arithmetic_reply(message) == answer
+
+
+@pytest.mark.parametrize('message', [
+    'One plus one clients', 'One plus one and send the invoice',
+    'What is one plus one? Also check my calendar.', 'One hundred plus one',
+    'Subtract five invoices from twelve invoices', 'one divided by zero',
+])
+def test_spoken_arithmetic_never_consumes_business_or_mixed_requests(message):
+    assert truth.elementary_arithmetic_reply(message) is None
