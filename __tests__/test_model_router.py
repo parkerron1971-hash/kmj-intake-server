@@ -133,8 +133,8 @@ def test_normalise_drops_framing_not_meaning():
 
 @pytest.mark.parametrize("a,b", [
     ("What does ROI mean?", "what does roi mean"),
-    ("what does ROI mean?", "Hey chief, what does ROI mean please"),
-    ("what's the difference between a W-2 and a 1099?", "difference between a 1099 and a W-2?"),
+    ("what does ROI mean?", "Hey chief, what does ROI mean, please"),
+    ("what's the difference between a W-2 and a 1099?", "Hey Chief, what's the difference between a W-2 and a 1099, please"),
 ])
 def test_near_repeats_hit(a, b):
     cache = mr.SemanticCache(ttl_s=3600)
@@ -356,3 +356,22 @@ def test_only_a_question_counts_as_asked():
         assert mr.is_question(q), q
     for s in ["give me a pep talk", "For me to revisit.", "We also put in the notes box in a flyer as well."]:
         assert not mr.is_question(s), s
+
+
+@pytest.mark.parametrize("first,second", [
+    ("convert 5 kilometers to miles", "convert 5 miles to kilometers"),
+    ("what is 20 divided by 5", "what is 5 divided by 20"),
+    ("what is 5 + 2", "what is 5 / 2"),
+    ("what is 5 * 2", "what is 5 - 2"),
+    ("what is 5!", "what is 5"),
+    ("define thanks", "define please"),
+    ("what is the difference between annual simple interest and compound interest",
+     "what is the difference between annual simple interest and compound interest rates"),
+    ("what is risk with insurance", "what is risk without insurance"),
+])
+def test_cache_requires_the_same_question_even_at_lowest_overlap_threshold(monkeypatch, first, second):
+    monkeypatch.setenv("ROUTER_CACHE_SIMILARITY", "0.6")
+    cache = mr.SemanticCache()
+    cache.put("owner:business", first, "Answer to the first question")
+    assert cache.get("owner:business", second) is None
+    assert cache.get("owner:business", first).answer == "Answer to the first question"

@@ -277,7 +277,7 @@ def test_repeats_of_a_general_question_come_from_the_cache(monkeypatch, restore_
     fake, calls = _fake_stream(lambda ep: [(0.03, answer[:20]), (0.01, answer[20:])])
     monkeypatch.setattr(cft, "stream_text", fake)
     asyncio.run(_run(_req("What does ROI mean?")))
-    events, turns = asyncio.run(_run(_req("hey chief, what does ROI mean please")))
+    events, turns = asyncio.run(_run(_req("hey chief, what does ROI mean, please")))
     assert len(calls) == 1 and turns == []
     ds = _deltas(events)
     assert ds[0]["lead"] == "cache" and ds[0]["text"] == answer
@@ -469,3 +469,54 @@ def test_the_stream_endpoint_still_registers_the_turn_for_replay():
     tail = tail[:tail.index("return StreamingResponse")]
     assert "chief_stream_replay.register(req, _uid, turn)" in tail
     assert "turn.cancel()" not in tail
+
+
+@pytest.mark.parametrize("first_context,second_context", [
+    ({"client_surface": "chat"}, {"client_surface": "voice"}),
+    ({"conversation_id": "first"}, {"conversation_id": "second"}),
+    ({"conversation_history": [{"role": "user", "content": "Explain concepts in Spanish."}]},
+     {"conversation_history": [{"role": "user", "content": "Explain concepts in English."}]}),
+])
+def test_cached_answer_never_crosses_delivery_or_conversation_context(
+        monkeypatch, restore_chat, first_context, second_context):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    answer = "ROI means return on investment, measuring value relative to cost."
+    fake, calls = _fake_stream(lambda ep: [(0, answer)])
+    monkeypatch.setattr(cft, "stream_text", fake)
+    first = _req("What does ROI mean?", **first_context)
+    second = _req("What does ROI mean?", **second_context)
+    asyncio.run(_run(first))
+    events, turns = asyncio.run(_run(second))
+    assert len(calls) == 2 and not turns
+    assert not any(d.get("lead") == "cache" for d in _deltas(events))
+    # Replays with precisely the same inputs still avoid another model call.
+    events, _ = asyncio.run(_run(second))
+    assert len(calls) == 2 and _deltas(events)[0]["lead"] == "cache"
+
+
+def test_cache_changes_with_personality_and_model(monkeypatch):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    req = _req("What does ROI mean?")
+    monkeypatch.setattr(cft, "style_for", lambda *args: "Direct and formal")
+    first = cft.plan(req, SESSION)
+    cft.CACHE.put(first.cache_scope, req.message, "The prior answer")
+    assert cft.plan(req, SESSION).lane == mr.LANE_CACHE
+    monkeypatch.setattr(cft, "style_for", lambda *args: "Warm and conversational")
+    assert cft.plan(req, SESSION).lane == mr.LANE_FAST
+    monkeypatch.setattr(cft, "style_for", lambda *args: "Direct and formal")
+    monkeypatch.setattr(cft.chief_models, "model_for", lambda *args: "replacement-fast-model")
+    assert cft.plan(req, SESSION).lane == mr.LANE_FAST
+
+
+def test_interrupted_fast_answer_hands_off_and_is_not_cached(monkeypatch, restore_chat, _router_on):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    async def stream(system, messages, **kwargs):
+        yield "ROI measures returns relative to cost. The calculation needs"
+        kwargs["out"]["error"] = "incomplete_stream"
+    monkeypatch.setattr(cft, "stream_text", stream)
+    events, turns = asyncio.run(_run(_req("What does ROI mean?"),
+                                    turn_reply="Divide net gain by cost, then multiply by 100."))
+    assert len(turns) == 1
+    assert _router_on[-1]["escalation_reason"] == "error:incomplete_stream"
+    assert len(cft.CACHE) == 0
+    assert "".join(d["text"] for d in _deltas(events)) == events[-1][1]["payload"]["response"]
