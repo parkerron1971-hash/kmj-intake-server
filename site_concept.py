@@ -204,6 +204,59 @@ def vocabulary_pairs(sheet: Dict[str, str]) -> List[Tuple[str, str]]:
     return pairs[:12]
 
 
+# ─── THE SAMENESS GUARD (2026-10-01, the concept-layer plan) ─────────
+# A library of objects risks a house style of its own: every course a
+# semester, every shop a ticket counter. The Director sees the concepts
+# the platform has used most recently on OTHER businesses and is told not
+# to repeat an idea, and to reuse an object only in a different way.
+# One small query (the spec text alone, by JSON path), cached ten
+# minutes. Fail-open: no rows, no block.
+
+RECENT_LIMIT = 12
+_RECENT_TTL_S = 600
+_recent_cache: Dict[str, Any] = {"at": None, "rows": []}   # None: never loaded
+
+
+def recent_concepts(exclude_business: str = "", limit: int = RECENT_LIMIT) -> List[Dict[str, str]]:
+    import time
+    now = time.monotonic()
+    # "never loaded" is its own state: a freshly booted container's
+    # monotonic clock can read under the TTL, which made 0.0 look fresh.
+    if _recent_cache["at"] is None or now - _recent_cache["at"] > _RECENT_TTL_S:
+        rows: List[Dict[str, Any]] = []
+        try:
+            import sb_clients
+            rows = sb_clients.sb_get_as_service(
+                "/business_sites?select=business_id,spec:site_config->design_spec->>text"
+                f"&order=updated_at.desc&limit={limit * 3}") or []
+        except Exception as e:
+            logger.info(f"[concept] recent concepts skipped: {e}")
+        _recent_cache.update(at=now, rows=rows)
+    out: List[Dict[str, str]] = []
+    for r in _recent_cache["rows"]:
+        if str(r.get("business_id") or "") == exclude_business:
+            continue
+        sheet = parse_sheet(str(r.get("spec") or ""))
+        if sheet.get("intensity") in ("signature", "world") and sheet.get("idea"):
+            out.append({"intensity": sheet["intensity"], "idea": sheet["idea"][:160],
+                        "objects": (sheet.get("objects") or "")[:120]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def recent_block(items: List[Dict[str, str]]) -> str:
+    if not items:
+        return ""
+    lines = ["== RECENT CONCEPTS ON THE PLATFORM (other businesses' sites: never "
+             "repeat an idea; reuse an object only with a different finish or a "
+             "different job) =="]
+    for it in items:
+        objs = f" (objects: {it['objects']})" if it.get("objects") else ""
+        lines.append(f"- {it['intensity']}: {it['idea']}{objs}")
+    return "\n".join(lines)
+
+
 _NAV_RE = re.compile(r"<nav\b.*?</nav>|<[^>]+role\s*=\s*[\"']navigation[\"'][^>]*>.*?</(?:div|ul|header)>",
                      re.IGNORECASE | re.DOTALL)
 _A_RE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.IGNORECASE | re.DOTALL)

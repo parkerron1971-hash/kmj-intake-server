@@ -159,7 +159,70 @@ def test_no_sheet_no_findings():
     assert sc.check_page("<p>x</p>", {"intensity": ""}) == []
 
 
+# ─── THE SAMENESS GUARD (2026-10-01) ─────────────────────────────────
+
+def _rows():
+    world = ("0. THE CONCEPT\nINTENSITY: world\nIDEA: The shop is a take-a-number counter.\n"
+             "OBJECTS: ticket (paper), letterboard (paper)\n1. OVERVIEW\nx")
+    plain = "0. THE CONCEPT\nINTENSITY: plain\n1. OVERVIEW\nx"
+    mine = "0. THE CONCEPT\nINTENSITY: world\nIDEA: My own idea.\n1. OVERVIEW\nx"
+    return [{"business_id": "other-1", "spec": world}, {"business_id": "other-2", "spec": plain},
+            {"business_id": "me", "spec": mine}, {"business_id": "other-3", "spec": None}]
+
+
+def test_recent_concepts_read_other_businesses_ideas(monkeypatch):
+    import sb_clients
+    seen = {}
+    monkeypatch.setattr(sc, "_recent_cache", {"at": None, "rows": []})
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path: seen.setdefault("path", path) and _rows())
+    got = sc.recent_concepts("me")
+    assert got == [{"intensity": "world", "idea": "The shop is a take-a-number counter.",
+                    "objects": "ticket (paper), letterboard (paper)"}]
+    assert "spec:site_config->design_spec->>text" in seen["path"], "the spec text alone, never the pages"
+    block = sc.recent_block(got)
+    assert "never repeat an idea" in block and "take-a-number counter" in block
+    assert sc.recent_block([]) == ""
+
+
+def test_recent_concepts_are_cached(monkeypatch):
+    import sb_clients
+    calls = []
+    monkeypatch.setattr(sc, "_recent_cache", {"at": None, "rows": []})
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: calls.append(path) or _rows())
+    sc.recent_concepts("me")
+    sc.recent_concepts("me")
+    assert len(calls) == 1
+
+
+def test_the_director_sees_recent_concepts_when_the_site_wears_one(monkeypatch):
+    import spec_author
+    seen = {}
+    monkeypatch.setattr(spec_author, "_call_llm",
+                        lambda system, user, bid, image_urls=None, mark_urls=None:
+                        seen.setdefault("user", user) and "0. THE CONCEPT\nINTENSITY: signature")
+    monkeypatch.setattr(sc, "recent_concepts", lambda bid, limit=12: [
+        {"intensity": "world", "idea": "The course is a semester.", "objects": "schedule-card"}])
+    ctx = {"business": {"name": "Wheelhouse", "type": "Pottery studio"}, "site": {"site_config": {}}}
+    spec_author.author_spec("biz-1", ctx, None, [])
+    assert "RECENT CONCEPTS ON THE PLATFORM" in seen["user"] and "The course is a semester." in seen["user"]
+    seen.clear()
+    plain = {"business": {"name": "Calm", "type": "Licensed therapist"}, "site": {"site_config": {}}}
+    spec_author.author_spec("biz-2", plain, None, [])
+    assert "RECENT CONCEPTS" not in seen["user"], "a plain site wears no concept to repeat"
 def test_decorative_numbers_are_taught_to_stay_short():
     assert "Decorative numbers" in sc.DIRECTOR_LAW and "one or two digits" in sc.DIRECTOR_LAW
     block = sc.brief_block({"intensity": "signature", "scope": "site", "by": "default"})
     assert "((" not in block and "))" not in block
+
+
+def test_a_fresh_container_still_loads_recent_concepts(monkeypatch):
+    """On a machine booted under ten minutes ago the monotonic clock reads
+    below the cache TTL; 'never loaded' must still load."""
+    import sb_clients
+    import time
+    calls = []
+    monkeypatch.setattr(sc, "_recent_cache", {"at": None, "rows": []})
+    monkeypatch.setattr(time, "monotonic", lambda: 42.0)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: calls.append(path) or _rows())
+    assert sc.recent_concepts("me") and len(calls) == 1
