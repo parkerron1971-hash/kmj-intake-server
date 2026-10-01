@@ -153,6 +153,7 @@ def test_retry_calls_remain_separate_and_snapshot_is_bounded(clock):
     for _ in range(40):
         call = trace.start("main","model","sse")
         call.finish("http_error")
+    assert call.data["call"] == 40
     assert len(trace.snapshot()["calls"]) == 32
     assert trace.snapshot()["calls"][1]["call"] == 2
 
@@ -207,3 +208,28 @@ def test_tally_only_preview_still_streams_with_inherited_trace(clock,monkeypatch
     asyncio.run(run())
     assert trace.calls[0].data["role"] == "preview"
     assert trace.calls[0].data["outcome"] == "complete"
+
+
+def test_background_work_does_not_inherit_foreground_trace(monkeypatch):
+    import chief_of_staff as chief
+    import chief_proactive_suggestions as suggestions
+    observed=[]
+    monkeypatch.setattr(chief,"_TURN_SWEEP_TASKS",set())
+    monkeypatch.setattr(suggestions,"maybe_emit_proactive_suggestions", lambda *args: observed.append(timing.CURRENT.get()))
+    async def sweep(*args):
+        observed.append(timing.CURRENT.get())
+        return 0
+    monkeypatch.setattr(chief,"_autopilot_sweep",sweep)
+    monkeypatch.setattr(chief,"_evaluate_escalations",sweep)
+    async def run():
+        trace=timing.Trace(timing.time.perf_counter(),"foreground")
+        token=timing.CURRENT.set(trace)
+        try:
+            chief._spawn_proactive_suggestions({"id":"business"})
+            chief._spawn_turn_sweeps({"id":"business"})
+            await chief._drain_turn_sweeps()
+            assert timing.CURRENT.get() is trace
+        finally:
+            timing.CURRENT.reset(token)
+    asyncio.run(run())
+    assert observed == [None,None,None]

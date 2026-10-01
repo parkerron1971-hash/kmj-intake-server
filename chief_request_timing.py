@@ -36,6 +36,7 @@ class Trace:
         self.arrived = arrived
         self.request_id = request_id
         self.calls = []
+        self.call_count = 0
         self.main_work_started_ms = None
 
     def now(self):
@@ -46,6 +47,7 @@ class Trace:
             self.main_work_started_ms = self.now()
 
     def start(self, role, model, transport):
+        self.call_count += 1
         call = Call(self, role, str(model or "unknown")[:100], transport)
         if len(self.calls) < 32:
             self.calls.append(call)
@@ -69,7 +71,7 @@ class Trace:
 class Call:
     def __init__(self, trace, role, model, transport):
         self.trace = trace
-        self.data = {"call": len(trace.calls) + 1, "role": role, "model": model,
+        self.data = {"call": trace.call_count, "role": role, "model": model,
                      "transport": transport, "start_ms": trace.now(), "headers_ms": None,
                      "first_text_ms": None, "first_text_wait_ms": None,
                      "end_ms": None, "outcome": None, "status": None}

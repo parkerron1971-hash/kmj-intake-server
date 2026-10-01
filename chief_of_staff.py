@@ -6853,6 +6853,8 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         # Background bookkeeping, not this turn's reply: its model calls stay
         # out of the turn's route cost (route_ledger). Task-local context.
         route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
                 auto_count = await _autopilot_sweep(c, biz_lite)
@@ -6897,6 +6899,8 @@ def _spawn_proactive_suggestions(biz: Dict[str, Any]) -> None:
         # Keep the originating billing/JWT context, but do not bill background
         # work to the foreground route. The emitter owns its database clients.
         route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
         try:
             import chief_proactive_suggestions
             await asyncio.to_thread(chief_proactive_suggestions.maybe_emit_proactive_suggestions, biz)
