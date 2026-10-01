@@ -33,18 +33,22 @@ def amount(text):
 # Keep the units attached to the inputs. A traffic target or annual price
 # must never become a revenue target or monthly subscription assumption.
 _YEAR = r"(?:(?:a|per|each) year|(?:in|over) (?:one|1|the next) year|annually)"
-_TARGET = r"(?:make|earn|collect|generate|reach|(?:(?:revenue|income|sales) )?(?:goal|target)(?: is)?)[ :]*"
+_TARGET = r"(?:make|earn|collect|generate|reach|(?:revenue|sales|gross income) (?:goal|target)(?: is)?)[ :]*"
 _ANNUAL_TARGET = re.compile(
     r"\b" + _TARGET + r"(?P<amount>" + _AMOUNT + r")\s+"
     r"(?:(?:in )?(?:revenue|income|sales)\s+)?" + _YEAR + r"\b", re.I)
 _ANNUAL_PREFIX = re.compile(
-    r"\b(?:annual|yearly) (?:(?:revenue|income|sales) )?(?:goal|target)(?: is)?[ :]*"
+    r"\b(?:annual|yearly) (?:revenue|sales|gross income) (?:goal|target)(?: is)?[ :]*"
     r"(?P<amount>" + _AMOUNT + r")", re.I)
 _MONTHLY_RATE = re.compile(
-    r"(?P<amount>" + _AMOUNT + r")\s+(?:(?:a|per|each) month|monthly)\b", re.I)
+    r"\b(?:(?:our|the|my|this|a|each) (?:membership|subscription|plan|tier|offer)"
+    r"(?: price| rate)? (?:costs?|is|is priced at)|we charge)\s+"
+    r"(?P<amount>" + _AMOUNT + r")\s+(?:(?:a|per|each) month|monthly)"
+    r"(?=\s*(?:[.,;!?]|$|\band\b))", re.I)
 _MONTHLY_LIST = re.compile(
     r"\bmonthly (?:prices|tiers|plans|rates)(?: are| cost| at| of)?[ :]*"
     r"(?P<amounts>" + _AMOUNT + r"(?:(?:\s*,\s*|\s+and\s+)" + _AMOUNT + r")*)", re.I)
+_NON_REVENUE = re.compile(r"\b(?:profit|budget|spend|spending|expense|expenses|cost|costs|margin|net income)\b", re.I)
 _NEGATED = re.compile(r"\b(?:not|never|instead)\b|n['\u2019]t\b", re.I)
 
 
@@ -56,7 +60,7 @@ def owner_inputs(sources):
         for clause in re.split(r'(?<=[.!?;])\s+|\n+', source.get('text') or ''):
             if _NEGATED.search(clause):
                 continue
-            for pattern in (_ANNUAL_TARGET, _ANNUAL_PREFIX):
+            for pattern in (() if _NON_REVENUE.search(clause) else (_ANNUAL_TARGET, _ANNUAL_PREFIX)):
                 for match in pattern.finditer(clause):
                     raw = match['amount']
                     if '$' in raw or 'dollars' in raw.lower():

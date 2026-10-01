@@ -54,7 +54,7 @@ def test_target_and_rates_must_come_from_owner_not_assistant():
 
 
 def test_other_targets_and_rates_and_monthly_units_work():
-    sources = truth.conversation_for_review('My target is $120,000 a year and the plan is $50 monthly.', [])
+    sources = truth.conversation_for_review('My revenue target is $120,000 a year and the plan is $50 monthly.', [])
     draft = '$120,000 per year means $10,000 per month. At $50 per month, you would need about 200 subscribers.'
     assert truth.assess_review(review_for(draft), draft, sources)[0] == 'supported'
     assert verified_figures('At $50 per month, you would need about 200 subscribers.', draft, sources) == {Decimal(50), Decimal(200)}
@@ -153,3 +153,37 @@ def test_latest_correction_is_not_overridden_by_older_arithmetic_inputs():
     raw = json.loads(review_for(draft))
     raw['claims'][0]['gap'] = 'This uses the old target; the latest owner correction is $500,000'
     assert truth.assess_review(json.dumps(raw), draft, sources)[0] == 'unsupported'
+
+
+@pytest.mark.parametrize('owner', [
+    'My annual revenue target is $120,000. We pay $50 per month in office rent.',
+    'My annual revenue target is $120,000. Our office rent is $50 per month and the plan is $100 per month.',
+    'My annual revenue target is $120,000. The plan is $100 per month and we pay $50 per month in office rent.',
+    'My annual revenue target is $120,000. The plan is $50 per month for office rent.',
+    'My annual revenue target is $120,000. Our insurance plan is $50 per month.',
+])
+def test_monthly_expenses_cannot_supply_a_subscription_price(owner):
+    sources = truth.conversation_for_review(owner, [])
+    draft = '$120,000 per year means $10,000 per month. At $50 per month, you would need about 200 subscribers.'
+    assert truth.assess_review(review_for(draft), draft, sources)[0] == 'unsupported'
+
+
+def test_price_and_rent_in_same_sentence_preserve_only_the_explicit_price():
+    sources = truth.conversation_for_review(
+        'My annual revenue target is $120,000. Our office rent is $50 per month and the plan is $100 per month.', [])
+    draft = '$120,000 per year means $10,000 per month. At $100 per month, you would need about 100 subscribers.'
+    assert truth.assess_review(review_for(draft), draft, sources)[0] == 'supported'
+
+
+@pytest.mark.parametrize('owner', [
+    'My profit target is $120,000 per year. The plan costs $50 monthly.',
+    'The spending target is $120,000 per year. The plan costs $50 monthly.',
+    'My annual budget target is $120,000. The plan costs $50 monthly.',
+    'I want to make $120,000 per year in profit. The plan costs $50 monthly.',
+    'I want to earn $120,000 per year in net income. The plan costs $50 monthly.',
+    'My target is $120,000 per year. The plan costs $50 monthly.',
+])
+def test_non_revenue_or_ambiguous_targets_cannot_prove_customer_counts(owner):
+    sources = truth.conversation_for_review(owner, [])
+    draft = '$120,000 per year means $10,000 per month. At $50 per month, you would need about 200 subscribers.'
+    assert truth.assess_review(review_for(draft), draft, sources)[0] == 'unsupported'
