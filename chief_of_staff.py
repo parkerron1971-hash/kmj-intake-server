@@ -1288,7 +1288,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        read_tools: Optional[List[Dict[str, Any]]] = None,
                        tool_biz: Optional[Dict[str, Any]] = None,
                        effort: Optional[str] = None,
-                       stable_tools: bool = False) -> str:
+                       stable_tools: bool = False,
+                       timing_role: str = "chief_auxiliary") -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
     # turns once this business crosses its daily-dollar ceiling, or the
     # platform crosses its own. Fail-open — a bookkeeping hiccup must
@@ -1302,7 +1303,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # against, and blocked by, the platform ceiling everyone shares.
     try:
         import spend_guard
-        if spend_guard.over_budget(business_id):
+        if await asyncio.to_thread(spend_guard.over_budget, business_id):
             logger.warning("[chief] daily spend cap hit — turn soft-blocked "
                            "(business=%s)", business_id or "unattributed")
             return spend_guard.block_message()
@@ -1506,7 +1507,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
               try:
                   async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                              extra_headers=_beta_headers(_extended)) as resp:
+                                              extra_headers=_beta_headers(_extended),
+                                              task=timing_role) as resp:
                       if resp.status_code >= 400:
                           body = await resp.aread()
                           # If the API is rejecting the extended-ttl beta, stop
@@ -1523,7 +1525,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   client, system, messages, max_tokens=max_tokens,
                                   enable_web_search=enable_web_search,
                                   business_id=business_id, model=model,
-                                  stream_sink=stream_sink)
+                                  stream_sink=stream_sink, timing_role=timing_role)
                           logger.warning(
                               f"Claude stream error (attempt {attempt + 1}/3): "
                               f"{resp.status_code} {body[:300]}")
@@ -1630,7 +1632,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               client, system, messages, max_tokens=max_tokens,
                               enable_web_search=enable_web_search,
                               business_id=business_id, model=fb_model,
-                              stream_sink=stream_sink, read_tools=read_tools,
+                              stream_sink=stream_sink, timing_role=timing_role, read_tools=read_tools,
                               tool_biz=tool_biz, effort=effort, stable_tools=stable_tools)
                       fb_reason = f"declined ({category})"
                       break                      # the same model declines again
@@ -1721,7 +1723,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               await asyncio.sleep(1.5 * attempt)
           try:
               resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                          extra_headers=_beta_headers(_extended))
+                                          extra_headers=_beta_headers(_extended), task=timing_role)
           except httpx.HTTPError as e:
               last_err = str(e)
               logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
@@ -1741,7 +1743,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   return await _call_claude(
                       client, system, messages, max_tokens=max_tokens,
                       enable_web_search=enable_web_search,
-                      business_id=business_id, model=model, stream_sink=stream_sink,
+                      business_id=business_id, model=model, stream_sink=stream_sink, timing_role=timing_role,
                       read_tools=read_tools, tool_biz=tool_biz)
               if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
                   resp = None
@@ -1817,7 +1819,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               return await _call_claude(
                   client, system, messages, max_tokens=max_tokens,
                   enable_web_search=enable_web_search,
-                  business_id=business_id, model=fb_model, stream_sink=stream_sink,
+                  business_id=business_id, model=fb_model, stream_sink=stream_sink, timing_role=timing_role,
                   read_tools=read_tools, tool_biz=tool_biz, effort=effort,
                   stable_tools=stable_tools)
       from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
@@ -6851,6 +6853,8 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         # Background bookkeeping, not this turn's reply: its model calls stay
         # out of the turn's route cost (route_ledger). Task-local context.
         route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
                 auto_count = await _autopilot_sweep(c, biz_lite)
@@ -6887,6 +6891,25 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         outer.add_done_callback(_TURN_SWEEP_TASKS.discard)
     except Exception as e:  # pragma: no cover — no loop = no sweep, never a crash
         print(f"[Chief] sweep spawn failed: {e}", flush=True)
+
+
+def _spawn_proactive_suggestions(biz: Dict[str, Any]) -> None:
+    """Track independent suggestion writes without delaying this turn's model call."""
+    async def _body() -> None:
+        # Keep the originating billing/JWT context, but do not bill background
+        # work to the foreground route. The emitter owns its database clients.
+        route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
+        try:
+            import chief_proactive_suggestions
+            await asyncio.to_thread(chief_proactive_suggestions.maybe_emit_proactive_suggestions, biz)
+        except Exception as exc:  # best-effort, just as when awaited inline
+            logger.warning("proactive suggestions failed: %s", exc)
+
+    task = asyncio.create_task(_body())
+    _TURN_SWEEP_TASKS.add(task)
+    task.add_done_callback(_TURN_SWEEP_TASKS.discard)
 
 
 async def _drain_turn_sweeps() -> None:
@@ -8132,6 +8155,10 @@ class _TurnClock:
     def log(self, **fields: Any) -> None:
         try:
             total = int((time.perf_counter() - self._t0) * 1000)
+            import chief_request_timing as _crt
+            trace = _crt.CURRENT.get()
+            if trace is not None:
+                fields["request_id"] = trace.request_id
             parts = " ".join(f"{n}={ms}" for n, ms in self.stages)
             parts += f" tools={getattr(self, 'tools', 0)}"
             extra = " ".join(
@@ -14126,8 +14153,7 @@ async def chief_chat(
             # Intelligence enrichment — voice samples, session context,
             # mentor cooldown, revenue forecast, relationship insights,
             # time context, habits, live bookkeeping, and cross-vertical
-            # learning. Plus the proactive-suggestion emit, which writes
-            # rather than reads but is nobody's dependency either.
+            # learning. Independent proactive suggestions run separately below.
             #
             # These are independent: not one of them consumes another's
             # result. They used to run as ten sequential awaits — twelve
@@ -14163,16 +14189,9 @@ async def chief_chat(
                 return await asyncio.to_thread(
                     _vctx.build_vertical_learned_block, biz, req.message or "")
 
-            async def _proactive():
-                # NT8b — best-effort proactive suggestion emission on
-                # state change. Runs ONCE per chat turn; idempotent (the
-                # emitter checks for active dupes + has a cap). Nothing
-                # this turn reads what it writes — ctx was gathered above
-                # — so it rides along here instead of blocking ahead of
-                # the enrichment it never feeds.
-                import chief_proactive_suggestions as _cps
-                return await asyncio.to_thread(
-                    _cps.maybe_emit_proactive_suggestions, biz)
+            # Suggestions do not feed the snapshot already read above. Keep
+            # their existing per-turn trigger, without waiting for their writes.
+            _spawn_proactive_suggestions(biz)
 
             # Mic-open prewarm (Kevin, 8/14): if /agents/chief/prewarm ran
             # while the practitioner was still talking, the eight
@@ -14216,7 +14235,6 @@ async def chief_chat(
             _results = await asyncio.gather(
                 *[_resolve_source(warm, n, *sources[n]) for n in _names],
                 _enrich("vertical learned context", _learned(), ""),
-                _enrich("proactive emit (non-blocking)", _proactive(), None),
                 _enrich("setup snapshot", _setup_probe(), None),
                 _enrich("business knowledge", _knowledge_probe(), None),
             )
@@ -14233,9 +14251,9 @@ async def chief_chat(
             habit_block = _ctx_vals["habit_block"]
             bookkeeping_block = _ctx_vals["bookkeeping_block"]
             learned_block = _results[len(_names)]
-            setup_snapshot = _results[len(_names) + 2]
-            if _results[len(_names) + 3] is not None:
-                ctx["business_knowledge"] = _results[len(_names) + 3]
+            setup_snapshot = _results[len(_names) + 1]
+            if _results[len(_names) + 2] is not None:
+                ctx["business_knowledge"] = _results[len(_names) + 2]
             setup_block = _format_setup_block(setup_snapshot)
             chief_truth.record('context:setup', setup_block, kind='context')
             # First-run = the account is days old and nearly nothing is
@@ -14610,7 +14628,7 @@ async def chief_chat(
                                          stream_sink=_sentence_streamer,
                                          read_tools=_read_tools,
                                          tool_biz=biz,
-                                         effort=chief_models.effort_for(lane))
+                                         effort=chief_models.effort_for(lane), timing_role="chief_main")
                 if isinstance(_sentence_streamer, _SentenceStreamer):
                     _sentence_streamer.finish_input()
             finally:
@@ -15093,6 +15111,8 @@ async def chief_chat_stream(
             # create_task snapshots the current context, so the sink rides
             # into the turn; resetting immediately keeps THIS request's
             # context clean for anything that runs after.
+            if track is not None:
+                track.rec.trace.work_started()
             turn = asyncio.create_task(chief_chat(req, user_session))
             if track is not None:
                 turn.add_done_callback(lambda _task: track.holder.answer_ready.set())

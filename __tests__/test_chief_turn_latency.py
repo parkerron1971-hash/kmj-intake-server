@@ -366,3 +366,31 @@ def test_continuous_turn_skips_the_serial_headline(turn, monkeypatch, continuous
         assert headline.await_count == expected
     finally:
         cos._STREAM_SINK.reset(token)
+
+
+def test_proactive_writes_do_not_hold_the_main_model_request(turn, monkeypatch):
+    import threading
+    import chief_proactive_suggestions
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    model_observed = []
+
+    def slow_emitter(*args):
+        entered.set()
+        release.wait(2.0)
+        finished.set()
+
+    async def model(*args, **kwargs):
+        assert await asyncio.to_thread(entered.wait, 1.0), "the existing emitter must still run"
+        model_observed.append((not finished.is_set(), bool(cos._TURN_SWEEP_TASKS)))
+        release.set()
+        return "All good."
+
+    monkeypatch.setattr(chief_proactive_suggestions, "maybe_emit_proactive_suggestions", slow_emitter)
+    monkeypatch.setattr(cos, "_call_claude", model)
+    try:
+        _, reply = turn()
+        assert reply["response"] == "All good."
+    finally:
+        release.set()
+    assert finished.is_set()
+    assert model_observed == [(True, True)], "model must start before tracked suggestion work finishes"

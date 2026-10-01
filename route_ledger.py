@@ -36,6 +36,7 @@ every field.
 from __future__ import annotations
 
 import contextvars
+import chief_request_timing
 import json
 import logging
 import math
@@ -192,6 +193,11 @@ class RouteRecord:
     slo_applies: bool = True       # False: the app talking to itself (sentinels)
     tally: Tally = field(default_factory=Tally)
 
+    trace: Any = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self.trace = chief_request_timing.Trace(self.arrived, self.request_id)
+
     def mark_first_token(self, source: Optional[str] = None) -> None:
         if self.first_token_at is None:
             self.first_token_at = time.perf_counter()
@@ -210,6 +216,7 @@ class RouteRecord:
     def flow_metrics(self) -> Dict[str, Any]:
         return {
             "request_id": self.request_id,
+            "model_timing": self.trace.snapshot(),
             "first_content_ms": (int((self.content_first_at - self.arrived) * 1000)
                                  if self.content_first_at is not None else None),
             "max_content_gap_ms": self.content_max_gap_ms,

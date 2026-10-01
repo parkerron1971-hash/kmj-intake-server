@@ -563,3 +563,111 @@ def test_exact_arithmetic_still_obeys_current_guard_denial(monkeypatch, restore_
 def test_mixed_requests_never_take_the_exact_arithmetic_route(message):
     cft.note_full_turn_ok(SESSION.user.id, BIZ)
     assert cft.plan(_req(message), SESSION).calculated_answer is None
+
+
+
+def test_ambiguous_voice_starts_full_turn_without_a_classifier_wait(monkeypatch, restore_chat, _router_on):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('voice ambiguity must not serialize a classifier before the answer')
+    monkeypatch.setattr(cft, 'classify', forbidden)
+    fake, calls = _fake_stream(lambda ep: [(1, "Let me think about that.")])
+    monkeypatch.setattr(cft, 'stream_text', fake)
+    req = _req('can you cheer me up?', client_surface='voice')
+    plan = cft.plan(req, SESSION)
+    assert plan.starts_turn_now() and not plan.route.ambiguous
+    assert plan.holder.parallel_voice
+    events, turns = asyncio.run(_run(req, turn_reply='Take one manageable step.', turn_delay=.02))
+    assert len(turns) == 1 and turns[0]['opening'] == ''
+    assert events[-1][0] < .5
+    assert _router_on[-1]['reason'] == 'voice_ambiguous'
+    assert '/chief/route' not in {call['endpoint'] for call in calls}
+
+
+@pytest.mark.parametrize('held_tokens', [False, True])
+def test_voice_fast_first_content_deadline_cancels_haiku_then_hands_off(
+        monkeypatch, restore_chat, _router_on, held_tokens):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    monkeypatch.setattr(cft, 'VOICE_FAST_FIRST_CONTENT_S', .06)
+    cancelled = []
+    async def stalled(*args, **kwargs):
+        try:
+            if held_tokens:
+                for piece in ['ROI', ' ', 'means', ' ']:
+                    await asyncio.sleep(.01)
+                    yield piece
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(True)
+    monkeypatch.setattr(cft, 'stream_text', stalled)
+    events, turns = asyncio.run(_run(_req('What does ROI mean?', client_surface='voice'),
+        turn_reply='ROI is return on investment.', turn_delay=.01))
+    assert cancelled == [True] and len(turns) == 1
+    assert events[-1][0] < .4
+    assert _router_on[-1]['escalation_reason'] == 'voice_first_content_timeout'
+    assert _router_on[-1]['lane'] == 'full'
+    assert ''.join(d['text'] for d in _deltas(events)) == events[-1][1]['payload']['response']
+    assert len(cft.CACHE) == 0
+
+
+def test_voice_fast_idle_deadline_preserves_the_shown_prefix(monkeypatch, restore_chat, _router_on):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    monkeypatch.setattr(cft, 'VOICE_FAST_IDLE_S', .05)
+    cancelled = []
+    async def stalled(*args, **kwargs):
+        try:
+            yield 'ROI measures return on investment. It compares the gain with the cost. '
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(True)
+    monkeypatch.setattr(cft, 'stream_text', stalled)
+    events, turns = asyncio.run(_run(_req('What does ROI mean?', client_surface='voice'),
+        turn_reply='Divide the net gain by cost to calculate the return.', turn_delay=.01))
+    assert cancelled == [True] and len(turns) == 1
+    assert events[-1][0] < .4
+    assert _router_on[-1]['escalation_reason'] == 'voice_answer_idle'
+    shown = ''.join(d['text'] for d in _deltas(events))
+    assert shown == events[-1][1]['payload']['response']
+    assert shown.count('ROI measures return on investment.') == 1
+    assert turns[0]['opening'].startswith('ROI measures return on investment.')
+    assert len(cft.CACHE) == 0
+
+
+def test_progressive_voice_fast_answer_keeps_its_lane(monkeypatch, restore_chat, _router_on):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    monkeypatch.setattr(cft, 'VOICE_FAST_FIRST_CONTENT_S', .08)
+    monkeypatch.setattr(cft, 'VOICE_FAST_IDLE_S', .08)
+    answer = 'ROI measures the return on an investment by comparing net gain against its original cost.'
+    fake, _ = _fake_stream(lambda ep: [(0.02, answer[:40]), (0.03, answer[40:70]), (.03, answer[70:])])
+    monkeypatch.setattr(cft, 'stream_text', fake)
+    events, turns = asyncio.run(_run(_req('What does ROI mean?', client_surface='voice')))
+    assert turns == [] and _router_on[-1]['lane'] == 'fast'
+    assert not _router_on[-1]['escalated']
+    assert events[-1][1]['payload']['response'] == answer
+
+
+def test_voice_fast_overall_cap_still_bounds_continuous_output(monkeypatch, restore_chat, _router_on):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    monkeypatch.setattr(cft, 'VOICE_FAST_ANSWER_CAP_S', .12)
+    async def endless(*args, **kwargs):
+        while True:
+            await asyncio.sleep(.015)
+            yield 'An investment return compares the original cost and the gain. '
+    monkeypatch.setattr(cft, 'stream_text', endless)
+    events, turns = asyncio.run(_run(_req('What does ROI mean?', client_surface='voice'),
+        turn_reply='That ratio expresses the return.', turn_delay=.01))
+    assert len(turns) == 1 and events[-1][0] < .4
+    assert _router_on[-1]['escalation_reason'] == 'voice_answer_timeout'
+
+
+def test_chat_fast_answers_do_not_inherit_voice_stall_deadlines(monkeypatch, restore_chat, _router_on):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    monkeypatch.setattr(cft, 'VOICE_FAST_FIRST_CONTENT_S', .001)
+    monkeypatch.setattr(cft, 'VOICE_FAST_IDLE_S', .001)
+    monkeypatch.setattr(cft, 'VOICE_FAST_ANSWER_CAP_S', .001)
+    answer = 'ROI means return on investment, comparing net gain with original cost.'
+    fake, _ = _fake_stream(lambda ep: [(.04, answer)])
+    monkeypatch.setattr(cft, 'stream_text', fake)
+    events, turns = asyncio.run(_run(_req('What does ROI mean?')))
+    assert turns == [] and _router_on[-1]['lane'] == 'fast'
+    assert events[-1][1]['payload']['response'] == answer

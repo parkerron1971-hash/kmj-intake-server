@@ -115,6 +115,12 @@ def _classifier_timeout_s() -> float:
 # turn's own words take over, whatever the model is doing.
 OPENER_HARD_CAP_S = 2.5
 FAST_ANSWER_CAP_S = 20.0
+# A call cannot spend twenty seconds waiting for the small model before
+# starting the full answer. Progress means released answer text, not a lead
+# or raw tokens still held by the answer gate.
+VOICE_FAST_ANSWER_CAP_S = 8.0
+VOICE_FAST_FIRST_CONTENT_S = 2.5
+VOICE_FAST_IDLE_S = 2.5
 FAST_MAX_TOKENS = 500
 OPENER_MAX_TOKENS = 80
 VOICE_OPENER_MAX_TOKENS = 140
@@ -518,7 +524,8 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
     complete = False
     try:
         async with llm_call.astream(client(), payload, timeout=httpx.Timeout(
-                connect=3.0, read=15.0, write=5.0, pool=2.0)) as resp:
+                connect=3.0, read=15.0, write=5.0, pool=2.0),
+                task=endpoint, timing_trace=getattr(rec, "trace", None)) as resp:
             if resp.status_code >= 400:
                 body = (await resp.aread())[:200]
                 out["error"] = f"{resp.status_code} {body!r}"
@@ -681,7 +688,9 @@ class TwoTrack:
 
     def bind_turn_context(self) -> List[Any]:
         """Context the full turn task must be created with (reset after)."""
-        return [(OPENER, OPENER.set(self.holder)),
+        import chief_request_timing as _crt
+        return [(_crt.CURRENT, _crt.CURRENT.set(self.rec.trace)),
+                (OPENER, OPENER.set(self.holder)),
                 (route_ledger.TALLY, route_ledger.TALLY.set(self.rec.tally))]
 
     def mark_turn_delta(self) -> None:
@@ -1012,17 +1021,22 @@ class TwoTrack:
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, messages, model=model, max_tokens=FAST_MAX_TOKENS, rec=self.rec,
             endpoint="/chief/backend", units=None, business_id=self.business_id, out=out), q))
-        hard_stop = self.rec.arrived + FAST_ANSWER_CAP_S
+        hard_stop = self.rec.arrived + (VOICE_FAST_ANSWER_CAP_S if self.voice else FAST_ANSWER_CAP_S)
+        content_deadline = time.perf_counter() + VOICE_FAST_FIRST_CONTENT_S
         after_lead = bool(self.lead_text)
         first_model_text = True
         escalate: Optional[str] = None
         try:
             while not gate.closed:
-                piece = await self._next(q, deadline, hard_stop)
+                wait_until = min(hard_stop, content_deadline) if self.voice else hard_stop
+                piece = await self._next(q, deadline, wait_until)
                 if piece == "AGAIN":
                     continue
                 if piece == "STOP":
-                    escalate = "timeout"
+                    if self.voice and content_deadline <= hard_stop:
+                        escalate = "voice_answer_idle" if self.fast_answer else "voice_first_content_timeout"
+                    else:
+                        escalate = "voice_answer_timeout" if self.voice else "timeout"
                     break
                 if piece == "LEAD":
                     after_lead = True
@@ -1045,6 +1059,8 @@ class TwoTrack:
                             text.lstrip(), lower=not self._lead_is_sentence())
                     first_model_text = False
                     self.fast_answer += text
+                    if self.voice:
+                        content_deadline = time.perf_counter() + VOICE_FAST_IDLE_S
                     async for ev in self._emit(text, "answer"):
                         yield ev
                 if piece is None:
@@ -1055,6 +1071,7 @@ class TwoTrack:
         finally:
             if not pump.done():
                 pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
 
         if escalate:
             self.rec.escalate(escalate)
@@ -1120,6 +1137,7 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
         # The app's id for this turn: what a client-side measurement (time
         # to first audio on a call) is reported against.
         rec.request_id = str(req.request_id)[:80]
+        rec.trace.request_id = rec.request_id
     message = str(getattr(req, "message", "") or "")
     c = mr.score(message, _prior_assistant(req),
                  has_images=bool(getattr(req, "image_ids", None)),
@@ -1145,6 +1163,12 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
             # The complete message is an integer expression; prior conversational
             # complexity cannot turn it into a business lookup or an action.
             route = mr.Route(mr.LANE_FAST, "exact_arithmetic")
+    if route.ambiguous and (getattr(req, "client_surface", "") or "") == "voice":
+        # Uncertain spoken turns already need the full turn unless a separate
+        # classifier proves otherwise. Start that authorized path now instead
+        # of putting a classifier's network wait in front of it. Clear/simple
+        # fast answers and exact arithmetic retain their existing routes.
+        route = mr.Route(mr.LANE_FULL, "voice_ambiguous")
     if unhappy and st.get("lane") == mr.LANE_FAST:
         rec.escalate("dissatisfied_after_fast")
     rec.lane, rec.reason = route.lane, route.reason
