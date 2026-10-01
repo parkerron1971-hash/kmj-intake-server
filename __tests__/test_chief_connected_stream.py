@@ -127,6 +127,7 @@ def test_large_relevant_record_is_never_truncated_or_falsely_marked_complete(mon
     'The message is on its way. ', 'The text is on the way. ', 'It is on its way. ',
     'That is taken care of. ', 'It is handled. ', 'The booking went through. ',
     'The update went through. ', 'The payment has gone through. ',
+    'The emails are on their way. ', 'The bookings have gone through. ',
 ])
 def test_delivery_idioms_require_receipts_and_never_enter_early_review(monkeypatch, sentence):
     assert truth.has_completion_claim(sentence)

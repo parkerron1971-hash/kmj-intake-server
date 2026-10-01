@@ -1250,10 +1250,10 @@ def _asserted_text(reply):
 # Literal delivery/completion idioms still imply an outcome when they avoid
 # verbs such as "sent". They need a receipt, never an early prose shortcut.
 _DELIVERY_COMPLETION = re.compile(
-    r"\b(?:message|email|text|invoice|reminder|booking|update|payment|request|change|it|that|this)"
-    r"(?:\s+(?:is|was)|['\u2019]s)\s+(?:on (?:its|the) way|taken care of|handled)\b"
-    r"|\b(?:message|email|text|invoice|reminder|booking|update|payment|request|change)"
-    r"\s+(?:went|has gone) through\b", re.I)
+    r"\b(?:messages?|emails?|texts?|invoices?|reminders?|bookings?|updates?|payments?|requests?|changes?|it|that|this)"
+    r"(?:\s+(?:is|was|are|were)|['\u2019]s)\s+(?:on (?:its|their|the) way|taken care of|handled)\b"
+    r"|\b(?:messages?|emails?|texts?|invoices?|reminders?|bookings?|updates?|payments?|requests?|changes?)"
+    r"\s+(?:went|has gone|have gone) through\b", re.I)
 
 
 def has_completion_claim(reply):
