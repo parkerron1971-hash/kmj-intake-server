@@ -62,6 +62,53 @@ jobs:
           # Enough history to see what shipped in the last few days.
           fetch-depth: 200
 
+      # The evidence is gathered HERE, by plain shell, before Claude starts.
+      # In the first rehearsal (#1134) Claude's own curl calls were refused
+      # inside the action, so it never saw production first-hand and
+      # filled the gap with a confident story. Whatever the action's
+      # sandbox allows, this file is always there.
+      - name: Gather evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue || github.event.issue.number }}
+          BACKEND: https://kmj-intake-server-production.up.railway.app
+          APP: https://mysolutionist.app
+        run: |
+          set +e
+          f=oncall-evidence.md
+          fence='```'
+          {
+            echo "# Evidence gathered by the workflow at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo
+            echo "## Production backend, checked just now"
+            for p in /health/ready /health; do
+              code=$(curl -s --max-time 20 -o /tmp/body -w '%{http_code}' "$BACKEND$p")
+              echo "### GET $BACKEND$p -> HTTP $code"
+              echo "$fence"; head -c 1500 /tmp/body; echo; echo "$fence"
+            done
+            echo "## The app"
+            echo "GET $APP -> HTTP $(curl -s --max-time 20 -o /dev/null -w '%{http_code}' "$APP")"
+            echo
+            echo "## The incident issue #$ISSUE"
+            echo "$fence"; gh issue view "$ISSUE" --comments | head -c 6000; echo; echo "$fence"
+            echo "## Other open alarms"
+            for l in uptime deploy incident; do
+              echo "- label $l:"
+              gh issue list --label "$l" --state open --json number,title,createdAt \
+                --template '{{range .}}  - #{{.number}} {{.title}} ({{.createdAt}}){{"\n"}}{{end}}'
+            done
+            echo
+            echo "## Commits on main, last 3 days"
+            echo "$fence"; git log origin/main --since='3 days ago' --format='%h %ad %s' --date=iso | head -60; echo "$fence"
+            echo "## Recent failed workflow runs"
+            echo "$fence"
+            gh run list --status failure --limit 10 --json workflowName,headSha,createdAt \
+              --template '{{range .}}{{.createdAt}} {{.workflowName}} {{.headSha}}{{"\n"}}{{end}}'
+            echo "$fence"
+          } > "$f"
+          wc -c "$f"
+
       - name: Investigate
         uses: anthropics/claude-code-action@v1
         env:
@@ -81,11 +128,18 @@ jobs:
             Vercel). An alarm opened incident issue #${{ inputs.issue || github.event.issue.number }}
             in ${{ github.repository }}. Diagnose it. Do not fix it.
 
-            1. Read the issue and its comments: `gh issue view <n> --comments`.
-            2. Check production now:
+            1. Read `oncall-evidence.md` in the working directory FIRST. The workflow
+               gathered it moments before you started: production's /health/ready and
+               /health (which reports `version`, the running commit), the app's status,
+               the issue and its comments, other open alarms, recent commits and failed
+               runs. It is your first-hand view of production. You may also try
                `curl -s https://kmj-intake-server-production.up.railway.app/health/ready`
-               and `/health` (it reports `version`, the running commit). Check the app with
-               `curl -s -o /dev/null -w %{http_code} https://mysolutionist.app`.
+               yourself; if that is refused, the file is enough.
+            2. If the issue says REHEARSAL, or the address it probed is not
+               https://kmj-intake-server-production.up.railway.app (backend) or
+               https://mysolutionist.app (app), this was a test of the alarm. Say that in
+               your first sentence, confirm from the evidence whether production itself is
+               healthy, and stop there. Do not diagnose a cause for a test.
             3. Look at what changed: `git log --since='3 days ago' --format='%h %ad %s' --date=iso`
                on origin/main, and `git show` anything that touches the failing area. Compare
                the running `version` with the newest commit on main.
@@ -109,3 +163,10 @@ jobs:
             setting. If production is healthy again by the time you look, say so first and
             keep the diagnosis short. Never guess past the evidence; "I could not tell" is an
             acceptable answer.
+
+            How sure to say you are: call a cause "likely" only when the evidence shows the
+            failure itself (an error response, a running version that does not match main, a
+            failed run with a matching error). A timing coincidence, such as a merge shortly
+            before the alarm, makes a cause "possible", never "high confidence". When the
+            failure is already gone and nothing in the evidence shows it, say the cause is
+            unknown and list what would tell you.
