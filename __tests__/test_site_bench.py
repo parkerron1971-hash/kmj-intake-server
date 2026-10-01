@@ -60,3 +60,9 @@ def test_objects_writes_the_library_contact_sheet(tmp_path):
     html = sheet.read_text(encoding="utf-8")
     assert 'data-sx-object="boarding-pass"' in html
     assert "example.com" not in html, "photo urls are swapped for stand-ins"
+
+
+def test_the_directors_prompt_carries_the_concept_dial():
+    out = _run("director", "--fixture", FIXTURE)
+    assert "THE CONCEPT (how far this site's idea goes)" in out
+    assert "intensity: signature" in out, "a barbershop defaults to signature"

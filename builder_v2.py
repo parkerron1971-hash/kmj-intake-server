@@ -207,6 +207,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store, events) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section, an Upcoming Events moment that invites the visitor to see the dates and RSVP). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
 15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
 16. THE TYPE FLOOR (measured on the render; a miss costs a repair round): exactly one <h1> (the hero headline), headings stepping down one level at a time. Set a type scale with clamp() and keep to it. Display sizes tighten their tracking (-0.01em to -0.03em); uppercase labels open theirs (0.08em or more). Running text is 16px or larger on a phone and never under 14px; nothing a visitor reads is under 11px. Body copy holds a 45 to 75 character measure (max-width in ch). Headings get text-wrap: balance and paragraphs text-wrap: pretty. Digits that line up (prices, hours, durations, stats) get font-variant-numeric: tabular-nums. When a face offers an optical-size axis, request it in the Google Fonts url (opsz) and set font-optical-sizing: auto. Buttons, inputs and selects inherit the page's fonts (font: inherit). No paragraph longer than three lines is centered. At most two type families, three with a utility face. Write straight quotes freely: a typographer pass sets real quotes, apostrophes and ranges after you.
+17. THE CONCEPT: the blueprint's section 0 sets how far the page's idea goes, and the page obeys it. PLAIN: nothing renamed, no objects. SIGNATURE: the one object and the one or two renamed labels it names, nothing more. WORLD: the navigation and section names use its VOCABULARY, its OBJECTS hold the content, its LIVING DETAIL moves once. Every in-world label keeps its plain word, visible beneath it (a small line) or in the link's aria-label, so a first-time visitor never has to guess. A concept never hides what a thing is or what it costs. When section 0 says SCOPE: offer, this page is the home: it stays at SIGNATURE and links to the offer page.
 
 CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold.
 
@@ -1260,6 +1261,24 @@ def _call(system: str, user: str, business_id: str,
         return None
 
 
+def _concept_sheet(spec_text: str) -> Dict[str, str]:
+    try:
+        import site_concept
+        return site_concept.parse_sheet(spec_text)
+    except Exception as e:
+        logger.info(f"[v2] concept sheet unreadable: {e}")
+        return {}
+
+
+def _concept_findings(html: str, sheet: Dict[str, str]) -> List[str]:
+    try:
+        import site_concept
+        return site_concept.check_page(html, sheet)
+    except Exception as e:
+        logger.info(f"[v2] concept check skipped: {e}")
+        return []
+
+
 def _craft():
     """craft_laws, imported late so a missing module can never stop a
     build (the floor is quality, not a gate)."""
@@ -1305,6 +1324,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             pass
 
     real_data = assemble_real_data(ctx, business_id)
+    sheet = _concept_sheet(spec_text)
+    report["concept"] = {k: sheet.get(k) for k in ("intensity", "scope", "idea", "objects")
+                         if sheet.get(k)}
     _progress(48, "One mind builds the whole page")
     # THE BUILDER WITH TOOLS (2026-08-29): when the loop is on, the
     # authoring step can look at the owner's images, pull whole sections
@@ -1353,9 +1375,11 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
 
     def _soft(d: str) -> List[str]:
         # THE SOFT TIER: quality defects that earn the repair round and
-        # never the fallback: visible stand-ins (11c) and the craft floor
-        # (one h1, alt text, type families, likely typos).
-        return check_stand_ins(d) + _craft().check_html(d, real_data)
+        # never the fallback: visible stand-ins (11c), the craft floor
+        # (one h1, alt text, type families, likely typos) and the page
+        # held to its concept sheet (objects, the plain-word rule).
+        return (check_stand_ins(d) + _craft().check_html(d, real_data)
+                + _concept_findings(d, sheet))
 
     def _laws(d: str) -> List[str]:
         # armor_violations reads the drops _mechanical just recorded for
