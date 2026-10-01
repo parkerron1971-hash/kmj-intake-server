@@ -599,6 +599,8 @@ app.include_router(support_queue_router)
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
 from stripe_billing import router as stripe_billing_router
 app.include_router(stripe_billing_router)
+from stripe_discounts import router as stripe_discounts_router
+app.include_router(stripe_discounts_router)
 # Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
 # over the existing email/SMS rails. /campaigns/* (all JWT-authed,
 # ownership verified); the send sweep registers in startup() below.
