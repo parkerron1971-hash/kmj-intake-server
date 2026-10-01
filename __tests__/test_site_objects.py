@@ -175,3 +175,25 @@ def test_an_id_card_grows_to_its_content():
     assert ".sxo-card>*{flex-shrink:0}" in css
     card_rule = css.split(".sxo-card{", 1)[1].split("}", 1)[0]
     assert "overflow:hidden" not in card_rule, "a fixed card height squashes the portrait"
+
+
+# ─── every object in every design language (2026-10-01) ──────────────
+
+def test_the_contact_sheet_covers_every_language_in_its_finish():
+    import design_languages as dl
+    names = [t["name"] for t in so.CONTACT_THEMES]
+    assert names == list(dl.LANGUAGES), "one theme per language, in registry order"
+    for t in so.CONTACT_THEMES:
+        assert t["finish"] == dl.OBJECT_FINISH[t["name"]][0], t["name"]
+    html = so.contact_sheet_html([so.CONTACT_THEMES[1]])        # monograph, metal
+    assert 'data-finish="metal" data-sx-object="ticket"' in html
+
+
+def test_the_metal_finish_does_more_than_the_seal():
+    assert "--_metal" in so.BASE_CSS
+    for key in ("ticket", "card-id", "boarding-pass", "installments"):
+        assert 'data-finish="metal"' in OBJECTS[key].css and "var(--_metal)" in OBJECTS[key].css, key
+
+
+def test_the_director_is_told_where_inverse_belongs():
+    assert "light ground only" in so.director_block()
