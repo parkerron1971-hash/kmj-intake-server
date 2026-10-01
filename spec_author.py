@@ -159,7 +159,8 @@ def _digest_plan(spec_plan: List[Dict[str, Any]]) -> str:
     the Director decides content AROUND this structure (data sections
     render from real rows; creative sections are fully authorable)."""
     if not spec_plan:
-        return "(no composed plan yet — propose a section list yourself, 6-9 sections)"
+        return ("(no composed plan yet — propose a section list yourself, "
+                "following THE DENSITY SKELETON: 8-11 sections)")
     lines = []
     for i, s in enumerate(spec_plan, 1):
         mid = str(s.get("module") or "?")

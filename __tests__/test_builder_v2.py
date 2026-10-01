@@ -583,3 +583,74 @@ def test_run_carries_the_eyes_reason_onto_the_report(monkeypatch):
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out["html"] and out["report"]["vision"]["ran"] is False
     assert "no screenshots" in out["report"]["vision"]["reason"]
+
+
+# ─── THE MEASURED RENDER (2026-10-01, the concept-layer plan) ─────────
+
+def test_role_navigation_counts_as_a_nav():
+    rd = "CONTACT FORM ENDPOINT (the form's action): https://e/x"
+    page = ('<div role="navigation"><a href="#a">A</a></div>'
+            '<form action="https://e/x"></form><footer></footer>')
+    assert not any("nav" in p for p in v2.check_coverage(page, rd))
+    assert any("nav" in p for p in v2.check_coverage("<form></form><footer></footer>", rd))
+
+
+def test_render_findings_name_only_certain_defects():
+    measures = {
+        "390": {"overflow_x": True, "scroll_width": 612, "empty_headings": 1,
+                "overlaps": [{"a": 'h2.title "Our work"', "b": 'p.lede "We cut"', "y": 900},
+                             {"a": 'img.hero ""', "b": 'h1 "Cut sharp"', "y": 0}]},
+        "1440": {"overflow_x": False, "scroll_width": 1440, "empty_headings": 0,
+                 "overlaps": []},
+    }
+    found = v2.render_findings(measures)
+    joined = " ".join(found)
+    assert "612px wide" in joined and "sideways" in joined
+    assert "heading(s) render with no text" in joined
+    assert "h2.title" in joined and "data-overlap-ok" in joined
+    assert "img.hero" not in joined, "a photo behind a headline is usually layering"
+    assert v2.render_findings(None) == [] and v2.render_findings({}) == []
+
+
+def test_walk_measurements_are_read_once_per_document():
+    v2._record_measure("<html>a</html>", 390, {"overflow_x": True, "scroll_width": 500})
+    assert v2.walk_measurements("<html>b</html>") is None
+    got = v2.walk_measurements("<html>a</html>")
+    assert got == {"390": {"overflow_x": True, "scroll_width": 500}}
+    assert v2.walk_measurements("<html>a</html>") is None
+
+
+def test_a_measured_defect_earns_the_vision_repair_without_a_verdict(monkeypatch):
+    """The eyes may not answer (no key, cut reply), but a page measured as
+    scrolling sideways on a phone still gets its repair round."""
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    def _eyes(doc, spec, biz, why=None):
+        v2._record_measure(doc, 390, {"overflow_x": True, "scroll_width": 700,
+                                      "empty_headings": 0, "overlaps": []})
+        if why is not None:
+            why["reason"] = "no ANTHROPIC_API_KEY"
+        return None
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+    monkeypatch.setattr(v2, "inspect_with_eyes", _eyes)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"]
+    assert out["report"]["vision"]["ran"] is False
+    assert out["report"]["vision"]["measured"]
+    assert len(calls) == 2, "author + one repair for the measured defect"
+    assert "MEASURED IN THE RENDER" in calls[1] and "700px wide" in calls[1]
+    assert out["report"]["vision"].get("repaired") is True
+
+
+def test_the_system_prompt_teaches_layering_on_purpose():
+    assert "data-overlap-ok" in v2._SYSTEM
+    assert len(v2._SYSTEM) < 12000, "the moves block crept back into the system prompt"
