@@ -45,6 +45,8 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      new_issue: ${{ steps.incident.outputs.new_issue }}
     steps:
       - name: Probe the backend and the app
         id: probe
@@ -132,6 +134,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Open or update an incident issue
+        id: incident
         if: steps.probe.outputs.failed == 'yes'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -165,7 +168,7 @@ jobs:
 
           [run]($RUN)"
           else
-            gh issue create --label uptime \
+            url=$(gh issue create --label uptime \
               --title "Uptime: production is not answering" \
               --body "An external probe could not confirm production is healthy.
 
@@ -178,7 +181,13 @@ jobs:
           [run]($RUN)
 
           This issue stays open and gets a comment per failed check.
-          Close it once things recover; the next failure opens a new one."
+          Close it once things recover; the next failure opens a new one.
+
+          On-call is investigating and will post a diagnosis here.")
+            # A NEW incident, and only a new one, goes to on-call. A
+            # comment per still-failing probe must not start another
+            # investigation every ten minutes.
+            echo "new_issue=${url##*/}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Close the incident on recovery
@@ -196,3 +205,20 @@ jobs:
             gh issue comment "$existing" --body "Recovered — probe green at $(date -u '+%Y-%m-%d %H:%M UTC')."
             gh issue close "$existing"
           fi
+
+  # The Engineering agent reads the new incident and posts a diagnosis on
+  # it (oncall.yml). Called directly because an issue opened with this
+  # workflow's GITHUB_TOKEN cannot start another workflow by itself.
+  # Diagnosis only: it never edits, merges, redeploys or rolls back.
+  investigate:
+    needs: probe
+    if: needs.probe.outputs.new_issue != ''
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/oncall.yml
+    with:
+      issue: ${{ fromJSON(needs.probe.outputs.new_issue) }}
+    secrets: inherit
