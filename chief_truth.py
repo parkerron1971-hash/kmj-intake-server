@@ -952,6 +952,17 @@ def _reuse_review_claims(raw, original, repaired, sources):
                 return None
         if not retained:
             return None
+        # A partial first review may omit an entire nonnumeric assertion.
+        # assess_review checks citations and numeric coverage, not prose
+        # coverage: do not call such an omitted sentence already verified.
+        # Require a claim for the WHOLE unchanged sentence, or independently
+        # prove that sentence at the same strict bar used for early speech.
+        # A claim for one clause cannot cover an unsupported adjoining clause.
+        covered = {_squash(claim['text']) for claim in retained}
+        prover = stream_prover(sources)
+        for sentence in unchanged:
+            if _squash(sentence) not in covered and not streamable_sentence(prover, sentence):
+                return None
         kept = json.dumps({'verdict': 'supported', 'claims': retained})
         if assess_review(kept, '\n'.join(unchanged), sources)[0] != 'supported':
             return None

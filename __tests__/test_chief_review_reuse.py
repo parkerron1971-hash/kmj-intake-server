@@ -143,3 +143,42 @@ def test_cleanup_avoids_repair_and_repeated_review_for_valid_advice():
     assert out == PRICE + ' ' + advice and meta['status'] == 'trimmed'
     reviewer.assert_awaited_once()
     repairer.assert_not_awaited()
+
+
+@pytest.mark.parametrize('unreviewed', [
+    'All your invoices are paid.',
+    'Your customers have already confirmed their bookings.',
+])
+def test_omitted_unchanged_nonnumeric_fact_requires_full_review(unreviewed):
+    original = ORIGINAL.replace(PRICE, PRICE + ' ' + unreviewed, 1)
+    repaired = REPAIRED.replace(PRICE, PRICE + ' ' + unreviewed, 1)
+    assert truth._reuse_review_claims(FIRST, original, repaired, SOURCES) is None
+
+
+def test_partial_sentence_claim_does_not_cover_unreviewed_clause():
+    mixed = 'Your Blueprint price is $3000, and all your invoices are paid.'
+    original = ORIGINAL.replace(PRICE, mixed, 1)
+    repaired = REPAIRED.replace(PRICE, mixed, 1)
+    first = raw([claim('Your Blueprint price is $3000'), claim(BAD)], 'unsupported')
+    assert truth._reuse_review_claims(first, original, repaired, SOURCES) is None
+
+
+def test_omitted_fact_reaches_full_independent_second_review():
+    omitted = 'All your invoices are paid.'
+    original = ORIGINAL.replace(PRICE, PRICE + ' ' + omitted, 1)
+    repaired = REPAIRED.replace(PRICE, PRICE + ' ' + omitted, 1)
+    reviewer = AsyncMock(side_effect=[FIRST, raw([], 'unsupported')])
+    repairer = AsyncMock(return_value=repaired)
+    token = truth.begin('owner', 'How can I grow this business?')
+    try:
+        truth.record('context:capacity', SOURCE)
+        out, meta = asyncio.run(truth.finalize_reply(None, original, ctx={}, view_detail='',
+            taken=[], message='How can I grow this business?', business_id='test',
+            reviewer=reviewer, repairer=repairer))
+    finally:
+        truth.end(token)
+    payload = json.loads(reviewer.call_args.args[2][0]['content'])
+    assert payload['draft'] == repaired and omitted in payload['draft']
+    assert 'complete_repaired_answer' not in payload
+    assert out == truth.NO_ACTION_REPLY and meta['status'] == 'withheld'
+    assert reviewer.await_count == 2
