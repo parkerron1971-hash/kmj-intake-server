@@ -193,7 +193,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 2. TRUTH: every fact, number, price, and claim on the page appears in the REAL DATA below. Nothing invented — a stat the data doesn't prove renders as a clearly-marked editable placeholder, never a made-up figure.
 3. COVERAGE: every listed image appears (exact url in src); a fixed navigation; a working contact form posting to the given endpoint (method="POST", the given action url, name/email fields at minimum); a footer. Every real service/offering has a home, with its price and, when the data carries duration_min, its duration in minutes beside the price.
 4. EXTERNAL REQUESTS: Google Fonts stylesheet links, the provided https image urls, and the one contact-form fetch of rule 9 ONLY. No other external scripts, styles, frames, or calls.
-5. EDITABILITY: stamp data-override-target="v2/f1", "v2/f2", … on headings, paragraphs, and captions as you write them (a platform pass guarantees any you miss — stamping well keeps the labels meaningful).
+5. EDITABILITY: stamp data-override-target="v2/f1", "v2/f2", … on headings, paragraphs, and captions as you write them (a platform pass guarantees any you miss — stamping well keeps the labels meaningful). Every top-level <section> carries a unique, meaningful id (id="prices", id="story"): the navigation anchors to it, the review names it, and a repair can rebuild that one section without touching the rest.
 6. MOBILE: a real responsive pass in the same document — media queries so every section holds at 390px. What breaks on a phone fails the whole page. The page must also hold on wide screens (1900px+): content keeps an intentional measure, backgrounds and motifs extend, nothing stretches thin or drifts off-grid.
 7. The spec's color hexes and font names are law — write them directly in your CSS, once, as :root custom properties named as the spec names them; everything below :root is a var() reference or a color-mix() against those tokens, never a second literal.
 8. COPY GRAMMAR (the DASH LAW): never splice a sentence with a dash. No em dashes, no " - " splices in headings, paragraphs, or list copy — rewrite with a period, comma, or colon. A dash may appear only inside a proper title supplied by the data (an artwork or event name).
@@ -1079,9 +1079,16 @@ Measure against THE CHECKLIST (each item is a law, not a suggestion):
 - MOBILE (390px): nothing crowded, cropped, or broken; rhythm holds.
 - ULTRAWIDE: the page keeps an intentional measure; nothing stretches thin or drifts.
 - SPEC FIDELITY: the named signature move is visible and executed; the spec's palette and type are what actually rendered.
+- THE IDEA: the hero says what this business is; a stranger knows in five seconds.
+- ONE SIGNATURE MOMENT: it is visible, and the sections around it are quiet enough to let it lead.
+- RHYTHM: no two neighboring sections share the same shape (the same heading-number-paragraph opening, the same three cards). A page where every section opens the same way has defaulted.
+- PHONE COMPOSITION: at 390px the headline survives, objects simplify, nothing collides or shrinks to unreadable.
+- CONCEPT CLARITY: when the page wears a concept, it never hides what a thing is or what it costs, and in-world labels keep their plain words.
+
+Each violation names its "section": the id from SECTIONS ON THE PAGE, or "page" when it spans the page. Then name the WEAKEST section, the one a designer would rebuild first, with a score from 1 to 10 against everything above.
 
 Output STRICT JSON only:
-{"verdict":"ship"|"repair","violations":[{"where":"<section/breakpoint>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}]}
+{"verdict":"ship"|"repair","violations":[{"where":"<section/breakpoint>","section":"<id or page>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}],"weakest":{"section":"<id>","score":<1-10>,"why":"<one sentence>","fix":"<what the rebuilt section does instead>"}}
 Rules: at most 6 violations, ranked by owner-visible damage. Cosmetic taste differences are NOT violations. An empty violations list means verdict "ship". JSON only, no commentary."""
 
 
@@ -1105,6 +1112,17 @@ def _parse_inspector(raw: str) -> Optional[Dict[str, Any]]:
                          if isinstance(v, dict) and v.get("what")][:6]
     if not out["violations"]:
         out["verdict"] = "ship"
+    w = out.get("weakest")
+    if isinstance(w, dict) and str(w.get("section") or "").strip():
+        try:
+            score = int(w.get("score"))
+        except (TypeError, ValueError):
+            score = None
+        out["weakest"] = {"section": str(w["section"]).strip().lstrip("#"),
+                          "score": score, "why": str(w.get("why") or "")[:240],
+                          "fix": str(w.get("fix") or "")[:240]}
+    else:
+        out["weakest"] = None
     return out
 
 
@@ -1133,6 +1151,10 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
         content: List[Dict[str, Any]] = [
             {"type": "text", "text": "THE APPROVED SPEC (what the page "
              "promised):\n" + (spec_text or "").strip()[:2400]}]
+        outline = section_outline(doc)
+        if outline:
+            content.append({"type": "text", "text": "SECTIONS ON THE PAGE (id: "
+                            "heading), top to bottom:\n" + outline})
         for label, shot in shots:
             content.append({"type": "text", "text": f"View — {label}:"})
             content.append({"type": "image", "source": {
@@ -1275,6 +1297,129 @@ def _call(system: str, user: str, business_id: str,
         logger.error(f"[v2] build call failed on every rung: "
                      f"{type(e).__name__}: {e}")
         return None
+
+
+# ─── THE DESIGNER'S REVIEW (2026-10-01, the concept-layer plan) ──────
+# The vision repair used to resend the whole document for any defect the
+# eyes saw, paying for a full page to fix one band and risking the
+# sections that were already right. When every defect lives in named
+# sections, only those sections are rebuilt, and the rest of the page
+# stays byte for byte. A page-wide defect still gets the whole-page pass.
+
+WEAKEST_REBUILD_BELOW = 7        # the weakest section is rebuilt when it scores under this
+MAX_SECTION_REPAIRS = 2
+
+_SECTION_SYSTEM = ("THIS CALL REPAIRS ONE SECTION OF A FINISHED PAGE. Where the "
+                   "rules below say document or page, read section: you output ONE "
+                   "<section> element and nothing else.\n\n" + "{SYSTEM}")
+
+
+def _section_id(open_tag: str) -> str:
+    m = re.search(r'\bid\s*=\s*["\']([^"\']+)', open_tag)
+    return m.group(1) if m else ""
+
+
+def section_spans(doc: str) -> List[Tuple[str, int, int]]:
+    """(id, start, end) for every top-level <section> with an id."""
+    try:
+        import site_pages
+        out = []
+        for a, z in site_pages.top_sections(doc or ""):
+            open_tag = re.match(r"<section\b[^>]*>", doc[a:z], re.IGNORECASE).group(0)
+            sid = _section_id(open_tag)
+            if sid:
+                out.append((sid, a, z))
+        return out
+    except Exception:
+        return []
+
+
+def section_outline(doc: str) -> str:
+    lines = []
+    for sid, a, z in section_spans(doc):
+        h = re.search(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]>", doc[a:z], re.IGNORECASE | re.DOTALL)
+        heading = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h.group(1))).strip() if h else ""
+        lines.append(f"- {sid}: {heading[:70] or '(no heading)'}")
+    return "\n".join(lines[:24])
+
+
+def build_section_prompt(spec_text: str, real_data: str, doc: str, sid: str,
+                         issues: List[str]) -> str:
+    span = next(((a, z) for i, a, z in section_spans(doc) if i == sid), None)
+    current = doc[span[0]:span[1]] if span else ""
+    return "\n".join([
+        f"SECTION REPAIR: rebuild ONE section of your page, the <section id=\"{sid}\">. "
+        "Every other byte of the page is final and stays exactly as it is.",
+        "",
+        "WHAT TO FIX IN THIS SECTION:",
+        *[f"- {x}" for x in issues[:6]],
+        "",
+        f"Return ONLY the complete replacement element: it starts with <section, keeps "
+        f"id=\"{sid}\", uses the page's existing classes, tokens and fonts, keeps every "
+        "data-override-target it already has, and ends with </section>. New styles go in a "
+        "<style> element inside the section. No commentary, no code fences.",
+        "",
+        "THE APPROVED SPEC (excerpt):",
+        (spec_text or "").strip()[:6000],
+        "",
+        "THE REAL DATA (the only source of facts):",
+        (real_data or "").strip()[:10000],
+        "",
+        "THE WHOLE PAGE (context; do not return it):",
+        doc,
+        "",
+        "THE SECTION TO REBUILD:",
+        current,
+    ])
+
+
+def splice_section(doc: str, sid: str, raw: str) -> Optional[str]:
+    """The page with section `sid` replaced by the model's element, or None
+    when the reply is not one balanced <section id=sid>."""
+    text = _FENCE_RE.sub("", raw or "").strip()
+    i = text.lower().find("<section")
+    j = text.lower().rfind("</section>")
+    if i < 0 or j < i:
+        return None
+    new = text[i:j + len("</section>")]
+    try:
+        import site_pages
+        tops = site_pages.top_sections(new)
+    except Exception:
+        return None
+    if len(tops) != 1 or tops[0] != (0, len(new)):
+        return None
+    if _section_id(re.match(r"<section\b[^>]*>", new, re.IGNORECASE).group(0)) != sid:
+        return None
+    span = next(((a, z) for i2, a, z in section_spans(doc) if i2 == sid), None)
+    if not span:
+        return None
+    return doc[:span[0]] + new + doc[span[1]:]
+
+
+def plan_vision_repair(verdict: Optional[Dict[str, Any]], doc: str,
+                       page_items: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
+    """(page-wide items, {section id: items}). Anything the eyes could not
+    place in a section on this page is page-wide."""
+    ids = {sid for sid, _, _ in section_spans(doc)}
+    page = list(page_items)
+    by_section: Dict[str, List[str]] = {}
+    if verdict and verdict.get("verdict") == "repair":
+        for v in verdict.get("violations") or []:
+            item = (f"SEEN IN THE RENDER ({v.get('where', 'page')}): {v.get('what')} "
+                    f"— FIX: {v.get('fix', 'minimal edit')}")
+            sid = str(v.get("section") or "").strip().lstrip("#")
+            if sid in ids:
+                by_section.setdefault(sid, []).append(item)
+            else:
+                page.append(item)
+    w = (verdict or {}).get("weakest")
+    if isinstance(w, dict) and w.get("section") in ids and isinstance(w.get("score"), int) \
+            and w["score"] < WEAKEST_REBUILD_BELOW:
+        by_section.setdefault(w["section"], []).append(
+            f"THE WEAKEST SECTION (scored {w['score']}/10): {w.get('why')} "
+            f"— REBUILD IT SO: {w.get('fix')}")
+    return page, by_section
 
 
 def _concept_sheet(spec_text: str) -> Dict[str, str]:
@@ -1539,8 +1684,33 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             report["vision"]["ran"] = True
             report["vision"]["verdict"] = verdict.get("verdict")
             report["vision"]["violations"] = verdict.get("violations", [])
-        wants_repair = bool(measured) or bool(
-            verdict and verdict.get("verdict") == "repair")
+            report["vision"]["weakest"] = verdict.get("weakest")
+        page_items, by_section = plan_vision_repair(
+            verdict, doc, [f"MEASURED IN THE RENDER: {m}" for m in measured])
+        if by_section and not page_items:
+            # THE DESIGNER'S REVIEW: only the named sections are rebuilt.
+            _progress(68, "Rebuilding the sections the eyes flagged")
+            done: List[Dict[str, Any]] = []
+            for sid, items in list(by_section.items())[:MAX_SECTION_REPAIRS]:
+                if not _budget_left(spend):
+                    spend["skipped"].append(f"section-repair:{sid}")
+                    break
+                raw_s = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
+                              build_section_prompt(spec_text, real_data, doc, sid, items),
+                              business_id, spend=spend)
+                cand = splice_section(doc, sid, raw_s or "")
+                applied = False
+                if cand:
+                    cand = _mechanical(cand)
+                    if not _laws(cand):
+                        doc, applied = cand, True
+                done.append({"section": sid, "applied": applied})
+            report["vision"]["section_repairs"] = done
+            report["vision"]["repaired"] = any(d["applied"] for d in done)
+            if report["vision"]["repaired"]:
+                report["stand_ins"] = check_stand_ins(doc)
+                report["craft"] = _craft().check_html(doc, real_data)
+        wants_repair = bool(page_items)
         if wants_repair:
             if not _budget_left(spend):
                 spend["skipped"].append("vision-repair")
@@ -1549,11 +1719,11 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                     "detail": "output budget reached — keeping the law-passing document"})
             else:
                 _progress(68, "Vision repair: fixing what the eyes found")
-                seen = [f"SEEN IN THE RENDER ({v.get('where', 'page')}): "
-                        f"{v.get('what')} — FIX: {v.get('fix', 'minimal edit')}"
-                        for v in ((verdict or {}).get("violations") or [])
-                        if (verdict or {}).get("verdict") == "repair"]
-                seen += [f"MEASURED IN THE RENDER: {m}" for m in measured]
+                # page-wide: one whole-page pass carries everything, the
+                # section items included
+                seen = list(page_items)
+                for items in by_section.values():
+                    seen += items
                 # a stand-in or a craft miss the surgical round left behind
                 # rides the vision repair too — the eyes' round is the last chance
                 seen += [f"STILL ON THE PAGE: {s}" for s in report["stand_ins"]]
