@@ -1,0 +1,46 @@
+{
+  "_about": "Bench fixture (2026-10-01, the concept-layer plan): a pottery studio launching a six-week wheel course. The owner tapped 'World: one offer page' in the Design Coach, so the home stays Signature and the course gets its own World page. Fictional business; nothing here is a real person.",
+  "business": {
+    "id": "00000000-0000-4000-8000-0000000c1a70",
+    "name": "Wheelhouse Ceramics",
+    "type": "Pottery studio",
+    "slug": "wheelhouse-ceramics"
+  },
+  "founded_year": 2019,
+  "practitioner_name": "Mara Quill",
+  "owner_brief": "Wheelhouse is a small pottery studio in Pittsburgh with eight wheels. We sell open studio time and pieces, and this fall we are launching a six-week wheel-throwing course on Thursday nights, Sep 4 to Oct 9. Eight seats. Clay, glazes and two firings are included. I want the course to feel like a real term at an art school, with a syllabus and a little ceremony on the last night.",
+  "booking_url": "https://mysolutionist.app/book/wheelhouse-ceramics",
+  "store_url": "",
+  "offerings": [
+    {"id": "w1", "name": "Six-Week Wheel Course", "price": 340, "duration_min": 150, "description": "Six Thursday classes, 6 to 8:30pm, Sep 4 to Oct 9. Clay, glazes and two firings included. Eight seats."},
+    {"id": "w2", "name": "Open Studio Day Pass", "price": 25, "duration_min": 240, "description": "A wheel, tools and shelf space for an afternoon."},
+    {"id": "w3", "name": "Intro to the Wheel", "price": 85, "duration_min": 180, "description": "One evening on the wheel. You leave with two pieces to fire."}
+  ],
+  "testimonials": [
+    {"id": "wt1", "name": "June R.", "quote": "I came in never having touched clay and left week six with four bowls I actually use."}
+  ],
+  "gallery": [
+    {"url": "https://cdn.example.invalid/wheelhouse/wheels.jpg", "alt": "wheels.jpg"},
+    {"url": "https://cdn.example.invalid/wheelhouse/bowls.jpg", "alt": "bowls.jpg"},
+    {"url": "https://cdn.example.invalid/wheelhouse/kiln.jpg", "alt": "kiln.jpg"}
+  ],
+  "contact": {
+    "email": "studio@wheelhouse.example",
+    "phone": "(412) 555-0190",
+    "address": "3315 Butler St, Pittsburgh, PA 15201",
+    "hours": "Tue to Thu 5pm to 9pm, Sat 10am to 4pm, Sun 12pm to 5pm",
+    "sms_capable": false
+  },
+  "discovery_dossier": {
+    "identity": {
+      "team": [{"name": "Mara Quill", "role": "Studio lead and teacher.", "provenance": "asked"}]
+    },
+    "taste": {
+      "tone_words": {"value": ["warm", "hands-on", "a little ceremonial"], "provenance": "asked"},
+      "concept": {"value": "world-offer", "provenance": "asked"},
+      "concept_idea": {"value": "the course is a term at an art school: a syllabus, a seat, a certificate on the last night", "provenance": "asked"},
+      "concept_offer": {"value": "Six-Week Wheel Course", "provenance": "asked"}
+    },
+    "capabilities": {"booking": {"value": "on", "provenance": "asked"}, "store": {"value": "off", "provenance": "asked"}}
+  }
+}

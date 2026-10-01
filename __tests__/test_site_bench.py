@@ -66,3 +66,25 @@ def test_the_directors_prompt_carries_the_concept_dial():
     out = _run("director", "--fixture", FIXTURE)
     assert "THE CONCEPT (how far this site's idea goes)" in out
     assert "intensity: signature" in out, "a barbershop defaults to signature"
+
+
+# ─── the dial on the bench (2026-10-01, the concept-layer plan) ──────
+# Three fixtures across the three settings: Marrow & Steel (a barbershop,
+# Signature by default), Calm Counsel (a therapist, Plain by default) and
+# Wheelhouse Ceramics (the owner picked World on one offer page).
+
+def _fixture(name):
+    return os.path.join(ROOT, "scripts", "fixtures", name)
+
+
+def test_a_therapist_is_plain_by_default():
+    out = _run("director", "--fixture", _fixture("calm_counsel.json"))
+    assert "intensity: plain" in out and "trade's default" in out
+    assert "RECENT CONCEPTS" not in out
+
+
+def test_an_owners_world_offer_pick_reaches_the_director():
+    out = _run("director", "--fixture", _fixture("wheelhouse_course.json"))
+    assert "intensity: world" in out and "owner chose this" in out
+    assert "ONE OFFER PAGE" in out and "Six-Week Wheel Course" in out
+    assert "a term at an art school" in out

@@ -1,0 +1,38 @@
+{
+  "_about": "Bench fixture (2026-10-01, the concept-layer plan): a licensed therapist. The trade's concept default is PLAIN: no theme, nothing renamed, clarity and craft carry the page. Fictional business; nothing here is a real person.",
+  "business": {
+    "id": "00000000-0000-4000-8000-0000000ca1e0",
+    "name": "Calm Counsel",
+    "type": "Licensed therapist",
+    "slug": "calm-counsel"
+  },
+  "founded_year": 2018,
+  "practitioner_name": "Dr. Lena Ortiz",
+  "owner_brief": "I'm a licensed clinical therapist in Columbus. I see adults for anxiety, life transitions and couples work, in person and by video. I want the site to feel calm and trustworthy, never gimmicky. People should know what a first session is like, what it costs, and how to book a free 15 minute call. I take two insurance plans and offer a sliding scale.",
+  "booking_url": "https://mysolutionist.app/book/calm-counsel",
+  "store_url": "",
+  "offerings": [
+    {"id": "c1", "name": "Free consultation call", "price": 0, "duration_min": 15, "description": "A short call to see whether we are a good fit."},
+    {"id": "c2", "name": "Individual session", "price": 140, "duration_min": 50, "description": "One-on-one therapy for anxiety and life transitions, in person or by video."},
+    {"id": "c3", "name": "Couples session", "price": 170, "duration_min": 75, "description": "Structured sessions for couples working through conflict and change."}
+  ],
+  "testimonials": [],
+  "gallery": [],
+  "contact": {
+    "email": "hello@calmcounsel.example",
+    "phone": "(614) 555-0177",
+    "address": "220 Neil Ave, Suite 4, Columbus, OH 43215",
+    "hours": "Mon to Thu 9am to 6pm, Fri 9am to 1pm",
+    "sms_capable": false
+  },
+  "discovery_dossier": {
+    "identity": {
+      "credentials": {"value": "Licensed Professional Clinical Counselor (LPCC) in Ohio", "provenance": "asked"}
+    },
+    "taste": {
+      "tone_words": {"value": ["calm", "warm", "clear"], "provenance": "asked"},
+      "bans": {"value": ["stock photos of people holding their heads", "gimmicks"], "provenance": "asked"}
+    },
+    "capabilities": {"booking": {"value": "on", "provenance": "asked"}, "store": {"value": "off", "provenance": "asked"}}
+  }
+}
