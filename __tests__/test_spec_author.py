@@ -572,3 +572,9 @@ def test_approve_route_handles_a_failed_write_as_503_not_500(monkeypatch):
     with pytest.raises(HTTPException) as ei2:
         site_composer.approve_design_spec(body, sess)
     assert ei2.value.status_code == 409
+
+
+def test_one_section_count_when_no_plan_is_composed():
+    """The skeleton said 8-11 and the no-plan line said 6-9 (2026-10-01)."""
+    line = spec_author._digest_plan([])
+    assert "8-11" in line and "6-9" not in line

@@ -199,7 +199,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 11. INVENTORY-SHAPED LAYOUT: compose the gallery/grid to the number of images that actually exist. Two images get a two-image composition; never a grid with holes, never a repeated image as filler.
 11b. ART-DIRECTED DROP SLOTS: when the composition WANTS an image the inventory doesn't have (a hero portrait, a third gallery piece), author a placeholder the owner can fill: <div class="sx-drop" data-sx-slot="short_name">…</div> containing ONE line of shot direction in plain words ("You at the chair, mid-cut, warm light" — you are telling them what to photograph). Style: a dashed 1px frame in the accent color at low opacity, the design's crop and position already decided, so a dropped-in photo inherits your intention. Your CSS MUST include `.sx-drop{display:none}` and `body.sx-studio .sx-drop{display:flex;…}` — the public page never shows an empty frame; the owner's Studio reveals them. Never fake an image, never leave a hole: real, or an art-directed drop slot.
 11c. NO VISIBLE STAND-INS: a photo the inventory lacks is INVISIBLE to the visitor. Never author a "filled" or "art-directed" placeholder that reads as intentional — no tinted or textured box, no framed panel, no caption-only frame, no italic line describing the photograph that should be there. The hidden .sx-drop of 11b is the ONLY stand-in; its shot direction never appears outside it. HERO without a hero photo: a typographic hero — display type carries the composition and rule 15's presence is a ghost word or the signature motif, never an empty frame. WORK/GALLERY with fewer than two real photos: no photo grid at all — say what you make and how it feels in words, with drop slots the Studio reveals. A visitor must never be able to tell a photo is missing.
-12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border.
+12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border. LAYERING ON PURPOSE: when you overlap elements deliberately (a cut-out crossing a section edge, a nameplate over a photo, an object breaking its frame, ghost type behind a headline), put data-overlap-ok on the outer element of the layered piece. The render is measured, and any other overlap of text on text counts as a collision.
 13. HEAD + SHARE: a real <title>, a meta description written from the data, and og:title / og:description / og:image (the strongest image url from the data) so a shared link looks intentional.
 14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store, events) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section, an Upcoming Events moment that invites the visitor to see the dates and RSVP). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
 15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
@@ -213,9 +213,14 @@ OUTPUT: the HTML document only. No commentary, no code fences."""
 # THE PRIMITIVES (2026-08-09 design review) — see design_moves.
 # The atmosphere techniques the spec names were never taught to any
 # author, while the colour validator banned the natural syntax.
+# 2026-10-01 (the concept-layer plan): the system prompt keeps the colour
+# voice and the tinting rule; the CSS for the moves a blueprint names
+# rides that build's own message (build_user_prompt). All thirteen
+# primitives in front of every build was 8,300 characters for the one or
+# two a blueprint commits to, and the invariant the moves tests guard
+# holds either way: a named move always arrives with its primitive.
 import design_moves as _dm
-_SYSTEM = _SYSTEM + chr(10)*2 + _dm.builder_block(
-    "the element's own class", color_law="hexes")
+_SYSTEM = _SYSTEM + chr(10)*2 + _dm.tinting_block(color_law="hexes")
 _SYSTEM = _SYSTEM + "\n\n== TWO HARD RULES ON WHAT THE PAGE DOES WITHOUT HELP ==\n\n1. THE PAGE MUST SURVIVE WITHOUT JAVASCRIPT.\nScroll-reveal is the classic way to ship a blank page. If you write\n`.reveal{opacity:0}` and clear it from script, then ANY script error, a\nblocked asset, or a crawler that does not execute JS sees your nav and a\nblack rectangle. On the live site this hid 14 elements below the hero.\nSo: gate every reveal on a class the script itself adds, and give a\nno-script escape.\n\n   <script>document.documentElement.className+=' js'</script>  (put it in <head>)\n   .js .reveal{opacity:0;transform:translateY(14px)}\n   .js .reveal.in{opacity:1;transform:none}\n   <noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>\n\nNever write a bare `.reveal{opacity:0}`. Content is visible by default and\nJS may only take it away.\n\n2. THE BRAND MARK IS NOT A PORTFOLIO PIECE.\nUse the BRAND MARK url from the real-data block for the header logo, and\nnothing else. If no mark was supplied, set a typographic wordmark. A\ngallery image in the header is a broken brand: it shipped once as a\n1200x675 campaign flyer squashed into a 59x34 box. Give the mark its own\nbox with object-fit: contain so it keeps its aspect ratio.\n"
 
 def build_user_prompt(spec_text: str, real_data: str,
@@ -242,17 +247,23 @@ def build_user_prompt(spec_text: str, real_data: str,
             "",
             "Output the corrected complete HTML document only.",
         ])
-    return "\n".join([
+    parts = [
         "== THE APPROVED SPEC (the law of the page — the owner read and "
         "approved this document) ==",
         spec_text.strip(),
         "",
+    ]
+    primitives = _dm.primitives_block(_dm.move_names_in(spec_text))
+    if primitives:
+        parts += [primitives, ""]
+    parts += [
         "== THE REAL DATA (the only facts you may render; every image url "
         "listed here must appear on the page) ==",
         real_data.strip()[:16000],
         "",
         "Build the complete page now.",
-    ])
+    ]
+    return "\n".join(parts)
 
 
 # ─── real data assembly ──────────────────────────────────────────────
@@ -752,7 +763,8 @@ def check_coverage(html: str, real_data: str) -> List[str]:
         url = m.group(1)
         if url not in html:
             problems.append(f"required image missing: {url}")
-    if not re.search(r"<nav\b", html, re.IGNORECASE):
+    if not re.search(r"<nav\b|role\s*=\s*[\"']navigation[\"']", html,
+                     re.IGNORECASE):
         problems.append("no <nav> — a fixed navigation is required")
     endpoint = re.search(r"CONTACT FORM ENDPOINT[^\n]*:\s*(\S+)", real_data)
     if endpoint and endpoint.group(1) not in html:
@@ -882,6 +894,70 @@ VISION_SETTLE_MS = 1600
 INSPECTOR_MAX_TOKENS = 4000
 
 
+# THE MEASURED RENDER (2026-10-01, the concept-layer plan): site_check
+# measured overflow, empty headings and collisions on the LIVE site, but
+# the build never ran it, so a page that scrolled sideways on a phone
+# shipped and was only reported afterwards. The eyes' walk already has
+# the page open at 390 and 1440; it now runs the same audit there (free,
+# no model call) and the findings ride the vision repair. Kept beside the
+# walk rather than in its return value so every caller of
+# _screenshot_walk (the tool loop, the tests) sees the same shape.
+_MEASURES: Dict[str, Dict[str, Any]] = {}
+_MEASURES_KEEP = 8
+_TEXTISH_RE = re.compile(r"^(?:h[1-6]|p|li|blockquote|a|button|input|textarea|form)\b")
+
+
+def _doc_key(html: str) -> str:
+    import hashlib
+    return hashlib.sha1((html or "").encode("utf-8", "ignore")).hexdigest()
+
+
+def _record_measure(html: str, width: int, data: Any) -> None:
+    if not isinstance(data, dict):
+        return
+    key = _doc_key(html)
+    if key not in _MEASURES and len(_MEASURES) >= _MEASURES_KEEP:
+        _MEASURES.pop(next(iter(_MEASURES)))
+    _MEASURES.setdefault(key, {})[str(width)] = data
+
+
+def walk_measurements(html: str) -> Optional[Dict[str, Any]]:
+    """What the last walk of this exact document measured, by width, or
+    None when it was not walked (no playwright, eyes off). Read once."""
+    return _MEASURES.pop(_doc_key(html), None)
+
+
+def render_findings(measures: Optional[Dict[str, Any]]) -> List[str]:
+    """Measured defects worth a repair round, in the builder's words.
+    Only what is certainly wrong: content wider than the screen, a
+    heading with no words, and text colliding with text. An image under
+    a caption or a photo behind a headline is usually layering on
+    purpose, so those overlaps are left to the eyes and to
+    data-overlap-ok."""
+    out: List[str] = []
+    for width, m in sorted((measures or {}).items(), key=lambda kv: int(kv[0])):
+        if not isinstance(m, dict):
+            continue
+        if m.get("overflow_x"):
+            out.append(f"at {width}px the page is {m.get('scroll_width')}px wide: "
+                       "something is wider than the screen, so the page scrolls "
+                       "sideways. Find the element and constrain it.")
+        if m.get("empty_headings"):
+            out.append(f"at {width}px {m['empty_headings']} heading(s) render "
+                       "with no text. Give each words or remove it.")
+        hits = []
+        for o in (m.get("overlaps") or []):
+            a, b = str(o.get("a") or ""), str(o.get("b") or "")
+            if _TEXTISH_RE.match(a) and _TEXTISH_RE.match(b):
+                hits.append(f"{a} over {b}")
+        if hits:
+            out.append(f"at {width}px text collides with text: "
+                       + "; ".join(hits[:3])
+                       + ". Separate them, or mark deliberate layering with "
+                         "data-overlap-ok.")
+    return out[:6]
+
+
 def eyes_enabled() -> bool:
     return (os.environ.get("SITE_V2_VISION_LOOP") or "on").strip().lower() \
         in ("on", "1", "true", "yes")
@@ -911,6 +987,12 @@ def _screenshot_walk(html: str) -> Optional[List[Tuple[str, bytes]]]:
                                      timeout=25000)
                     total = page.evaluate(
                         "document.documentElement.scrollHeight")
+                    try:
+                        import site_check
+                        _record_measure(html, width,
+                                        page.evaluate(site_check._AUDIT_JS))
+                    except Exception as _me:
+                        logger.info(f"[v2:eyes] measure skipped at {width}px: {_me}")
                     stops = [0, max(0, total // 2 - 450),
                              max(0, total - 900)]
                     names = ("top", "middle", "bottom")
@@ -1289,20 +1371,27 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         verdict = inspect_with_eyes(doc, spec_text, business_id, why=why)
         if not verdict and why.get("reason"):
             report["vision"]["reason"] = why["reason"]
+        measured = render_findings(walk_measurements(doc))
+        report["vision"]["measured"] = measured
         if verdict:
             report["vision"]["ran"] = True
             report["vision"]["verdict"] = verdict.get("verdict")
             report["vision"]["violations"] = verdict.get("violations", [])
-            if verdict.get("verdict") == "repair" and not _budget_left(spend):
+        wants_repair = bool(measured) or bool(
+            verdict and verdict.get("verdict") == "repair")
+        if wants_repair:
+            if not _budget_left(spend):
                 spend["skipped"].append("vision-repair")
                 report["fallbacks"].append({
                     "stage": "vision-repair",
                     "detail": "output budget reached — keeping the law-passing document"})
-            elif verdict.get("verdict") == "repair":
+            else:
                 _progress(68, "Vision repair: fixing what the eyes found")
                 seen = [f"SEEN IN THE RENDER ({v.get('where', 'page')}): "
                         f"{v.get('what')} — FIX: {v.get('fix', 'minimal edit')}"
-                        for v in verdict["violations"]]
+                        for v in ((verdict or {}).get("violations") or [])
+                        if (verdict or {}).get("verdict") == "repair"]
+                seen += [f"MEASURED IN THE RENDER: {m}" for m in measured]
                 # a stand-in the surgical round left behind rides the
                 # vision repair too — the eyes' round is the last chance
                 seen += [f"STILL ON THE PAGE: {s}" for s in report["stand_ins"]]
