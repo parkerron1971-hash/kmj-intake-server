@@ -130,3 +130,30 @@ def test_proactive_failure_is_observed_and_background_task_is_released(monkeypat
 
     asyncio.run(run())
     assert "proactive suggestions failed" in caplog.text
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_jit_uses_scoped_turn_snapshots_without_three_new_reads(monkeypatch, empty):
+    business = {} if empty else {"brand_voice": "warm", "proactive_capture_enabled": True}
+    practitioner = {} if empty else {"full_legal_name": "Fixture Owner",
+        "proactive_capture_enabled": True, "voice_samples": {"casual_nurture": "Sample"}}
+    ctx = {"business": {"id": "biz", "owner_id": "owner"}, "memories": []}
+    monkeypatch.setattr(chief.business_profile_agent, "get_profile", lambda _: business)
+    monkeypatch.setattr(chief.practitioner_profile_agent, "get_profile", lambda _: practitioner)
+    monkeypatch.setattr(chief.voice_depth_agent, "get_voice_depth", lambda _: practitioner)
+    message = "My business profile, accountant, and writing voice need attention."
+    assert chief.business_profile_agent.get_missing_jit_fields("biz") == chief.business_profile_agent.missing_jit_fields_from_profile(business)
+    assert chief.practitioner_profile_agent.get_missing_jit_fields("owner") == chief.practitioner_profile_agent.missing_jit_fields_from_profile(practitioner)
+    assert chief.voice_depth_agent.get_missing_voice_jit_fields("owner") == chief.voice_depth_agent.missing_voice_jit_fields_from_profile(practitioner)
+    ctx.update(business_profile_raw=business, practitioner_profile_raw=practitioner)
+    expected = chief._build_jit_directive(ctx, message)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("duplicate database read after context was gathered")
+    monkeypatch.setattr(chief.business_profile_agent, "get_profile", forbidden)
+    monkeypatch.setattr(chief.practitioner_profile_agent, "get_profile", forbidden)
+    monkeypatch.setattr(chief.voice_depth_agent, "get_voice_depth", forbidden)
+    actual = chief._build_jit_directive({**ctx, "business_profile_raw": business,
+        "practitioner_profile_raw": practitioner}, message)
+    assert actual == expected
+    if not empty:
+        assert "JIT-CAPTURE PRIORITY" in actual

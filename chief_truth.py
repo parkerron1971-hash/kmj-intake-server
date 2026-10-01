@@ -8,6 +8,7 @@ Execution receipts remain authoritative even when the reviewer is unavailable.
 from __future__ import annotations
 
 import contextvars
+import difflib
 import json
 import logging
 import os
@@ -239,7 +240,13 @@ reference claim has no quote): a figure that
 comes from a different record gets its own claim citing that record.
 Use unsupported if ANY claim lacks support. Include all factual claims in claims.
 Use claims=[] only for a reply with no factual assertions or action claims.
-Do not rewrite the answer or suggest any tool/action invocation."""
+Do not rewrite the answer or suggest any tool/action invocation.
+If complete_repaired_answer is present, draft contains every changed sentence of a
+repaired answer. complete_repaired_answer is context, never evidence. Independently
+check draft AND whether its changes make any conclusion in the complete answer
+unsupported or contradictory. If so, return unsupported with no claims. List claims
+only from draft; unchanged sentences already passed an independent review and will
+have their citations revalidated after this check."""
 
 CAPABILITY_EVIDENCE = (
     'Chief supports sending an existing invoice by email or SMS using send_invoice. '
@@ -278,6 +285,8 @@ If the request is actionable but no action ran, explain that it has not been com
 do not promise it is running or invent a reason for the missing action.
 Answer questions about what can be verified using the supplied evidence and capabilities.
 Never invent a contact, invoice, link, amount, status, or a send failure reason.
+Preserve already supported sentences verbatim. Correct only the rejected claims and
+any conclusions that depend on them; do not rewrite unrelated advice or facts.
 """
 
 
@@ -571,6 +580,14 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 # Chief's own recommendation is advice, not evidence-bound.
                 if _is_recommendation(claim, reply):
                     continue
+                # A complete, bounded target calculation can be proved from
+                # owner inputs even when the reviewer labels it unsourced.
+                # It cannot prove actual revenue, record counts, or writes.
+                from chief_projection_math import verified_figures, arithmetic_only_gap
+                sentence = _sentence_containing(reply, text_)
+                calculated = verified_figures(sentence, reply, sources)
+                if arithmetic_only_gap(gap) and calculated and _numbers(text_) <= calculated:
+                    continue
                 if _numbers(text_) - _practitioner_figures(sources) - _free_figures(text_) \
                         - _advice_math(text_, reply, sources):
                     return 'unsupported', [], _claim_fail('claim number has no evidence', text_)
@@ -849,6 +866,10 @@ def _clean_review_gaps(raw, reply, sources, gaps, references):
     cuts = 0
     review = _review_json(raw)
     for gap in gaps:
+        gap_claims = [c for c in review.get('claims', []) if isinstance(c, dict)
+                      and isinstance(c.get('text'), str) and c['text'].strip()[:140] == gap]
+        if gap_claims and all(_is_recommendation(c, reply) for c in gap_claims):
+            continue
         if _squash(gap) not in _squash(draft) and _squash(gap) in _squash(reply):
             continue  # a prior cut removed both gaps in the same sentence
         sentence = _sentence_containing(draft, gap)
@@ -881,6 +902,73 @@ def _clean_review_gaps(raw, reply, sources, gaps, references):
         draft += "\n\nThis is general guidance; confirm the applicable rule with the official source before acting."
     return draft, {'status': 'caveated' if refs else 'trimmed', 'sources': cited,
                    'gaps': gaps, 'references': refs, 'cuts': cuts}
+
+
+def _reuse_review_claims(raw, original, repaired, sources):
+    """Reuse checked, verbatim sentences; independently review every changed one.
+
+    This only narrows the second review's output, never its evidence or context.
+    Any ambiguity, incomplete first review, action prose, or broad rewrite keeps
+    the ordinary full review. The merged claims still have to prove the ENTIRE
+    repaired answer after the independent reviewer approves the changed text.
+    """
+    if any(has_completion_claim(text) or _DONE_CLAIM.search(_asserted_text(text))
+           or re.search(r'\[\s*ACTION\s*:', text, re.I) for text in (original, repaired)):
+        return None
+    try:
+        review = _review_json(raw)
+        if not isinstance(review, dict) or not isinstance(review.get('claims'), list):
+            return None
+        split = lambda value: [part.strip() for part in
+            re.split(r'(?<=[.!?])\s+|\n+', value) if part.strip()]
+        before, after = split(original), split(repaired)
+        # Repeated sentences make assigning a claim to an occurrence ambiguous.
+        if len(set(before)) != len(before) or len(set(after)) != len(after):
+            return None
+        matching = set()
+        for block in difflib.SequenceMatcher(a=before, b=after, autojunk=False).get_matching_blocks():
+            matching.update(range(block.b, block.b + block.size))
+        unchanged = [sentence for i, sentence in enumerate(after) if i in matching]
+        changed = [sentence for i, sentence in enumerate(after) if i not in matching]
+        draft = '\n'.join(changed)
+        if not unchanged or not changed or len(changed) > 3 or len(draft) > 1200:
+            return None
+        if len(draft) >= len(repaired) * 0.6:
+            return None
+        retained = []
+        for claim in review['claims']:
+            if not isinstance(claim, dict) or not isinstance(claim.get('text'), str):
+                return None
+            text = _squash(claim['text'])
+            if not text or text not in _squash(original):
+                return None
+            owners = [sentence for sentence in unchanged if text in _squash(sentence)]
+            if len(owners) > 1:
+                return None
+            if owners:
+                retained.append(claim)
+            elif text in _squash(repaired):
+                # A claim spanning changed/unchanged sentences cannot be split.
+                return None
+        if not retained:
+            return None
+        # A partial first review may omit an entire nonnumeric assertion.
+        # assess_review checks citations and numeric coverage, not prose
+        # coverage: do not call such an omitted sentence already verified.
+        # Require a claim for the WHOLE unchanged sentence, or independently
+        # prove that sentence at the same strict bar used for early speech.
+        # A claim for one clause cannot cover an unsupported adjoining clause.
+        covered = {_squash(claim['text']) for claim in retained}
+        prover = stream_prover(sources)
+        for sentence in unchanged:
+            if _squash(sentence) not in covered and not streamable_sentence(prover, sentence):
+                return None
+        kept = json.dumps({'verdict': 'supported', 'claims': retained})
+        if assess_review(kept, '\n'.join(unchanged), sources)[0] != 'supported':
+            return None
+        return draft, retained
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _words(text):
@@ -2297,13 +2385,25 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             if (isinstance(repaired, str) and repaired.strip() and len(repaired) <= MAX_REPLY_CHARS
                     and not re.search(r'\[\s*ACTION\s*:', repaired, re.I)
                     and not has_completion_claim(repaired)):
-                recheck = [{'role': 'user', 'content': json.dumps({
-                    'owner_message': message, 'draft': repaired, 'sources': sources,
-                    'unavailable': unavailable_sources()}, ensure_ascii=False)}]
-                checked = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM, recheck,
+                reuse = _reuse_review_claims(raw, reply, repaired, sources)
+                check_draft, retained = reuse if reuse else (repaired, [])
+                check_payload = {'owner_message': message, 'draft': check_draft, 'sources': sources,
+                                 'unavailable': unavailable_sources()}
+                check_system = REVIEW_SYSTEM
+                if reuse:
+                    check_payload['complete_repaired_answer'] = repaired
+                recheck = [{'role': 'user', 'content': json.dumps(check_payload, ensure_ascii=False)}]
+                checked = await asyncio.wait_for(reviewer(client, check_system, recheck,
                     max_tokens=REVIEW_MAX_TOKENS, enable_web_search=False,
                     business_id=business_id), timeout=min(15.0, max(4.0, _left())))
-                checked_verdict, checked_sources, checked_reason = assess_review(checked, repaired, sources)
+                checked_verdict, checked_sources, checked_reason = assess_review(checked, check_draft, sources)
+                if reuse and checked_verdict == 'supported':
+                    independent = _review_json(checked)
+                    checked = json.dumps({'verdict': 'supported',
+                                          'claims': retained + independent['claims']})
+                    checked_verdict, checked_sources, checked_reason = assess_review(checked, repaired, sources)
+                    logger.info('reply repair reused %d unchanged claims; changed_chars=%d',
+                                len(retained), len(check_draft))
                 if checked_verdict == 'supported':
                     logger.info('reply review recovered; citations=%d', len(checked_sources))
                     return _above(ui_bits, repaired), {'status': 'supported', 'sources': checked_sources, 'recovered': True}
@@ -2315,7 +2415,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
                 # 41 s and ended in "try again" (2026-09-23).
                 r_gaps = unconfirmed_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
                 r_refs = reference_claims(checked, checked_reason) if checked_verdict == 'unsupported' else []
-                if (r_gaps or r_refs) and not has_completion_claim(repaired):
+                if not reuse and (r_gaps or r_refs) and not has_completion_claim(repaired):
                     logger.info('reply review recovered with %d gap(s), %d general rule(s)',
                                 len(r_gaps), len(r_refs))
                     clean, metadata = _clean_review_gaps(checked, repaired, sources, r_gaps, r_refs)

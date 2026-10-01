@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
+import json
 import pathlib
 import sys
 
@@ -72,12 +74,14 @@ class _Resp:
 def harness(monkeypatch):
     """Drive the REAL _call_claude streaming branch with a scripted
     sequence of upstream responses."""
-    state = {"responses": [], "attempts": 0, "fallbacks": 0, "sunk": []}
+    state = {"responses": [], "attempts": 0, "fallbacks": 0, "sunk": [],
+             "payloads": [], "sleeps": []}
 
     @contextlib.asynccontextmanager
     async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         idx = min(state["attempts"], len(state["responses"]) - 1)
         state["attempts"] += 1
+        state["payloads"].append(copy.deepcopy(payload))
         yield state["responses"][idx]
 
     async def fake_fallback(client, system, messages, max_tokens, business_id, reason=""):
@@ -88,18 +92,21 @@ def harness(monkeypatch):
     async def _noop(*a, **k):
         return None
 
+    async def _sleep(delay):
+        state["sleeps"].append(delay)
+
     monkeypatch.setattr(llm_call, "astream", fake_astream)
     monkeypatch.setattr(cos.fallback_brain, "call_fallback", fake_fallback)
     monkeypatch.setattr(cos, "log_api_usage", _noop)
     monkeypatch.setattr(cos, "_anthropic_key", lambda: "test-key")
     # No real sleeping between attempts — the schedule is not under test.
-    monkeypatch.setattr(cos.asyncio, "sleep", _noop)
+    monkeypatch.setattr(cos.asyncio, "sleep", _sleep)
 
-    def run(*responses):
+    def run(*responses, **kwargs):
         state["responses"] = list(responses)
         out = asyncio.run(cos._call_claude(
             None, "SYSTEM", [{"role": "user", "content": "hi"}],
-            stream_sink=state["sunk"].append))
+            stream_sink=state["sunk"].append, **kwargs))
         return out, state
 
     return run
@@ -139,6 +146,100 @@ def test_an_empty_200_is_treated_as_transient(harness):
     out, st = harness(_Resp(lines=[]), _Resp(lines=_sse("Filled in.")))
     assert out == "Filled in."
     assert st["attempts"] == 2
+
+
+def _ended_stream(reason="max_tokens", block_type="thinking", text=""):
+    block = {"type": block_type}
+    if block_type == "tool_use":
+        block.update(id="write-1", name="create_contact")
+    events = [
+        {"type": "content_block_start", "index": 0, "content_block": block},
+    ]
+    if block_type == "tool_use":
+        events.append({"type": "content_block_delta", "index": 0,
+                       "delta": {"type": "input_json_delta", "partial_json": '{"name":"Ada"}'}})
+    if text:
+        events.append({"type": "content_block_delta", "index": 1,
+                       "delta": {"type": "text_delta", "text": text}})
+    events.extend([
+        {"type": "message_delta", "delta": {"stop_reason": reason},
+         "usage": {"output_tokens": 1400}},
+        {"type": "message_stop"},
+    ])
+    return ["data: " + json.dumps(event) for event in events]
+
+
+def test_empty_exhausted_budget_recovers_once_on_same_model_without_backoff(harness):
+    out, st = harness(_Resp(lines=_ended_stream()), _Resp(lines=_sse("Try a fixed monthly price.")),
+                      model="claude-sonnet-5-5", effort="medium", max_tokens=1400)
+    first, recovery = st["payloads"]
+    assert out == "Try a fixed monthly price."
+    assert st["attempts"] == 2 and st["fallbacks"] == 0 and not st["sleeps"]
+    assert recovery["thinking"] == {"type": "between_tools"}
+    assert recovery["output_config"] == {"effort": "low"}
+    for key in ("model", "max_tokens", "system", "messages"):
+        assert recovery[key] == first[key]
+
+
+def test_repeated_budget_exhaustion_does_not_make_third_identical_request(harness):
+    out, st = harness(_Resp(lines=_ended_stream()), model="claude-sonnet-5-5")
+    assert st["attempts"] == 2 and st["fallbacks"] == 1
+    assert st["fallback_reason"] == "stream empty at max_tokens"
+    assert out == "fallback reply" and st["sunk"] == [out]
+
+
+@pytest.mark.parametrize("block_type", ["tool_use", "server_tool_use"])
+def test_truncated_tool_blocks_are_never_executed_or_blindly_retried(harness, monkeypatch, block_type):
+    async def forbidden(*args):
+        pytest.fail("a max_tokens tool block must not execute")
+    monkeypatch.setattr(cos.chief_tool_loop, "run_tool_round", forbidden)
+    out, st = harness(_Resp(lines=_ended_stream(block_type=block_type)),
+                      model="claude-sonnet-5-5", read_tools=[{"name": "create_contact"}],
+                      tool_biz={"id": "fictional"})
+    assert st["attempts"] == 1 and st["fallbacks"] == 1
+
+
+def test_token_exhaustion_after_text_never_replays_it(harness):
+    out, st = harness(_Resp(lines=_ended_stream(text="Start at a fixed monthly price.")),
+                      model="claude-sonnet-5-5")
+    assert out == "Start at a fixed monthly price."
+    assert st["attempts"] == 1 and st["fallbacks"] == 0
+
+
+def test_recovery_preserves_completed_tool_receipt_without_repeating_write(harness, monkeypatch):
+    writes = []
+    async def run_tool_round(client, biz, content, count):
+        writes.append(content)
+        return ({"role": "assistant", "content": content},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "write-1",
+                                               "content": "Contact created: c-1"}]}, 1)
+    monkeypatch.setattr(cos.chief_tool_loop, "run_tool_round", run_tool_round)
+    out, st = harness(_Resp(lines=_ended_stream(reason="tool_use", block_type="tool_use")),
+                      _Resp(lines=_ended_stream()), _Resp(lines=_sse("Ada is saved.")),
+                      model="claude-sonnet-5-5", read_tools=[{"name": "create_contact"}],
+                      tool_biz={"id": "fictional"})
+    assert out == "Ada is saved." and len(writes) == 1
+    assert st["attempts"] == 3 and st["fallbacks"] == 0
+    assert st["payloads"][1]["messages"] == st["payloads"][2]["messages"]
+    assert st["payloads"][2]["messages"][-1]["content"][0]["tool_use_id"] == "write-1"
+    assert st["payloads"][1]["tools"] == st["payloads"][2]["tools"]
+
+
+def test_stream_result_log_contains_bounded_diagnostics_not_content(harness, caplog):
+    import chief_request_timing as timing
+    import time
+    token = timing.CURRENT.set(timing.Trace(time.perf_counter(), "synthetic-turn"))
+    try:
+        with caplog.at_level("INFO", logger=cos.logger.name):
+            harness(_Resp(lines=_ended_stream(text="PRIVATE SENTENCE")), model="claude-sonnet-5-5")
+    finally:
+        timing.CURRENT.reset(token)
+    logs = [r.message for r in caplog.records if r.message.startswith("[chief stream result]")]
+    assert len(logs) == 1 and "PRIVATE SENTENCE" not in logs[0]
+    record = json.loads(logs[0].split("] ", 1)[1])
+    assert record["request_id"] == "synthetic-turn"
+    assert record["stop_reason"] == "max_tokens" and record["output_tokens"] == 1400
+    assert record["blocks"]["thinking"] == 1 and record["text_chars"] == len("PRIVATE SENTENCE")
 
 
 # ─────────────────────────────────────────────────────────────────────
