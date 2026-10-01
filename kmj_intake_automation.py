@@ -567,6 +567,10 @@ app.include_router(lead_admin_diag_router)
 # Tauri app.
 from platform_console import router as platform_console_router
 app.include_router(platform_console_router)
+# Mission Control → Today (2026-10-01 redesign): the ranked, deduplicated
+# "needs you" queue + pulse + overnight in one owner-only read.
+from platform_today import router as platform_today_router
+app.include_router(platform_today_router)
 from platform_chief_authority import router as platform_chief_authority_router
 app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
