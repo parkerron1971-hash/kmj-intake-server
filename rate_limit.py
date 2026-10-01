@@ -119,6 +119,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "station_pair": (int(os.environ.get("RL_STATION_PAIR_PER_10MIN", "10")), 600),
     "station_pin": (int(os.environ.get("RL_STATION_PIN_PER_15MIN", "6")), 900),
     "station_self_find": (int(os.environ.get("RL_STATION_SELF_PER_10MIN", "40")), 600),
+    # Live chat (member_portal_live.py), per member: a lively service, not
+    # a flood. "I'm here" rides member_action.
+    "live_chat": (int(os.environ.get("RL_LIVE_CHAT_PER_MIN", "8")), 60),
 }
 _DEFAULT = (60, 60)
 
