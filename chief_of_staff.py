@@ -11610,7 +11610,6 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
     contradiction impossible — independent of any LLM behavior."""
     if len(taken or []) == 1 and taken[0].get('needs_confirmation') and taken[0].get('label'):
         return taken[0]['label']
-    succeeded: List[tuple] = []
     failed: List[tuple] = []
     # An action HELD for the practitioner's confirmation is not a failure
     # to report; its label is the read-back they need to hear. Its
@@ -11628,29 +11627,16 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
             if reason.lower().startswith("failed:"):
                 reason = reason[len("failed:"):].strip()
             failed.append((atype, label, reason))
-        else:
-            succeeded.append((atype, label, result))
 
+    from chief_receipts import receipt_lines
+    from chief_truth import _receipts_said
+    success_receipts = [t for t in (taken or [])
+                        if not _action_failed(t) and not t.get("needs_confirmation")]
+    success_text = _receipts_said(receipt_lines(success_receipts))
     if not failed and not held:
-        # Defensive — _deterministic_fallback_reply is only called when
-        # any_failed is true. If somehow we land here without failures,
-        # acknowledge the success terse so the bubble isn't blank.
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            return (lbl or res or "Done.").strip()
-        return f"{len(succeeded)} action(s) completed."
+        return success_text or "No action result was returned."
 
-    chunks: List[str] = []
-
-    # Brief success acknowledgment first (if any) — keeps the message
-    # accurate when a turn had mixed outcomes.
-    if succeeded:
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            chunks.append(f"{(lbl or res).strip()}.")
-        else:
-            total = len(succeeded) + len(failed) + len(held)
-            chunks.append(f"{len(succeeded)} of {total} actions went through.")
+    chunks: List[str] = [success_text] if success_text else []
 
     # Failures — name + reason for each.
     if len(failed) == 1:
@@ -11800,7 +11786,8 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
         parts.append("")
         parts.append("RESULTS (use the exact state; queued/running is not completed, and held/draft is not sent):")
         for atype, label, result, t in succeeded:
-            parts.append(f"  • {atype}: {label or result}")
+            parts.append(f"  • {atype}: {label}")
+            parts.append(f"      result: {result or '(no detail returned)'}")
             # Read verbs (show_view) return a `speak` digest of the rows
             # they fetched. Forwarding it is what lets the second pass
             # SAY the values ("Marcus owes the most at $520") instead of
@@ -11945,9 +11932,9 @@ async def _compose_post_action_reply(
         # delivered). Replace with a deterministic substitution reply.
         if _has_breadcrumb(taken):
             return _deterministic_substitution_reply(taken)
-        # No failures + no substitution breadcrumbs — first-pass is
-        # safe to keep verbatim.
-        return first_pass_clean
+        # Success on some actions does not validate the optimistic draft
+        # (other work may still be queued or absent). Report actual results.
+        return _deterministic_fallback_reply(taken)
 
     # Strip any stray action tags the second pass might have emitted
     # despite the system prompt (belt-and-suspenders).
@@ -14809,6 +14796,8 @@ async def chief_chat(
                         # first-pass narration so it doesn't survive as
                         # a substitution-blind lie.
                         clean = _deterministic_substitution_reply(taken)
+                    else:
+                        clean = _deterministic_fallback_reply(taken)
 
             # One final boundary for normal, native-tool, coach and fallback
             # replies. Only checked prose may enter history, learning or speech.

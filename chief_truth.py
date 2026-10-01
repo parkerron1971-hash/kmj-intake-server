@@ -50,7 +50,7 @@ NO_ACTION_REPLY = ("No action ran in this request. I couldn't verify my proposed
 
 
 def conversation_check_reply(message: str) -> str | None:
-    """Acknowledge receipt of an exact check-in, never bless model-written prose.
+    """Answer an exact check-in or thank-you, never bless model-written prose.
 
     Receiving a transcript proves receipt of words, not microphone quality or
     access to previous audio. Full matching keeps mixed business/action requests
@@ -59,12 +59,31 @@ def conversation_check_reply(message: str) -> str | None:
     text = re.sub(r'[^\w\s]', ' ', message.casefold())
     text = ' '.join(text.split())
     text = re.sub(r'^(?:hello|hi|hey)(?: chief)?\s+', '', text)
+    if text in {'thanks', 'thank you', 'thanks chief', 'thank you chief',
+                'thanks that helped', 'thank you that helped', 'thanks for your help',
+                'thank you for your help', 'thanks i appreciate it', 'thank you i appreciate it'}:
+        return "You're welcome."
     if text in {'hello', 'hi', 'hey', 'hey chief', 'hello chief', 'hi chief',
                 'chief', 'are you there', 'chief are you there',
                 'can you hear me', 'can you hear what i just said',
                 'did you hear me', 'can you read this', 'are you listening'}:
         return "I'm here. I received your message. What would you like help with?"
     return None
+
+
+def elementary_arithmetic_reply(message: str) -> str | None:
+    """Exact, bounded integer arithmetic only; never consume a mixed request."""
+    match = re.fullmatch(
+        r"\s*(?:(?:what(?: is|'s)|calculate|compute)\s+)?"
+        r"(-?\d{1,9})\s*([+*\-])\s*(-?\d{1,9})\s*[?=.!]?\s*",
+        message or "", re.I)
+    if not match:
+        return None
+    left, right = int(match[1]), int(match[3])
+    value = {"+": lambda: left + right, "-": lambda: left - right,
+             "*": lambda: left * right}[match[2]]()
+    return f"{value}."
+
 
 AUTHOR_RULES = """
 ANSWER ACCURACY:
@@ -671,7 +690,7 @@ def _squash(text):
 
 
 _LEFT_OUT = "I left the rest of my answer out because I couldn't confirm it from your records."
-_NOT_ALL_DONE = "That's what's done so far; the rest of what you asked for isn't done yet."
+_NOT_ALL_DONE = "I couldn't confirm the additional work described."
 
 
 def _not_done_line(claims):
@@ -681,7 +700,7 @@ def _not_done_line(claims):
     parts = [re.sub(r"\s+", " ", c).strip(" .,;") for c in claims if c and c.strip()]
     if not parts:
         return _NOT_ALL_DONE
-    lead = "This part didn't happen: " if len(parts) == 1 else "These parts didn't happen: "
+    lead = "I couldn't confirm this claim: " if len(parts) == 1 else "I couldn't confirm these claims: "
     return lead + "; ".join(parts[:3]) + "."
 
 
@@ -2027,6 +2046,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # review and tag-only turns, where the model never saw the tool result.
         from chief_link_pilot import receipt_text
         return '\n\n'.join(receipt_text(r) for r in receipts), {'status': 'receipts', 'sources': []}
+    arithmetic = elementary_arithmetic_reply(message) if not receipts else None
+    if arithmetic is not None:
+        return arithmetic, {'status': 'calculated', 'sources': []}
     check_in = conversation_check_reply(message) if not receipts else None
     if check_in:
         return check_in, {'status': 'acknowledged', 'sources': []}
@@ -2084,8 +2106,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             t_reply, t_verdict, t_cited, t_reason, cuts = trimmed
             note = ""
             if undone:
-                # Said as not done, because it is not: the practitioner asked
-                # for it and must not walk away thinking it happened.
+                # Missing evidence is not proof of failure or the state of
+                # background work. Name the unsupported claim precisely.
                 note += "\n\n" + _not_done_line(undone)
             if t_verdict == 'supported':
                 logger.info('reply review trimmed %d claim(s); rest supported', cuts)
@@ -2103,7 +2125,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         return reply, {'status': 'supported', 'sources': cited}
     # Preserve real work and links/cards even when narration cannot be checked.
     import action_registry
-    bits = []
+    from chief_receipts import receipt_lines
+    confirmed_receipts = []
     for receipt in receipts:
         # Writes and UI verbs carry deterministic, server-written labels
         # ("Opened BUILD → booking"); a read's label may be model prose.
@@ -2111,12 +2134,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             continue
         # A read/analysis summary may itself contain model prose. It cannot
         # bypass the reviewer by masquerading as a deterministic receipt.
-        value = receipt.get('label') or receipt.get('result')
         if receipt.get('type') == 'link_wallet_pilot':
             from chief_link_pilot import receipt_text
-            value = receipt_text(receipt)
-        if isinstance(value, str) and value.strip():
-            bits.append(value.strip())
+            confirmed_receipts.append({**receipt, 'label': receipt_text(receipt), 'result': ''})
+        else:
+            confirmed_receipts.append(receipt)
+    bits = receipt_lines(confirmed_receipts)
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
     gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
@@ -2150,7 +2173,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # claiming a completed action without a receipt is withheld.
         if bits:
             logger.info('reply review unchecked (%s); receipts shown', reason)
-            return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
+            return _receipts_said(bits), {'status': 'receipts', 'sources': []}
         if email_answer:
             logger.info('reply review unchecked (%s); records answer shown', reason)
             return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
