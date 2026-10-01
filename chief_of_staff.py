@@ -1303,7 +1303,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # against, and blocked by, the platform ceiling everyone shares.
     try:
         import spend_guard
-        if spend_guard.over_budget(business_id):
+        if await asyncio.to_thread(spend_guard.over_budget, business_id):
             logger.warning("[chief] daily spend cap hit — turn soft-blocked "
                            "(business=%s)", business_id or "unattributed")
             return spend_guard.block_message()
@@ -6889,6 +6889,23 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         outer.add_done_callback(_TURN_SWEEP_TASKS.discard)
     except Exception as e:  # pragma: no cover — no loop = no sweep, never a crash
         print(f"[Chief] sweep spawn failed: {e}", flush=True)
+
+
+def _spawn_proactive_suggestions(biz: Dict[str, Any]) -> None:
+    """Track independent suggestion writes without delaying this turn's model call."""
+    async def _body() -> None:
+        # Keep the originating billing/JWT context, but do not bill background
+        # work to the foreground route. The emitter owns its database clients.
+        route_ledger.TALLY.set(None)
+        try:
+            import chief_proactive_suggestions
+            await asyncio.to_thread(chief_proactive_suggestions.maybe_emit_proactive_suggestions, biz)
+        except Exception as exc:  # best-effort, just as when awaited inline
+            logger.warning("proactive suggestions failed: %s", exc)
+
+    task = asyncio.create_task(_body())
+    _TURN_SWEEP_TASKS.add(task)
+    task.add_done_callback(_TURN_SWEEP_TASKS.discard)
 
 
 async def _drain_turn_sweeps() -> None:
@@ -14132,8 +14149,7 @@ async def chief_chat(
             # Intelligence enrichment — voice samples, session context,
             # mentor cooldown, revenue forecast, relationship insights,
             # time context, habits, live bookkeeping, and cross-vertical
-            # learning. Plus the proactive-suggestion emit, which writes
-            # rather than reads but is nobody's dependency either.
+            # learning. Independent proactive suggestions run separately below.
             #
             # These are independent: not one of them consumes another's
             # result. They used to run as ten sequential awaits — twelve
@@ -14169,16 +14185,9 @@ async def chief_chat(
                 return await asyncio.to_thread(
                     _vctx.build_vertical_learned_block, biz, req.message or "")
 
-            async def _proactive():
-                # NT8b — best-effort proactive suggestion emission on
-                # state change. Runs ONCE per chat turn; idempotent (the
-                # emitter checks for active dupes + has a cap). Nothing
-                # this turn reads what it writes — ctx was gathered above
-                # — so it rides along here instead of blocking ahead of
-                # the enrichment it never feeds.
-                import chief_proactive_suggestions as _cps
-                return await asyncio.to_thread(
-                    _cps.maybe_emit_proactive_suggestions, biz)
+            # Suggestions do not feed the snapshot already read above. Keep
+            # their existing per-turn trigger, without waiting for their writes.
+            _spawn_proactive_suggestions(biz)
 
             # Mic-open prewarm (Kevin, 8/14): if /agents/chief/prewarm ran
             # while the practitioner was still talking, the eight
@@ -14222,7 +14231,6 @@ async def chief_chat(
             _results = await asyncio.gather(
                 *[_resolve_source(warm, n, *sources[n]) for n in _names],
                 _enrich("vertical learned context", _learned(), ""),
-                _enrich("proactive emit (non-blocking)", _proactive(), None),
                 _enrich("setup snapshot", _setup_probe(), None),
                 _enrich("business knowledge", _knowledge_probe(), None),
             )
@@ -14239,9 +14247,9 @@ async def chief_chat(
             habit_block = _ctx_vals["habit_block"]
             bookkeeping_block = _ctx_vals["bookkeeping_block"]
             learned_block = _results[len(_names)]
-            setup_snapshot = _results[len(_names) + 2]
-            if _results[len(_names) + 3] is not None:
-                ctx["business_knowledge"] = _results[len(_names) + 3]
+            setup_snapshot = _results[len(_names) + 1]
+            if _results[len(_names) + 2] is not None:
+                ctx["business_knowledge"] = _results[len(_names) + 2]
             setup_block = _format_setup_block(setup_snapshot)
             chief_truth.record('context:setup', setup_block, kind='context')
             # First-run = the account is days old and nearly nothing is
