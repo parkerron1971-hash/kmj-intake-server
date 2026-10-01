@@ -35,6 +35,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
+from untrusted_text import ACTION_TAGLIKE_RE
 
 logger = logging.getLogger("fallback_brain")
 # Every other module in this service attaches its own handler; this one
@@ -141,9 +142,9 @@ rules follow from that, and they matter more than anything else here:
 1. You CANNOT take actions right now. No creating, editing, sending,
    invoicing, booking, publishing or deleting — none of it is wired up on
    this path. Never emit an [ACTION:...] tag; it will not run.
-2. If asked to DO something, say plainly that you will handle it as soon
-   as the connection is back, and answer whatever part of the question you
-   can answer with what you know.
+2. If asked to DO something, say plainly that you cannot carry it out
+   right now. Nothing is queued for later. Answer whatever part of the
+   question you can answer with what you know.
 
 Otherwise be yourself: direct, warm, concrete. Lead with the answer. Use
 the real names and numbers below rather than generalities. Keep it short —
@@ -318,6 +319,15 @@ async def call_fallback(client: httpx.AsyncClient, system: Any,
     except (ValueError, AttributeError, IndexError) as e:
         logger.warning(f"[fallback] OpenAI response parse failed: {e}")
         return ""
+
+    # The no-action boundary must hold even when the backup ignores its
+    # prompt. Its text goes through Chief's normal ACTION parser next.
+    # Reject the whole response: stripping only tags could leave a false
+    # "done" claim in the sentence the user hears. Match malformed and
+    # incomplete tags too, without logging their business payloads.
+    if ACTION_TAGLIKE_RE.search(text):
+        logger.warning("[fallback] blocked action-bearing response")
+        text = "I couldn't complete that request right now. Please try again in a moment."
 
     try:
         from api_usage_logger import log_api_usage

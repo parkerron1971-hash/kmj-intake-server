@@ -1494,11 +1494,16 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         for _round in range(rounds_cap):
           round_done = False
           mute_course_retry = False
+          empty_budget_recovery = False
+          immediate_retry = False
           for attempt in range(3):
-              if attempt:
+              if attempt and not immediate_retry:
                   await asyncio.sleep(1.5 * attempt)
+              immediate_retry = False
               full_parts: List[str] = []
               blocks: Dict[int, Dict[str, Any]] = {}
+              block_counts = {"text": 0, "tool_use": 0, "server_tool_use": 0,
+                              "thinking": 0, "redacted_thinking": 0}
               import chief_search_steps
               searches = chief_search_steps.SearchSteps(_emit_stream_step)
               stop_reason = ""
@@ -1548,6 +1553,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           if et == "content_block_start":
                               idx = int(evt.get("index") or 0)
                               cb = evt.get("content_block") or {}
+                              if cb.get("type") in block_counts:
+                                  block_counts[cb["type"]] += 1
                               searches.block_start(idx, cb)
                               if cb.get("type") == "tool_use":
                                   blocks[idx] = {"type": "tool_use", "id": cb.get("id"),
@@ -1612,6 +1619,15 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               else:
                   searches.close()
                   text = "".join(full_parts).strip()
+                  import chief_request_timing as _crt
+                  _trace = _crt.CURRENT.get()
+                  logger.info("[chief stream result] %s", json.dumps({
+                      "request_id": _trace.request_id if _trace else "",
+                      "model": model, "round": _round + 1, "attempt": attempt + 1,
+                      "stop_reason": str(stop_reason)[:64], "text_chars": len(text),
+                      "blocks": block_counts, "output_tokens": out_tok,
+                      "empty_budget_recovery": empty_budget_recovery,
+                  }, separators=(",", ":")))
                   await log_api_usage(
                       endpoint="/chief/backend", model=model,
                       input_tokens=in_tok, output_tokens=out_tok,
@@ -1682,6 +1698,27 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           break                  # next ROUND, fresh attempts
                   if text or turn_streamed:
                       return "".join(turn_parts + [text]).strip()
+                  if stop_reason == "max_tokens":
+                      # A completed request that consumed its entire budget is
+                      # not a transport hiccup. Repeating the identical request
+                      # can spend three budgets thinking without saying a word.
+                      # Try the SAME model once with its supported minimal
+                      # thinking controls; keep tools, prior receipts, and the
+                      # token limit intact. Never execute truncated tool input.
+                      import model_ladder as _ml
+                      recovery = {**_ml.thinking_off_kwargs(model),
+                                  **_ml.effort_kwargs(model, "low")}
+                      has_tool_blocks = (block_counts["tool_use"]
+                                         or block_counts["server_tool_use"])
+                      changed = any(payload.get(k) != v for k, v in recovery.items())
+                      if (not has_tool_blocks and not empty_budget_recovery
+                              and changed and attempt < 2):
+                          payload.update(recovery)
+                          empty_budget_recovery = True
+                          immediate_retry = True
+                          continue
+                      fb_reason = "stream empty at max_tokens"
+                      break
                   # A 200 that streamed no text at all — treat as transient.
                   logger.warning(f"Claude stream returned empty (attempt {attempt + 1}/3)")
                   fb_reason = fb_reason or "stream empty"
@@ -1691,8 +1728,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               continue
           break
 
-        # Three attempts with backoff have failed — this is an outage, a
-        # rate-limit wall, or a bad key. One shot on the backup brain
+        # Transient retries or bounded empty-budget recovery failed.
+        # One shot on the backup brain
         # before conceding the turn, exactly like the non-streaming path.
         # (If earlier ROUNDS already streamed text, return that instead --
         # the practitioner heard it; a fallback would contradict it.)
