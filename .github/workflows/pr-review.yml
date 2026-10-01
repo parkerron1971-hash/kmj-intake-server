@@ -25,12 +25,14 @@ permissions:
   issues: write
   id-token: write
 
-concurrency:
-  group: pr-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   review:
+    # Job-level, so it applies only to runs that pass `if:`. At workflow
+    # level an unrelated label cancelled a running review and then skipped
+    # itself, leaving no comment (found by this workflow's own review).
+    concurrency:
+      group: pr-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     if: >-
       !github.event.pull_request.draft &&
       (github.event.action != 'labeled' || github.event.label.name == 'review') &&
@@ -54,20 +56,30 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           BASE: ${{ github.event.pull_request.base.ref }}
         run: |
-          set +e
+          # No `set +e`: if the PR or diff cannot be read, fail loudly rather
+          # than review an empty change and call it clean.
+          set -eo pipefail
           f=review-evidence.md
           fence='```'
+          git diff "origin/$BASE...HEAD" > /tmp/full.diff
+          size=$(wc -c < /tmp/full.diff)
           {
             echo "# PR #$PR"
             gh pr view "$PR" --json title,body,author,headRefName,baseRefName,files \
               --template '{{.title}}{{"\n\n"}}by {{.author.login}} · {{.headRefName}} → {{.baseRefName}}{{"\n\n"}}{{.body}}{{"\n\n"}}## Files{{"\n"}}{{range .files}}- {{.path}} (+{{.additions}} -{{.deletions}}){{"\n"}}{{end}}'
             echo
-            echo "## Diff against $BASE (first 150 KB)"
+            echo "## Diff against $BASE ($size bytes)"
             echo "$fence"
-            git diff "origin/$BASE...HEAD" | head -c 150000
+            head -c 150000 /tmp/full.diff
             echo "$fence"
+            if [ "$size" -gt 150000 ]; then
+              echo "**TRUNCATED:** only the first 150 KB of a $size-byte diff is shown. Say which files you could not see."
+            fi
           } > "$f"
           wc -c "$f"
+          if [ "$size" -eq 0 ]; then
+            echo "::error::The diff is empty; nothing to review." && exit 1
+          fi
 
       - name: Review
         uses: anthropics/claude-code-action@v1
@@ -109,9 +121,12 @@ jobs:
               service fails.
             - The commit trailer names the model that wrote it.
 
-            Then post ONE comment with
-            `gh pr comment ${{ github.event.pull_request.number }} --body "<text>"`,
-            written for an owner reading on a phone:
+            Then post ONE comment, written for an owner reading on a phone. Post it ONLY
+            with a quoted heredoc, so backticks and $ in the text are never run by the shell:
+              gh pr comment ${{ github.event.pull_request.number }} --body-file - <<'REVIEW'
+              ...your comment...
+              REVIEW
+            The comment:
 
             **Review: Looks good** or **Review: N things to fix** (first line, exactly one).
             Then, for each problem, most serious first: the file:line, what is wrong, what
