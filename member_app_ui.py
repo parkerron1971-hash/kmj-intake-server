@@ -250,6 +250,21 @@ a{{color:var(--accent);}}
 .mb-compose .mp-go{{width:48px;flex:none;padding:0;border-radius:50%;}}
 .mb-chat-note{{margin:10px 2px 0;font-size:13px;}}
 .mb-chat-err{{margin:8px 2px 0;}}
+.mb-chip .mb-live-dot,.mp-go .mb-live-dot{{background:currentColor;}}
+.mb-start{{display:flex!important;flex-wrap:wrap;gap:8px;flex:1 1 100%;}}
+.mb-start select{{flex:1 1 200px;min-width:0;min-height:44px;}}
+.mb-meet{{margin-top:14px;}}
+.mb-tiles{{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;}}
+.mb-tile{{position:relative;aspect-ratio:4/3;border-radius:14px;overflow:hidden;background:var(--mb-surface-2);border:1px solid var(--mb-line);
+  display:grid;place-items:center;}}
+.mb-tile video{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}}
+.mb-tile-name{{position:absolute;left:8px;bottom:8px;z-index:1;padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;
+  font-size:12px;font-weight:700;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+.mb-meet-bar{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px;}}
+.mb-meet-bar .mp-go{{width:auto;min-height:48px;padding:0 10px;font-size:14px;}}
+.mb-meet-bar .mp-go[aria-pressed="true"]{{background:var(--mb-soft);color:var(--accent);border-color:var(--mb-soft-line);}}
+.mb-end{{margin-top:10px;}}
+.mb-end .mp-go{{width:100%;}}
 .mb-top{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;}}
 .mb-brand{{display:flex;align-items:center;gap:10px;min-width:0;}}
 .mb-mark{{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;font-weight:900;font-size:13px;
