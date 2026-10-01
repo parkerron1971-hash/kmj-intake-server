@@ -1,0 +1,111 @@
+name: On-call
+
+# The Engineering agent's on-call shift. When an alarm opens an incident
+# issue, Claude investigates and posts a diagnosis on that issue: what is
+# failing, what changed recently, the likely cause, and the first thing a
+# person should check.
+#
+# It DIAGNOSES; it does not act. No edits, no branches, no merges, no
+# redeploys, no rollbacks. That is deliberate and different from the
+# builder in claude.yml, which merges its own PRs on Kevin's standing
+# order. An outage is the worst time for an unreviewed change to reach
+# production, so here a person always presses the button.
+#
+# Two ways in:
+#   - uptime.yml calls this directly (workflow_call). It has to: an issue
+#     opened with the workflow's own GITHUB_TOKEN never starts another
+#     workflow, so an `issues: opened` trigger would never fire for it.
+#   - an issue labelled `incident` opened by anything else (e.g. the
+#     backend watchdog, which files with a personal token) starts it too.
+#
+# Runs on Kevin's Claude Max subscription (CLAUDE_CODE_OAUTH_TOKEN), the
+# same as the builder.
+
+on:
+  workflow_call:
+    inputs:
+      issue:
+        description: "Incident issue number to investigate"
+        required: true
+        type: number
+  issues:
+    # `opened` only. An issue created with a label also fires `labeled`,
+    # which would run the investigation twice.
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Incident issue number to investigate"
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: oncall-${{ inputs.issue || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  investigate:
+    if: >-
+      github.event_name != 'issues' ||
+      contains(github.event.issue.labels.*.name, 'incident')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Enough history to see what shipped in the last few days.
+          fetch-depth: 200
+
+      - name: Investigate
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          claude_args: >-
+            --model ${{ vars.CLAUDE_ONCALL_MODEL || vars.CLAUDE_BUILD_MODEL || 'claude-fable-5' }}
+            --max-turns 40
+            --allowedTools "Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(curl -s https://kmj-intake-server-production.up.railway.app:*),Bash(curl -s -o /dev/null -w %{http_code} https://mysolutionist.app:*)"
+            --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash(git push:*),Bash(git commit:*),Bash(gh pr:*)"
+          prompt: |
+            You are on call for the Solutionist backend (FastAPI on Railway, this repo;
+            Supabase database; the app at https://mysolutionist.app is a separate repo on
+            Vercel). An alarm opened incident issue #${{ inputs.issue || github.event.issue.number }}
+            in ${{ github.repository }}. Diagnose it. Do not fix it.
+
+            1. Read the issue and its comments: `gh issue view <n> --comments`.
+            2. Check production now:
+               `curl -s https://kmj-intake-server-production.up.railway.app/health/ready`
+               and `/health` (it reports `version`, the running commit). Check the app with
+               `curl -s -o /dev/null -w %{http_code} https://mysolutionist.app`.
+            3. Look at what changed: `git log --since='3 days ago' --format='%h %ad %s' --date=iso`
+               on origin/main, and `git show` anything that touches the failing area. Compare
+               the running `version` with the newest commit on main.
+            4. Look for related alarms: open issues labelled `uptime`, `deploy` or `incident`,
+               and recent failed runs (`gh run list --status failure --limit 10`).
+            5. Read the code paths behind whatever is failing (CLAUDE.md explains the layout;
+               /health and /health/ready live in kmj_intake_automation.py).
+
+            Then post ONE comment on the issue with `gh issue comment`, written for a
+            non-engineer owner reading on a phone, under these headings:
+            **What is failing** (one or two sentences, plain words),
+            **Most likely cause** (with the evidence: a commit, a log line, a response body;
+            say how sure you are),
+            **What changed recently** (only the relevant commits),
+            **First thing to check** (one concrete step for a person, e.g. a specific Railway
+            screen or setting),
+            **What I could not see** (you have no Railway logs, no database access and no
+            Sentry yet; say what that leaves unknown).
+
+            Rules: never edit files, open branches or PRs, redeploy, roll back, or change any
+            setting. If production is healthy again by the time you look, say so first and
+            keep the diagnosis short. Never guess past the evidence; "I could not tell" is an
+            acceptable answer.
