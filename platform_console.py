@@ -1206,6 +1206,17 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_agent_runs (every tick), platform_changelog (findings only)",
     },
     {
+        "id": "money_auditor",
+        "name": "Money auditor",
+        "kind": "watcher",
+        "beat": "Billing rails: whether Stripe webhooks are recorded at all, stuck "
+                "and failed webhooks, failed payments, past-due businesses, trials "
+                "that ended without an update, paying businesses on a plan we don't "
+                "recognise, negative credit balances. Reads and reports only.",
+        "schedule": "daily 10:00 UTC (6 AM Eastern)",
+        "writes_to": "platform_agent_runs (every run), platform_changelog (findings only)",
+    },
+    {
         "id": "stripe_usage_report",
         "name": "Usage Reporter",
         "kind": "system",
@@ -1273,6 +1284,13 @@ async def run_hermes_now(_owner=Depends(require_owner)):
     """Manual tick from the console — same pass the hourly schedule runs."""
     from hermes_agent import hermes_tick
     return await hermes_tick()
+
+
+@router.post("/agents/money-auditor/run")
+async def run_money_auditor_now(_owner=Depends(require_owner)):
+    """Manual run from the console — same pass the daily schedule runs."""
+    from money_auditor import audit_tick
+    return await audit_tick()
 
 
 from platform_chief_marketing import ChiefMessageBody, conversation_messages, marketing_snapshot, product_context, prepare_actions, MARKETING_PROMPT, VISUAL_PROMPT
