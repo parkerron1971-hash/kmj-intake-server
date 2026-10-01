@@ -151,3 +151,64 @@ def test_the_live_check_looks_at_the_offer_page_too(monkeypatch):
     _, urls = site_check.site_pages("b1")
     assert "https://acme.mysolutionist.app/saturday-shave-club" in urls
     assert "https://acme.mysolutionist.app/about" in urls
+
+
+# ─── the offer page's own edits (2026-10-01) ─────────────────────────
+# Builder pages number editable elements by position, so the offer page's
+# v2/f4 and the home page's v2/f4 were different words under one key: an
+# Edit Mode change on one would have rewritten the other on refresh.
+
+def _store(monkeypatch, text):
+    from agents.override_system import override_storage
+    monkeypatch.setattr(override_storage, "overrides_as_lookup",
+                        lambda bid, kind: {p: {"override_value": v, "status": "active"}
+                                           for p, v in text.items()} if kind == "text" else {})
+    monkeypatch.setattr(site_composer, "_inject_color_overrides", lambda html, bid: html)
+
+
+def test_the_offer_page_answers_to_its_own_edit_keys(monkeypatch):
+    from agents.override_system.override_resolver import resolve_html_overrides
+    home = '<h2 data-override-target="v2/f4">The Board</h2>'
+    offer = site_composer.namespace_offer_page('<h2 data-override-target="v2/f4">Week one</h2>')
+    assert 'data-override-target="v2o/f4"' in offer
+    _store(monkeypatch, {"v2/f4": "Home edit", "v2o/f4": "Offer edit"})
+    assert ">Home edit<" in resolve_html_overrides(home, "b1")
+    applied = site_composer._apply_page_overrides(offer, "b1")
+    assert ">Offer edit<" in applied and "Home edit" not in applied
+
+
+def test_a_rebuilt_offer_page_keeps_its_base_and_retires_old_edits(monkeypatch):
+    patched = _db(monkeypatch, {"site_config": {"generated_pages": {}}})
+    from agents.override_system import override_storage
+    staled = []
+    monkeypatch.setattr(override_storage, "list_overrides", lambda bid, kind: [
+        {"id": "o1", "target_path": "v2o/f2", "status": "active"},
+        {"id": "h1", "target_path": "v2/f2", "status": "active"}] if kind == "text" else [])
+    monkeypatch.setattr(override_storage, "mark_overrides_status",
+                        lambda ids, status: staled.extend(ids))
+    _store(monkeypatch, {})
+    monkeypatch.setattr(v2, "run_builder_v2", lambda *a, **k: {
+        "html": '<!DOCTYPE html><html><body><h1 data-override-target="v2/f1">Week one</h1></body></html>'})
+    ctx = {"design_spec_text": "x", "offer_page": {"path": "/course", "name": "Course"}}
+    assert site_composer.build_offer_page("b1", ctx, HOME) is True
+    cfg = patched[-1]["site_config"]
+    assert 'data-override-target="v2o/f1"' in cfg["generated_pages"]["offer"]
+    assert 'data-override-target="v2o/f1"' in cfg["offer_page"]["html_base"]
+    assert staled == ["o1"], "only the offer page's old edits retire; the home's stay"
+
+
+def test_an_edit_reaches_the_offer_page_without_a_rebuild(monkeypatch):
+    base = '<!DOCTYPE html><html><body><h1 data-override-target="v2o/f1">Week one</h1></body></html>'
+    patched = _db(monkeypatch, {"site_config": {"generated_pages": {"offer": base},
+                                                "offer_page": {"path": "/course", "html_base": base}}})
+    _store(monkeypatch, {"v2o/f1": "Week one: finding center"})
+    assert site_composer.refresh_offer_page("b1") is True
+    assert ">Week one: finding center<" in patched[-1]["site_config"]["generated_pages"]["offer"]
+    assert patched[-1]["site_config"]["offer_page"]["html_base"] == base, "the base stays clean for reverts"
+
+
+def test_the_studio_previews_the_offer_page_by_id_or_path():
+    cfg = {"offer_page": {"path": "/six-week-wheel-course"}}
+    assert public_site._preview_page_id(cfg, "offer") == "offer"
+    assert public_site._preview_page_id(cfg, "six-week-wheel-course") == "offer"
+    assert public_site._preview_page_id(cfg, "about") == "about"
