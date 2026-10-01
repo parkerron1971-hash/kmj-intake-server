@@ -726,3 +726,33 @@ def test_craft_render_findings_ride_the_measured_list(monkeypatch):
     measured = " ".join(out["report"]["vision"]["measured"])
     assert "under 14px" in measured, "merged from the second measurement"
     assert len(calls) == 2 and "MEASURED IN THE RENDER" in calls[1]
+
+
+# ─── THE OBJECT LIBRARY (2026-10-01, the concept-layer plan) ──────────
+
+def test_named_objects_arrive_with_their_source():
+    import site_objects
+    spec = ("0. CONCEPT\nINTENSITY: world\nOBJECTS: tear-off tickets (paper), seal (metal)\n"
+            "1. OVERVIEW\nA take-a-number counter.")
+    user = v2.build_user_prompt(spec, "BUSINESS: x")
+    assert site_objects.OBJECTS["ticket"].css in user
+    assert site_objects.OBJECTS["seal"].css in user
+    assert site_objects.OBJECTS["letter"].css not in user
+    assert user.index("THE APPROVED SPEC") < user.index("WORKING SOURCE") < user.index("THE REAL DATA")
+    plain = v2.build_user_prompt("0. CONCEPT\nINTENSITY: plain\n1. OVERVIEW\nx", "BUSINESS: x")
+    assert "WORKING SOURCE" not in plain
+
+
+def test_url_is_allowed_only_for_the_library_grain():
+    assert "the one exception: the object library's own paper grain" in v2._SYSTEM
+
+
+def test_the_page_ceiling_is_450_kb():
+    """Kevin, 2026-10-01: richer pages with library objects must not fall
+    to the fallback engine for size alone."""
+    assert v2.DOC_MAX_BYTES == 450 * 1024
+    body = "<p>" + ("x" * 1000) + "</p>"
+    doc = "<!DOCTYPE html><html><body>" + body * 400 + "</body></html>"
+    assert 300 * 1024 < len(doc.encode()) < 450 * 1024
+    assert v2._parse_doc(doc) is not None
+    assert v2._parse_doc(doc.replace("</body>", body * 80 + "</body>")) is None
