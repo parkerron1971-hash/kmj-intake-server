@@ -475,9 +475,9 @@ _SENTENCE_END = re.compile(r'(?<=[.!?])["”’)]?\s+|\n+')
 class _SentenceStreamer:
     """Release an ordered, checked prefix while the main model is writing.
 
-    A sentence the local prover cannot settle gets a bounded asynchronous
-    check. Later sentences wait behind it; they are never skipped or reordered.
-    A rejected check/action tag still holds the rest for the final review.
+    Up to two bounded checks may overlap. Each sees its preceding candidate
+    text as context, but no sentence escapes until every earlier one passed.
+    A rejection/action tag still holds the remainder for the final review.
     """
 
     def __init__(self, sink, prover, review=None) -> None:
@@ -487,61 +487,80 @@ class _SentenceStreamer:
         self._filt = _ActionTagFilter()
         self._buf = ""
         self._raw_tail = ""
-        self._review_task = None
-        self._closing_task = None
+        self._pending = []
+        self._review_tasks = set()
         self._review_calls = 0
+        self._blocked = False
         self.open = prover is not None and sink is not None
         self.sent: List[str] = []
 
     def __call__(self, piece: str) -> None:
         if not self.open or not isinstance(piece, str):
             return
-        self._raw_tail = (self._raw_tail + piece)[-16:]
-        if "[ACTION" in self._raw_tail.upper() or "[ACTION" in piece.upper():
+        prior_tail = self._raw_tail
+        self._raw_tail = (prior_tail + piece)[-16:]
+        combined = prior_tail + piece
+        action_at = combined.upper().find("[ACTION")
+        if action_at >= 0:
+            # A provider delta can contain both complete safe prose and the
+            # next action tag. Preserve that prose exactly as when split into
+            # separate deltas; the tag and everything after it stay private.
+            before_tag = piece[:max(0, action_at - len(prior_tail))]
+            self._buf += self._filt.feed(before_tag)
+            self._drain()
             self.close()
             return
         self._buf += self._filt.feed(piece)
-        if len(self._buf) > 12000:
+        if len(self._buf) + sum(len(p["sentence"]) for p in self._pending) > 12000:
             self.close()
             return
         self._drain()
 
     def _drain(self) -> None:
-        while self.open and self._review_task is None:
+        while self.open and not self._blocked:
             m = _SENTENCE_END.search(self._buf)
             if not m:
                 break
-            sentence = self._buf[:m.end()]
+            sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
             import chief_truth as _truth
-            if not sentence.strip() or _truth.streamable_sentence(self._prover, sentence):
-                self._buf = self._buf[m.end():]
-                self._emit(sentence)
-                continue
-            if self._review is None or self._review_calls >= 2:
-                self.close()
-                break
-            # The checker sees the whole prefix, so a pronoun or conclusion
-            # is assessed in context, not as an unrelated sentence.
-            prefix = self.text + sentence
-            self._review_calls += 1
-            self._review_task = asyncio.create_task(self._check(prefix, sentence))
+            accepted = not sentence.strip() or _truth.streamable_sentence(self._prover, sentence)
+            candidate = {"sentence": sentence, "accepted": True if accepted else None}
+            prefix = self.text + "".join(p["sentence"] for p in self._pending) + sentence
+            self._pending.append(candidate)
+            if not accepted:
+                if self._review is None or self._review_calls >= 2:
+                    # Let preceding checks settle before holding this remainder.
+                    candidate["accepted"] = False
+                    self._blocked = True
+                else:
+                    self._review_calls += 1
+                    task = asyncio.create_task(self._check(prefix, candidate))
+                    self._review_tasks.add(task)
+                    task.add_done_callback(self._review_tasks.discard)
+            self._release_checked()
 
-    async def _check(self, prefix: str, sentence: str) -> None:
+    def _release_checked(self) -> None:
+        while self.open and self._pending:
+            candidate = self._pending[0]
+            if candidate["accepted"] is None:
+                return
+            if candidate["accepted"] is not True:
+                self.close()
+                return
+            self._pending.pop(0)
+            self._emit(candidate["sentence"])
+
+    async def _check(self, prefix: str, candidate) -> None:
         try:
             accepted = await asyncio.wait_for(self._review(prefix), timeout=4.0)
         except asyncio.CancelledError:
             raise
         except Exception:
             accepted = False
-        self._review_task = None
         if not self.open:
             return
-        if not accepted:
-            self.close()
-            return
-        self._buf = self._buf[len(sentence):]
-        self._emit(sentence)
-        self._drain()
+        candidate["accepted"] = accepted is True
+        self._release_checked()
 
     def _emit(self, text: str) -> None:
         try:
@@ -554,10 +573,10 @@ class _SentenceStreamer:
         """Stop before final review. No late checker may append to the reply."""
         self.open = False
         self._buf = ""
-        if self._review_task is not None:
-            self._closing_task = self._review_task
-            self._review_task.cancel()
-            self._review_task = None
+        self._pending.clear()
+        for task in tuple(self._review_tasks):
+            if not task.done():
+                task.cancel()
 
     def finish_input(self) -> None:
         # Generation ended, but final review/actions may still be running.
@@ -566,15 +585,15 @@ class _SentenceStreamer:
             self(' ')
 
     async def wait_closed(self) -> None:
-        if self._closing_task is not None:
-            await asyncio.gather(self._closing_task, return_exceptions=True)
-            self._closing_task = None
+        if self._review_tasks:
+            await asyncio.gather(*tuple(self._review_tasks), return_exceptions=True)
 
     def reopen(self) -> None:
         """Legacy headline handoff: start a new writer after the old one ends."""
+        self.close()
         self._filt = _ActionTagFilter()
-        self._buf = ""
         self._raw_tail = ""
+        self._blocked = False
         self.open = self._prover is not None and self._sink is not None
 
     @property
@@ -4436,10 +4455,15 @@ async def handle_update_contact_status(client, biz, action) -> Dict:
             "nav": _nav("operate", "contacts", contact["id"]),
         }
 
-    await _sb(client, "PATCH", f"/contacts?id=eq.{contact['id']}",
-              {"status": new_status})
+    updated = await _sb(client, "PATCH",
+                        f"/contacts?id=eq.{contact['id']}&business_id=eq.{biz['id']}",
+                        {"status": new_status})
+    if not (isinstance(updated, list) and any(
+            isinstance(row, dict) and str(row.get("id")) == str(contact["id"])
+            and row.get("status") == new_status for row in updated)):
+        return _fail("update_contact_status", "Contact status change could not be confirmed")
 
-    # Emit event so contact-linked modules can pick it up
+    # Emit event only after the write returned the confirmed contact state.
     await _sb(client, "POST", "/events", {
         "business_id": biz["id"],
         "contact_id": contact["id"],
@@ -11605,7 +11629,6 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
     contradiction impossible — independent of any LLM behavior."""
     if len(taken or []) == 1 and taken[0].get('needs_confirmation') and taken[0].get('label'):
         return taken[0]['label']
-    succeeded: List[tuple] = []
     failed: List[tuple] = []
     # An action HELD for the practitioner's confirmation is not a failure
     # to report; its label is the read-back they need to hear. Its
@@ -11623,29 +11646,16 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
             if reason.lower().startswith("failed:"):
                 reason = reason[len("failed:"):].strip()
             failed.append((atype, label, reason))
-        else:
-            succeeded.append((atype, label, result))
 
+    from chief_receipts import receipt_lines
+    from chief_truth import _receipts_said
+    success_receipts = [t for t in (taken or [])
+                        if not _action_failed(t) and not t.get("needs_confirmation")]
+    success_text = _receipts_said(receipt_lines(success_receipts))
     if not failed and not held:
-        # Defensive — _deterministic_fallback_reply is only called when
-        # any_failed is true. If somehow we land here without failures,
-        # acknowledge the success terse so the bubble isn't blank.
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            return (lbl or res or "Done.").strip()
-        return f"{len(succeeded)} action(s) completed."
+        return success_text or "No action result was returned."
 
-    chunks: List[str] = []
-
-    # Brief success acknowledgment first (if any) — keeps the message
-    # accurate when a turn had mixed outcomes.
-    if succeeded:
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            chunks.append(f"{(lbl or res).strip()}.")
-        else:
-            total = len(succeeded) + len(failed) + len(held)
-            chunks.append(f"{len(succeeded)} of {total} actions went through.")
+    chunks: List[str] = [success_text] if success_text else []
 
     # Failures — name + reason for each.
     if len(failed) == 1:
@@ -11795,7 +11805,8 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
         parts.append("")
         parts.append("RESULTS (use the exact state; queued/running is not completed, and held/draft is not sent):")
         for atype, label, result, t in succeeded:
-            parts.append(f"  • {atype}: {label or result}")
+            parts.append(f"  • {atype}: {label}")
+            parts.append(f"      result: {result or '(no detail returned)'}")
             # Read verbs (show_view) return a `speak` digest of the rows
             # they fetched. Forwarding it is what lets the second pass
             # SAY the values ("Marcus owes the most at $520") instead of
@@ -11940,9 +11951,9 @@ async def _compose_post_action_reply(
         # delivered). Replace with a deterministic substitution reply.
         if _has_breadcrumb(taken):
             return _deterministic_substitution_reply(taken)
-        # No failures + no substitution breadcrumbs — first-pass is
-        # safe to keep verbatim.
-        return first_pass_clean
+        # Success on some actions does not validate the optimistic draft
+        # (other work may still be queued or absent). Report actual results.
+        return _deterministic_fallback_reply(taken)
 
     # Strip any stray action tags the second pass might have emitted
     # despite the system prompt (belt-and-suspenders).
@@ -14804,6 +14815,8 @@ async def chief_chat(
                         # first-pass narration so it doesn't survive as
                         # a substitution-blind lie.
                         clean = _deterministic_substitution_reply(taken)
+                    else:
+                        clean = _deterministic_fallback_reply(taken)
 
             # One final boundary for normal, native-tool, coach and fallback
             # replies. Only checked prose may enter history, learning or speech.

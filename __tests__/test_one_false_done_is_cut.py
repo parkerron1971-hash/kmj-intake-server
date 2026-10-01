@@ -50,7 +50,7 @@ def _receipt_quote(i):
     return json.loads(sources[f"result:{i}"]["text"])["label"]
 
 
-def test_the_false_done_is_cut_and_said_as_not_done():
+def test_the_false_done_is_cut_and_named_as_unconfirmed():
     reply = ("I've added the first three days to your calendar as tasks. "
              "I also saved the whole seven-day plan to your notes.")
     claims = [
@@ -61,8 +61,8 @@ def test_the_false_done_is_cut_and_said_as_not_done():
     ]
     text, grounding = _run(reply, claims)
     assert text.startswith("I've added the first three days to your calendar as tasks.")
-    assert "saved the whole seven-day plan to your notes." not in text.split("This part didn't happen:")[0]
-    assert "This part didn't happen: saved the whole seven-day plan to your notes." in text
+    assert "saved the whole seven-day plan to your notes." not in text.split("I couldn't confirm this claim:")[0]
+    assert "I couldn't confirm this claim: saved the whole seven-day plan to your notes." in text
     assert "✅" not in text and "Task:" not in text
     assert grounding["status"] == "trimmed"
 

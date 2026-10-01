@@ -113,3 +113,42 @@ def test_http_audio_does_not_wait_for_usage_logging(monkeypatch):
         with pytest.raises(StopAsyncIteration): await anext(response.body_iterator)
         assert len(calls)==1
     asyncio.run(run())
+
+
+def test_alignment_times_stay_cumulative_and_bounded():
+    raw={'normalizedAlignment': {'chars':['A','b'], 'charStartTimesMs':[1254,1300], 'charDurationsMs':[46,60]}}
+    event=speech.alignment_event(raw,1246.7)
+    assert event['time_base']=='stream'
+    assert event['char_start_times_ms']==[1254,1300]
+    assert event['audio_offset_ms']==1246.7
+    assert speech.alignment_event({'alignment':{'chars':['x'],'char_start_times_ms':[0],'char_durations_ms':[40]}},0)
+    for invalid in [float('nan'), float('inf'), -1, True, 600001]:
+        raw['normalizedAlignment']['charStartTimesMs']=[invalid,1300]
+        assert speech.alignment_event(raw,0) is None
+    assert speech.alignment_event({'alignment':{'chars':['x'],'charStartTimesMs':[],'charDurationsMs':[20]}},0) is None
+
+
+def test_alignment_precedes_audio_and_malformed_timing_never_blocks_speech(monkeypatch):
+    async def run():
+        monkeypatch.setattr(tts,'ELEVENLABS_MONTHLY_CHARS_PER_BIZ',0)
+        monkeypatch.setattr(tts,'log_api_usage',AsyncMock())
+        class AlignedProvider(Provider):
+            async def send(self,raw):
+                self.inputs.append(json.loads(raw))
+                if json.loads(raw)['text']:
+                    for start in [0, 25]:
+                        await self.output.put(json.dumps({'audio':base64.b64encode(b'\x00\x01'*600).decode(),
+                            'normalizedAlignment':{'chars':['x'],'charStartTimesMs':[start],'charDurationsMs':[20]}}))
+                    await self.output.put(json.dumps({'audio':base64.b64encode(b'\x00\x01').decode(),'alignment':{'bad':True}}))
+                else:
+                    await self.output.put(json.dumps({'is_final':True}))
+        ws=Socket([{'type':'text','text':'Test.'},{'type':'finish'}]);up=AlignedProvider();order=[]
+        async def event(e): order.append(('event',e))
+        async def audio(b): order.append(('audio',len(b)))
+        ws.send_json=event;ws.send_bytes=audio
+        await asyncio.wait_for(speech.relay(ws,up,'biz','owner'),1)
+        assert [item[0] for item in order]==['event','audio','event','audio','audio','event']
+        assert order[2][1]['audio_offset_ms']==25
+        assert order[2][1]['char_start_times_ms']==[25]
+        assert order[-1][1]['type']=='done'
+    asyncio.run(run())
