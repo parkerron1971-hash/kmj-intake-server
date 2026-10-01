@@ -1193,6 +1193,23 @@ def _find_or_create_customer(
     return created[0]["id"]
 
 
+def _pg_ts(dt) -> str:
+    """A datetime that survives a PostgREST query string.
+
+    isoformat() on an aware datetime ends in '+00:00', and a '+' in a URL
+    query decodes to a SPACE, so `appointment_at=gte.2026-10-01T02:27:47
+    +00:00` reaches Postgres as '... 00:00' and 400s with 22007. Same bug
+    chief_of_staff._ts fixed on 2026-09-03; Sentry found it here on
+    2026-10-01. The 400 came back as None, which the callers read as
+    "no bookings": the double-book guard passed every slot, and the
+    booking session sync mirrored and cancelled nothing. Aware datetimes
+    are sent as UTC with a Z; naive ones carry no '+' and pass as-is."""
+    if dt.tzinfo is None:
+        return dt.isoformat()
+    from datetime import timezone as _tz
+    return dt.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _check_slot_available(
     business_id: str,
     appointment_at_iso: str,
@@ -1245,8 +1262,8 @@ def _check_slot_available(
         # Pad the query window by 4h either side so we don't miss a
         # long booking whose appointment_at lands outside the immediate
         # window but whose end-time spills in.
-        lo = (slot_start - timedelta(hours=4)).isoformat()
-        hi = (slot_start + timedelta(hours=4)).isoformat()
+        lo = _pg_ts(slot_start - timedelta(hours=4))
+        hi = _pg_ts(slot_start + timedelta(hours=4))
     except Exception:
         # If we can't parse the slot, don't block the booking; the
         # check is opportunistic.
@@ -1343,7 +1360,7 @@ async def booking_session_sync_tick() -> None:
 
     def _sync() -> None:
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
+        now = _pg_ts(datetime.now(timezone.utc))
         mods = sb_clients.sb_get_as_service(
             "/custom_modules?archetype=eq.booking_calendar&is_active=eq.true"
             "&select=id,business_id&limit=500") or []
