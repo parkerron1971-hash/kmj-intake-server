@@ -196,6 +196,9 @@ def director_prompt(ctx: Dict[str, Any]) -> str:
     kwargs = dict(inventory=inventory, discovery=disc, facts=facts)
     if "vertical" in spec_author.build_user_prompt.__code__.co_varnames:
         kwargs["vertical"] = vertical
+    if "concept" in spec_author.build_user_prompt.__code__.co_varnames:
+        import site_concept
+        kwargs["concept"] = site_concept.brief_block(site_concept.attach(ctx))
     return spec_author.build_user_prompt(dossier, plan, **kwargs)
 
 
@@ -209,7 +212,7 @@ def builder_prompt(ctx: Dict[str, Any], spec_text: str) -> str:
     return builder_v2.build_user_prompt(spec_text, real_data(ctx))
 
 
-def validate(ctx: Dict[str, Any], html: str) -> Dict[str, Any]:
+def validate(ctx: Dict[str, Any], html: str, spec_text: str = "") -> Dict[str, Any]:
     import builder_v2
     bid = (ctx.get("business") or {}).get("id") or ""
     rd = real_data(ctx)
@@ -238,12 +241,20 @@ def validate(ctx: Dict[str, Any], html: str) -> Dict[str, Any]:
         out["craft_floor"] = craft_laws.check_html(doc, rd)
     except Exception as e:
         out["craft_floor"] = [f"(craft floor error: {e!r})"]
+    try:
+        import site_concept
+        sheet = site_concept.parse_sheet(spec_text) if spec_text else {}
+        out["concept_sheet"] = sheet
+        out["concept_floor"] = site_concept.check_page(doc, sheet)
+    except Exception as e:
+        out["concept_floor"] = [f"(concept check error: {e!r})"]
     _, n = builder_v2.annotate_editability(doc)
     out["editability_stamps_added_by_annotator"] = n
     out["bytes"] = len(doc.encode("utf-8"))
     out["violations_total"] = sum(len(v) for k, v in out.items()
                                   if k.startswith("check_") or k == "armor_violations")
-    out["soft_total"] = len(out.get("check_stand_ins") or []) + len(out.get("craft_floor") or [])
+    out["soft_total"] = (len(out.get("check_stand_ins") or []) + len(out.get("craft_floor") or [])
+                         + len(out.get("concept_floor") or []))
     return out
 
 
@@ -375,7 +386,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.page:
             sys.exit("validate needs page.html")
         html = open(args.page, encoding="utf-8").read()
-        print(json.dumps(validate(ctx, html), indent=1, ensure_ascii=False))
+        spec = open(args.spec, encoding="utf-8").read() if args.spec else ""
+        print(json.dumps(validate(ctx, html, spec), indent=1, ensure_ascii=False))
     return 0
 
 

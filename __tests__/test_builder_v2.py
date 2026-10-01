@@ -653,7 +653,9 @@ def test_a_measured_defect_earns_the_vision_repair_without_a_verdict(monkeypatch
 
 def test_the_system_prompt_teaches_layering_on_purpose():
     assert "data-overlap-ok" in v2._SYSTEM
-    assert len(v2._SYSTEM) < 12000, "the moves block crept back into the system prompt"
+    # 17,458 chars with all thirteen move primitives inline (before
+    # 2026-10-01); the rules now fit well under that, moves arrive per build.
+    assert len(v2._SYSTEM) < 14000, "the system prompt is growing back toward the old 17k"
 
 
 # ─── THE CRAFT FLOOR (2026-10-01, the concept-layer plan) ─────────────
@@ -756,3 +758,38 @@ def test_the_page_ceiling_is_450_kb():
     assert 300 * 1024 < len(doc.encode()) < 450 * 1024
     assert v2._parse_doc(doc) is not None
     assert v2._parse_doc(doc.replace("</body>", body * 80 + "</body>")) is None
+
+
+# ─── THE CONCEPT (2026-10-01, the concept-layer plan) ─────────────────
+
+_WORLD_SPEC = ("0. THE CONCEPT\nINTENSITY: world\nSCOPE: site\n"
+               "IDEA: The shop is a take-a-number counter.\n"
+               "VOCABULARY: Book -> Take a number\n"
+               "OBJECTS: ticket (paper), letterboard (paper)\n"
+               "1. OVERVIEW\nA counter.")
+
+
+def test_rule_17_teaches_the_concept_and_the_plain_word():
+    s = v2._SYSTEM
+    assert "17. THE CONCEPT" in s and "plain word" in s
+    assert s.index("16. THE TYPE FLOOR") < s.index("17. THE CONCEPT") < s.index("CRAFT FLOOR:")
+
+
+def test_a_page_that_ignores_its_concept_earns_the_repair(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2(_WORLD_SPEC, {}, "biz-1")
+    assert out["html"], "a concept miss never sends the build to the fallback"
+    assert out["report"]["concept"]["intensity"] == "world"
+    assert len(calls) == 2 and "CONCEPT:" in calls[1]
+    assert "ticket" in calls[1] and "letterboard" in calls[1]
+    assert "WORKING SOURCE" in calls[0], "the named objects arrived with the author's brief"

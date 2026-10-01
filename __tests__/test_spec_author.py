@@ -578,3 +578,39 @@ def test_one_section_count_when_no_plan_is_composed():
     """The skeleton said 8-11 and the no-plan line said 6-9 (2026-10-01)."""
     line = spec_author._digest_plan([])
     assert "8-11" in line and "6-9" not in line
+
+
+# ─── THE CONCEPT LAYER (2026-10-01, the concept-layer plan) ───────────
+
+def test_the_director_is_taught_the_concept_law_and_the_object_catalog():
+    import site_objects
+    s = spec_author._SYSTEM
+    assert "{CONCEPT_LAW}" not in s and "{OBJECT_CATALOG}" not in s
+    assert "THE CONCEPT LAW" in s and "PLAIN-WORD RULE" in s
+    for key in site_objects.OBJECT_KEYS:
+        assert f"- {key}:" in s, f"the Director cannot name {key}"
+    assert "0. THE CONCEPT" in s and "6. THE OFFER PAGE" in s
+    assert s.index("0. THE CONCEPT") < s.index("1. OVERVIEW")
+
+
+def test_the_concept_block_rides_the_directors_message():
+    out = spec_author.build_user_prompt(
+        "DOSSIER", [], concept="== THE CONCEPT (how far this site's idea goes) ==\n"
+                               "- intensity: plain (the trade's default)")
+    assert "THE CONCEPT (how far" in out and "intensity: plain" in out
+
+
+def test_author_spec_attaches_the_concept_for_the_trade(monkeypatch):
+    seen = {}
+
+    def _fake(system, user, business_id, image_urls=None, mark_urls=None):
+        seen["user"] = user
+        return "0. THE CONCEPT\nINTENSITY: plain\n1. OVERVIEW\nA calm page."
+
+    monkeypatch.setattr(spec_author, "_call_llm", _fake)
+    ctx = {"business": {"name": "Calm Counsel", "type": "Licensed therapist"},
+           "site": {"site_config": {}}}
+    text = spec_author.author_spec("biz-1", ctx, None, [])
+    assert text and "INTENSITY: plain" in text
+    assert "intensity: plain" in seen["user"] and "trade's default" in seen["user"]
+    assert ctx["concept"]["intensity"] == "plain"
