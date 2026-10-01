@@ -182,3 +182,22 @@ def test_payment_issue_is_featured_and_drafts_through_chief(monkeypatch):
     assert first["kind"] == "payment"
     assert "Creative Genius" in first["action"]["chief"]
     assert out["pulse"]["ai_spend_today_cents"] == 120
+
+
+def test_next_run_follows_the_observed_cadence():
+    """Hermes is scheduled hourly but runs every ~20 minutes in practice."""
+    runs = [NOW - timedelta(minutes=m) for m in (65, 45, 25, 5)]
+    nxt = pt.next_run(runs, NOW)
+    assert nxt == NOW + timedelta(minutes=15)
+
+
+def test_next_run_without_history_is_unknown():
+    assert pt.next_run([], NOW) is None
+
+
+def test_watchdog_last_seen_falls_back_to_its_newest_finding(monkeypatch):
+    import platform_watchdog as wd
+    monkeypatch.setattr(wd, "LAST_SWEEP", {}, raising=False)
+    rows = [{"agent": None, "title": "Watchdog: 11 server errors", "created_at": NOW.isoformat()}]
+    out = pt._running([], None, rows)
+    assert out[0]["id"] == "watchdog" and out[0]["last_at"] == NOW.isoformat()

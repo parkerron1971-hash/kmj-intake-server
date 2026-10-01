@@ -204,6 +204,27 @@ def compose_read(needs: List[Dict[str, Any]], parked: List[Dict[str, Any]]) -> D
     return {"headline": headline[0].upper() + headline[1:], "body": body}
 
 
+def next_run(times: List[Optional[datetime]], now: datetime,
+             default: timedelta = timedelta(hours=1)) -> Optional[datetime]:
+    """When a watcher will next run, from how often it has ACTUALLY run.
+
+    Hermes is scheduled hourly, but every process that boots the scheduler
+    runs it, so the observed cadence is closer to every 20-30 minutes, and
+    "last run + 1 hour" showed a next run that never came. The median gap
+    of recent runs is the honest estimate (clamped to 5 minutes-2 hours)."""
+    ts = sorted(t for t in times if t)
+    if not ts:
+        return None
+    recent = ts[-7:]
+    gaps = [(b - a) for a, b in zip(recent, recent[1:]) if b > a]
+    step = sorted(gaps)[len(gaps) // 2] if gaps else default
+    step = max(timedelta(minutes=5), min(step, timedelta(hours=2)))
+    nxt = ts[-1] + step
+    while nxt < now:
+        nxt += step
+    return nxt
+
+
 def coverage() -> List[Dict[str, Any]]:
     """What the platform can see — replaces the hand-kept 'blind spots'
     list, which went stale the week Sentry landed and kept telling Chief
@@ -563,7 +584,7 @@ async def build_today(owner) -> Dict[str, Any]:
     # bucketed into 15-minute bins from the in-process ring buffer.
     overnight = _overnight(runs or [], now)
 
-    running = _running(runs or [], dev_tasks)
+    running = _running(runs or [], dev_tasks, findings_rows or [])
 
     ships: List[Dict[str, Any]] = []
     try:
@@ -650,12 +671,8 @@ def _overnight(runs: List[Dict[str, Any]], now: datetime) -> Dict[str, Any]:
     except Exception:
         errors = []
     upcoming = []
-    hermes = [e for e in events if e["agent"] == "hermes"]
-    if hermes:
-        last = max(_parse_ts(e["at"]) for e in hermes)
-        nxt = last + timedelta(hours=1)
-        while nxt < now:
-            nxt += timedelta(hours=1)
+    nxt = next_run([_parse_ts(e["at"]) for e in events if e["agent"] == "hermes"], now)
+    if nxt:
         upcoming.append({"at": nxt.isoformat(), "agent": "hermes", "label": "Hermes runs"})
     brief = now.replace(hour=13, minute=0, second=0, microsecond=0)
     if brief <= now:
@@ -666,7 +683,8 @@ def _overnight(runs: List[Dict[str, Any]], now: datetime) -> Dict[str, Any]:
     return {"events": events[-40:], "errors": errors, "upcoming": upcoming}
 
 
-def _running(runs: List[Dict[str, Any]], dev_tasks: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def _running(runs: List[Dict[str, Any]], dev_tasks: Optional[List[Dict[str, Any]]],
+             findings_rows: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     from platform_console import AGENT_REGISTRY
     last: Dict[str, Dict[str, Any]] = {}
     for r in runs:
@@ -680,6 +698,15 @@ def _running(runs: List[Dict[str, Any]], dev_tasks: Optional[List[Dict[str, Any]
                                          "ok": wd.LAST_SWEEP.get("ok")})
     except Exception:
         pass
+    if "watchdog" not in last:
+        # The sweep runs in whichever process's scheduler fired it, so the
+        # one serving this request often has no LAST_SWEEP and the
+        # watchdog read "idle". Its newest written finding is the next
+        # best evidence that it is running.
+        for r in findings_rows or []:
+            if (r.get("agent") or "").lower() == "watchdog" or (r.get("title") or "").lower().startswith("watchdog:"):
+                last["watchdog"] = {"started_at": r.get("created_at"), "ok": True}
+                break
     out = [{"id": "watchdog", "name": "Watchdog", "beat": "errors, keys, services",
             "last_at": (last.get("watchdog") or {}).get("started_at"),
             "ok": (last.get("watchdog") or {}).get("ok", True) is not False}]
