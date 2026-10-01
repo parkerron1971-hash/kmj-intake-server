@@ -157,3 +157,9 @@ def test_an_offer_scoped_home_is_not_held_to_world_objects():
 def test_no_sheet_no_findings():
     assert sc.check_page("<p>x</p>", {}) == []
     assert sc.check_page("<p>x</p>", {"intensity": ""}) == []
+
+
+def test_decorative_numbers_are_taught_to_stay_short():
+    assert "Decorative numbers" in sc.DIRECTOR_LAW and "one or two digits" in sc.DIRECTOR_LAW
+    block = sc.brief_block({"intensity": "signature", "scope": "site", "by": "default"})
+    assert "((" not in block and "))" not in block
