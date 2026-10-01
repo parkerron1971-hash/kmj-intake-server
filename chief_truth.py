@@ -580,6 +580,14 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 # Chief's own recommendation is advice, not evidence-bound.
                 if _is_recommendation(claim, reply):
                     continue
+                # A complete, bounded target calculation can be proved from
+                # owner inputs even when the reviewer labels it unsourced.
+                # It cannot prove actual revenue, record counts, or writes.
+                from chief_projection_math import verified_figures
+                sentence = _sentence_containing(reply, text_)
+                calculated = verified_figures(sentence, reply, sources)
+                if calculated and _numbers(text_) <= calculated:
+                    continue
                 if _numbers(text_) - _practitioner_figures(sources) - _free_figures(text_) \
                         - _advice_math(text_, reply, sources):
                     return 'unsupported', [], _claim_fail('claim number has no evidence', text_)
