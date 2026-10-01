@@ -75,7 +75,7 @@ def harness(monkeypatch):
     state = {"responses": [], "attempts": 0, "fallbacks": 0, "sunk": []}
 
     @contextlib.asynccontextmanager
-    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None):
+    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         idx = min(state["attempts"], len(state["responses"]) - 1)
         state["attempts"] += 1
         yield state["responses"][idx]

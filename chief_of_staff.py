@@ -475,9 +475,9 @@ _SENTENCE_END = re.compile(r'(?<=[.!?])["”’)]?\s+|\n+')
 class _SentenceStreamer:
     """Release an ordered, checked prefix while the main model is writing.
 
-    A sentence the local prover cannot settle gets a bounded asynchronous
-    check. Later sentences wait behind it; they are never skipped or reordered.
-    A rejected check/action tag still holds the rest for the final review.
+    Up to two bounded checks may overlap. Each sees its preceding candidate
+    text as context, but no sentence escapes until every earlier one passed.
+    A rejection/action tag still holds the remainder for the final review.
     """
 
     def __init__(self, sink, prover, review=None) -> None:
@@ -487,61 +487,80 @@ class _SentenceStreamer:
         self._filt = _ActionTagFilter()
         self._buf = ""
         self._raw_tail = ""
-        self._review_task = None
-        self._closing_task = None
+        self._pending = []
+        self._review_tasks = set()
         self._review_calls = 0
+        self._blocked = False
         self.open = prover is not None and sink is not None
         self.sent: List[str] = []
 
     def __call__(self, piece: str) -> None:
         if not self.open or not isinstance(piece, str):
             return
-        self._raw_tail = (self._raw_tail + piece)[-16:]
-        if "[ACTION" in self._raw_tail.upper() or "[ACTION" in piece.upper():
+        prior_tail = self._raw_tail
+        self._raw_tail = (prior_tail + piece)[-16:]
+        combined = prior_tail + piece
+        action_at = combined.upper().find("[ACTION")
+        if action_at >= 0:
+            # A provider delta can contain both complete safe prose and the
+            # next action tag. Preserve that prose exactly as when split into
+            # separate deltas; the tag and everything after it stay private.
+            before_tag = piece[:max(0, action_at - len(prior_tail))]
+            self._buf += self._filt.feed(before_tag)
+            self._drain()
             self.close()
             return
         self._buf += self._filt.feed(piece)
-        if len(self._buf) > 12000:
+        if len(self._buf) + sum(len(p["sentence"]) for p in self._pending) > 12000:
             self.close()
             return
         self._drain()
 
     def _drain(self) -> None:
-        while self.open and self._review_task is None:
+        while self.open and not self._blocked:
             m = _SENTENCE_END.search(self._buf)
             if not m:
                 break
-            sentence = self._buf[:m.end()]
+            sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
             import chief_truth as _truth
-            if not sentence.strip() or _truth.streamable_sentence(self._prover, sentence):
-                self._buf = self._buf[m.end():]
-                self._emit(sentence)
-                continue
-            if self._review is None or self._review_calls >= 2:
-                self.close()
-                break
-            # The checker sees the whole prefix, so a pronoun or conclusion
-            # is assessed in context, not as an unrelated sentence.
-            prefix = self.text + sentence
-            self._review_calls += 1
-            self._review_task = asyncio.create_task(self._check(prefix, sentence))
+            accepted = not sentence.strip() or _truth.streamable_sentence(self._prover, sentence)
+            candidate = {"sentence": sentence, "accepted": True if accepted else None}
+            prefix = self.text + "".join(p["sentence"] for p in self._pending) + sentence
+            self._pending.append(candidate)
+            if not accepted:
+                if self._review is None or self._review_calls >= 2:
+                    # Let preceding checks settle before holding this remainder.
+                    candidate["accepted"] = False
+                    self._blocked = True
+                else:
+                    self._review_calls += 1
+                    task = asyncio.create_task(self._check(prefix, candidate))
+                    self._review_tasks.add(task)
+                    task.add_done_callback(self._review_tasks.discard)
+            self._release_checked()
 
-    async def _check(self, prefix: str, sentence: str) -> None:
+    def _release_checked(self) -> None:
+        while self.open and self._pending:
+            candidate = self._pending[0]
+            if candidate["accepted"] is None:
+                return
+            if candidate["accepted"] is not True:
+                self.close()
+                return
+            self._pending.pop(0)
+            self._emit(candidate["sentence"])
+
+    async def _check(self, prefix: str, candidate) -> None:
         try:
             accepted = await asyncio.wait_for(self._review(prefix), timeout=4.0)
         except asyncio.CancelledError:
             raise
         except Exception:
             accepted = False
-        self._review_task = None
         if not self.open:
             return
-        if not accepted:
-            self.close()
-            return
-        self._buf = self._buf[len(sentence):]
-        self._emit(sentence)
-        self._drain()
+        candidate["accepted"] = accepted is True
+        self._release_checked()
 
     def _emit(self, text: str) -> None:
         try:
@@ -554,10 +573,10 @@ class _SentenceStreamer:
         """Stop before final review. No late checker may append to the reply."""
         self.open = False
         self._buf = ""
-        if self._review_task is not None:
-            self._closing_task = self._review_task
-            self._review_task.cancel()
-            self._review_task = None
+        self._pending.clear()
+        for task in tuple(self._review_tasks):
+            if not task.done():
+                task.cancel()
 
     def finish_input(self) -> None:
         # Generation ended, but final review/actions may still be running.
@@ -566,15 +585,15 @@ class _SentenceStreamer:
             self(' ')
 
     async def wait_closed(self) -> None:
-        if self._closing_task is not None:
-            await asyncio.gather(self._closing_task, return_exceptions=True)
-            self._closing_task = None
+        if self._review_tasks:
+            await asyncio.gather(*tuple(self._review_tasks), return_exceptions=True)
 
     def reopen(self) -> None:
         """Legacy headline handoff: start a new writer after the old one ends."""
+        self.close()
         self._filt = _ActionTagFilter()
-        self._buf = ""
         self._raw_tail = ""
+        self._blocked = False
         self.open = self._prover is not None and self._sink is not None
 
     @property
@@ -1269,7 +1288,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        read_tools: Optional[List[Dict[str, Any]]] = None,
                        tool_biz: Optional[Dict[str, Any]] = None,
                        effort: Optional[str] = None,
-                       stable_tools: bool = False) -> str:
+                       stable_tools: bool = False,
+                       timing_role: str = "chief_auxiliary") -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
     # turns once this business crosses its daily-dollar ceiling, or the
     # platform crosses its own. Fail-open — a bookkeeping hiccup must
@@ -1283,7 +1303,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # against, and blocked by, the platform ceiling everyone shares.
     try:
         import spend_guard
-        if spend_guard.over_budget(business_id):
+        if await asyncio.to_thread(spend_guard.over_budget, business_id):
             logger.warning("[chief] daily spend cap hit — turn soft-blocked "
                            "(business=%s)", business_id or "unattributed")
             return spend_guard.block_message()
@@ -1487,7 +1507,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
               try:
                   async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                              extra_headers=_beta_headers(_extended)) as resp:
+                                              extra_headers=_beta_headers(_extended),
+                                              task=timing_role) as resp:
                       if resp.status_code >= 400:
                           body = await resp.aread()
                           # If the API is rejecting the extended-ttl beta, stop
@@ -1504,7 +1525,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   client, system, messages, max_tokens=max_tokens,
                                   enable_web_search=enable_web_search,
                                   business_id=business_id, model=model,
-                                  stream_sink=stream_sink)
+                                  stream_sink=stream_sink, timing_role=timing_role)
                           logger.warning(
                               f"Claude stream error (attempt {attempt + 1}/3): "
                               f"{resp.status_code} {body[:300]}")
@@ -1611,7 +1632,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               client, system, messages, max_tokens=max_tokens,
                               enable_web_search=enable_web_search,
                               business_id=business_id, model=fb_model,
-                              stream_sink=stream_sink, read_tools=read_tools,
+                              stream_sink=stream_sink, timing_role=timing_role, read_tools=read_tools,
                               tool_biz=tool_biz, effort=effort, stable_tools=stable_tools)
                       fb_reason = f"declined ({category})"
                       break                      # the same model declines again
@@ -1702,7 +1723,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               await asyncio.sleep(1.5 * attempt)
           try:
               resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                          extra_headers=_beta_headers(_extended))
+                                          extra_headers=_beta_headers(_extended), task=timing_role)
           except httpx.HTTPError as e:
               last_err = str(e)
               logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
@@ -1722,7 +1743,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   return await _call_claude(
                       client, system, messages, max_tokens=max_tokens,
                       enable_web_search=enable_web_search,
-                      business_id=business_id, model=model, stream_sink=stream_sink,
+                      business_id=business_id, model=model, stream_sink=stream_sink, timing_role=timing_role,
                       read_tools=read_tools, tool_biz=tool_biz)
               if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
                   resp = None
@@ -1798,7 +1819,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               return await _call_claude(
                   client, system, messages, max_tokens=max_tokens,
                   enable_web_search=enable_web_search,
-                  business_id=business_id, model=fb_model, stream_sink=stream_sink,
+                  business_id=business_id, model=fb_model, stream_sink=stream_sink, timing_role=timing_role,
                   read_tools=read_tools, tool_biz=tool_biz, effort=effort,
                   stable_tools=stable_tools)
       from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
@@ -4436,10 +4457,15 @@ async def handle_update_contact_status(client, biz, action) -> Dict:
             "nav": _nav("operate", "contacts", contact["id"]),
         }
 
-    await _sb(client, "PATCH", f"/contacts?id=eq.{contact['id']}",
-              {"status": new_status})
+    updated = await _sb(client, "PATCH",
+                        f"/contacts?id=eq.{contact['id']}&business_id=eq.{biz['id']}",
+                        {"status": new_status})
+    if not (isinstance(updated, list) and any(
+            isinstance(row, dict) and str(row.get("id")) == str(contact["id"])
+            and row.get("status") == new_status for row in updated)):
+        return _fail("update_contact_status", "Contact status change could not be confirmed")
 
-    # Emit event so contact-linked modules can pick it up
+    # Emit event only after the write returned the confirmed contact state.
     await _sb(client, "POST", "/events", {
         "business_id": biz["id"],
         "contact_id": contact["id"],
@@ -6827,6 +6853,8 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         # Background bookkeeping, not this turn's reply: its model calls stay
         # out of the turn's route cost (route_ledger). Task-local context.
         route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
                 auto_count = await _autopilot_sweep(c, biz_lite)
@@ -6863,6 +6891,25 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         outer.add_done_callback(_TURN_SWEEP_TASKS.discard)
     except Exception as e:  # pragma: no cover — no loop = no sweep, never a crash
         print(f"[Chief] sweep spawn failed: {e}", flush=True)
+
+
+def _spawn_proactive_suggestions(biz: Dict[str, Any]) -> None:
+    """Track independent suggestion writes without delaying this turn's model call."""
+    async def _body() -> None:
+        # Keep the originating billing/JWT context, but do not bill background
+        # work to the foreground route. The emitter owns its database clients.
+        route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
+        try:
+            import chief_proactive_suggestions
+            await asyncio.to_thread(chief_proactive_suggestions.maybe_emit_proactive_suggestions, biz)
+        except Exception as exc:  # best-effort, just as when awaited inline
+            logger.warning("proactive suggestions failed: %s", exc)
+
+    task = asyncio.create_task(_body())
+    _TURN_SWEEP_TASKS.add(task)
+    task.add_done_callback(_TURN_SWEEP_TASKS.discard)
 
 
 async def _drain_turn_sweeps() -> None:
@@ -8108,6 +8155,10 @@ class _TurnClock:
     def log(self, **fields: Any) -> None:
         try:
             total = int((time.perf_counter() - self._t0) * 1000)
+            import chief_request_timing as _crt
+            trace = _crt.CURRENT.get()
+            if trace is not None:
+                fields["request_id"] = trace.request_id
             parts = " ".join(f"{n}={ms}" for n, ms in self.stages)
             parts += f" tools={getattr(self, 'tools', 0)}"
             extra = " ".join(
@@ -9831,88 +9882,94 @@ def _conversation_matches(row: Dict[str, Any], query: str) -> bool:
     return False
 
 
+def _recall_excerpt(text: str, query: str = "", limit: int = 260) -> str:
+    """Keep the matched words, even near the end of a long archived message."""
+    text = " ".join(str(text or "").split())
+    at = text.lower().find(query.lower()) if query else -1
+    start = max(0, at - 60) if at >= 0 else 0
+    excerpt = text[start:start + limit]
+    return ("..." if start else "") + excerpt + ("..." if start + limit < len(text) else "")
+
+
+def _recall_exchange(conv: Dict[str, Any], query: str) -> str:
+    """A bounded, role-labelled exchange; old assistant prose is not a receipt."""
+    messages = [m for m in (conv.get("messages") or [])
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    match = next((i for i, m in enumerate(messages)
+                  if query and query.lower() in str(m.get("content") or "").lower()), None)
+    if match is None:
+        selected = messages[-2:]
+    elif messages[match]["role"] == "assistant" and match:
+        selected = messages[match - 1:match + 1]
+    else:
+        selected = messages[match:match + 2]
+    return "\n".join(m["role"] + ": " + _recall_excerpt(m.get("content"), query)
+                     for m in selected)
+
+
 async def handle_recall_conversation(client, biz, action) -> Dict:
-    """Search archived chief_conversations rows for relevant context.
-    Filters by `query` (matched against summary, key_topics and the
-    messages) and `time_range`.
-
-    THE TABLE IS WRITTEN NOW (2026-09-04). Until today nothing in this
-    backend wrote chief_conversations; the only writer was a browser
-    sweep that fired when the panel was reopened after four idle hours,
-    or on Clear chat — so a practitioner who never did either produced
-    no rows, on any device, ever, and this handler answered "nothing
-    archived" as if that were a fact about their history. chief_chat
-    now archives every turn (see _archive_turn), so recall is
-    structurally true for every turn on every surface.
-
-    Two lies removed on the same day: (1) a query with no matches used
-    to fall back to returning EVERY row, so "what did we say about
-    Marcus" came back with conversations that never mentioned Marcus —
-    the raw material for confabulated recall; it now says no match.
-    (2) The empty-state copy asserted an auto-archive behaviour the
-    backend never had.
-    """
+    """Recall bounded historical exchanges, preserving read failures and search scope."""
     query = (action.get("query") or "").strip()
     days = _parse_time_range_days(action.get("time_range"))
-    # _ts, not isoformat(): its '+00:00' decodes to a space in the query
-    # string, the read 400s (22007) and fails soft, so "what did we talk
-    # about last week?" found nothing (seen 2026-09-26, "chief read
-    # unavailable: /chief_conversations").
+    # _ts keeps '+00:00' from decoding to a space in the PostgREST query.
     since = _ts(datetime.now(timezone.utc) - timedelta(days=days))
-
     rows = await _sb(
         client, "GET",
         f"/chief_conversations?business_id=eq.{biz['id']}&ended_at=gte.{since}"
         f"&order=ended_at.desc&limit=60"
         f"&select=id,summary,key_topics,actions_taken,messages,"
         f"started_at,ended_at,message_count",
-    ) or []
-    if not isinstance(rows, list):
-        rows = []
+    )
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return {
+            "type": "recall_conversation", "result": "Failed: conversation history unavailable",
+            "label": "Conversation history is unavailable", "failed": True,
+            "summary": "Conversation history is unavailable right now. This does not mean there are no saved conversations.",
+            "conversations": [], "search_complete": False,
+        }
 
+    searched = len(rows)
+    search_complete = searched < 60
+    scope = {"searched_count": searched, "search_complete": search_complete}
     if not rows:
         return {
-            "type": "recall_conversation",
-            "result": "no_conversations",
-            "label": "📜 No recent conversations to recall",
-            "summary": (
-                f"I don't have anything from the last {days} days on file — "
-                "every conversation is kept from here on, so there is simply "
-                "nothing in that window yet."
-            ),
-            "conversations": [],
+            "type": "recall_conversation", "result": "no_conversations",
+            "label": "No recent conversations to recall",
+            "summary": f"No saved conversations were found in the last {days} days.",
+            "conversations": [], **scope,
         }
 
     if query:
         rows = [c for c in rows if _conversation_matches(c, query)]
         if not rows:
             return {
-                "type": "recall_conversation",
-                "result": "no_matches",
-                "label": f"📜 Nothing about “{query[:40]}” in the last {days} days",
+                "type": "recall_conversation", "result": "no_matches",
+                "label": f"No matches for {query[:40]}",
                 "summary": (
-                    f"Nothing in the last {days} days mentions “{query}”. "
-                    "I can widen the window if you like."
+                    f'No matches for "{query}" were found in the '
+                    f'{searched} saved conversations checked from the last {days} days.'
+                    + (" Older conversations in that window have not been checked." if not search_complete else "")
                 ),
-                "conversations": [],
+                "conversations": [], **scope,
             }
 
     summaries: List[str] = []
+    exchanges: List[str] = []
     for conv in rows[:5]:
         ended = (conv.get("ended_at") or "")[:10]
-        summary = conv.get("summary") or "No summary recorded."
-        topics = ", ".join(conv.get("key_topics") or []) or "—"
-        msg_count = conv.get("message_count") or 0
-        summaries.append(
-            f"**{ended}** ({msg_count} messages · topics: {topics})\n{summary}"
-        )
+        summary = _recall_excerpt(conv.get("summary") or "No summary recorded.", query, 150)
+        summaries.append(f"{ended}: {summary}")
+        exchange = _recall_exchange(conv, query)
+        exchanges.append(f"{ended}: {summary}" + ("\n" + exchange if exchange else ""))
 
     return {
         "type": "recall_conversation",
         "result": f"{len(rows)} conversations",
-        "label": f"📜 Found {len(rows)} recent conversation{'s' if len(rows) != 1 else ''}",
-        "conversations": summaries,
+        "label": f"Found {len(rows)} matching saved conversation{'s' if len(rows) != 1 else ''}",
+        "context_note": "Historical conversation excerpts; assistant statements are not execution receipts or proof of current status.",
+        "conversations": exchanges,
         "summary": "\n\n".join(summaries),
+        "returned_count": len(exchanges), **scope,
     }
 
 
@@ -11599,7 +11656,6 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
     contradiction impossible — independent of any LLM behavior."""
     if len(taken or []) == 1 and taken[0].get('needs_confirmation') and taken[0].get('label'):
         return taken[0]['label']
-    succeeded: List[tuple] = []
     failed: List[tuple] = []
     # An action HELD for the practitioner's confirmation is not a failure
     # to report; its label is the read-back they need to hear. Its
@@ -11617,29 +11673,16 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
             if reason.lower().startswith("failed:"):
                 reason = reason[len("failed:"):].strip()
             failed.append((atype, label, reason))
-        else:
-            succeeded.append((atype, label, result))
 
+    from chief_receipts import receipt_lines
+    from chief_truth import _receipts_said
+    success_receipts = [t for t in (taken or [])
+                        if not _action_failed(t) and not t.get("needs_confirmation")]
+    success_text = _receipts_said(receipt_lines(success_receipts))
     if not failed and not held:
-        # Defensive — _deterministic_fallback_reply is only called when
-        # any_failed is true. If somehow we land here without failures,
-        # acknowledge the success terse so the bubble isn't blank.
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            return (lbl or res or "Done.").strip()
-        return f"{len(succeeded)} action(s) completed."
+        return success_text or "No action result was returned."
 
-    chunks: List[str] = []
-
-    # Brief success acknowledgment first (if any) — keeps the message
-    # accurate when a turn had mixed outcomes.
-    if succeeded:
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            chunks.append(f"{(lbl or res).strip()}.")
-        else:
-            total = len(succeeded) + len(failed) + len(held)
-            chunks.append(f"{len(succeeded)} of {total} actions went through.")
+    chunks: List[str] = [success_text] if success_text else []
 
     # Failures — name + reason for each.
     if len(failed) == 1:
@@ -11789,7 +11832,8 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
         parts.append("")
         parts.append("RESULTS (use the exact state; queued/running is not completed, and held/draft is not sent):")
         for atype, label, result, t in succeeded:
-            parts.append(f"  • {atype}: {label or result}")
+            parts.append(f"  • {atype}: {label}")
+            parts.append(f"      result: {result or '(no detail returned)'}")
             # Read verbs (show_view) return a `speak` digest of the rows
             # they fetched. Forwarding it is what lets the second pass
             # SAY the values ("Marcus owes the most at $520") instead of
@@ -11934,9 +11978,9 @@ async def _compose_post_action_reply(
         # delivered). Replace with a deterministic substitution reply.
         if _has_breadcrumb(taken):
             return _deterministic_substitution_reply(taken)
-        # No failures + no substitution breadcrumbs — first-pass is
-        # safe to keep verbatim.
-        return first_pass_clean
+        # Success on some actions does not validate the optimistic draft
+        # (other work may still be queued or absent). Report actual results.
+        return _deterministic_fallback_reply(taken)
 
     # Strip any stray action tags the second pass might have emitted
     # despite the system prompt (belt-and-suspenders).
@@ -14109,8 +14153,7 @@ async def chief_chat(
             # Intelligence enrichment — voice samples, session context,
             # mentor cooldown, revenue forecast, relationship insights,
             # time context, habits, live bookkeeping, and cross-vertical
-            # learning. Plus the proactive-suggestion emit, which writes
-            # rather than reads but is nobody's dependency either.
+            # learning. Independent proactive suggestions run separately below.
             #
             # These are independent: not one of them consumes another's
             # result. They used to run as ten sequential awaits — twelve
@@ -14146,16 +14189,9 @@ async def chief_chat(
                 return await asyncio.to_thread(
                     _vctx.build_vertical_learned_block, biz, req.message or "")
 
-            async def _proactive():
-                # NT8b — best-effort proactive suggestion emission on
-                # state change. Runs ONCE per chat turn; idempotent (the
-                # emitter checks for active dupes + has a cap). Nothing
-                # this turn reads what it writes — ctx was gathered above
-                # — so it rides along here instead of blocking ahead of
-                # the enrichment it never feeds.
-                import chief_proactive_suggestions as _cps
-                return await asyncio.to_thread(
-                    _cps.maybe_emit_proactive_suggestions, biz)
+            # Suggestions do not feed the snapshot already read above. Keep
+            # their existing per-turn trigger, without waiting for their writes.
+            _spawn_proactive_suggestions(biz)
 
             # Mic-open prewarm (Kevin, 8/14): if /agents/chief/prewarm ran
             # while the practitioner was still talking, the eight
@@ -14199,7 +14235,6 @@ async def chief_chat(
             _results = await asyncio.gather(
                 *[_resolve_source(warm, n, *sources[n]) for n in _names],
                 _enrich("vertical learned context", _learned(), ""),
-                _enrich("proactive emit (non-blocking)", _proactive(), None),
                 _enrich("setup snapshot", _setup_probe(), None),
                 _enrich("business knowledge", _knowledge_probe(), None),
             )
@@ -14216,9 +14251,9 @@ async def chief_chat(
             habit_block = _ctx_vals["habit_block"]
             bookkeeping_block = _ctx_vals["bookkeeping_block"]
             learned_block = _results[len(_names)]
-            setup_snapshot = _results[len(_names) + 2]
-            if _results[len(_names) + 3] is not None:
-                ctx["business_knowledge"] = _results[len(_names) + 3]
+            setup_snapshot = _results[len(_names) + 1]
+            if _results[len(_names) + 2] is not None:
+                ctx["business_knowledge"] = _results[len(_names) + 2]
             setup_block = _format_setup_block(setup_snapshot)
             chief_truth.record('context:setup', setup_block, kind='context')
             # First-run = the account is days old and nearly nothing is
@@ -14593,7 +14628,7 @@ async def chief_chat(
                                          stream_sink=_sentence_streamer,
                                          read_tools=_read_tools,
                                          tool_biz=biz,
-                                         effort=chief_models.effort_for(lane))
+                                         effort=chief_models.effort_for(lane), timing_role="chief_main")
                 if isinstance(_sentence_streamer, _SentenceStreamer):
                     _sentence_streamer.finish_input()
             finally:
@@ -14798,6 +14833,8 @@ async def chief_chat(
                         # first-pass narration so it doesn't survive as
                         # a substitution-blind lie.
                         clean = _deterministic_substitution_reply(taken)
+                    else:
+                        clean = _deterministic_fallback_reply(taken)
 
             # One final boundary for normal, native-tool, coach and fallback
             # replies. Only checked prose may enter history, learning or speech.
@@ -15074,6 +15111,8 @@ async def chief_chat_stream(
             # create_task snapshots the current context, so the sink rides
             # into the turn; resetting immediately keeps THIS request's
             # context clean for anything that runs after.
+            if track is not None:
+                track.rec.trace.work_started()
             turn = asyncio.create_task(chief_chat(req, user_session))
             if track is not None:
                 turn.add_done_callback(lambda _task: track.holder.answer_ready.set())
@@ -15298,6 +15337,7 @@ async def chief_missions_endpoint(
 
 class PrewarmRequest(BaseModel):
     business_id: str
+    refresh_style: bool = False
 
 
 @router.post("/agents/chief/prewarm")
@@ -15328,7 +15368,7 @@ async def chief_prewarm_endpoint(
         user_id = getattr(getattr(user_session, "user", None), "id", None)
 
         # Mic-tap throttle: four taps must not fan out four sweeps.
-        if not chief_prewarm.should_rewarm(user_id, req.business_id):
+        if not req.refresh_style and not chief_prewarm.should_rewarm(user_id, req.business_id):
             return {"ok": True, "warmed": 0, "reason": "already warm"}
 
         async with httpx.AsyncClient() as client:
@@ -15346,6 +15386,9 @@ async def chief_prewarm_endpoint(
 
             import chief_fast_track
             chief_fast_track.remember_style(str(user_id or ""), biz)
+            if req.refresh_style:
+                # Refresh only the authorized delivery profile after settings change.
+                return {"ok": True, "warmed": 0, "style_refreshed": True}
             sources = _context_sources(client, biz)
             names = list(sources.keys())
             results = await asyncio.gather(

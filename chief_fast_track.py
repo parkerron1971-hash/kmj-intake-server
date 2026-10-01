@@ -115,6 +115,12 @@ def _classifier_timeout_s() -> float:
 # turn's own words take over, whatever the model is doing.
 OPENER_HARD_CAP_S = 2.5
 FAST_ANSWER_CAP_S = 20.0
+# A call cannot spend twenty seconds waiting for the small model before
+# starting the full answer. Progress means released answer text, not a lead
+# or raw tokens still held by the answer gate.
+VOICE_FAST_ANSWER_CAP_S = 8.0
+VOICE_FAST_FIRST_CONTENT_S = 2.5
+VOICE_FAST_IDLE_S = 2.5
 FAST_MAX_TOKENS = 500
 OPENER_MAX_TOKENS = 80
 VOICE_OPENER_MAX_TOKENS = 140
@@ -515,9 +521,11 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
         payload["stop_sequences"] = stop_sequences
     started = time.perf_counter()
     usage: Dict[str, Any] = {}
+    complete = False
     try:
         async with llm_call.astream(client(), payload, timeout=httpx.Timeout(
-                connect=3.0, read=15.0, write=5.0, pool=2.0)) as resp:
+                connect=3.0, read=15.0, write=5.0, pool=2.0),
+                task=endpoint, timing_trace=getattr(rec, "trace", None)) as resp:
             if resp.status_code >= 400:
                 body = (await resp.aread())[:200]
                 out["error"] = f"{resp.status_code} {body!r}"
@@ -529,7 +537,17 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
                     evt = json.loads(line[5:].strip())
                 except ValueError:
                     continue
+                if not isinstance(evt, dict):
+                    continue
                 et = evt.get("type")
+                if et == "error":
+                    error = evt.get("error") or {}
+                    out["error"] = (str(error.get("type") or "stream_error")[:80]
+                                    if isinstance(error, dict) else "stream_error")
+                    return
+                if et == "message_stop":
+                    complete = True
+                    break
                 if et == "content_block_delta":
                     d = evt.get("delta") or {}
                     if d.get("type") == "text_delta" and d.get("text"):
@@ -542,6 +560,8 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
                     u = evt.get("usage") or {}
                     if u.get("output_tokens") is not None:
                         usage["output_tokens"] = u["output_tokens"]
+            if not complete:
+                out["error"] = "incomplete_stream"
     except (httpx.HTTPError, asyncio.TimeoutError) as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -617,11 +637,20 @@ class TwoTrack:
         self.business_id = str(getattr(req, "business_id", "") or "")
         self.verified = known_good(user_id, self.business_id)
         self.style = style_for(user_id, self.business_id)
-        # A cached answer must not outlive a change to Chief's chosen tone.
-        style_key = hashlib.sha256(self.style.encode()).hexdigest()[:16]
-        self.cache_scope = _pair(user_id, self.business_id) + ":" + style_key
+        # The fast answer is conditioned on these inputs, not just its question.
+        # Never replay a chat-formatted answer on a call, or an explanation
+        # tailored to earlier history after the practitioner changes context.
+        cache_context = json.dumps({
+            "style": self.style, "voice": self.voice,
+            "model": chief_models.model_for("fast"),
+            "conversation": getattr(req, "conversation_id", None),
+            "history": _history_tail(req),
+        }, sort_keys=True, ensure_ascii=False)
+        context_key = hashlib.sha256(cache_context.encode()).hexdigest()
+        self.cache_scope = _pair(user_id, self.business_id) + ":" + context_key
         self.cache_hit: Optional[mr.CacheHit] = None
         self.fast_answer = ""
+        self.calculated_answer = None
         self.lead_text = ""                 # everything the first track sent
         self.turn_started = False
         self._key = _convo_key(user_id, req)
@@ -659,7 +688,9 @@ class TwoTrack:
 
     def bind_turn_context(self) -> List[Any]:
         """Context the full turn task must be created with (reset after)."""
-        return [(OPENER, OPENER.set(self.holder)),
+        import chief_request_timing as _crt
+        return [(_crt.CURRENT, _crt.CURRENT.set(self.rec.trace)),
+                (OPENER, OPENER.set(self.holder)),
                 (route_ledger.TALLY, route_ledger.TALLY.set(self.rec.tally))]
 
     def mark_turn_delta(self) -> None:
@@ -694,7 +725,8 @@ class TwoTrack:
         """The fast lane's (or the cache's) answer, in /chat's shape."""
         text = self.lead_text
         return {"response": text, "actions_taken": [],
-                "grounding": {"status": "unchecked", "reason": "no records needed",
+                "grounding": {"status": "calculated" if self.calculated_answer else "unchecked",
+                              "reason": "exact arithmetic" if self.calculated_answer else "no records needed",
                               "sources": []},
                 "routing": {"lane": self.rec.lane, "model": self.rec.answer_model}}
 
@@ -707,6 +739,28 @@ class TwoTrack:
             return
         deadline = self.rec.arrived + route_ledger.budget_ms() / 1000.0 - _deadline_margin_s()
         self.holder.deadline = deadline
+        if self.calculated_answer is not None:
+            # This uses the same previously authorized user/business pair as
+            # the fast lane, and still checks its current rate/spend guards.
+            # No model/context read is needed to prove a bounded calculation.
+            try:
+                allowed = await asyncio.wait_for(asyncio.to_thread(
+                    _fast_guards, self.user_id, self.business_id), timeout=0.25)
+            except Exception:
+                allowed = False
+            if not allowed:
+                self.calculated_answer = None
+                self.rec.escalate("guard")
+                self.rec.lane = mr.LANE_FULL
+                self.holder.finish()
+                start_turn()
+                self.turn_started = True
+                return
+            self.rec.answer_model = "deterministic"
+            async for ev in self._emit(self.calculated_answer, "answer"):
+                yield ev
+            self.holder.finish()
+            return
         if self.rec.lane == mr.LANE_CACHE and self.cache_hit is not None:
             async for ev in self._emit(self.cache_hit.answer, "cache"):
                 yield ev
@@ -967,17 +1021,22 @@ class TwoTrack:
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, messages, model=model, max_tokens=FAST_MAX_TOKENS, rec=self.rec,
             endpoint="/chief/backend", units=None, business_id=self.business_id, out=out), q))
-        hard_stop = self.rec.arrived + FAST_ANSWER_CAP_S
+        hard_stop = self.rec.arrived + (VOICE_FAST_ANSWER_CAP_S if self.voice else FAST_ANSWER_CAP_S)
+        content_deadline = time.perf_counter() + VOICE_FAST_FIRST_CONTENT_S
         after_lead = bool(self.lead_text)
         first_model_text = True
         escalate: Optional[str] = None
         try:
             while not gate.closed:
-                piece = await self._next(q, deadline, hard_stop)
+                wait_until = min(hard_stop, content_deadline) if self.voice else hard_stop
+                piece = await self._next(q, deadline, wait_until)
                 if piece == "AGAIN":
                     continue
                 if piece == "STOP":
-                    escalate = "timeout"
+                    if self.voice and content_deadline <= hard_stop:
+                        escalate = "voice_answer_idle" if self.fast_answer else "voice_first_content_timeout"
+                    else:
+                        escalate = "voice_answer_timeout" if self.voice else "timeout"
                     break
                 if piece == "LEAD":
                     after_lead = True
@@ -1000,6 +1059,8 @@ class TwoTrack:
                             text.lstrip(), lower=not self._lead_is_sentence())
                     first_model_text = False
                     self.fast_answer += text
+                    if self.voice:
+                        content_deadline = time.perf_counter() + VOICE_FAST_IDLE_S
                     async for ev in self._emit(text, "answer"):
                         yield ev
                 if piece is None:
@@ -1010,6 +1071,7 @@ class TwoTrack:
         finally:
             if not pump.done():
                 pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
 
         if escalate:
             self.rec.escalate(escalate)
@@ -1075,6 +1137,7 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
         # The app's id for this turn: what a client-side measurement (time
         # to first audio on a call) is reported against.
         rec.request_id = str(req.request_id)[:80]
+        rec.trace.request_id = rec.request_id
     message = str(getattr(req, "message", "") or "")
     c = mr.score(message, _prior_assistant(req),
                  has_images=bool(getattr(req, "image_ids", None)),
@@ -1091,11 +1154,27 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
     business_id = str(getattr(req, "business_id", "") or "")
     allow_fast = (_on("CHIEF_ROUTER_FAST_LANE") and known_good(user_id, business_id))
     route = mr.decide(c, allow_fast=allow_fast, dissatisfied_now=unhappy, sticky_up=sticky)
+    calculated = None
+    if (allow_fast and not getattr(req, "image_ids", None)
+            and (getattr(req, "mode", None) or "") in ("", "chief")):
+        from chief_truth import elementary_arithmetic_reply
+        calculated = elementary_arithmetic_reply(message)
+        if calculated is not None:
+            # The complete message is an integer expression; prior conversational
+            # complexity cannot turn it into a business lookup or an action.
+            route = mr.Route(mr.LANE_FAST, "exact_arithmetic")
+    if route.ambiguous and (getattr(req, "client_surface", "") or "") == "voice":
+        # Uncertain spoken turns already need the full turn unless a separate
+        # classifier proves otherwise. Start that authorized path now instead
+        # of putting a classifier's network wait in front of it. Clear/simple
+        # fast answers and exact arithmetic retain their existing routes.
+        route = mr.Route(mr.LANE_FULL, "voice_ambiguous")
     if unhappy and st.get("lane") == mr.LANE_FAST:
         rec.escalate("dissatisfied_after_fast")
     rec.lane, rec.reason = route.lane, route.reason
     track = TwoTrack(req, user_id, rec, c, route)
-    if route.lane == mr.LANE_FAST and c.cacheable and _on("CHIEF_ROUTER_CACHE"):
+    track.calculated_answer = calculated
+    if calculated is None and route.lane == mr.LANE_FAST and c.cacheable and _on("CHIEF_ROUTER_CACHE"):
         hit = CACHE.get(track.cache_scope, message)
         if hit is not None:
             track.cache_hit = hit

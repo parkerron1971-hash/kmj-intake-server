@@ -50,7 +50,7 @@ NO_ACTION_REPLY = ("No action ran in this request. I couldn't verify my proposed
 
 
 def conversation_check_reply(message: str) -> str | None:
-    """Acknowledge receipt of an exact check-in, never bless model-written prose.
+    """Answer an exact check-in or thank-you, never bless model-written prose.
 
     Receiving a transcript proves receipt of words, not microphone quality or
     access to previous audio. Full matching keeps mixed business/action requests
@@ -59,12 +59,45 @@ def conversation_check_reply(message: str) -> str | None:
     text = re.sub(r'[^\w\s]', ' ', message.casefold())
     text = ' '.join(text.split())
     text = re.sub(r'^(?:hello|hi|hey)(?: chief)?\s+', '', text)
+    if text in {'thanks', 'thank you', 'thanks chief', 'thank you chief',
+                'thanks that helped', 'thank you that helped', 'thanks for your help',
+                'thank you for your help', 'thanks i appreciate it', 'thank you i appreciate it'}:
+        return "You're welcome."
     if text in {'hello', 'hi', 'hey', 'hey chief', 'hello chief', 'hi chief',
                 'chief', 'are you there', 'chief are you there',
                 'can you hear me', 'can you hear what i just said',
                 'did you hear me', 'can you read this', 'are you listening'}:
         return "I'm here. I received your message. What would you like help with?"
     return None
+
+
+def elementary_arithmetic_reply(message: str) -> str | None:
+    """Exact, bounded integer arithmetic only; never consume a mixed request.
+
+    Voice transcripts spell out small numbers, so the same narrow grammar
+    accepts zero through twenty without handing a simple sum to the models.
+    """
+    words = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+    values = {word: value for value, word in enumerate(words)}
+    number = r"(?:-?\d{1,9}|" + '|'.join(words) + ')'
+    prefix = r"\s*(?:(?:what(?: is|'s)|calculate|compute)\s+)?"
+    ending = r"\s*[?=.!]?\s*"
+    match = re.fullmatch(prefix + '(' + number + r")\s*(\+|\*|-|plus|minus|times|multiplied by)\s*(" + number + ')' + ending,
+                         message or '', re.I)
+    def value(text):
+        return values[text.lower()] if text.lower() in values else int(text)
+    if match:
+        left, right = value(match[1]), value(match[3])
+        op = match[2].lower()
+        result = left + right if op in ('+', 'plus') else (
+            left - right if op in ('-', 'minus') else left * right)
+        return f"{result}."
+    subtraction = re.fullmatch(r"\s*subtract\s+(" + number + r")\s+from\s+(" + number + ')' + ending,
+                               message or '', re.I)
+    if subtraction:
+        return f"{value(subtraction[2]) - value(subtraction[1])}."
+    return None
+
 
 AUTHOR_RULES = """
 ANSWER ACCURACY:
@@ -671,7 +704,7 @@ def _squash(text):
 
 
 _LEFT_OUT = "I left the rest of my answer out because I couldn't confirm it from your records."
-_NOT_ALL_DONE = "That's what's done so far; the rest of what you asked for isn't done yet."
+_NOT_ALL_DONE = "I couldn't confirm the additional work described."
 
 
 def _not_done_line(claims):
@@ -681,7 +714,7 @@ def _not_done_line(claims):
     parts = [re.sub(r"\s+", " ", c).strip(" .,;") for c in claims if c and c.strip()]
     if not parts:
         return _NOT_ALL_DONE
-    lead = "This part didn't happen: " if len(parts) == 1 else "These parts didn't happen: "
+    lead = "I couldn't confirm this claim: " if len(parts) == 1 else "I couldn't confirm these claims: "
     return lead + "; ".join(parts[:3]) + "."
 
 
@@ -1214,10 +1247,19 @@ def _asserted_text(reply):
     return ' '.join(out)
 
 
+# Literal delivery/completion idioms still imply an outcome when they avoid
+# verbs such as "sent". They need a receipt, never an early prose shortcut.
+_DELIVERY_COMPLETION = re.compile(
+    r"\b(?:messages?|emails?|texts?|invoices?|reminders?|bookings?|updates?|payments?|requests?|changes?|it|that|this)"
+    r"(?:\s+(?:is|was|are|were)|['\u2019]s)\s+(?:on (?:its|their|the) way|taken care of|handled)\b"
+    r"|\b(?:messages?|emails?|texts?|invoices?|reminders?|bookings?|updates?|payments?|requests?|changes?)"
+    r"\s+(?:went|has gone|have gone) through\b", re.I)
+
+
 def has_completion_claim(reply):
     import chief_of_staff as chief
     asserted = _asserted_text(reply)
-    return chief._looks_like_completed_action(asserted) or bool(re.search(
+    return bool(_DELIVERY_COMPLETION.search(asserted)) or chief._looks_like_completed_action(asserted) or bool(re.search(
         r'\b(?:appointment is booked|changes have been saved|payment recorded successfully)\b',
         asserted, re.IGNORECASE))
 
@@ -1948,10 +1990,48 @@ and quote a short, exact passage from it. Check names, status, dates and numbers
 A derived total/ranking/absence needs a complete source, not a partial list.
 An earlier assistant answer is never proof of a business fact. Owner statements
 support only explicitly attributed reports/preferences, not current business status.
-A missing, failed or conflicting source means supported=false. Completed actions
+A missing, failed or conflicting source means supported=false. Omitted source IDs
+are not evidence: do not assume they are empty or infer absence from this subset. Completed actions
 are never supported in this lane. If multiple sources are needed, return false.
 Pure suggestions or conversational remarks may use empty source_id and quote,
 but a factual premise inside a suggestion still needs evidence. No explanation."""
+
+
+STREAM_REVIEW_EVIDENCE_CHARS = 14000
+_STREAM_REVIEW_FILLER = frozenset("""
+a an the and or but to of in on at for with by from as is are was were be been
+being do does did have has had i me my we our you your it its this that these
+those they them their there here what which who when where why how can could
+would should will shall may might must not no all any only just more most
+about into than then so very also business chief owner
+""".split())
+
+
+def _stream_review_sources(sources, sentence, preceding, message):
+    """Bound an early check to whole relevant sources; never truncate a record.
+
+    The final reviewer still gets everything. Here excess/uncertain evidence
+    simply defers speech. Keep every matching source, including conflicts,
+    rather than selecting a top hit that could conceal contradictory records.
+    """
+    valid = {sid: dict(src) for sid, src in sources.items() if isinstance(src, dict)}
+    if sum(len(str(src.get('text') or '')) for src in valid.values()) <= STREAM_REVIEW_EVIDENCE_CHARS:
+        return valid, []
+    terms = {_stem(word) for word in _words(sentence) - _STREAM_REVIEW_FILLER}
+    # References need their conversational subject, not just 'it' or 'they'.
+    if re.search(r"\b(?:it|its|they|them|their|that|those|this)\b", sentence, re.I):
+        terms |= {_stem(word) for word in _words(preceding[-400:] + ' ' + message[:1200])
+                  - _STREAM_REVIEW_FILLER}
+    selected = {}
+    for sid, src in valid.items():
+        text = str(src.get('text') or '')
+        words = {_stem(word) for word in _words(sid + ' ' + text)}
+        if (terms & words or sid == 'context:context_quality'
+                or _HEDGED_ITEM.search(text)):
+            selected[sid] = src
+    if not selected or sum(len(str(src.get('text') or '')) for src in selected.values()) > STREAM_REVIEW_EVIDENCE_CHARS:
+        return None, list(valid)
+    return selected, [sid for sid in valid if sid not in selected]
 
 
 async def review_stream_prefix(client, prefix, *, sources, message, business_id):
@@ -1967,10 +2047,13 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
     if not sentences:
         return False
     sentence = sentences[-1]
-    sources = {sid: dict(value) for sid, value in sources.items()}
+    preceding = ' '.join(sentences[:-1])
+    sources, omitted = _stream_review_sources(sources, sentence, preceding, message or '')
+    if sources is None:
+        return False
     turn = _turn.get()
-    payload = {'owner_message': message, 'preceding_text': ' '.join(sentences[:-1]),
-               'sentence': sentence, 'sources': sources,
+    payload = {'owner_message': (message or '')[:1200], 'preceding_text': preceding,
+               'sentence': sentence, 'sources': sources, 'omitted_sources': omitted,
                'unavailable': sorted(turn.unavailable) if turn else []}
     raw = await review_reply(client, STREAM_PREFIX_REVIEW_SYSTEM,
         [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
@@ -2027,6 +2110,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # review and tag-only turns, where the model never saw the tool result.
         from chief_link_pilot import receipt_text
         return '\n\n'.join(receipt_text(r) for r in receipts), {'status': 'receipts', 'sources': []}
+    arithmetic = elementary_arithmetic_reply(message) if not receipts else None
+    if arithmetic is not None:
+        return arithmetic, {'status': 'calculated', 'sources': []}
     check_in = conversation_check_reply(message) if not receipts else None
     if check_in:
         return check_in, {'status': 'acknowledged', 'sources': []}
@@ -2084,8 +2170,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             t_reply, t_verdict, t_cited, t_reason, cuts = trimmed
             note = ""
             if undone:
-                # Said as not done, because it is not: the practitioner asked
-                # for it and must not walk away thinking it happened.
+                # Missing evidence is not proof of failure or the state of
+                # background work. Name the unsupported claim precisely.
                 note += "\n\n" + _not_done_line(undone)
             if t_verdict == 'supported':
                 logger.info('reply review trimmed %d claim(s); rest supported', cuts)
@@ -2103,7 +2189,8 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         return reply, {'status': 'supported', 'sources': cited}
     # Preserve real work and links/cards even when narration cannot be checked.
     import action_registry
-    bits = []
+    from chief_receipts import receipt_lines
+    confirmed_receipts = []
     for receipt in receipts:
         # Writes and UI verbs carry deterministic, server-written labels
         # ("Opened BUILD → booking"); a read's label may be model prose.
@@ -2111,12 +2198,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
             continue
         # A read/analysis summary may itself contain model prose. It cannot
         # bypass the reviewer by masquerading as a deterministic receipt.
-        value = receipt.get('label') or receipt.get('result')
         if receipt.get('type') == 'link_wallet_pilot':
             from chief_link_pilot import receipt_text
-            value = receipt_text(receipt)
-        if isinstance(value, str) and value.strip():
-            bits.append(value.strip())
+            confirmed_receipts.append({**receipt, 'label': receipt_text(receipt), 'result': ''})
+        else:
+            confirmed_receipts.append(receipt)
+    bits = receipt_lines(confirmed_receipts)
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
     gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
@@ -2150,7 +2237,7 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # claiming a completed action without a receipt is withheld.
         if bits:
             logger.info('reply review unchecked (%s); receipts shown', reason)
-            return '\n\n'.join(bits), {'status': 'receipts', 'sources': []}
+            return _receipts_said(bits), {'status': 'receipts', 'sources': []}
         if email_answer:
             logger.info('reply review unchecked (%s); records answer shown', reason)
             return email_answer, {'status': 'records', 'sources': ['context:email_replies']}

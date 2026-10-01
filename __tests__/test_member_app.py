@@ -200,3 +200,19 @@ def test_only_published_messages_are_loaded(monkeypatch):
     assert [s["id"] for s in lib["sermons"]] == [S1]
     monkeypatch.setattr(mps.sb_clients, "sb_get_as_service", lambda p: None)
     assert mps.load_library("b1") is None
+
+
+def test_give_is_one_tap_from_every_signed_in_screen(monkeypatch):
+    import giving_router
+    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
+    page = mp._shell(_biz("#0B2146"), None, "Groups", "<p>x</p>", tab="groups", who=ME)
+    assert 'class="mb-give mp-noprint" href="/give" aria-label="Give"' in page
+    assert 'aria-label="Give"' not in mp.render_signin(_biz(), None)     # not before sign-in
+    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
+    assert 'aria-label="Give"' not in mp._shell(_biz(), None, "Groups", "<p>x</p>", tab="groups", who=ME)
+
+
+def test_the_bar_has_live_between_sermons_and_groups():
+    page = mp._shell(_biz(), None, "Live", "<p>x</p>", tab="live", who=ME)
+    nav = page[page.index('aria-label="Main"'):]
+    assert nav.index('href="/my/sermons"') < nav.index('href="/my/live" aria-current="page"') < nav.index('href="/my/groups"')
