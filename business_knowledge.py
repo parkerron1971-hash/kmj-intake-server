@@ -468,10 +468,16 @@ def _operations_area(track: Dict[str, Any], probe: Callable[[str], bool]) -> Dic
     return _area("operations", status, facts)
 
 
-def _growth_area(biz_id: str, track: Dict[str, Any],
+def _growth_area(settings: Dict[str, Any], track: Dict[str, Any],
                  gaps: List[Dict[str, Any]], name: str = "Chief") -> Dict[str, Any]:
-    goals = _get(f"/goals?business_id=eq.{biz_id}&status=eq.active"
-                 "&select=title,target,period&order=created_at.desc&limit=5")
+    # Goals live in businesses.settings.goals.active_goals — the store
+    # create_goal (chief_grow_actions) and Grow → Goals write. There is no
+    # goals table; reading one 404'd on every call, so this area could
+    # never say "known" for a business that had set goals.
+    store = (settings or {}).get("goals")
+    raw = store.get("active_goals") if isinstance(store, dict) else None
+    goals = [g for g in (raw or []) if isinstance(g, dict) and str(g.get("title") or "").strip()]
+    goals.sort(key=lambda g: str(g.get("created_at") or ""), reverse=True)
     facts: List[str] = []
     for g in goals[:2]:
         if g.get("title"):
@@ -543,7 +549,7 @@ def knowledge_for(biz: Dict[str, Any]) -> Dict[str, Any]:
         "clients":    lambda: _clients_area(biz_id, voice, track),
         "money":      lambda: _money_area(biz, bp, track, probe),
         "operations": lambda: _operations_area(track, probe),
-        "growth":     lambda: _growth_area(biz_id, track, gaps, name),
+        "growth":     lambda: _growth_area(biz.get("settings") or {}, track, gaps, name),
         "plan":       lambda: _plan_area(track),
     }
     areas = []

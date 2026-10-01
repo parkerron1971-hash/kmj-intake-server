@@ -65,7 +65,6 @@ def kmj(monkeypatch):
         "offerings": OFFERINGS,
         "contacts": [{"id": f"c{i}"} for i in range(11)],
         "invoices": [{"id": "i1"}, {"id": "i2"}, {"id": "i3"}],
-        "goals": [],
         "businesses": [{"settings": {}, "stripe_account_id": None}],
     }
     monkeypatch.setattr(sb_clients, "sb_get_as_service", _fake_db(tables))
@@ -117,6 +116,22 @@ def test_na_is_not_a_person(kmj):
     # an accountant. It must surface as a question, not as known.
     k = bk.knowledge_for(BIZ)
     assert "key_people" in [g["key"] for g in k["gaps"]]
+
+
+def test_goals_are_read_from_settings_where_the_app_stores_them(kmj):
+    # There is no goals table: create_goal writes settings.goals.active_goals.
+    # Reading a table 404'd and left this area "Not yet" for everyone.
+    biz = {**BIZ, "settings": {"goals": {"active_goals": [
+        {"id": "g1", "title": "Reach $10,000 a month", "created_at": "2026-09-01T00:00:00Z"},
+        {"id": "g2", "title": "20 coaching clients", "created_at": "2026-09-20T00:00:00Z"},
+        {"id": "g3", "title": "", "created_at": "2026-09-21T00:00:00Z"},
+    ]}}}
+    k = bk.knowledge_for(biz)
+    growth = _area(k, "growth")
+    assert growth["status"] == bk.KNOWN
+    assert growth["facts"][:2] == ["20 coaching clients", "Reach $10,000 a month"]
+    assert growth["goal_count"] == 2
+    assert "growth" not in [g["key"] for g in k["gaps"]]
 
 
 def test_an_empty_business_is_all_open_and_the_coach_gets_the_full_interview(monkeypatch):
