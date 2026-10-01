@@ -6117,6 +6117,76 @@ def file_photo_list(business_id: str, ctx: Dict[str, Any]) -> Optional[str]:
         return None
 
 
+OFFER_KEY_PREFIX = "v2o/"
+
+
+def namespace_offer_page(html: str) -> str:
+    """Move a builder page's edit keys from v2/ to the offer page's own v2o/."""
+    return (html or "").replace('data-override-target="v2/', f'data-override-target="{OFFER_KEY_PREFIX}') \
+        .replace("data-override-target='v2/", f"data-override-target='{OFFER_KEY_PREFIX}")
+
+
+def _apply_page_overrides(html: str, business_id: str) -> str:
+    """The practitioner's text and colour edits, applied the way the home
+    page gets them. Keys are page-specific, so only this page's edits land."""
+    try:
+        from agents.override_system.override_resolver import resolve_html_overrides
+        html = resolve_html_overrides(html, business_id)
+    except Exception as e:
+        logger.info(f"[composer] offer text overrides skipped: {e}")
+    try:
+        html = _inject_color_overrides(html, business_id)
+    except Exception as e:
+        logger.info(f"[composer] offer color overrides skipped: {e}")
+    return html
+
+
+def _retire_offer_overrides(business_id: str) -> int:
+    """A rebuilt offer page is a new design: edits made against the old one
+    go stale (never deleted), the policy a full recompose applies to the
+    home page's colour tweaks."""
+    try:
+        from agents.override_system.override_storage import list_overrides, mark_overrides_status
+        ids = []
+        for kind in ("text", "color_role"):
+            for r in list_overrides(business_id, kind) or []:
+                if str(r.get("target_path") or "").startswith(OFFER_KEY_PREFIX) and r.get("id") \
+                        and str(r.get("status") or "active") != "stale":
+                    ids.append(r["id"])
+        if ids:
+            mark_overrides_status(ids, "stale")
+        return len(ids)
+    except Exception as e:
+        logger.info(f"[composer] offer override retire skipped: {e}")
+        return 0
+
+
+def refresh_offer_page(business_id: str) -> bool:
+    """Re-apply the practitioner's edits to the offer page from its base,
+    so an Edit Mode change (or a revert) shows without a rebuild. Free."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=site_config&order=updated_at.desc&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else {}) or {}
+        offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
+        base = str(offer.get("html_base") or "")
+        if not base:
+            return False
+        pages = dict(cfg.get("generated_pages") or {})
+        fresh = _apply_page_overrides(base, business_id)
+        if pages.get("offer") == fresh:
+            return False
+        pages["offer"] = fresh
+        cfg["generated_pages"] = pages
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{business_id}", {"site_config": cfg})
+        return True
+    except Exception as e:
+        logger.info(f"[composer] offer page refresh skipped: {e}")
+        return False
+
+
 def build_offer_page(business_id: str, ctx: Dict[str, Any], home_html: str,
                      progress_cb=None) -> bool:
     """One more builder_v2 run for the World concept's offer page, saved as
@@ -6149,10 +6219,18 @@ def build_offer_page(business_id: str, ctx: Dict[str, Any], home_html: str,
             logger.warning(f"[composer] offer page fell back for {business_id[:8]}: "
                            f"{((out or {}).get('report') or {}).get('fallbacks')}")
             return False
-        pages["offer"] = html
+        # ITS OWN EDIT KEYS (2026-10-01): builder pages number their editable
+        # elements by position (v2/f1, v2/f2 ...), so an offer page's v2/f4
+        # and the home page's v2/f4 are different words under one key. An
+        # Edit Mode change on the offer page would have rewritten the home
+        # page on the next refresh. The offer page answers to v2o/ keys.
+        base = namespace_offer_page(html)
+        _retire_offer_overrides(business_id)          # a new page, new words
+        pages["offer"] = _apply_page_overrides(base, business_id)
         cfg["generated_pages"] = pages
         cfg["offer_page"] = {"path": offer["path"], "name": offer.get("name") or "",
-                             "built_at": datetime.now(timezone.utc).isoformat()}
+                             "built_at": datetime.now(timezone.utc).isoformat(),
+                             "html_base": base}
         sb_clients.sb_patch_as_service(
             f"/business_sites?business_id=eq.{business_id}", {"site_config": cfg})
         logger.info(f"[composer] offer page saved at {offer['path']} for {business_id[:8]}")
@@ -6274,6 +6352,8 @@ def refresh_if_composed(business_id: str) -> bool:
         # pages, and they go just as stale.
         if _mp:
             rebuild_secondary_pages(business_id, ctx, _mp)
+        # the World offer page keeps its own edits current too
+        refresh_offer_page(business_id)
         return True
     return False
 
