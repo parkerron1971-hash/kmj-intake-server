@@ -150,3 +150,28 @@ def test_the_contact_sheet_renders_every_object_in_every_theme():
     for key in OBJECT_KEYS:
         assert html.count(f'data-sx-object="{key}"') >= len(so.CONTACT_THEMES), key
     assert html.count('class="cs-theme"') == len(so.CONTACT_THEMES)
+
+
+# ─── the library never trips the builder's own laws (2026-10-01 bench) ─
+# Found by the first zero-spend proof render: the ID card's lanyard hole
+# was classed "sxo-card-slot", which the stand-in law reads as a fake
+# photo frame, and the examples' serial numbers ("No. 0412") were 3+ digit
+# runs the truth law reads as invented claims.
+
+def test_no_example_trips_the_stand_in_law():
+    import builder_v2
+    for key, o in OBJECTS.items():
+        assert builder_v2.check_stand_ins(o.html) == [], key
+
+
+def test_decorative_numbers_stay_one_or_two_digits():
+    for key, o in OBJECTS.items():
+        for m in re.finditer(r"No\.\s*(\d+)", o.html):
+            assert len(m.group(1)) <= 2, f"{key}: serial {m.group(0)} reads as a claim"
+
+
+def test_an_id_card_grows_to_its_content():
+    css = OBJECTS["card-id"].css
+    assert ".sxo-card>*{flex-shrink:0}" in css
+    card_rule = css.split(".sxo-card{", 1)[1].split("}", 1)[0]
+    assert "overflow:hidden" not in card_rule, "a fixed card height squashes the portrait"

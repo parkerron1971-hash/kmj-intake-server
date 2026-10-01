@@ -178,26 +178,29 @@ _add(_o(
     intent="a punched ID card: photo, name, role, a number",
     use_when="the team, the students, the members, the graduates. One card per "
              "real person, photo when the data has one, initials when it does "
-             "not. Several cards sit in .sxo-card-row.",
+             "not. Several cards sit in .sxo-card-row. The card number is one "
+             "or two digits (the truth law reads longer numbers as claims).",
     aliases=("id card", "card-id", "member card", "student card", "staff card", "badge card", "id cards"),
     html="""<div class="sxo-card-row">
 <article class="sxo sxo-card sxo-paper" data-sx-object="card-id">
-  <span class="sxo-card-slot" aria-hidden="true"></span>
+  <span class="sxo-card-punch" aria-hidden="true"></span>
   <p class="sxo-card-kind sxo-label">Member · Spring cohort</p>
   <div class="sxo-card-photo"><span aria-hidden="true">JR</span></div>
   <h3 class="sxo-card-name">June Reyes</h3>
   <p class="sxo-card-role">Throws lidded jars</p>
-  <p class="sxo-card-no sxo-label">No. 0042</p>
+  <p class="sxo-card-no sxo-label">No. 42</p>
 </article>
 </div>""",
     css=""".sxo-card-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:clamp(1rem,2vw,1.5rem)}
 .sxo-card{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;gap:.35rem;
   padding:2.4rem 1.1rem 1.1rem;border-radius:14px;aspect-ratio:54/86;box-shadow:var(--_lift);
-  border:1px solid var(--_line);overflow:hidden}
-.sxo-card::before{content:"";position:absolute;left:0;right:0;top:0;height:30%;
+  border:1px solid var(--_line)}
+.sxo-card::before{content:"";position:absolute;left:0;right:0;top:0;height:30%;border-radius:13px 13px 0 0;
   background:color-mix(in srgb,var(--_accent) 88%,transparent);z-index:0}
+.sxo-card>*{flex-shrink:0}
+.sxo-card-row>.sxo-card{height:100%}
 .sxo-card>*{position:relative;z-index:1}
-.sxo-card-slot{position:absolute!important;top:12px;left:50%;width:46px;height:9px;transform:translateX(-50%);
+.sxo-card-punch{position:absolute!important;top:12px;left:50%;width:46px;height:9px;transform:translateX(-50%);
   border-radius:9px;background:color-mix(in srgb,var(--_ink) 55%,rgba(0,0,0,.6));box-shadow:inset 0 1px 2px rgba(0,0,0,.6)}
 .sxo-card-kind{color:var(--_paper);margin:0;font-size:11px}
 .sxo-card-photo{width:62%;aspect-ratio:1;border-radius:50%;overflow:hidden;display:grid;place-items:center;margin:.5rem 0 .4rem;
@@ -219,12 +222,14 @@ _add(_o(
     intent="a ticket with a serial number and a stub you tear off to book",
     use_when="services, classes, events and sessions with a price and a time. "
              "One ticket per real offering; the stub is the booking link when "
-             "booking is on. Several sit in .sxo-ticket-row.",
+             "booking is on. Several sit in .sxo-ticket-row. Serial numbers are "
+             "one or two digits (No. 07): the truth law reads longer numbers as "
+             "claims.",
     aliases=("ticket", "tickets", "ticket stub", "tear-off ticket", "take a number"),
     html="""<div class="sxo-ticket-row">
 <article class="sxo sxo-ticket sxo-paper" data-sx-object="ticket">
   <div class="sxo-ticket-main">
-    <p class="sxo-ticket-no sxo-label">No. 0412</p>
+    <p class="sxo-ticket-no sxo-label">No. 07</p>
     <h3 class="sxo-ticket-title">Intro to the wheel</h3>
     <p class="sxo-ticket-meta">3 hours · clay and firing included</p>
   </div>
