@@ -522,7 +522,8 @@ def attach_language(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Optio
             ctx["language_key"] = key
             ctx["language_because"] = because
             ctx["language_by"] = by
-            ctx["language_brief_text"] = dl.brief_for(key)
+            ctx["language_brief_text"] = dl.brief_for(key) + (
+                "\n" + dl.objects_line(key) if dl.objects_line(key) else "")
         return key
     except Exception as e:
         logger.info(f"[spec] language attach skipped: {e}")
