@@ -193,10 +193,12 @@ def compose_read(needs: List[Dict[str, Any]], parked: List[Dict[str, Any]]) -> D
                      f"{'is' if len(machines) == 1 else 'are'} the machines")
     headline = _join(parts) + "."
     first = (people or money or machines)[0]
-    body = f"Start with this: {first['title'].rstrip('.').lower()}."
+    # Titles keep their case: they carry business names ("Creative
+    # Genius's renewal…"), and lowercasing them read as a typo.
+    body = f"Start with this: {first['title'].rstrip('.')}."
     rest = [i for i in needs if i is not first]
     if rest:
-        body += f" After that, {rest[0]['title'].rstrip('.').lower()}."
+        body += f" After that: {rest[0]['title'].rstrip('.')}."
     if len(rest) > 1:
         body += f" {_word(len(rest) - 1)} more below."
     return {"headline": headline[0].upper() + headline[1:], "body": body}
