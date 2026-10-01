@@ -204,6 +204,12 @@ body::after{{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opa
 a{{color:var(--accent);}}
 .mp-shell{{position:relative;z-index:1;max-width:520px;margin:0 auto;padding:16px 20px 40px;}}
 .mp-shell.mb-has-nav{{padding-bottom:calc(112px + env(safe-area-inset-bottom,0px));}}
+.mb-preview{{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;display:flex;align-items:center;gap:10px;margin:-16px -20px 14px;
+  padding:10px 20px;background:var(--accent);color:var(--accent-text);font-size:13px;line-height:1.35;}}
+.mb-preview span{{flex:1;min-width:0;}}
+.mb-preview form{{margin:0;flex:none;}}
+.mb-preview button{{min-height:36px;padding:0 12px;border-radius:999px;border:1.5px solid currentColor;background:transparent;color:inherit;
+  font:inherit;font-weight:800;cursor:pointer;}}
 .mb-top{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;}}
 .mb-brand{{display:flex;align-items:center;gap:10px;min-width:0;}}
 .mb-mark{{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;font-weight:900;font-size:13px;
