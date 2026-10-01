@@ -72,6 +72,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           ISSUE: ${{ inputs.issue || github.event.issue.number }}
+          # Optional. Without it the evidence says Sentry was not available.
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           BACKEND: https://kmj-intake-server-production.up.railway.app
           APP: https://mysolutionist.app
         run: |
@@ -106,6 +108,8 @@ jobs:
             gh run list --status failure --limit 10 --json workflowName,headSha,createdAt \
               --template '{{range .}}{{.createdAt}} {{.workflowName}} {{.headSha}}{{"\n"}}{{end}}'
             echo "$fence"
+            echo
+            python3 scripts/oncall_sentry_evidence.py
           } > "$f"
           wc -c "$f"
 
@@ -132,7 +136,10 @@ jobs:
                gathered it moments before you started: production's /health/ready and
                /health (which reports `version`, the running commit), the app's status,
                the issue and its comments, other open alarms, recent commits and failed
-               runs. It is your first-hand view of production. You may also try
+               runs, and Sentry's unresolved errors from the last 24 hours with the latest
+               event's message, stack and breadcrumbs. It is your first-hand view of
+               production. Sentry's breadcrumbs usually carry the real status code and
+               database error; read them before naming a cause. You may also try
                `curl -s https://kmj-intake-server-production.up.railway.app/health/ready`
                yourself; if that is refused, the file is enough.
             2. If the issue says REHEARSAL, or the address it probed is not
@@ -148,16 +155,21 @@ jobs:
             5. Read the code paths behind whatever is failing (CLAUDE.md explains the layout;
                /health and /health/ready live in kmj_intake_automation.py).
 
-            Then post ONE comment on the issue with `gh issue comment`, written for a
-            non-engineer owner reading on a phone, under these headings:
+            Then post ONE comment on the issue, written for a non-engineer owner reading on a
+            phone. Post it ONLY with a quoted heredoc, so backticks and $ in the text are never
+            run by the shell:
+              gh issue comment <n> --body-file - <<'DIAGNOSIS'
+              ...your comment...
+              DIAGNOSIS
+            Use these headings:
             **What is failing** (one or two sentences, plain words),
             **Most likely cause** (with the evidence: a commit, a log line, a response body;
             say how sure you are),
             **What changed recently** (only the relevant commits),
             **First thing to check** (one concrete step for a person, e.g. a specific Railway
             screen or setting),
-            **What I could not see** (you have no Railway logs, no database access and no
-            Sentry yet; say what that leaves unknown).
+            **What I could not see** (you have no Railway logs and no database access, and
+            Sentry only if the evidence file shows it; say what that leaves unknown).
 
             Rules: never edit files, open branches or PRs, redeploy, roll back, or change any
             setting. If production is healthy again by the time you look, say so first and
