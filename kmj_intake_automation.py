@@ -345,6 +345,12 @@ app.include_router(kids_checkin_router)
 # Check-in stations: a PIN-locked tablet and a family self check-in kiosk.
 from kids_station import router as kids_station_router
 app.include_router(kids_station_router)
+# Live: the team runs a live service and moderates its chat (live_router);
+# members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
+from live_router import router as live_router
+app.include_router(live_router)
+from member_portal_live import router as member_portal_live_router
+app.include_router(member_portal_live_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
