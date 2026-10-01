@@ -33,6 +33,9 @@ TABS = (
      '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>'),
     ("sermons", "/my/sermons", "Sermons",
      '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>'),
+    ("live", "/my/live", "Live",
+     '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49'
+     'M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>'),
     ("groups", "/my/groups", "Groups",
      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>'
      '<path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
@@ -210,6 +213,43 @@ a{{color:var(--accent);}}
 .mb-preview form{{margin:0;flex:none;}}
 .mb-preview button{{min-height:36px;padding:0 12px;border-radius:999px;border:1.5px solid currentColor;background:transparent;color:inherit;
   font:inherit;font-weight:800;cursor:pointer;}}
+.mb-top-right{{display:flex;align-items:center;gap:8px;flex:none;}}
+.mb-give{{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 12px 0 10px;border-radius:999px;text-decoration:none;
+  background:var(--mb-soft);color:var(--accent);border:1px solid var(--mb-soft-line);font-size:13px;font-weight:800;}}
+.mb-live-badge{{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;background:#D93A3F;color:#fff;
+  font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;align-self:flex-start;}}
+.mb-live-dot{{width:8px;height:8px;border-radius:50%;background:#fff;flex:none;}}
+.mb-live-dot.mb-off{{background:var(--text-muted);width:10px;height:10px;margin-top:6px;}}
+@media (prefers-reduced-motion:no-preference){{.mb-live-badge .mb-live-dot{{animation:mbpulse 1.6s ease-in-out infinite;}}}}
+@keyframes mbpulse{{0%,100%{{opacity:1;}}50%{{opacity:.35;}}}}
+.mb-live-now{{flex-wrap:wrap;}}
+.mb-live-now .mb-what{{flex:1 1 160px;}}
+.mb-offair{{display:flex;gap:12px;align-items:flex-start;margin-top:4px;}}
+.mb-prayer-link{{display:flex;align-items:center;gap:12px;min-height:56px;margin-top:20px;padding:12px 14px;border-radius:14px;
+  border:1px dashed var(--border);color:var(--text-secondary);text-decoration:none;font-size:14px;}}
+.mb-prayer-link span{{flex:1;}}
+.mb-prayer-link .mb-ic:first-child{{color:var(--accent);}}
+.mb-live-head{{margin-top:14px;display:flex;flex-direction:column;}}
+.mb-live-actions{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px;align-items:center;}}
+.mb-live-actions form{{margin:0;}}
+.mb-live-actions .mb-chip{{justify-self:start;min-height:44px;padding:0 14px;font-size:13px;}}
+.mb-linkout{{display:grid;place-items:center;padding:20px;background:var(--mb-surface-2);}}
+.mb-linkout .mp-go{{width:auto;}}
+.mb-chat{{list-style:none;margin:0;padding:12px;max-height:46vh;min-height:160px;overflow-y:auto;border-radius:16px;
+  background:var(--mb-surface);border:1px solid var(--mb-line);display:flex;flex-direction:column;gap:8px;}}
+.mb-msg{{max-width:85%;align-self:flex-start;display:flex;flex-direction:column;gap:2px;padding:8px 12px;border-radius:14px 14px 14px 4px;
+  background:var(--mb-surface-2);}}
+.mb-msg.mb-mine{{align-self:flex-end;border-radius:14px 14px 4px 14px;background:var(--accent);color:var(--accent-text);}}
+.mb-msg.mb-host{{background:var(--mb-soft);border:1px solid var(--mb-soft-line);}}
+.mb-msg-who{{font-size:11.5px;font-weight:800;color:var(--text-secondary);}}
+.mb-host .mb-msg-who{{color:var(--accent);}}
+.mb-msg-body{{font-size:14.5px;line-height:1.4;overflow-wrap:anywhere;}}
+.mb-chat-empty{{align-self:center;margin:auto 0;font-size:13px;}}
+.mb-compose{{display:flex;gap:8px;margin-top:10px;}}
+.mb-compose .mp-input{{flex:1;min-width:0;border-radius:999px;padding:0 16px;}}
+.mb-compose .mp-go{{width:48px;flex:none;padding:0;border-radius:50%;}}
+.mb-chat-note{{margin:10px 2px 0;font-size:13px;}}
+.mb-chat-err{{margin:8px 2px 0;}}
 .mb-top{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;}}
 .mb-brand{{display:flex;align-items:center;gap:10px;min-width:0;}}
 .mb-mark{{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;font-weight:900;font-size:13px;
@@ -307,7 +347,7 @@ label{{font-size:14px;font-weight:600;}}
 .mb-msg-title{{font-family:var(--font-heading);font-size:18px;font-weight:800;margin:12px 0 3px;line-height:1.2;}}
 .mb-msg-title a{{color:inherit;text-decoration:none;}}
 .mb-meta{{font-size:13px;color:var(--text-secondary);margin:0;}}
-.mb-week{{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;margin:0 -20px;padding:0 20px 4px;scrollbar-width:none;}}
+.mb-week{{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-inline:20px;margin:0 -20px;padding:0 20px 4px;scrollbar-width:none;}}
 .mb-week::-webkit-scrollbar{{display:none;}}
 .mb-wk{{flex:none;width:156px;scroll-snap-align:start;border-radius:16px;padding:12px;background:var(--mb-surface);border:1px solid var(--mb-line);
   display:flex;flex-direction:column;gap:6px;text-decoration:none;color:var(--text-primary);}}
@@ -350,10 +390,10 @@ details.mb-each summary{{cursor:pointer;min-height:44px;display:flex;align-items
   list-style:none;margin-top:6px;}}
 details.mb-each summary::-webkit-details-marker{{display:none;}}
 .mb-nav{{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--mb-nav);backdrop-filter:blur(12px);border-top:1px solid var(--mb-line);
-  padding:8px 10px calc(10px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:repeat(4,minmax(0,1fr));}}
+  padding:8px 10px calc(10px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:repeat(5,minmax(0,1fr));}}
 .mb-tab{{min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-decoration:none;
   color:var(--text-muted);font-size:11px;font-weight:600;}}
-.mb-pill{{width:54px;height:30px;border-radius:999px;display:grid;place-items:center;}}
+.mb-pill{{width:50px;height:30px;border-radius:999px;display:grid;place-items:center;}}
 .mb-tab[aria-current]{{color:var(--text-primary);font-weight:800;}}
 .mb-tab[aria-current] .mb-pill{{background:var(--mb-soft);color:var(--accent);}}
 @media (min-width:600px){{.mb-nav{{max-width:520px;margin:0 auto;border-left:1px solid var(--mb-line);border-right:1px solid var(--mb-line);

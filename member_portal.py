@@ -522,6 +522,10 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me">{_e(ui.initials(who.get("name")))}</a>'
               if who else "")
     signed_in = tab is not None
+    # Giving is one tap from every screen (Kevin, 2026-09-30).
+    from giving_router import giving_is_active
+    give = (f'<a class="mb-give mp-noprint" href="/give" aria-label="Give">{ui.icon("heart", 18)}<span>Give</span></a>'
+            if signed_in and giving_is_active(biz) else "")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -536,7 +540,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 </head>
 <body>
 <main class="mp-shell{' mb-has-nav' if signed_in else ''}">
-  <header class="mb-top"><span class="mb-brand"><span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p></span>{avatar}</header>
+  <header class="mb-top"><span class="mb-brand"><span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p></span><span class="mb-top-right">{give}{avatar}</span></header>
   {body}
   <footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>
 </main>
@@ -614,13 +618,22 @@ anyone who reads it can see each of these people's giving. Choose yourself.</p>
 <div class="mp-row">{buttons}</div>""")
 
 
+def _live_card(live: Dict[str, Any]) -> str:
+    """While the church is live: the one thing Home leads with."""
+    import member_app_ui as ui
+    return (f'<a class="mb-next mb-live-now" href="/my/live"><span class="mb-live-badge"><span class="mb-live-dot" '
+            f'aria-hidden="true"></span>Live now</span><span class="mb-what"><strong>{_e(live.get("title"))}</strong>'
+            f'<span>Watch and chat with your church</span></span>{ui.icon("chevron", 18)}</a>')
+
+
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
-                give_url: str, flash: str = "") -> str:
-    """Home: a greeting with the date, the next gathering, four quick ways
-    in (Give is the one filled button), the latest message, this person's
-    week, then what they haven't answered yet. The greeting and date are
-    set by the phone's own clock (the server can't know the member's
-    time of day); without script it reads "Hi, Ana"."""
+                give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None) -> str:
+    """Home: a greeting with the date, the next gathering (or, while the
+    church is live, a Live now card), four quick ways in (Give is the one
+    filled button), the latest message, this person's week, then what
+    they haven't answered yet. The greeting and date are set by the
+    phone's own clock (the server can't know the member's time of day);
+    without script it reads "Hi, Ana"."""
     import member_app_ui as ui
     import member_portal_church as mpc
     import member_portal_sermons as mps
@@ -641,7 +654,7 @@ var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+'
 <p class="mb-date" aria-hidden="true"></p>
 <h1 class="mb-hello" data-first="{_e(hello)}">Hi, {_e(hello)}</h1>
 {flash}
-{mpc.next_card(occasions)}
+{_live_card(live) if live else mpc.next_card(occasions)}
 <nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
 {mps.latest_card(library, pal)}
 {mpc.week_cards(occasions, groups)}
@@ -853,6 +866,31 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mpc.render_details(biz, site, request, full))
     from giving_router import giving_is_active
     give_url = "/give" if giving_is_active(biz) else ""
+    # Live, inside the app (member_portal_live.py).
+    if sub in ("/my/live", "/my/live/feed"):
+        import live_router as lr
+        import member_portal_live as mpl
+        from fastapi.responses import JSONResponse
+        if sub == "/my/live/feed":
+            try:
+                v = int(request.query_params.get("v") or -1)
+            except ValueError:
+                v = -1
+            data = await asyncio.to_thread(mpl.feed, biz["id"], me, v)
+            return JSONResponse(data, status_code=503 if data.get("error") else 200, headers=_SECURE_HEADERS)
+        cur = await asyncio.to_thread(lr.current, biz["id"])
+        if cur:
+            msgs, here_me, muted_me = await asyncio.gather(
+                asyncio.to_thread(lr.messages, biz["id"], cur["id"], False, mpl.FEED_LIMIT),
+                asyncio.to_thread(mpl.i_am_here, biz["id"], cur["id"], me["id"]),
+                asyncio.to_thread(mpl.is_muted, biz["id"], cur["id"], me["id"]))
+            return _page(mpl.render_live(biz, site, request, me, cur, msgs=msgs, here_me=here_me, muted_me=muted_me))
+        occ, lib = (None, None)
+        if cur == {}:
+            occ, lib = await asyncio.gather(asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
+                                            asyncio.to_thread(mps.load_library, biz["id"]))
+        return _page(mpl.render_live(biz, site, request, me, cur, occasions=occ, library=lib),
+                     503 if cur is None else 200)
     # Sermons, inside the app (member_portal_sermons.py).
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
         lib = await asyncio.to_thread(mps.load_library, biz["id"])
@@ -875,12 +913,14 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                                give_url=give_url, this_year=this_year, flash=mpc._flash(request)))
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
-    occ, groups, lib = await asyncio.gather(
+    import live_router as lr
+    occ, groups, lib, live = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mpc.groups_for, biz["id"], me),
-        asyncio.to_thread(mps.load_library, biz["id"]))
+        asyncio.to_thread(mps.load_library, biz["id"]),
+        asyncio.to_thread(lr.current, biz["id"]))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
-                             give_url=give_url, flash=mpc._flash(request)))
+                             give_url=give_url, flash=mpc._flash(request), live=live))
 
 
 # ─── POST ────────────────────────────────────────────────────────────
