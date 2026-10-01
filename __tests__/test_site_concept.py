@@ -173,7 +173,7 @@ def _rows():
 def test_recent_concepts_read_other_businesses_ideas(monkeypatch):
     import sb_clients
     seen = {}
-    monkeypatch.setattr(sc, "_recent_cache", {"at": 0.0, "rows": []})
+    monkeypatch.setattr(sc, "_recent_cache", {"at": None, "rows": []})
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
                         lambda path: seen.setdefault("path", path) and _rows())
     got = sc.recent_concepts("me")
@@ -188,7 +188,7 @@ def test_recent_concepts_read_other_businesses_ideas(monkeypatch):
 def test_recent_concepts_are_cached(monkeypatch):
     import sb_clients
     calls = []
-    monkeypatch.setattr(sc, "_recent_cache", {"at": 0.0, "rows": []})
+    monkeypatch.setattr(sc, "_recent_cache", {"at": None, "rows": []})
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: calls.append(path) or _rows())
     sc.recent_concepts("me")
     sc.recent_concepts("me")
@@ -214,3 +214,15 @@ def test_decorative_numbers_are_taught_to_stay_short():
     assert "Decorative numbers" in sc.DIRECTOR_LAW and "one or two digits" in sc.DIRECTOR_LAW
     block = sc.brief_block({"intensity": "signature", "scope": "site", "by": "default"})
     assert "((" not in block and "))" not in block
+
+
+def test_a_fresh_container_still_loads_recent_concepts(monkeypatch):
+    """On a machine booted under ten minutes ago the monotonic clock reads
+    below the cache TTL; 'never loaded' must still load."""
+    import sb_clients
+    import time
+    calls = []
+    monkeypatch.setattr(sc, "_recent_cache", {"at": None, "rows": []})
+    monkeypatch.setattr(time, "monotonic", lambda: 42.0)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: calls.append(path) or _rows())
+    assert sc.recent_concepts("me") and len(calls) == 1

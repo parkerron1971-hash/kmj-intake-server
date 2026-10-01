@@ -214,13 +214,15 @@ def vocabulary_pairs(sheet: Dict[str, str]) -> List[Tuple[str, str]]:
 
 RECENT_LIMIT = 12
 _RECENT_TTL_S = 600
-_recent_cache: Dict[str, Any] = {"at": 0.0, "rows": []}
+_recent_cache: Dict[str, Any] = {"at": None, "rows": []}   # None: never loaded
 
 
 def recent_concepts(exclude_business: str = "", limit: int = RECENT_LIMIT) -> List[Dict[str, str]]:
     import time
     now = time.monotonic()
-    if now - _recent_cache["at"] > _RECENT_TTL_S:
+    # "never loaded" is its own state: a freshly booted container's
+    # monotonic clock can read under the TTL, which made 0.0 look fresh.
+    if _recent_cache["at"] is None or now - _recent_cache["at"] > _RECENT_TTL_S:
         rows: List[Dict[str, Any]] = []
         try:
             import sb_clients
