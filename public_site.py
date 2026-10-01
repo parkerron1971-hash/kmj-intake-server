@@ -7426,7 +7426,11 @@ async def public_start(request: Request):
     # startswith "founder") and enforces the seat cap.
     if plan in ("starter", "professional", "practice", "founder"):
         carried["plan"] = plan
-    url = MARKETING_APP_URL + (f"/?{urlencode(carried)}" if carried else "/")
+    # Everyone who reaches /start pressed a "start" button, so the app opens on
+    # Create account. Without this it opened on "Welcome back / Sign in" and the
+    # 21 people who clicked Start in September all stopped there (2026-10-01).
+    carried["signup"] = "1"
+    url = MARKETING_APP_URL + f"/?{urlencode(carried)}"
     return RedirectResponse(url=url, status_code=302)
 
 
