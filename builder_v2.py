@@ -232,7 +232,7 @@ _SYSTEM = _SYSTEM + "\n\n== TWO HARD RULES ON WHAT THE PAGE DOES WITHOUT HELP ==
 
 def build_user_prompt(spec_text: str, real_data: str,
                       violations: Optional[List[str]] = None,
-                      prior_doc: str = "") -> str:
+                      prior_doc: str = "", page_brief: str = "") -> str:
     """Pure prompt assembly (testable). With violations + prior_doc it
     becomes the ONE surgical repair prompt (Amendment 1: minimal edits,
     never a fresh re-roll)."""
@@ -260,6 +260,8 @@ def build_user_prompt(spec_text: str, real_data: str,
         spec_text.strip(),
         "",
     ]
+    if page_brief.strip():
+        parts += [page_brief.strip(), ""]
     primitives = _dm.primitives_block(_dm.move_names_in(spec_text))
     if primitives:
         parts += [primitives, ""]
@@ -371,6 +373,15 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
     block = connected_systems_block(business_id, ctx)
     if block:
         parts.append(block)
+    # THE OFFER PAGE (2026-10-01): a World concept scoped to one offer is
+    # built as its own page; the home page links to it.
+    offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
+    if offer.get("path"):
+        try:
+            import site_pages
+            parts.append(site_pages.offer_line(offer["path"], offer.get("name") or ""))
+        except Exception as e:
+            logger.info(f"[v2] offer line skipped: {e}")
     # ONE SET OF FACTS (2026-08-29): the same block the Director read, so
     # a founding year the Blueprint states is traceable here and the
     # truth law never deletes a true sentence again.
@@ -775,9 +786,14 @@ def check_tenure(html: str, real_data: str) -> List[str]:
     return site_facts.tenure_claims(_visible_text(html), facts)
 
 
-def check_coverage(html: str, real_data: str) -> List[str]:
+def check_coverage(html: str, real_data: str, page: str = "home") -> List[str]:
+    """page="offer" (2026-10-01): the offer page carries the offer, not the
+    whole inventory, so every-image and the contact form are home-page
+    laws; navigation and a footer are every page's."""
     problems: List[str] = []
     for m in re.finditer(r"^- (https://\S+)", real_data, re.MULTILINE):
+        if page != "home":
+            break
         url = m.group(1)
         if url not in html:
             problems.append(f"required image missing: {url}")
@@ -785,9 +801,9 @@ def check_coverage(html: str, real_data: str) -> List[str]:
                      re.IGNORECASE):
         problems.append("no <nav> — a fixed navigation is required")
     endpoint = re.search(r"CONTACT FORM ENDPOINT[^\n]*:\s*(\S+)", real_data)
-    if endpoint and endpoint.group(1) not in html:
+    if page == "home" and endpoint and endpoint.group(1) not in html:
         problems.append(f"contact form must post to {endpoint.group(1)}")
-    if not re.search(r"<form\b", html, re.IGNORECASE):
+    if page == "home" and not re.search(r"<form\b", html, re.IGNORECASE):
         problems.append("no <form> — the working inquiry form is required")
     if not re.search(r"<footer\b", html, re.IGNORECASE):
         problems.append("no <footer>")
@@ -1305,8 +1321,49 @@ def _craft():
         return _Off
 
 
+def house_style(home_html: str) -> str:
+    """What an offer page must wear exactly: the home page's styles, font
+    links, header and footer (capped so the brief stays sane)."""
+    h = home_html or ""
+    styles = "\n".join(re.findall(r"<style\b[^>]*>(.*?)</style>", h,
+                                   re.DOTALL | re.IGNORECASE))[:60000]
+    fonts = "\n".join(re.findall(r"<link\b[^>]*fonts\.googleapis\.com[^>]*>", h,
+                                  re.IGNORECASE))[:2000]
+    header = (re.search(r"<header\b.*?</header>", h, re.DOTALL | re.IGNORECASE)
+              or re.search(r"<nav\b.*?</nav>", h, re.DOTALL | re.IGNORECASE))
+    footer = re.search(r"<footer\b.*?</footer>", h, re.DOTALL | re.IGNORECASE)
+    return "\n".join([
+        "FONT LINKS:", fonts,
+        "STYLES (reuse these rules and class names; add rules only for this page's own sections):",
+        styles,
+        "HEADER (reuse it, pointing its links at the home page's sections with /#id):",
+        header.group(0)[:8000] if header else "(none)",
+        "FOOTER (reuse it):",
+        footer.group(0)[:6000] if footer else "(none)",
+    ])
+
+
+def offer_page_brief(path: str, name: str, house: str) -> str:
+    return "\n".join([
+        "== THIS CALL BUILDS THE OFFER PAGE, NOT THE HOME PAGE ==",
+        f"Build ONE complete page: the offer page{(' for ' + name) if name else ''} "
+        f"that the blueprint's section 6 describes, served at {path}. It runs the "
+        "section 0 concept at WORLD intensity: its vocabulary, its objects, its "
+        "living detail. The home page (section 3) is already built; do not rebuild "
+        "it. Link back to it (href=\"/\") from the header.",
+        "Wear the house style below EXACTLY: the same :root tokens, the same fonts, "
+        "the same header and footer, so a visitor never feels they left the site.",
+        "The every-image law is the home page's: show only the images this offer "
+        "needs. The one action (book, enroll, ask) is a real link or the contact form.",
+        "",
+        "== THE HOUSE STYLE (from the home page already built) ==",
+        house,
+    ])
+
+
 def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
-                   progress_cb=None) -> Dict[str, Any]:
+                   progress_cb=None, page: str = "home",
+                   house: str = "") -> Dict[str, Any]:
     """ONE call → armor → (one scoped repair) → document or None.
     None = the old path takes over (and still wears the spec's tokens
     via the bridge). The report always returns — loud failures."""
@@ -1325,6 +1382,14 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
 
     real_data = assemble_real_data(ctx, business_id)
     sheet = _concept_sheet(spec_text)
+    offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
+    page_brief = ""
+    if page == "offer":
+        report["page"] = "offer"
+        page_brief = offer_page_brief(offer.get("path") or "/offer",
+                                      offer.get("name") or "", house)
+        # the offer page IS the World page: hold it to the world rules
+        sheet = dict(sheet, scope="site", intensity="world") if sheet else sheet
     report["concept"] = {k: sheet.get(k) for k in ("intensity", "scope", "idea", "objects")
                          if sheet.get(k)}
     _progress(48, "One mind builds the whole page")
@@ -1336,7 +1401,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     doc: Optional[str] = None
     try:
         import builder_loop
-        if builder_loop.enabled():
+        if builder_loop.enabled() and page == "home":
             _progress(48, "The builder looks, renders, corrects")
             looped = builder_loop.run_loop(spec_text, ctx, business_id, spend,
                                            progress_cb=_progress)
@@ -1352,8 +1417,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         report["fallbacks"].append({"stage": "loop",
                                     "detail": f"{type(e).__name__}: {e}"})
     if not doc:
-        raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data), business_id,
-                    spend=spend)
+        raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data,
+                                               page_brief=page_brief),
+                    business_id, spend=spend)
         doc = _parse_doc(raw or "")
     if not doc:
         report["fallbacks"].append({"stage": "author",
@@ -1378,15 +1444,22 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         # never the fallback: visible stand-ins (11c), the craft floor
         # (one h1, alt text, type families, likely typos) and the page
         # held to its concept sheet (objects, the plain-word rule).
-        return (check_stand_ins(d) + _craft().check_html(d, real_data)
-                + _concept_findings(d, sheet))
+        out = (check_stand_ins(d) + _craft().check_html(d, real_data)
+               + _concept_findings(d, sheet))
+        if page == "home" and offer.get("path"):
+            try:
+                import site_pages
+                out += site_pages.check_offer_link(d, offer["path"])
+            except Exception:
+                pass
+        return out
 
     def _laws(d: str) -> List[str]:
         # armor_violations reads the drops _mechanical just recorded for
         # this same doc — a dropped script must fail the law gate loudly
         # (silently shipping it is the 2026-07-25 blank-sections bug).
         return (check_truth(d, real_data) + check_tenure(d, real_data)
-                + check_coverage(d, real_data)
+                + check_coverage(d, real_data, page=page)
                 + check_grammar(d) + check_head(d) + check_interactions(d)
                 + check_connected(d, real_data)
                 + armor_violations(
