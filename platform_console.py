@@ -1492,14 +1492,11 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    snap["blind_spots"] = [
-        "Backend errors / Railway log stream (no aggregator wired)",
-        "Frontend client errors (no error reporter)",
-        "Per-business storage usage (no snapshot job)",
-        "Meta token expiry alerts (data exists, no alerting)",
-        "Resend bounce / spam complaints (no webhook handler)",
-        "Per-agent AI call breakdown (only ai_proxy + chief_of_staff are instrumented)",
-    ]
+    # Derived, not hand-kept: the old literal list went stale the week
+    # Sentry landed and kept telling Chief there was no error reporter.
+    from platform_today import coverage as _coverage
+    snap["blind_spots"] = [c["label"] for c in _coverage() if not c["covered"]]
+    snap["coverage"] = _coverage()
     return snap
 
 
