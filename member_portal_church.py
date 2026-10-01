@@ -54,6 +54,7 @@ DONE = {
     "details": "Your details are saved.",
     "joined": "You're in. The group's leader will see you on the list.",
     "left": "You've left that group.",
+    "here": "Thanks for joining us. You're counted as here today.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -70,6 +71,13 @@ ERRORS = {
     "group_gone": "That group isn't running any more.",
     "leader": "You lead this group, so to step down, talk to the church office.",
     "preview": "This is a preview, so nothing is saved.",
+    "not_live": "The service isn't live right now.",
+    "chat_closed": "The chat is closed right now.",
+    "muted": "The host has paused your chat for this service.",
+    "link": "Links can't be shared in the chat.",
+    "empty_chat": "Write a message first.",
+    "slow_chat": "That's a lot of messages at once. Wait a moment, then try again.",
+    "signed_out": "Your sign-in ended. Open the page again to sign back in.",
 }
 
 
@@ -695,7 +703,7 @@ async def _signed_in(request: Request):
 
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if target not in ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups"):
+    if target not in ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live"):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)

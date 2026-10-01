@@ -160,6 +160,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # the groups — all before contacts.
     "group_meeting_attendance", "group_meetings", "group_members", "groups",
     "sermons", "sermon_series",   # sermons before the series they point at
+    # Live: chat, pauses and presence before their session; all before
+    # contacts and module_entries.
+    "live_chat", "live_mutes", "live_presence", "live_sessions",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -619,6 +622,9 @@ _IMPORT_SKIP = {
     "groups", "group_members", "group_meetings", "group_meeting_attendance",
     # Sermons cite their series by id; same reason.
     "sermon_series", "sermons",
+    # Live sessions, chat and presence cite contacts and occasions by id;
+    # same reason.
+    "live_sessions", "live_chat", "live_mutes", "live_presence",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
