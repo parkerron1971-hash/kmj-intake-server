@@ -184,6 +184,7 @@ def parse_sheet(spec_text: str) -> Dict[str, str]:
             out[key] = lm.group(2).strip()
     raw = out.get("intensity", "").lower()
     out["intensity"] = next((i for i in INTENSITIES if i in raw), "")
+    out["scope_raw"] = out.get("scope", "")
     scope = out.get("scope", "").lower()
     out["scope"] = "offer" if scope.startswith("offer") or " offer" in scope else (
         "site" if scope else "")

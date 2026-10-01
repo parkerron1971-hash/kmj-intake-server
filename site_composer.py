@@ -4107,6 +4107,19 @@ def compose_site(business_id: str, brief_notes: str = "",
     # joins at the same seam the canvas uses; on any failure the ladder
     # continues below (canvas → modules), wearing the spec's tokens via
     # the bridge either way.
+    # THE OFFER PAGE (2026-10-01, Kevin: World lives on one offer page by
+    # default). Named before the home is built, so the home links to it.
+    if use_llm and _has_spec:
+        try:
+            import site_concept as _sconcept
+            import site_pages as _spages
+            _sheet = _sconcept.parse_sheet(ctx.get("design_spec_text") or "")
+            if _sheet.get("intensity") == "world" and _sheet.get("scope") == "offer" \
+                    and _offer_pages_enabled():
+                ctx["offer_page"] = {"path": _spages.offer_path(_sheet),
+                                     "name": _spages.offer_name(_sheet)}
+        except Exception as _oe:
+            logger.info(f"[composer] offer page not planned: {_oe}")
     if use_llm and _has_spec and canvas_html is None:
         try:
             import builder_v2 as _bv2
@@ -4319,6 +4332,12 @@ def compose_site(business_id: str, brief_notes: str = "",
     # persist generated_pages. Best-effort — a failure never blocks the home.
     if _mp_slug:
         rebuild_secondary_pages(business_id, ctx, _mp_slug)
+
+    # THE OFFER PAGE: built after the home is live (it never delays it),
+    # wearing the home's house style. A spec with no offer scope clears a
+    # page an earlier build made. Best-effort.
+    if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
+        build_offer_page(business_id, ctx, canvas_html, progress_cb=progress_cb)
 
     # Arc 19 weight-hole fix (2026-07-30): THE one billable row for this
     # build — the per-call authoring rows above it are priced 0, so one
@@ -6070,6 +6089,56 @@ def choose_direction(body: ChooseDirectionBody,
 
 # ─── Arc 28b — live refresh on catalog change ─────────────────────────
 
+def _offer_pages_enabled() -> bool:
+    return (os.environ.get("SITE_OFFER_PAGE") or "on").strip().lower() not in (
+        "off", "0", "false", "no")
+
+
+def build_offer_page(business_id: str, ctx: Dict[str, Any], home_html: str,
+                     progress_cb=None) -> bool:
+    """One more builder_v2 run for the World concept's offer page, saved as
+    generated_pages["offer"] with site_config.offer_page {path, name}.
+    No offer planned: an offer page an earlier build left is removed, so a
+    practitioner who moves off World never keeps a stale page. Never
+    raises; returns True when a page was saved."""
+    from datetime import datetime, timezone
+    offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=site_config&order=updated_at.desc&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else {}) or {}
+        pages = dict(cfg.get("generated_pages") or {})
+        if not offer.get("path"):
+            if pages.pop("offer", None) is not None or cfg.get("offer_page"):
+                cfg["generated_pages"] = pages
+                cfg.pop("offer_page", None)
+                sb_clients.sb_patch_as_service(
+                    f"/business_sites?business_id=eq.{business_id}",
+                    {"site_config": cfg})
+            return False
+        import builder_v2 as _bv2
+        _report_progress(progress_cb, 92, "Building your offer page")
+        out = _bv2.run_builder_v2(ctx.get("design_spec_text") or "", ctx, business_id,
+                                  page="offer", house=_bv2.house_style(home_html))
+        html = (out or {}).get("html")
+        if not html:
+            logger.warning(f"[composer] offer page fell back for {business_id[:8]}: "
+                           f"{((out or {}).get('report') or {}).get('fallbacks')}")
+            return False
+        pages["offer"] = html
+        cfg["generated_pages"] = pages
+        cfg["offer_page"] = {"path": offer["path"], "name": offer.get("name") or "",
+                             "built_at": datetime.now(timezone.utc).isoformat()}
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{business_id}", {"site_config": cfg})
+        logger.info(f"[composer] offer page saved at {offer['path']} for {business_id[:8]}")
+        return True
+    except Exception as e:
+        logger.warning(f"[composer] offer page skipped (non-fatal): {e}")
+        return False
+
+
 def rebuild_secondary_pages(business_id: str, ctx: Dict[str, Any],
                             slug: str) -> int:
     """Render About / Services / Contact and persist generated_pages.
@@ -6092,13 +6161,28 @@ def rebuild_secondary_pages(business_id: str, ctx: Dict[str, Any],
     try:
         import site_multipage
         title = (ctx.get("business") or {}).get("name") or "Welcome"
-        pages = site_multipage.build_secondary_pages(ctx, slug, title)
-        if not pages:
-            return 0
         rows = sb_clients.sb_get_as_service(
             f"/business_sites?business_id=eq.{business_id}"
-            f"&select=site_config&order=updated_at.desc&limit=1") or []
+            f"&select=site_config,html_content&order=updated_at.desc&limit=1") or []
         cfg = (rows[0].get("site_config") if rows else {}) or {}
+        home = str((rows[0].get("html_content") if rows else "") or "")
+        # PAGES THAT MATCH (2026-10-01): a builder home page gives up its own
+        # sections to About / Services / Contact, so the pages share its
+        # design and words instead of module templates with fixed copy.
+        pages: Dict[str, str] = {}
+        try:
+            import site_pages
+            if site_pages.is_builder_page(home):
+                pages = site_pages.slice_pages(home, title)
+        except Exception as _se:
+            logger.info(f"[composer] page cut skipped: {_se}")
+        if not pages:
+            pages = site_multipage.build_secondary_pages(ctx, slug, title)
+        if not pages:
+            return 0
+        _old = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
+        if _old.get("offer"):
+            pages["offer"] = _old["offer"]          # the offer page is its own build
         cfg["generated_pages"] = pages
         cfg["site_pages"] = ["home"] + list(site_multipage.SECONDARY_PAGES)
         sb_clients.sb_patch_as_service(
