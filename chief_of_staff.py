@@ -4436,10 +4436,15 @@ async def handle_update_contact_status(client, biz, action) -> Dict:
             "nav": _nav("operate", "contacts", contact["id"]),
         }
 
-    await _sb(client, "PATCH", f"/contacts?id=eq.{contact['id']}",
-              {"status": new_status})
+    updated = await _sb(client, "PATCH",
+                        f"/contacts?id=eq.{contact['id']}&business_id=eq.{biz['id']}",
+                        {"status": new_status})
+    if not (isinstance(updated, list) and any(
+            isinstance(row, dict) and str(row.get("id")) == str(contact["id"])
+            and row.get("status") == new_status for row in updated)):
+        return _fail("update_contact_status", "Contact status change could not be confirmed")
 
-    # Emit event so contact-linked modules can pick it up
+    # Emit event only after the write returned the confirmed contact state.
     await _sb(client, "POST", "/events", {
         "business_id": biz["id"],
         "contact_id": contact["id"],
