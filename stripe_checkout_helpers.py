@@ -61,6 +61,10 @@ def _checkout_session_form(
     shipping_countries: Optional[List[str]] = None,
     extra_metadata: Optional[Dict[str, Any]] = None,
     setup_future_usage: Optional[str] = None,
+    allow_promotion_codes: bool = False,
+    tax_rate_id: Optional[str] = None,
+    shipping_amount_cents: Optional[int] = None,
+    shipping_label: str = "Shipping",
 ) -> Dict[str, Any]:
     """The Checkout-Session form. Pure so tests can pin the metadata +
     line-item contract without touching Stripe (same reason
@@ -92,6 +96,17 @@ def _checkout_session_form(
         "success_url": success_url,
         "cancel_url": cancel_url,
     }
+    if allow_promotion_codes:
+        form["allow_promotion_codes"] = "true"
+        form["metadata[discount_checkout_v1]"] = "true"
+        form["payment_intent_data[metadata][discount_checkout_v1]"] = "true"
+    if shipping_amount_cents is not None:
+        if shipping_amount_cents < 0:
+            raise ValueError("shipping must not be negative")
+        form["shipping_options[0][shipping_rate_data][type]"] = "fixed_amount"
+        form["shipping_options[0][shipping_rate_data][fixed_amount][amount]"] = shipping_amount_cents
+        form["shipping_options[0][shipping_rate_data][fixed_amount][currency]"] = currency
+        form["shipping_options[0][shipping_rate_data][display_name]"] = shipping_label
     # Extras first so the closed-enum routing keys below always win.
     for k, v in (extra_metadata or {}).items():
         if v is None:
@@ -132,6 +147,8 @@ def _checkout_session_form(
         quantity = int(item.get("quantity") or 1)
         if amount_cents <= 0 or quantity <= 0:
             raise ValueError(f"line_items[{i}] needs positive amount + quantity")
+        if tax_rate_id:
+            form[f"line_items[{i}][tax_rates][0]"] = tax_rate_id
         form[f"line_items[{i}][quantity]"] = quantity
         form[f"line_items[{i}][price_data][currency]"] = currency
         form[f"line_items[{i}][price_data][product_data][name]"] = name
@@ -154,6 +171,10 @@ async def create_checkout_session(
     shipping_countries: Optional[List[str]] = None,
     extra_metadata: Optional[Dict[str, Any]] = None,
     setup_future_usage: Optional[str] = None,
+    allow_promotion_codes: bool = False,
+    tax_rate_id: Optional[str] = None,
+    shipping_amount_cents: Optional[int] = None,
+    shipping_label: str = "Shipping",
 ) -> Dict[str, Any]:
     """Create a Stripe Checkout Session on the connected account.
 
@@ -189,6 +210,10 @@ async def create_checkout_session(
         shipping_countries=shipping_countries,
         extra_metadata=extra_metadata,
         setup_future_usage=setup_future_usage,
+        allow_promotion_codes=allow_promotion_codes,
+        tax_rate_id=tax_rate_id,
+        shipping_amount_cents=shipping_amount_cents,
+        shipping_label=shipping_label,
     )
 
     require_stripe_write(stripe_account_id)
@@ -302,6 +327,9 @@ async def create_booking_checkout(
         customer_email=customer_email,
         extra_metadata=parts["extra_metadata"],
         setup_future_usage=parts["setup_future_usage"],
+        # Deposits and tips keep their disclosed amounts. Full service payments
+        # can redeem a code on Stripe; donations and no-show fees never can.
+        allow_promotion_codes=not deposit_cents and not tip_cents,
     )
 
 
