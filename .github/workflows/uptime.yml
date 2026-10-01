@@ -64,6 +64,18 @@ jobs:
           fail=""
           detail=""
 
+          # Say WHAT was probed, and say it loudly when it was not
+          # production. The first rehearsal (#1134) proved why: the issue
+          # only said "returned 000", so on-call could not tell a test
+          # against a fake host from an outage, and diagnosed a deploy
+          # restart that never happened.
+          if [ "$BACKEND" != "https://kmj-intake-server-production.up.railway.app" ] \
+             || [ "$APP" != "https://mysolutionist.app" ]; then
+            echo "rehearsal=yes" >> "$GITHUB_OUTPUT"
+            detail="**REHEARSAL:** a person ran this check by hand against an override address. It is a test of the alarm, not a production outage."$'\n'
+          fi
+          detail="${detail}- probed backend ${BACKEND} and app ${APP}"$'\n'
+
           # ── backend readiness: reaches Supabase, reports the scheduler ──
           # --max-time, not just a status check: a hung request that never
           # returns is an outage too, and without a timeout this step
@@ -146,6 +158,7 @@ jobs:
           # it directly, and keeps the job checkout-free.
           GH_REPO: ${{ github.repository }}
           DETAIL: ${{ steps.probe.outputs.detail }}
+          REHEARSAL: ${{ steps.probe.outputs.rehearsal }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # The label has to exist before --label will accept it. A
@@ -168,8 +181,12 @@ jobs:
 
           [run]($RUN)"
           else
+            title="Uptime: production is not answering"
+            if [ "$REHEARSAL" = "yes" ]; then
+              title="Uptime rehearsal: the alarm was tested by hand"
+            fi
             url=$(gh issue create --label uptime \
-              --title "Uptime: production is not answering" \
+              --title "$title" \
               --body "An external probe could not confirm production is healthy.
 
           $DETAIL
