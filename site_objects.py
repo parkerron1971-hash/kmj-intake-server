@@ -81,6 +81,7 @@ BASE_CSS = """/* THE OBJECT LIBRARY: shared tokens. Map the seven --obj-* tokens
 .sxo-paper{color:var(--_ink);background-color:var(--_paper);background-image:var(--_grain);background-blend-mode:multiply}
 .sxo[data-finish="glow"] .sxo-paper,.sxo-paper[data-finish="glow"]{background-image:none;
   box-shadow:0 0 0 1px color-mix(in srgb,var(--_accent) 70%,transparent),0 0 28px color-mix(in srgb,var(--_accent) 35%,transparent)}
+.sxo[data-finish="metal"]{--_metal:linear-gradient(135deg,color-mix(in srgb,var(--_accent) 58%,rgba(255,255,255,1)),var(--_accent) 34%,color-mix(in srgb,var(--_accent) 66%,rgba(0,0,0,1)) 68%,color-mix(in srgb,var(--_accent) 78%,rgba(255,255,255,1)))}
 .sxo-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .sxo-label{font-family:var(--_label);font-size:12px;letter-spacing:.14em;text-transform:uppercase}"""
 
@@ -198,6 +199,7 @@ _add(_o(
 .sxo-card::before{content:"";position:absolute;left:0;right:0;top:0;height:30%;border-radius:13px 13px 0 0;
   background:color-mix(in srgb,var(--_accent) 88%,transparent);z-index:0}
 .sxo-card>*{flex-shrink:0}
+.sxo-card[data-finish="metal"]::before{background:var(--_metal)}
 .sxo-card-row>.sxo-card{height:100%}
 .sxo-card>*{position:relative;z-index:1}
 .sxo-card-punch{position:absolute!important;top:12px;left:50%;width:46px;height:9px;transform:translateX(-50%);
@@ -252,6 +254,7 @@ _add(_o(
 .sxo-ticket-stub{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.4rem;text-decoration:none;
   color:var(--_paper);background:var(--_accent);border-left:2px dashed color-mix(in srgb,var(--_paper) 70%,transparent);transition:background .25s}
 .sxo-ticket-stub:hover,.sxo-ticket-stub:focus-visible{background:color-mix(in srgb,var(--_accent) 84%,rgba(0,0,0,1))}
+.sxo-ticket[data-finish="metal"] .sxo-ticket-stub{background:var(--_metal);text-shadow:0 1px 0 rgba(0,0,0,.35)}
 .sxo-ticket-price{font-family:var(--_display);font-size:clamp(26px,2.4vw,34px);line-height:1;font-variant-numeric:tabular-nums}
 @media (max-width:600px){.sxo-ticket{--stub:6rem}.sxo-row-tilt>.sxo-ticket{transform:none!important}}""",
     phone="tickets stack one per row, the tilt straightens, the stub narrows and stays the tap target",
@@ -534,6 +537,7 @@ _add(_o(
 .sxo-pass-meta dd{margin:.15rem 0 0;font-weight:700;font-variant-numeric:tabular-nums}
 .sxo-pass-stub{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.8rem;text-decoration:none;color:var(--_paper);
   background:var(--_accent);border-left:2px dashed color-mix(in srgb,var(--_paper) 70%,transparent)}
+.sxo-pass[data-finish="metal"] .sxo-pass-stub{background:var(--_metal);text-shadow:0 1px 0 rgba(0,0,0,.35)}
 .sxo-pass-code{width:60%;height:3.2rem;background:repeating-linear-gradient(90deg,var(--_paper) 0 2px,transparent 2px 4px,var(--_paper) 4px 5px,transparent 5px 8px,var(--_paper) 8px 11px,transparent 11px 13px)}
 @media (max-width:600px){.sxo-pass{grid-template-columns:1fr;-webkit-mask:none;mask:none}
   .sxo-pass-stub{flex-direction:row;padding:.9rem;border-left:0;border-top:2px dashed color-mix(in srgb,var(--_paper) 70%,transparent)}
@@ -581,6 +585,7 @@ _add(_o(
 .sxo-split-tiles{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.6rem;width:min(100%,34rem)}
 .sxo-split-tiles li{display:flex;flex-direction:column;gap:.25rem;padding:.9rem .4rem;border-radius:10px;border:1.5px solid color-mix(in srgb,var(--_accent) 55%,transparent);
   background:color-mix(in srgb,var(--_accent) 10%,transparent)}
+.sxo-split[data-finish="metal"] .sxo-split-tiles li:first-child{background:var(--_metal);text-shadow:0 1px 0 rgba(0,0,0,.35)}
 .sxo-split-tiles li:first-child{background:var(--_accent);color:var(--obj-paper,var(--sx-bg,Canvas));border-color:var(--_accent)}
 .sxo-split-tiles b{font-family:var(--_display);font-size:clamp(20px,2vw,28px);font-variant-numeric:tabular-nums}
 .sxo-split-tiles span{font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85}
@@ -663,8 +668,10 @@ def director_block() -> str:
         "them by key on the concept sheet's OBJECTS line, with a finish "
         "(paper, inverse, glow, metal) that suits the design language "
         "(printed paper for Broadsheet or Atelier, metal for Ledger or "
-        "Monograph, glow for Neon or Glass). Name only objects whose content "
-        "the data can fill.",
+        "Monograph, glow for Neon or Glass). Inverse turns objects into solid "
+        "panels in the ink colour: use it on a light ground only; on a dark "
+        "ground choose paper (light objects) or glow. Name only objects whose "
+        "content the data can fill.",
     ]
     for key, o in OBJECTS.items():
         lines.append(f"- {key}: {o.intent}. USE FOR: {o.use_when}")
@@ -724,8 +731,11 @@ def contact_sheet_html(themes: Iterable[Dict[str, str]]) -> str:
         tokens = ";".join(f"{k}:{v}" for k, v in t.items()
                           if k.startswith("--"))
         cells = []
+        finish = t.get("finish") or "paper"
         for key, o in OBJECTS.items():
             html = o.html
+            if finish != "paper":
+                html = html.replace('data-sx-object="', f'data-finish="{finish}" data-sx-object="')
             if key == "letter":
                 html = html.replace('<span class="sxo-letter-front" aria-hidden="true"></span>',
                                     '<span class="sxo-letter-front" aria-hidden="true"></span>'
@@ -754,15 +764,43 @@ def contact_sheet_html(themes: Iterable[Dict[str, str]]) -> str:
             + "</script></body></html>")
 
 
+_FONTS = ("<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Fraunces:wght@600"
+          "&family=Source+Sans+3:wght@400;700&family=IBM+Plex+Mono:wght@400;700&family=Anton"
+          "&family=Barlow:wght@400;700&family=Space+Mono:wght@400;700&family=Archivo+Black"
+          "&family=DM+Sans:wght@400;700&family=Cormorant+Garamond:wght@600&family=Playfair+Display:wght@700"
+          "&family=Space+Grotesk:wght@400;700&family=Bebas+Neue&display=swap'>")
+
+
+def _theme(name, bg, text, paper, ink, accent, display, body, label, finish="paper"):
+    return {"name": name, "finish": finish, "--sx-bg": bg, "--sx-text": text,
+            "--obj-paper": paper, "--obj-ink": ink, "--obj-accent": accent,
+            "--obj-display": display, "--obj-body": body, "--obj-label": label}
+
+
+# One theme per design language, in that language's colours and type, each
+# wearing the finish design_languages.OBJECT_FINISH gives it.
 CONTACT_THEMES: List[Dict[str, str]] = [
-    {"name": "paper", "--sx-bg": "#efe9df", "--sx-text": "#1f1b17", "--obj-paper": "#fbf8f2", "--obj-ink": "#1f1b17",
-     "--obj-accent": "#b4532d", "--obj-display": "'Fraunces',Georgia,serif",
-     "--obj-body": "'Source Sans 3',system-ui,sans-serif", "--obj-label": "'IBM Plex Mono',monospace",
-     "font_link": "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Fraunces:wght@600&family=Source+Sans+3:wght@400;700&family=IBM+Plex+Mono:wght@400;700&family=Anton&family=Barlow:wght@400;700&family=Space+Mono:wght@400;700&display=swap'>"},
-    {"name": "ledger", "--sx-bg": "#121417", "--sx-text": "#e9e4d8", "--obj-paper": "#e9e4d8", "--obj-ink": "#16181b",
-     "--obj-accent": "#a88a4e", "--obj-display": "'Fraunces',Georgia,serif",
-     "--obj-body": "'Source Sans 3',system-ui,sans-serif", "--obj-label": "'IBM Plex Mono',monospace"},
-    {"name": "neon", "--sx-bg": "#0b0b0d", "--sx-text": "#f2efe8", "--obj-paper": "#17171b", "--obj-ink": "#f2efe8",
-     "--obj-accent": "#ff3d6e", "--obj-display": "'Anton',Impact,sans-serif",
-     "--obj-body": "'Barlow',system-ui,sans-serif", "--obj-label": "'Space Mono',monospace"},
+    _theme("mural", "#f2c230", "#1c1a17", "#fffdf6", "#1c1a17", "#e8432f",
+           "'Archivo Black',Impact,sans-serif", "'DM Sans',system-ui,sans-serif", "'Space Mono',monospace"),
+    _theme("monograph", "#141414", "#e8e6e1", "#efeee9", "#161616", "#b89a5a",
+           "'Cormorant Garamond',Georgia,serif", "'DM Sans',system-ui,sans-serif", "'IBM Plex Mono',monospace", "metal"),
+    _theme("broadsheet", "#f4efe4", "#1d1b18", "#fbf8f1", "#1d1b18", "#c0281e",
+           "'Playfair Display',Georgia,serif", "'Source Sans 3',system-ui,sans-serif", "'IBM Plex Mono',monospace"),
+    _theme("signal", "#f3f3f0", "#111111", "#ffffff", "#2347d9", "#111111",
+           "'Space Grotesk',system-ui,sans-serif", "'Space Grotesk',system-ui,sans-serif", "'Space Mono',monospace", "inverse"),
+    _theme("atelier", "#ece7dd", "#2a2622", "#f8f5ef", "#2a2622", "#8a7b62",
+           "'Cormorant Garamond',Georgia,serif", "'DM Sans',system-ui,sans-serif", "'IBM Plex Mono',monospace"),
+    _theme("neon", "#0b0b0d", "#f2efe8", "#17171b", "#f2efe8", "#ff3d6e",
+           "'Anton',Impact,sans-serif", "'Barlow',system-ui,sans-serif", "'Space Mono',monospace", "glow"),
+    _theme("hearth", "#2a1d17", "#f3e7d8", "#f6ecdf", "#2a1d17", "#d9864a",
+           "'Fraunces',Georgia,serif", "'DM Sans',system-ui,sans-serif", "'IBM Plex Mono',monospace"),
+    _theme("glass", "#0a0c10", "#e8edf5", "#141821", "#e8edf5", "#4c8dff",
+           "'Space Grotesk',system-ui,sans-serif", "'DM Sans',system-ui,sans-serif", "'IBM Plex Mono',monospace", "glow"),
+    _theme("runway", "#0d0d0d", "#f2f2f2", "#f2f2f2", "#0d0d0d", "#8c8c8c",
+           "'Bebas Neue',Impact,sans-serif", "'DM Sans',system-ui,sans-serif", "'IBM Plex Mono',monospace"),
+    _theme("arena", "#16161a", "#f4f1ea", "#f4f1ea", "#16161a", "#ff6a1a",
+           "'Anton',Impact,sans-serif", "'Barlow',system-ui,sans-serif", "'Space Mono',monospace"),
+    _theme("ledger", "#121417", "#e9e4d8", "#e9e4d8", "#16181b", "#a88a4e",
+           "'Fraunces',Georgia,serif", "'Source Sans 3',system-ui,sans-serif", "'IBM Plex Mono',monospace", "metal"),
 ]
+CONTACT_THEMES[0]["font_link"] = _FONTS

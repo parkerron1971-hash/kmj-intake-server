@@ -614,3 +614,12 @@ def test_author_spec_attaches_the_concept_for_the_trade(monkeypatch):
     assert text and "INTENSITY: plain" in text
     assert "intensity: plain" in seen["user"] and "trade's default" in seen["user"]
     assert ctx["concept"]["intensity"] == "plain"
+
+
+def test_the_language_block_tells_the_director_how_objects_wear_it(monkeypatch):
+    import design_languages as dl
+    monkeypatch.setattr(dl, "resolve", lambda ctx, dro: ("ledger", "the owner chose it", "owner"))
+    ctx = {}
+    assert spec_author.attach_language(ctx, None) == "ledger"
+    assert "OBJECTS IN THIS LANGUAGE" in ctx["language_brief_text"]
+    assert 'data-finish="metal"' in ctx["language_brief_text"]
