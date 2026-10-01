@@ -1967,10 +1967,48 @@ and quote a short, exact passage from it. Check names, status, dates and numbers
 A derived total/ranking/absence needs a complete source, not a partial list.
 An earlier assistant answer is never proof of a business fact. Owner statements
 support only explicitly attributed reports/preferences, not current business status.
-A missing, failed or conflicting source means supported=false. Completed actions
+A missing, failed or conflicting source means supported=false. Omitted source IDs
+are not evidence: do not assume they are empty or infer absence from this subset. Completed actions
 are never supported in this lane. If multiple sources are needed, return false.
 Pure suggestions or conversational remarks may use empty source_id and quote,
 but a factual premise inside a suggestion still needs evidence. No explanation."""
+
+
+STREAM_REVIEW_EVIDENCE_CHARS = 14000
+_STREAM_REVIEW_FILLER = frozenset("""
+a an the and or but to of in on at for with by from as is are was were be been
+being do does did have has had i me my we our you your it its this that these
+those they them their there here what which who when where why how can could
+would should will shall may might must not no all any only just more most
+about into than then so very also business chief owner
+""".split())
+
+
+def _stream_review_sources(sources, sentence, preceding, message):
+    """Bound an early check to whole relevant sources; never truncate a record.
+
+    The final reviewer still gets everything. Here excess/uncertain evidence
+    simply defers speech. Keep every matching source, including conflicts,
+    rather than selecting a top hit that could conceal contradictory records.
+    """
+    valid = {sid: dict(src) for sid, src in sources.items() if isinstance(src, dict)}
+    if sum(len(str(src.get('text') or '')) for src in valid.values()) <= STREAM_REVIEW_EVIDENCE_CHARS:
+        return valid, []
+    terms = {_stem(word) for word in _words(sentence) - _STREAM_REVIEW_FILLER}
+    # References need their conversational subject, not just 'it' or 'they'.
+    if re.search(r"\b(?:it|its|they|them|their|that|those|this)\b", sentence, re.I):
+        terms |= {_stem(word) for word in _words(preceding[-400:] + ' ' + message[:1200])
+                  - _STREAM_REVIEW_FILLER}
+    selected = {}
+    for sid, src in valid.items():
+        text = str(src.get('text') or '')
+        words = {_stem(word) for word in _words(sid + ' ' + text)}
+        if (terms & words or sid == 'context:context_quality'
+                or _HEDGED_ITEM.search(text)):
+            selected[sid] = src
+    if not selected or sum(len(str(src.get('text') or '')) for src in selected.values()) > STREAM_REVIEW_EVIDENCE_CHARS:
+        return None, list(valid)
+    return selected, [sid for sid in valid if sid not in selected]
 
 
 async def review_stream_prefix(client, prefix, *, sources, message, business_id):
@@ -1986,10 +2024,13 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
     if not sentences:
         return False
     sentence = sentences[-1]
-    sources = {sid: dict(value) for sid, value in sources.items()}
+    preceding = ' '.join(sentences[:-1])
+    sources, omitted = _stream_review_sources(sources, sentence, preceding, message or '')
+    if sources is None:
+        return False
     turn = _turn.get()
-    payload = {'owner_message': message, 'preceding_text': ' '.join(sentences[:-1]),
-               'sentence': sentence, 'sources': sources,
+    payload = {'owner_message': (message or '')[:1200], 'preceding_text': preceding,
+               'sentence': sentence, 'sources': sources, 'omitted_sources': omitted,
                'unavailable': sorted(turn.unavailable) if turn else []}
     raw = await review_reply(client, STREAM_PREFIX_REVIEW_SYSTEM,
         [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],

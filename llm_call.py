@@ -48,6 +48,9 @@ WHAT THIS IS NOT
 """
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import functools
 import logging
 import os
 import sys
@@ -112,10 +115,21 @@ def _caller_module() -> str:
     return "unknown"
 
 
+# Keep persistence work alive independently of a timed-out reviewer. The loop's
+# executor owns the running write; each row retains its originating billing scope.
+_PENDING_METERS = set()
+
+
+def _meter_finished(future):
+    _PENDING_METERS.discard(future)
+    if not future.cancelled() and future.exception() is not None:
+        logger.warning("[llm_call] background metering failed: %s", type(future.exception()).__name__)
+
+
 def _meter(response: Any, payload: Optional[Dict[str, Any]],
            caller: str, started: float,
            business_id: Optional[str] = None,
-           units: Optional[int] = None) -> None:
+           units: Optional[int] = None, *, background: bool = False) -> None:
     """Write one api_usage row for a call whose caller does not log it.
 
     Never raises and never blocks: a metering failure must not fail an
@@ -153,7 +167,7 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
         except Exception:
             pass
         from api_usage_logger import log_api_usage_sync
-        log_api_usage_sync(
+        row = dict(
             endpoint=f"llm:{caller}",
             model=str((data or {}).get("model")
                       or (payload or {}).get("model") or "unknown"),
@@ -165,6 +179,18 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
             units=units,
             duration_ms=int((time.time() - started) * 1000),
         )
+        if background:
+            # The tally above is local and immediately visible to this turn.
+            # Persist the same row once off-loop: a slow billing database must
+            # not hold back a completed verdict or freeze all speech streams.
+            # Executor submission starts now and survives caller cancellation.
+            context = contextvars.copy_context()
+            write = functools.partial(log_api_usage_sync, **row)
+            future = asyncio.get_running_loop().run_in_executor(None, context.run, write)
+            _PENDING_METERS.add(future)
+            future.add_done_callback(_meter_finished)
+        else:
+            log_api_usage_sync(**row)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("[llm_call] metering failed for %s: %s", caller, e)
 
@@ -264,7 +290,7 @@ async def apost(client: httpx.AsyncClient,
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
         **body,
     )
-    _meter(resp, payload, caller, started, business_id=business_id, units=units)
+    _meter(resp, payload, caller, started, business_id=business_id, units=units, background=True)
     return resp
 
 
