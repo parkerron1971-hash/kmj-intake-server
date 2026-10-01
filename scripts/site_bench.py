@@ -229,11 +229,18 @@ def validate(ctx: Dict[str, Any], html: str) -> Dict[str, Any]:
             out[name] = fn(doc, rd) if fn.__code__.co_argcount >= 2 else fn(doc)
         except Exception as e:
             out[name] = [f"(validator error: {e!r})"]
+    try:
+        import craft_laws
+        _, out["typography_fixes"] = craft_laws.typographer(doc)
+        out["craft_floor"] = craft_laws.check_html(doc, rd)
+    except Exception as e:
+        out["craft_floor"] = [f"(craft floor error: {e!r})"]
     _, n = builder_v2.annotate_editability(doc)
     out["editability_stamps_added_by_annotator"] = n
     out["bytes"] = len(doc.encode("utf-8"))
     out["violations_total"] = sum(len(v) for k, v in out.items()
                                   if k.startswith("check_") or k == "armor_violations")
+    out["soft_total"] = len(out.get("check_stand_ins") or []) + len(out.get("craft_floor") or [])
     return out
 
 

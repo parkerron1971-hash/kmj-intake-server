@@ -203,6 +203,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 13. HEAD + SHARE: a real <title>, a meta description written from the data, and og:title / og:description / og:image (the strongest image url from the data) so a shared link looks intentional.
 14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store, events) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section, an Upcoming Events moment that invites the visitor to see the dates and RSVP). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
 15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
+16. THE TYPE FLOOR (measured on the render; a miss costs a repair round): exactly one <h1> (the hero headline), headings stepping down one level at a time. Set a type scale with clamp() and keep to it. Display sizes tighten their tracking (-0.01em to -0.03em); uppercase labels open theirs (0.08em or more). Running text is 16px or larger on a phone and never under 14px; nothing a visitor reads is under 11px. Body copy holds a 45 to 75 character measure (max-width in ch). Headings get text-wrap: balance and paragraphs text-wrap: pretty. Digits that line up (prices, hours, durations, stats) get font-variant-numeric: tabular-nums. When a face offers an optical-size axis, request it in the Google Fonts url (opsz) and set font-optical-sizing: auto. Buttons, inputs and selects inherit the page's fonts (font: inherit). No paragraph longer than three lines is centered. At most two type families, three with a utility face. Write straight quotes freely: a typographer pass sets real quotes, apostrophes and ranges after you.
 
 CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold.
 
@@ -918,7 +919,23 @@ def _record_measure(html: str, width: int, data: Any) -> None:
     key = _doc_key(html)
     if key not in _MEASURES and len(_MEASURES) >= _MEASURES_KEEP:
         _MEASURES.pop(next(iter(_MEASURES)))
-    _MEASURES.setdefault(key, {})[str(width)] = data
+    _MEASURES.setdefault(key, {}).setdefault(str(width), {}).update(data)
+
+
+def _measure_page(page: Any, html: str, width: int) -> None:
+    """Geometry (site_check's audit) and the craft floor (craft_laws),
+    measured on the open page once the hero has settled. Free; never
+    fatal."""
+    try:
+        import site_check
+        _record_measure(html, width, page.evaluate(site_check._AUDIT_JS))
+    except Exception as e:
+        logger.info(f"[v2:eyes] geometry skipped at {width}px: {e}")
+    try:
+        import craft_laws
+        _record_measure(html, width, page.evaluate(craft_laws.RENDER_JS))
+    except Exception as e:
+        logger.info(f"[v2:eyes] craft measure skipped at {width}px: {e}")
 
 
 def walk_measurements(html: str) -> Optional[Dict[str, Any]]:
@@ -987,12 +1004,6 @@ def _screenshot_walk(html: str) -> Optional[List[Tuple[str, bytes]]]:
                                      timeout=25000)
                     total = page.evaluate(
                         "document.documentElement.scrollHeight")
-                    try:
-                        import site_check
-                        _record_measure(html, width,
-                                        page.evaluate(site_check._AUDIT_JS))
-                    except Exception as _me:
-                        logger.info(f"[v2:eyes] measure skipped at {width}px: {_me}")
                     stops = [0, max(0, total // 2 - 450),
                              max(0, total - 900)]
                     names = ("top", "middle", "bottom")
@@ -1002,6 +1013,8 @@ def _screenshot_walk(html: str) -> Optional[List[Tuple[str, bytes]]]:
                         shots.append((f"{width}px {name}",
                                       page.screenshot(type="jpeg",
                                                       quality=55)))
+                        if name == "top":
+                            _measure_page(page, html, width)
                     page.close()
                 page = browser.new_page(
                     viewport={"width": VISION_WIDE_WIDTH, "height": 1000})
@@ -1231,6 +1244,32 @@ def _call(system: str, user: str, business_id: str,
         return None
 
 
+def _craft():
+    """craft_laws, imported late so a missing module can never stop a
+    build (the floor is quality, not a gate)."""
+    try:
+        import craft_laws
+        return craft_laws
+    except Exception as e:                     # pragma: no cover
+        logger.warning(f"[v2] craft floor unavailable: {e}")
+
+        class _Off:
+            RENDER_JS = "() => ({})"
+
+            @staticmethod
+            def typographer(d):
+                return d, 0
+
+            @staticmethod
+            def check_html(d, rd=""):
+                return []
+
+            @staticmethod
+            def render_findings(m):
+                return []
+        return _Off
+
+
 def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                    progress_cb=None) -> Dict[str, Any]:
     """ONE call → armor → (one scoped repair) → document or None.
@@ -1288,11 +1327,19 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     def _mechanical(d: str) -> str:
         d, dropped = armor_scripts(d, allowed_fetch=endpoint)
         d, stripped = armor_external(d)
+        d, typeset = _craft().typographer(d)
         d, added = annotate_editability(d)
         report["mechanical"] = {"scripts_dropped": dropped,
                                 "externals_stripped": stripped,
+                                "typography_fixes": typeset,
                                 "override_targets_added": added}
         return d
+
+    def _soft(d: str) -> List[str]:
+        # THE SOFT TIER: quality defects that earn the repair round and
+        # never the fallback: visible stand-ins (11c) and the craft floor
+        # (one h1, alt text, type families, likely typos).
+        return check_stand_ins(d) + _craft().check_html(d, real_data)
 
     def _laws(d: str) -> List[str]:
         # armor_violations reads the drops _mechanical just recorded for
@@ -1312,7 +1359,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     # but a stand-in is a quality defect, not an invented fact — it never
     # sends a build to the fallback engine. Whatever survives the repair
     # is reported (report["stand_ins"]) and handed to the eyes.
-    stand_ins = check_stand_ins(doc)
+    stand_ins = _soft(doc)
     if (violations or stand_ins) and not _budget_left(spend):
         # THE HARD BUDGET: no repair round left in the purse. Stand-ins
         # ride the report; hard laws still cannot ship (below).
@@ -1359,6 +1406,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                                         "detail": "stand-in repair unparseable "
                                                   "— keeping the document"})
     report["stand_ins"] = check_stand_ins(doc)
+    report["craft"] = _craft().check_html(doc, real_data)
 
     # THE EYES (Arc 2): the builder looks at its own rendered work and
     # gets ONE surgical pass to fix what it sees. Quality violations are
@@ -1371,7 +1419,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         verdict = inspect_with_eyes(doc, spec_text, business_id, why=why)
         if not verdict and why.get("reason"):
             report["vision"]["reason"] = why["reason"]
-        measured = render_findings(walk_measurements(doc))
+        _m = walk_measurements(doc)
+        measured = render_findings(_m) + _craft().render_findings(_m)
         report["vision"]["measured"] = measured
         if verdict:
             report["vision"]["ran"] = True
@@ -1392,9 +1441,10 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                         for v in ((verdict or {}).get("violations") or [])
                         if (verdict or {}).get("verdict") == "repair"]
                 seen += [f"MEASURED IN THE RENDER: {m}" for m in measured]
-                # a stand-in the surgical round left behind rides the
-                # vision repair too — the eyes' round is the last chance
+                # a stand-in or a craft miss the surgical round left behind
+                # rides the vision repair too — the eyes' round is the last chance
                 seen += [f"STILL ON THE PAGE: {s}" for s in report["stand_ins"]]
+                seen += [f"STILL ON THE PAGE: {s}" for s in report.get("craft") or []]
                 raw3 = _call(_SYSTEM,
                              build_user_prompt(spec_text, real_data,
                                                violations=seen,
@@ -1407,6 +1457,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                         doc = doc3
                         report["vision"]["repaired"] = True
                         report["stand_ins"] = check_stand_ins(doc)
+                        report["craft"] = _craft().check_html(doc, real_data)
                     else:
                         report["fallbacks"].append({
                             "stage": "vision-repair",

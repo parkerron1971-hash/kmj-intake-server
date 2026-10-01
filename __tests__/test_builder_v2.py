@@ -654,3 +654,75 @@ def test_a_measured_defect_earns_the_vision_repair_without_a_verdict(monkeypatch
 def test_the_system_prompt_teaches_layering_on_purpose():
     assert "data-overlap-ok" in v2._SYSTEM
     assert len(v2._SYSTEM) < 12000, "the moves block crept back into the system prompt"
+
+
+# ─── THE CRAFT FLOOR (2026-10-01, the concept-layer plan) ─────────────
+
+def test_the_type_floor_is_a_numbered_rule_in_order():
+    s = v2._SYSTEM
+    assert s.index("15. FILLED SPACE") < s.index("16. THE TYPE FLOOR") < s.index("CRAFT FLOOR:")
+    for must in ("one <h1>", "14px", "11px", "tabular-nums", "text-wrap: balance",
+                 "font: inherit", "opsz"):
+        assert must in s, must
+
+
+def test_the_typographer_rides_the_mechanical_armor(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    quoted = '<p>"Walk-ins welcome," the sign says. Open 10am - 7pm.</p>'
+    monkeypatch.setattr(v2, "_call", lambda s, u, b, spend=None: _law_passing_doc(endpoint, quoted))
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert "“Walk-ins welcome,”" in out["html"]
+    assert "10am–7pm" in out["html"], "the spaced range is set, not flagged"
+    assert out["report"]["mechanical"]["typography_fixes"] > 0
+    assert not out["report"]["violations"]
+
+
+def test_craft_misses_earn_the_repair_but_never_the_fallback(monkeypatch):
+    """Two h1s and an image with no alt are quality defects, not lies:
+    one surgical round, and the page ships even if they survive it."""
+    endpoint = "https://api.example/contact/biz-1"
+    sloppy = '<h1>Second headline</h1><img src="https://x/a.jpg">'
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint, sloppy)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"], "a craft miss never sends the build to the fallback"
+    assert len(calls) == 2
+    assert "2 <h1>" in calls[1] and "alt attribute" in calls[1]
+    craft = " ".join(out["report"]["craft"])
+    assert "2 <h1>" in craft, "what survived the repair is reported"
+
+
+def test_craft_render_findings_ride_the_measured_list(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    def _eyes(doc, spec, biz, why=None):
+        v2._record_measure(doc, 390, {"overflow_x": False, "scroll_width": 390,
+                                      "empty_headings": 0, "overlaps": []})
+        v2._record_measure(doc, 390, {"small_text": [{"label": 'p "Over five weeks"', "px": 9}]})
+        return {"verdict": "ship", "violations": []}
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+    monkeypatch.setattr(v2, "inspect_with_eyes", _eyes)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    measured = " ".join(out["report"]["vision"]["measured"])
+    assert "under 14px" in measured, "merged from the second measurement"
+    assert len(calls) == 2 and "MEASURED IN THE RENDER" in calls[1]
