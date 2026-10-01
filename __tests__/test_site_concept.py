@@ -210,3 +210,7 @@ def test_the_director_sees_recent_concepts_when_the_site_wears_one(monkeypatch):
     plain = {"business": {"name": "Calm", "type": "Licensed therapist"}, "site": {"site_config": {}}}
     spec_author.author_spec("biz-2", plain, None, [])
     assert "RECENT CONCEPTS" not in seen["user"], "a plain site wears no concept to repeat"
+def test_decorative_numbers_are_taught_to_stay_short():
+    assert "Decorative numbers" in sc.DIRECTOR_LAW and "one or two digits" in sc.DIRECTOR_LAW
+    block = sc.brief_block({"intensity": "signature", "scope": "site", "by": "default"})
+    assert "((" not in block and "))" not in block

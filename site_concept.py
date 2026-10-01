@@ -123,7 +123,7 @@ def brief_block(c: Optional[Dict[str, str]]) -> str:
     if not c:
         return ""
     who = {"owner": "the owner chose this in the Design Coach",
-           "default": "the trade's default (the owner has not chosen)",
+           "default": "the trade's default; the owner has not chosen",
            }.get(c.get("by", ""), c.get("by", ""))
     lines = ["== THE CONCEPT (how far this site's idea goes) ==",
              f"- intensity: {c.get('intensity')} ({who})"]
@@ -146,7 +146,7 @@ A design language decides how the site LOOKS. A concept decides what the site is
 - WORLD: the idea runs the page. The navigation and section names use the concept's vocabulary, two to four objects hold the content, one living detail moves. When SCOPE is offer, the home page stays at SIGNATURE and the World concept is written for the offer page in section 6.
 THE PLAIN-WORD RULE: every in-world label keeps its plain word beside it ("Tuition" over a small "Pricing"), so a first-time visitor never has to guess and search still reads what the thing is. A concept never hides what something is or what it costs.
 THE GENEROSITY RULE STILL HOLDS: a World page renames, merges and reorders sections, and every function still has a home. A concept is never a reason to leave something out.
-Ground it: every line of the sheet traces to the dossier. Never invent a credential, a class size or a date to make an idea work; pick a different idea.
+Ground it: every line of the sheet traces to the dossier. Never invent a credential, a class size or a date to make an idea work; pick a different idea. Decorative numbers (ticket serials, card numbers) stay one or two digits: THE FACTS LAW reads any longer number as a claim.
 
 {OBJECT_CATALOG}
 
