@@ -10,7 +10,7 @@ import chief_of_staff as chief
 import chief_truth as truth
 from chief_projection_math import verified_figures
 
-SOURCES = truth.conversation_for_review('Use the $79, $149 and $299 tiers.', [
+SOURCES = truth.conversation_for_review('The monthly prices are $79, $149 and $299.', [
     {'role': 'user', 'content': 'Could we make a million dollars in one year?'}])
 CONVERSION = 'A million a year is about $83,300 a month in recurring revenue.'
 MATH = CONVERSION + ' At $79, about 1,055. At $149, about 560. At $299, about 280.'
@@ -74,7 +74,7 @@ def test_checked_math_survives_beside_real_save_receipt():
     review['claims'].append({'text': 'I saved the pricing assumptions.', 'kind': 'action',
         'source_id': 'result:0', 'quote': 'Saved the pricing assumptions'})
     reply, meta = asyncio.run(truth.finalize_reply(None, draft, ctx={}, view_detail='',
-        taken=[receipt], message='Use the $79, $149 and $299 tiers.', business_id='fixture',
+        taken=[receipt], message='The monthly prices are $79, $149 and $299.', business_id='fixture',
         conversation_history=[{'role': 'user', 'content': 'Could we make a million dollars in one year?'}],
         reviewer=AsyncMock(return_value=json.dumps(review))))
     assert reply == draft and meta['status'] == 'supported'
@@ -111,3 +111,45 @@ def test_composer_receives_question_and_calculation_with_receipt(monkeypatch):
     payload = composer.call_args.args[2][0]['content']
     assert 'receipts supplement' in system and 'calculations' in system
     assert 'Explain the pricing math.' in payload and MATH in payload and 'Note saved' in payload
+
+
+@pytest.mark.parametrize('owner,draft,gap', [
+    ('We aim for 1,000,000 website views. Our membership costs $299 per year, not per month.',
+     '$1,000,000 per year means about $83,333 per month. At $299 per month, you would need about 280 subscribers.',
+     'Owner target is website views, not revenue; the rate is annual, not monthly'),
+    ('My goal is $120,000 over five years. The plan costs $50 monthly.',
+     '$120,000 per year means $10,000 per month. At $50 per month, you would need about 200 subscribers.',
+     'calculation'),
+    ('My annual revenue target is $120,000; the offer costs $50 per session.',
+     '$120,000 per year means $10,000 per month. At $50 per month, you would need about 200 subscribers.',
+     'calculation'),
+    ('My annual revenue target is $120,000. The plan is not $50 per month.',
+     '$120,000 per year means $10,000 per month. At $50 per month, you would need about 200 subscribers.',
+     'calculation'),
+])
+def test_wrong_meaning_and_billing_period_cannot_pass_as_arithmetic(owner, draft, gap):
+    sources = truth.conversation_for_review(owner, [])
+    review = json.loads(review_for(draft))
+    for claim in review['claims']:
+        claim['gap'] = gap
+    assert truth.assess_review(json.dumps(review), draft, sources)[0] == 'unsupported'
+
+
+@pytest.mark.parametrize('gap', [
+    'The latest target is different', 'Owner did not authorize this target',
+    'The monthly billing assumption contradicts the owner',
+    'calculation, but the source is website views',
+])
+def test_semantic_gap_is_never_overridden_by_matching_numbers(gap):
+    raw = json.loads(review_for(MATH))
+    raw['claims'][0]['gap'] = gap
+    assert truth.assess_review(json.dumps(raw), MATH, SOURCES)[0] == 'unsupported'
+
+
+def test_latest_correction_is_not_overridden_by_older_arithmetic_inputs():
+    sources = truth.conversation_for_review('Actually use $500,000 per year instead.', [
+        {'role': 'user', 'content': 'My annual revenue target is $1,000,000.'}])
+    draft = '$1,000,000 per year means about $83,333 per month.'
+    raw = json.loads(review_for(draft))
+    raw['claims'][0]['gap'] = 'This uses the old target; the latest owner correction is $500,000'
+    assert truth.assess_review(json.dumps(raw), draft, sources)[0] == 'unsupported'
