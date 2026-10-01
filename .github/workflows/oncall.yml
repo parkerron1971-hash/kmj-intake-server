@@ -155,8 +155,13 @@ jobs:
             5. Read the code paths behind whatever is failing (CLAUDE.md explains the layout;
                /health and /health/ready live in kmj_intake_automation.py).
 
-            Then post ONE comment on the issue with `gh issue comment`, written for a
-            non-engineer owner reading on a phone, under these headings:
+            Then post ONE comment on the issue, written for a non-engineer owner reading on a
+            phone. Post it ONLY with a quoted heredoc, so backticks and $ in the text are never
+            run by the shell:
+              gh issue comment <n> --body-file - <<'DIAGNOSIS'
+              ...your comment...
+              DIAGNOSIS
+            Use these headings:
             **What is failing** (one or two sentences, plain words),
             **Most likely cause** (with the evidence: a commit, a log line, a response body;
             say how sure you are),
