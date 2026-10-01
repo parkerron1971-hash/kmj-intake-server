@@ -92,3 +92,26 @@ def test_actual_prompt_contains_independent_tone_and_respects_suggestions_off():
     assert "After that, be purely efficient" not in prompt
     assert "[[CHIEF_GLOBAL_SPLIT]]" in prompt
     assert "[[CHIEF_CACHE_SPLIT]]" in prompt
+
+
+@pytest.mark.parametrize("suggestions_active", [False, True])
+def test_operating_manual_does_not_override_conversation_preferences(suggestions_active):
+    ctx = collections.defaultdict(lambda: [], {
+        "business": {"id": "b1", "name": "Example", "settings": {},
+                     "voice_profile": {"tone": "formal", "chief_tone": {"tone": "witty and dry"}}}})
+    prompt = cos._build_system_prompt(ctx, False, suggestions_active=suggestions_active)
+    assert "After every answer or action" not in prompt
+    assert "propose 1-2 natural next steps" not in prompt
+    assert "SMART NEXT STEPS:" not in prompt
+    assert "Direct, warm, operational. Match" not in prompt
+    assert "A question or next-step offer must earn its place" in prompt
+    # Final delivery guidance follows action recipes, within the same stable cache.
+    assert prompt.index("AGENT ACTIVITY AWARENESS:") < prompt.index("PERSONALITY")
+    assert prompt.index("SMART SUGGESTIONS:") < prompt.index("[[CHIEF_CACHE_SPLIT]]")
+    assert prompt.count("PERSONALITY") == 1
+    assert prompt.count("SMART SUGGESTIONS:") == 1
+    assert chief_tone(prompt)["tone"] == "witty and dry"
+    if suggestions_active:
+        assert "MAY offer one useful next step after a completed action" in prompt
+    else:
+        assert "SMART SUGGESTIONS: OFF" in prompt

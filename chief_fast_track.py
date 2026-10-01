@@ -515,6 +515,7 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
         payload["stop_sequences"] = stop_sequences
     started = time.perf_counter()
     usage: Dict[str, Any] = {}
+    complete = False
     try:
         async with llm_call.astream(client(), payload, timeout=httpx.Timeout(
                 connect=3.0, read=15.0, write=5.0, pool=2.0)) as resp:
@@ -529,7 +530,17 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
                     evt = json.loads(line[5:].strip())
                 except ValueError:
                     continue
+                if not isinstance(evt, dict):
+                    continue
                 et = evt.get("type")
+                if et == "error":
+                    error = evt.get("error") or {}
+                    out["error"] = (str(error.get("type") or "stream_error")[:80]
+                                    if isinstance(error, dict) else "stream_error")
+                    return
+                if et == "message_stop":
+                    complete = True
+                    break
                 if et == "content_block_delta":
                     d = evt.get("delta") or {}
                     if d.get("type") == "text_delta" and d.get("text"):
@@ -542,6 +553,8 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
                     u = evt.get("usage") or {}
                     if u.get("output_tokens") is not None:
                         usage["output_tokens"] = u["output_tokens"]
+            if not complete:
+                out["error"] = "incomplete_stream"
     except (httpx.HTTPError, asyncio.TimeoutError) as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -617,9 +630,17 @@ class TwoTrack:
         self.business_id = str(getattr(req, "business_id", "") or "")
         self.verified = known_good(user_id, self.business_id)
         self.style = style_for(user_id, self.business_id)
-        # A cached answer must not outlive a change to Chief's chosen tone.
-        style_key = hashlib.sha256(self.style.encode()).hexdigest()[:16]
-        self.cache_scope = _pair(user_id, self.business_id) + ":" + style_key
+        # The fast answer is conditioned on these inputs, not just its question.
+        # Never replay a chat-formatted answer on a call, or an explanation
+        # tailored to earlier history after the practitioner changes context.
+        cache_context = json.dumps({
+            "style": self.style, "voice": self.voice,
+            "model": chief_models.model_for("fast"),
+            "conversation": getattr(req, "conversation_id", None),
+            "history": _history_tail(req),
+        }, sort_keys=True, ensure_ascii=False)
+        context_key = hashlib.sha256(cache_context.encode()).hexdigest()
+        self.cache_scope = _pair(user_id, self.business_id) + ":" + context_key
         self.cache_hit: Optional[mr.CacheHit] = None
         self.fast_answer = ""
         self.lead_text = ""                 # everything the first track sent

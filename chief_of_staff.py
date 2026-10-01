@@ -9831,88 +9831,94 @@ def _conversation_matches(row: Dict[str, Any], query: str) -> bool:
     return False
 
 
+def _recall_excerpt(text: str, query: str = "", limit: int = 260) -> str:
+    """Keep the matched words, even near the end of a long archived message."""
+    text = " ".join(str(text or "").split())
+    at = text.lower().find(query.lower()) if query else -1
+    start = max(0, at - 60) if at >= 0 else 0
+    excerpt = text[start:start + limit]
+    return ("..." if start else "") + excerpt + ("..." if start + limit < len(text) else "")
+
+
+def _recall_exchange(conv: Dict[str, Any], query: str) -> str:
+    """A bounded, role-labelled exchange; old assistant prose is not a receipt."""
+    messages = [m for m in (conv.get("messages") or [])
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    match = next((i for i, m in enumerate(messages)
+                  if query and query.lower() in str(m.get("content") or "").lower()), None)
+    if match is None:
+        selected = messages[-2:]
+    elif messages[match]["role"] == "assistant" and match:
+        selected = messages[match - 1:match + 1]
+    else:
+        selected = messages[match:match + 2]
+    return "\n".join(m["role"] + ": " + _recall_excerpt(m.get("content"), query)
+                     for m in selected)
+
+
 async def handle_recall_conversation(client, biz, action) -> Dict:
-    """Search archived chief_conversations rows for relevant context.
-    Filters by `query` (matched against summary, key_topics and the
-    messages) and `time_range`.
-
-    THE TABLE IS WRITTEN NOW (2026-09-04). Until today nothing in this
-    backend wrote chief_conversations; the only writer was a browser
-    sweep that fired when the panel was reopened after four idle hours,
-    or on Clear chat — so a practitioner who never did either produced
-    no rows, on any device, ever, and this handler answered "nothing
-    archived" as if that were a fact about their history. chief_chat
-    now archives every turn (see _archive_turn), so recall is
-    structurally true for every turn on every surface.
-
-    Two lies removed on the same day: (1) a query with no matches used
-    to fall back to returning EVERY row, so "what did we say about
-    Marcus" came back with conversations that never mentioned Marcus —
-    the raw material for confabulated recall; it now says no match.
-    (2) The empty-state copy asserted an auto-archive behaviour the
-    backend never had.
-    """
+    """Recall bounded historical exchanges, preserving read failures and search scope."""
     query = (action.get("query") or "").strip()
     days = _parse_time_range_days(action.get("time_range"))
-    # _ts, not isoformat(): its '+00:00' decodes to a space in the query
-    # string, the read 400s (22007) and fails soft, so "what did we talk
-    # about last week?" found nothing (seen 2026-09-26, "chief read
-    # unavailable: /chief_conversations").
+    # _ts keeps '+00:00' from decoding to a space in the PostgREST query.
     since = _ts(datetime.now(timezone.utc) - timedelta(days=days))
-
     rows = await _sb(
         client, "GET",
         f"/chief_conversations?business_id=eq.{biz['id']}&ended_at=gte.{since}"
         f"&order=ended_at.desc&limit=60"
         f"&select=id,summary,key_topics,actions_taken,messages,"
         f"started_at,ended_at,message_count",
-    ) or []
-    if not isinstance(rows, list):
-        rows = []
+    )
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return {
+            "type": "recall_conversation", "result": "Failed: conversation history unavailable",
+            "label": "Conversation history is unavailable", "failed": True,
+            "summary": "Conversation history is unavailable right now. This does not mean there are no saved conversations.",
+            "conversations": [], "search_complete": False,
+        }
 
+    searched = len(rows)
+    search_complete = searched < 60
+    scope = {"searched_count": searched, "search_complete": search_complete}
     if not rows:
         return {
-            "type": "recall_conversation",
-            "result": "no_conversations",
-            "label": "📜 No recent conversations to recall",
-            "summary": (
-                f"I don't have anything from the last {days} days on file — "
-                "every conversation is kept from here on, so there is simply "
-                "nothing in that window yet."
-            ),
-            "conversations": [],
+            "type": "recall_conversation", "result": "no_conversations",
+            "label": "No recent conversations to recall",
+            "summary": f"No saved conversations were found in the last {days} days.",
+            "conversations": [], **scope,
         }
 
     if query:
         rows = [c for c in rows if _conversation_matches(c, query)]
         if not rows:
             return {
-                "type": "recall_conversation",
-                "result": "no_matches",
-                "label": f"📜 Nothing about “{query[:40]}” in the last {days} days",
+                "type": "recall_conversation", "result": "no_matches",
+                "label": f"No matches for {query[:40]}",
                 "summary": (
-                    f"Nothing in the last {days} days mentions “{query}”. "
-                    "I can widen the window if you like."
+                    f'No matches for "{query}" were found in the '
+                    f'{searched} saved conversations checked from the last {days} days.'
+                    + (" Older conversations in that window have not been checked." if not search_complete else "")
                 ),
-                "conversations": [],
+                "conversations": [], **scope,
             }
 
     summaries: List[str] = []
+    exchanges: List[str] = []
     for conv in rows[:5]:
         ended = (conv.get("ended_at") or "")[:10]
-        summary = conv.get("summary") or "No summary recorded."
-        topics = ", ".join(conv.get("key_topics") or []) or "—"
-        msg_count = conv.get("message_count") or 0
-        summaries.append(
-            f"**{ended}** ({msg_count} messages · topics: {topics})\n{summary}"
-        )
+        summary = _recall_excerpt(conv.get("summary") or "No summary recorded.", query, 150)
+        summaries.append(f"{ended}: {summary}")
+        exchange = _recall_exchange(conv, query)
+        exchanges.append(f"{ended}: {summary}" + ("\n" + exchange if exchange else ""))
 
     return {
         "type": "recall_conversation",
         "result": f"{len(rows)} conversations",
-        "label": f"📜 Found {len(rows)} recent conversation{'s' if len(rows) != 1 else ''}",
-        "conversations": summaries,
+        "label": f"Found {len(rows)} matching saved conversation{'s' if len(rows) != 1 else ''}",
+        "context_note": "Historical conversation excerpts; assistant statements are not execution receipts or proof of current status.",
+        "conversations": exchanges,
         "summary": "\n\n".join(summaries),
+        "returned_count": len(exchanges), **scope,
     }
 
 
@@ -15298,6 +15304,7 @@ async def chief_missions_endpoint(
 
 class PrewarmRequest(BaseModel):
     business_id: str
+    refresh_style: bool = False
 
 
 @router.post("/agents/chief/prewarm")
@@ -15328,7 +15335,7 @@ async def chief_prewarm_endpoint(
         user_id = getattr(getattr(user_session, "user", None), "id", None)
 
         # Mic-tap throttle: four taps must not fan out four sweeps.
-        if not chief_prewarm.should_rewarm(user_id, req.business_id):
+        if not req.refresh_style and not chief_prewarm.should_rewarm(user_id, req.business_id):
             return {"ok": True, "warmed": 0, "reason": "already warm"}
 
         async with httpx.AsyncClient() as client:
@@ -15346,6 +15353,9 @@ async def chief_prewarm_endpoint(
 
             import chief_fast_track
             chief_fast_track.remember_style(str(user_id or ""), biz)
+            if req.refresh_style:
+                # Refresh only the authorized delivery profile after settings change.
+                return {"ok": True, "warmed": 0, "style_refreshed": True}
             sources = _context_sources(client, biz)
             names = list(sources.keys())
             results = await asyncio.gather(
