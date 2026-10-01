@@ -567,6 +567,10 @@ app.include_router(lead_admin_diag_router)
 # Tauri app.
 from platform_console import router as platform_console_router
 app.include_router(platform_console_router)
+# Mission Control → Today (2026-10-01 redesign): the ranked, deduplicated
+# "needs you" queue + pulse + overnight in one owner-only read.
+from platform_today import router as platform_today_router
+app.include_router(platform_today_router)
 from platform_chief_authority import router as platform_chief_authority_router
 app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
@@ -599,6 +603,8 @@ app.include_router(support_queue_router)
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
 from stripe_billing import router as stripe_billing_router
 app.include_router(stripe_billing_router)
+from stripe_discounts import router as stripe_discounts_router
+app.include_router(stripe_discounts_router)
 # Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
 # over the existing email/SMS rails. /campaigns/* (all JWT-authed,
 # ownership verified); the send sweep registers in startup() below.

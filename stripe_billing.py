@@ -76,7 +76,7 @@ import ledger_unlock
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from auth_supabase import AuthedUser, require_user
 from lead_admin import require_owner
@@ -478,6 +478,7 @@ class CheckoutBody(BaseModel):
     # checkout and the full monthly tank is theirs at once, instead of
     # the trial's smaller one. Off by default; the trial stays the door.
     skip_trial: bool = False
+    promotion_code: Optional[str] = Field(default=None, max_length=64)
 
 
 def _price_for_plan(plan):
@@ -542,7 +543,13 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     # PAYG overage line item is GONE — usage beyond the allowance draws
     # down prepaid credit packs instead. See /billing/credits/checkout.)
     line_items: list = [{"price": price_id, "quantity": 1}]
+    discount_options = {"allow_promotion_codes": True}
+    if body.promotion_code:
+        from stripe_discounts import resolve_code
+        promo = await resolve_code(body.promotion_code)
+        discount_options = {"discounts": [{"promotion_code": promo["id"]}]}
     session = await _stripe_post("/checkout/sessions", {
+        **discount_options,
         "mode": "subscription",
         "customer": customer_id,
         "line_items": line_items,
