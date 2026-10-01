@@ -93,7 +93,7 @@ def test_reviewer_failure_preserves_queued_status_and_never_says_finished():
         ctx={}, view_detail={}, taken=[{'type': 'enqueue_job', 'result': 'queued',
             'label': 'Course build queued'}], message='Build course', business_id='biz',
         reviewer=AsyncMock(side_effect=RuntimeError('offline'))))
-    assert result == 'Course build queued'
+    assert result == 'Course build queued.'
     assert meta['status'] == 'receipts'
 
 
