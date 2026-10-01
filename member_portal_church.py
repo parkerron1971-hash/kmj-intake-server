@@ -69,6 +69,7 @@ ERRORS = {
     "group_closed": "That group isn't taking new people right now.",
     "group_gone": "That group isn't running any more.",
     "leader": "You lead this group, so to step down, talk to the church office.",
+    "preview": "This is a preview, so nothing is saved.",
 }
 
 
@@ -676,13 +677,17 @@ def coming_up(occasions: Optional[List[Dict[str, Any]]]) -> str:
 async def _signed_in(request: Request):
     """(church, me, unavailable): me is None without a live session;
     unavailable is True when the records could not be read, so the route
-    says "try again" instead of dropping the member at sign-in."""
+    says "try again" instead of dropping the member at sign-in, and
+    "preview" in the owner's preview (nothing saves)."""
     import asyncio
     from member_portal import _church_or_404, _session_for
     church = await _church_or_404(request)
     sess = await asyncio.to_thread(_session_for, request, church)
     if sess and sess.get("unavailable"):
         return church, None, True
+    if sess and sess.get("preview"):
+        # The owner's preview reads; it never writes as the member.
+        return church, None, "preview"
     if not sess or not sess.get("me"):
         return church, None, False
     return church, sess["me"], False
@@ -708,7 +713,7 @@ async def rsvp(request: Request):
     form = await request.form()
     back = str(form.get("back") or "/my")
     if unavailable:
-        return _back(back, err="error")
+        return _back(back, err="preview" if unavailable == "preview" else "error")
     if not me:
         return _back("/my")
     if not _allowed(church, me):
@@ -724,7 +729,7 @@ async def prayer(request: Request):
     import asyncio
     church, me, unavailable = await _signed_in(request)
     if unavailable:
-        return _back("/my/prayer", err="error")
+        return _back("/my/prayer", err="preview" if unavailable == "preview" else "error")
     if not me:
         return _back("/my")
     form = await request.form()
@@ -744,7 +749,7 @@ async def details(request: Request):
     import asyncio
     church, me, unavailable = await _signed_in(request)
     if unavailable:
-        return _back("/my/details", err="error")
+        return _back("/my/details", err="preview" if unavailable == "preview" else "error")
     if not me:
         return _back("/my")
     form = await request.form()
@@ -776,7 +781,7 @@ async def groups(request: Request):
     import asyncio
     church, me, unavailable = await _signed_in(request)
     if unavailable:
-        return _back("/my/groups", err="error")
+        return _back("/my/groups", err="preview" if unavailable == "preview" else "error")
     if not me:
         return _back("/my")
     form = await request.form()

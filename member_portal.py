@@ -163,16 +163,26 @@ def portal_settings(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-def portal_active(biz: Dict[str, Any]) -> bool:
-    """The ONE activation rubric: page, POSTs and the owner panel."""
+def portal_eligible(biz: Dict[str, Any]) -> bool:
+    """A church (or nonprofit) that COULD switch the page on."""
     import vertical_family
     import vertical_scope
     t = biz.get("type")
-    if not vertical_family.is_nonprofit_like(t):
-        return False
-    if not vertical_scope.client_surface_allowed(t):
-        return False
-    return bool(portal_settings(biz.get("settings")).get("enabled"))
+    return vertical_family.is_nonprofit_like(t) and vertical_scope.client_surface_allowed(t)
+
+
+def portal_active(biz: Dict[str, Any]) -> bool:
+    """The ONE activation rubric: page, POSTs and the owner panel."""
+    return portal_eligible(biz) and bool(portal_settings(biz.get("settings")).get("enabled"))
+
+
+def _previewing(request: Request, biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The owner's live preview claims on this church, or None
+    (member_portal_preview.py)."""
+    import member_portal_preview as pv
+    if not portal_eligible(biz):
+        return None
+    return pv.read_session(request.cookies.get(pv.PREVIEW_COOKIE) or "", biz["id"], epoch=_epoch(biz))
 
 
 def _key(purpose: str, business_id: str) -> bytes:
@@ -461,6 +471,14 @@ def _session_for(request: Request, church: Dict[str, Any]) -> Optional[Dict[str,
     {"unavailable": True} when the records could not be read — the page
     says "try again" rather than signing the member out."""
     biz = church["business"]
+    preview = _previewing(request, biz)
+    if preview:
+        import member_portal_preview as pv
+        who = pv.load_contact(biz["id"], preview["cid"])
+        if who is None:
+            return {"unavailable": True}
+        if who:
+            return {"claims": preview, "people": [who], "me": who, "preview": True}
     claims = read_session(request.cookies.get(SESSION_COOKIE) or "", biz["id"],
                           epoch=_epoch(biz))
     if not claims:
@@ -762,10 +780,37 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     if not church:
         raise HTTPException(404, "Not found")
     biz, site = church["business"], church["site"]
-    if not portal_active(biz):
+    sub = path.rstrip("/") or "/my"
+    if sub == "/my/preview":
+        return await asyncio.to_thread(_open_preview, request, biz, site)
+    # The owner's preview works before the page is switched on.
+    if not portal_active(biz) and not _previewing(request, biz):
         return _page(render_unavailable(biz, site), 404)
     sess = await asyncio.to_thread(_session_for, request, church)
-    sub = path.rstrip("/") or "/my"
+    resp = await _serve_page(request, church, sess, sub)
+    if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
+        import member_portal_preview as pv
+        resp = _page(pv.mark(resp.body.decode("utf-8"), (sess["me"] or {}).get("name") or ""), resp.status_code)
+    return resp
+
+
+def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:
+    """The owner's one-time preview link: trade it for an hour-long
+    preview cookie and land on Home. An expired or used link says so."""
+    import member_portal_preview as pv
+    claims = (pv.redeem_link_token(biz["id"], str(request.query_params.get("t") or ""))
+              if portal_eligible(biz) else None)
+    if not claims:
+        return _page(_shell(biz, site, "Preview", """
+<div class="mp-card"><h1>This preview link has expired</h1>
+<p class="mp-muted">Preview links work once, for two minutes. Open a new one from Settings → Member page in the app.</p></div>"""), 410)
+    resp = RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+    pv.set_cookie(resp, pv.mint_session(biz["id"], claims["cid"], claims.get("own") or ""))
+    return resp
+
+
+async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
+    biz, site = church["business"], church["site"]
     if sess and sess.get("unavailable"):
         return _page(render_try_again(biz, site), 503)
     if not sess:
@@ -847,7 +892,7 @@ async def _church_or_404(request: Request) -> Dict[str, Any]:
     church = await asyncio.to_thread(_church_for_request, request)
     if not church:
         raise HTTPException(404, "Not found")
-    if not portal_active(church["business"]):
+    if not portal_active(church["business"]) and not _previewing(request, church["business"]):
         raise HTTPException(404, "Not found")
     return church
 
@@ -1001,9 +1046,27 @@ async def choose_person(request: Request):
 
 @router.post("/my/signout", include_in_schema=False)
 async def sign_out(request: Request):
+    import member_portal_preview as pv
     await _church_or_404(request)
     resp = RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     resp.delete_cookie(SESSION_COOKIE, path=COOKIE_PATH, secure=True, httponly=True, samesite="lax")
+    pv.clear_cookie(resp)
+    return resp
+
+
+@router.post("/my/preview/end", include_in_schema=False)
+async def end_preview(request: Request):
+    """Leave the owner's preview. Lands on /my when the page is on, else
+    the church's home page (a switched-off /my would be a 404)."""
+    import member_portal_preview as pv
+    if not _same_origin(request):
+        raise HTTPException(403, "Not allowed")
+    church = await asyncio.to_thread(_church_for_request, request)
+    if not church:
+        raise HTTPException(404, "Not found")
+    resp = RedirectResponse("/my" if portal_active(church["business"]) else "/", status_code=303,
+                            headers=_SECURE_HEADERS)
+    pv.clear_cookie(resp)
     return resp
 
 
@@ -1044,6 +1107,32 @@ def get_member_portal_config(business_id: str, user: AuthedUser = Depends(requir
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
     return _config_payload(biz, site)
+
+
+@router.post("/member-portal/{business_id}/preview")
+def create_member_preview(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """Owner only. Body: { contact_id }. A one-time, two-minute link that
+    opens the member app as that member, in a read-only preview
+    (member_portal_preview.py) — no email or text involved."""
+    import member_portal_preview as pv
+    from business_sites_helpers import ensure_business_site
+    biz = _require_owner(business_id, user)
+    if not portal_eligible(biz):
+        raise HTTPException(400, "Member pages are for churches and nonprofits.")
+    contact_id = str((body or {}).get("contact_id") or "")
+    if not UUID_RE.match(contact_id):
+        raise HTTPException(400, "Choose who to preview as.")
+    who = pv.load_contact(business_id, contact_id)
+    if who is None:
+        raise HTTPException(503, "Couldn't open a preview just now. Please try again.")
+    if not who:
+        raise HTTPException(404, "That person isn't in this church's records.")
+    token = pv.issue_link_token(business_id, contact_id, str(user.id))
+    if not token:
+        raise HTTPException(503, "Couldn't open a preview just now. Please try again.")
+    site, _ = ensure_business_site(biz)
+    base = _config_payload(biz, site)["url"]
+    return {"ok": True, "url": f"{base}/preview?t={quote(token, safe='')}", "expires_in": pv.LINK_TTL_SECONDS}
 
 
 @router.patch("/member-portal/{business_id}")
