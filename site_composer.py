@@ -4333,6 +4333,11 @@ def compose_site(business_id: str, brief_notes: str = "",
     if _mp_slug:
         rebuild_secondary_pages(business_id, ctx, _mp_slug)
 
+    # THE PHOTO LIST (2026-10-01): what the page still wants photographed
+    # becomes one practitioner task, refreshed in place. Free; best-effort.
+    if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
+        file_photo_list(business_id, ctx)
+
     # THE OFFER PAGE: built after the home is live (it never delays it),
     # wearing the home's house style. A spec with no offer scope clears a
     # page an earlier build made. Best-effort.
@@ -6092,6 +6097,24 @@ def choose_direction(body: ChooseDirectionBody,
 def _offer_pages_enabled() -> bool:
     return (os.environ.get("SITE_OFFER_PAGE") or "on").strip().lower() not in (
         "off", "0", "false", "no")
+
+
+def file_photo_list(business_id: str, ctx: Dict[str, Any]) -> Optional[str]:
+    """Read the served home (slots filled since are marked sx-filled) and
+    hand the owner what is still missing, with the concept's own photo
+    list. Never raises."""
+    try:
+        import site_concept
+        import site_photo_list
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=html_content&order=updated_at.desc&limit=1") or []
+        html = str((rows[0].get("html_content") if rows else "") or "")
+        sheet = site_concept.parse_sheet(ctx.get("design_spec_text") or "")
+        return site_photo_list.file_task(business_id, html, sheet)
+    except Exception as e:
+        logger.info(f"[composer] photo list skipped: {e}")
+        return None
 
 
 def build_offer_page(business_id: str, ctx: Dict[str, Any], home_html: str,
