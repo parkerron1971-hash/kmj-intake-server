@@ -23,9 +23,9 @@ class Provider:
     def __init__(self): self.inputs=[]; self.output=asyncio.Queue()
     async def send(self, raw):
         msg=json.loads(raw); self.inputs.append(msg)
-        if msg['text']:
+        if msg['text'] and msg.get('flush'):
             await self.output.put(json.dumps({'audio':base64.b64encode(b'\x00\x01'*64).decode()}))
-        else: await self.output.put(json.dumps({'isFinal':True}))
+        elif not msg['text']: await self.output.put(json.dumps({'isFinal':True}))
     async def close(self): pass
     def __aiter__(self): return self
     async def __anext__(self): return await self.output.get()
@@ -51,7 +51,7 @@ def test_audio_flows_before_finish_and_before_usage_logging(monkeypatch):
         await asyncio.wait_for(task,1)
         assert len(ws.audio)==2 and ws.events[-1]['type']=='done'
         assert len(logged)==1 and logged[0]['input_tokens']==43
-        assert all('flush' not in m for m in up.inputs)
+        assert all(m.get('flush') is True for m in up.inputs if m['text'])
         assert up.inputs[-1] == {'text': ''}  # finish drains the provider buffer
     asyncio.run(run())
 
