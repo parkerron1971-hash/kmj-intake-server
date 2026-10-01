@@ -298,13 +298,17 @@ async def call_fallback(client: httpx.AsyncClient, system: Any,
 
     started_ms = int(time.time() * 1000)
     try:
-        resp = await client.post(
+        operation = client.post(
             OPENAI_CHAT_URL,
             headers={"Authorization": f"Bearer {key}",
                      "Content-Type": "application/json"},
             json={"model": model, "messages": oai_messages,
                   "max_completion_tokens": max_tokens},
             timeout=60.0)
+        import chief_request_timing
+        trace = chief_request_timing.CURRENT.get()
+        resp = (await chief_request_timing.post_response(operation, trace, "fallback", model)
+                if trace is not None else await operation)
     except httpx.HTTPError as e:
         logger.warning(f"[fallback] OpenAI request failed: {e}")
         return ""

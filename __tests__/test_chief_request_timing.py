@@ -252,3 +252,30 @@ def test_empty_thinking_exhaustion_is_diagnosable_without_content(clock, caplog)
     # Unknown provider values cannot accidentally log provider-supplied prose.
     call.observe({"type": "message_delta", "delta": {"stop_reason": "private detail"}})
     assert call.data["stop_reason"] == "max_tokens"
+
+
+def test_backup_provider_is_visible_in_same_request_trace(clock, monkeypatch):
+    from unittest.mock import AsyncMock
+    import fallback_brain
+    import api_usage_logger
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
+    monkeypatch.setenv("FALLBACK_BRAIN", "on")
+    monkeypatch.setattr(api_usage_logger, "log_api_usage", AsyncMock())
+    monkeypatch.setattr(fallback_brain, "_notify_owner", AsyncMock())
+    class Client:
+        async def post(self, *args, **kwargs):
+            clock[0] += .5
+            return httpx.Response(200, json={"choices": [{"message": {"content": "Fixture advice."}}], "usage": {}})
+    trace = timing.Trace(10, "backup-turn")
+    async def run():
+        token = timing.CURRENT.set(trace)
+        try:
+            return await fallback_brain.call_fallback(Client(), "system", [], 100)
+        finally:
+            timing.CURRENT.reset(token)
+    assert asyncio.run(run()) == "Fixture advice."
+    call = trace.snapshot()["calls"][0]
+    assert call["role"] == "fallback" and call["model"] == fallback_brain._model()
+    assert call["start_ms"] == 0 and call["end_ms"] == 500
+    assert call["outcome"] == "complete"
+    assert call["first_text_ms"] is None and call["headers_ms"] is None
