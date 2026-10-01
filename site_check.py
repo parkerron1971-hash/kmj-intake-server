@@ -154,6 +154,10 @@ def site_pages(business_id: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     for p in PAGE_PATHS[1:]:
         if str(pages.get(p.strip("/")) or "").strip():
             urls.append(origin + p)
+    # the World concept's offer page (2026-10-01) is a page visitors land on too
+    offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
+    if offer.get("path") and str(pages.get("offer") or "").strip():
+        urls.append(origin + offer["path"])
     return row, urls
 
 

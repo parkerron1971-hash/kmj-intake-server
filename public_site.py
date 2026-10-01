@@ -364,7 +364,21 @@ def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
 _SITE_PAGE_PATHS = {"/about": "about", "/services": "services", "/contact": "contact"}
 
 
-def _rewrite_nav_for_preview(html: str, slug: str) -> str:
+def _site_page_id(cfg: Dict[str, Any], path: str) -> Optional[str]:
+    """The generated page a clean path serves: a secondary page, or the
+    World concept's offer page at the path site_config.offer_page names
+    (2026-10-01, the concept-layer plan)."""
+    pid = _SITE_PAGE_PATHS.get(path)
+    if pid:
+        return pid
+    offer = (cfg or {}).get("offer_page") if isinstance((cfg or {}).get("offer_page"), dict) else {}
+    if offer.get("path") and path == offer["path"]:
+        return "offer"
+    return None
+
+
+def _rewrite_nav_for_preview(html: str, slug: str,
+                             cfg: Optional[Dict[str, Any]] = None) -> str:
     """Point the page nav at the preview base, for the preview base only.
 
     2026-08-13 site-builder audit: site_multipage.build_page_nav now
@@ -397,6 +411,15 @@ def _rewrite_nav_for_preview(html: str, slug: str) -> str:
     origin = f"https://{slug}.mysolutionist.app"
     for sub in _ALWAYS_WINS_PATHS:
         out = out.replace(f'href="{sub}"', f'href="{origin}{sub}"')
+    # Sliced pages (2026-10-01) link /about#x style, and a home with an
+    # offer page links its path; both stay inside the preview.
+    base = f"/public/site/{slug}"
+    for path, pid in _SITE_PAGE_PATHS.items():
+        out = out.replace(f'href="{path}#', f'href="{base}/{pid}#')
+    out = out.replace('href="/#', f'href="{base}#')
+    _offer = (cfg or {}).get("offer_page") if isinstance((cfg or {}).get("offer_page"), dict) else {}
+    if _offer.get("path"):
+        out = out.replace(f'href="{_offer["path"]}"', f'href="{base}{_offer["path"]}"')
     return out
 # Sub-paths served by their own handlers — never 404, never in the
 # "unknown path" branch.
@@ -432,6 +455,9 @@ def _site_sitemap_xml(slug: str, cfg: Dict[str, Any],
         for path, page_id in _SITE_PAGE_PATHS.items():
             if (pages.get(page_id) or "").strip():
                 urls.append(origin + path)
+        _offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
+        if _offer.get("path") and (pages.get("offer") or "").strip():
+            urls.append(origin + _offer["path"])
 
     # News, listed only once something has been written — an archive
     # page reading "nothing posted yet" is a real URL but not one worth
@@ -1792,6 +1818,8 @@ async def get_site_page_html(slug: str, page_path: str):
         cfg = sites[0].get("site_config") or {}
         pages = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
         page_id = studio_page_types.slug_to_page_id(page_path)
+        if _site_page_id(cfg, "/" + page_path.strip("/")) == "offer":
+            page_id = "offer"
         html = (pages or {}).get(page_id) or ""
         if not html:
             # Home, unknown page, or a single-page site → serve the main page.
@@ -1812,7 +1840,7 @@ async def get_site_page_html(slug: str, page_path: str):
         html = _inject_canonical(html, slug, cfg.get("custom_domain"),
                                  f"/{page_id}" if page_id != "home" else "")
         html = _inject_brand_meta(html, sites[0].get("business_id"))
-        html = _rewrite_nav_for_preview(html, slug)
+        html = _rewrite_nav_for_preview(html, slug, cfg)
         return HTMLResponse(content=html, status_code=200, media_type="text/html",
                             headers={"X-Solutionist-Source": "manual-site" if manual
                                      else "module-composer-multipage"})
@@ -6676,7 +6704,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # nav pointed visitors at the /public/... preview URL.
         _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
-        _page_id = _SITE_PAGE_PATHS.get(normalized_path)
+        _page_id = _site_page_id(_cfg, normalized_path)
         if _page_id and isinstance(_pages, dict):
             _page_html = (_pages.get(_page_id) or "").strip()
             if _page_html:
@@ -6808,7 +6836,7 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # Secondary pages at clean paths, on the practitioner's own domain.
         _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
-        _page_id = _SITE_PAGE_PATHS.get(_norm)
+        _page_id = _site_page_id(_cfg, _norm)
         if _page_id and isinstance(_pages, dict):
             _page_html = (_pages.get(_page_id) or "").strip()
             if _page_html:
@@ -7426,7 +7454,11 @@ async def public_start(request: Request):
     # startswith "founder") and enforces the seat cap.
     if plan in ("starter", "professional", "practice", "founder"):
         carried["plan"] = plan
-    url = MARKETING_APP_URL + (f"/?{urlencode(carried)}" if carried else "/")
+    # Everyone who reaches /start pressed a "start" button, so the app opens on
+    # Create account. Without this it opened on "Welcome back / Sign in" and the
+    # 21 people who clicked Start in September all stopped there (2026-10-01).
+    carried["signup"] = "1"
+    url = MARKETING_APP_URL + f"/?{urlencode(carried)}"
     return RedirectResponse(url=url, status_code=302)
 
 

@@ -165,7 +165,15 @@ HOST = {"host": "mysolutionist.app"}
 def test_start_sends_you_to_the_app(client):
     r = client.get("/start", headers=HOST)
     assert r.status_code == 302
-    assert r.headers["location"] == "https://system.mysolutionist.app/"
+    assert r.headers["location"] == "https://system.mysolutionist.app/?signup=1"
+
+
+def test_start_opens_the_app_on_create_account(client):
+    """Everyone at /start pressed a start button. The app used to open on
+    "Welcome back / Sign in", and every September Start click stopped there."""
+    loc = client.get("/start?utm_source=meta&plan=founder", headers=HOST).headers["location"]
+    assert "signup=1" in loc and "utm_source=meta" in loc and "plan=founder" in loc
+    assert client.get("/start?signup=0", headers=HOST).headers["location"].count("signup=") == 1
 
 
 def test_start_carries_the_campaign_across_the_origin_hop(client):

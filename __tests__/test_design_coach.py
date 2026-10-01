@@ -240,3 +240,42 @@ def test_parse_turn_passes_the_photo_ask_through_and_drops_junk():
     assert dc.parse_turn(_turn(ask="Photos "))["ask"] == "photos"
     assert dc.parse_turn(_turn(ask="money"))["ask"] is None
     assert dc.parse_turn(_turn())["ask"] is None
+
+
+# ─── THE CONCEPT CARDS (2026-10-01, the concept-layer plan) ──────────
+# Kevin: "I like how you showed me options, so that is how I would want
+# it done." The coach shows plain / signature / world as cards, each with
+# a one-line pitch for this business, and the tap binds the build.
+
+def test_the_concept_gallery_keeps_its_cards_and_their_pitches():
+    out = dc.parse_turn(_turn(gallery={
+        "kind": "concept", "options": ["signature", "plain", "world-offer", "neon"],
+        "notes": {"signature": "your price list as the board on your wall",
+                  "world-offer": "your Saturday shave club as its own page",
+                  "neon": "not a concept card"}}))
+    assert out["gallery"]["kind"] == "concept"
+    assert out["gallery"]["options"] == ["signature", "plain", "world-offer"]
+    assert set(out["gallery"]["notes"]) == {"signature", "world-offer"}
+    assert "notes" not in dc.parse_turn(_turn(gallery={
+        "kind": "concept", "options": ["plain", "signature"]}))["gallery"]
+
+
+def test_a_tapped_concept_card_saves_its_key():
+    for said, key in (("World: one offer page, that's the one.", "world-offer"),
+                      ("World: the whole site, that's the one.", "world-site"),
+                      ("World", "world-offer"),
+                      ("Signature", "signature"), ("Plain", "plain"),
+                      ("keep it simple", "plain")):
+        out = dc.parse_turn(_turn(saves=[{"section": "taste", "field": "concept",
+                                          "value": said}]))
+        assert out["saves"] == [{"section": "taste", "field": "concept", "value": key}], said
+    junk = dc.parse_turn(_turn(saves=[{"section": "taste", "field": "concept",
+                                       "value": "maximalist"}]))
+    assert junk["saves"] == []
+
+
+def test_the_coach_is_taught_the_cards_and_the_rulings():
+    s = dc._SYSTEM
+    assert 'kind "concept"' in s and "world-offer" in s and "world-site" in s
+    assert "CONCEPT DEFAULT" in s and "Never pick for them" in s
+    assert "concept_idea" in s and "concept_offer" in s

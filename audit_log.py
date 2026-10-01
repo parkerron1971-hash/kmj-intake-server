@@ -126,19 +126,33 @@ def sync_action_types() -> int:
     # is not in action_types gets its ledger rows stamped
     # verb_registered=false, so a silent failure here shows up later as
     # a ledger that quietly doubts itself.
-    try:
-        written = sb_clients.sb_post_as_service(
-            "/action_types?on_conflict=verb&select=verb", vocab,
-            prefer="resolution=merge-duplicates,return=representation")
-    except Exception as e:
-        logger.error(f"[ledger] action_types sync raised: {e}")
-        return 0
-    if not written:
-        logger.error("[ledger] action_types sync LOST — the vocabulary was "
-                     "not published, so new verbs will be stamped "
-                     "verb_registered=false")
-        return 0
-    return len(vocab)
+    #
+    # And it was never landing. PostgREST rejects a bulk insert whose rows
+    # do not all carry the same keys (PGRST102 "All object keys must
+    # match"), and the vocabulary mixes three shapes: registry verbs with
+    # bulk + reversibility, described verbs, and bare ledger verbs. Every
+    # boot lost the whole vocabulary (Sentry PYTHON-FASTAPI-1). One upsert
+    # per shape keeps each request uniform, and leaves the columns a shape
+    # does not carry untouched instead of nulling them.
+    shapes: Dict[tuple, List[Dict[str, Any]]] = {}
+    for row in vocab:
+        shapes.setdefault(tuple(sorted(row)), []).append(row)
+    published = 0
+    for rows in shapes.values():
+        try:
+            written = sb_clients.sb_post_as_service(
+                "/action_types?on_conflict=verb&select=verb", rows,
+                prefer="resolution=merge-duplicates,return=representation")
+        except Exception as e:
+            logger.error(f"[ledger] action_types sync raised: {e}")
+            continue
+        if written:
+            published += len(rows)
+    if published < len(vocab):
+        logger.error(f"[ledger] action_types sync LOST {len(vocab) - published} "
+                     f"of {len(vocab)} verbs — they were not published, so "
+                     "they will be stamped verb_registered=false")
+    return published
 
 
 def _cap_json(value: Any) -> Dict[str, Any]:

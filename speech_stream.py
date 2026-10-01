@@ -5,6 +5,7 @@ Only PCM and small status events leave the relay; the provider key stays here.
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import time
@@ -48,8 +49,32 @@ def parse_hello(raw):
 def upstream_url(voice):
     return "wss://api.elevenlabs.io/v1/text-to-speech/" + voice + "/stream-input?" + urlencode({
         "model_id": tts.ELEVENLABS_MODEL, "output_format": "pcm_24000",
-        "auto_mode": "true", "inactivity_timeout": 60,
+        "auto_mode": "true", "sync_alignment": "true", "inactivity_timeout": 60,
     })
+
+
+def alignment_event(message, audio_offset_ms):
+    """Forward bounded timing only; provider times are cumulative within the stream."""
+    data = (message.get("normalizedAlignment") or message.get("normalized_alignment")
+            or message.get("alignment"))
+    if not isinstance(data, dict):
+        return None
+    chars = data.get("chars")
+    starts = data.get("charStartTimesMs", data.get("char_start_times_ms"))
+    durations = data.get("charDurationsMs", data.get("char_durations_ms"))
+    if not all(isinstance(v, list) for v in (chars, starts, durations)):
+        return None
+    if not 0 < len(chars) <= 4096 or len(chars) != len(starts) or len(chars) != len(durations):
+        return None
+    if any(not isinstance(v, str) or len(v) > 32 for v in chars):
+        return None
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+           or not 0 <= v <= 600000 for v in starts + durations):
+        return None
+    if any(b < a for a, b in zip(starts, starts[1:])):
+        return None
+    return {"type": "alignment", "time_base": "stream", "audio_offset_ms": audio_offset_ms,
+            "chars": chars, "char_start_times_ms": starts, "char_durations_ms": durations}
 
 
 async def relay(ws, up, business_id, user_id):
@@ -57,6 +82,7 @@ async def relay(ws, up, business_id, user_id):
     chars = 0
     submitted_at = None
     first_audio = None
+    audio_bytes = 0
     finished_input = asyncio.Event()
 
     async def read_text():
@@ -90,13 +116,13 @@ async def relay(ws, up, business_id, user_id):
                 submitted_at = time.perf_counter()
             chars += len(text)
             tts._note_el_chars(business_id, len(text))
-            # Complete sentences generate directly in auto_mode; a forced
-            # per-fragment flush is unnecessary. Empty text at finish drains
-            # the tail without closing between the opening and main answer.
-            await up.send(json.dumps({"text": spoken + " "}))
+            # The browser sends complete sentences, not model token fragments.
+            # Explicitly release each sentence so a short Haiku opening never
+            # waits for more text from the main model. Keep the socket open.
+            await up.send(json.dumps({"text": spoken + " ", "flush": True}))
 
     async def read_audio():
-        nonlocal first_audio
+        nonlocal first_audio, audio_bytes
         async for raw in up:
             msg = json.loads(raw)
             if msg.get("error") or msg.get("message") and not msg.get("audio"):
@@ -106,8 +132,12 @@ async def relay(ws, up, business_id, user_id):
                 if audio:
                     if first_audio is None:
                         first_audio = time.perf_counter()
+                    alignment = alignment_event(msg, audio_bytes / 48)
+                    if alignment:
+                        await ws.send_json(alignment)
                     await ws.send_bytes(audio)
-            if msg.get("isFinal"):
+                    audio_bytes += len(audio)
+            if msg.get("isFinal") or msg.get("is_final"):
                 if not finished_input.is_set():
                     raise RuntimeError("speech provider ended before input")
                 await ws.send_json({"type": "done"})
