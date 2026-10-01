@@ -233,3 +233,22 @@ def test_background_work_does_not_inherit_foreground_trace(monkeypatch):
             timing.CURRENT.reset(token)
     asyncio.run(run())
     assert observed == [None,None,None]
+
+
+def test_empty_thinking_exhaustion_is_diagnosable_without_content(clock, caplog):
+    caplog.set_level(logging.INFO, logger="chief.request_timing")
+    trace = timing.Trace(10, "empty-turn")
+    call = trace.start("main", "model", "sse")
+    call.observe({"type": "content_block_start", "content_block": {"type": "thinking", "thinking": "private reasoning"}})
+    call.observe({"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "more private"}})
+    call.observe({"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 1400}})
+    call.observe({"type": "message_stop"})
+    call.finish("complete")
+    data = trace.snapshot()["calls"][0]
+    assert data["stop_reason"] == "max_tokens" and data["output_tokens"] == 1400
+    assert data["thinking_blocks"] == 1 and data["tool_blocks"] == 0
+    assert data["first_text_ms"] is None and data["text_chars"] == 0
+    assert "private" not in caplog.text
+    # Unknown provider values cannot accidentally log provider-supplied prose.
+    call.observe({"type": "message_delta", "delta": {"stop_reason": "private detail"}})
+    assert call.data["stop_reason"] == "max_tokens"

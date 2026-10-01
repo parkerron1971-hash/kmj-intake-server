@@ -2294,57 +2294,53 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id'),
     )]
 
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = await asyncio.gather(*tasks)
+    # Start each dependent read as soon as its own scoped prerequisite is
+    # available. A slow mailbox/contact query must not postpone owner profiles
+    # or module counts. All sources still join before prompt construction.
+    primary = [asyncio.ensure_future(a) for a in tasks]
 
+    async def _owner_context():
+        scoped_business = await primary[0]
+        owner_id = (scoped_business[0] if scoped_business else {}).get("owner_id")
+        if not owner_id:
+            return "", {}, ""
+        return await asyncio.gather(
+            _soft(asyncio.to_thread(pp_chief_context_block, owner_id), ""),
+            _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id), {}),
+            _soft(asyncio.to_thread(voice_chief_context_block, owner_id), ""),
+        )
+
+    async def _module_counts():
+        scoped_business = await primary[0]
+        if not scoped_business:
+            return []
+        scoped_modules = await primary[6]
+        return await asyncio.gather(*[
+            _sb_count(client,
+                f"/module_entries?business_id=eq.{biz_id}&module_id=eq.{m['id']}&status=eq.active&select=id")
+            for m in (scoped_modules or [])
+        ])
+
+    dependent = [asyncio.create_task(_owner_context()), asyncio.create_task(_module_counts())]
+    try:
+        if not await primary[0]:
+            return {}
+        primary_values, owner_values, module_entry_rows, early_values = await asyncio.gather(
+            asyncio.gather(*primary), *dependent, asyncio.gather(*early))
+    finally:
+        # Cancellation/error must not leave reads using this turn's closed client.
+        for task in [*primary, *dependent, *early]:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*primary, *dependent, *early, return_exceptions=True)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = primary_values
     if not biz_rows:
-        for t in early:
-            t.cancel()
-        await asyncio.gather(*early, return_exceptions=True)
         return {}
     biz = biz_rows[0]
-
-    # ── Wave 2 (latency round 4, 2026-08-26) ─────────────────────────
-    # These context blocks had become TEN SEQUENTIAL awaits — one
-    # Supabase round trip after another, 2-4s of the context leg every
-    # turn. That is the exact serial-reads class the 8/14 fix (#584)
-    # cured in wave 1, regrown BEHIND it as new blocks accreted one
-    # try/except at a time. Every one depends only on biz_id or
-    # owner_id (which wave 1's business row supplies), so they run as
-    # ONE gather. Each keeps its own fail-open fallback — a block that
-    # errors degrades to empty exactly as it always did, never the turn.
-    #
-    # The semantic memory match rides in the same wave — and moves OFF
-    # the event loop while it's at it: chief_memory_semantic.match does
-    # a SYNCHRONOUS OpenAI embedding call (httpx.post) that was running
-    # directly on the loop every turn, blocking the whole process —
-    # including other requests' SSE streams — for the length of an
-    # external API round trip.
-    owner_id_for_pp = (biz or {}).get("owner_id")
-
-    # The rest of wave 2: practitioner-keyed blocks (Build 3 / Pass 2.5b)
-    # need owner_id, because they follow the human across all their
-    # businesses; the module counts need wave 1's module list. They join
-    # whatever of the early wave is still running.
-    module_entries_tasks = [
-        _sb_count(client,
-            f"/module_entries?business_id=eq.{biz_id}&module_id=eq.{m['id']}&status=eq.active&select=id")
-        for m in (modules or [])
-    ]
-    late = await asyncio.gather(
-        _soft(asyncio.to_thread(pp_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
-        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
-              if owner_id_for_pp else _const({}), {}),
-        _soft(asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
-        *early,
-        *module_entries_tasks,
-    )
-    practitioner_block, practitioner_profile_raw, voice_block = late[0:3]
+    practitioner_block, practitioner_profile_raw, voice_block = owner_values
     (foundation_block, business_profile_block, _mat_block, _growth_block,
      business_profile_raw, brand_block, playbook_block, _semantic_hits,
-     blueprint_block, exact_contact_total) = late[3:3 + len(early)]
-    module_entry_rows = list(late[3 + len(early):])
+     blueprint_block, exact_contact_total) = early_values
 
     contacts_available = contacts is not None
     # A server-side row cap can be lower than our requested limit. Even a
@@ -2742,7 +2738,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     # ─── Business JIT section ──────────────────────────────────
     biz_section = ""
     try:
-        biz_missing = business_profile_agent.get_missing_jit_fields(biz_id)
+        biz_missing = (business_profile_agent.missing_jit_fields_from_profile(ctx["business_profile_raw"])
+                       if "business_profile_raw" in ctx
+                       else business_profile_agent.get_missing_jit_fields(biz_id))
     except Exception as e:
         logger.warning(f"[jit] business get_missing_jit_fields failed: {e}")
         biz_missing = []
@@ -2789,7 +2787,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     owner_id = (ctx.get("business") or {}).get("owner_id")
     if owner_id:
         try:
-            p_missing = practitioner_profile_agent.get_missing_jit_fields(owner_id)
+            p_missing = (practitioner_profile_agent.missing_jit_fields_from_profile(ctx["practitioner_profile_raw"])
+                         if "practitioner_profile_raw" in ctx
+                         else practitioner_profile_agent.get_missing_jit_fields(owner_id))
         except Exception as e:
             logger.warning(f"[jit] practitioner get_missing_jit_fields failed: {e}")
             p_missing = []
@@ -2837,7 +2837,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     voice_section = ""
     if voice_depth_agent and owner_id:
         try:
-            v_missing = voice_depth_agent.get_missing_voice_jit_fields(owner_id)
+            v_missing = (voice_depth_agent.missing_voice_jit_fields_from_profile(ctx["practitioner_profile_raw"])
+                         if "practitioner_profile_raw" in ctx
+                         else voice_depth_agent.get_missing_voice_jit_fields(owner_id))
         except Exception as e:
             logger.warning(f"[jit] voice get_missing_voice_jit_fields failed: {e}")
             v_missing = []
@@ -14010,6 +14012,10 @@ async def chief_chat(
         if not req.message:
             raise HTTPException(400, "message is required")
 
+        # Include admission checks in preparation timing; they precede context
+        # reads and previously disappeared from the stage breakdown.
+        _t = _TurnClock()
+
         # Per-user rate limit (beta-readiness audit) — one tester can't
         # fire thousands of Chief turns. Fail-open.
         # These gates read the database with a SYNCHRONOUS client, so they
@@ -14027,6 +14033,8 @@ async def chief_chat(
             raise
         except Exception:
             pass
+
+        _t.mark("rate_limit")
 
         # 7/30 tier arc — the Chief backend never consulted the allowance
         # (only /ai/proxy did). Dormant behind BILLING_ENFORCE; the 402
@@ -14049,7 +14057,7 @@ async def chief_chat(
         # these stamps say which STAGE was slow, so the next change goes
         # where the time actually is instead of where it is suspected.
         # Durations and counts only; nothing here is content.
-        _t = _TurnClock()
+        _t.mark("billing_gates")
 
         async with httpx.AsyncClient() as client:
             # Recurrence "cron" — generate any due invoice instances
