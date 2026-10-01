@@ -155,7 +155,7 @@ def stream(monkeypatch):
     state = {"models": [], "fallbacks": 0}
 
     @contextlib.asynccontextmanager
-    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None):
+    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         state["models"].append(payload["model"])
         yield _Resp(_refusal_sse() if payload["model"] == "claude-sonnet-5-5"
                     else _text_sse("Here is the answer."))
