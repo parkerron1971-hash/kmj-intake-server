@@ -82,7 +82,10 @@ def _gen_kwargs(model: str, temperature: Optional[float]) -> Dict[str, Any]:
     import model_ladder
     return {**model_ladder.sampling_kwargs(model, temperature),
             **model_ladder.effort_kwargs(model, BUILDER_EFFORT)}
-DOC_MAX_BYTES = 300 * 1024
+# 2026-10-01 (Kevin, the concept-layer plan): 300 KB sent richer pages to
+# the fallback engine whole. Library objects (letters, seals, tickets,
+# boarding passes) carry real markup, so the ceiling is 450 KB.
+DOC_MAX_BYTES = 450 * 1024
 
 _ALLOWED_LINK_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 # AUDIT FIX (flight one): the 2-digit rule attacked the DESIGN — the
@@ -221,7 +224,9 @@ OUTPUT: the HTML document only. No commentary, no code fences."""
 # two a blueprint commits to, and the invariant the moves tests guard
 # holds either way: a named move always arrives with its primitive.
 import design_moves as _dm
-_SYSTEM = _SYSTEM + chr(10)*2 + _dm.tinting_block(color_law="hexes")
+_SYSTEM = _SYSTEM + chr(10)*2 + _dm.tinting_block(color_law="hexes").replace(
+    "no url().", "no url() (the one exception: the object library's own paper "
+    "grain, inside data-sx-object elements).")
 _SYSTEM = _SYSTEM + "\n\n== TWO HARD RULES ON WHAT THE PAGE DOES WITHOUT HELP ==\n\n1. THE PAGE MUST SURVIVE WITHOUT JAVASCRIPT.\nScroll-reveal is the classic way to ship a blank page. If you write\n`.reveal{opacity:0}` and clear it from script, then ANY script error, a\nblocked asset, or a crawler that does not execute JS sees your nav and a\nblack rectangle. On the live site this hid 14 elements below the hero.\nSo: gate every reveal on a class the script itself adds, and give a\nno-script escape.\n\n   <script>document.documentElement.className+=' js'</script>  (put it in <head>)\n   .js .reveal{opacity:0;transform:translateY(14px)}\n   .js .reveal.in{opacity:1;transform:none}\n   <noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>\n\nNever write a bare `.reveal{opacity:0}`. Content is visible by default and\nJS may only take it away.\n\n2. THE BRAND MARK IS NOT A PORTFOLIO PIECE.\nUse the BRAND MARK url from the real-data block for the header logo, and\nnothing else. If no mark was supplied, set a typographic wordmark. A\ngallery image in the header is a broken brand: it shipped once as a\n1200x675 campaign flyer squashed into a 59x34 box. Give the mark its own\nbox with object-fit: contain so it keeps its aspect ratio.\n"
 
 def build_user_prompt(spec_text: str, real_data: str,
@@ -257,6 +262,17 @@ def build_user_prompt(spec_text: str, real_data: str,
     primitives = _dm.primitives_block(_dm.move_names_in(spec_text))
     if primitives:
         parts += [primitives, ""]
+    # THE OBJECTS (2026-10-01): the library objects the blueprint's concept
+    # sheet names arrive with their working source, the way named moves
+    # arrive with their primitives.
+    try:
+        import site_objects
+        objects = site_objects.builder_block(site_objects.object_names_in(spec_text))
+    except Exception as e:
+        logger.info(f"[v2] object library skipped: {e}")
+        objects = ""
+    if objects:
+        parts += [objects, ""]
     parts += [
         "== THE REAL DATA (the only facts you may render; every image url "
         "listed here must appear on the page) ==",

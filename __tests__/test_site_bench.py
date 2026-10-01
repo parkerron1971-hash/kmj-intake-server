@@ -50,3 +50,13 @@ def test_validate_grades_a_page_with_the_builders_laws(tmp_path):
     assert "14 years" not in tenure, "the owner's stated years pass"
     assert "25 years" in tenure, "an invented number still fails"
     assert out["violations_total"] >= 1
+    assert "craft_floor" in out and "soft_total" in out
+
+
+def test_objects_writes_the_library_contact_sheet(tmp_path):
+    out = _run("objects", "--out", str(tmp_path))
+    sheet = tmp_path / "objects.html"
+    assert str(sheet) in out or "objects.html" in out
+    html = sheet.read_text(encoding="utf-8")
+    assert 'data-sx-object="boarding-pass"' in html
+    assert "example.com" not in html, "photo urls are swapped for stand-ins"
