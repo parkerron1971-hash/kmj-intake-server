@@ -15304,6 +15304,7 @@ async def chief_missions_endpoint(
 
 class PrewarmRequest(BaseModel):
     business_id: str
+    refresh_style: bool = False
 
 
 @router.post("/agents/chief/prewarm")
@@ -15334,7 +15335,7 @@ async def chief_prewarm_endpoint(
         user_id = getattr(getattr(user_session, "user", None), "id", None)
 
         # Mic-tap throttle: four taps must not fan out four sweeps.
-        if not chief_prewarm.should_rewarm(user_id, req.business_id):
+        if not req.refresh_style and not chief_prewarm.should_rewarm(user_id, req.business_id):
             return {"ok": True, "warmed": 0, "reason": "already warm"}
 
         async with httpx.AsyncClient() as client:
@@ -15352,6 +15353,9 @@ async def chief_prewarm_endpoint(
 
             import chief_fast_track
             chief_fast_track.remember_style(str(user_id or ""), biz)
+            if req.refresh_style:
+                # Refresh only the authorized delivery profile after settings change.
+                return {"ok": True, "warmed": 0, "style_refreshed": True}
             sources = _context_sources(client, biz)
             names = list(sources.keys())
             results = await asyncio.gather(
