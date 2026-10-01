@@ -573,6 +573,10 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
     concept_block = ""
     try:
         concept_block = _concept.brief_block(_concept.attach(ctx))
+        if (ctx.get("concept") or {}).get("intensity") in ("signature", "world"):
+            recent = _concept.recent_block(_concept.recent_concepts(business_id))
+            if recent:
+                concept_block = concept_block + "\n\n" + recent
     except Exception as e:
         logger.info(f"[spec] concept skipped: {e}")
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
