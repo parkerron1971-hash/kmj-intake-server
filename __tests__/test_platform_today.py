@@ -99,7 +99,8 @@ def test_read_restates_the_queue():
     ]
     read = pt.compose_read(needs, [])
     assert read["headline"].startswith("One thing touches real people")
-    assert "creative genius" in read["body"]
+    # Business names keep their capitals.
+    assert "Creative Genius's renewal" in read["body"]
 
 
 def test_read_when_quiet_mentions_parked():
