@@ -1294,6 +1294,11 @@ async def startup():
             import hermes_agent as _hermes
             scheduler.add_job(g("hermes_tick", _hermes.hermes_tick), "interval", hours=1,
                               id="hermes_tick")
+            # Money auditor (agent ops Wave 2) — the daily read of the billing
+            # rails, same sense pattern as Hermes. 10:00 UTC = 6 AM Eastern.
+            import money_auditor as _money
+            scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
+                              hour=10, minute=0, id="money_auditor")
             # Email domain drift (setup room, Phase 1) — hourly re-check of
             # every VERIFIED sending domain. Without it a DNS record that
             # vanishes flips sends back to the platform address in
