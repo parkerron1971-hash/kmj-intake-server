@@ -476,6 +476,9 @@ app.include_router(accounting_periods_router)
 # The Bookkeeping room's front page: where the books stand, in one read
 from bookkeeping_overview import router as bookkeeping_overview_router
 app.include_router(bookkeeping_overview_router)
+# Close the month: one checklist per month (sync, money in, categories, statement, look, lock)
+from bookkeeping_close import router as bookkeeping_close_router
+app.include_router(bookkeeping_close_router)
 # Phase I.3 PR2 — soft-lock audit trail
 from period_overrides_router import router as period_overrides_router
 app.include_router(period_overrides_router)
