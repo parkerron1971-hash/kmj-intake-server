@@ -219,6 +219,7 @@ from chief_link_pilot import handle_link_wallet_pilot
 from chief_lane_wallet import handle_lane_wallet
 from chief_agentcard import handle_agentcard_wallet
 from chief_site_view import handle_view_website
+from chief_weather import handle_get_weather
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -1330,6 +1331,12 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # Chief Layers arc — callers pick a lane (chat/voice/deep) via
     # chief_models.model_for; no explicit model keeps the chat default.
     model = model or CHIEF_MODEL
+    # Put weather routing in the uncached tail, including a short retry whose
+    # location lives in the preceding owner request. Keep proof review intact.
+    import chief_weather
+    if (isinstance(system, str) and any(t.get('name') == 'get_weather' for t in (read_tools or []))
+            and chief_weather.weather_turn(messages) and chief_weather.TURN_GUIDANCE not in system):
+        system += chief_weather.TURN_GUIDANCE
     # A stable tool list (2026-09-24). Tools render BEFORE the system prompt,
     # so adding or dropping web_search between turns ("which invoices…" off,
     # "help me price…" on) invalidated the whole cached prefix — the 45k-token
@@ -11552,6 +11559,7 @@ ACTION_HANDLERS = {
     "lane_wallet":           handle_lane_wallet,
     "agentcard_wallet":      handle_agentcard_wallet,
     "view_website":          handle_view_website,
+    "get_weather":           handle_get_weather,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,

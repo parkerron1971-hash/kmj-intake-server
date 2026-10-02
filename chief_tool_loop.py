@@ -199,6 +199,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
             if action_registry.effect(n) == action_registry.READ]
     import chief_site_view
     out.append(chief_site_view.TOOL)  # Chief's own read: its image comes back via run_tool_round.
+    import chief_weather
+    out.append(chief_weather.TOOL)
     return out
 
 
@@ -416,7 +418,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
         return await _execute_write(client, biz, name, args)
 
     if name in _EXCLUDED or (not action_registry.may_expose_to_agent(name)
-                             and name not in ("list_connected_agents", "connected_agent_assignments")):
+                             and name not in ("list_connected_agents", "connected_agent_assignments", "get_weather")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

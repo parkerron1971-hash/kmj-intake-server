@@ -501,6 +501,12 @@ WEATHER_UNVERIFIED_REPLY = "I couldn't verify the current weather, so I don't ha
 def _weather_assertions(reply):
     assertions = []
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
+        # An exact heading names the topic, not a condition. Keep the location
+        # shape strict so "... in Muskegon is rainy" remains an assertion.
+        if re.fullmatch(r"(?i:here(?: is|'s|\u2019s) the (?:current )?weather)"
+                        r"(?:(?i: (?:in|for) )[A-Z][A-Za-z'-]*(?:[ -][A-Z][A-Za-z'-]*)*(?:, [A-Z]{2})?)?[.!:]?",
+                        sentence.strip()):
+            continue
         # A conditional keeps its coordinated predicates: "If it is rainy
         # and windy, move indoors" describes a contingency, not conditions.
         # A separate "but/however" clause can still assert current weather.
@@ -529,13 +535,21 @@ def _weather_assertions(reply):
     return assertions
 
 
-def _weather_source(sid, source):
+def _weather_source(sid, source, assertion='', quote=''):
     if not isinstance(source, dict) or source.get('failed'):
         return False
     # Provider-delivered citations are recorded during this turn, never copied
     # from conversational history. Structured weather tools can supply records.
     if source.get('kind') == 'research' and sid.startswith(('web:https://', 'web:http://')):
         return True
+    if sid == 'tool:get_weather':
+        if source.get('kind') != 'record':
+            return False
+        try:
+            import chief_weather
+            return chief_weather.supports_claim(json.loads(source.get('text') or ''), assertion, quote)
+        except (ValueError, TypeError):
+            return False
     return (source.get('kind') == 'record'
             and bool(re.match(r'^(?:tool|lookup|read):.*weather', sid, re.I)))
 
@@ -547,7 +561,7 @@ def _weather_provenance_missing(reply, claims, sources):
             if not isinstance(claim, dict) or not isinstance(claim.get('text'), str):
                 continue
             sid = claim.get('source_id')
-            if (isinstance(sid, str) and _weather_source(sid, sources.get(sid))
+            if (isinstance(sid, str) and _weather_source(sid, sources.get(sid), assertion, claim.get('quote') or '')
                     and not _unsourced(claim)
                     and _squash(assertion).rstrip('.!?') in _squash(claim['text']).rstrip('.!?')):
                 covered = True

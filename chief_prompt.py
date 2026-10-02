@@ -830,6 +830,8 @@ def _build_web_search_block() -> str:
         "- Public merchant product/billing pages for buying requests, unless a saved merchant link fits; verify the actual source before preparing a Wallet proposal. Never search for private account details.\n"
         "- General knowledge you're not confident about\n\n"
         "DO NOT SEARCH FOR:\n"
+        "- U.S. weather: use get_weather for timestamped NWS observations/forecasts. On a short yes/retry, "
+        "reuse the user's latest weather location. If unavailable, explain once without repeated searches or retry offers.\n"
         "- ANYTHING about this practitioner's own business — projects, contacts, "
         "invoices, sessions, revenue, products, their website. Every one of those "
         "is in the context blocks above. A web search cannot see their data and "
