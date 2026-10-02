@@ -68,6 +68,24 @@ def test_no_track_row_falls_back_to_age():
         _biz(cos.SETUP_SNAPSHOT_MAX_AGE_DAYS + 30), None)
 
 
+def test_a_greeting_on_an_empty_business_is_measured_whatever_its_age():
+    """2026-09-26: a four-month-old empty business got the launch greeting
+    with guessed steps ("your booking hours aren't set"); the answer check
+    could not confirm them, so the greeting came back unverified."""
+    old = _biz(cos.SETUP_SNAPSHOT_MAX_AGE_DAYS + 60)
+    assert not cos._setup_snapshot_wanted(old, None)
+    assert cos._setup_snapshot_wanted(old, {"status": "completed"}, greeting_on_empty=True)
+    dismissed = _biz(400, settings={"checklist_dismissed": True})
+    assert not cos._setup_snapshot_wanted(dismissed, None, greeting_on_empty=True)
+
+
+def test_an_unmeasured_launch_greeting_suggests_instead_of_asserting():
+    import inspect
+    import chief_prompt
+    src = inspect.getsource(chief_prompt)
+    assert "never as facts about what is or isn't set up" in src
+
+
 def test_unparseable_created_at_fails_closed():
     biz = _biz(1)
     biz["created_at"] = "not a date"

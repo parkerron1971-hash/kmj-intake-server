@@ -10,6 +10,43 @@ Each order has a stable identity, durable checkpoints before effects, read-back 
 
 Leases serialize builds per business across replicas. A process runs at most eight workers. Heartbeats fence stale workers; scheduler recovery resumes interrupted work. Child image/site jobs are checked on later ticks instead of long polling loops. Cards poll every five seconds while active, thirty otherwise, and pause in hidden tabs. They reject stale approval revisions, refresh after responses, and clear old results on business changes. Voice stream fallback reuses one request ID.
 
+## Plans: several pieces of work from one message (2026-09-26)
+
+Kevin, from the Dev Desk: can someone "give a project such as schedule events, make flyer, etc... in one message and it all get worked on ... and conversation still go on?" He chose one brain with many hands over many agents, on the condition that Chief redirects when a worker stops.
+
+A **plan** is a work order of kind `plan` (`chief_plans.py`). Its facts are a title, a goal and up to 12 steps. Each step is an ordinary Chief action (`{"title", "action": {"type", ...}, "for_each"?, "approval"?}`). It runs on this same worker, with the same leases, checkpoints, card, chat message and push, so the chat is free while it works.
+
+- **Same steps as a mission.** `chief_missions.validate_steps` decides what a step may be. A later step can use an earlier result (`"@create_contact.contact_id"`) or repeat over a list (`for_each`). Not allowed as plan steps: work orders, form builds (`create_client_form`), event setup and permission verbs. A plan makes at most one image.
+- **Same door.** Every step runs through `chief_of_staff._execute_actions` inside `Adapter.handler_scope`, as the owner who asked. The policy, taint, class-C gate and spend guard are the chat's own.
+- **Sends, notifying bookings, charges and deletes (class C)** run on the owner's own ask on the desktop, as in chat. A spoken or tainted plan holds them for a yes. No order runs more than three of them without a go-ahead. A step marked `approval: true` always waits.
+- **Order.** Each step waits for the one before it, so a stop is never stepped over. The exception is an image, which only holds up a step that references it. A step waiting on a running image says so and is picked up on the next tick.
+- **Retries.** A write that may have happened (the handler raised or timed out) is `uncertain` and never repeated blind. A clean refusal can be retried.
+
+**Chief's first look at a stop.** When a step fails or is uncertain, the worker runs one model turn before the owner is bothered. That turn has read-only tools (`reset_turn(writes_allowed=False)`, `read_tool_definitions()`) and sees the plan, what each step did and why it stopped. Chief answers with one `plan_decision` tag:
+- `continue` rewrites the steps still to run and adds a plain note on what changed and why.
+- `ask` puts one question and a suggestion on the card (`needs_answer`, field `plan_answer`). The owner's answer, from the card or from chat through `respond_work_order`, is the input to the next look.
+
+The guard rails live in `apply()`/`_revise()`, not in the prompt:
+- A rewritten plan passes the same step rules.
+- Any class-C step in it that is not exactly one the owner already asked for (same action) waits for their go-ahead, and so does any class-C step when the look read third-party text.
+- Chief looks at most twice on its own per plan (and four times after answers).
+- Every look is recorded in `result.looks`. The latest change leads the summary, and `public_job` exposes the notes.
+
+A look costs one model turn, only when something stopped. It is skipped over the daily spend cap.
+
+**The closing check (2026-09-26, after the live test).** Asked for nine changes, Chief made three in its reply, planned two, and "call Plan Test D" was in neither. A stop only catches a step that ran, so a finished plan now gets one closing look, once per plan. It compares the owner's words with what the reply already did and with the plan's receipts. The reply's changes are recorded by the server in `facts.done_in_turn` (`note_done_in_turn`, called from `_execute_actions` just before `submit_work_order`); the model cannot write it. Anything missing goes through the same `continue` path and guards, and a send, charge or delete it adds waits for the owner. Nothing missing adds no note. The check runs only on a plan that finished `done`, never on one that is held, waiting or asking.
+
+**Overflow.** A reply can make three direct changes (`MAX_WRITE_CALLS`). Once those are spent (budget, not a hold), `submit_work_order` stays open for the turn's one order, and the refusal tells the model to put the rest into one plan instead of promising "the next pass".
+
+A plan's image is found by its stable id on every run, so a redirect cannot pay for a second image; an image that fails still needs the owner.
+
+## Several jobs from one message, side by side (step 2, 2026-09-26)
+
+- **Up to four work orders per turn** (`MAX_ORDERS_PER_TURN`), one per piece: for example a workshop (`event_setup`), a flyer, and one plan for everything else. Each order has its own identity, `stable_id(business, turn, slot)`. The first keeps the original `build` slot, so a replayed turn still matches its order; later ones are `build:2`, `build:3` and so on. Answering a job (`respond_work_order`) and starting one stay in separate turns. The overflow after the three direct changes stays open until the turn's last order.
+- **Lanes** (`supabase/APPLY-2026-09-26-chief-build-lanes.sql`): one running build per business and lane, instead of per business. The lanes are `site` (workshops, forms with links, events pages, which share the Events collection, forms and the website), `image` (flyers) and `plan` (plans). A workshop, a flyer and a plan from one message run at once, and two workshops still take turns. Only `chief_build_claim` changes (same signature), so the server code runs before and after the migration; before it, jobs simply queue per business as they did. `scripts/chief-build-lanes-db-check.mjs` checks it in CI.
+- **No five-minute wait.** When a job finishes, the worker starts whatever was queued for that business (`_launch_waiting`), instead of waiting for the recovery tick.
+- **Starting a plan names its pieces**: "Working on these in the background: A, B and C. You can leave this chat..." Before, the reply and its receipts never said what went to the background.
+
 ## Important contract decisions
 
 - Owner-only first rollout; underlying action scope, policy, taint, spend and voice gates still run per step. No user JWT is stored in a job.
