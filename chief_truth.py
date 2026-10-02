@@ -939,6 +939,39 @@ def _no_trim(why, reason):
     return None
 
 
+# "reference" also includes pricing ballparks and ordinary planning advice.
+# Only actual public rules call for an official-source warning; attaching it
+# to every reference made marketing outcomes sound like regulated instructions.
+_OFFICIAL_RULE = re.compile(
+    r"\b(?:laws?|legal|statutory|regulations?|regulatory|tax(?:es|ation)?|IRS|FTC|FDA|"
+    r"licen[sc](?:e|es|ing)|permits?|copyright|trademark|minimum wage|"
+    r"filing (?:deadline|threshold|requirement)|government (?:rule|requirement)|"
+    r"HIPAA|OSHA|GDPR|COPPA|ADA)\b"
+    r"|\b(?:990(?:-N|-EZ)?|1099|W-2|501\s*\(c\))\b", re.I)
+_BINDING_RULE = re.compile(
+    r"\b(?:prohibits?|forbids?|mandatory|prohibited|illegal)\b"
+    r"|\b(?:must|shall|required to|requires? (?:[\w-]+ ){0,4}to) "
+    r"(?:retain|file|disclose|register|report|obtain|comply)\b", re.I)
+_MEDICAL_INSTRUCTION = re.compile(
+    r"\b(?:take|give|administer|dose|dosage)\b[^.!?]{0,80}\b(?:mg|mcg|milligrams?|tablets?|capsules?)\b"
+    r"|\b(?:medication|prescription|drug|vaccine|medical treatment)\b", re.I)
+_NAMED_SOURCE_CLAIM = re.compile(
+    r"\b(?:according to|published (?:research|study|report)|"
+    r"(?:a|the) study (?:found|shows|says)|official (?:guidance|source))\b", re.I)
+
+
+def _reference_notice(references, draft):
+    """Delivery only: keep all existing verification and estimate qualifications."""
+    sentences = [_sentence_containing(draft, reference) for reference in references]
+    if any(_OFFICIAL_RULE.search(sentence) or _BINDING_RULE.search(sentence) for sentence in sentences):
+        return "This is general guidance; confirm the applicable rule with the official source before acting."
+    if any(_MEDICAL_INSTRUCTION.search(sentence) for sentence in sentences):
+        return "Confirm that health guidance with a qualified clinician or an official medical source before acting."
+    if any(_NAMED_SOURCE_CLAIM.search(sentence) for sentence in sentences):
+        return "I haven't verified the cited source for that claim."
+    return ""
+
+
 def _clean_review_gaps(raw, reply, sources, gaps, references):
     """Remove unsupported claims, not just their warning label. No extra model call.
     Keep the review details in metadata; re-check remaining claims against
@@ -980,8 +1013,9 @@ def _clean_review_gaps(raw, reply, sources, gaps, references):
     if has_completion_claim(draft) and not (verdict == 'supported' and wrote_anything(sources)):
         return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps}
     draft = re.sub(r'\n{3,}', '\n\n', draft).strip()
-    if refs:
-        draft += "\n\nThis is general guidance; confirm the applicable rule with the official source before acting."
+    notice = _reference_notice(refs, draft)
+    if notice:
+        draft += "\n\n" + notice
     return draft, {'status': 'caveated' if refs else 'trimmed', 'sources': cited,
                    'gaps': gaps, 'references': refs, 'cuts': cuts}
 
@@ -2177,6 +2211,12 @@ those they them their there here what which who when where why how can could
 would should will shall may might must not no all any only just more most
 about into than then so very also business chief owner
 """.split())
+# These may invalidate other sources without repeating their subject, e.g.
+# "all fetched summaries are stale". Ordinary draft/historical notes are
+# source-local labels; all other uncertainty warnings remain conservative.
+_STREAM_EVIDENCE_WARNING = re.compile(
+    r'\b(?:untrusted|stale|unverified|not verified|no current|conflict\w*|unknown|'
+    r'regardless|failed|unavailable|disregard|outdated|superseded)\b', re.I)
 
 
 def _stream_review_sources(sources, sentence, preceding, message):
@@ -2198,12 +2238,29 @@ def _stream_review_sources(sources, sentence, preceding, message):
     for sid, src in valid.items():
         text = str(src.get('text') or '')
         words = {_stem(word) for word in _words(sid + ' ' + text)}
+        # Draft/historical labels do not make an unrelated source relevant.
+        # Matching notes still all survive. Other uncertainty warnings can
+        # invalidate sources without repeating the sentence's subject, so
+        # retain them and global context availability independently of overlap.
         if (terms & words or sid == 'context:context_quality'
-                or _HEDGED_ITEM.search(text)):
+                or _STREAM_EVIDENCE_WARNING.search(text)):
             selected[sid] = src
     if not selected or sum(len(str(src.get('text') or '')) for src in selected.values()) > STREAM_REVIEW_EVIDENCE_CHARS:
+        _prefix_review_diagnostic('evidence_budget' if selected else 'no_relevant_sources',
+            available_sources=len(valid), selected_sources=len(selected),
+            selected_chars=sum(len(str(src.get('text') or '')) for src in selected.values()))
         return None, list(valid)
     return selected, [sid for sid in valid if sid not in selected]
+
+
+def _prefix_review_diagnostic(reason, **counts):
+    """Why early speech waited, without logging sentence or record contents."""
+    import chief_request_timing
+    trace = chief_request_timing.CURRENT.get()
+    logger.info('[chief prefix review] %s', json.dumps({
+        'request_id': trace.request_id if trace else '', 'reason': reason,
+        **counts,
+    }, separators=(',', ':')))
 
 
 async def review_stream_prefix(client, prefix, *, sources, message, business_id):
@@ -2211,9 +2268,12 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
     The caller limits it to two attempts/four seconds; no repair or unchecked
     fallback. Existing provenance checks still decide whether it may stream.
     """
-    if not prefix or len(prefix) > 1800 or has_completion_claim(prefix) \
-            or _DONE_CLAIM.search(_asserted_text(prefix)) \
+    if not prefix or len(prefix) > 1800:
+        _prefix_review_diagnostic('prefix_size', prefix_chars=len(prefix or ''))
+        return False
+    if has_completion_claim(prefix) or _DONE_CLAIM.search(_asserted_text(prefix)) \
             or re.search(r'\[\s*ACTION', prefix, re.I):
+        _prefix_review_diagnostic('action_guard')
         return False
     sentences = [s for s in re.split(r'(?<=[.!?])\s+|\n+', prefix.strip()) if s.strip()]
     if not sentences:
@@ -2227,34 +2287,44 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
     payload = {'owner_message': (message or '')[:1200], 'preceding_text': preceding,
                'sentence': sentence, 'sources': sources, 'omitted_sources': omitted,
                'unavailable': sorted(turn.unavailable) if turn else []}
+    _prefix_review_diagnostic('dispatch', selected_sources=len(sources),
+        selected_chars=sum(len(str(src.get('text') or '')) for src in sources.values()))
     raw = await review_reply(client, STREAM_PREFIX_REVIEW_SYSTEM,
         [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
         max_tokens=256, business_id=business_id, model_lane='fast', schema=None)
     try:
         result = _review_json(_strip_fences(raw))
     except (ValueError, TypeError):
+        _prefix_review_diagnostic('invalid_json')
         return False
     if not isinstance(result, dict) or set(result) != {'supported', 'source_id', 'quote'} \
             or result.get('supported') is not True:
+        _prefix_review_diagnostic('not_supported')
         return False
     sid, quote = result.get('source_id'), result.get('quote')
     if not isinstance(sid, str) or not isinstance(quote, str):
+        _prefix_review_diagnostic('invalid_citation')
         return False
     if not sid:
         # A vacuous review must not release an uncited business assertion.
-        return not quote and not (_weather_assertions(sentence) or _ABOUT_THE_BUSINESS.search(sentence)
+        safe = not quote and not (_weather_assertions(sentence) or _ABOUT_THE_BUSINESS.search(sentence)
             or _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence)
             or _RECORD_NOUN.search(sentence)
             or _fast_lane_names(sentence) or _numbers(sentence))
+        _prefix_review_diagnostic('accepted' if safe else 'uncited_claim')
+        return safe
     if sid not in sources or not quote:
+        _prefix_review_diagnostic('missing_citation')
         return False
     if _UNPROVABLE_STATE.search(sentence) and not sources[sid].get('complete'):
+        _prefix_review_diagnostic('incomplete_source')
         return False
     # The model selects evidence; it cannot invent a citation or waive the
     # normal checks for figures, source provenance or completed actions.
     review = json.dumps({'verdict': 'supported', 'claims': [{
         'text': sentence, 'kind': 'fact', 'source_id': sid, 'quote': quote}]})
     verdict, _, _ = assess_review(review, sentence, sources)
+    _prefix_review_diagnostic('accepted' if verdict == 'supported' else 'citation_rejected')
     return verdict == 'supported'
 
 
