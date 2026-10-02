@@ -53,7 +53,11 @@ all the practitioner-facing data actions.
 
 - 113 `ACTION_HANDLERS`. Every handler returns `{result, label}`; a
   missing `result` blanks the app (toLowerCase crash) — always return
-  both. Actions are emitted by the model as `[ACTION:{"type":...}]` tags.
+  both. Actions are emitted by the model as `[ACTION:{"type":...}]` tags —
+  except the reviewed class-A verbs in `mcp_server.WRITE_TOOL_SCHEMAS`,
+  which are native tool calls inside the turn (`chief_tool_loop`), still
+  dispatched through `_execute_actions`. `CHIEF_NATIVE_WRITES=off` reverts
+  to tags-only.
 - 3-segment prompt cache: `[[CHIEF_GLOBAL_SPLIT]]` (universal, cached once
   globally) → `[[CHIEF_CACHE_SPLIT]]` (per-business stable) → dynamic
   tail. A segment under the model's 1024-token min silently won't cache.
@@ -71,6 +75,20 @@ is harder to debug than a hard failure. See `.env.example` for the full
 list with what breaks without each. The load-bearing ones:
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON`,
 `ANTHROPIC_API_KEY`, `PLATFORM_OWNER_EMAIL`.
+
+## Work log (every session, Claude Code and Codex)
+
+- **Before building**, read `worklog/` in BOTH repos (this one and
+  solutionist-studio) for the same or overlapping work, and say what you
+  found. Platform Chief and the unfinished-work watcher read it too.
+- **At the end of every session that changes code**, add or update one
+  `worklog/YYYY-MM-DD-slug.md` in the same PR: what Kevin asked, what you
+  built (PRs, migrations), status, decisions, and what you left undone.
+  Format: `worklog/README.md`.
+- **If you stop before shipping**, still open a draft PR with your log entry
+  saying what is unfinished and where. Uncommitted work on one machine is
+  invisible to every other session (the 2026-09-30 security audit sat
+  uncommitted for days because of exactly this).
 
 ## Conventions
 

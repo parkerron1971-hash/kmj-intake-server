@@ -33,6 +33,8 @@ from module_agent import router as module_router
 from chief_of_staff import router as chief_router
 from notification_engine import router as notification_router
 from whisper_proxy import router as whisper_router
+from voice_stream import router as voice_stream_router
+from speech_stream import router as speech_stream_router
 from public_site import router as public_site_router
 from email_sender import router as email_router
 from meta_oauth import router as meta_router
@@ -49,7 +51,9 @@ from strategy_router import router as strategy_router
 from restricted_modules import router as restricted_router
 from workflow_router import router as workflow_router
 from growth_objective_router import router as growth_objective_router
+from growth_intelligence_router import router as growth_intelligence_router
 from module_spec_router import router as module_spec_router
+from module_check_router import router as module_check_router
 # Phase C.1 — Bookings archetype: customer-facing widget endpoints +
 # contact-related-entries surfacing for ContactDetail.
 from booking_widget_router import router as booking_widget_router
@@ -115,6 +119,7 @@ if os.environ.get("SENTRY_DSN"):
             # credential. Without this, switching error tracking on would
             # ship live audit links to a third party.
             before_send=scrub_sentry_event,
+            before_send_transaction=scrub_sentry_event,
         )
         print("   Sentry error tracking: ON")
     except Exception as _e:
@@ -162,6 +167,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=False,  # bearer tokens only — never cookie auth
+    # Response headers the app reads cross-origin. X-TTS-Cache says a phrase
+    # came from the speech proxy's memory (the call counts those hits).
+    expose_headers=["X-TTS-Cache"],
 )
 # Compression (2026-08-02, performance pass). Composed sites are single
 # documents with CSS + JS + JSON-LD inlined — routinely 100-250KB, and
@@ -232,8 +240,40 @@ app.include_router(module_router)
 app.include_router(chief_router)
 from chief_jobs import router as chief_jobs_router  # Feature 2 — queued desk jobs
 app.include_router(chief_jobs_router)
+from chief_errands import router as chief_errands_router
+app.include_router(chief_errands_router)
+from card_connections import router as card_connections_router
+app.include_router(card_connections_router)
+from link_wallet import router as link_wallet_router
+app.include_router(link_wallet_router)
+import lane_purchases  # Register purchase routes before mounting the shared Lane router.
+from lane_wallet import router as lane_wallet_router
+app.include_router(lane_wallet_router)
+from agentcard_wallet import router as agentcard_wallet_router
+app.include_router(agentcard_wallet_router)
+from connected_ai import router as connected_ai_router
+app.include_router(connected_ai_router)
+# The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.
+from chief_agent import router as chief_agent_router
+app.include_router(chief_agent_router)
+# Assignments (2026-09-04): the outcomes the standing agent works over days.
+from chief_assignments import router as chief_assignments_router
+app.include_router(chief_assignments_router)
+from agent_coordination import router as agent_coordination_router
+app.include_router(agent_coordination_router)
+# Outcomes (2026-09-04): what came of Chief's moves, per business.
+from outcome_ledger import router as outcome_ledger_router
+app.include_router(outcome_ledger_router)
+# Chief's week (2026-09-04): the report the Home card and Monday read.
+from chief_week import router as chief_week_router
+# Standing permissions (2026-09-04): what Chief may send on its own.
+from standing_permissions import router as standing_router
+app.include_router(standing_router)
+app.include_router(chief_week_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
+app.include_router(voice_stream_router)
+app.include_router(speech_stream_router)
 app.include_router(email_router)
 app.include_router(meta_router)
 app.include_router(google_router)
@@ -249,6 +289,10 @@ from sms_routing import router as sms_routing_router
 from consent_router import router as consent_router
 app.include_router(sms_routing_router)
 app.include_router(consent_router)
+# Dedicated numbers (2026-09-02): a practitioner's own line, bought on
+# the platform account, attached to the one Messaging Service.
+from sms_numbers_router import router as sms_numbers_router
+app.include_router(sms_numbers_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 # THE OBSERVATORY — research a card (docs/STRATEGY_ROOM.md phase 3c)
@@ -256,7 +300,13 @@ app.include_router(strategy_router)
 app.include_router(restricted_router)
 app.include_router(workflow_router)
 app.include_router(growth_objective_router)
+from image_studio import router as image_studio_router
+app.include_router(image_studio_router)
+app.include_router(growth_intelligence_router)
+from academy_live_router import router as academy_live_router
+app.include_router(academy_live_router)
 app.include_router(module_spec_router)
+app.include_router(module_check_router)
 # Phase C.1 — Bookings archetype
 app.include_router(booking_widget_router)
 app.include_router(contacts_router)
@@ -279,6 +329,32 @@ app.include_router(giving_router)
 # subdomain catch-all.
 from events_rsvp_router import router as events_rsvp_router
 app.include_router(events_rsvp_router)
+# A member's own page at <church site>/my — the POSTs (/my/code, /my/verify,
+# …) and the owner switch (/member-portal/...). BEFORE public_site_router.
+from member_portal import router as member_portal_router
+app.include_router(member_portal_router)
+from member_portal_church import router as member_portal_church_router
+app.include_router(member_portal_church_router)
+# Families and children (households, children, pickups, care notes) —
+# server-only tables, seat-checked here. Kevin, 2026-09-29.
+from kids_router import router as kids_router
+app.include_router(kids_router)
+# Children's check-in and pickup (codes, texts, release) — Kevin, 2026-09-29.
+from kids_checkin import router as kids_checkin_router
+app.include_router(kids_checkin_router)
+# Check-in stations: a PIN-locked tablet and a family self check-in kiosk.
+from kids_station import router as kids_station_router
+app.include_router(kids_station_router)
+# Live: the team runs a live service and moderates its chat (live_router);
+# members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
+from live_router import router as live_router
+app.include_router(live_router)
+from member_portal_live import router as member_portal_live_router
+app.include_router(member_portal_live_router)
+# Live group meetings (video) — a group's approved leaders host from the
+# member app. Kevin, 2026-09-29.
+from member_portal_group_live import router as member_portal_group_live_router
+app.include_router(member_portal_group_live_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
@@ -317,11 +393,20 @@ app.include_router(customer_balances_router)
 # can never disagree about what to switch on next.
 from business_track_router import router as business_track_router
 app.include_router(business_track_router)
+# Wave C (2026-09-02): the room card behind "What is this room?" — no model call.
+from room_card_router import router as room_card_router
+app.include_router(room_card_router)
 # Bring an existing client list in. /contacts had CSV export and no
 # import; for a business that arrives with people, that was the first
 # wall they hit.
 from contacts_import_router import router as contacts_import_router
 app.include_router(contacts_import_router)
+# Structure Import, Stage 0 (2026-09-01). A business that arrives already
+# running hands over its spreadsheet exports; the rubric proposes what
+# each sheet IS (their people → contacts, their jobs → a pipeline module)
+# and the run builds it. Kills "I'd have to rebuild everything".
+from structure_import_router import router as structure_import_router
+app.include_router(structure_import_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)
@@ -375,6 +460,9 @@ app.include_router(setup_plan_router)
 # Phase I.3 — Period closing
 from accounting_periods_router import router as accounting_periods_router
 app.include_router(accounting_periods_router)
+# The Bookkeeping room's front page: where the books stand, in one read
+from bookkeeping_overview import router as bookkeeping_overview_router
+app.include_router(bookkeeping_overview_router)
 # Phase I.3 PR2 — soft-lock audit trail
 from period_overrides_router import router as period_overrides_router
 app.include_router(period_overrides_router)
@@ -391,6 +479,13 @@ app.include_router(launch_access_router)
 # satisfies the unattended gate in post_approval.py.
 from content_approval import router as content_approval_router
 app.include_router(content_approval_router)
+from platform_marketing import router as platform_marketing_router
+app.include_router(platform_marketing_router)
+from platform_marketing_campaigns import router as platform_marketing_campaigns_router
+app.include_router(platform_marketing_campaigns_router)
+# The Monday plan: signals -> diagnosis -> plays -> a week of drafts for review.
+from marketing_engine import router as marketing_engine_router
+app.include_router(marketing_engine_router)
 # Arc 25 - practitioner referral loop (codes + attribution + rewards)
 from referrals import router as referrals_router
 app.include_router(referrals_router)
@@ -445,6 +540,16 @@ app.include_router(terminology_overrides_router)
 app.include_router(workspace_composer_router)
 app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
+from business_learning_router import router as business_learning_router
+app.include_router(business_learning_router)
+from program_outcomes_router import router as program_outcomes_router
+app.include_router(program_outcomes_router)
+from financial_policy_router import router as financial_policy_router
+app.include_router(financial_policy_router)
+from media_library_router import router as media_library_router
+app.include_router(media_library_router)
+from video_studio_router import router as video_studio_router
+app.include_router(video_studio_router)
 app.include_router(practitioner_profile_router)
 app.include_router(foundation_router)
 # Pass 4.0a — Director Agent foundations
@@ -475,17 +580,44 @@ app.include_router(lead_admin_diag_router)
 # Tauri app.
 from platform_console import router as platform_console_router
 app.include_router(platform_console_router)
+# Mission Control → Today (2026-10-01 redesign): the ranked, deduplicated
+# "needs you" queue + pulse + overnight in one owner-only read.
+from platform_today import router as platform_today_router
+app.include_router(platform_today_router)
+from platform_chief_authority import router as platform_chief_authority_router
+app.include_router(platform_chief_authority_router)
+# Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
+from chief_fast_track import router as chief_routing_router
+app.include_router(chief_routing_router)
+# Time to first audio on a call: the app's per-turn report + the owner's stats (2026-09-25).
+from voice_metrics import router as voice_metrics_router
+app.include_router(voice_metrics_router)
+# What BILLING_ENFORCE=on would do today, without flipping it (2026-09-04). Owner-only.
+from billing_rehearsal import router as billing_rehearsal_router
+app.include_router(billing_rehearsal_router)
 # Dev Bridge (2026-08-19) — Mission Control's Dev Desk dispatches dev
 # tasks: the cloud lane fires @claude build issues, the local lane is
 # polled by Solution Space on Kevin's machine. /platform/dev-desk/*
 # (owner JWT) + /dev-bridge/* (device token / per-task report key).
 from dev_bridge import router as dev_bridge_router
 app.include_router(dev_bridge_router)
+from chief_local_work import router as chief_local_work_router
+app.include_router(chief_local_work_router)
+from creative_director import router as creative_director_router
+app.include_router(creative_director_router)
+# The fix queue (2026-09-02) — support tickets ranked, dispatched into dev
+# tasks, walked back when the fix ships, and answered by email.
+# /platform/support/* (owner JWT) + /dev-bridge/tickets* (device token, so
+# the ticket area in Solution Space renders without Kevin's JWT).
+from support_router import router as support_queue_router
+app.include_router(support_queue_router)
 # Phase 5b of BILLING_PLAN — Stripe subscription billing.
 # /billing/checkout (authed), /billing/portal (authed),
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
 from stripe_billing import router as stripe_billing_router
 app.include_router(stripe_billing_router)
+from stripe_discounts import router as stripe_discounts_router
+app.include_router(stripe_discounts_router)
 # Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
 # over the existing email/SMS rails. /campaigns/* (all JWT-authed,
 # ownership verified); the send sweep registers in startup() below.
@@ -522,6 +654,12 @@ async def health():
         "scheduler": scheduler.running,
         "next_followup_check": str(scheduler.get_job("followup_check").next_run_time)
                                if scheduler.get_job("followup_check") else None,
+        # Which commit this process is running. Railway sets it on every
+        # GitHub-triggered deploy. The deploy check (.github/workflows/
+        # deploy-check.yml) compares it with each merge, because "merged"
+        # has twice not meant "live": an unpaid Railway bill silently
+        # skipped deploys while every health check stayed green.
+        "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA") or None,
     }
 
 
@@ -600,6 +738,12 @@ app.include_router(_health_router)
 # would otherwise be swallowed by its `/{path:path}` catch-all.
 from auditor_portal import router as auditor_portal_router
 app.include_router(auditor_portal_router)
+
+# The agent-readable site API (2026-09-04): /public/agent/{slug}/… —
+# services, per-date availability, and booking for a customer's agent.
+# Same reason it sits here: the catch-all below would swallow it.
+from agent_site import router as agent_site_router
+app.include_router(agent_site_router)
 
 # public_site_router MUST remain LAST — it defines `/` and `/{path:path}`
 # catch-alls that would otherwise shadow every specific API route.
@@ -1066,6 +1210,21 @@ async def startup():
     except Exception as _e:
         print(f"   [warn] initial lease acquire failed (defaulting leader): {_e}")
 
+    # Chief jobs orphaned by THIS restart (2026-09-04): rows still
+    # queued/running belong to a process that no longer exists. Mark
+    # them failed with the retryable reason now, on the leader, rather
+    # than leaving the practitioner's "working on it" chip spinning
+    # until somebody happens to enqueue the same kind again. Never
+    # retried automatically — every kind is a paid build.
+    try:
+        if scheduler_lock.is_leader():
+            import chief_jobs as _chief_jobs
+            _swept = _chief_jobs.sweep_orphans("boot")
+            if _swept:
+                print(f"   [jobs] {_swept} orphaned job(s) marked failed, retryable")
+    except Exception as _e:
+        print(f"   [warn] chief_jobs boot sweep failed: {_e}")
+
     # Action Ledger: publish the controlled vocabulary. Idempotent upsert
     # from action_registry + the event catalog, so a verb added in code is
     # registered by the next boot and its rows stop being stamped
@@ -1076,6 +1235,15 @@ async def startup():
         print(f"   [ledger] vocabulary synced: {_al.sync_action_types()} verbs")
     except Exception as _e:
         print(f"   [warn] ledger vocabulary sync failed: {_e}")
+
+    # Hand-built sites (sites/<dir>/build.py) install themselves from the
+    # repo on boot, hash-gated so an unchanged deploy writes nothing.
+    # Background thread; never blocks or fails startup (site_sync.py).
+    try:
+        import site_sync as _site_sync
+        _site_sync.sync_all_async()
+    except Exception as _e:
+        print(f"   [warn] site sync did not start: {_e}")
 
     scheduler.add_job(scheduler_lock.renew_tick, "interval",
                       seconds=scheduler_lock.RENEW_SEC, id="scheduler_lease_renew")
@@ -1139,6 +1307,41 @@ async def startup():
             import hermes_agent as _hermes
             scheduler.add_job(g("hermes_tick", _hermes.hermes_tick), "interval", hours=1,
                               id="hermes_tick")
+            # Money auditor (agent ops Wave 2) — the daily read of the billing
+            # rails, same sense pattern as Hermes. 10:00 UTC = 6 AM Eastern.
+            # Support desk (agent ops Wave 3): draft replies for tickets
+            # waiting on an answer. Drafts only; a person sends.
+            import support_drafts as _support_drafts
+            scheduler.add_job(g("support_drafts", _support_drafts.drafts_tick), "interval",
+                              minutes=5, id="support_drafts", max_instances=1)
+            # Chief quality & cost (agent ops Wave 3) — the nightly sense over
+            # model_route_log and api_usage. 07:00 UTC = 3 AM Eastern.
+            import chief_quality as _chief_quality
+            scheduler.add_job(g("chief_quality", _chief_quality.quality_tick), "cron",
+                              hour=7, minute=0, id="chief_quality")
+            # Customer health (agent ops, Agent 9) — 14:00 UTC = 10 AM Eastern.
+            import customer_health as _customer_health
+            scheduler.add_job(g("customer_health", _customer_health.health_tick), "cron",
+                              hour=14, minute=0, id="customer_health")
+            # Unfinished-work watcher — 13:00 UTC = 9 AM Eastern.
+            import unfinished_work as _unfinished
+            scheduler.add_job(g("unfinished_work", _unfinished.watch_tick), "cron",
+                              hour=13, minute=0, id="unfinished_work")
+            import money_auditor as _money
+            scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
+                              hour=10, minute=0, id="money_auditor")
+            # App-granted trials end on their own, like Stripe trials do.
+            import trial_expiry as _trial_expiry
+            scheduler.add_job(g("trial_expiry", _trial_expiry.expire_tick), "interval",
+                              hours=1, id="trial_expiry")
+            # Email domain drift (setup room, Phase 1) — hourly re-check of
+            # every VERIFIED sending domain. Without it a DNS record that
+            # vanishes flips sends back to the platform address in
+            # silence; the operator's "Verified" badge stays green and
+            # nobody is told. Only changes are written.
+            import email_domain_monitor as _edm
+            scheduler.add_job(g("email_domain_monitor", _edm.monitor_tick), "interval",
+                              hours=1, id="email_domain_monitor")
     except Exception as e:
         print(f"   [warn] GL sync jobs not scheduled: {e}")
     # A2P automated alerts (2026-07-07, campaign approved) — hourly
@@ -1151,6 +1354,14 @@ async def startup():
                           "interval", hours=1, id="sms_reminder_sweep")
     except Exception as e:
         print(f"   [warn] sms reminder sweep not scheduled: {e}")
+    # Dedicated numbers (2026-09-02) — hourly: hand back lines whose
+    # release grace window has passed (SMS_NUMBER_RELEASE_GRACE_DAYS).
+    try:
+        import sms_numbers_router as _sms_numbers
+        scheduler.add_job(g("sms_number_release_sweep", _sms_numbers.release_sweep),
+                          "interval", hours=1, id="sms_number_release_sweep")
+    except Exception as e:
+        print(f"   [warn] sms number release sweep not scheduled: {e}")
     # THE LEAD ARC PR 2 (2026-08-14) — the notification engine, which
     # until now was imported as a ROUTER ONLY.
     #
@@ -1179,6 +1390,11 @@ async def startup():
                               id="notif_urgent_check")
             scheduler.add_job(g("notif_morning_brief", _notif.generate_morning_brief_for_all),
                               "cron", hour=13, minute=5, id="notif_morning_brief")
+            # The setup brief on a launching business's own clock
+            # (setup_brief.py). Hourly at :35, never :05, so it can't
+            # race the morning tick into writing two briefs.
+            scheduler.add_job(g("notif_setup_brief", _notif.setup_brief_local_morning_tick),
+                              "cron", minute=35, id="notif_setup_brief")
             scheduler.add_job(g("notif_midday_ping", _notif.generate_midday_ping_for_all),
                               "cron", hour=17, minute=5, id="notif_midday_ping")
             scheduler.add_job(g("notif_evening_summary", _notif.generate_evening_summary_for_all),
@@ -1302,6 +1518,22 @@ async def startup():
                           "interval", minutes=10, id="booking_session_sync")
     except Exception as e:
         print(f"   [warn] booking-session sync not scheduled: {e}")
+    # Owner-only marketing: local schedules, exact content approval, Buffer delivery.
+    try:
+        import platform_marketing as _marketing
+        scheduler.add_job(g("platform_marketing_due", _marketing.due_tick),
+                          "interval", minutes=1, id="platform_marketing_due", max_instances=1)
+        from platform_marketing_campaigns import metrics_tick
+        scheduler.add_job(g("platform_marketing_metrics", metrics_tick),
+                          "interval", hours=1, id="platform_marketing_metrics", max_instances=1)
+        scheduler.add_job(g("platform_marketing_status", _marketing.reconcile_tick),
+                          "interval", minutes=10, id="platform_marketing_status", max_instances=1)
+        # Plans the week on Monday morning (ET); drafts only. MARKETING_ENGINE=off stops it.
+        from marketing_engine import engine_tick
+        scheduler.add_job(g("platform_marketing_engine", engine_tick),
+                          "interval", hours=1, id="platform_marketing_engine", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] platform marketing not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:
     # every minute, execute due chief_scheduled_actions rows through
     # the same ACTION_HANDLERS registry. Kill switch: CHIEF_SCHEDULER=off.
@@ -1311,6 +1543,102 @@ async def startup():
                           "interval", minutes=1, id="chief_scheduled")
     except Exception as e:
         print(f"   [warn] chief scheduled-actions job not scheduled: {e}")
+    try:
+        import media_library as _media_library
+        scheduler.add_job(g("media_library", _media_library.tick),
+                          "interval", seconds=30, id="media_library", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] media processing not scheduled: {e}")
+    try:
+        import video_studio_worker as _video_studio_worker
+        scheduler.add_job(_video_studio_worker.tick, 'interval', seconds=8, id='video_studio', max_instances=1)
+    except Exception as e:
+        print(f'   [warn] video studio processing not scheduled: {e}')
+    # Chief jobs recovery (2026-09-04): the boot sweep's twin, for the
+    # deploy that happens on another replica or mid-build. Reads the
+    # heartbeat; marks dead rows failed-retryable; never retries.
+    try:
+        import chief_jobs as _chief_jobs_mod
+        scheduler.add_job(g("chief_jobs_recover", _chief_jobs_mod.recover_tick),
+                          "interval", minutes=5, id="chief_jobs_recover")
+    except Exception as e:
+        print(f"   [warn] chief jobs recovery tick not scheduled: {e}")
+    # The standing agent (2026-09-04): every two minutes, for businesses
+    # that opted in, act on the events that arrived since the last look
+    # — through the same tools and the same door as a chat turn, marked
+    # unattended. Leads and bookings do not wait for this: event_spine
+    # nudges the agent within a minute (chief_agent.FAST_EVENT_TYPES);
+    # this sweep is the net under that. Quiet ticks cost one indexed
+    # read. Kill switch: CHIEF_AGENT=off.
+    try:
+        import chief_agent as _chief_agent
+        scheduler.add_job(g("chief_agent", _chief_agent.agent_tick),
+                          "interval", minutes=2, id="chief_agent")
+    except Exception as e:
+        print(f"   [warn] chief agent tick not scheduled: {e}")
+    # Assignments (2026-09-04): every fifteen minutes, measure each
+    # open assignment with a plain read and think — a model turn —
+    # only on the ones where progress moved or hours have passed.
+    # Same switch as the standing agent. Kill switch: CHIEF_ASSIGNMENTS=off.
+    try:
+        import chief_assignments as _chief_assignments
+        scheduler.add_job(g("chief_assignments", _chief_assignments.assignments_tick),
+                          "interval", minutes=15, id="chief_assignments")
+    except Exception as e:
+        print(f"   [warn] chief assignments tick not scheduled: {e}")
+    # Proposals with a life (2026-09-04): hourly, expire the drafts
+    # nobody approved in time (any hour) and remind about the ones
+    # waiting (waking hours, once per proposal, once per business per
+    # twelve hours). Fail-soft until the agent_queue columns exist.
+    try:
+        import proposal_life as _proposal_life
+        scheduler.add_job(g("proposal_life", _proposal_life.proposals_tick),
+                          "interval", hours=1, id="proposal_life")
+    except Exception as e:
+        print(f"   [warn] proposal life tick not scheduled: {e}")
+    # The outcome ledger (2026-09-04): every six hours, fill in what
+    # came of Chief's moves with plain reads, and tell a practitioner
+    # once when a proposal verb retires. Kill switch: OUTCOME_LEDGER=off.
+    try:
+        import outcome_ledger as _outcome_ledger
+        scheduler.add_job(g("outcome_ledger", _outcome_ledger.outcomes_tick),
+                          "interval", hours=6, id="outcome_ledger")
+    except Exception as e:
+        print(f"   [warn] outcome ledger tick not scheduled: {e}")
+    # Chief's week (2026-09-04): Monday, after the morning brief — what
+    # Chief did on its own, what came of it, what is waiting. Counted
+    # from the ledger; no model. Kill switch: CHIEF_WEEK=off.
+    try:
+        import chief_week as _chief_week
+        scheduler.add_job(g("chief_week", _chief_week.weekly_tick),
+                          "cron", day_of_week="mon", hour=13, minute=30, id="chief_week")
+    except Exception as e:
+        print(f"   [warn] chief week job not scheduled: {e}")
+    # Standing permissions (2026-09-04): every minute, release the
+    # proposals whose two-minute window closed without a Stop — through
+    # the same door an approval uses, on surface "standing". Kill
+    # switch: STANDING_PERMISSIONS=off (nothing files with a release
+    # time either; every proposal waits for a tap).
+    try:
+        import standing_permissions as _standing
+        scheduler.add_job(g("standing_release", _standing.release_tick),
+                          "interval", minutes=1, id="standing_release")
+    except Exception as e:
+        print(f"   [warn] standing release tick not scheduled: {e}")
+    # Shared rate windows (2026-09-04): drop rows nobody touched in a
+    # day, and re-arm the shared path so a migration applied after boot
+    # is picked up without a restart.
+    try:
+        import rate_limit as _rl
+        async def _rate_purge_tick():
+            import asyncio as _aio
+            n = await _aio.to_thread(_rl.purge_shared)
+            if n:
+                print(f"   [rate_limit] purged {n} idle window(s)")
+        scheduler.add_job(g("rate_windows_purge", _rate_purge_tick),
+                          "interval", hours=1, id="rate_windows_purge")
+    except Exception as e:
+        print(f"   [warn] rate window purge not scheduled: {e}")
     # Campaigns Phase 1 (2026-07-21) — execute due campaign touches
     # through the shared email/SMS rails (suppression + consent + quiet
     # hours inside). Kill switch: CAMPAIGNS=off.
@@ -1385,6 +1713,24 @@ async def startup():
                           next_run_time=_dt.now(_tz.utc) + _td(minutes=5))
     except Exception as e:
         print(f"   [warn] ledger anchor sweep not scheduled: {e}")
+    # Lifecycle emails: hourly eligibility checks plus welcome recovery tell a
+    # practitioner their trial ends soon / has ended. Once per business
+    # per email, stamped in businesses.settings; quiet while enforcement
+    # is off. Hourly checks allow safe retries inside Resend's 24h key window.
+    # Kill switch: LIFECYCLE_EMAILS=off.
+    try:
+        import lifecycle_emails as _lifecycle
+        scheduler.add_job(g("lifecycle_emails", _lifecycle.sweep_tick),
+                          "cron", minute=30, id="lifecycle_emails")
+        scheduler.add_job(g("welcome_retry", _lifecycle.welcome_retry_tick),
+                          "interval", minutes=15, id="welcome_retry")
+        scheduler.add_job(g("signup_reminders", _lifecycle.signup_reminders_tick),
+                          "cron", minute=5, id="signup_reminders")
+        # The week (2026-09-02): day-three and day-seven beats, once each.
+        scheduler.add_job(g("week_beats", _lifecycle.week_beats_tick),
+                          "cron", minute=45, id="week_beats")
+    except Exception as e:
+        print(f"   [warn] lifecycle email sweep not scheduled: {e}")
 
     _staggered = stagger_long_interval_first_runs(scheduler)
     if _staggered:

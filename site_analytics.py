@@ -206,6 +206,14 @@ async def track(ev: TrackEvent, request: Request,
         session = (ev.s or "").strip()[:64]
         if not session or not _rate_ok(session):
             return _no_content()
+        # The per-session guard above is keyed on a string the caller
+        # chooses — decorative against a script that varies it. A per-IP
+        # bucket beside it (2026-09-04), fail-OPEN: a beacon must never
+        # surface an error to a visitor's browser, but it also must not
+        # be a free service-role insert per request.
+        import rate_limit
+        if not rate_limit.allow("track", rate_limit.trusted_client_ip(request)):
+            return _no_content()
 
         # HOST ONLY. Full referrer URLs leak search terms.
         #

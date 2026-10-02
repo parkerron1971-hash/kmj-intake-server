@@ -82,6 +82,11 @@ def test_trial_only_for_first_subscription(monkeypatch):
     assert d1.get("trial_period_days") == 7             # default trial (7 from 2026-08-24)
     d2 = sb._subscription_data(returning, _U())
     assert "trial_period_days" not in d2                 # no second trial
+    # Pay today (2026-09-04): no trial on a first subscription either,
+    # and the choice is on the subscription for the webhook to read.
+    d3 = sb._subscription_data(fresh, _U(), skip_trial=True)
+    assert "trial_period_days" not in d3 and d3["metadata"]["skipped_trial"] == "true"
+    assert "skipped_trial" not in d1["metadata"]
     monkeypatch.setenv("BILLING_TRIAL_DAYS", "30")
     assert sb._subscription_data(fresh, _U())["trial_period_days"] == 30
     monkeypatch.setenv("BILLING_TRIAL_DAYS", "0")

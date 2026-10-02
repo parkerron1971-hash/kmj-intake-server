@@ -35,6 +35,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import pytest
 
 import ownership_sweep
+import sms_numbers_router
 import sms_routing
 import sms_service
 
@@ -46,6 +47,13 @@ GUARDED = [
     (sms_routing, "get_keyword", "viewer"),
     (sms_routing, "set_keyword", "admin"),
     (sms_routing, "broadcast", "admin"),
+    # Dedicated numbers (phase C): a number id is not a capability —
+    # every handler resolves the caller's relationship to the business.
+    (sms_numbers_router, "get_number", "viewer"),
+    (sms_numbers_router, "available_numbers", "viewer"),
+    (sms_numbers_router, "provision_number", "admin"),
+    (sms_numbers_router, "release_number", "admin"),
+    (sms_numbers_router, "restore_number", "admin"),
 ]
 
 

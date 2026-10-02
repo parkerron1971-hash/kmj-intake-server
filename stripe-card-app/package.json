@@ -1,0 +1,7 @@
+{
+  "name": "solutionist-chief-cards",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Customer-owned Stripe virtual-card account connector",
+  "license": "UNLICENSED"
+}

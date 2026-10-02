@@ -1,0 +1,184 @@
+name: On-call
+
+# The Engineering agent's on-call shift. When an alarm opens an incident
+# issue, Claude investigates and posts a diagnosis on that issue: what is
+# failing, what changed recently, the likely cause, and the first thing a
+# person should check.
+#
+# It DIAGNOSES; it does not act. No edits, no branches, no merges, no
+# redeploys, no rollbacks. That is deliberate and different from the
+# builder in claude.yml, which merges its own PRs on Kevin's standing
+# order. An outage is the worst time for an unreviewed change to reach
+# production, so here a person always presses the button.
+#
+# Two ways in:
+#   - uptime.yml calls this directly (workflow_call). It has to: an issue
+#     opened with the workflow's own GITHUB_TOKEN never starts another
+#     workflow, so an `issues: opened` trigger would never fire for it.
+#   - an issue labelled `incident` opened by anything else (e.g. the
+#     backend watchdog, which files with a personal token) starts it too.
+#
+# Runs on Kevin's Claude Max subscription (CLAUDE_CODE_OAUTH_TOKEN), the
+# same as the builder.
+
+on:
+  workflow_call:
+    inputs:
+      issue:
+        description: "Incident issue number to investigate"
+        required: true
+        type: number
+  issues:
+    # `opened` only. An issue created with a label also fires `labeled`,
+    # which would run the investigation twice.
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "Incident issue number to investigate"
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: oncall-${{ inputs.issue || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  investigate:
+    if: >-
+      github.event_name != 'issues' ||
+      contains(github.event.issue.labels.*.name, 'incident')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Enough history to see what shipped in the last few days.
+          fetch-depth: 200
+
+      # The evidence is gathered HERE, by plain shell, before Claude starts.
+      # In the first rehearsal (#1134) Claude's own curl calls were refused
+      # inside the action, so it never saw production first-hand and
+      # filled the gap with a confident story. Whatever the action's
+      # sandbox allows, this file is always there.
+      - name: Gather evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ inputs.issue || github.event.issue.number }}
+          # Optional. Without it the evidence says Sentry was not available.
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          BACKEND: https://kmj-intake-server-production.up.railway.app
+          APP: https://mysolutionist.app
+        run: |
+          set +e
+          f=oncall-evidence.md
+          fence='```'
+          {
+            echo "# Evidence gathered by the workflow at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo
+            echo "## Production backend, checked just now"
+            for p in /health/ready /health; do
+              code=$(curl -s --max-time 20 -o /tmp/body -w '%{http_code}' "$BACKEND$p")
+              echo "### GET $BACKEND$p -> HTTP $code"
+              echo "$fence"; head -c 1500 /tmp/body; echo; echo "$fence"
+            done
+            echo "## The app"
+            echo "GET $APP -> HTTP $(curl -s --max-time 20 -o /dev/null -w '%{http_code}' "$APP")"
+            echo
+            echo "## The incident issue #$ISSUE"
+            echo "$fence"; gh issue view "$ISSUE" --comments | head -c 6000; echo; echo "$fence"
+            echo "## Other open alarms"
+            for l in uptime deploy incident; do
+              echo "- label $l:"
+              gh issue list --label "$l" --state open --json number,title,createdAt \
+                --template '{{range .}}  - #{{.number}} {{.title}} ({{.createdAt}}){{"\n"}}{{end}}'
+            done
+            echo
+            echo "## Commits on main, last 3 days"
+            echo "$fence"; git log origin/main --since='3 days ago' --format='%h %ad %s' --date=iso | head -60; echo "$fence"
+            echo "## Recent failed workflow runs"
+            echo "$fence"
+            gh run list --status failure --limit 10 --json workflowName,headSha,createdAt \
+              --template '{{range .}}{{.createdAt}} {{.workflowName}} {{.headSha}}{{"\n"}}{{end}}'
+            echo "$fence"
+            echo
+            python3 scripts/oncall_sentry_evidence.py
+          } > "$f"
+          wc -c "$f"
+
+      - name: Investigate
+        uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          claude_args: >-
+            --model ${{ vars.CLAUDE_ONCALL_MODEL || vars.CLAUDE_BUILD_MODEL || 'claude-fable-5' }}
+            --max-turns 40
+            --allowedTools "Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(curl -s https://kmj-intake-server-production.up.railway.app:*),Bash(curl -s -o /dev/null -w %{http_code} https://mysolutionist.app:*)"
+            --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Bash(git push:*),Bash(git commit:*),Bash(gh pr:*)"
+          prompt: |
+            You are on call for the Solutionist backend (FastAPI on Railway, this repo;
+            Supabase database; the app at https://mysolutionist.app is a separate repo on
+            Vercel). An alarm opened incident issue #${{ inputs.issue || github.event.issue.number }}
+            in ${{ github.repository }}. Diagnose it. Do not fix it.
+
+            1. Read `oncall-evidence.md` in the working directory FIRST. The workflow
+               gathered it moments before you started: production's /health/ready and
+               /health (which reports `version`, the running commit), the app's status,
+               the issue and its comments, other open alarms, recent commits and failed
+               runs, and Sentry's unresolved errors from the last 24 hours with the latest
+               event's message, stack and breadcrumbs. It is your first-hand view of
+               production. Sentry's breadcrumbs usually carry the real status code and
+               database error; read them before naming a cause. You may also try
+               `curl -s https://kmj-intake-server-production.up.railway.app/health/ready`
+               yourself; if that is refused, the file is enough.
+            2. If the issue says REHEARSAL, or the address it probed is not
+               https://kmj-intake-server-production.up.railway.app (backend) or
+               https://mysolutionist.app (app), this was a test of the alarm. Say that in
+               your first sentence, confirm from the evidence whether production itself is
+               healthy, and stop there. Do not diagnose a cause for a test.
+            3. Look at what changed: `git log --since='3 days ago' --format='%h %ad %s' --date=iso`
+               on origin/main, and `git show` anything that touches the failing area. Compare
+               the running `version` with the newest commit on main.
+            4. Look for related alarms: open issues labelled `uptime`, `deploy` or `incident`,
+               and recent failed runs (`gh run list --status failure --limit 10`).
+            5. Read the code paths behind whatever is failing (CLAUDE.md explains the layout;
+               /health and /health/ready live in kmj_intake_automation.py).
+
+            Then post ONE comment on the issue, written for a non-engineer owner reading on a
+            phone. Post it ONLY with a quoted heredoc, so backticks and $ in the text are never
+            run by the shell:
+              gh issue comment <n> --body-file - <<'DIAGNOSIS'
+              ...your comment...
+              DIAGNOSIS
+            Use these headings:
+            **What is failing** (one or two sentences, plain words),
+            **Most likely cause** (with the evidence: a commit, a log line, a response body;
+            say how sure you are),
+            **What changed recently** (only the relevant commits),
+            **First thing to check** (one concrete step for a person, e.g. a specific Railway
+            screen or setting),
+            **What I could not see** (you have no Railway logs and no database access, and
+            Sentry only if the evidence file shows it; say what that leaves unknown).
+
+            Rules: never edit files, open branches or PRs, redeploy, roll back, or change any
+            setting. If production is healthy again by the time you look, say so first and
+            keep the diagnosis short. Never guess past the evidence; "I could not tell" is an
+            acceptable answer.
+
+            How sure to say you are: call a cause "likely" only when the evidence shows the
+            failure itself (an error response, a running version that does not match main, a
+            failed run with a matching error). A timing coincidence, such as a merge shortly
+            before the alarm, makes a cause "possible", never "high confidence". When the
+            failure is already gone and nothing in the evidence shows it, say the cause is
+            unknown and list what would tell you.

@@ -163,6 +163,14 @@ async def accept(spec_id: str, user: AuthedUser = Depends(require_user)) -> Dict
             status_code=400,
             detail=res.get("detail") or res.get("error") or "materialize failed",
         )
+    # The second pair of eyes (module_check): best effort, never blocks the accept.
+    try:
+        import module_check_router
+        mod = res.get("module") or {}
+        await module_check_router.enqueue_after_accept(
+            str(user.id), str(mod.get("business_id") or ""), mod.get("id"))
+    except Exception:
+        pass
     return res
 
 

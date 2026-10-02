@@ -17,9 +17,9 @@ paid beta; what remains is configuration, operations, and polish.
 ## 2. The money machine (tiers + pay-as-you-go)
 
 **Model (docs/pricing_model.md):** subscription floor + metered overage.
-- Starter $79/mo → 75 Chief interactions, overage $0.40/unit
-- Professional $199/mo → 350 units, overage $0.30/unit
-- Practice $399/mo → 1000 units, overage $0.25/unit
+- Starter $79/mo → 3,000 credits (about 250 conversations)
+- Professional $149/mo (2026-09-04; was $199) → 7,500 credits
+- Solutionist (plan key `practice`) $299/mo (2026-09-04; was $399) → 17,500 credits
 - 2× bill promise: overage can never exceed the tier price itself.
 - Weighted units: chat = 1, hero compose = 5, full site build = 25.
 
@@ -40,7 +40,7 @@ in `/platform/subscriptions/summary`.
 5. Watch `/access/readiness` — it preflights all of the above.
 
 **Not built (don't market):** multi-seat collaboration
-(`feature_gates.py` flags it NOT BUILT — the Practice tier sells
+(`feature_gates.py` flags it NOT BUILT — the Solutionist tier (key `practice`) sells
 accountant collaboration, which IS built via TeamPanel invites).
 
 ## 3. Running the beta from Mission Control (this PR)

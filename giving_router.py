@@ -351,8 +351,11 @@ async def public_giving_checkout(
     Returns { ok, url } — the Stripe-hosted payment page.
     """
     # Rate limit FIRST — before any read or write (pinned in tests).
-    from rate_limit import client_ip
-    ip = client_ip(request)
+    # The trusted (last) hop, not the first: this creates Stripe sessions
+    # for amounts up to $25k, and a limiter keyed on a caller-typed
+    # header is decorative (2026-09-04).
+    from rate_limit import trusted_client_ip
+    ip = trusted_client_ip(request)
     if not _check_give_rate(ip):
         raise HTTPException(429, "Too many attempts. Please try again in a minute.")
 
@@ -495,6 +498,7 @@ def record_gift(
     giver_email: str = "",
     stripe_ref: str,
     recurring: bool = False,
+    received_at: Optional[str] = None,
 ) -> Optional[str]:
     """Turn a completed Stripe gift payment into the PAID invoices row
     every downstream giving surface reads. Returns the invoice id (or
@@ -542,7 +546,9 @@ def record_gift(
         "contact_id": contact_id,
         "invoice_number": invoice_number,
         "status": "paid",
-        "paid_at": _now_iso(),
+        "paid_at": received_at or _now_iso(),
+        "is_gift": True,
+        "gift_fund": fund,
         "payment_method": "stripe",   # load-bearing: GL clearing routing
         "items": [{"description": description, "quantity": 1,
                    "unit_price": amount, "total": amount}],
@@ -626,7 +632,15 @@ def record_gift_from_session(session: Dict[str, Any]) -> Optional[str]:
         giver_email=(md.get("giver_email") or details.get("email") or "").lower(),
         stripe_ref=str(ref),
         recurring=False,
+        received_at=_stripe_time(session.get("created")),
     )
+
+
+def _stripe_time(value) -> Optional[str]:
+    try:
+        return datetime.fromtimestamp(int(value), timezone.utc).isoformat() if value else None
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def gift_metadata_from_stripe_invoice(inv: Dict[str, Any]) -> Dict[str, Any]:
@@ -634,7 +648,7 @@ def gift_metadata_from_stripe_invoice(inv: Dict[str, Any]) -> Dict[str, Any]:
     event: invoice.subscription_details.metadata (Stripe mirrors the
     Subscription's metadata there at invoice creation). Separate helper
     so the webhook's gift check and the recorder read ONE place."""
-    sub = inv.get("subscription_details") or {}
+    sub = inv.get("subscription_details") or (inv.get("parent") or {}).get("subscription_details") or {}
     md = sub.get("metadata") or {}
     return md if isinstance(md, dict) else {}
 
@@ -658,6 +672,7 @@ def record_gift_from_cycle(inv: Dict[str, Any]) -> Optional[str]:
         giver_email=(md.get("giver_email") or inv.get("customer_email") or "").lower(),
         stripe_ref=str(ref),
         recurring=True,
+        received_at=_stripe_time((inv.get("status_transitions") or {}).get("paid_at") or inv.get("created")),
     )
 
 
@@ -744,6 +759,12 @@ def _brand_css_vars(business: Dict[str, Any]) -> str:
     return _css_vars(_brand_kit(business))
 
 
+def _brand_font_links(business: Dict[str, Any]) -> str:
+    """The brand's faces, loaded — the partner of _brand_css_vars."""
+    from booking_page_renderer import _font_links, _brand_kit
+    return _font_links(_brand_kit(business))
+
+
 def render_give_page(
     business: Dict[str, Any],
     canonical_url: str,
@@ -803,6 +824,7 @@ def render_give_page(
 <meta property="og:url" content="{_esc(canonical_url)}">
 <meta property="og:type" content="website">
 {og_image_html}
+{_brand_font_links(business)}
 <style>{css_vars}</style>
 <style>
 html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);
@@ -973,6 +995,7 @@ def render_giving_unavailable_page(business: Dict[str, Any],
         f"<title>{_esc(name)}</title>",
         '<meta name="robots" content="noindex,nofollow">',
         f'<link rel="canonical" href="{_esc(canonical_url)}">',
+        _brand_font_links(business),
         f"<style>{css_vars}</style>",
         "<style>html,body{margin:0;padding:0;font-family:var(--font-body);"
         "color:var(--text-primary);background:var(--surface);min-height:100vh;}"
@@ -990,3 +1013,110 @@ def render_giving_unavailable_page(business: Dict[str, Any],
         "</body>",
         "</html>",
     ])
+
+
+# The finance entry surface works without Stripe or bank linking.
+@router.get("/giving/{business_id}/records")
+def giving_records(business_id: str, year: Optional[int] = None, user: AuthedUser = Depends(require_user)):
+    from giving_records import require_finance, read_gifts
+    require_finance(business_id, user)
+    year = year or datetime.now(timezone.utc).year
+    if not 2000 <= year <= 2200:
+        raise HTTPException(400, "Choose a valid year")
+    rows = read_gifts(business_id, f"{year}-01-01T00:00:00Z", f"{year+1}-01-01T00:00:00Z")
+    return {"rows": rows, "year": year}
+
+
+def _manual_gift_fields(business_id, body):
+    from decimal import Decimal, InvalidOperation
+    from datetime import date
+    try:
+        cents = Decimal(str(body.get("amount_cents")))
+        if not cents.is_finite() or cents != cents.to_integral_value() or not 1 <= cents <= MAX_GIFT_CENTS:
+            raise ValueError()
+        day = date.fromisoformat(str(body.get("received_on", "")))
+        if day.year < 2000 or day > datetime.now(timezone.utc).date():
+            raise ValueError()
+    except (ValueError, InvalidOperation):
+        raise HTTPException(400, "Enter a valid amount and received date (not in the future)")
+    method = body.get("method")
+    if method not in ("cash", "check", "bank_transfer", "other"):
+        raise HTTPException(400, "Choose cash, check, bank transfer, or other")
+    fund = str(body.get("fund") or "General").strip()
+    if not fund or len(fund) > MAX_FUND_NAME_LEN:
+        raise HTTPException(400, "Enter a fund name up to 40 characters")
+    cid = body.get("contact_id") or None
+    if cid:
+        try: cid = str(uuid.UUID(str(cid)))
+        except ValueError: raise HTTPException(400, "Choose a valid giver")
+        contact = sb_clients.sb_get_as_service(f"/contacts?id=eq.{cid}&business_id=eq.{business_id}&select=id&limit=1")
+        if contact is None:
+            raise HTTPException(503, "Givers could not be loaded. Please retry.")
+        if not contact:
+            raise HTTPException(400, "Choose a giver from this business")
+    amount = float(cents / 100)
+    return {"contact_id": cid, "total": amount, "subtotal": amount,
+            "paid_at": f"{day.isoformat()}T12:00:00Z", "due_date": day.isoformat(),
+            "payment_method": method, "gift_fund": fund,
+            "category": RESTRICTED_CATEGORY if is_designated(fund) else None,
+            "items": [{"description": f"Gift — {fund_label(fund)}", "quantity": 1, "unit_price": amount, "total": amount}]}
+
+
+@router.post("/giving/{business_id}/records")
+def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    from giving_records import require_finance
+    from vertical_family import is_nonprofit_like
+    require_finance(business_id, user)
+    biz = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=type&limit=1")
+    if not biz or not is_nonprofit_like(biz[0].get("type")):
+        raise HTTPException(409, "Giving is available to ministries and nonprofits")
+    try: request_id = str(uuid.UUID(str(body.get("request_id"))))
+    except ValueError: raise HTTPException(400, "A request identifier is required")
+    number = f"GIVE-manual-{request_id}"
+    fields = _manual_gift_fields(business_id, body)
+    existing = sb_clients.sb_get_as_service(f"/invoices?business_id=eq.{business_id}&invoice_number=eq.{number}&select=id&limit=1")
+    if existing is None:
+        raise HTTPException(503, "Giving records are temporarily unavailable")
+    if existing:
+        return {"ok": True, "id": existing[0]["id"], "already": True}
+    row = {**fields, "business_id": business_id, "invoice_number": number, "is_gift": True,
+           "status": "paid", "tax_rate": 0, "tax_amount": 0, "currency": "USD",
+           "notes": f"Manual gift recorded by {user.id}"}
+    saved = sb_clients.sb_post_as_service("/invoices", row)
+    if not saved:
+        raise HTTPException(503, "Gift could not be saved. Retry with the same request.")
+    return {"ok": True, "id": saved[0]["id"]}
+
+
+@router.patch("/giving/{business_id}/records/{gift_id}")
+def correct_manual_gift(business_id: str, gift_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    from giving_records import require_finance
+    require_finance(business_id, user)
+    try: gift_id = str(uuid.UUID(gift_id))
+    except ValueError: raise HTTPException(400, "Invalid gift")
+    rows = sb_clients.sb_get_as_service(f"/invoices?id=eq.{gift_id}&business_id=eq.{business_id}&is_gift=eq.true&select=*&limit=1")
+    if not rows:
+        raise HTTPException(404, "Gift not found")
+    original = rows[0]
+    if not str(original.get("invoice_number", "")).startswith("GIVE-manual-"):
+        raise HTTPException(409, "Online gifts are corrected through the payment provider")
+    reason = str(body.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(400, "Enter the reason for this correction")
+    fields = _manual_gift_fields(business_id, body)
+    refund = body.get("refund_amount_cents", 0)
+    if not isinstance(refund, int) or isinstance(refund, bool) or not 0 <= refund <= round(fields["total"] * 100):
+        raise HTTPException(400, "Refund must be between zero and the gift amount")
+    version = original.get("updated_at")
+    if not version or str(body.get("updated_at")) != str(version):
+        raise HTTPException(409, "This gift changed. Reload before correcting it.")
+    fields.update(refund_amount_cents=refund, refunded_at=_now_iso() if refund else None)
+    # Preserve the prior financial entry and reason in the existing audit trail.
+    # The database trigger retains the old/new values, including manual corrections.
+    fields["notes"] = (original.get("notes") or "") + f"\nCorrection by {user.id}: " + reason[:300]
+    saved = sb_clients.sb_patch_as_service(f"/invoices?id=eq.{gift_id}&business_id=eq.{business_id}&updated_at=eq.{urllib.parse.quote(str(version), safe='')}", fields)
+    if saved is None:
+        raise HTTPException(503, "The gift could not be saved. Reload and retry.")
+    if not saved:
+        raise HTTPException(409, "The gift changed. Reload and retry.")
+    return {"ok": True, "id": gift_id}

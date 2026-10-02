@@ -98,10 +98,42 @@ _TYPE_ALIASES = {
 }
 VALID_TYPES = sorted(set(_TYPE_ALIASES.values()))
 
+def public_form_url(business_id: str, form_id: str) -> str:
+    """The page a visitor opens to fill in this form — on the business's
+    own site address (custom domain, else the mysolutionist subdomain),
+    falling back to the API host, which serves the same page. Every
+    surface that hands out a form link goes through here."""
+    origin = ""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=slug,site_config&limit=1") or []
+        if rows:
+            cfg = rows[0].get("site_config") if isinstance(rows[0].get("site_config"), dict) else {}
+            custom = str((cfg or {}).get("custom_domain") or "").strip().lower().strip("/")
+            slug = str(rows[0].get("slug") or "").strip()
+            origin = (f"https://{custom}" if custom
+                      else (f"https://{slug}.mysolutionist.app" if slug else ""))
+    except Exception as e:  # pragma: no cover
+        logger.info(f"[forms] site origin lookup skipped: {e}")
+    if not origin:
+        from chief_host import FALLBACK_BASE
+        origin = FALLBACK_BASE.rstrip("/")
+    return f"{origin}/public/widget/form/{form_id}"
+
+
 # Mirrors the vocabulary the seeded forms use. Anything else falls back to
 # "general", which is what `submit_intake` itself defaults to.
+#
+# THIS LIST AND THE DATABASE CHECK MUST AGREE. intake_forms.form_type has
+# a CHECK constraint (supabase/APPLY-2026-09-18-intake-form-types.sql);
+# until 2026-09-18 it allowed six values while this tuple allowed ten,
+# so "intake" (the prompt's own example), "application", "feedback",
+# "waitlist" and "quote" were accepted here and rejected by Postgres —
+# "I couldn't save that form just now" on every one, with no log.
+# test_chief_form_types pins the two lists to the migration.
 _FORM_TYPES = ("general", "intake", "discovery", "consultation", "connect_card",
-               "volunteer", "application", "feedback", "waitlist", "quote")
+               "volunteer", "application", "feedback", "waitlist", "quote", "event")
 
 # THE THREE KEYS THE SUBMIT DOOR READS BY EXACT NAME.
 #
@@ -370,6 +402,14 @@ async def handle_create_client_form(client, biz, action) -> Dict[str, Any]:
     if action.get("description"):
         settings["description"] = str(action["description"])[:400]
 
+    if form_type == 'event':
+        from event_form_details import event_values, details_question
+        details = event_values(action)
+        need = details_question(details)
+        if need:
+            return {**_fail('create_client_form', need['text']), 'question': need}
+        settings['event_details'] = details
+
     linked_name: Optional[str] = None
     link_ref = (action.get("link_module") or action.get("module_name")
                 or action.get("module_id") or "")
@@ -382,7 +422,9 @@ async def handle_create_client_form(client, biz, action) -> Dict[str, Any]:
         settings["field_map"] = _auto_field_map(fields, module)
         linked_name = module.get("name")
 
+    from chief_code import entity_id
     row = {
+        **({'id': entity_id.get()} if entity_id.get() else {}),
         "business_id": business_id,
         "name": name,
         "form_type": form_type,
@@ -393,6 +435,15 @@ async def handle_create_client_form(client, biz, action) -> Dict[str, Any]:
     try:
         inserted = await asyncio.to_thread(sb_clients.sb_post_as_service,
                                            "/intake_forms", row)
+        if (not inserted or not isinstance(inserted, list)) and form_type != "general":
+            # The database's form_type CHECK may lag the list above (it did
+            # for five months). A rejected label must not cost the form:
+            # save it as "general" and keep the asked-for kind in settings.
+            logger.warning(f"create_client_form: form_type {form_type!r} rejected; saving as general")
+            row = {**row, "form_type": "general",
+                   "settings": {**settings, "requested_form_type": form_type}}
+            inserted = await asyncio.to_thread(sb_clients.sb_post_as_service,
+                                               "/intake_forms", row)
     except Exception as e:
         logger.exception(f"create_client_form insert failed: {e}")
         return _fail("create_client_form",
@@ -419,24 +470,29 @@ async def handle_create_client_form(client, biz, action) -> Dict[str, Any]:
     asked = ", ".join(f["label"] for f in fields[:6])
     if len(fields) > 6:
         asked += f", +{len(fields) - 6} more"
+    url = public_form_url(business_id, form_id) if form_id else ""
     result = (f"Created '{name}' — {len(fields)} question"
-              f"{'s' if len(fields) != 1 else ''}: {asked}. It's live in "
-              f"Client Forms with an embed snippet for your site, and it "
-              f"shows up on your composed site automatically.")
+              f"{'s' if len(fields) != 1 else ''}: {asked}. Its page is "
+              f"{url} — that is the link to share or text; it also shows "
+              f"up on your composed site automatically.")
     if linked_name:
         result += f" Every submission also files a row in {linked_name}."
 
     return {
         "type": "create_client_form",
         "result": result,
-        "label": f"New client form — {name}",
+        "label": f"New client form — {name} — {url}",
         "form_id": form_id,
         "form_name": name,
         "field_count": len(fields),
         "fields": [{"label": f["label"], "type": f["type"],
                     "required": bool(f.get("required"))} for f in fields],
         "linked_module_id": settings.get("linked_module_id"),
-        "embed_url": f"/public/widget/form/{form_id}" if form_id else None,
+        # The page a visitor opens. This was a root-relative path with no
+        # route behind it on any host — Chief texted a 404 to a client
+        # (2026-09-18). Absolute, on the site's own address when it has one.
+        "url": url or None,
+        "embed_url": url or None,
         "nav": _nav_forms(),
     }
 
@@ -554,6 +610,17 @@ async def handle_update_client_form(client, biz, action) -> Dict[str, Any]:
         settings_touched = True
         changes.append("unlinked from its solution")
 
+    from event_form_details import is_event, event_values, details_question
+    event_form = action.get('form_type') == 'event' or is_event(form)
+    if event_form and action.get('is_active') is not False:
+        details = event_values(action, settings.get('event_details'))
+        need = details_question(details)
+        if need:
+            return {**_fail('update_client_form', need['text']), 'question': need}
+        if details != settings.get('event_details'):
+            settings['event_details'] = details
+            settings_touched = True
+            changes.append('event details and flyer preference updated')
     if settings_touched:
         patch["settings"] = settings
 
@@ -653,7 +720,8 @@ async def handle_list_client_forms(client, biz, action) -> Dict[str, Any]:
                           if isinstance(f, dict)][:8],
             "submissions": counts.get(str(r["id"]), 0),
             "linked_module_id": (r.get("settings") or {}).get("linked_module_id"),
-            "embed_url": f"/public/widget/form/{r['id']}",
+            "url": public_form_url(business_id, r["id"]),
+            "embed_url": public_form_url(business_id, r["id"]),
         })
 
     lines = []

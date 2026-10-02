@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 from fastapi import HTTPException
 
@@ -208,7 +209,7 @@ def test_the_verb_is_registered_everywhere():
     nothing — the lesson giving_statement taught this codebase."""
     assert "adjust_template" in cos.ACTION_HANDLERS
     assert "adjust_template" in ar.REGISTRY
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     assert '"type":"adjust_template"' in src
 
 

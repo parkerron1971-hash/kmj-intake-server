@@ -395,7 +395,12 @@ def get_missing_voice_jit_fields(owner_id: str) -> List[str]:
     """Return the JIT_VOICE_FIELDS the practitioner hasn't filled yet."""
     if not owner_id:
         return list(JIT_VOICE_FIELDS)
-    voice = get_voice_depth(owner_id) or {}
+    return missing_voice_jit_fields_from_profile(get_voice_depth(owner_id))
+
+
+def missing_voice_jit_fields_from_profile(voice: Optional[Dict[str, Any]]) -> List[str]:
+    """A full practitioner row also contains all voice fields used here."""
+    voice = voice or {}
     samples = voice.get("voice_samples") or {}
     missing: List[str] = []
     for field_path in JIT_VOICE_FIELDS:

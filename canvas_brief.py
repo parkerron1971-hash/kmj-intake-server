@@ -30,6 +30,15 @@ logger = logging.getLogger("canvas_brief")
 # carries real tone words + deterministic chrome motion, so it renders
 # as a block (§10.2 marquee wiring); every other seam variant is
 # authored. Unknown modules default to block (safe: module-rendered).
+# THE OWNER'S WORDS, UNCUT (2026-09-04, the barbershop bench). The
+# practitioner's typed prompt was sliced to 600 characters here and at
+# both places compose stashes it on ctx — a real prompt ("...Show the
+# work. Price list on the site, people always ask.") lost its last
+# sentence before the Director ever read it, and nothing said so. One
+# named cap, generous enough for anything a person types into a chat
+# box, shared by every seam that carries the brief.
+OWNER_BRIEF_MAX_CHARS = 2400
+
 AUTHORED_MODULES = frozenset({"hero", "about", "cta", "interstitial"})
 BLOCK_MODULES = frozenset({"offerings", "testimonials", "statband",
                            "process", "faq", "store", "showcase",
@@ -190,7 +199,7 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
     if owner:
         A("== THE OWNER'S WORDS (verbatim — they asked for exactly this; "
           "honor it above every taste rule below) ==")
-        A(owner[:600])
+        A(owner[:OWNER_BRIEF_MAX_CHARS])
         A("")
 
     # ── OVERVIEW: offer, audience, verbs ──

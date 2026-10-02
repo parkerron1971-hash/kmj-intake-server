@@ -4,15 +4,37 @@ embedded on practitioners' public composed sites.
 
 THIS IS NOT CHIEF. Zero imports from Chief action modules, zero verbs.
 The Concierge reads a fenced, PUBLIC-ONLY knowledge set and can do
-exactly four things: answer, link, capture a lead, escalate. The model
+exactly six things: answer, link, capture a lead, QUALIFY that lead,
+BOOK a time (in the chat, on the walk-in flow), escalate. The model
 never sees anything beyond the assembled public knowledge, so leaking
 private data is structurally impossible — keep it that way.
 
+QUALIFICATION (2026-09-05, concierge_qualify.py): the practitioner may
+give the concierge up to five qualifying questions ("What are you hoping
+to fix?"). The model weaves them into the chat; at lead capture the
+server reads the visitor's turns, extracts the answers (one small model
+call, failure-tolerant) and runs a deterministic rubric → hot / warm /
+cold with the reasons in words. The tier lands on the conversation row,
+the contact, the notification, and the spine. The tier NEVER comes
+from the model — only the answers do.
+
+IN-CHAT BOOKING (2026-09-05): when online booking is live, the visitor
+picks a service and a time WITHOUT leaving the chat. The three booking
+endpoints are thin: services + slots come from agent_site (the same
+truth /.well-known/agent.json hands to a customer's own agent), and the
+booking rides booking_widget_router.book_anon — same dedupe, same
+double-book guard, same confirmation email + SMS consent. A concierge
+booking is a booking, stamped booked_via='concierge'. The model NEVER
+books; the server does, on a click. No model call on any booking path.
+
 Surfaces:
   PUBLIC (anon, rate-limited BEFORE any work):
-    POST /public/concierge/{slug}/message    — chat turn
-    POST /public/concierge/{slug}/lead      — lead-capture fallback
-    GET  /public/concierge/{slug}/widget.js — self-contained widget
+    POST /public/concierge/{slug}/message                — chat turn
+    POST /public/concierge/{slug}/lead                   — lead capture (+ qualification)
+    GET  /public/concierge/{slug}/booking/services       — bookable offerings
+    GET  /public/concierge/{slug}/booking/availability   — slots for one offering
+    POST /public/concierge/{slug}/booking/book           — book (walk-in flow)
+    GET  /public/concierge/{slug}/widget.js              — self-contained widget
   OPERATOR (authed, require_role ladder — member read / manager write):
     GET   /concierge/{business_id}                                  — settings
     PATCH /concierge/{business_id}                                  — settings
@@ -54,9 +76,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
+import concierge_qualify
 import event_spine
 import feature_gates
 import llm_call
@@ -144,6 +167,11 @@ DEFLECT_CRISIS = (
     "If you're in crisis or thinking about harming yourself, please "
     "call or text 988 (the Suicide & Crisis Lifeline) or dial 911 "
     "right away. You deserve immediate support from a real person.")
+
+# Words that mean "I want to book" — the server decides when to show
+# the picker, never the model.
+BOOKING_WORDS = ("book", "appoint", "schedul", "reserv", "availab", "slot",
+                 "opening", "come in", "set up a time", "pick a time")
 
 # Policy keys as named by chief_of_staff._VALID_POLICY_KEYS (READ-ONLY
 # reference — deliberately NOT imported; law #1 is zero imports from
@@ -447,6 +475,24 @@ def assemble_knowledge(business_id: str,
                             "a": str(item["a"]).strip()[:600]})
     faq = faq[:24]
 
+    # In-chat booking: live only when the walk-in flow is live AND at
+    # least one offering is booked by the slot. Read through agent_site
+    # so the chat and a customer's own agent see the same door.
+    booking_inline = False
+    bookable: List[Dict[str, Any]] = []
+    try:
+        import agent_site
+        bundle = agent_site._load_bundle(business_id)
+        if bundle and bundle.get("booking_open"):
+            for o in bundle.get("offerings") or []:
+                pub = agent_site.public_offering(o)
+                if pub.get("bookable"):
+                    bookable.append({"id": pub["id"], "name": pub["name"],
+                                     "duration_min": pub.get("duration_min")})
+            booking_inline = bool(bookable)
+    except Exception as e:
+        logger.warning(f"[concierge] booking door check failed: {e}")
+
     knowledge = {
         "business": {"id": str(biz.get("id")),
                      "name": (biz.get("name") or "this business").strip(),
@@ -461,6 +507,10 @@ def assemble_knowledge(business_id: str,
         "policies": policies,
         "faq": faq,
         "greeting": (concierge_settings(biz).get("greeting") or "").strip()[:300],
+        "qualifying": concierge_qualify.clean_questions(
+            concierge_settings(biz).get("qualifying")),
+        "booking_inline": booking_inline,
+        "bookable": bookable,
     }
     _knowledge_cache[business_id] = (now, knowledge)
     return knowledge
@@ -523,6 +573,31 @@ def build_system_prompt(knowledge: Dict[str, Any]) -> str:
             "condition, or care, warmly direct them to contact the "
             "practitioner directly.")
 
+    # In-chat booking: the model TELLS, the server BOOKS. It must never
+    # claim a time is taken or free — the picker shows real slots.
+    if knowledge.get("booking_inline"):
+        lines.append(
+            "- BOOKING: the visitor can pick a service and a time right "
+            "here in this chat — a 'Pick a time' button appears under "
+            "your reply whenever booking comes up. When someone wants to "
+            "book, say they can choose a time below. Never state which "
+            "times are open or taken; the picker shows the real "
+            "availability. Never say you have booked anything yourself.")
+
+    # Qualifying questions (practitioner-authored). Woven in, one at a
+    # time, only when it fits — a concierge, not an intake form.
+    qualifying = knowledge.get("qualifying") or []
+    if qualifying:
+        lines.append(
+            "\nQUALIFYING: " + name + " would like to learn these from "
+            "interested visitors. Work them into the conversation "
+            "naturally, ONE at a time, only once the visitor has shown "
+            "interest — never as a list, never before answering what "
+            "they asked, and never repeat a question they already "
+            "answered. It is fine to leave some unasked.")
+        for q in qualifying:
+            lines.append(f"- {q}")
+
     # Vertical voice (a ministry concierge sounds pastoral; a barber's is
     # quick). Read-only reuse of the vertical intelligence tables.
     try:
@@ -580,9 +655,12 @@ def _suggest_actions(message: str,
     m = (message or "").lower()
     links = knowledge.get("links") or {}
     out: List[Dict[str, str]] = []
-    if links.get("booking") and any(w in m for w in
-                                    ("book", "appoint", "schedul", "reserv",
-                                     "availab", "slot")):
+    wants_booking = any(w in m for w in BOOKING_WORDS)
+    if wants_booking and knowledge.get("booking_inline"):
+        # The in-chat picker beats the external page: the visitor stays
+        # in the conversation and the server books on the walk-in flow.
+        out.append({"type": "book", "label": "Pick a time"})
+    elif links.get("booking") and wants_booking:
         out.append({"type": "link", "label": "Book now", "url": links["booking"]})
     if links.get("store") and any(w in m for w in
                                   ("buy", "purchase", "store", "product",
@@ -839,12 +917,69 @@ class PublicLeadBody(BaseModel):
     conversation_id: Optional[str] = None
     name: str
     email: str
+    phone: Optional[str] = None
     message: Optional[str] = ""
+
+
+def _transcript(conversation_id: Optional[str]) -> List[Dict[str, Any]]:
+    """The conversation's turns, oldest first — the evidence the rubric
+    reads. Empty when there is no conversation (a direct lead form)."""
+    if not conversation_id:
+        return []
+    try:
+        return sb_clients.sb_get_as_service(
+            f"/concierge_messages?conversation_id=eq.{conversation_id}"
+            f"&select=role,body,created_at&order=created_at.asc&limit=60") or []
+    except Exception as e:
+        logger.warning(f"[concierge] transcript read failed: {e}")
+        return []
+
+
+async def _qualify_lead(knowledge: Dict[str, Any],
+                        transcript: List[Dict[str, Any]], *,
+                        email: str, phone: str, message: str,
+                        booked: bool = False) -> concierge_qualify.Qualification:
+    """Extraction (model, optional) then the rubric (pure). A model
+    failure costs the answers, never the tier."""
+    questions = list(knowledge.get("qualifying") or [])
+    answers: Optional[Dict[str, str]] = {}
+    if questions and (transcript or message):
+        answers = await concierge_qualify.extract_answers(
+            questions, transcript, extra_text=message,
+            model=CONCIERGE_MODEL, business_id=knowledge["business"]["id"])
+    return concierge_qualify.qualify(
+        transcript, questions=questions,
+        offerings=knowledge.get("offerings") or [],
+        answers=answers or {}, email=email, phone=phone,
+        extra_text=message, booked=booked,
+        extracted=answers is not None and bool(questions))
+
+
+def _write_qualification(conversation: Optional[Dict[str, Any]],
+                         business_id: str,
+                         q: concierge_qualify.Qualification,
+                         appointment_id: Optional[str] = None) -> None:
+    """The tier lands on the conversation row (the operator list reads
+    it) — best-effort, and tolerant of a not-yet-migrated column."""
+    if not conversation:
+        return
+    patch: Dict[str, Any] = {"qualification": dict(q.as_dict(), at=_now_iso())}
+    if appointment_id:
+        patch["appointment_id"] = str(appointment_id)
+    try:
+        sb_clients.sb_patch_as_service(
+            f"/concierge_conversations?id=eq.{conversation['id']}"
+            f"&business_id=eq.{business_id}", patch)
+        conversation.update(patch)
+    except Exception as e:
+        logger.warning(f"[concierge] qualification write failed: {e}")
 
 
 def _find_or_create_contact(business_id: str, name: str, email: str,
                             message: str,
-                            attribution: Optional[Dict[str, Any]] = None
+                            attribution: Optional[Dict[str, Any]] = None,
+                            phone: str = "",
+                            qualification: Optional[concierge_qualify.Qualification] = None
                             ) -> Optional[str]:
     """Find-or-create with the outbound-integrity dedup pattern (PR #344,
     public_site._capture_contact_from_form): email ilike with LIKE
@@ -852,36 +987,47 @@ def _find_or_create_contact(business_id: str, name: str, email: str,
     raises."""
     try:
         email_clean = (email or "").strip().lower()
+        phone_clean = (phone or "").strip()[:40]
         now_iso = _now_iso()
         # THE ONE DEDUPE RULE (lead_identity). This matched on email
         # ALONE, so a visitor who left a phone number and no email
         # became a new row every time they came back.
         import lead_identity
         existing = lead_identity.find(
-            business_id, email=email_clean, name=name,
-            select="id,name,metadata")
+            business_id, email=email_clean, phone=phone_clean or None,
+            name=name, select="id,name,phone,metadata")
 
         entry = {"at": now_iso, "message": (message or "")[:1000]}
+        qual = qualification.as_dict() if qualification else None
         if existing:
             contact_id = existing["id"]
             meta = existing.get("metadata") or {}
             msgs = list(meta.get("concierge_messages") or [])
             msgs.append(entry)
             meta["concierge_messages"] = msgs[-10:]
+            if qual:
+                meta["concierge_qualification"] = dict(qual, at=now_iso)
+            patch: Dict[str, Any] = {"last_interaction": now_iso, "metadata": meta}
+            if phone_clean and not existing.get("phone"):
+                patch["phone"] = phone_clean
             sb_clients.sb_patch_as_service(
                 f"/contacts?id=eq.{contact_id}&business_id=eq.{business_id}",
-                {"last_interaction": now_iso, "metadata": meta})
+                patch)
         else:
+            meta = {"concierge_messages": [entry]}
+            if qual:
+                meta["concierge_qualification"] = dict(qual, at=now_iso)
             created = sb_clients.sb_post_as_service("/contacts", {
                 "business_id": business_id,
                 "name": name,
                 "email": email_clean or None,
+                "phone": phone_clean or None,
                 "status": "lead",
                 "source": "site_concierge",
                 "source_detail": lead_attribution.detail_for(
                     attribution, "site concierge"),
                 "attribution": attribution or None,
-                "metadata": {"concierge_messages": [entry]},
+                "metadata": meta,
                 "last_interaction": now_iso,
             })
             if not isinstance(created, list) or not created:
@@ -891,12 +1037,19 @@ def _find_or_create_contact(business_id: str, name: str, email: str,
         # Score it, on a worker thread — this lead used to carry a null
         # lead_score forever, which hid it from every reader gated on
         # that column. `site_concierge` earns a rubric bonus: they held
-        # a conversation before leaving their details.
+        # a conversation before leaving their details. The qualifying
+        # answers ride along as fields, so the Hot Leads score sees
+        # what the concierge learned.
         import lead_scoring
+        submission: Dict[str, Any] = {"name": name, "email": email_clean,
+                                      "message": message}
+        if phone_clean:
+            submission["phone"] = phone_clean
+        if qualification:
+            submission.update({k: v for k, v in qualification.answers.items()})
         lead_scoring.score_in_background(
-            business_id, contact_id,
-            {"name": name, "email": email_clean, "message": message},
-            source="site_concierge", email=email_clean)
+            business_id, contact_id, submission,
+            source="site_concierge", email=email_clean, phone=phone_clean)
         return contact_id
     except Exception as e:
         logger.warning(f"[concierge] contact capture failed: {e}")
@@ -922,19 +1075,34 @@ async def public_lead(slug: str, body: PublicLeadBody,
 
     name = (body.name or "").strip()[:200]
     email = (body.email or "").strip()[:200]
+    phone = (body.phone or "").strip()[:40]
     message = (body.message or "").strip()[:2000]
     if not name or not email:
         raise HTTPException(400, "name and email required")
     if "@" not in email or "." not in email:
         raise HTTPException(400, "invalid email")
 
+    conversation = _get_conversation(body.conversation_id or "", business_id)
+
+    # QUALIFY before the contact write, so the tier lands in the same
+    # metadata write as the message (no second read-modify-write racing
+    # the scorer). Knowledge + transcript are what the concierge already
+    # had; nothing new enters the model's world.
+    knowledge = assemble_knowledge(business_id, biz_row=biz, site_row=site) or {
+        "business": {"id": business_id, "name": (biz or {}).get("name") or ""},
+        "offerings": [], "qualifying": []}
+    transcript = _transcript(str(conversation["id"]) if conversation else None)
+    qualification = await _qualify_lead(
+        knowledge, transcript, email=email, phone=phone, message=message,
+        booked=bool((conversation or {}).get("appointment_id")))
+
     contact_id = _find_or_create_contact(
         business_id, name, email, message,
         attribution=lead_attribution.capture(
             request, body.model_dump() if hasattr(body, "model_dump") else None,
-            source_detail="site concierge"))
+            source_detail="site concierge"),
+        phone=phone, qualification=qualification)
 
-    conversation = _get_conversation(body.conversation_id or "", business_id)
     if conversation and contact_id:
         try:
             sb_clients.sb_patch_as_service(
@@ -943,19 +1111,28 @@ async def public_lead(slug: str, body: PublicLeadBody,
                 {"contact_id": contact_id})
         except Exception as e:
             logger.warning(f"[concierge] conversation tie failed: {e}")
+    _write_qualification(conversation, business_id, qualification)
 
+    tier_word = qualification.tier.upper()
+    answer_lines = "".join(
+        f"\n{q}: {a}" for q, a in list(qualification.answers.items())[:5])
     try:
         sb_clients.sb_post_as_service("/chief_notifications", {
             "business_id": business_id,
             "type": "success",
-            "title": f"New lead from your website — {name}",
-            "body": (f"{name} ({email}) left their details with the site "
-                     f"concierge"
-                     + (f": \"{message[:160]}\"" if message else ".")),
+            "title": f"{tier_word} lead from your website — {name}",
+            "body": (f"{name} ({email}"
+                     + (f", {phone}" if phone else "")
+                     + f") left their details with the site concierge"
+                     + (f": \"{message[:160]}\"" if message else ".")
+                     + f"\n{concierge_qualify.describe(qualification)}"
+                     + answer_lines),
             "status": "unread",
             "data": {"kind": "concierge_lead", "contact_id": contact_id,
                      "conversation_id": (str(conversation["id"])
-                                         if conversation else None)},
+                                         if conversation else None),
+                     "tier": qualification.tier,
+                     "score": qualification.score},
         }, prefer=None)
     except Exception as e:
         logger.warning(f"[concierge] lead notification failed: {e}")
@@ -965,10 +1142,256 @@ async def public_lead(slug: str, body: PublicLeadBody,
         {"name": name, "email": email,
          "message_preview": message[:160],
          "conversation_id": str(conversation["id"]) if conversation else None,
-         "new_contact": contact_id is not None},
+         "new_contact": contact_id is not None,
+         "tier": qualification.tier,
+         "score": qualification.score,
+         "signals": qualification.signals[:6],
+         "answers": qualification.answers},
         contact_id=contact_id, source="site_concierge")
 
+    # The wire shape stays {ok} — the widget thanks the visitor the same
+    # way whatever the tier; the tier is for the practitioner's eyes.
     return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PUBLIC booking endpoints — in-chat booking on the walk-in flow.
+# No model call anywhere here: the server lists, the server books.
+# ═══════════════════════════════════════════════════════════════════
+
+def _booking_bundle(slug: str, request: Request, verb: str) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """(site, biz, agent_site bundle) for a booking call, or the honest
+    refusal. Order: rate cap → site → enabled → client policy → booking
+    open. Refusals are 404/403 JSON the widget turns into 'pick a time
+    on the booking page instead' — never a dead end."""
+    ip = rate_limit.trusted_client_ip(request)
+    if not _check_ip_rate(ip):
+        raise HTTPException(429, "Too many requests. Please try again in a minute.")
+    site = _site_by_slug(slug)
+    if not site:
+        raise HTTPException(404, "site not found")
+    business_id = str(site["business_id"])
+    biz = _biz_row(business_id)
+    if not is_enabled(biz):
+        raise HTTPException(404, "concierge not available")
+    try:
+        import policy_engine
+        v = policy_engine.evaluate_client(business_id, verb=verb, actor="client",
+                                          biz_row=biz)
+    except Exception as e:
+        logger.warning(f"[concierge] client policy unavailable: {e}")
+        raise HTTPException(503, "the booking policy is unavailable")
+    if not v.allowed:
+        raise HTTPException(403, v.reason)
+    import agent_site
+    bundle = agent_site._load_bundle(business_id)
+    if not bundle or not bundle.get("booking_open"):
+        raise HTTPException(404, "online booking is not open for this business")
+    return site, biz, bundle
+
+
+def _bookable_offering(bundle: Dict[str, Any], offering_id: str) -> Dict[str, Any]:
+    import agent_site
+    off = next((o for o in bundle.get("offerings") or []
+                if str(o.get("id")) == str(offering_id)), None)
+    if not off or not agent_site.public_offering(off).get("bookable"):
+        raise HTTPException(404, "offering not found or not bookable")
+    return off
+
+
+@router.get("/public/concierge/{slug}/booking/services")
+async def booking_services(slug: str, request: Request) -> Dict[str, Any]:
+    """Bookable offerings only (slot-booked, with a duration), through
+    agent_site.public_offering — hidden prices are ABSENT, not null."""
+    import agent_site
+    _site, _biz, bundle = _booking_bundle(slug, request, "client_view_booking_config")
+    services = [agent_site.public_offering(o) for o in bundle.get("offerings") or []]
+    return {
+        "ok": True,
+        "timezone": bundle["facts"].get("timezone") or "UTC",
+        "booking_page": bundle["facts"].get("booking_url") or None,
+        "services": [s for s in services if s.get("bookable") and s.get("name")],
+    }
+
+
+@router.get("/public/concierge/{slug}/booking/availability")
+async def booking_availability(slug: str, request: Request,
+                               offering_id: str = Query(..., min_length=1),
+                               from_: Optional[str] = Query(None, alias="from"),
+                               to: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """Open slots for ONE offering — agent_site.slots_for, the shared
+    computation, so the chat quotes the same times the booking page
+    and a customer's agent would."""
+    import agent_site
+    _site, _biz, bundle = _booking_bundle(slug, request, "client_view_booking_config")
+    off = _bookable_offering(bundle, offering_id)
+    start, end = agent_site.parse_window(from_, to)
+    slots = agent_site.slots_for(bundle, off, start, end)
+    return {
+        "ok": True,
+        "offering_id": str(off.get("id")),
+        "timezone": bundle["facts"].get("timezone") or "UTC",
+        "from": start.isoformat(),
+        "to": end.isoformat(),
+        "slots": slots,
+    }
+
+
+class PublicBookBody(BaseModel):
+    conversation_id: Optional[str] = None
+    name: str
+    email: str
+    phone: Optional[str] = None
+    offering_id: str
+    start: str
+    notes: Optional[str] = None
+    sms_consent: bool = False
+
+
+@router.post("/public/concierge/{slug}/booking/book")
+async def booking_book(slug: str, body: PublicBookBody,
+                       request: Request) -> Dict[str, Any]:
+    """Book from the chat. Rides booking_widget_router.book_anon via
+    agent_site.walkin_book — same dedupe, same double-book guard (409),
+    same confirmation email + SMS consent. Then the conversation is
+    tied to the contact, qualified as HOT (booked), and the operator
+    is told — a booking, not a special case."""
+    import agent_site
+    site, biz, bundle = _booking_bundle(slug, request, "client_book_appointment")
+    business_id = str(site["business_id"])
+    off = _bookable_offering(bundle, body.offering_id)
+
+    name = (body.name or "").strip()[:200]
+    email = (body.email or "").strip()[:200].lower()
+    phone = (body.phone or "").strip()[:40]
+    if not name or not email:
+        raise HTTPException(400, "name and email required")
+    if "@" not in email or "." not in email:
+        raise HTTPException(400, "invalid email")
+    start = (body.start or "").strip()[:40]
+    try:
+        datetime.fromisoformat(start.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "start must be ISO 8601")
+
+    result = await agent_site.walkin_book(
+        bundle, off, request, name=name, email=email, start=start,
+        booked_via="concierge", notes=body.notes, sms_consent=bool(body.sms_consent),
+        phone=phone or None)
+    appointment_id = str(result.get("appointment_id") or "")
+    contact_id = result.get("contact_id")
+
+    conversation = _get_conversation(body.conversation_id or "", business_id)
+    knowledge = assemble_knowledge(business_id, biz_row=biz, site_row=site) or {
+        "business": {"id": business_id, "name": (biz or {}).get("name") or ""},
+        "offerings": [], "qualifying": []}
+    transcript = _transcript(str(conversation["id"]) if conversation else None)
+    qualification = await _qualify_lead(
+        knowledge, transcript, email=email, phone=phone,
+        message=(body.notes or ""), booked=True)
+
+    # The transcript records the booking as a concierge turn, so the
+    # operator reads "booked" where it happened.
+    when = _slot_label(start, bundle["facts"].get("timezone"))
+    if conversation:
+        _store_message(str(conversation["id"]), "concierge",
+                       f"Booked: {off.get('name')} — {when} for {name}.")
+        try:
+            sb_clients.sb_patch_as_service(
+                f"/concierge_conversations?id=eq.{conversation['id']}"
+                f"&business_id=eq.{business_id}",
+                {"contact_id": contact_id} if contact_id else {})
+        except Exception as e:
+            logger.warning(f"[concierge] conversation tie failed: {e}")
+        _write_qualification(conversation, business_id, qualification,
+                             appointment_id=appointment_id)
+
+    if contact_id:
+        try:
+            rows = sb_clients.sb_get_as_service(
+                f"/contacts?id=eq.{contact_id}&business_id=eq.{business_id}"
+                f"&select=id,metadata&limit=1") or []
+            if rows:
+                meta = rows[0].get("metadata") or {}
+                meta["concierge_qualification"] = dict(qualification.as_dict(), at=_now_iso())
+                sb_clients.sb_patch_as_service(
+                    f"/contacts?id=eq.{contact_id}&business_id=eq.{business_id}",
+                    {"metadata": meta})
+        except Exception as e:
+            logger.warning(f"[concierge] contact qualification write failed: {e}")
+
+    try:
+        sb_clients.sb_post_as_service("/chief_notifications", {
+            "business_id": business_id,
+            "type": "success",
+            "title": f"Booked from your website chat — {name}",
+            "body": (f"{name} ({email}"
+                     + (f", {phone}" if phone else "")
+                     + f") booked {off.get('name')} for {when} with the site "
+                     f"concierge.\n{concierge_qualify.describe(qualification)}"),
+            "status": "unread",
+            "data": {"kind": "concierge_booking", "contact_id": contact_id,
+                     "appointment_id": appointment_id,
+                     "conversation_id": (str(conversation["id"])
+                                         if conversation else None),
+                     "tier": qualification.tier},
+        }, prefer=None)
+    except Exception as e:
+        logger.warning(f"[concierge] booking notification failed: {e}")
+
+    event_spine.emit(
+        "concierge_booking_made", business_id,
+        {"name": name, "email": email, "offering": off.get("name"),
+         "offering_id": str(off.get("id")), "start": start,
+         "appointment_id": appointment_id,
+         "conversation_id": str(conversation["id"]) if conversation else None,
+         "tier": qualification.tier},
+        contact_id=contact_id, source="site_concierge")
+
+    try:
+        import audit_log
+        audit_log.record(
+            business_id, actor_type="client", verb="client_book_appointment",
+            actor_id="concierge", ok=True, source="site_concierge",
+            authorized_by="client:concierge",
+            target_type="appointment", target_id=appointment_id,
+            summary=f"{name} booked {off.get('name')} in the website chat",
+            payload={"offering_id": str(off.get("id")), "start": start})
+    except Exception as e:
+        logger.warning(f"[concierge] ledger write failed (non-fatal): {e}")
+
+    manage_url = None
+    if result.get("token") and bundle["facts"].get("booking_url"):
+        manage_url = f"{bundle['facts']['booking_url']}?token={result.get('token')}"
+    return {
+        "ok": True,
+        "appointment_id": appointment_id,
+        "offering": off.get("name"),
+        "start": start,
+        "when": when,
+        "timezone": bundle["facts"].get("timezone") or "UTC",
+        "confirmation": f"A confirmation email is on its way to {email}.",
+        "manage_url": manage_url,
+    }
+
+
+def _slot_label(start_iso: str, tz_name: Optional[str]) -> str:
+    """'Tue, Sep 8 at 2:00 PM' in the business's zone — a human line for
+    the transcript + notification, never the wire format."""
+    try:
+        dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if tz_name:
+            try:
+                from zoneinfo import ZoneInfo
+                dt = dt.astimezone(ZoneInfo(tz_name))
+            except Exception:
+                pass
+        hour = dt.strftime("%I").lstrip("0") or "12"
+        return f"{dt.strftime('%a, %b')} {dt.day} at {hour}:{dt.strftime('%M %p')}"
+    except Exception:
+        return start_iso
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -988,6 +1411,14 @@ def get_concierge(business_id: str,
     if not biz:
         raise HTTPException(404, "business not found")
     cs = concierge_settings(biz)
+    # Is the in-chat picker live? Same door check the widget uses, so
+    # the panel never claims a button the visitor will not see.
+    booking_inline = False
+    try:
+        k = assemble_knowledge(business_id, biz_row=biz)
+        booking_inline = bool((k or {}).get("booking_inline"))
+    except Exception:
+        booking_inline = False
     return {
         "ok": True,
         "enabled": bool(cs.get("enabled")),
@@ -995,6 +1426,8 @@ def get_concierge(business_id: str,
         "daily_cap": _daily_cap(biz),
         "faq": [f for f in (cs.get("faq") or [])
                 if isinstance(f, dict) and f.get("q") and f.get("a")],
+        "qualifying": concierge_qualify.clean_questions(cs.get("qualifying")),
+        "booking_inline": booking_inline,
     }
 
 
@@ -1003,6 +1436,7 @@ class ConciergeSettingsPatch(BaseModel):
     greeting: Optional[str] = None
     daily_cap: Optional[int] = None
     faq: Optional[List[Dict[str, str]]] = None
+    qualifying: Optional[List[str]] = None
 
 
 @router.patch("/concierge/{business_id}")
@@ -1035,6 +1469,8 @@ def patch_concierge(business_id: str, body: ConciergeSettingsPatch,
             if q and a:
                 cleaned.append({"q": q, "a": a})
         cs["faq"] = cleaned
+    if body.qualifying is not None:
+        cs["qualifying"] = concierge_qualify.clean_questions(body.qualifying)
     settings["concierge"] = cs
     sb_clients.sb_patch_as_service(
         f"/businesses?id=eq.{business_id}", {"settings": settings})
@@ -1044,7 +1480,8 @@ def patch_concierge(business_id: str, body: ConciergeSettingsPatch,
     return {"ok": True, "enabled": bool(cs.get("enabled")),
             "greeting": (cs.get("greeting") or "").strip(),
             "daily_cap": _daily_cap({"settings": settings}),
-            "faq": cs.get("faq") or []}
+            "faq": cs.get("faq") or [],
+            "qualifying": cs.get("qualifying") or []}
 
 
 @router.get("/concierge/{business_id}/conversations")
@@ -1054,7 +1491,8 @@ def list_conversations(business_id: str, limit: int = 50,
     limit = max(1, min(int(limit or 50), 100))
     convs = sb_clients.sb_get_as_service(
         f"/concierge_conversations?business_id=eq.{business_id}"
-        f"&select=id,started_at,visitor_key,status,contact_id"
+        f"&select=id,started_at,visitor_key,status,contact_id,"
+        f"qualification,appointment_id"
         f"&order=started_at.desc&limit={limit}") or []
     by_conv: Dict[str, List[Dict[str, Any]]] = {}
     if convs:
@@ -1069,11 +1507,15 @@ def list_conversations(business_id: str, limit: int = 50,
     for c in convs:
         thread = by_conv.get(str(c.get("id")), [])
         last = thread[-1] if thread else None
+        qual = c.get("qualification") if isinstance(c.get("qualification"), dict) else None
         out.append({
             "id": c.get("id"),
             "started_at": c.get("started_at"),
             "status": c.get("status"),
             "contact_id": c.get("contact_id"),
+            "appointment_id": c.get("appointment_id"),
+            "qualification": qual,
+            "tier": (qual or {}).get("tier"),
             "message_count": len(thread),
             "last_message": ({"role": last.get("role"),
                               "body": str(last.get("body") or "")[:200],
@@ -1268,6 +1710,29 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
     + 'box-sizing:border-box;}'
     + '#sol-cg-lead button{min-height:44px;border:none;border-radius:10px;'
     + 'background:' + CFG.accent + ';color:#fff;font-size:14px;font-weight:600;cursor:pointer;}'
+    // In-chat booking: a card in the thread, chips ≥44px, one step at a time.
+    + '.sol-cg-card{align-self:stretch;background:#fff;border:1px solid #e4e4ea;'
+    + 'border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px;}'
+    + '.sol-cg-card h4{margin:0;font-size:13px;font-weight:600;color:#1a1a1a;}'
+    + '.sol-cg-card .sol-cg-sub{font-size:12px;color:#5f5f6b;}'
+    + '.sol-cg-chips{display:flex;flex-wrap:wrap;gap:6px;}'
+    + '.sol-cg-chip{min-height:44px;padding:8px 12px;border-radius:10px;border:1.5px solid '
+    + CFG.accent + ';background:#fff;color:' + CFG.accent + ';font-size:13px;font-weight:600;'
+    + 'cursor:pointer;font-family:inherit;text-align:left;}'
+    + '.sol-cg-chip:disabled{opacity:.5;cursor:default;}'
+    + '.sol-cg-chip small{display:block;font-weight:400;font-size:11px;color:#5f5f6b;}'
+    + '.sol-cg-day{font-size:12px;font-weight:600;color:#1a1a1a;margin-top:4px;}'
+    + '.sol-cg-card input{min-height:44px;padding:10px 12px;border:1px solid #d4d4dc;'
+    + 'border-radius:10px;font-size:14px;font-family:inherit;box-sizing:border-box;width:100%;}'
+    + '.sol-cg-card label.sol-cg-check{display:flex;gap:8px;align-items:flex-start;font-size:12px;'
+    + 'color:#5f5f6b;line-height:1.4;}'
+    + '.sol-cg-card label.sol-cg-check input{width:auto;min-height:0;margin-top:2px;}'
+    + '.sol-cg-card .sol-cg-row{display:flex;gap:8px;flex-wrap:wrap;}'
+    + '.sol-cg-primary{min-height:44px;flex:1;border:none;border-radius:10px;background:'
+    + CFG.accent + ';color:#fff;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;}'
+    + '.sol-cg-primary:disabled{opacity:.55;cursor:default;}'
+    + '.sol-cg-ghost{min-height:44px;padding:0 12px;border:1px solid #d4d4dc;border-radius:10px;'
+    + 'background:#fff;color:#1a1a1a;font-size:13px;cursor:pointer;font-family:inherit;}'
     + '@media (max-width:768px){'
     + '#sol-cg-panel{right:0;left:0;bottom:0;width:100vw;max-width:100vw;'
     + 'height:78vh;max-height:78vh;border-radius:14px 14px 0 0;}'
@@ -1329,6 +1794,10 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
   leadEmail.placeholder = 'Your email';
   leadEmail.required = true;
   leadEmail.setAttribute('autocomplete', 'email');
+  var leadPhone = document.createElement('input');
+  leadPhone.type = 'tel';
+  leadPhone.placeholder = 'Phone (optional)';
+  leadPhone.setAttribute('autocomplete', 'tel');
   var leadMsg = document.createElement('textarea');
   leadMsg.placeholder = 'What can we help with?';
   leadMsg.rows = 2;
@@ -1337,6 +1806,7 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
   leadSend.textContent = 'Send to ' + CFG.businessName;
   lead.appendChild(leadName);
   lead.appendChild(leadEmail);
+  lead.appendChild(leadPhone);
   lead.appendChild(leadMsg);
   lead.appendChild(leadSend);
   panel.appendChild(lead);
@@ -1372,7 +1842,18 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
     thread.scrollTop = thread.scrollHeight;
   }
   function addAction(a) {
-    if (!a || a.type !== 'link' || !a.url) return;
+    if (!a) return;
+    if (a.type === 'book') {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'sol-cg-action';
+      b.textContent = a.label || 'Pick a time';
+      b.addEventListener('click', function () { startBooking(b); });
+      thread.appendChild(b);
+      thread.scrollTop = thread.scrollHeight;
+      return;
+    }
+    if (a.type !== 'link' || !a.url) return;
     var el = document.createElement('a');
     el.className = 'sol-cg-action';
     el.textContent = a.label || 'Open';
@@ -1385,6 +1866,214 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
   function showLead() {
     lead.classList.add('sol-open');
     inputRow.style.display = 'none';
+  }
+
+  // ── In-chat booking ──────────────────────────────────────────
+  // One card in the thread, three steps: service → time → details.
+  // Every string lands via textContent (escape armor). Every failure
+  // falls back to the booking page link when there is one, never a
+  // dead end.
+  var bookingPage = null;
+  var el = function (tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+  function convId() {
+    try { return sessionStorage.getItem(convKey); } catch (e) { return null; }
+  }
+  function api(path, opts) {
+    return fetch(CFG.apiBase + '/public/concierge/' + CFG.slug + path, opts || {})
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, data: j }; }); });
+  }
+  function priceLabel(s) {
+    if (s.price == null) return '';
+    var n = Number(s.price);
+    if (!isFinite(n) || n <= 0) return '';
+    var cur = (s.currency || 'USD') === 'USD' ? '$' : (s.currency + ' ');
+    return cur + (Math.round(n * 100) / 100).toString();
+  }
+  function dayLabel(iso) {
+    // start_local is "YYYY-MM-DDTHH:MM:SS" in the business's zone.
+    var d = new Date(iso.slice(0, 10) + 'T00:00:00');
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+  function timeLabel(iso) {
+    var hh = parseInt(iso.slice(11, 13), 10), mm = iso.slice(14, 16);
+    var ap = hh >= 12 ? 'PM' : 'AM';
+    var h = hh % 12; if (h === 0) h = 12;
+    return h + ':' + mm + ' ' + ap;
+  }
+  function fallbackCard(card, msg) {
+    while (card.firstChild) card.removeChild(card.firstChild);
+    card.appendChild(el('div', 'sol-cg-sub', msg));
+    if (bookingPage) {
+      var a = document.createElement('a');
+      a.className = 'sol-cg-action';
+      a.textContent = 'Open the booking page';
+      a.href = bookingPage; a.target = '_blank'; a.rel = 'noopener';
+      card.appendChild(a);
+    } else {
+      var b = el('button', 'sol-cg-ghost', 'Leave my details instead');
+      b.type = 'button';
+      b.addEventListener('click', function () { card.remove(); showLead(); });
+      card.appendChild(b);
+    }
+    thread.scrollTop = thread.scrollHeight;
+  }
+  function startBooking(trigger) {
+    if (trigger) trigger.disabled = true;
+    var card = el('div', 'sol-cg-card');
+    card.appendChild(el('h4', null, 'Pick a service'));
+    card.appendChild(el('div', 'sol-cg-sub', 'Loading…'));
+    thread.appendChild(card);
+    thread.scrollTop = thread.scrollHeight;
+    api('/booking/services').then(function (res) {
+      if (!res.ok || !res.data || !res.data.services || !res.data.services.length) {
+        bookingPage = (res.data && res.data.booking_page) || bookingPage;
+        fallbackCard(card, "Online booking isn't open right now.");
+        return;
+      }
+      bookingPage = res.data.booking_page || bookingPage;
+      renderServices(card, res.data.services);
+    }).catch(function () { fallbackCard(card, "I couldn't load the services just now."); });
+  }
+  function renderServices(card, services) {
+    while (card.firstChild) card.removeChild(card.firstChild);
+    card.appendChild(el('h4', null, 'Pick a service'));
+    var chips = el('div', 'sol-cg-chips');
+    services.forEach(function (s) {
+      var c = el('button', 'sol-cg-chip', s.name);
+      c.type = 'button';
+      var meta = [];
+      if (s.duration_min) meta.push(s.duration_min + ' min');
+      var p = priceLabel(s); if (p) meta.push(p);
+      if (meta.length) c.appendChild(el('small', null, meta.join(' · ')));
+      c.addEventListener('click', function () { renderSlots(card, s, 0); });
+      chips.appendChild(c);
+    });
+    card.appendChild(chips);
+    thread.scrollTop = thread.scrollHeight;
+  }
+  function isoDay(offsetDays) {
+    var d = new Date(); d.setDate(d.getDate() + offsetDays);
+    return d.toISOString().slice(0, 10);
+  }
+  function renderSlots(card, service, weekOffset) {
+    while (card.firstChild) card.removeChild(card.firstChild);
+    card.appendChild(el('h4', null, service.name));
+    card.appendChild(el('div', 'sol-cg-sub', 'Loading open times…'));
+    var from = isoDay(weekOffset * 7), to = isoDay(weekOffset * 7 + 6);
+    api('/booking/availability?offering_id=' + encodeURIComponent(service.id)
+        + '&from=' + from + '&to=' + to).then(function (res) {
+      while (card.firstChild) card.removeChild(card.firstChild);
+      card.appendChild(el('h4', null, service.name));
+      if (!res.ok || !res.data) { fallbackCard(card, "I couldn't load the open times."); return; }
+      var slots = res.data.slots || [];
+      var tz = res.data.timezone ? ' (' + res.data.timezone.replace(/_/g, ' ') + ')' : '';
+      if (!slots.length) {
+        card.appendChild(el('div', 'sol-cg-sub', 'Nothing open ' + dayLabel(from) + ' – ' + dayLabel(to) + '.'));
+      } else {
+        card.appendChild(el('div', 'sol-cg-sub', 'Open times' + tz + ':'));
+        var byDay = {};
+        slots.forEach(function (s) {
+          var k = (s.start_local || '').slice(0, 10);
+          (byDay[k] = byDay[k] || []).push(s);
+        });
+        Object.keys(byDay).sort().forEach(function (k) {
+          card.appendChild(el('div', 'sol-cg-day', dayLabel(k)));
+          var chips = el('div', 'sol-cg-chips');
+          byDay[k].slice(0, 12).forEach(function (s) {
+            var c = el('button', 'sol-cg-chip', timeLabel(s.start_local || ''));
+            c.type = 'button';
+            c.addEventListener('click', function () { renderDetails(card, service, s); });
+            chips.appendChild(c);
+          });
+          card.appendChild(chips);
+        });
+      }
+      var row = el('div', 'sol-cg-row');
+      if (weekOffset > 0) {
+        var back = el('button', 'sol-cg-ghost', '← Earlier'); back.type = 'button';
+        back.addEventListener('click', function () { renderSlots(card, service, weekOffset - 1); });
+        row.appendChild(back);
+      }
+      if (weekOffset < 1) {
+        var next = el('button', 'sol-cg-ghost', 'Next week →'); next.type = 'button';
+        next.addEventListener('click', function () { renderSlots(card, service, weekOffset + 1); });
+        row.appendChild(next);
+      }
+      var change = el('button', 'sol-cg-ghost', 'Change service'); change.type = 'button';
+      change.addEventListener('click', function () { startBookingInto(card); });
+      row.appendChild(change);
+      card.appendChild(row);
+      thread.scrollTop = thread.scrollHeight;
+    }).catch(function () { fallbackCard(card, "I couldn't load the open times."); });
+  }
+  function startBookingInto(card) {
+    api('/booking/services').then(function (res) {
+      if (!res.ok || !res.data || !res.data.services) { fallbackCard(card, "Online booking isn't open right now."); return; }
+      renderServices(card, res.data.services);
+    }).catch(function () { fallbackCard(card, "I couldn't load the services just now."); });
+  }
+  function renderDetails(card, service, slot) {
+    while (card.firstChild) card.removeChild(card.firstChild);
+    card.appendChild(el('h4', null, service.name + ' — ' + dayLabel(slot.start_local || '') + ' at ' + timeLabel(slot.start_local || '')));
+    card.appendChild(el('div', 'sol-cg-sub', 'Your details to hold the time:'));
+    var name = document.createElement('input');
+    name.placeholder = 'Your name'; name.required = true; name.setAttribute('autocomplete', 'name');
+    name.value = (leadName.value || '').trim();
+    var email = document.createElement('input');
+    email.type = 'email'; email.placeholder = 'Your email'; email.required = true; email.setAttribute('autocomplete', 'email');
+    email.value = (leadEmail.value || '').trim();
+    var phone = document.createElement('input');
+    phone.type = 'tel'; phone.placeholder = 'Phone (optional)'; phone.setAttribute('autocomplete', 'tel');
+    phone.value = (leadPhone.value || '').trim();
+    var consentWrap = el('label', 'sol-cg-check');
+    var consent = document.createElement('input'); consent.type = 'checkbox';
+    consentWrap.appendChild(consent);
+    consentWrap.appendChild(document.createTextNode('Text me confirmations and reminders (optional).'));
+    var row = el('div', 'sol-cg-row');
+    var confirm = el('button', 'sol-cg-primary', 'Book it'); confirm.type = 'button';
+    var back = el('button', 'sol-cg-ghost', 'Other times'); back.type = 'button';
+    back.addEventListener('click', function () { renderSlots(card, service, 0); });
+    row.appendChild(confirm); row.appendChild(back);
+    card.appendChild(name); card.appendChild(email); card.appendChild(phone);
+    card.appendChild(consentWrap); card.appendChild(row);
+    var err = el('div', 'sol-cg-sub', '');
+    card.appendChild(err);
+    name.focus();
+    confirm.addEventListener('click', function () {
+      var n = (name.value || '').trim(), e = (email.value || '').trim();
+      if (!n || !e || e.indexOf('@') < 0) { err.textContent = 'Please add your name and a valid email.'; return; }
+      confirm.disabled = true; err.textContent = '';
+      var payload = { name: n, email: e, phone: (phone.value || '').trim() || null,
+        offering_id: service.id, start: slot.start_utc, sms_consent: !!consent.checked };
+      var conv = convId(); if (conv) payload.conversation_id = conv;
+      api('/booking/book', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload) }).then(function (res) {
+        if (res.ok && res.data && res.data.ok) {
+          card.remove();
+          addMsg('concierge', "You're booked: " + (res.data.offering || service.name) + ' — '
+            + (res.data.when || '') + '. ' + (res.data.confirmation || ''));
+          if (res.data.manage_url) addAction({ type: 'link', label: 'Manage my booking', url: res.data.manage_url });
+          return;
+        }
+        confirm.disabled = false;
+        if (res.status === 409) {
+          err.textContent = 'That time was just taken — pick another.';
+          setTimeout(function () { renderSlots(card, service, 0); }, 900);
+          return;
+        }
+        var detail = res.data && (res.data.detail || res.data.error);
+        err.textContent = typeof detail === 'string' ? detail : "That didn't go through — please try again.";
+      }).catch(function () {
+        confirm.disabled = false;
+        err.textContent = "That didn't go through — please try again.";
+      });
+    });
+    thread.scrollTop = thread.scrollHeight;
   }
 
   function open() {
@@ -1438,6 +2127,7 @@ _WIDGET_JS_TEMPLATE = r"""(function () {
     var payload = {
       name: (leadName.value || '').trim(),
       email: (leadEmail.value || '').trim(),
+      phone: (leadPhone.value || '').trim() || null,
       message: (leadMsg.value || '').trim()
     };
     if (!payload.name || !payload.email) return;

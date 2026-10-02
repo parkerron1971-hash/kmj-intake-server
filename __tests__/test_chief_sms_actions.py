@@ -44,7 +44,7 @@ def _patch_contacts(monkeypatch, rows, sent=None):
             return rows
         return []
 
-    async def _core(client, *, business_id, to, message, contact_id=None):
+    async def _core(client, *, business_id, to, message, contact_id=None, sent_by=None):
         (sent if sent is not None else []).append((to, message))
         return {"id": "m1", "telnyx_id": "SM1"}
 
@@ -359,7 +359,8 @@ def test_every_return_path_carries_result_and_label(monkeypatch):
 
 # ─── registration: a handler is not a capability ──────────────────────
 
-VERBS = ("set_sms_keyword", "set_sms_alerts", "sms_status")
+VERBS = ("set_sms_keyword", "set_sms_alerts", "sms_status",
+         "provision_sms_number", "release_sms_number", "restore_sms_number")
 
 
 @pytest.mark.parametrize("verb", VERBS)

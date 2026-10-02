@@ -227,3 +227,43 @@ class TestWiring:
         metering it here would consume the stream the caller needs."""
         import inspect
         assert "_meter(" not in inspect.getsource(llm_call.astream)
+
+
+def test_async_provider_result_and_tally_do_not_wait_for_slow_meter(monkeypatch):
+    import asyncio
+    import threading
+    import api_usage_logger
+    import billing_context
+    import route_ledger
+
+    async def run():
+        entered, release = threading.Event(), threading.Event()
+        rows = []
+        def slow_write(**row):
+            entered.set()
+            assert release.wait(2), 'meter was never released'
+            rows.append((row, billing_context.current()))
+        monkeypatch.setattr(api_usage_logger, 'log_api_usage_sync', slow_write)
+        monkeypatch.setattr(llm_call, '_caller_module', lambda: 'chief_truth')
+        response = _Resp({'input_tokens': 12, 'output_tokens': 7})
+        class Client:
+            async def post(self, *args, **kwargs):
+                return response
+        tally = route_ledger.Tally()
+        token = route_ledger.TALLY.set(tally)
+        try:
+            with billing_context.bill_to('original-business'):
+                result = await asyncio.wait_for(llm_call.apost(Client(), {'model': 'test'}), .2)
+            assert result is response and not rows
+            assert tally.totals()['in'] == 12 and tally.totals()['out'] == 7
+            assert await asyncio.to_thread(entered.wait, .2)
+            with billing_context.bill_to('different-business'):
+                release.set()
+                await asyncio.gather(*tuple(llm_call._PENDING_METERS))
+            assert len(rows) == 1 and rows[0][1] == 'original-business'
+            assert rows[0][0]['input_tokens'] == 12
+            assert tally.totals()['in'] == 12  # persistence did not tally twice
+        finally:
+            release.set()
+            route_ledger.TALLY.reset(token)
+    asyncio.run(run())

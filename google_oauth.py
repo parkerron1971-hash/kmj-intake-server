@@ -369,9 +369,15 @@ async def google_callback(code: Optional[str] = None,
         }
         # merge-duplicates turns the (business_id, google_email) unique
         # constraint into an upsert, so reconnecting replaces the dead
-        # token instead of erroring on the second attempt.
+        # token instead of erroring on the second attempt. The conflict
+        # target has to be NAMED: without on_conflict PostgREST resolves
+        # against the primary key (id, freshly generated), inserts a
+        # second row, and the unique constraint rejects it with a 409 —
+        # so every first connect worked and every reconnect of the same
+        # mailbox failed with "could not save it" (found 2026-09-04
+        # re-consenting for Google's demo video).
         written = sb_clients.sb_post_as_service(
-            "/google_mailboxes", row,
+            "/google_mailboxes?on_conflict=business_id,google_email", row,
             prefer="resolution=merge-duplicates,return=representation")
         if not written:
             # sb_* returns None on 4xx/5xx. Reporting success here would

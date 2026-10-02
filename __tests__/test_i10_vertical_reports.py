@@ -67,7 +67,7 @@ def test_donor_report_restricted_split(fake):
     fb.rows("contacts").append({"id": "d1", "name": "Big Donor", "email": "d@x.com"})
     for iid, total, cat in (("g1", 1000, "restricted"), ("g2", 250, "general")):
         fb.rows("invoices").append({
-            "id": iid, "business_id": "np1", "total": total, "status": "paid",
+            "is_gift": True, "id": iid, "business_id": "np1", "total": total, "status": "paid",
             "paid_at": "2026-06-05T00:00:00Z", "sent_at": "2026-06-01T00:00:00Z",
             "created_at": "2026-06-01T00:00:00Z", "due_date": "2026-06-10",
             "payment_method": "check", "stripe_payment_url": None,

@@ -133,6 +133,13 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
     except Exception:
         pass
 
+    # Private rules follow the shared defaults so the owner's corrections
+    # govern every existing consumer of this context, across sessions.
+    if (business or {}).get("id"):
+        import business_learning
+        private = business_learning.context_block(business)
+        if private:
+            lines.append(private)
     return "\n".join(lines)
 
 

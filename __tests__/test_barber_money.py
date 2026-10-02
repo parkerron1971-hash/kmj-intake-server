@@ -302,10 +302,12 @@ def _run_noshow(entry, *, role="manager", charge=None, charge_err=None):
          mock.patch.object(stripe_payments_router.sb_clients,
                            "sb_patch_as_service", fake_patch), \
          mock.patch.object(business_users_router, "require_role", fake_role), \
+         mock.patch('ledger_unlock.verify', return_value=True), \
          mock.patch.object(payments_core.StripeAdapter,
                            "charge_saved_payment_method", fake_charge):
+        from starlette.requests import Request
         result = asyncio.run(charge_no_show(
-            ChargeNoShowBody(booking_id="bk-1"), user=_USER))
+            ChargeNoShowBody(booking_id="bk-1"), request=Request({'type': 'http', 'headers': []}), user=_USER))
     return result, calls
 
 

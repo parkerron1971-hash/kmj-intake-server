@@ -69,6 +69,10 @@ HTTP_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
 # $1/$5). Keys are matched LONGEST-PREFIX-FIRST so
 # "claude-opus-4-8-..." hits its own entry, not "claude-opus-4".
 MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
+    # Jev: $0.042/MTok input, free output. Gateway actual cost overrides this
+    # conservative estimate when returned (including promotional free usage).
+    "jev-1.13.0":       (4.2, 0.0),
+    "typesafe-ai/jev":  (4.2, 0.0),
     # Fable 5 — Mythos-class flagship: $10/MTok in, $50/MTok out.
     # (Elite-tier deep/insight lanes — the launch-gate entry.)
     "claude-fable-5":    (1000.0, 5000.0),
@@ -78,6 +82,10 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # against. When a new model ships, its row lands here BEFORE any
     # engine adopts it.
     "claude-opus-5":     (500.0, 2500.0),
+    # Opus 5.5 — $4/MTok in, $20/MTok out (claude-api skill table,
+    # 2026-09-22). Without its own row it matched "claude-opus-5" above
+    # and every builder call booked 25% high.
+    "claude-opus-5-5":   (400.0, 2000.0),
     # Opus 4.5–4.8 — $5/MTok in, $25/MTok out
     "claude-opus-4-8":   (500.0, 2500.0),
     "claude-opus-4-7":   (500.0, 2500.0),
@@ -85,9 +93,10 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "claude-opus-4-5":   (500.0, 2500.0),
     # Opus 4.0/4.1 (retired/deprecated) — $15/MTok in, $75/MTok out
     "claude-opus-4":     (1500.0, 7500.0),
-    # Sonnet 5 — intro $2/$10 through 2026-08-31, then $3/$15; we book
-    # at the standard rate so margins are computed conservatively.
-    "claude-sonnet-5":   (300.0, 1500.0),
+    # Sonnet 5 — $2/$10 is now permanent; the scheduled September increase
+    # was cancelled. Verified 2026-09-09 against the official pricing page.
+    "claude-sonnet-5":   (200.0, 1000.0),
+    "claude-sonnet-5-5": (200.0, 1000.0),   # same list price as Sonnet 5 (2026-09-28)
     # Sonnet 4.x — $3/MTok in, $15/MTok out
     "claude-sonnet-4":   (300.0, 1500.0),
     # Haiku 4.5 — $1/MTok in, $5/MTok out
@@ -106,6 +115,7 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "text-embedding-3-large": (13.0, 0.0),   # $0.13/MTok input
     "tts-1":             (1500.0, 0.0),      # $15 / 1M characters
     "tts-1-hd":          (3000.0, 0.0),      # $30 / 1M characters
+    "gpt-4o-mini-tts":   (1500.0, 0.0),      # $12 / 1M audio tokens ≈ $0.015/min ≈ $15 / 1M chars (voice latency arc 9/08)
     "eleven_turbo_v2_5": (2500.0, 0.0),      # ElevenLabs Turbo ≈ $25 / 1M chars (0.5 credits/char @ $0.05/1k credits)
     "whisper-1":         (0.0, 0.0),         # $0.006/min — via cost_cents_override
     "gpt-4o-mini-transcribe": (0.0, 0.0),    # per-minute — via cost_cents_override
@@ -114,9 +124,22 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
 }
 
 # Anthropic prompt-cache multipliers (relative to base input rate):
-# cache READ = 0.10×, cache WRITE/creation = 1.25×.
+# cache READ = 0.10×, cache WRITE = 1.25× for the 5-minute TTL and 2× for
+# the 1-hour TTL. Chief's two long segments are written at 1 hour, and
+# every write was priced at 1.25×: a 1-hour write was logged at 62% of
+# what it cost (found 2026-09-24).
 _CACHE_READ_MULT = 0.10
 _CACHE_WRITE_MULT = 1.25
+_CACHE_WRITE_1H_MULT = 2.0
+
+
+def cache_write_1h(usage) -> int:
+    """The 1-hour part of a response's cache write, from the API's
+    `usage.cache_creation` breakdown; 0 when absent."""
+    try:
+        return int(((usage or {}).get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return 0
 
 
 def _price_for_model(model: str) -> tuple[float, float]:
@@ -137,16 +160,22 @@ def _price_for_model(model: str) -> tuple[float, float]:
 
 def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int,
                         cache_read_tokens: int = 0,
-                        cache_creation_tokens: int = 0) -> float:
+                        cache_creation_tokens: int = 0,
+                        cache_creation_1h_tokens: int = 0) -> float:
     in_cents_per_mtok, out_cents_per_mtok = _price_for_model(model)
     # Anthropic reports input_tokens as FRESH (uncached) input only; cache
-    # reads (0.10×) and cache writes (1.25×) are separate and were being
-    # dropped — understating every cached Chief turn. Fold them in.
+    # reads (0.10×) and cache writes (1.25× / 2× at 1 hour) are separate
+    # and were being dropped — understating every cached Chief turn. Fold
+    # them in. `cache_creation_tokens` is the whole write; the 1-hour part
+    # of it is priced at its own rate.
+    cache_creation_tokens = int(cache_creation_tokens or 0)
+    one_hour = min(max(int(cache_creation_1h_tokens or 0), 0), cache_creation_tokens)
     cost = (
         (input_tokens  / 1_000_000.0) * in_cents_per_mtok +
         (output_tokens / 1_000_000.0) * out_cents_per_mtok +
         (cache_read_tokens     / 1_000_000.0) * in_cents_per_mtok * _CACHE_READ_MULT +
-        (cache_creation_tokens / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_MULT
+        ((cache_creation_tokens - one_hour) / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_MULT +
+        (one_hour / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_1H_MULT
     )
     return round(cost, 4)
 
@@ -238,6 +267,7 @@ async def log_api_usage(
     cache_creation_tokens: int = 0,
     cost_cents_override: Optional[float] = None,
     units: Optional[int] = None,
+    cache_creation_1h_tokens: int = 0,
 ) -> None:
     """Append one row to api_usage. Never raises.
 
@@ -248,7 +278,8 @@ async def log_api_usage(
 
     cost_cents = (round(cost_cents_override, 4) if cost_cents_override is not None
                   else _compute_cost_cents(model, input_tokens, output_tokens,
-                                           cache_read_tokens, cache_creation_tokens))
+                                           cache_read_tokens, cache_creation_tokens,
+                                           cache_creation_1h_tokens))
     body: Dict[str, Any] = {
         "endpoint":      endpoint,
         "model":         model,
@@ -294,3 +325,39 @@ async def log_api_usage(
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def capture_in_memory() -> list:
+    """Divert every api_usage row in this process to a list instead of the
+    table, and return that list (each row carries its computed `cents`).
+
+    For offline evals and benches that drive Chief against fixture
+    businesses: the rows are not real tenants, and a run should say what it
+    cost. Rebinds the module-level names every already-imported module
+    holds, since callers import these functions by name. Irreversible for
+    the life of the process -- never call it in the server."""
+    import sys
+    rows: list = []
+    originals = {log_api_usage_sync, log_api_usage}
+
+    def _sync(**kw):
+        try:
+            kw["cents"] = kw.get("cost_cents_override") or _compute_cost_cents(
+                kw.get("model") or "", kw.get("input_tokens") or 0, kw.get("output_tokens") or 0,
+                kw.get("cache_read_tokens") or 0, kw.get("cache_creation_tokens") or 0,
+                kw.get("cache_creation_1h_tokens") or 0)
+        except Exception:
+            kw["cents"] = 0
+        rows.append(kw)
+
+    async def _async(**kw):
+        _sync(**kw)
+
+    for mod in list(sys.modules.values()):
+        for name, repl in (("log_api_usage_sync", _sync), ("log_api_usage", _async)):
+            try:
+                if getattr(mod, name, None) in originals:
+                    setattr(mod, name, repl)
+            except Exception:
+                pass
+    return rows

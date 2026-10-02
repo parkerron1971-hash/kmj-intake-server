@@ -183,3 +183,53 @@ Ship **Tier 1 only** first. Instrument: % of active practitioners with ≥1 enab
 - **Validation instrumentation:** adoption = businesses with ≥1 enabled
   rule (practitioner_rules), volume = rule_runs/week — both queryable for
   the 60-day ≥20% gate.
+
+# Appendix B — The standing agent and assignments (2026-09-04, shipped)
+
+- **§2.2's first slice shipped as `chief_agent.py`:** a leader-gated tick
+  (every 2 minutes, plus a fast lane for leads and bookings) that acts on
+  the events nobody has handled, through the same tool loop and the same
+  door as a chat turn, marked `surface="agent", prompted=False`. Class C
+  has no tool on that surface; the reviewed `propose_*` tools file into
+  the Approval Queue instead. Per-business switch:
+  `settings.autonomy.agent_enabled`, off by default.
+- **Assignments shipped as `chief_assignments.py`** — the "Chief to
+  Eight" plan's phase one. An assignment is an OUTCOME the practitioner
+  hands Chief in chat with a target the code can measure (sessions in a
+  range, new contacts, money collected, one invoice paid, or manual) and
+  a deadline. Distinct from a mission: no step list. The tick measures
+  every open assignment with a plain read (every 15 minutes, or sooner
+  when an event reaches the business) and THINKS — a model turn — only
+  when progress moved or hours have passed, inside waking hours, at most
+  six times a day. Each think writes its reasoning to the row BEFORE the
+  act turn runs, which is §2.2's pre-action-reasoning rule made real;
+  the event runs still write theirs after. Open assignments are capped
+  by plan (1 / 3 / 10). Same switch as the standing agent.
+- **Proposals with a life (`proposal_life.py`, phase two):** a filed
+  proposal expires after 48 hours, reminds once after 6, and reaches the
+  owner's phone the moment it is filed with Yes, do that / Not now — the
+  tap opens the app, which approves through the audited /approvals door.
+- **The outcome ledger (`outcome_ledger.py`, phase three):** one
+  `chief_moves` row per move the agent or an assignment makes; a
+  six-hourly reconciler fills in approved / dismissed / expired / replied
+  / completed / ignored / met / missed from plain reads. A digest of the
+  last thirty days rides every prompt (chat, event runs, assignment
+  thinks). The retire rule: a proposal verb dismissed three times running
+  is refused by the tool loop for two weeks, and the practitioner is told
+  once. Event runs now write their plan BEFORE the act call too, so §2.2's
+  pre-action reasoning holds on both surfaces.
+- **Standing permissions (`standing_permissions.py`, phase five):** the
+  approval earns the permission. The third yes in a row for one KIND of
+  class-C proposal (read off the outcome ledger) brings one question in
+  the app; yes grants that kind for that business. A granted kind still
+  files as a proposal, but with a two-minute release time and a Stop
+  button on the phone; the minute tick releases it through the door on
+  surface "standing", authorized by the grant. This IS §2.4's class-B
+  recall window, applied to the practitioner's own grant. Guardrails
+  fixed in code: four eligible kinds, never publish; money above the cap
+  still waits; regulated practices cannot grant client-facing sends;
+  three Stops in a row revoke it (the retire rule); chat grant is class C.
+- **Still owed from §2.2:** permission scopes finer than the one boolean
+  for the standing agent itself. Trust Track graduation stays a
+  per-category grant the practitioner makes; the ledger's ratios feed the
+  weekly report rather than a switch.

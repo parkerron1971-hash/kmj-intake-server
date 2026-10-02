@@ -45,6 +45,15 @@ class NoGzipForStreams:
         if scope.get("type") == "http":
             path = str(scope.get("path", ""))
             if path.endswith(STREAM_PATH_SUFFIXES):
+                # The first-token clock starts here, the outermost layer,
+                # before auth and body parsing (route_ledger). A contextvar
+                # set in this task is visible to the endpoint below it.
+                try:
+                    import time as _time
+                    import chief_fast_track
+                    chief_fast_track.ARRIVED.set(_time.perf_counter())
+                except Exception:  # pragma: no cover — never cost a request
+                    pass
                 scope = dict(scope)
                 scope["headers"] = [
                     (k, v) for (k, v) in scope.get("headers", [])

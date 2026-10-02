@@ -101,9 +101,19 @@ async def booking_checkout(
     Anonymous: customer is paying from the wizard or from the email
     Pay Now button without a Solutionist account. We look up the
     booking + business + offering server-side to derive the amount —
-    the caller can't influence it. Rate-limiting handled by the
-    existing wizard rate-limit middleware.
+    the caller can't influence it.
+
+    RATE-LIMITED HERE (2026-09-04). This docstring used to say the
+    limit was "handled by the existing wizard rate-limit middleware".
+    No such middleware exists — the app registers CORS and gzip and
+    nothing else — so an anonymous caller could mint a Stripe Checkout
+    Session per request against an enumerable booking id. Strict, per
+    trusted IP, per hour; the bucket is registered in rate_limit.
     """
+    import rate_limit
+    if not rate_limit.allow_strict("booking_checkout",
+                                   rate_limit.trusted_client_ip(request)):
+        raise HTTPException(429, "Too many attempts — try again in a little while.")
     booking_id = (body.booking_id or "").strip()
     if not booking_id:
         raise HTTPException(400, "booking_id required")
@@ -266,6 +276,8 @@ async def invoice_checkout(
 
     from business_users_router import require_role
     require_role(business_id, str(user.id), "member")
+    from financial_policy import require_operational_write
+    require_operational_write(business_id)
 
     status = (inv.get("status") or "").lower()
     if status == "paid":
@@ -345,6 +357,7 @@ class ChargeNoShowBody(BaseModel):
 @router.post("/charge-no-show")
 async def charge_no_show(
     body: ChargeNoShowBody,
+    request: Request,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Charge the disclosed no-show fee against the card stored at
@@ -377,6 +390,10 @@ async def charge_no_show(
 
     from business_users_router import require_role
     require_role(business_id, str(user.id), "manager")
+    from financial_policy import require_operational_write
+    require_operational_write(business_id)
+    import ledger_unlock
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
 
     data = entry.get("data") or {}
     try:
@@ -482,9 +499,14 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
 async def refund_charge(
     charge_id: str,
     body: RefundBody,
+    request: Request,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     biz = _require_owner(body.business_id, user)
+    from financial_policy import require_operational_write
+    require_operational_write(body.business_id)
+    import ledger_unlock
+    ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
     try:
         refund = await payments_core.provider_for(biz).create_refund(
             biz,

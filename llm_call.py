@@ -48,6 +48,9 @@ WHAT THIS IS NOT
 """
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import functools
 import logging
 import os
 import sys
@@ -55,6 +58,7 @@ import time
 from typing import Any, Dict, Mapping, Optional
 
 import httpx
+import chief_request_timing
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +90,9 @@ _SELF_METERING = frozenset({
     "design_coach", "design_intent", "doc_intelligence_router",
     "doc_templates_router", "passes", "platform_console", "site_composer",
     "site_concierge", "sourcing_engine", "spec_author", "vision_grader",
+    "errand_driver",  # logs each browser-toolset turn under task=errand
+    "chief_fast_track",  # the two-track reply's Haiku calls (/chief/opener …)
+    "chief_site_view",  # view_website's written look at a screenshot, endpoint=view_website
 })
 
 # Frames to walk past when deciding who the caller is. model_ladder
@@ -109,10 +116,21 @@ def _caller_module() -> str:
     return "unknown"
 
 
+# Keep persistence work alive independently of a timed-out reviewer. The loop's
+# executor owns the running write; each row retains its originating billing scope.
+_PENDING_METERS = set()
+
+
+def _meter_finished(future):
+    _PENDING_METERS.discard(future)
+    if not future.cancelled() and future.exception() is not None:
+        logger.warning("[llm_call] background metering failed: %s", type(future.exception()).__name__)
+
+
 def _meter(response: Any, payload: Optional[Dict[str, Any]],
            caller: str, started: float,
            business_id: Optional[str] = None,
-           units: Optional[int] = None) -> None:
+           units: Optional[int] = None, *, background: bool = False) -> None:
     """Write one api_usage row for a call whose caller does not log it.
 
     Never raises and never blocks: a metering failure must not fail an
@@ -140,8 +158,17 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
         usage = (data or {}).get("usage") or {}
         if not usage:
             return
+        # The routed request's own cost view (route_ledger). Here, after the
+        # self-metering skip, so a call is tallied by exactly one of the two
+        # places that meter it; a no-op outside a routed request.
+        try:
+            import route_ledger
+            route_ledger.tally_usage(str((data or {}).get("model")
+                                         or (payload or {}).get("model") or "unknown"), usage)
+        except Exception:
+            pass
         from api_usage_logger import log_api_usage_sync
-        log_api_usage_sync(
+        row = dict(
             endpoint=f"llm:{caller}",
             model=str((data or {}).get("model")
                       or (payload or {}).get("model") or "unknown"),
@@ -153,6 +180,18 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
             units=units,
             duration_ms=int((time.time() - started) * 1000),
         )
+        if background:
+            # The tally above is local and immediately visible to this turn.
+            # Persist the same row once off-loop: a slow billing database must
+            # not hold back a completed verdict or freeze all speech streams.
+            # Executor submission starts now and survives caller cancellation.
+            context = contextvars.copy_context()
+            write = functools.partial(log_api_usage_sync, **row)
+            future = asyncio.get_running_loop().run_in_executor(None, context.run, write)
+            _PENDING_METERS.add(future)
+            future.add_done_callback(_meter_finished)
+        else:
+            log_api_usage_sync(**row)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("[llm_call] metering failed for %s: %s", caller, e)
 
@@ -246,13 +285,17 @@ async def apost(client: httpx.AsyncClient,
     _route(task)
     body = {"content": content} if content is not None else {"json": payload}
     caller, started = _caller_module(), time.time()
-    resp = await client.post(
+    operation = client.post(
         messages_url(),
         headers=headers(extra_headers, key=key),
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
         **body,
     )
-    _meter(resp, payload, caller, started, business_id=business_id, units=units)
+    trace = chief_request_timing.CURRENT.get()
+    resp = (await chief_request_timing.post_response(operation, trace,
+                chief_request_timing.role_for(task, caller), (payload or {}).get("model"))
+            if trace is not None else await operation)
+    _meter(resp, payload, caller, started, business_id=business_id, units=units, background=True)
     return resp
 
 
@@ -311,18 +354,23 @@ def astream(client: httpx.AsyncClient,
             timeout: Any = None,
             extra_headers: Optional[Mapping[str, str]] = None,
             key: Optional[str] = None,
-            task: Optional[str] = None):
-    """Streaming POST. Returns httpx's async context manager unchanged, so
-    `async with astream(...) as resp:` reads exactly like the client.stream
-    call it replaced."""
+            task: Optional[str] = None,
+            timing_trace=None):
+    """Streaming POST with content-free timing only for an active Chief trace.
+    Response operations and SSE lines retain their original behavior."""
     _route(task)
-    return client.stream(
+    context = client.stream(
         "POST",
         messages_url(),
         headers=headers(extra_headers, key=key),
         json=payload,
         timeout=_CLIENT_DEFAULT if timeout is None else timeout,
     )
+    trace = timing_trace or chief_request_timing.CURRENT.get()
+    if trace is None:
+        return context
+    return chief_request_timing.stream(context, trace,
+        chief_request_timing.role_for(task, _caller_module()), payload.get("model"))
 
 
 # ──────────────────────────────────────────────────────────────

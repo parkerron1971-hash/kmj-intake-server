@@ -36,6 +36,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 
 import action_registry
@@ -57,8 +58,13 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
     names = {t["name"] for t in ctl.read_tool_definitions()}
     exposed = set(mcp_server.exposed_tools())
     assert "show_view" not in names, "display stays an action"
-    assert names == (exposed - {"show_view"}), (
-        "one audited list — the loop must not grow or shrink it on its own"
+    private_coordination = {"list_connected_agents", "connected_agent_assignments"}
+    # view_website drives the server's browser: Chief's own, never an outside agent's.
+    chief_only = private_coordination | {"view_website"}
+    assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
+    assert names == (exposed - {"show_view"}) | chief_only, (
+        "The only extra reads are Chief's private ones: coordination tools (bots cannot see one "
+        "another's briefs) and view_website (the server's browser)"
     )
 
 
@@ -212,7 +218,7 @@ class _FakeResp:
 def plain_harness(monkeypatch):
     state = {"responses": [], "i": 0, "handler_runs": 0, "payloads": []}
 
-    async def fake_apost(client, payload, timeout=None, key=None, extra_headers=None):
+    async def fake_apost(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         state["payloads"].append(json.loads(json.dumps(payload)))
         r = state["responses"][min(state["i"], len(state["responses"]) - 1)]
         state["i"] += 1
@@ -263,7 +269,7 @@ def test_plain_branch_round_cap_holds(plain_harness):
 def test_tools_off_means_no_tools_in_payload(plain_harness, monkeypatch):
     state_payloads = []
 
-    async def spy_apost(client, payload, timeout=None, key=None, extra_headers=None):
+    async def spy_apost(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         state_payloads.append(payload)
         return _FakeResp(_final_response("plain"))
     monkeypatch.setattr(llm_call, "apost", spy_apost)
@@ -316,7 +322,7 @@ def stream_harness(monkeypatch):
     state = {"scripts": [], "i": 0, "handler_runs": 0, "sunk": []}
 
     @contextlib.asynccontextmanager
-    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None):
+    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         script = state["scripts"][min(state["i"], len(state["scripts"]) - 1)]
         state["i"] += 1
         yield _StreamResp(script)
@@ -371,7 +377,7 @@ def test_stream_with_tools_but_no_tool_use_is_one_round(stream_harness):
 # ─────────────────────────────────────────────────────────────────────
 
 def test_the_prompt_documents_mid_turn_lookups():
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     assert "MID-TURN LOOKUPS" in src
     assert "never claim data is unavailable before trying the tool" in src
 

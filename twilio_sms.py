@@ -13,6 +13,11 @@ ENV (Railway) — never hardcoded, never sent to any client
     TWILIO_API_KEY_SID            SK…   (API key)
     TWILIO_API_KEY_SECRET               (API key secret)
     TWILIO_MESSAGING_SERVICE_SID  MG…   (Messaging Service — sender pool)
+    TWILIO_PLATFORM_NUMBER        +1…   (the shared platform number, E.164.
+                                         Every send PINS a from_ number;
+                                         this is the default. Unset → the
+                                         service picks from its pool, with
+                                         a loud warning — see send_sms.)
     TEST_SMS_TO                   +1…   (verified cell, E.164, test sends)
     TWILIO_AUTH_TOKEN                   (OPTIONAL but strongly recommended:
                                          inbound signature validation needs
@@ -42,6 +47,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
+from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
@@ -86,19 +92,137 @@ def _twilio_client():
     return Client(api_key_sid, api_key_secret, account_sid)
 
 
-def send_sms(to: str, body: str) -> str:
-    """Send one SMS through the Messaging Service (no from_ number —
-    Twilio picks the sender from the service's pool). Returns the
-    created Message SID. Blocking — call via run_in_threadpool from
-    async handlers."""
+def platform_number() -> str:
+    """The shared platform number (E.164) — the sender every business
+    texts from until it has a number of its own."""
+    return (os.environ.get("TWILIO_PLATFORM_NUMBER") or "").strip()
+
+
+_warned_unpinned = False
+
+
+def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
+    """Send one SMS through the Messaging Service, PINNED to a sender.
+    Returns the created Message SID. Blocking — call via
+    run_in_threadpool from async handlers.
+
+    Why pinned (2026-09-02, dedicated numbers phase A): a send through
+    a Messaging Service with no from_ lets Twilio pick ANY number in
+    the service's pool. That is fine while the pool holds one number.
+    The moment a practitioner's own number joins the pool, an unpinned
+    booking alert for Business A can go out from Business B's line. So
+    every send names its sender — the business's own number when it
+    has one, else the platform number — and Twilio honors from_ +
+    messaging_service_sid together (the specific number is used; the
+    service's opt-out handling and status callbacks still apply).
+
+    TWILIO_PLATFORM_NUMBER unset → today's behavior (pool pick) with a
+    warning, so a missing env var degrades to the old path rather than
+    stopping texts; provisioning a dedicated number refuses to run in
+    that state, which is what keeps the old path safe."""
+    global _warned_unpinned
     messaging_service_sid = _require_env("TWILIO_MESSAGING_SERVICE_SID")
-    message = _twilio_client().messages.create(
-        to=to,
-        body=body,
-        messaging_service_sid=messaging_service_sid,
-    )
-    logger.info(f"sent SMS to={to} sid={message.sid}")
+    sender = (from_number or "").strip() or platform_number()
+    kwargs = dict(to=to, body=body, messaging_service_sid=messaging_service_sid)
+    if sender:
+        kwargs["from_"] = sender
+    elif not _warned_unpinned:
+        _warned_unpinned = True
+        logger.warning(
+            "TWILIO_PLATFORM_NUMBER is not set — sends are UNPINNED and the "
+            "Messaging Service picks the sender. Set it before any dedicated "
+            "number joins the pool.")
+    message = _twilio_client().messages.create(**kwargs)
+    logger.info(f"sent SMS to={to} from={sender or 'pool'} sid={message.sid}")
     return message.sid
+
+
+# ─── Number lifecycle (dedicated numbers, phase C) ─────────────────────
+# Blocking — call via run_in_threadpool. All on the platform account;
+# every number bought here is attached to the one Messaging Service so
+# it rides the registered 10DLC campaign. sms_numbers_router owns the
+# order of operations and the rollback.
+
+@lru_cache(maxsize=1)
+def _twilio_admin_client():
+    """The client for number LIFECYCLE calls (search, buy, attach,
+    release). The platform's API key is a restricted one — it can send
+    (messages.create) and that is all; proven 2026-09-02 against the
+    live account: listing the sender pool with it returns 401 "required
+    permission twilio/messaging/services.phonenumbers/list is missing",
+    and active-numbers/list the same. The ACCOUNT auth token can do all
+    of it, and it is already in Railway for inbound signature
+    validation. So lifecycle uses the token when present, and the key
+    otherwise — a key that has been granted the permissions works too.
+    Sending stays on the key: least privilege for the hot path."""
+    from twilio.rest import Client
+    account_sid = _require_env("TWILIO_ACCOUNT_SID")
+    token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+    if token:
+        return Client(account_sid, token)
+    return _twilio_client()
+
+
+def search_numbers(area_code: Optional[str], limit: int = 10) -> list:
+    """Local, SMS-capable US numbers in an area code."""
+    kwargs = dict(sms_enabled=True, limit=max(1, min(int(limit), 20)))
+    if area_code:
+        kwargs["area_code"] = int(area_code)
+    found = _twilio_admin_client().available_phone_numbers("US").local.list(**kwargs)
+    return [{
+        "phone_number": n.phone_number,
+        "friendly_name": n.friendly_name,
+        "locality": getattr(n, "locality", None),
+        "region": getattr(n, "region", None),
+    } for n in found]
+
+
+def webhook_base() -> str:
+    """Where Twilio reaches us. The public host, no trailing slash."""
+    return (os.environ.get("SMS_WEBHOOK_BASE")
+            or "https://kmj-intake-server-production.up.railway.app").rstrip("/")
+
+
+def buy_number(phone_number: str) -> dict:
+    """Buy the number WITH its inbound webhook set. Found on the first
+    real provision (2026-09-02): the Messaging Service was configured
+    with use_inbound_webhook_on_number=true and no inbound URL of its
+    own — inbound is per NUMBER on this account, and a freshly bought
+    number has none, so a reply to it went nowhere. The service has
+    since been pointed at /webhooks/twilio/sms for the whole pool; the
+    per-number URL is set here as well so a line answers the door under
+    either service mode."""
+    base = webhook_base()
+    pn = _twilio_admin_client().incoming_phone_numbers.create(
+        phone_number=phone_number, friendly_name="Solutionist private line",
+        sms_url=f"{base}/webhooks/twilio/sms", sms_method="POST",
+        status_callback=f"{base}/webhooks/twilio/status", status_callback_method="POST",
+    )
+    logger.info(f"bought {pn.phone_number} sid={pn.sid} sms_url={base}/webhooks/twilio/sms")
+    return {"sid": pn.sid, "phone_number": pn.phone_number}
+
+
+def attach_to_service(pn_sid: str) -> str:
+    """Add a bought number to the Messaging Service's sender pool.
+    Returns the service SID it joined."""
+    mg = _require_env("TWILIO_MESSAGING_SERVICE_SID")
+    _twilio_admin_client().messaging.v1.services(mg).phone_numbers.create(phone_number_sid=pn_sid)
+    logger.info(f"attached {pn_sid} to {mg}")
+    return mg
+
+
+def detach_from_service(pn_sid: str) -> None:
+    """Best effort — a number already out of the pool is fine."""
+    mg = _require_env("TWILIO_MESSAGING_SERVICE_SID")
+    try:
+        _twilio_admin_client().messaging.v1.services(mg).phone_numbers(pn_sid).delete()
+    except Exception as e:
+        logger.warning(f"detach {pn_sid} from {mg}: {e}")
+
+
+def release_number(pn_sid: str) -> None:
+    _twilio_admin_client().incoming_phone_numbers(pn_sid).delete()
+    logger.info(f"released {pn_sid}")
 
 
 # ─── Test send ─────────────────────────────────────────────────────────
@@ -160,7 +284,8 @@ async def twilio_inbound_sms(request: Request):
     body = params.get("Body", "")
     logger.info(f"inbound SMS from={pii_mask.mask_phone(from_number)} len={len(body)}")
 
-    # Routing (2026-07-04, Kevin's architecture): ONE platform number —
+    # Routing (2026-07-04, Kevin's architecture; own numbers 2026-09-02):
+    # a business's OWN number routes by To. Otherwise ONE platform number —
     # Chief routes every inbound BINDING FIRST, KEYWORD SECOND
     # (sms_routing.route_inbound: STOP/START/HELP → keyword bind +
     # connection/consent confirmation → binding route → disambiguate →
@@ -180,6 +305,10 @@ async def twilio_inbound_sms(request: Request):
                 text=body,
                 provider_id=params.get("MessageSid", ""),
                 media=media,
+                # The number the customer texted. A business's own
+                # line routes straight to it; the platform number
+                # takes the keyword/binding path.
+                to_number=params.get("To", ""),
             )
             reply = result.get("reply")
             if reply:

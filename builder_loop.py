@@ -136,6 +136,15 @@ def _jpeg_block(data: bytes) -> Dict[str, Any]:
                                         "data": base64.b64encode(data).decode()}}
 
 
+_IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
+
+
+def _is_image_url(url: str) -> bool:
+    from urllib.parse import urlsplit
+    path = urlsplit(url).path.lower()
+    return path.endswith(_IMAGE_EXT) or "/storage/v1/object/" in path
+
+
 class ToolBox:
     """Executes the builder's tools against one business's context.
     Remembers the last rendered document (the loop's 'never nothing')."""
@@ -166,7 +175,20 @@ class ToolBox:
         if not any(u == a.rstrip(").,") for a in self.allowed_urls):
             return [{"type": "text", "text": f"{u} is not in the real data — "
                                              "look only at the owner's images and references."}]
-        return [{"type": "text", "text": f"IMAGE — exact url: {u}"}, _image_block(u)]
+        if _is_image_url(u):
+            return [{"type": "text", "text": f"IMAGE — exact url: {u}"}, _image_block(u)]
+        # A web page (a reference site the owner loved) is not an image:
+        # sent as one, the API refused the whole request and the loop
+        # ended (2026-09-22). Look at it the way a person would.
+        try:
+            from website_image_references import capture_viewports_sync
+            shot = capture_viewports_sync(u, (1440,), 900)[0]
+        except Exception as e:
+            return [{"type": "text", "text": f"{u} could not be opened ({type(e).__name__}); "
+                                             "work from the written reference notes."}]
+        return [{"type": "text", "text": f"PAGE — screenshot at 1440px of {u}. Learn its "
+                                         "disciplines; never copy its brand, words or images."},
+                _jpeg_block(shot)]
 
     def render(self, html: str, note: str = "") -> List[Dict[str, Any]]:
         self.renders += 1
@@ -306,6 +328,21 @@ def _stream(client, *, model: str, max_tokens: int, system: str,
         return s.get_final_message()
 
 
+FINISH_NOW = ("That was the last tool call this build allows. Call finish now "
+              "with the complete HTML document.")
+
+
+def _with_note(turns: List[Dict[str, Any]], note: str) -> List[Dict[str, Any]]:
+    """The turns with `note` added to the closing user message, for one
+    request only (the stored conversation is not changed)."""
+    out = list(turns)
+    last = out[-1]
+    content = last["content"]
+    blocks = [{"type": "text", "text": content}] if isinstance(content, str) else list(content)
+    out[-1] = {**last, "content": blocks + [{"type": "text", "text": note}]}
+    return out
+
+
 def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
              spend: Dict[str, Any], progress_cb: Optional[Callable[[int, str], None]] = None,
              toolbox: Optional[ToolBox] = None, client: Any = None,
@@ -337,7 +374,7 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
     system = v2._SYSTEM + "\n\n" + ROOM.format(n=max_tools())
     user = v2.build_user_prompt(spec_text, real_data)
     turns: List[Dict[str, Any]] = [{"role": "user", "content": user}]
-    sampling = model_ladder.sampling_kwargs(model, v2.V2_TEMPERATURE)
+    sampling = v2._gen_kwargs(model, v2.V2_TEMPERATURE)
     final_html: Optional[str] = None
     cap = max_tools()
 
@@ -346,10 +383,20 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
         force = (report["tool_calls"] >= cap) or not budget_ok
         _progress(48 + min(20, round_no * 3),
                   "The builder looks, renders, corrects" if not force else "Handing in")
+        tools, choice, sent = TOOLS, None, list(turns)
+        if force:
+            if model_ladder.supports_forced_tool_choice(model):
+                choice = {"type": "tool", "name": "finish"}
+            else:
+                # Opus 5.5 / Fable 5.1 answer a forced tool_choice with a
+                # 400, which ended the loop with no page (2026-09-22).
+                # Same effect by other means: finish is the only tool left
+                # and the turn says so.
+                tools = [t for t in TOOLS if t["name"] == "finish"]
+                sent = _with_note(sent, FINISH_NOW)
         try:
             msg = _stream(client, model=model, max_tokens=v2._max_tokens(), system=system,
-                          messages=list(turns), tools=TOOLS,
-                          tool_choice={"type": "tool", "name": "finish"} if force else None,
+                          messages=sent, tools=tools, tool_choice=choice,
                           sampling=sampling)
         except Exception as e:
             logger.error(f"[loop] call failed: {type(e).__name__}: {e}")

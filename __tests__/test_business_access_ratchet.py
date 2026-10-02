@@ -68,7 +68,28 @@ RESIDUAL = [h for h in UNGUARDED
 # and the module had been parked on PUBLIC_BY_DESIGN to quieten it.
 # Both blind spots are fixed, so the entry is gone and the two
 # handlers now resolve as what they are: guarded.
-MAX_UNGUARDED_TOTAL = 44
+# 44 -> 45 (2026-09-05, in-chat booking): site_concierge gained a
+# third anonymous WRITE, /public/concierge/{slug}/booking/book — a
+# website visitor booking a time inside the chat, no account by
+# design (the same person, the same walk-in flow, as the booking
+# widget's book_anon). It sits behind the IP cap, the client policy
+# verdict, and book_anon's own guards. The residual stays at ZERO;
+# this raise records one deliberate public door, not slack.
+# 45 -> 46 (2026-09-18, the client form's page): intake_endpoint gained
+# GET /public/widget/form/{form_id} — the page behind the link Chief
+# hands out for a client form (it had been a 404 on every host). A
+# visitor with the link, no account, by design — the same person who
+# then POSTs to /intake/submit, which was already public. A READ of an
+# active form's own fields (the composed site already exposes the same
+# list); the business is read only to brand the page. The residual
+# stays at ZERO; this raise records one deliberate public door.
+# 46 -> 47 (2026-09-30, check-in stations): kids_station.pair — a church
+# tablet typing the one-time pairing code a manager read out, before it
+# has any credential. Strictly rate-limited per network, the code lasts
+# 15 minutes and works once. Every other station route resolves its
+# device token through station_from_token (a HINT in ownership_sweep).
+# The residual stays at ZERO; one deliberate public door.
+MAX_UNGUARDED_TOTAL = 47
 MAX_UNGUARDED_RESIDUAL = 0
 
 

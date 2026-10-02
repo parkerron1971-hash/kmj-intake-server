@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+import build_quality
 import build_skills
 import module_inspect
 import module_vocabulary
@@ -296,6 +297,8 @@ ArchetypeEnum = Literal[
     "work_pipeline",      # staged work moving toward done — Matters/Jobs/Engagements
     "event_roster",       # one occasion, many people — RSVP headcount + named roles
     "agreement_ledger",   # a document somebody signs — signed / expiring / expired
+    "progress_tracker",   # a number moving toward a target — score / weight / visits / savings
+    "composed_dashboard", # a log with a front page assembled from blocks — expenses / workouts / sales
 ]
 
 
@@ -348,6 +351,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": None,
         "chief_can_suggest": False,    # NEVER suggest the fallback
         "label": "Generic Module",
+        "pitch": "a plain list or board for anything else",
         "operate_group": None,
     },
     "event_roster": {
@@ -364,6 +368,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",
         "chief_can_suggest": True,
         "label": "Roster",
+        "pitch": "one occasion and the people attached to it — RSVP headcounts and named volunteer roles",
         "operate_group": "schedule",
     },
     "work_pipeline": {
@@ -381,6 +386,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",
         "chief_can_suggest": True,
         "label": "Pipeline",
+        "pitch": "work moving through stages on a board — matters, jobs, projects, leads, applications",
         # G03 — operate_group was None, which the sidebar's bucketer
         # skips entirely (`if (!bucket) continue`): a materialized
         # pipeline would have been invisible in OPERATE (dead-weight
@@ -393,6 +399,7 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",  # the BookingCalendar week-grid hero
         "chief_can_suggest": True,
         "label": "Bookings",
+        "pitch": "appointments on a calendar with a booking form customers use themselves",
         # C.1.3.1b — Bookings lives inside the existing OPERATE → Schedule
         # group alongside Calendar + Tasks (sidebar's append-into-existing
         # merge step picks this up).
@@ -403,10 +410,48 @@ ARCHETYPE_METADATA: Dict[str, Dict[str, Any]] = {
         "daily_use_surface": "operate",
         "chief_can_suggest": True,
         "label": "Agreements",
+        "pitch": "documents somebody has to sign, led by who has not — waivers, engagement letters, contracts",
         # 'work', not 'schedule'. An unsigned engagement letter is
         # outstanding WORK, not an occasion on a calendar — and the
         # whole point of the archetype is that the unsigned ones are
         # a thing to act on rather than a date to keep.
+        "operate_group": "work",
+    },
+    "progress_tracker": {
+        # A NUMBER MOVING TOWARD A TARGET, read over time. The live gap
+        # log (well — the modules that would have filled it) held exactly
+        # two shapes on the generic fallback: a credit-repair consultant's
+        # score climbing toward 720, and three barber reward trackers
+        # counting visits toward a free cut. Same archetype: a subject, a
+        # series of dated readings, a target, and the question "how close
+        # are they, and did anyone just cross the line". Weight, savings,
+        # attendance streaks, fundraising thermometers and grades are the
+        # same shape with different units.
+        "config_surface": "build",
+        "daily_use_surface": "operate",
+        "chief_can_suggest": True,
+        "label": "Progress",
+        "pitch": "a number tracked over time toward a goal, per person, with a chart, milestones and an alert when the goal is reached — credit scores, weight, savings, visits toward a reward",
+        # The subject is almost always a person the practitioner serves
+        # (a client's score, a member's visits), so it buckets with them.
+        # This is the bucket the C.1.3 note reserved for RewardProgress.
+        "operate_group": "customers",
+    },
+    "composed_dashboard": {
+        # THE EVERYTHING-ELSE SHAPE, done properly. An expense log, a
+        # workout log, a sales log, a mileage log, a maintenance log — a
+        # module that is a LOG of rows and whose real question is "what
+        # does it add up to". Before this, every one of them landed on
+        # the generic table. Now the model assembles a front page from a
+        # closed catalog of blocks bound to the module's own fields:
+        # stat tiles, a series over time, a breakdown by a choice, a
+        # progress bar, recent rows, upcoming dates, notes. Freedom in
+        # what to show; determinism in how it is drawn.
+        "config_surface": "build",
+        "daily_use_surface": "operate",
+        "chief_can_suggest": True,
+        "label": "Dashboard",
+        "pitch": "a log with a front page built from blocks — totals, a trend over time, a breakdown by category, recent entries — for expenses, sales, workouts, hours, anything you log and want to see add up",
         "operate_group": "work",
     },
 }
@@ -422,6 +467,41 @@ def suggestable_archetypes() -> List[str]:
     """NT8e — returns the closed set of archetypes Chief may proactively
     suggest. Single source of truth for the proactive-suggestion gate."""
     return [name for name, meta in ARCHETYPE_METADATA.items() if meta.get("chief_can_suggest") is True]
+
+
+def module_palette_block() -> str:
+    """What Chief can build WELL, in practitioner words, for Chief's own
+    conversational prompt.
+
+    Chief's prompt used to describe the build verbs and never the
+    surfaces those verbs produce, so Chief could route "track my clients'
+    credit scores" to the generator without knowing a purpose-built
+    tracker existed — and could not tell a practitioner "yes, I can build
+    that with a chart and a goal line" before proposing. Derived from
+    ARCHETYPE_METADATA so a new archetype reaches Chief's awareness the
+    day it is registered, not when somebody remembers to edit the prompt.
+    fallback_generic is deliberately left out: it is an outcome, not an
+    offer."""
+    lines = []
+    for name in suggestable_archetypes():
+        meta = ARCHETYPE_METADATA[name]
+        pitch = (meta.get("pitch") or "").strip()
+        if not pitch:
+            continue
+        lines.append(f"    • {meta.get('label', name)} — {pitch}")
+    if not lines:
+        return ""
+    return (
+        "  WHAT YOU BUILD WELL (each is a purpose-built surface, not a plain "
+        "table — say so when they describe one of these shapes, then propose):\n"
+        + "\n".join(lines)
+        + "\n    Anything else still gets built as a plain list or board; say that "
+        "honestly rather than promising a chart or a calendar it will not have."
+        + "\n    Every one of these already MOVES — cards rise in, numbers count up, bars fill, "
+        "a reached goal celebrates. There is no per-module animation switch to add; what "
+        "changes is the FEEL: a tone (calm · bold · warm · precise) and the empty line — "
+        "set_module_feel. Never say a module cannot have animation or feeling."
+    )
 
 
 # C.1.5 Plan A (M3-δ) — archetypes that are single-instance per business
@@ -541,6 +621,131 @@ class AgreementLedgerParams(BaseModel):
     item_noun: Optional[str] = None        # "Waiver", "Engagement Letter", "Disclosure"
 
 
+class ProgressTrackerParams(BaseModel):
+    """Parameters for the ProgressTracker archetype — a number moving
+    toward a target.
+
+    Two modes, one shape:
+      reading — each row is a dated READING of the number (a credit score
+                on the 1st of the month, a weigh-in, a savings balance).
+                Progress = the latest reading against the target; the
+                chart is the series.
+      count   — each row IS one unit (a visit, a session, a donation).
+                Progress = how many rows the subject has toward the
+                target. This is the reward-card shape: 5 of 7 haircuts.
+
+    subject_field points at who or what is being tracked — usually a
+    contact_link — so one module holds every client's series and the
+    surface groups by them. Omit it and the module tracks one thing
+    (the business's own revenue goal), which is still valid.
+
+    direction says which way is better. 'up' for a score, a balance, a
+    count; 'down' for weight, debt, days-to-close. The target line and
+    the "reached" state both read it, so a weight tracker with direction
+    'up' would congratulate the wrong movement — hence it is a closed
+    Literal rather than free text.
+
+    milestones are the intermediate marks worth naming (620 / 680 / 720
+    for a score). The FE draws them on the bar and the module agent's
+    target_reached trigger fires when the target itself is crossed.
+
+    Field refs are checked against schema.fields like every archetype's."""
+    mode: Literal["reading", "count"] = "reading"
+    subject_field: Optional[str] = None    # contact_link (or text/select) — who/what is tracked
+    value_field: Optional[str] = None      # number/currency holding the reading (REQUIRED in reading mode)
+    date_field: Optional[str] = None       # date of the reading; defaults to the row's created_at
+    target_field: Optional[str] = None     # per-subject target, a number/currency field
+    target: Optional[float] = None         # one target for everyone when there is no target_field
+    direction: Literal["up", "down"] = "up"
+    milestones: Optional[List[float]] = None
+    unit: Optional[str] = None             # "pts", "lbs", "$", "visits" — display only
+    item_noun: Optional[str] = None        # what one row is called ("Reading", "Visit")
+    subject_noun: Optional[str] = None     # what one subject is called ("Client", "Member")
+
+
+BlockKind = Literal["stat", "series", "breakdown", "progress", "recent", "upcoming", "notes",
+                    "list", "board", "calendar"]
+BLOCK_KINDS: tuple = ("stat", "series", "breakdown", "progress", "recent", "upcoming", "notes",
+                      "list", "board", "calendar")
+StatAgg = Literal["count", "sum", "avg", "latest", "min", "max"]
+Bucket = Literal["day", "week", "month"]
+Window = Literal["all", "7d", "30d", "month"]
+
+
+class DashboardBlock(BaseModel):
+    """One block on a composed_dashboard front page. `kind` is closed; the
+    other keys are read per kind (the ModuleSpec validator checks the
+    field refs and types for each kind):
+
+      stat       a hero number: agg over field (count needs no field;
+                 sum/avg/min/max need a number or currency; latest takes
+                 any field). window narrows it (this month, last 30 days).
+      series     a number over time: field (number/currency) bucketed by
+                 date_field, agg sum|avg|latest per bucket.
+      breakdown  bars by a select field; measure count, or sum of field.
+      progress   a bar toward target: field (number/currency) summed over
+                 window, or the row count when field is absent.
+      recent     the latest rows, showing fields[].
+      upcoming   the next rows by date_field, from today forward.
+      notes      the latest textarea/text values from field.
+
+    The structural three (2026-09-06) — the generic module's views as
+    blocks, so ANY module can be composed rather than falling back:
+      list       every row (or those matching where), showing fields[],
+                 sorted by sort (a field name; newest first by default)
+      board      columns by a select field, cards move between them
+      calendar   the month grid on date_field"""
+    kind: BlockKind
+    sort: Optional[str] = None
+    label: Optional[str] = Field(default=None, max_length=60)
+    field: Optional[str] = None
+    date_field: Optional[str] = None
+    agg: Optional[StatAgg] = None
+    bucket: Optional[Bucket] = None
+    window: Optional[Window] = None
+    target: Optional[float] = None
+    direction: Literal["up", "down"] = "up"
+    limit: Optional[int] = Field(default=None, ge=1, le=20)
+    fields: Optional[List[str]] = None
+    # Narrow the rows the block reads: "unbilled" is the sum of amount
+    # WHERE status is not in [paid]. One of is_in / not_in.
+    where: Optional["BlockFilter"] = None
+
+
+class BlockFilter(BaseModel):
+    """Rows a block counts: those whose `field` is (or is not) one of the
+    listed values. The field is a select, checkbox, contact_link, text or
+    module_ref — something with discrete values; filtering a number is a
+    threshold, which is the progress block's job."""
+    field: str
+    is_in: Optional[List[str]] = None
+    not_in: Optional[List[str]] = None
+
+    @model_validator(mode="after")
+    def _one_side(self):
+        if not (self.is_in or self.not_in):
+            raise ValueError("where needs is_in or not_in")
+        return self
+
+
+DashboardBlock.model_rebuild()
+
+
+class ComposedDashboardParams(BaseModel):
+    """Parameters for the ComposedDashboard archetype — a log whose front
+    page is assembled from blocks over its own rows.
+
+    blocks is the whole design: what the practitioner sees first, in
+    order. Between two and eight; one block is a stat tile on a table,
+    nine is a wall. date_field is the module's "when" (the series and
+    upcoming blocks default to it); title_field names a row in the
+    recent list. Field refs are checked against schema.fields."""
+    blocks: List[DashboardBlock] = Field(..., min_length=1, max_length=8)
+    title_field: Optional[str] = None
+    date_field: Optional[str] = None
+    item_noun: Optional[str] = None
+
+
 # Validators dispatched by archetype value.
 _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "booking_calendar": BookingCalendarParams,
@@ -548,7 +753,84 @@ _ARCHETYPE_PARAM_MODELS: Dict[str, type] = {
     "work_pipeline": WorkPipelineParams,
     "event_roster": EventRosterParams,
     "agreement_ledger": AgreementLedgerParams,
+    "progress_tracker": ProgressTrackerParams,
+    "composed_dashboard": ComposedDashboardParams,
 }
+
+
+Tone = Literal["calm", "bold", "warm", "precise"]
+TONES: tuple = ("calm", "bold", "warm", "precise")
+
+# A line the practitioner reads on the surface. Long enough for a
+# sentence with a number in it, short enough that it stays one line on a
+# phone card.
+_LINE_MAX = 140
+
+
+class Presentation(BaseModel):
+    """How the module FEELS — decided by the model from the practitioner's
+    own words, rendered deterministically by the archetype component.
+
+    This is the generalization pattern applied to feel: the model reasons
+    freely (a credit-repair consultant's milestones are 'Fair / Good /
+    Prime'; a barber's seventh cut is 'on the house'), the output is a
+    closed, validated shape, and the surface does the drawing. Nothing
+    here can break a theme, a layout or a phone — the worst a bad value
+    can do is read oddly, and the practitioner sees every line on the
+    proposal card before accepting.
+
+    All optional. An empty presentation renders the archetype's honest
+    defaults; every archetype must work with {}."""
+    # The sentence the empty state says under the icon.
+    empty_line: Optional[str] = Field(default=None, max_length=_LINE_MAX)
+    # progress_tracker: what the celebration and the badge say when a
+    # subject reaches the goal.
+    reached_line: Optional[str] = Field(default=None, max_length=_LINE_MAX)
+    # progress_tracker: a name for each milestone, keyed by its number as
+    # a string ("620": "Fair"). The FE draws them under the ticks.
+    milestone_labels: Dict[str, str] = Field(default_factory=dict)
+    # The surface's register. calm is the default; bold leads with the
+    # number; warm rounds and softens; precise tightens and tabulates.
+    tone: Optional[Tone] = None
+
+    @model_validator(mode="after")
+    def _keys_are_numbers(self):
+        cleaned: Dict[str, str] = {}
+        for k, v in (self.milestone_labels or {}).items():
+            try:
+                float(str(k))
+            except ValueError:
+                raise ValueError(
+                    f"presentation.milestone_labels key '{k}' is not a number — "
+                    f"keys are the milestone values as strings ('620')")
+            label = (v or "").strip()
+            if not label:
+                continue
+            if len(label) > 40:
+                raise ValueError(
+                    f"presentation.milestone_labels['{k}'] is longer than 40 "
+                    f"characters — it sits under a tick mark")
+            cleaned[str(k).strip()] = label
+        object.__setattr__(self, "milestone_labels", cleaned)
+        for attr in ("empty_line", "reached_line"):
+            val = getattr(self, attr)
+            if val is not None and not val.strip():
+                object.__setattr__(self, attr, None)
+        return self
+
+
+def presentation_from_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """The presentation a custom_modules row gets from a draft spec:
+    validated through the model, empties dropped, never raises on a bad
+    blob (a malformed feel must not block a build — it renders default)."""
+    raw = spec.get("presentation")
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        return Presentation(**raw).model_dump(exclude_none=True)
+    except ValidationError as e:
+        logger.warning(f"presentation ignored (invalid): {e}")
+        return {}
 
 
 class ModuleSpec(BaseModel):
@@ -560,6 +842,8 @@ class ModuleSpec(BaseModel):
     schema_: ModuleSchema = Field(..., alias="schema")
     agent_config: ModuleAgentConfig = Field(default_factory=ModuleAgentConfig)
     public_display: Optional[PublicDisplaySlot] = None
+    # How it feels (2026-09-05). Optional and validated; see Presentation.
+    presentation: Presentation = Field(default_factory=Presentation)
     workflows: List[WorkflowSpec] = Field(default_factory=list)
     voice_hints: List[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
@@ -665,6 +949,134 @@ class ModuleSpec(BaseModel):
                     "'fallback_generic' — every fallback is a marker that a "
                     "new archetype is owed"
                 )
+
+        # progress_tracker: every named field must exist and be the right
+        # kind. A value_field pointing at a text column would chart NaN;
+        # a subject_field pointing at a date would group readings by day
+        # and call each day a client. Refused here, not repaired.
+        if self.archetype == "progress_tracker":
+            by_name = {f.name: f for f in self.schema_.fields}
+            p = self.archetype_params
+            numeric = {"number", "currency", "rating"}
+
+            def _ref(key: str, allowed: set, required: bool = False) -> None:
+                name = p.get(key)
+                if not name:
+                    if required:
+                        raise ValueError(
+                            f"progress_tracker {key} is required in "
+                            f"'{p.get('mode', 'reading')}' mode — nothing "
+                            f"says which field holds the number")
+                    return
+                if name not in by_name:
+                    raise ValueError(
+                        f"progress_tracker {key} '{name}' is not in "
+                        f"schema.fields (have: {sorted(by_name)})")
+                if by_name[name].type not in allowed:
+                    raise ValueError(
+                        f"progress_tracker {key} '{name}' must be one of "
+                        f"{sorted(allowed)} (got '{by_name[name].type}')")
+
+            _ref("value_field", numeric, required=(p.get("mode", "reading") == "reading"))
+            _ref("target_field", numeric)
+            _ref("date_field", {"date"})
+            _ref("subject_field", {"contact_link", "text", "select", "module_ref"})
+            if p.get("target") is None and not p.get("target_field"):
+                raise ValueError(
+                    "progress_tracker needs a target: set `target` (one "
+                    "number for everyone) or `target_field` (a per-subject "
+                    "number field) — without one there is nothing to "
+                    "measure progress toward")
+            if p.get("target") is not None and p.get("target_field"):
+                raise ValueError(
+                    "progress_tracker: set `target` OR `target_field`, not "
+                    "both — two targets disagree")
+
+        # composed_dashboard: every block's refs must exist and be the kind
+        # of field the block can draw. A series over a text field is a
+        # blank chart; a breakdown by a number is one bar per row.
+        if self.archetype == "composed_dashboard":
+            by_name = {f.name: f for f in self.schema_.fields}
+            p = self.archetype_params
+            numeric = {"number", "currency", "rating"}
+
+            def _need(name: Optional[str], allowed: set, what: str, i: int) -> None:
+                if not name:
+                    raise ValueError(f"composed_dashboard blocks[{i}] ({what}) needs a field")
+                if name not in by_name:
+                    raise ValueError(
+                        f"composed_dashboard blocks[{i}] {what} '{name}' is not in "
+                        f"schema.fields (have: {sorted(by_name)})")
+                if by_name[name].type not in allowed:
+                    raise ValueError(
+                        f"composed_dashboard blocks[{i}] {what} '{name}' must be one of "
+                        f"{sorted(allowed)} (got '{by_name[name].type}')")
+
+            for key in ("title_field", "date_field"):
+                v = p.get(key)
+                if v and v not in by_name:
+                    raise ValueError(f"composed_dashboard {key} '{v}' is not in schema.fields")
+            if p.get("date_field") and by_name[p["date_field"]].type != "date":
+                raise ValueError("composed_dashboard date_field must be a date field")
+
+            for i, b in enumerate(p.get("blocks") or []):
+                kind = b.get("kind")
+                date_ref = b.get("date_field") or p.get("date_field")
+                w = b.get("where")
+                if w:
+                    _need(w.get("field"), {"select", "checkbox", "contact_link", "text", "module_ref"},
+                          "where field", i)
+                if kind == "stat":
+                    agg = b.get("agg") or ("count" if not b.get("field") else "sum")
+                    if agg in ("sum", "avg", "min", "max"):
+                        _need(b.get("field"), numeric, f"stat {agg} field", i)
+                    elif agg == "latest":
+                        _need(b.get("field"), set(module_vocabulary.FIELD_TYPES), "stat latest field", i)
+                elif kind == "series":
+                    _need(b.get("field"), numeric, "series field", i)
+                    if not date_ref:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] series needs a date_field "
+                            f"(on the block or on archetype_params)")
+                    _need(date_ref, {"date"}, "series date_field", i)
+                elif kind == "breakdown":
+                    _need(b.get("field"), {"select", "checkbox", "contact_link"}, "breakdown field", i)
+                    if b.get("agg") == "sum":
+                        _need(b.get("fields", [None])[0] if b.get("fields") else None,
+                              numeric, "breakdown sum field (fields[0])", i)
+                elif kind == "progress":
+                    if b.get("field"):
+                        _need(b.get("field"), numeric, "progress field", i)
+                    if b.get("target") is None:
+                        raise ValueError(f"composed_dashboard blocks[{i}] progress needs a target")
+                elif kind == "upcoming":
+                    if not date_ref:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] upcoming needs a date_field")
+                    _need(date_ref, {"date"}, "upcoming date_field", i)
+                elif kind == "notes":
+                    _need(b.get("field"), {"textarea", "text"}, "notes field", i)
+                elif kind in ("recent", "list"):
+                    for fname in b.get("fields") or []:
+                        if fname not in by_name:
+                            raise ValueError(
+                                f"composed_dashboard blocks[{i}] {kind} fields '{fname}' "
+                                f"is not in schema.fields")
+                    if b.get("sort") and b["sort"] not in by_name:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] sort '{b['sort']}' is not in "
+                            f"schema.fields")
+                elif kind == "board":
+                    _need(b.get("field"), {"select"}, "board field", i)
+                    if not by_name[b["field"]].options:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] board field '{b['field']}' has "
+                            f"no options — a board needs columns")
+                elif kind == "calendar":
+                    if not date_ref:
+                        raise ValueError(
+                            f"composed_dashboard blocks[{i}] calendar needs a date_field")
+                    _need(date_ref, {"date"}, "calendar date_field", i)
 
         # booking_calendar-specific: primary_date_field MUST exist in the schema.
         if self.archetype == "booking_calendar":
@@ -1040,7 +1452,14 @@ Available archetypes:
   booking_calendar
     purpose: a tracker for appointments / time-slot reservations / sessions
     when to pick: intake describes booking, scheduling, appointments,
-      reservations, sessions, slot-based time tracking
+      reservations, sessions, slot-based time tracking — a TIME SLOT a
+      customer reserves for the future
+    when NOT to pick: a record of how a session WENT (feedback, ratings,
+      notes after the fact) — that is composed_dashboard; a log of
+      sessions delivered for hours or billing — composed_dashboard. The
+      word "session" alone is not a booking. This archetype is one per
+      business and ships a customer-facing form, so picking it for a
+      non-booking costs the practitioner both.
     schema requirement: schema.fields MUST contain at least one date or
       datetime field that holds the slot start time
     archetype_params (required keys marked *):
@@ -1256,24 +1675,243 @@ Available archetypes:
         item_noun — what one is called ("Waiver", "Engagement Letter")
       Any *_field you set MUST name a field in schema.fields.
 
+  progress_tracker
+    purpose: A NUMBER MOVING TOWARD A TARGET, read over time — a credit
+      score climbing to 720, a client's weight, a savings balance, visits
+      toward a free service, a fundraising total, attendance streaks,
+      grades, reps, days sober. The daily question is "how close are they,
+      which way is it moving, and did anyone just cross the line".
+    when to pick: intake describes measuring something repeatedly and
+      comparing it to a goal — "track their score over time", "see their
+      progress", "count visits toward a reward", "milestones", "hit the
+      target", "progress bar", "trend", "before and after".
+    when NOT to pick: one-off records with no series (fallback_generic);
+      staged work with named stages (work_pipeline — a stage is a word, a
+      reading is a number); a rating someone gives you (that is feedback,
+      generic, using the `rating` type).
+    TWO MODES — pick one:
+      reading — each row is a dated reading of the number. Schema MUST
+        contain a number (or currency) field for the value and SHOULD
+        contain a date field for when it was read. Credit score, weight,
+        balance, blood pressure, revenue.
+      count — each row IS one unit: a visit, a session, a class attended.
+        No value field needed; the surface counts rows per subject. This
+        is the reward card: 5 of 7 haircuts. Add a checkbox like
+        `redeemed` when a reward resets the count.
+    schema requirement: a contact_link for WHO is being tracked when the
+      practitioner tracks other people (almost always — put it first);
+      omit it only when the business tracks one thing of its own. In
+      reading mode a number/currency value field and a date field. A
+      textarea for notes is usual ("disputed two collections this month").
+      Do NOT add a `status` or `progress` select — the state is computed
+      from the numbers and a stored copy goes stale against them.
+    views: ['list'] is enough — the archetype draws its own chart and
+      bars; a board has nothing to group by. Add 'calendar' only for
+      count mode where the visits are appointments (they usually are a
+      booking_calendar's rows already — then link with module_ref rather
+      than logging twice).
+    archetype_params (keys marked * are required):
+      * mode — "reading" | "count"
+      * target — ONE number everyone aims at (720, 7 visits, 10000), OR
+        target_field — name of a number field holding a per-subject
+        target (each client has their own goal). Set exactly one.
+        value_field — name of the number/currency field holding the
+                      reading. REQUIRED in reading mode.
+        subject_field — name of the contact_link (or text/select) field
+                        for who is tracked. Set it whenever there is one.
+        date_field — name of the date field for when the reading was
+                     taken; defaults to when the row was created.
+        direction — "up" (score, balance, count: higher is better) or
+                    "down" (weight, debt, days-to-close: lower is
+                    better). Default "up". Get this right — it decides
+                    what "reached" means.
+        milestones — intermediate marks worth celebrating, in order
+                     ([620, 680, 720]). Optional.
+        unit — display unit ("pts", "lbs", "$", "visits"). Optional.
+        item_noun — what one row is called ("Reading", "Visit", "Weigh-in")
+        subject_noun — what one subject is called ("Client", "Member")
+      Any *_field you set MUST name a field in schema.fields.
+    MILESTONE ALERTS: add a trigger of type "target_reached" with action
+      "draft_notification" so the practitioner is told the day a subject
+      crosses the target. It needs no field — it reads the archetype
+      params. The template is a short subject line; the person's name and
+      the value are filled in when it fires. Shape:
+        {"type":"target_reached","action":"draft_notification",
+         "template":"Goal reached"}
+    example intake → spec (reading mode):
+      "I help clients repair their credit and want to see each person's
+       score climb month by month toward 720"
+      → {"archetype":"progress_tracker",
+         "archetype_params":{"mode":"reading","subject_field":"client",
+           "value_field":"score","date_field":"pulled_on","target":720,
+           "direction":"up","milestones":[620,680,720],"unit":"pts",
+           "item_noun":"Reading","subject_noun":"Client"},
+         "schema":{"fields":[
+           {"name":"client","type":"contact_link","label":"Client","required":true},
+           {"name":"score","type":"number","label":"Score","required":true},
+           {"name":"pulled_on","type":"date","label":"Pulled on","required":true},
+           {"name":"bureau","type":"select","label":"Bureau",
+            "options":["Experian","Equifax","TransUnion"]},
+           {"name":"notes","type":"textarea","label":"What changed"}],
+           "views":["list"],"default_view":"list","default_sort":"pulled_on"},
+         "agent_config":{"enabled":true,"triggers":[
+           {"type":"target_reached","action":"draft_notification",
+            "template":"Credit goal reached"} ] },
+         "presentation":{"empty_line":"Pull the first report and the climb starts here.",
+           "reached_line":"Prime territory — 720 and climbing.",
+           "milestone_labels":{"620":"Fair","680":"Good","720":"Prime"},
+           "tone":"bold"}
+        }
+    example intake → spec (count mode):
+      "every seventh haircut is free"
+      → archetype_params {"mode":"count","subject_field":"client",
+         "target":7,"direction":"up","unit":"visits","item_noun":"Visit"}
+        with fields client (contact_link), visited_on (date),
+        redeemed (checkbox).
+
+  composed_dashboard
+    purpose: A LOG WITH A FRONT PAGE. Rows the practitioner adds as things
+      happen — expenses, sales, workouts, hours, mileage, meals, maintenance,
+      donations received, calls made — and whose real question is "what does
+      it add up to": how much this month, where it goes, is it trending up,
+      what is coming. You design the front page from a closed catalog of
+      BLOCKS bound to the module's own fields; the surface draws them.
+    when to pick: the intake describes logging something repeatedly and
+      wanting to SEE totals, a trend, a breakdown, or an overview — "track my
+      expenses and see where the money goes", "log my workouts", "a sales log
+      with monthly totals", "hours per client", "at a glance".
+    when NOT to pick: one number per person chasing a goal (progress_tracker
+      — a series with a target and milestones); staged work (work_pipeline);
+      an occasion with people (event_roster); a reference list nobody
+      totals (fallback_generic).
+    schema requirement: a `date` field for when it happened (put it first
+      after the title), a `currency` or `number` for the amount when there is
+      one, a `select` for the category when things come in kinds, a
+      `contact_link` when rows belong to a person, a `textarea` for notes.
+    archetype_params (keys marked * are required):
+      * blocks — 2 to 8 blocks, in the order they appear. Lead with the
+        number they open the page to see. Each block:
+          {"kind":"stat","agg":"sum","field":"amount","window":"month","label":"This month"}
+          {"kind":"stat","agg":"count","window":"7d","label":"This week"}
+          {"kind":"stat","agg":"avg","field":"amount","label":"Average"}
+          {"kind":"stat","agg":"latest","field":"weight","label":"Last weigh-in"}
+          {"kind":"series","field":"amount","agg":"sum","bucket":"month","label":"By month"}
+          {"kind":"breakdown","field":"category","agg":"sum","fields":["amount"],"label":"Where it goes"}
+          {"kind":"breakdown","field":"category","agg":"count"}
+          {"kind":"progress","field":"amount","target":2000,"window":"month","direction":"down","label":"Budget"}
+          {"kind":"recent","limit":5,"fields":["date","category","amount"]}
+          {"kind":"upcoming","date_field":"due","limit":5,"label":"Coming up"}
+          {"kind":"notes","field":"notes","limit":3}
+          {"kind":"stat","agg":"sum","field":"amount","label":"Still owed",
+           "where":{"field":"status","not_in":["paid","written_off"]} }
+          {"kind":"list","fields":["spent_on","vendor","category","amount"],"sort":"spent_on"}
+          {"kind":"board","field":"status","label":"By status"}
+          {"kind":"calendar","date_field":"due_on","label":"Due dates"}
+        list / board / calendar are the STRUCTURAL blocks — the whole table,
+          the kanban, the month grid — so a module that needs one of those
+          is still a composed_dashboard with that block on the page. Put a
+          "list" last when the practitioner will scan rows; a "board" when
+          rows move between states; a "calendar" when rows happen on days.
+        where — any block may carry {"field", "is_in" | "not_in": [...]}
+          to read only the rows whose select / checkbox / contact matches:
+          "unbilled" is amount summed where status is not paid; "Software
+          this year" is amount where category is in ["Software"]. This is
+          how a payments or invoice log answers "what am I owed".
+        kinds: stat (agg count|sum|avg|latest|min|max; window all|7d|30d|month),
+        series (number field + date, bucket day|week|month), breakdown (a
+        select; agg count or sum with fields[0] the amount), progress (sum of
+        field — or row count without one — toward target; direction "down"
+        for a budget), recent, upcoming (a date field, from today on), notes,
+        list (every row; fields[] + sort), board (a select with options),
+        calendar (a date field).
+        date_field — the module's "when"; series and upcoming default to it
+        title_field — what names a row in the recent list
+        item_noun — what one row is called ("Expense", "Workout", "Sale")
+      Every field a block names MUST be in schema.fields and be the type the
+      block can draw (series/sum/avg need a number or currency; breakdown
+      needs a select; notes needs a textarea).
+    A good front page: one or two stats that answer the daily question, one
+      series OR one breakdown (both when the intake asks for both), recent
+      rows, and notes only when the notes are the point. Do not put eight
+      stats on a page.
+    example intake → spec:
+      "I want to log my business expenses and see where the money goes each
+       month"
+      → archetype_params {"blocks":[
+           {"kind":"stat","agg":"sum","field":"amount","window":"month","label":"Spent this month"},
+           {"kind":"stat","agg":"sum","field":"amount","window":"30d","label":"Last 30 days"},
+           {"kind":"series","field":"amount","agg":"sum","bucket":"month","label":"By month"},
+           {"kind":"breakdown","field":"category","agg":"sum","fields":["amount"],"label":"Where it goes"},
+           {"kind":"recent","limit":6,"fields":["spent_on","category","amount"]}],
+         "date_field":"spent_on","title_field":"vendor","item_noun":"Expense"}
+        with fields vendor (text, required), amount (currency, required),
+        spent_on (date, required), category (select: Software, Travel,
+        Supplies, Marketing, Fees, Other), receipt (file), notes (textarea);
+        views ["list","summary"]; presentation empty_line "Log the first
+        expense and the month starts adding up."
+
   fallback_generic
     purpose: explicit "no archetype fits yet" — renders through the generic
       DynamicModule (list/board)
     when to pick: ANY module whose shape doesn't fit booking_calendar, \
-work_pipeline or event_roster (e.g. a reference list, a form, a log of \
-receipts — things with no time slots, no stage progression, no attached crowd)
+work_pipeline, event_roster, agreement_ledger, progress_tracker or \
+composed_dashboard (e.g. a reference list, a form, a directory — things with \
+no time slots, no stage progression, no attached crowd, no signature, no \
+number chasing a goal, and nothing worth totalling)
     schema requirement: none
     archetype_params: {}  (empty)
     archetype_fallback_reason REQUIRED: one sentence describing what \
-      archetype would have fit (e.g. "needs a RewardProgress archetype for \
-      counting visits toward a free service")
+      archetype would have fit (e.g. "needs a StockLevel archetype for \
+      reorder points across many products")
 
 Picking discipline: read the intake, then ask in order — is it time slots \
 someone books? (booking_calendar) — is it staged work moving toward done? \
 (work_pipeline) — is it an occasion with people to count or roles to fill? \
-(event_roster). Pick the first that fits and fill archetype_params from the \
-schema fields you already designed. If none fit, pick fallback_generic and \
+(event_roster) — is it paperwork somebody signs? (agreement_ledger) — is it a \
+number measured over time against a goal? (progress_tracker) — is it a log \
+of things that happen whose question is what they add up to? \
+(composed_dashboard). Pick the first that fits and fill archetype_params from \
+the schema fields you already designed. If none fit, pick fallback_generic and \
 write the archetype_fallback_reason.
+
+A GREAT module, not a plain one: a tracker the practitioner opens every day \
+has a purpose-built surface (the archetype), the fields that make that \
+surface work (a real date, a real number, a real person link — never text \
+standing in for them), a trigger that tells them when something crossed a \
+line, and closed_statuses so finished things stop being chased. Before you \
+emit fallback_generic, re-read the palette once: "tracker", "progress", \
+"over time", "toward", "goal", "milestone", "streak" are progress_tracker; \
+"log", "expenses", "sales", "hours", "how much", "where it goes", "per \
+month", "overview" are composed_dashboard; "where is it", "stage", \
+"pipeline" are work_pipeline; "who is coming" is event_roster; "signed" is \
+agreement_ledger; "book" is booking_calendar.
+
+PRESENTATION — how the module FEELS (every ModuleSpec carries one):
+The practitioner opens this surface every day; the words on it should \
+sound like their trade, not like software. You decide the feel; the \
+surface draws it. Four keys, all optional, all short:
+  empty_line — the one sentence the empty state says before the first row. \
+    In their voice, about their work, with a verb: a credit consultant's \
+    "Pull the first report and the climb starts here", a barber's \
+    "First cut goes on the card", a lawyer's "The first matter opens the \
+    board". Never "No data yet" or "Nothing here".
+  reached_line — (progress_tracker only) what the celebration says when a \
+    subject reaches the goal. Name the achievement in the trade's words: \
+    "Prime territory — 720 and climbing", "Seventh cut — this one is on \
+    the house", "Goal weight. Time to set the next one."
+  milestone_labels — (progress_tracker only) a NAME for each number in \
+    archetype_params.milestones, keyed by the number as a string, taken \
+    from the domain when it has one: credit scores {"620":"Fair", \
+    "680":"Good", "720":"Prime"}; a fundraising thermometer \
+    {"5000":"Halfway","10000":"Funded"}. Skip milestones no one names.
+  tone — the register: "calm" (default, most modules), "bold" (a number \
+    the practitioner is proud of leads big — scores, revenue, records), \
+    "warm" (people-first: members, clients, rewards, care), "precise" \
+    (money, legal, compliance — tight, tabular). Pick from the vertical \
+    and the intake; do not pick "bold" for a waiver ledger.
+Each line is at most 140 characters and reads as ONE sentence. Write \
+these for every module, not only trackers — the empty_line is the first \
+thing a practitioner sees on any surface they just built.
 
 confidence: 'high' if intake is specific, 'medium' if inferred, 'low' if vague.
 
@@ -1327,8 +1965,19 @@ class ProposalEnvelope(BaseModel):
 # Generation
 # ──────────────────────────────────────────────────────────────
 
-GENERATOR_MODEL = "claude-sonnet-4-5"
-GENERATOR_MAX_TOKENS = 4000
+# The model that designs modules. Opus 5 (2026-09-05): the site builder
+# has run Opus since the builder bench ruled it, and a module the
+# practitioner opens every day deserves the same judgment as their home
+# page. Thinking is on by default on this model and sampling parameters
+# are rejected, so the call sends neither. MODULE_SPEC_MODEL overrides
+# (Railway) — the cost dial stays Kevin's. Roughly 20-25¢ a build at
+# this prompt size; a build the critique revises costs two calls.
+GENERATOR_MODEL = (os.environ.get("MODULE_SPEC_MODEL") or "").strip() or "claude-opus-5"
+# Thinking tokens count against max_tokens; 4000 was the whole answer.
+GENERATOR_MAX_TOKENS = 12000
+# The second look (build_quality). MODULE_BUILD_CRITIQUE=off disables the
+# revision call; the rubric still runs and its findings still return.
+CRITIQUE_ENABLED = (os.environ.get("MODULE_BUILD_CRITIQUE") or "on").strip().lower() != "off"
 
 
 def _strip_code_fence(text: str) -> str:
@@ -1362,6 +2011,12 @@ def generate_module_proposal(
     if extra_guidance:
         user += ("\n\nAdditional practitioner guidance (use to revise the design "
                  "and update decomposition_reasoning):\n" + extra_guidance.strip())
+    import business_learning
+    try:
+        operating_profile = business_learning.load(business['id']) if business.get('id') else None
+    except (ValueError, RuntimeError) as e:
+        return {"ok": False, "error": f"Could not read business knowledge before building: {e}"}
+    user += "\n\n" + business_learning.context_block(business, intake_excerpt, profile_row=operating_profile)
     # Build skills — the guidance for THIS kind of module, selected
     # deterministically (no model call) and appended only when it applies.
     # Empty string when nothing matches, which is the common case and costs
@@ -1383,10 +2038,62 @@ def generate_module_proposal(
 
     try:
         client = llm_call.sdk_client(key=api_key)
+    except Exception as e:
+        logger.warning(f"LLM client unavailable: {e}")
+        return {"ok": False, "error": f"llm_call_failed: {e}"}
+
+    first = _call_and_parse(client, system_prompt, user)
+    if not first.get("ok"):
+        return first
+    env: ProposalEnvelope = first["env"]
+    specs = _dump_specs(env, intake_excerpt)
+
+    # ─── The second look ───────────────────────────────────────────────
+    # A deterministic rubric over what came back (build_quality.assess).
+    # When it finds something worth fixing — a tracker on the plain list,
+    # the alert they asked for missing, a generic empty state — the model
+    # is asked ONCE to revise with the findings spelled out, and the
+    # revision is kept only if it validates and scores no worse. One
+    # extra call on the builds that need it; none on the ones that don't.
+    btype = business.get("type", "") or ""
+    skill_names = [s["name"] for s in selected_skills]
+    report = build_quality.assess(specs, intake_excerpt, btype, skills=skill_names)
+    quality: Dict[str, Any] = {"first": report.as_dict(), "revised": None, "used": "first"}
+    if CRITIQUE_ENABLED and report.needs_revision:
+        logger.info("[quality] revising: " + ", ".join(
+            f.code for f in report.findings if f.severity == "revise"))
+        second = _call_and_parse(client, system_prompt,
+                                 user + "\n\n" + report.revision_block())
+        if second.get("ok"):
+            specs2 = _dump_specs(second["env"], intake_excerpt)
+            report2 = build_quality.assess(specs2, intake_excerpt, btype, skills=skill_names)
+            quality["revised"] = report2.as_dict()
+            if report2.score <= report.score:
+                env, specs = second["env"], specs2
+                quality["used"] = "revised"
+        else:
+            logger.info(f"[quality] revision discarded: {second.get('error')}")
+
+    offerings = [o.model_dump(exclude_none=False) for o in env.offerings]
+    if operating_profile:
+        for item in specs + offerings:
+            item['__operating_revision'] = operating_profile['revision']
+    return {
+        "ok": True,
+        "decomposition_reasoning": env.decomposition_reasoning,
+        "specs": specs,
+        "offerings": offerings,
+        "quality": quality,
+    }
+
+
+def _call_and_parse(client, system_prompt: str, user: str) -> Dict[str, Any]:
+    """One generator call → a validated ProposalEnvelope, or {ok: False}.
+    Soft-fails at every step; the caller decides what a failure costs."""
+    try:
         msg = client.messages.create(
             model=GENERATOR_MODEL,
             max_tokens=GENERATOR_MAX_TOKENS,
-            temperature=0.4,
             system=system_prompt,
             messages=[{"role": "user", "content": user}],
         )
@@ -1406,20 +2113,17 @@ def generate_module_proposal(
     except ValidationError as ve:
         logger.warning(f"envelope validation failed: {ve}")
         return {"ok": False, "error": f"validation_failed: {ve}", "raw": data}
+    return {"ok": True, "env": env}
 
-    # Anchor the intake excerpt on each spec.
-    specs = []
+
+def _dump_specs(env: "ProposalEnvelope", intake_excerpt: str) -> List[Dict[str, Any]]:
+    """Specs as dicts, each anchored on the intake that produced it."""
+    out = []
     for s in env.specs:
         sd = s.model_dump(by_alias=True, exclude_none=False)
         sd["intake_excerpt"] = intake_excerpt.strip()
-        specs.append(sd)
-    offerings = [o.model_dump(exclude_none=False) for o in env.offerings]
-    return {
-        "ok": True,
-        "decomposition_reasoning": env.decomposition_reasoning,
-        "specs": specs,
-        "offerings": offerings,
-    }
+        out.append(sd)
+    return out
 
 
 # Back-compat: single-spec helper still callable for tests.
@@ -1586,6 +2290,9 @@ def propose_module_from_intake(
         "ok": True,
         "decomposition_reasoning": gen["decomposition_reasoning"],
         "proposals": proposals,
+        # The second look, so Chief can say it took one (and the eval can
+        # see it). {first, revised, used}; absent on the upgrade path.
+        "quality": gen.get("quality"),
     }
 
 
@@ -1614,7 +2321,18 @@ Discipline to apply (all current passes, cumulative):
         no need to list specific offering ids in the spec.
 
   - Keep slug, name, icon, the OTHER schema fields, and archetype
-    unchanged unless the existing spec is structurally broken.
+    unchanged unless the existing spec is structurally broken — WITH ONE
+    EXCEPTION: if the current archetype is fallback_generic and an
+    archetype in the palette now fits (read the archetype_fallback_reason
+    in the current state — it names the shape that was owed), pick that
+    archetype and fill its archetype_params from the existing fields.
+    That is the whole point of upgrading a fallback module. Keep every
+    existing field name so the rows already in the module still render;
+    add fields only when the archetype cannot work without them.
+  - PRESENTATION: if the current presentation is empty, write it now
+    (empty_line, reached_line and milestone_labels for a tracker, a
+    tone) in the practitioner's vertical voice — an upgrade should
+    feel like an upgrade. If it already has lines, keep them.
   - The envelope MUST contain exactly ONE ModuleSpec.
   - The envelope MUST contain ONE ProposedOffering per inline service
     in the current module (if any).
@@ -1674,6 +2392,7 @@ def regenerate_for_upgrade(business_id: str, module_id: str) -> Dict[str, Any]:
         "agent_config": module.get("agent_config") or {},
         "archetype": module.get("archetype"),
         "archetype_params": module.get("archetype_params") or {},
+        "presentation": module.get("presentation") or {},
     }, indent=2)
     guidance = _UPGRADE_GUIDANCE.format(current_state=current_state)
 
@@ -1773,6 +2492,10 @@ def materialize_offering(spec_id: str) -> Dict[str, Any]:
 
     business_id = row["business_id"]
     payload = row["draft_json"] or {}
+    import business_learning
+    stale = business_learning.check_draft_revision(business_id, payload)
+    if stale:
+        return stale
     if (payload.get("__kind") or "module") != "offering":
         return {"ok": False, "error": "not an offering draft"}
 
@@ -1885,6 +2608,10 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
 
     business_id = spec_row["business_id"]
     spec = spec_row["draft_json"] or {}
+    import business_learning
+    stale = business_learning.check_draft_revision(business_id, spec)
+    if stale:
+        return stale
     slug = spec.get("slug")
     if not slug:
         return {"ok": False, "error": "spec missing slug"}
@@ -1919,6 +2646,9 @@ def materialize_spec(spec_id: str) -> Dict[str, Any]:
         "archetype": spec.get("archetype") or "fallback_generic",
         "archetype_params": spec.get("archetype_params") or {},
         "archetype_fallback_reason": spec.get("archetype_fallback_reason"),
+        # How it feels — the lines and the register the model chose from
+        # the practitioner's words (APPLY-2026-09-05-custom-modules-presentation).
+        "presentation": presentation_from_spec(spec),
         # Phase C, finally materialized (2026-08-13, post-audit gap list).
         # public_display was a CAPTURED SLOT ONLY — the spec model carried
         # it, this file's own docstring said so, and this payload dropped

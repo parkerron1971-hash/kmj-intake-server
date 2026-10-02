@@ -68,7 +68,8 @@ class InspectionReport(dict):
 
 
 def inspect_module_schema(schema: Any,
-                          agent_config: Optional[Dict[str, Any]] = None) -> InspectionReport:
+                          agent_config: Optional[Dict[str, Any]] = None,
+                          archetype: Optional[str] = None) -> InspectionReport:
     """Port of validateModuleSchema (frontend) + the trigger checks the
     frontend has no way to make.
 
@@ -183,12 +184,13 @@ def inspect_module_schema(schema: Any,
             f"{views[0]} instead"
         )
 
-    warnings.extend(_inspect_triggers(agent_config, fields))
+    warnings.extend(_inspect_triggers(agent_config, fields, archetype))
     return _report(problems, warnings)
 
 
 def _inspect_triggers(agent_config: Optional[Dict[str, Any]],
-                      fields: List[Any]) -> List[str]:
+                      fields: List[Any],
+                      archetype: Optional[str] = None) -> List[str]:
     """Triggers never make the renderer refuse — they make the module
     LOOK fine and quietly do nothing, which is the harder failure to
     notice. All warnings, never problems."""
@@ -228,6 +230,14 @@ def _inspect_triggers(agent_config: Optional[Dict[str, Any]],
                 out.append('a "field_change" trigger has no field — it will never fire')
             elif fname not in field_names:
                 out.append(f'"field_change" trigger points at "{fname}", which is not a field')
+        elif ttype == "target_reached":
+            # It reads the archetype params, not a field of its own, so
+            # the only way it never fires is being on the wrong archetype.
+            # Unknown archetype (a caller that did not pass one) is not a
+            # warning — this never invents a fault it cannot see.
+            if archetype is not None and archetype != "progress_tracker":
+                out.append('a "target_reached" trigger only fires on a progress '
+                           'tracker — this module is not one, so it will never fire')
 
     closed = agent_config.get("closed_statuses")
     if isinstance(closed, list) and closed:
@@ -270,7 +280,7 @@ def inspect_module_row(module: Optional[Dict[str, Any]]) -> InspectionReport:
 
     schema = module.get("schema")
     agent_config = module.get("agent_config")
-    report = inspect_module_schema(schema, agent_config)
+    report = inspect_module_schema(schema, agent_config, module.get("archetype"))
 
     problems = report.problems
     if not module.get("name") and not module.get("slug"):

@@ -96,7 +96,17 @@ def test_missing_secret_refuses_rather_than_defaulting(monkeypatch):
 
 def test_unknown_scopes_are_dropped_not_honoured(_no_db):
     _t, row = mt.mint("biz-1", scopes=["read", "write", "admin"])
-    assert row["scopes"] == ["read"]
+    # `write` became a real scope on 2026-09-03; `admin` is still nothing.
+    assert row["scopes"] == ["read", "write"]
+
+
+def test_write_always_carries_read(_no_db):
+    """A key that can change a record it cannot look at is a worse
+    credential, not a narrower one."""
+    _t, row = mt.mint("biz-1", scopes=["write"])
+    assert row["scopes"] == ["read", "write"]
+    claims = mt.verify_mcp_token(_t)
+    assert claims["scp"] == ["read", "write"]
 
 
 def test_scopes_never_end_up_empty(_no_db):

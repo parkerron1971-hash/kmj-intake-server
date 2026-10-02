@@ -88,6 +88,13 @@ CASES: List[Dict[str, Any]] = [
         "expect_field_types": ["rating", "textarea"],
         "expect_trigger_kinds": [],
         "expect_skill": "feedback-module",
+        # The first live run put this on booking_calendar because the
+        # intake said "session". A feedback log is a dashboard (average,
+        # trend, the words); it is never the one-per-business booking
+        # archetype with its customer form.
+        "expect_archetype": "composed_dashboard",
+        "expect_not_archetype": ["booking_calendar"],
+        "expect_presentation": ["empty_line"],
     },
     {
         "id": "equipment",
@@ -118,6 +125,45 @@ CASES: List[Dict[str, Any]] = [
         "expect_field_types": ["module_ref", "currency"],
         "expect_trigger_kinds": [],
         "expect_skill": "payments-module",
+        # The first live run left Invoices on fallback_generic. "What is
+        # still unbilled" is a stat with a where on status — a dashboard.
+        "expect_archetype": "composed_dashboard",
+        "expect_presentation": ["empty_line"],
+    },
+    {
+        # The first live gap the fallback banner ever recorded that a
+        # practitioner actually used: a credit-repair consultant's
+        # "Credit Profiles" landed on fallback_generic with the reason
+        # "needs a CreditScoreTracker archetype with time-series
+        # visualization ... and milestone alerts". progress_tracker is that
+        # archetype; this case is that intake.
+        "id": "tracker",
+        "business": {"name": "Clear Path Credit", "type": "consultant"},
+        "intake": ("I help clients repair their credit. I want to log each "
+                   "person's score every month and watch it climb toward 720, "
+                   "and be told the day someone gets there."),
+        "expect_field_types": ["number", "date", "contact_link"],
+        "expect_trigger_kinds": ["target_reached"],
+        "expect_archetype": "progress_tracker",
+        "expect_skill": "tracker-module",
+        # The feel: a tracker without a reached_line and milestone names
+        # is the plain table with a chart on it.
+        "expect_presentation": ["empty_line", "reached_line", "milestone_labels"],
+    },
+    {
+        # The everything-else shape, done properly: a log whose question is
+        # what it adds up to. Before composed_dashboard every one of these
+        # was a generic table.
+        "id": "expenses",
+        "business": {"name": "Northgate Studio", "type": "creative"},
+        "intake": ("I want to log my business expenses — what I bought, how much, "
+                   "what kind of thing it was — and see where the money goes "
+                   "each month."),
+        "expect_field_types": ["currency", "date", "select"],
+        "expect_trigger_kinds": [],
+        "expect_archetype": "composed_dashboard",
+        "expect_skill": "dashboard-module",
+        "expect_presentation": ["empty_line"],
     },
     {
         "id": "vague",
@@ -198,7 +244,8 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
         for t in ((sp.get("agent_config") or {}).get("triggers") or []):
             if isinstance(t, dict):
                 trigger_kinds.add(t.get("type"))
-        rep = module_inspect.inspect_module_schema(sch, sp.get("agent_config"))
+        rep = module_inspect.inspect_module_schema(
+            sch, sp.get("agent_config"), sp.get("archetype"))
         if not rep["renderable"]:
             unrenderable.append(f"{sp.get('slug') or sp.get('name')}: "
                                 + "; ".join(rep["problems"][:2]))
@@ -223,6 +270,51 @@ def score_case(case: Dict[str, Any], result: Dict[str, Any],
 
     for k in case.get("expect_trigger_kinds", []):
         check(f"trigger:{k}", k in trigger_kinds, f"got {sorted(trigger_kinds)}")
+
+    # WHICH ARCHETYPE — the surface the practitioner actually gets. A
+    # tracker that validates, renders and attaches the right skill but
+    # lands on fallback_generic is a plain table with a banner, which is
+    # the exact outcome the archetype exists to replace.
+    want_arch = case.get("expect_archetype")
+    if want_arch:
+        got_archs = sorted({sp.get("archetype") for sp in specs})
+        check(f"archetype:{want_arch}", want_arch in got_archs, f"got {got_archs}")
+    # The archetypes a case must NOT land on — the costly misreads (a
+    # single-instance booking calendar for a log that mentioned "session").
+    for bad in case.get("expect_not_archetype", []):
+        got_archs = sorted({sp.get("archetype") for sp in specs})
+        check(f"archetype:not:{bad}", bad not in got_archs, f"got {got_archs}")
+
+    # HOW IT FEELS — the presentation keys the case expects, present and
+    # non-empty on at least one spec; and, for a case that expects any
+    # feel at all, an empty_line on EVERY spec it produced. Cases that
+    # name no presentation keys are not scored on feel (the harness's
+    # own fixtures predate it).
+    want_feel = case.get("expect_presentation", [])
+    for key in want_feel:
+        got = [(sp.get("presentation") or {}).get(key) for sp in specs]
+        ok = any(bool(g) for g in got)
+        check(f"presentation:{key}", ok, f"got {got}")
+    if want_feel:
+        empties = [sp.get("slug") for sp in specs
+                   if not ((sp.get("presentation") or {}).get("empty_line") or "").strip()]
+        check("presentation:empty_line_on_every_spec", not empties, f"missing on {empties}")
+
+    # THE SECOND LOOK — the same rubric the generator revises against.
+    # Scored only for cases that expect a feel (the fixtures predate it);
+    # reported for every case, so a run shows what the critique would say.
+    if want_feel:
+        import build_quality
+        rep = build_quality.assess(specs, case.get("intake", ""),
+                                   case.get("business", {}).get("type", ""), skills=skills or [])
+        revise = [f.code for f in rep.findings if f.severity == "revise"]
+        check("quality:clean", not revise, "; ".join(revise) or
+              "; ".join(f.code for f in rep.findings) or "-")
+        q = result.get("quality") or {}
+        if q:
+            check("quality:used", True,
+                  f"{q.get('used')} (first score {q.get('first', {}).get('score')}"
+                  + (f", revised {q['revised']['score']}" if q.get("revised") else "") + ")")
 
     # Every field type used must be one the vocabulary allows. A spec that
     # invents a type validates nowhere and renders nowhere.
@@ -255,6 +347,7 @@ def _summarise(spec: Dict[str, Any]) -> Dict[str, Any]:
         "triggers": [t.get("type") for t in
                      ((spec.get("agent_config") or {}).get("triggers") or [])],
         "confidence": spec.get("confidence"),
+        "presentation": spec.get("presentation") or {},
     }
 
 

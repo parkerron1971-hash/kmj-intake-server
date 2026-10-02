@@ -2,7 +2,10 @@
 notification_engine.py — Solutionist System proactive notifications
 
 Generates ambient notifications the Chief sends throughout the day:
-- morning_brief    (cron: ~7:30am local)
+- morning_brief    (cron: 13:05 UTC; a quiet morning in a business's
+                    launch window gets one setup step instead of a
+                    skip, on its local clock when it has one; see
+                    setup_brief.py)
 - midday_ping      (cron: ~12:30pm local — only if something urgent)
 - evening_summary  (cron: ~6:00pm local)
 - urgent_alert     (real-time, called from other agents)
@@ -39,6 +42,7 @@ import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import onboarding_welcome as _welcome
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -215,9 +219,19 @@ def _midnight_iso() -> str:
 
 
 async def _settings_allow(client, biz: Dict, key: str, default: bool = True) -> bool:
-    """Check businesses.settings.notifications.<key>_enabled."""
+    """Check businesses.settings.notifications.<key>_enabled.
+
+    `<key>_enabled` is what the toggles in NotificationCenter and
+    Business Settings write (morning_brief_enabled, midday_ping_enabled,
+    evening_summary_enabled, urgent_alerts_enabled), and what the push
+    brief already reads. This read only the bare `<key>`, which nothing
+    in the app writes, so switching a brief off in Settings never
+    reached this engine. The bare key is still honored for rows that
+    carry it."""
     settings = (biz.get("settings") or {}).get("notifications") or {}
-    val = settings.get(key)
+    val = settings.get(f"{key}_enabled")
+    if val is None:
+        val = settings.get(key)
     if val is None:
         return default
     return bool(val)
@@ -271,8 +285,8 @@ async def _gather_morning_data(client, biz_id: str) -> Dict:
     # Z form — '+00:00' reads as a space in a PostgREST query string.
     day_ago = _z(now - timedelta(hours=24))
 
-    pending, sessions, at_risk, urgent, new_leads, hot_leads = await asyncio.gather(
-        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,subject&limit=20"),
+    pending, sessions, at_risk, urgent, new_leads, hot_leads, needs_hand = await asyncio.gather(
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,subject,{_welcome.SELECT_COLUMNS}&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{morning}&scheduled_for=lte.{end_of_day}&order=scheduled_for.asc&limit=10&select=id,title,scheduled_for,contacts(name)"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&health_score=lt.40&status=in.(active,lead,vip)&order=health_score.asc&limit=5&select=id,name,health_score"),
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&priority=eq.urgent&select=id,subject&limit=5"),
@@ -281,9 +295,15 @@ async def _gather_morning_data(client, biz_id: str) -> Dict:
         # customers is reporting the wrong day.
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&status=eq.lead&created_at=gte.{day_ago}&order=created_at.desc&select=id,name,lead_score,source&limit=10"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&status=eq.lead&lead_score=gte.70&order=lead_score.desc&select=id,name,lead_score,last_interaction&limit=5"),
+        # Chief's own proposals waiting on one tap (proposal_life). A
+        # brief that never says "two things need your hand" leaves the
+        # queue as a screen to remember.
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&channel=eq.action&select=id,subject,expires_at&order=created_at.asc&limit=10"),
     )
     return {
-        "pending": pending or [],
+        # The onboarding welcome note is not a draft waiting on anyone.
+        "pending": _welcome.without_welcome(pending) or [],
+        "needs_your_hand": needs_hand or [],
         "sessions_today": sessions or [],
         "at_risk": at_risk or [],
         "urgent": urgent or [],
@@ -296,13 +316,13 @@ async def _gather_midday_data(client, biz_id: str) -> Dict:
     cutoff = _z(datetime.now(timezone.utc) - timedelta(hours=MIDDAY_LOOKBACK_HOURS))
 
     new_drafts, urgent_drafts, no_shows, health_drops = await asyncio.gather(
-        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{cutoff}&status=eq.draft&select=id,agent,subject,priority&limit=20"),
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{cutoff}&status=eq.draft&select=id,subject,priority,{_welcome.SELECT_COLUMNS}&limit=20"),
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{cutoff}&status=eq.draft&priority=eq.urgent&select=id,subject&limit=5"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.no_show&updated_at=gte.{cutoff}&select=id,title,contacts(name)&limit=5"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&health_score=lt.30&updated_at=gte.{cutoff}&select=id,name,health_score&limit=5"),
     )
     return {
-        "new_drafts": new_drafts or [],
+        "new_drafts": _welcome.without_welcome(new_drafts) or [],
         "urgent_drafts": urgent_drafts or [],
         "no_shows": no_shows or [],
         "health_drops": health_drops or [],
@@ -318,14 +338,14 @@ async def _gather_evening_data(client, biz_id: str) -> Dict:
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.approved&reviewed_at=gte.{cutoff}&select=id,agent,subject&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.completed&scheduled_for=gte.{cutoff}&select=id,title,contacts(name)&limit=10"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&created_at=gte.{cutoff}&select=id,name,status&limit=10"),
-        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority&limit=20"),
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,{_welcome.SELECT_COLUMNS}&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{_z(datetime.now(timezone.utc))}&scheduled_for=lte.{tomorrow_end}&order=scheduled_for.asc&select=id,title,scheduled_for,contacts(name)&limit=10"),
     )
     return {
         "approved_today": approved or [],
         "completed_sessions": completed or [],
         "new_contacts": new_contacts or [],
-        "pending_carryover": pending or [],
+        "pending_carryover": _welcome.without_welcome(pending) or [],
         "tomorrow_sessions": upcoming or [],
     }
 
@@ -395,7 +415,66 @@ async def _ai_generate_notification(
     }
 
 
-async def _generate_morning_brief(client, biz_id: str) -> Dict:
+async def _setup_brief_or_skip(client, biz: Dict, *,
+                               now: Optional[datetime] = None,
+                               on_demand: bool = False) -> Dict:
+    """Nothing to report. For a business in its launch window with setup
+    still to do, that is not nothing: it gets ONE next setup step
+    (setup_brief). For everyone else, the skip this always was.
+
+    No model call. The copy is assembled from the plug-in catalog, so an
+    empty morning stays free, which is the reason the skip exists."""
+    try:
+        import setup_brief
+        plan = await asyncio.to_thread(setup_brief.plan, biz,
+                                       now=now, on_demand=on_demand)
+    except Exception as e:
+        logger.warning(f"setup brief plan failed for {biz.get('id')}: {e}")
+        plan = {}
+    if not plan.get("send"):
+        out: Dict[str, Any] = {"skipped": "nothing_to_report"}
+        if plan.get("window"):
+            out["setup_brief"] = plan.get("reason")
+        return out
+
+    biz_id = str(biz.get("id") or "")
+    notif = plan["notification"]
+    inserted = await _insert_notification(client, biz_id, {
+        "type": "morning_brief", **notif,
+    })
+    pushed = 0
+    if inserted:
+        # The same morning on the phone. send_to_business is a no-op
+        # without VAPID keys or a subscribed device, and the tag is the
+        # push brief's, so the device keeps one morning card, not two.
+        push = plan.get("push") or {}
+        try:
+            import push_notifications
+            pushed = await asyncio.to_thread(
+                push_notifications.send_to_business, biz_id,
+                title=push.get("title") or "Good morning",
+                body=push.get("body") or notif["title"],
+                nav=push.get("nav") or "home", tag=push.get("tag"))
+        except Exception as e:
+            logger.warning(f"setup brief push failed for {biz_id}: {e}")
+    return {"created": bool(inserted),
+            "notification_id": inserted["id"] if inserted else None,
+            "setup_step": (plan.get("step") or {}).get("key"),
+            "pushed": pushed, "notif": notif}
+
+
+async def _generate_morning_brief(client, biz_id: str, *,
+                                  setup_only: bool = False,
+                                  on_demand: bool = False,
+                                  now: Optional[datetime] = None) -> Dict:
+    """The morning brief for one business.
+
+    setup_only: the local-morning tick is asking on behalf of a launching
+    business's own clock. It may send the setup brief; a morning that
+    has something to report is left to the ordinary brief at the
+    morning tick.
+    on_demand: a person asked for their brief now (the route), so the
+    setup brief does not wait for their local morning."""
     biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{biz_id}&select=*&limit=1")
     if not biz_rows:
         return {"skipped": "business_not_found"}
@@ -408,7 +487,9 @@ async def _generate_morning_brief(client, biz_id: str) -> Dict:
 
     data = await _gather_morning_data(client, biz_id)
     if not has_anything_to_report(data):
-        return {"skipped": "nothing_to_report"}
+        return await _setup_brief_or_skip(client, biz, now=now, on_demand=on_demand)
+    if setup_only:
+        return {"skipped": "left_to_the_morning_brief"}
     biz_name = biz.get("name", "")
     practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
     voice = biz.get("voice_profile") or {}
@@ -416,7 +497,7 @@ async def _generate_morning_brief(client, biz_id: str) -> Dict:
     system = f"""You are the Chief of Staff for {biz_name}. Write a brief, warm morning notification for {practitioner} in their voice.
 Voice profile: {json.dumps(voice)[:400]}
 
-Cover (in this order): (1) ONE specific thing to prioritize today, (2) anything urgent, (3) sessions today if any, (4) one quick stat. Keep under 80 words. End with a clear next step or question.
+Cover (in this order): (1) ONE specific thing to prioritize today, (2) anything urgent, and anything in NEEDS_YOUR_HAND (Chief's proposals waiting on one tap in the Approval Queue — say how many, name the first), (3) sessions today if any, (4) one quick stat. Keep under 80 words. End with a clear next step or question.
 
 Set priority='high' if there's anything urgent, otherwise 'normal'. Suggest an action only if there's something obvious to do (run an agent, open a contact, triage queue)."""
 
@@ -607,13 +688,22 @@ async def _check_urgent(client, biz_id: str) -> Dict:
             "contact_form_submitted": "used the contact form on your site",
             "concierge_lead_captured": "left their details with the site concierge",
         }.get(ev.get("event_type") or "", "reached out")
+        # If the standing agent already drafted the reply (proposal_life),
+        # the alert hands them the reply, not the contact — one thing to
+        # read, one tap, never the alert AND the draft as two items.
+        import proposal_life
+        draft = await asyncio.to_thread(proposal_life.waiting_for_contact, biz_id, cid)
+        body = f"{contact.get('name', 'New contact')} just {arrived} — lead score {score}. Worth a same-day reply."
+        if draft:
+            body += " Chief drafted the reply — it is waiting in your Approval Queue."
         alert = await create_urgent_alert(
             client, biz_id,
             title=f"Hot lead: {contact.get('name', 'unknown')}",
-            body=f"{contact.get('name', 'New contact')} just {arrived} — lead score {score}. Worth a same-day reply.",
+            body=body,
             dedup_key=dedup,
-            suggested_action=f"Open {contact.get('name', 'this contact')}",
-            action_payload={"type": "navigate", "tab": "operate", "sub": "contacts", "contact_id": cid},
+            suggested_action=("Open the reply" if draft else f"Open {contact.get('name', 'this contact')}"),
+            action_payload=({"type": "navigate", "tab": "operate", "sub": "queue"} if draft else
+                            {"type": "navigate", "tab": "operate", "sub": "contacts", "contact_id": cid}),
             related_contact_id=cid,
         )
         if alert:
@@ -801,15 +891,23 @@ async def unanswered_lead_sweep(now: Optional[datetime] = None) -> Dict:
                 if isinstance(score, int) and score >= 70:
                     body += f" Their lead score is {score}."
 
+                # A reply Chief already drafted for the longest-waiting
+                # lead turns "nobody has replied" into "one tap sends it".
+                import proposal_life
+                draft = await asyncio.to_thread(
+                    proposal_life.waiting_for_contact, bid, worst.get("id"))
+                if draft:
+                    body += " Chief has a reply drafted — one tap in your Approval Queue sends it."
                 alert = await create_urgent_alert(
                     client, bid, title=title, body=body,
                     dedup_key=f"leads_waiting:{bid}",
                     dedup_hours=LEAD_WAIT_DEDUP_HOURS,
                     priority="high",
-                    suggested_action=f"Open {name}",
-                    action_payload={"type": "navigate", "tab": "operate",
-                                    "sub": "contacts",
-                                    "contact_id": worst.get("id")},
+                    suggested_action=("Open the reply" if draft else f"Open {name}"),
+                    action_payload=({"type": "navigate", "tab": "operate", "sub": "queue"} if draft else
+                                    {"type": "navigate", "tab": "operate",
+                                     "sub": "contacts",
+                                     "contact_id": worst.get("id")}),
                     related_contact_id=worst.get("id"),
                 )
                 if alert:
@@ -853,6 +951,44 @@ async def generate_morning_brief_for_all() -> Dict:
         return {"ran": len(ids), "results": results}
 
 
+async def setup_brief_local_morning_tick(now: Optional[datetime] = None) -> Dict:
+    """Hourly (:35). The setup brief on a launching business's own clock.
+
+    The morning tick is 13:05 UTC for everyone: 9am in New York, 6am in
+    Los Angeles, 3am in Honolulu. That compromise stands for the ordinary
+    brief. But a business in its first days that told us its timezone
+    gets its setup step in ITS morning, so this tick looks only at
+    launching businesses (created inside the window, or trialing) with a
+    timezone set, and asks for the setup brief of those whose local
+    morning it is. Businesses without a timezone are the morning tick's.
+
+    One platform read per hour when nobody is launching. The once-a-day
+    cap is the brief's own, so a business already briefed today (by the
+    morning tick or an earlier hour) costs one lookup and stops.
+    """
+    import setup_brief
+    if not setup_brief.enabled():
+        return {"skipped": "disabled"}
+    now = now or datetime.now(timezone.utc)
+    since = _z(now - timedelta(days=setup_brief.window_days() + 1))
+    async with httpx.AsyncClient() as client:
+        rows = await _sb(client, "GET",
+            f"/businesses?is_active=eq.true"
+            f"&or=(created_at.gte.{since},subscription_status.eq.trialing)"
+            f"&select=id,settings&limit=500") or []
+        due = [str(r["id"]) for r in rows
+               if r.get("id") and setup_brief.local_tz(r) is not None
+               and setup_brief.is_local_morning(r, now)]
+        results = []
+        for bid in due:
+            try:
+                results.append({"business_id": bid, **await _generate_morning_brief(
+                    client, bid, setup_only=True, now=now)})
+            except Exception as e:
+                logger.exception(f"setup brief failed for {bid}: {e}")
+        return {"candidates": len(rows), "due": len(due), "results": results}
+
+
 async def generate_midday_ping_for_all() -> Dict:
     async with httpx.AsyncClient() as client:
         ids = await _all_active_business_ids(client)
@@ -889,7 +1025,7 @@ async def morning_brief(req: NotifRequest,
                         user: AuthedUser = Depends(require_user)):
     _require_access(req.business_id, user)
     async with httpx.AsyncClient() as client:
-        return await _generate_morning_brief(client, req.business_id)
+        return await _generate_morning_brief(client, req.business_id, on_demand=True)
 
 
 @router.post("/agents/notifications/midday-ping")
