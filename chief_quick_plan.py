@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
+from datetime import date, datetime, timezone
 
 import chief_models
 import llm_call
@@ -54,6 +56,34 @@ def _safe_name(value):
                 or ACTION_TAGLIKE_RE.search(value))
 
 
+def _invoice_priority(row, today):
+    """Rank this loaded sample: past due, due today, unknown, then future.
+
+    Within urgency, prefer a larger known amount; age only breaks value ties.
+    Missing amounts remain usable for older sparse context, but invalid supplied
+    amounts never select a reminder. A valid due date wins over status/hints.
+    """
+    amount = row.get('total')
+    if amount is not None:
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
+            return None
+        try:
+            if not math.isfinite(amount):
+                return None
+        except OverflowError:
+            return None
+    value = amount if amount is not None else -1
+    try:
+        due = date.fromisoformat(row.get('due_date') or '')
+        days = (today - due).days
+        urgency = 3 if days > 0 else 2 if days == 0 else 0
+    except (ValueError, TypeError):
+        days = row.get('days_overdue')
+        days = days if isinstance(days, int) and not isinstance(days, bool) and days >= 0 else 0
+        urgency = 3 if days > 0 or row.get('status') == 'overdue' else 1
+    return urgency, value, days
+
+
 def candidates(ctx):
     """Only fresh loaded records select the topics; missing lists prove nothing."""
     out = []
@@ -61,15 +91,24 @@ def candidates(ctx):
         out.append({'id': key, 'step': text})
 
     invoices = ctx.get('open_invoices') or []
+    ranked = []
+    today = datetime.now(timezone.utc).date()
     for row in invoices:
         if not isinstance(row, dict) or row.get('status') not in ('sent', 'viewed', 'overdue'):
             continue
         name, number = row.get('client'), row.get('number')
-        if _safe_name(name) and _safe_name(number):
-            text = f'Draft {name} a reminder about {number}'
-            if text not in {r['step'] for r in out}:
-                add(f'invoice_{len(out)}', text)
-        if len(out) == 2:
+        priority = _invoice_priority(row, today)
+        if _safe_name(name) and _safe_name(number) and priority is not None:
+            ranked.append((priority, row))
+    seen_clients = set()
+    for _, row in sorted(ranked, key=lambda item: item[0], reverse=True):
+        name, number = row['client'], row['number']
+        client_key = ' '.join(name.casefold().split())
+        if client_key in seen_clients:
+            continue
+        seen_clients.add(client_key)
+        add(f'invoice_{len(out)}', f'Draft {name} a reminder about {number}')
+        if len(seen_clients) == 2:
             break
     if ctx.get('sms_messages') or ctx.get('email_replies'):
         add('messages', 'Review recent messages and draft a reply')
