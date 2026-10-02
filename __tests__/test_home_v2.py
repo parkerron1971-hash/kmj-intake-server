@@ -282,3 +282,39 @@ def test_what_was_not_approved_did_not_ship():
     for marker in ("sample quote", "verify one", 'id="proof"', "pv-", "Preview, not live",
                    "Hedera topic 0.0.", "draft signature", "Seat 01 is open", "pvSeats", "Mark changes on the page"):
         assert marker not in html, marker
+
+
+# ── 2026-10-01: the home page lost every campaign tag and quoted wrong prices ─
+
+def test_trade_switcher_keeps_the_campaign_tags():
+    """setTrade rewrote the address to ?trade=x before the attribution script
+    read it, so every ad and post visit landed untracked."""
+    html = (pathlib.Path(marketing_home_v2.__file__).parent / "marketing_home_v2.html").read_text(encoding="utf-8")
+    assert "history.replaceState(null,'','?trade='+t)" not in html
+    assert "q.set('trade',t)" in html and "new URLSearchParams(location.search)" in html
+
+
+def test_the_ask_answer_quotes_the_live_prices(monkeypatch):
+    page = marketing_home_v2.render_home_v2()
+    i = page.index("const PRICING=")
+    line = page[i:page.index("`;", i)]
+    dials = mp._tier_dials()
+    for plan in ("starter", "professional", "practice"):
+        assert f"${dials[plan]['price_num']}" in line
+    assert dials["professional"]["credits"] in line
+    assert "$199" not in line and "Elite" not in line and "$399" not in line
+    assert "{{" not in page                      # an unfilled ${{X}} is a JS syntax error
+
+
+def test_the_founding_line_uses_the_founder_price_or_says_nothing(monkeypatch):
+    import stripe_billing
+    monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: ["price_founder"])
+    monkeypatch.setattr(stripe_billing, "_founder_seat_limit", lambda: 50)
+    monkeypatch.setattr(mp, "_founder_seats_taken_sync", lambda: 12)
+    monkeypatch.setattr(pricing_config, "tier_price_cents", lambda: {"founder": 9900, "professional": 14900})
+    line = marketing_home_v2._founder_sentence()
+    assert "$99 a month" in line and "38 of 50 seats left" in line and "$149" not in line
+    monkeypatch.setattr(mp, "_founder_seats_taken_sync", lambda: 50)
+    assert marketing_home_v2._founder_sentence() == ""
+    monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
+    assert marketing_home_v2._founder_sentence() == ""

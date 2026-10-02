@@ -260,6 +260,71 @@ async def _log_finding(c: httpx.AsyncClient, headers: Dict[str, str],
         logger.warning(f"changelog write failed: {e}")
 
 
+# ─── Incident issues (the Engineering agent's on-call shift) ──────────
+# A critical finding that means the system is failing, not merely
+# misconfigured, is filed as a GitHub issue labelled `incident`, which
+# starts .github/workflows/oncall.yml: Claude reads it and posts a
+# diagnosis. Filed with the backend's personal GITHUB_TOKEN on purpose:
+# an issue opened by a workflow's own token cannot start a workflow.
+#
+# Missing service keys (svc:*) stay out. They are configuration, already
+# on System Health, and some are known and deliberate; paging on-call for
+# them after every deploy would teach everyone to ignore the label.
+
+INCIDENT_REPO = "parkerron1971-hash/kmj-intake-server"
+INCIDENT_LABEL = "incident"
+_INCIDENT_CODES = ("db:reach", "errors:server")
+
+
+def _incident_findings(findings: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    return [f for f in findings if f.get("code") in _INCIDENT_CODES]
+
+
+async def _file_incident(c: httpx.AsyncClient,
+                         findings: List[Dict[str, str]]) -> Optional[str]:
+    """Open one incident issue for this tick's fresh failures, or comment
+    on the watchdog incident that is already open. Only a NEW issue starts
+    an investigation (oncall.yml listens for `opened`), so a failure that
+    keeps recurring does not start one every hour. Fail-soft: returns
+    the issue URL, or None."""
+    token = (os.environ.get("GITHUB_TOKEN") or "").strip()
+    if not token or not findings:
+        return None
+    gh = {"Authorization": f"Bearer {token}",
+          "Accept": "application/vnd.github+json"}
+    base = f"https://api.github.com/repos/{INCIDENT_REPO}"
+    lines = "\n".join(f"- `{f['code']}`: {f['message']}" for f in findings)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    try:
+        r = await c.get(f"{base}/issues", headers=gh, params={
+            "state": "open", "labels": INCIDENT_LABEL, "per_page": "20"})
+        open_ones = r.json() if r.status_code < 400 else []
+        mine = [i for i in open_ones
+                if (i.get("title") or "").startswith("Watchdog:")]
+        if mine:
+            await c.post(f"{base}/issues/{mine[0]['number']}/comments",
+                         headers=gh,
+                         json={"body": f"Still failing at {stamp}.\n\n{lines}"})
+            return mine[0].get("html_url")
+        r = await c.post(f"{base}/issues", headers=gh, json={
+            "title": f"Watchdog: {findings[0]['message'][:90]}",
+            "labels": [INCIDENT_LABEL],
+            "body": (
+                f"The hourly platform watchdog found the system failing at "
+                f"{stamp}:\n\n{lines}\n\n"
+                "On-call is investigating and will post a diagnosis here. "
+                "Close this once it is resolved; the next failure opens a "
+                "new one."),
+        })
+        if r.status_code >= 400:
+            logger.warning(f"incident issue failed: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json().get("html_url")
+    except Exception as e:
+        logger.warning(f"incident issue failed: {e}")
+        return None
+
+
 async def watchdog_tick() -> Dict[str, Any]:
     """The autonomous hourly pass: sweep → operator log → owner push.
     Never raises (scheduler-safe)."""
@@ -289,6 +354,7 @@ async def watchdog_tick() -> Dict[str, Any]:
                 )
             # One push per tick, summarizing — not one per finding.
             owner = await _owner_user_id(c, headers)
+            await _file_incident(c, _incident_findings(fresh))
         if owner:
             try:
                 from push_notifications import send_to_user

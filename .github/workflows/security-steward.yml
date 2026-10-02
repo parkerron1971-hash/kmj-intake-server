@@ -1,0 +1,86 @@
+name: Security steward
+
+# Agent 8 of the agent operations plan: the weekly security look, plain
+# code (scripts/security_steward.py). Secrets in the code, database
+# tables without row level security or with anonymous write policies, a
+# service-role key in the live app's JavaScript, and backup/restore-drill
+# freshness. Findings open or update one `security` issue; a clean week
+# closes it; a check that cannot run is reported as "could not check",
+# never as clean.
+#
+# Dependency advisories belong to the dependency audit (security.yml,
+# from the 2026-09-30 audit), so they are not reported twice.
+#
+# It may report. It never rotates keys, changes access rules or touches
+# data. RLS_ALLOWLIST (repo variable, comma-separated) names any public
+# table that is deliberately without RLS.
+
+on:
+  schedule:
+    - cron: "0 11 * * 1"   # Mondays 11:00 UTC (7 AM Eastern)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: security-steward
+  cancel-in-progress: false
+
+jobs:
+  steward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Scan the code for secrets
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.18.4 \
+            detect --no-git --source /repo --redact \
+            --report-format json --report-path /repo/gitleaks.json --exit-code 0
+
+      - name: Check the database, the app bundle and the backups
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          RLS_ALLOWLIST: ${{ vars.RLS_ALLOWLIST }}
+          GITLEAKS_REPORT: gitleaks.json
+        run: python3 scripts/security_steward.py
+
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create security --color b60205 \
+            --description "The security steward found something" --force || true
+          n=$(python3 -c "import json; print(len(json.load(open('findings.json'))['findings']))")
+          report=$(python3 -c "import json; print(json.load(open('findings.json'))['report'])")
+          existing=$(gh issue list --label security --state open --json number --jq '.[0].number')
+          body="Security steward, $(date -u '+%Y-%m-%d'):
+
+          $report
+
+          [run]($RUN). Nothing was changed; every fix is a person's call."
+          if [ "$n" = "0" ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$body
+
+          Clean week; closing."
+              gh issue close "$existing"
+            fi
+            exit 0
+          fi
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file - <<< "$body"
+          else
+            gh issue create --label security --title "Security steward: $n thing(s) to look at" --body-file - <<< "$body"
+          fi

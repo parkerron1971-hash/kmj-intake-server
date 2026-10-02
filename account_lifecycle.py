@@ -98,12 +98,14 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "agentcard_wallets": "encrypted customer OAuth credentials and wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_purchases": "encrypted wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_saved_links": "owner-saved Lane merchant links encrypted under the server key; never portable, cascade on user/business deletion",
     "link_wallet_sessions": "encrypted Link OAuth credentials and pending authorization; never portable, cascade on user/business deletion",
     "chief_link_pilot_sessions": "encrypted private Link OAuth credentials and test journal; never portable, cascade on user/business deletion",
     "business_card_connections": "encrypted third-party OAuth credentials and card preferences; never portable, cascade on business deletion",
     "business_secrets": "encrypted browser credentials; never exported, cascade on business deletion",
+    "checkin_stations": "check-in station device tokens and PIN hashes; credentials, never portable — a restored church pairs its tablets again; cascade on business deletion",
     # The practitioner's other calendar. The feed link is a credential
     # (it reads their whole calendar), and the busy blocks are re-derived
     # from it on every sync; both cascade with the business.
@@ -133,6 +135,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "email_suppressions":      "recipient-keyed deliverability protection; deleting it re-mails bounces",
     "entity_groups":           "owner-keyed consolidation groups; die with the auth user",
     "mcp_oauth_codes":         "user-keyed OAuth codes; short-lived",
+    "member_login_codes":      "member portal sign-in codes (hashed, 10-minute, pruned daily); credentials, not records, cascade on business deletion",
     "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
     "site_events":             "anonymous marketing-site traffic; no business_id by design",
     # The tamper-evident ledger has its own door. audit_log is exported
@@ -150,12 +153,29 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # Owner-only account export includes private care and finance history.
+    # Erase children before their business, contact and invoice records.
+    "ministry_care_requests", "ministry_gift_history",
+    # Who was at each occasion; before module_entries and contacts.
+    "attendance", "attendance_headcounts",
+    # Families and children: notes, pickups and children before their
+    # household, and the household's adult links before contacts.
+    "child_checkins",
+    # Groups: who came to each meeting, the meetings, the roster, then
+    # the groups — all before contacts.
+    "group_live_sessions", "group_meeting_attendance", "group_meetings", "group_members", "groups",
+    "sermons", "sermon_series",   # sermons before the series they point at
+    # Live: chat, pauses and presence before their session; all before
+    # contacts and module_entries.
+    "live_chat", "live_mutes", "live_presence", "live_sessions",
+    "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
     "connected_agents",       # bot profiles; no live credentials in this table
     # Connection metadata travels with the business; credentials never do.
     # Remove devices first so workers lose access before jobs are erased.
     "connected_ai_devices", "connected_ai_pairings",
+    "creative_director_profiles",  # preserve owner preferences before deleting their source artwork
     "image_publications", "image_artworks",  # publication records reference originals
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
     "media_assets",
@@ -572,10 +592,15 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # documents live in S3. Stated here rather than discovered later.
 
 _IMPORT_SKIP = {
+    # Private archives retain original contact/form/invoice identifiers; the
+    # generic importer cannot safely remap them or recreate audit evidence.
+    # They remain in the owner archive and are explicitly reported as skipped.
+    "ministry_care_requests", "ministry_gift_history",
     "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication
     # claims or private storage paths tied to the original business.
+    "creative_director_profiles",  # source/logo IDs belong to the original private gallery; remember again after restore
     "image_publications", "image_artworks",
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
     "media_assets",  # media files and review proofs need an explicit restore
@@ -592,6 +617,19 @@ _IMPORT_SKIP = {
     # these would attach evidence to another business's records. Preserve the
     # full export, report the skipped restore, and keep fresh history coverage.
     "growth_events", "growth_records",
+    # Attendance cites original occasion and contact ids; same reason.
+    "attendance", "attendance_headcounts",
+    # Families link contacts and each other by id; same reason. The export
+    # keeps them (children's allergies included) for the owner.
+    "households", "household_adults", "children", "household_pickups", "child_care_notes",
+    "child_checkins",
+    # Groups link contacts and each other by id; same reason.
+    "groups", "group_members", "group_meetings", "group_meeting_attendance", "group_live_sessions",
+    # Sermons cite their series by id; same reason.
+    "sermon_series", "sermons",
+    # Live sessions, chat and presence cite contacts and occasions by id;
+    # same reason.
+    "live_sessions", "live_chat", "live_mutes", "live_presence",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The

@@ -358,14 +358,20 @@ def _stub_turn(monkeypatch, biz: Dict[str, Any], case=None):
                         "maybe_emit_proactive_suggestions", lambda *a, **k: None)
 
 
+# A real UUID: the live turn reads build jobs by user id and parses it as
+# one (chief_build_runtime.context), so "user-eval" crashed every --live
+# case before the model was called (found 2026-09-28).
+EVAL_USER_ID = "00000000-0000-4000-8000-0000000000ee"
+
+
 class _Session:
     class _User:
-        id = "user-eval"
+        id = EVAL_USER_ID
     user = _User()
     token = "eval-jwt"
 
 
-BIZ = {"id": "00000000-0000-4000-8000-000000000010", "name": "Eval Co", "type": "coach", "owner_id": "user-eval",
+BIZ = {"id": "00000000-0000-4000-8000-000000000010", "name": "Eval Co", "type": "coach", "owner_id": EVAL_USER_ID,
        "settings": {}}
 
 

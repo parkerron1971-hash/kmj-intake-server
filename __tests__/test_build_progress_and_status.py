@@ -21,6 +21,7 @@ import inspect
 import pathlib
 import sys
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,7 +110,12 @@ def test_the_turn_hands_the_chat_id_to_the_build():
 
 def test_starting_says_they_can_leave():
     assert "You can leave this chat" in runtime.QUEUED_LABEL
-    assert 'QUEUED_LABEL' in inspect.getsource(runtime.submit)
+    assert 'queued_label(order)' in inspect.getsource(runtime.submit)
+    flyer = SimpleNamespace(kind='flyer', facts={})
+    plan = SimpleNamespace(kind='plan', facts={'steps': [{'title': 'Add Ada'}, {'title': 'Call Ada'}, {'title': 'Print tags'}]})
+    assert runtime.queued_label(flyer) == runtime.QUEUED_LABEL
+    assert runtime.queued_label(plan).startswith('Working on these in the background: Add Ada, Call Ada and Print tags.')
+    assert 'You can leave this chat' in runtime.queued_label(plan)
 
 
 @pytest.mark.parametrize('status,headline,priority', [

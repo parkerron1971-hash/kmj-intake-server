@@ -322,13 +322,18 @@ def test_reconcile_skips_when_no_included_accounts(monkeypatch):
 
 def test_bucket_clause_handles_uncategorized():
     """5-bucket multi-select with the synthetic 'uncategorized' must build a
-    PostgREST predicate spanning NULL + named buckets."""
+    PostgREST predicate spanning NULL + named buckets. 'uncategorized' is
+    NULL or the 'other' catch-all: the same rule as every count of it, so
+    "66 need a category, tap to see just those" shows those 66."""
     from plaid_router import _bucket_clause
 
     assert _bucket_clause(["operating", "tax"]) == "business_category=in.(operating,tax)"
-    assert _bucket_clause(["uncategorized"]) == "business_category=is.null"
+    assert _bucket_clause(["uncategorized"]) == \
+        "or=(business_category.is.null,business_category.in.(other))"
     assert _bucket_clause(["uncategorized", "tax"]) == \
-        "or=(business_category.is.null,business_category.in.(tax))"
+        "or=(business_category.is.null,business_category.in.(tax,other))"
+    assert _bucket_clause(["uncategorized", "other"]) == \
+        "or=(business_category.is.null,business_category.in.(other))"
     # Unknown bucket names are dropped.
     assert _bucket_clause(["bogus"]) is None
 
