@@ -53,6 +53,11 @@ def _verse_html(text: str, tr: str) -> str:
     return t
 
 
+def where_label(code: str, ch: int) -> str:
+    """'Psalm 23', 'John 3' — one chapter's name (the book is Psalms)."""
+    return f"{'Psalm' if code == 'PSA' else bt.NAME[code]} {ch}"
+
+
 def _marked(v: int, rng: Optional[Tuple[int, int]]) -> bool:
     return bool(rng) and rng[0] <= v <= rng[1]
 
@@ -106,7 +111,7 @@ def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool 
     if where:
         code, ch = where
         cont = (f'<a class="mb-next bb-cont" href="/my/bible/{bt.slug(code)}/{ch}"><span class="mb-list-text">'
-                f'<span class="mp-sect" style="margin:0">Keep reading</span><strong>{_e(bt.NAME[code])} {ch}</strong></span>'
+                f'<span class="mp-sect" style="margin:0">Keep reading</span><strong>{_e(where_label(code, ch))}</strong></span>'
                 f'{ui.icon("chevron", 18)}</a>')
     err = ('<p class="mp-err" role="alert">We couldn\'t find that passage. Try something like John 3:16 or Psalm 23.</p>'
            if missed else "")
@@ -149,7 +154,7 @@ def render_chapter(biz, site, me, code: str, ch: int, tr: str, rng=None) -> str:
             return '<span></span>'
         c, n = to
         return (f'<a class="bb-step {cls}" href="/my/bible/{bt.slug(c)}/{n}">'
-                f'{ui.icon("back", 16) if cls == "bb-prev" else ""}<span>{_e(label)}<strong>{_e(bt.NAME[c])} {n}</strong></span>'
+                f'{ui.icon("back", 16) if cls == "bb-prev" else ""}<span>{_e(label)}<strong>{_e(where_label(c, n))}</strong></span>'
                 f'{ui.icon("chevron", 16) if cls == "bb-next" else ""}</a>')
     here = f"/my/bible/{bt.slug(code)}/{ch}"
     return _shell(biz, site, f"{name} {ch}", f"""<a class="mb-back" href="/my/bible/{bt.slug(code)}">{ui.icon('back', 16)}{_e(bt.NAME[code])}</a>

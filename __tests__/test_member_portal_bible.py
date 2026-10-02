@@ -72,6 +72,7 @@ def test_a_chapter_marks_its_verses_and_steps_across_books():
     assert page.count('<mark class="bb-hl">') == 2 and '<sup class="bb-n" id="v16">16</sup>' in page
     assert 'href="/my/bible/john/2"' in page and 'href="/my/bible/john/4"' in page
     assert "kjv|john/3" in cookie_of(r)
+    assert "<strong>Psalm 2</strong>" in go("/my/bible/psalms/1").body.decode()      # a chapter, not "Psalms 2"
     edge = go("/my/bible/malachi/4").body.decode()
     assert 'href="/my/bible/malachi/3"' in edge and 'href="/my/bible/matthew/1"' in edge
     assert go("/my/bible/john/3", "v=99").body.decode().count('<mark class="bb-hl">') == 0
