@@ -2051,6 +2051,12 @@ def _blend_memories(memories: List[Dict], keep: int = 50) -> List[Dict]:
 # evidence both carry them.
 _INVOICE_SAMPLE_LIMIT = 40
 
+# The row limit of each list _gather_context reads. A read that succeeded
+# and came back under its limit holds every matching row, so the prompt
+# and the answer check call that list complete (see complete_lists).
+_LIST_LIMITS = {"queue": 10, "sessions": 10, "projects": 50,
+                "open_invoices": _INVOICE_SAMPLE_LIMIT, "products": 50, "offerings": 60}
+
 
 def _invoice_today():
     return datetime.now(timezone.utc).date()
@@ -2141,18 +2147,23 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             # it builds the known-sender allowlist in Python and is
             # deliberately NOT copied into contacts_lookup, so it never
             # reaches the prompt. Gating costs one column, not a PII dump.
+            # The allowlist rides in ctx as email_known_senders (see
+            # mailbox_policy.split_for_prompt), which no prompt or review
+            # evidence renders.
             f"/contacts?business_id=eq.{biz_id}"
             f"&select=id,name,email,status,health_score,lead_score,role,last_interaction,created_at&limit=500"),
+        # ai_reasoning rides along only so the onboarding welcome note can
+        # be recognised and dropped (onboarding_welcome, after the gather).
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
-            f"&select=id,agent,action_type,subject,priority,contact_id,created_at"
-            f"&order=priority.asc,created_at.desc&limit=10"),
+            f"&select=id,agent,action_type,subject,priority,contact_id,created_at,ai_reasoning"
+            f"&order=priority.asc,created_at.desc&limit={_LIST_LIMITS['queue']}"),
         _sb(client, "GET",
             f"/events?business_id=eq.{biz_id}&order=created_at.desc&limit=20"
             f"&select=event_type,data,created_at,contacts(name)"),
         _sb(client, "GET",
             f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit=10"
+            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit={_LIST_LIMITS['sessions']}"
             f"&select=id,title,scheduled_for,contact_id,contacts(name)"),
         _sb(client, "GET",
             f"/insights?business_id=eq.{biz_id}&status=eq.unread"
@@ -2178,7 +2189,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/agent_queue?business_id=eq.{biz_id}"
             f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat().replace('+00:00', 'Z')}"
             f"&order=created_at.desc&limit=30"
-            f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at"),
+            f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at,ai_reasoning"),
         _sb(client, "GET",
             f"/business_sites?business_id=eq.{biz_id}"
             f"&order=updated_at.desc&limit=1"
@@ -2197,7 +2208,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # having to repeat themselves.
         _sb(client, "GET",
             f"/products?business_id=eq.{biz_id}&status=eq.active"
-            f"&order=type.asc,sort_order.asc,name.asc&limit=50"
+            f"&order=type.asc,sort_order.asc,name.asc&limit={_LIST_LIMITS['products']}"
             f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
         # Recent email replies — full body content so the Chief can
         # quote a contact's actual words back when drafting responses.
@@ -2242,7 +2253,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/module_entries?business_id=eq.{biz_id}"
             f"&custom_modules.slug=eq.projects"
             f"&select=id,data,created_at,custom_modules!inner(slug)"
-            f"&order=created_at.desc&limit=50"),
+            f"&order=created_at.desc&limit={_LIST_LIMITS['projects']}"),
         # Open missions — Chief must never forget a plan in flight, and a
         # mission waiting on the practitioner should be raised, not
         # discovered. Bounded and tiny.
@@ -2260,7 +2271,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/invoices?business_id=eq.{biz_id}"
             f"&status=in.(draft,sent,viewed,overdue)"
             f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
-            f"&order=due_date.asc.nullslast&limit=40"),
+            f"&order=due_date.asc.nullslast&limit={_LIST_LIMITS['open_invoices']}"),
         # Open assignments (2026-09-04) — the outcomes the standing
         # agent is working between conversations. Chief must know
         # what it is already on, so it never takes the same one twice
@@ -2282,7 +2293,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # saw the offerings table, withheld the answer as "no evidence".
         _sb(client, "GET",
             f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&select=name,current_price,category&order=name.asc&limit=60"),
+            f"&select=name,current_price,category&order=name.asc&limit={_LIST_LIMITS['offerings']}"),
     ]
     context_unavailable = []
 
@@ -2388,6 +2399,17 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
                 task.cancel()
         await asyncio.gather(*primary, *dependent, *early, return_exceptions=True)
     biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = primary_values
+    # The onboarding welcome note sat in the draft queue like work: a new
+    # practitioner's first greeting said "1 waiting for your review" and
+    # pointed them at a system note. It is not a draft anyone owes a
+    # decision on, so it is not counted or shown here (onboarding_welcome).
+    import onboarding_welcome
+    # Completeness is judged on the rows the read returned, before the
+    # welcome note is dropped: a full page (limit rows, one of them the
+    # welcome note) is still a page, not every draft.
+    queue_read = queue
+    queue = onboarding_welcome.without_welcome(queue)
+    recent_queue = onboarding_welcome.without_welcome(recent_queue)
     if not biz_rows:
         return {}
     biz = biz_rows[0]
@@ -2467,13 +2489,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "queue": queue or [],
         "events": events or [],
         "sessions": sessions or [],
-        # The calendar read succeeded and came back under its limit of 10:
-        # every scheduled session in the window is in the list, so an empty
-        # list means nothing is booked. Without this the prompt said "none
-        # in the loaded sample; check data availability" either way, and
-        # "When is my next appointment?" spent two lookups (17.9 s) before
-        # saying nothing was booked (2026-09-24).
-        "sessions_complete": sessions is not None and len(sessions) < 10,
+        # <list>_complete: the read succeeded (None is a failed read) and
+        # came back under its limit, so the list is every matching row and
+        # an empty one means none yet. The calendar came first: the prompt
+        # said "none in the loaded sample; check data availability" either
+        # way, and "When is my next appointment?" spent two lookups (17.9 s)
+        # before saying nothing was booked (2026-09-24). A business that
+        # signed up today is mostly empty lists, and "You have no open
+        # invoices yet" was just as hard to say (2026-09-26).
+        **{f"{name}_complete": rows is not None and len(rows) < _LIST_LIMITS[name]
+           for name, rows in (("queue", queue_read), ("sessions", sessions),
+                              ("projects", project_rows), ("open_invoices", open_invoices),
+                              ("products", products), ("offerings", offering_rows))},
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
@@ -2562,6 +2589,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # Totals and ages computed once, here, from the rows: the reply and the
     # answer check read the same figures (see _invoice_summary_lines).
     _ctx["invoice_summary"] = _invoice_summary_lines(_ctx["open_invoices"])
+    # Named where Chief and the answer check both read data quality.
+    _ctx["context_quality"]["complete_lists"] = complete_lists(_ctx)
     return _ctx
 
 
@@ -3381,6 +3410,48 @@ SESSIONS_HEADING = "UPCOMING SESSIONS (next 7 days)"
 AT_RISK_HEADING = "at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed)"
 CONTEXT_HEADINGS = {"sessions": SESSIONS_HEADING, "at_risk": AT_RISK_HEADING}
 
+# What an empty list says when its read came back complete, in the prompt
+# and in the answer check's record of it: the same words, so a reply that
+# repeats the prompt quotes its evidence. A read that failed never says
+# these; it says UNREAD_LIST.
+EMPTY_COMPLETE = {
+    "queue": "nothing waiting for review",
+    "sessions": "nothing booked in this window: this list is the whole calendar for it",
+    "projects": "no projects yet: this list is complete",
+    "open_invoices": "no open invoices: this list is complete",
+    "invoice_summary": "no open invoices: this list is complete",
+    "products": "no products or services yet: this catalog is complete",
+    "offerings": "no offerings yet: this list is complete",
+}
+UNREAD_LIST = "none in the loaded sample; check data availability"
+
+
+def complete_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists that hold every matching row (<list>_complete,
+    set in _gather_context). The invoice totals are computed from every
+    open invoice, so they are complete when the invoices are."""
+    names = [name for name in _LIST_LIMITS if (ctx or {}).get(f"{name}_complete")]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def unread_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists known to have failed to load: marked not complete
+    and still empty (an empty read is under every limit, so only a failed
+    one lands here). A context without the marks says nothing either way."""
+    names = [name for name in _LIST_LIMITS
+             if (ctx or {}).get(f"{name}_complete") is False and not (ctx or {}).get(name)]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def _empty_list_line(ctx: Dict[str, Any], name: str) -> str:
+    """The line under an empty list: plainly none when it was read in
+    full, and never an absence when it was not."""
+    return f"  ({EMPTY_COMPLETE[name] if ctx.get(f'{name}_complete') else UNREAD_LIST})"
+
 
 def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """context_quality for the CACHED state segment: the retrieval DATE,
@@ -3822,12 +3893,28 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         image_lines.append(
             f"  - \"{_neutralize_untrusted(job.get('prompt') or '')[:90]}\" — {job.get('status') or 'queued'}{started}")
 
+    # A list read in full says so (complete_lists); a sample says it is one.
+    # Projects and invoices show their first 25, so they are called
+    # complete only when every row is on the page.
+    n_queue = len(ctx['queue'])
+    queue_heading = (
+        f"QUEUE ({n_queue} draft{'' if n_queue == 1 else 's'} waiting for review; this list is complete)"
+        if ctx.get('queue_complete') else f"QUEUE ({n_queue} loaded draft rows; sample, not a total)")
+    projects_heading = (
+        "PROJECTS (every project on file; this list is complete)"
+        if ctx.get('projects_complete') and len(ctx.get('projects') or []) <= 25
+        else "PROJECTS (loaded sample; use list_projects for additional records)")
+    invoices_heading = (
+        "OPEN INVOICES (every open invoice, itemized; this list is complete; show_view displays them)"
+        if ctx.get('open_invoices_complete') and len(ctx.get('open_invoices') or []) <= 25
+        else "OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them)")
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
 
 DATA QUALITY: {json.dumps(_quality_for_prompt(ctx))}
-  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete. Never infer a total or absence from a capped list.
+  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete (complete_lists names them; an empty complete list means none yet, so say so plainly). Never infer a total or absence from a capped list.
 CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unknown'} total
   loaded: {ctx.get('contacts_loaded', 'unknown')}; complete: {ctx.get('contacts_complete', False)}
   by_status (loaded sample only): {json.dumps(ctx['contacts_by_status'])}
@@ -3836,14 +3923,14 @@ CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unkn
 {chr(10).join(at_risk_lines) if at_risk_lines else '  (none in this context sample)'}
   For complete Retention counts, names, repeat-payment rates and follow-up decisions, call growth_report section=client_health or section=retention. Do not treat this context sample as a complete report.
 
-QUEUE ({len(ctx['queue'])} loaded draft rows; sample, not a total):
-{chr(10).join(queue_lines) if queue_lines else '  (none in the loaded sample; check data availability)'}
+{queue_heading}:
+{chr(10).join(queue_lines) if queue_lines else _empty_list_line(ctx, 'queue')}
 
 {SESSIONS_HEADING}:
-{chr(10).join(session_lines) if session_lines else ('  (nothing booked in this window: this list is the whole calendar for it)' if ctx.get('sessions_complete') else '  (none in the loaded sample; check data availability)')}
+{chr(10).join(session_lines) if session_lines else _empty_list_line(ctx, 'sessions')}
 
-PROJECTS (loaded sample; use list_projects for additional records):
-{chr(10).join(project_lines) if project_lines else '  (none in the loaded sample; check data availability)'}
+{projects_heading}:
+{chr(10).join(project_lines) if project_lines else _empty_list_line(ctx, 'projects')}
 
 ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner; never re-propose one that already exists):
 {chr(10).join(mission_lines) if mission_lines else '  (none)'}
@@ -3857,10 +3944,10 @@ STANDING PERMISSIONS:
 {chr(10).join(standing_lines) if standing_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
 
 OPEN INVOICES — TOTALS (computed from the rows below; quote these for any count, total, age or who-owes-most answer, never add them up yourself):
-{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or '  (no open invoices)'}
+{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or _empty_list_line(ctx, 'open_invoices')}
 
-OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them):
-{chr(10).join(invoice_lines) if invoice_lines else '  (none in the loaded sample; check data availability)'}
+{invoices_heading}:
+{chr(10).join(invoice_lines) if invoice_lines else _empty_list_line(ctx, 'open_invoices')}
 
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
@@ -3898,7 +3985,7 @@ PRACTITIONER SITE:
 {_format_site_info(ctx)}
 
 PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull description + unit_price from the catalog rather than asking again):
-{chr(10).join(product_lines) if product_lines else '  (no products yet)'}
+{chr(10).join(product_lines) if product_lines else _empty_list_line(ctx, 'products')}
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
@@ -13444,6 +13531,50 @@ def _business_age_days(biz: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+def _first_week_day(biz: Dict[str, Any], arc: Optional[Dict[str, Any]]) -> int:
+    """Which day of their first week this is, as a whole number: the day
+    it started is day 1. 0 when it cannot be known.
+
+    The day-one arc is the anchor (first_run_arc.day_of): it starts when
+    the trial does, and a signup in March followed by a subscription in
+    April is one business with its first week in April. The business's
+    own age is the fallback for accounts that predate the arc or when the
+    arc read failed. Either way a whole day: the greeting used to say
+    "FIRST WEEK, DAY 3.4166…" because _business_age_days is a float.
+    """
+    try:
+        import first_run_arc as _fra
+        day = _fra.day_of(arc)
+    except Exception:  # pragma: no cover — the fallback still answers
+        day = 0
+    if day:
+        return day
+    age = _business_age_days(biz)
+    return int(age) + 1 if age is not None else 0
+
+
+def _intro_went_out(reply: str, grounding: Optional[Dict[str, Any]]) -> bool:
+    """Did the launch greeting actually reach the practitioner?
+
+    The introduction is said once, so it may only be spent on a reply
+    that went out. A turn that failed, came back empty, or had its words
+    withheld by the answer check ("I couldn't verify that") has not
+    introduced anyone — the next greeting must still be the launch."""
+    if not (reply or "").strip():
+        return False
+    return (grounding or {}).get("status") != "withheld"
+
+
+def _note_intro_delivered(business_id: Any) -> None:
+    """Stamp the day-one arc's introduction, off the event loop and off
+    the reply's critical path. Never raises."""
+    try:
+        import first_run_arc as _fra
+        asyncio.create_task(asyncio.to_thread(_fra.mark_intro_delivered, business_id))
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"first-run intro stamp not scheduled (non-fatal): {e}")
+
+
 def _setup_snapshot_wanted(biz: Dict[str, Any],
                            track: Optional[Dict[str, Any]],
                            greeting_on_empty: bool = False) -> bool:
@@ -14300,6 +14431,17 @@ async def chief_chat(
                     return None
                 return await asyncio.to_thread(_fetch_setup_snapshot, biz)
 
+            # The day-one arc (first_run_arc): whether the introduction
+            # has been said, and which day of their first week this is.
+            # Only a greeting in the setup phase reads it, and it rides
+            # the gather so it costs the turn nothing it was not already
+            # waiting for. None = no arc, or the read failed.
+            async def _arc_probe():
+                if not (is_greeting and want_setup):
+                    return None
+                import first_run_arc as _fra
+                return await asyncio.to_thread(_fra.state, biz.get("id"))
+
             # What is already on file from their records, so the Business
             # Coach skips what the practitioner entered elsewhere. Coach
             # mode only — every other turn would pay for a dozen reads.
@@ -14316,6 +14458,7 @@ async def chief_chat(
                 _enrich("vertical learned context", _learned(), ""),
                 _enrich("setup snapshot", _setup_probe(), None),
                 _enrich("business knowledge", _knowledge_probe(), None),
+                _enrich("first-run arc", _arc_probe(), None),
             )
             _ctx_vals = dict(zip(_names, _results))
             for source_name, source_value in _ctx_vals.items():
@@ -14333,6 +14476,7 @@ async def chief_chat(
             setup_snapshot = _results[len(_names) + 1]
             if _results[len(_names) + 2] is not None:
                 ctx["business_knowledge"] = _results[len(_names) + 2]
+            first_run_arc_row = _results[len(_names) + 3]
             setup_block = _format_setup_block(setup_snapshot)
             chief_truth.record('context:setup', setup_block, kind='context')
             # First-run = the account is days old and nearly nothing is
@@ -14347,24 +14491,25 @@ async def chief_chat(
             # that it was (intro_delivered_at); before it existed, a
             # 20-day-old business with nothing connected heard "this
             # business is brand new" on every greeting.
+            # It is stamped only once the reply has actually gone out —
+            # after the answer check, at the end of the turn. Stamped
+            # here, a greeting that failed or was withheld spent the one
+            # introduction and the next greeting skipped it.
+            intro_owed = False
             if first_run and is_greeting:
-                try:
-                    import first_run_arc as _fra
-                    if _fra.intro_delivered(biz.get("id")):
-                        first_run = False
-                    else:
-                        asyncio.create_task(asyncio.to_thread(
-                            _fra.mark_intro_delivered, biz.get("id")))
-                except Exception as e:  # pragma: no cover
-                    logger.warning(f"first-run arc check failed (non-fatal): {e}")
+                if (first_run_arc_row or {}).get("intro_delivered_at"):
+                    first_run = False
+                else:
+                    intro_owed = True
             # Days two to seven: Chief's greeting knows the day. Not the
             # launch script, not the ordinary day-read — one line on what
             # is in so far, then the one next move with its why.
             week_day = 0
-            if (is_greeting and not first_run and setup_snapshot
-                    and _age_days is not None and 1 <= _age_days <= 6
-                    and setup_snapshot["done"] < setup_snapshot["total"]):
-                week_day = _age_days + 1
+            if is_greeting and not first_run and setup_snapshot \
+                    and setup_snapshot["done"] < setup_snapshot["total"]:
+                _day = _first_week_day(biz, first_run_arc_row)
+                if 2 <= _day <= 7:
+                    week_day = _day
 
             # Pure, no I/O — computed off what the gather returned.
             priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
@@ -15011,6 +15156,14 @@ async def chief_chat(
             # app talking to itself and are not a conversation.
             if not is_greeting:
                 await _archive_turn(client, biz, req.message, response_text, taken)
+
+            # The launch greeting went out, checked: now it has been said.
+            # Every earlier return (no model reply, an error) leaves the
+            # introduction owed. The stream path runs this same turn, and
+            # its result is kept for the client's re-POST if the stream
+            # drops, so this is the point the reply is delivered on both.
+            if intro_owed and _intro_went_out(response_text, grounding):
+                _note_intro_delivered(biz.get("id"))
 
             result = {
                 "response": response_text,
