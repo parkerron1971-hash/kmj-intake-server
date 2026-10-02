@@ -4,7 +4,7 @@ date: 2026-10-02
 agent: Claude Code (Claude Opus 5.5)
 asked: 'finish everything. nothing is being sent out for text so make sure everything is good.'
 status: shipped
-prs: [kmj-intake-server#1190]
+prs: [kmj-intake-server#1191]
 migrations: []
 left_undone: []
 decisions: ['same title within 24h is not re-logged; titles carry counts, so a changed number logs again']
