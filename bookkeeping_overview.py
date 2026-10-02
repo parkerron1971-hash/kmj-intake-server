@@ -886,7 +886,11 @@ def _suggest(t: Dict[str, Any], pair_with: Optional[Dict[str, Any]],
     return None
 
 
-def build_review(biz: str, limit: int = 200) -> Dict[str, Any]:
+def build_review(biz: str, limit: int = 200, month: Optional[str] = None) -> Dict[str, Any]:
+    """Every row still waiting on an answer. `month` (YYYY-MM) narrows the
+    queue to one month, for Close the month's "Review N". Pairs are still
+    found across the whole range, so a move that straddles the month's
+    edge keeps its partner."""
     accounts = _get(f"/plaid_accounts?business_id=eq.{biz}&deleted_at=is.null"
                     f"&select=account_id,name,official_name,mask,type,included_in_bookkeeping,is_trust_account")
     acct_by_id = {a["account_id"]: a for a in accounts if a.get("account_id")}
@@ -909,6 +913,8 @@ def build_review(biz: str, limit: int = 200) -> Dict[str, Any]:
         partner[p_["in"]["transaction_id"]] = p_["out"]
     dup_ids = {tid for g in find_duplicates(txs, acct_by_id) for tid in g["transaction_ids"][1:]}
     queue = [t for t in txs if needs_category(t)]
+    if month:
+        queue = [t for t in queue if str(t.get("date") or "")[:7] == month]
     rows = []
     for t in queue[:limit]:
         tid = t.get("transaction_id")
@@ -938,15 +944,19 @@ def build_review(biz: str, limit: int = 200) -> Dict[str, Any]:
 
 
 @router.get("/review")
-def review(biz: str, limit: int = 200, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+def review(biz: str, limit: int = 200, month: Optional[str] = None,
+           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     from plaid_router import _require_reader
     _require_reader(biz, user)
+    if month is not None and not _MONTH_KEY.fullmatch(month):
+        raise HTTPException(400, "month must look like 2026-08")
     try:
-        return build_review(biz, max(1, min(int(limit), 500)))
+        return build_review(biz, max(1, min(int(limit), 500)), month)
     except SourceFailed as e:
         raise HTTPException(503, f"Couldn't read your bank rows just now ({e}).")
 
 
+_MONTH_KEY = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
 MAX_CONFIRM_PAIRS = 100
 _TX_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 

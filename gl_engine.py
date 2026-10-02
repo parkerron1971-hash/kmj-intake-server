@@ -1124,8 +1124,11 @@ def close_period(business_id: str, period_id: str, *, closed_by: str,
              "closed_via": closed_via, "updated_at": _now_iso()}
     if closing_je_id:
         patch["closing_journal_entry_id"] = closing_je_id
-    sb_clients.sb_patch_as_service(
-        f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}", patch)
+    # sb_clients returns None on a rejected write. Saying "closed" then
+    # would leave an open month the practitioner believes is locked.
+    if sb_clients.sb_patch_as_service(
+            f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}", patch) is None:
+        raise HTTPException(502, "The close didn't save. Try again.")
     return {"ok": True, "closed": True, "closing_journal_entry_id": closing_je_id}
 
 
@@ -1150,10 +1153,12 @@ def reopen_period(business_id: str, period_id: str, *, reopened_by: str,
             coa = ensure_chart_of_accounts(business_id, _biz_type(business_id))
             _reverse_je(business_id, je[0], coa)
 
-    sb_clients.sb_patch_as_service(
-        f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}",
-        {"status": "reopened", "reopened_at": _now_iso(), "reopened_by": reopened_by,
-         "reopened_reason": reason, "closing_journal_entry_id": None, "updated_at": _now_iso()})
+    if sb_clients.sb_patch_as_service(
+            f"/accounting_periods?id=eq.{period_id}&business_id=eq.{business_id}",
+            {"status": "reopened", "reopened_at": _now_iso(), "reopened_by": reopened_by,
+             "reopened_reason": reason, "closing_journal_entry_id": None,
+             "updated_at": _now_iso()}) is None:
+        raise HTTPException(502, "The reopen didn't save. Try again.")
     return {"ok": True, "reopened": True}
 
 

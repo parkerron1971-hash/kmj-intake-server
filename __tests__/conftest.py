@@ -59,3 +59,15 @@ def _fresh_money_kind_probe():
         _bm._probe.update(at=_time.monotonic(), ok=False)
     except Exception:  # pragma: no cover
         pass
+
+
+# bookkeeping_close caches "does accounting_periods.close_checklist exist?"
+# the same way; same pin, same reason.
+@pytest.fixture(autouse=True)
+def _fresh_close_checklist_probe():
+    try:
+        import time as _time
+        import bookkeeping_close as _bc
+        _bc._probe.update(at=_time.monotonic(), ok=False)
+    except Exception:  # pragma: no cover
+        pass
