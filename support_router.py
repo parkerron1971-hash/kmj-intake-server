@@ -315,6 +315,28 @@ async def _reconcile(c: httpx.AsyncClient, triage: Dict[str, Dict[str, Any]],
 
 # --- the queue itself -------------------------------------------------
 
+def _current_draft(ticket: Dict[str, Any], triage: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not triage.get("draft_reply"):
+        return None
+    answered = bool(triage.get("first_response_at") or ticket.get("replied_at"))
+    awaiting = ticket.get("last_message_author") == "practitioner"
+    if answered and not awaiting:
+        return None
+    want = ticket.get("last_message_at") if awaiting else ticket.get("created_at")
+    have = triage.get("draft_for_at")
+    if want and have:
+        try:
+            if datetime.fromisoformat(str(have).replace("Z", "+00:00")) <                     datetime.fromisoformat(str(want).replace("Z", "+00:00")):
+                return None
+        except ValueError:
+            return None
+    return {"reply": triage.get("draft_reply"),
+            "summary": triage.get("draft_summary"),
+            "category": triage.get("draft_category"),
+            "severity": triage.get("draft_severity"),
+            "drafted_at": triage.get("drafted_at")}
+
+
 def _item(ticket: Dict[str, Any], triage: Dict[str, Any], repeats: int,
           task: Optional[Dict[str, Any]], now: datetime,
           thread: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -351,6 +373,11 @@ def _item(ticket: Dict[str, Any], triage: Dict[str, Any], repeats: int,
         "repeats": repeats,
         "triage_note": triage.get("note"),
         "triaged_by": triage.get("triaged_by"),
+        # The Support desk agent's suggestion (support_drafts.py), only while
+        # it still answers the latest thing they said. Operator-only: it
+        # reaches the practitioner solely through the reply endpoint, when a
+        # person sends it.
+        "draft": _current_draft(ticket, triage),
         "rank": score,
         "why": why,
         "dev_task": ({

@@ -1302,6 +1302,11 @@ async def startup():
                               id="hermes_tick")
             # Money auditor (agent ops Wave 2) — the daily read of the billing
             # rails, same sense pattern as Hermes. 10:00 UTC = 6 AM Eastern.
+            # Support desk (agent ops Wave 3): draft replies for tickets
+            # waiting on an answer. Drafts only; a person sends.
+            import support_drafts as _support_drafts
+            scheduler.add_job(g("support_drafts", _support_drafts.drafts_tick), "interval",
+                              minutes=5, id="support_drafts", max_instances=1)
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
