@@ -662,9 +662,10 @@ async def triage_ticket(ticket_id: str, body: TriageBody,
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         ticket = await _get_ticket(c, ticket_id)
         row = await _upsert_triage(c, ticket, patch)
-        # A ticket closed as won't-fix or duplicate is not open work; the
+        # A ticket closed as won't-fix, duplicate or answered (Support
+        # Tickets' "Close without reply") is not open work; the
         # practitioner's own status should stop saying it is.
-        if patch.get("fix_state") in ("wont_fix", "duplicate"):
+        if patch.get("fix_state") in ("wont_fix", "duplicate", "answered"):
             await _sb_patch(c, "support_tickets", {"id": f"eq.{ticket_id}"},
                             {"status": "resolved"})
             # Deliberately NO system message here. "We are not going to fix
@@ -673,6 +674,11 @@ async def triage_ticket(ticket_id: str, body: TriageBody,
             # that gets said, and the confirm lane keeps nagging until it is.
         elif patch.get("fix_state") == "triaged":
             await _note_transition(c, ticket, "looking")
+        elif patch.get("fix_state") == "new" and ticket.get("status") == "resolved":
+            # Reopened from the Closed list: open again on their side too,
+            # with no message (reopening is the operator's bookkeeping).
+            await _sb_patch(c, "support_tickets", {"id": f"eq.{ticket_id}"},
+                            {"status": "open"})
     return {"ok": True, "triage": row}
 
 

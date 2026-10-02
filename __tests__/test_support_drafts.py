@@ -211,3 +211,41 @@ def test_queue_hides_a_stale_draft():
          "last_message_author": "practitioner", "last_message_at": "2026-10-02T09:00:00+00:00"}
     tr = {"draft_reply": "Hi", "draft_for_at": "2026-10-01T10:00:00+00:00"}
     assert sr._current_draft(t, tr) is None
+
+
+# --- close without reply / reopen (Support Tickets panel) ------------
+
+def _triage_world(monkeypatch, status):
+    patched = []
+    ticket = {"id": "t1", "status": status, "subject": "s", "message": "m",
+              "created_at": "2026-10-01T10:00:00+00:00"}
+
+    async def get_ticket(c, tid):
+        return dict(ticket)
+
+    async def upsert(c, t, patch):
+        return patch
+
+    async def sb_patch(c, table, params, body):
+        patched.append((table, body))
+
+    monkeypatch.setattr(sr, "_get_ticket", get_ticket)
+    monkeypatch.setattr(sr, "_upsert_triage", upsert)
+    monkeypatch.setattr(sr, "_sb_patch", sb_patch)
+    return patched
+
+
+class _Owner:
+    email = "owner@example.com"
+
+
+def test_close_without_reply_resolves_it_on_their_side_too(monkeypatch):
+    patched = _triage_world(monkeypatch, "in_progress")
+    asyncio.run(sr.triage_ticket("t1", sr.TriageBody(fix_state="answered"), _Owner()))
+    assert ("support_tickets", {"status": "resolved"}) in patched
+
+
+def test_reopen_opens_it_on_their_side_without_a_message(monkeypatch):
+    patched = _triage_world(monkeypatch, "resolved")
+    asyncio.run(sr.triage_ticket("t1", sr.TriageBody(fix_state="new"), _Owner()))
+    assert patched == [("support_tickets", {"status": "open"})]
