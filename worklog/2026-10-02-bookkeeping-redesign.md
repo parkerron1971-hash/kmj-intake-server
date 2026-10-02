@@ -2,7 +2,7 @@
 title: Bookkeeping redesign (Overview, review queue, money_kind) and the ledger that stopped posting
 date: 2026-10-02
 agent: Claude Code (Claude Opus 5.5)
-asked: "look at the bookkeeping tab ... redesign of layout ui design ... top tier and easy navigation" / "Yes start building" / "Go ahead"
+asked: '"look at the bookkeeping tab ... redesign of layout ui design ... top tier and easy navigation" / "Yes start building" / "Go ahead"'
 status: in progress
 prs: [kmj-intake-server#1182, kmj-intake-server#1183, kmj-intake-server#1184, kmj-intake-server#1190, solutionist-studio#1088, solutionist-studio#1089, solutionist-studio (review queue PR)]
 migrations: [supabase/APPLY-2026-10-02-bank-money-kind.sql (pending, Kevin applies)]
