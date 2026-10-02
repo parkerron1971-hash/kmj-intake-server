@@ -264,10 +264,31 @@ def _exec_create_task(biz_id: str, params: Dict, payload: Dict) -> Dict[str, Any
     return {"ok": True, "due_date": due.isoformat()}
 
 
-def _exec_send_template_email(biz_id: str, params: Dict, payload: Dict) -> Dict[str, Any]:
+def _exec_send_template_email(biz_id: str, params: Dict, payload: Dict,
+                              *, unattended: bool = True) -> Dict[str, Any]:
+    """Email the contact the event is about.
+
+    An automation is unattended bulk-shaped mail, so a contact who
+    unsubscribed (contacts.metadata.email_opt_out — the client-list
+    import writes it) is SKIPPED, and the skip lands in rule_runs with
+    the reason. If the unsubscribe check itself cannot run, the mail is
+    held too: an opt-out we could not read is not permission to send.
+
+    unattended=False is a person approving THIS email for THIS contact
+    (rules_router.approve). That is never blocked; it carries a note."""
     to_email = (payload.get("contact_email") or "").strip()
     if not to_email or "@" not in to_email:
         return {"ok": False, "error": "event has no contact email"}
+    import contact_fields
+    checked, why = contact_fields.lookup_email_opt_out(
+        biz_id, contact_id=payload.get("contact_id"), email=to_email)
+    if unattended:
+        if not checked:
+            return {"ok": False, "skipped": True,
+                    "error": "could not check whether they unsubscribed, so it was not sent"}
+        if why:
+            return {"ok": True, "skipped": True, "reason": "unsubscribed",
+                    "note": f"Not sent: {contact_fields.UNSUBSCRIBED_NOTE} ({why})."}
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz_id}&select=name&limit=1") or []
     biz_name = (rows[0].get("name") if rows else None) or "Your practitioner"
@@ -285,7 +306,10 @@ def _exec_send_template_email(biz_id: str, params: Dict, payload: Dict) -> Dict[
             asyncio.get_running_loop().create_task(coro)
         except RuntimeError:
             asyncio.run(coro)
-        return {"ok": True, "to": to_email}
+        out: Dict[str, Any] = {"ok": True, "to": to_email}
+        if why:
+            out["note"] = f"Sent as you asked; {contact_fields.UNSUBSCRIBED_NOTE}."
+        return out
     except Exception as e:
         return {"ok": False, "error": f"email failed: {e}"}
 
