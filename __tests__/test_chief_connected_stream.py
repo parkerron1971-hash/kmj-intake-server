@@ -123,6 +123,102 @@ def test_large_relevant_record_is_never_truncated_or_falsely_marked_complete(mon
         sources=sources, message='Which day is busiest?', business_id=None))
 
 
+def _noisy_sources():
+    return {
+        'context:summary': {'kind': 'context', 'complete': True,
+                            'text': 'Your busiest day is Tuesday.'},
+        'context:context_quality': {'kind': 'context', 'complete': True,
+                                    'text': 'Some secondary context is unavailable.'},
+        **{f'context:design_note_{i}': {'kind': 'context', 'complete': False,
+            'text': 'Unrelated historical draft color palette. ' + ('x' * 1600)}
+           for i in range(10)},
+    }
+
+
+def test_unrelated_historical_drafts_do_not_disable_a_checked_prefix(monkeypatch):
+    sources = _noisy_sources()
+    seen = []
+    async def reviewer(client, system, messages, **kwargs):
+        payload = json.loads(messages[0]['content'])
+        seen.append(payload)
+        assert set(payload['sources']) == {'context:summary', 'context:context_quality'}
+        assert len(payload['omitted_sources']) == 10
+        return json.dumps({'supported': True, 'source_id': 'context:summary',
+                           'quote': 'Your busiest day is Tuesday.'})
+    monkeypatch.setattr(truth, 'review_reply', reviewer)
+
+    async def run():
+        out = []
+        async def check(prefix):
+            return await truth.review_stream_prefix(None, prefix, sources=sources,
+                message='Which day is busiest?', business_id=None)
+        streamer = chief._SentenceStreamer(out.append, truth.stream_prover(sources), review=check)
+        streamer('Your busiest day is Tuesday. ')
+        await streamer.wait_closed()
+        # No final draft or full-review response has been supplied yet.
+        assert out == [chief.PROSE_PREFIX + 'Your busiest day is Tuesday. ']
+        assert streamer.open
+        streamer.close()
+    asyncio.run(run())
+    assert len(seen) == 1
+
+
+@pytest.mark.parametrize('qualifier', ['historical', 'draft', 'failed', 'unverified'])
+def test_relevant_hedged_conflicts_stay_in_early_review(monkeypatch, qualifier):
+    sources = _noisy_sources()
+    sources['context:corrected_summary'] = {'kind': 'context', 'complete': False,
+        'text': f'{qualifier}: Your busiest day is Friday, not Tuesday.'}
+    async def reviewer(client, system, messages, **kwargs):
+        payload = json.loads(messages[0]['content'])
+        assert payload['sources']['context:corrected_summary'] == sources['context:corrected_summary']
+        return json.dumps({'supported': False, 'source_id': '', 'quote': ''})
+    monkeypatch.setattr(truth, 'review_reply', reviewer)
+    assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
+        sources=sources, message='Which day is busiest?', business_id=None))
+
+
+def test_global_context_quality_cannot_be_dropped_to_make_the_check_fit(monkeypatch):
+    sources = _noisy_sources()
+    sources['context:context_quality']['text'] = 'Unavailable context. ' * 1000
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('oversized global availability must defer the check')
+    monkeypatch.setattr(truth, 'review_reply', forbidden)
+    assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
+        sources=sources, message='Which day is busiest?', business_id=None))
+
+
+def test_uncited_personal_forecast_still_waits_for_final_review(monkeypatch):
+    # This persisted opening from the latency report is a separate gate:
+    # omitting irrelevant drafts must not turn a forecast into proved fact.
+    sentence = "Realistically, the first thing you'd see is proof, not revenue."
+    assert not truth.streamable_sentence(truth.stream_prover({}), sentence)
+    calls = []
+    async def reviewer(*args, **kwargs):
+        calls.append(True)
+        return json.dumps({'supported': True, 'source_id': '', 'quote': ''})
+    monkeypatch.setattr(truth, 'review_reply', reviewer)
+    assert not asyncio.run(truth.review_stream_prefix(None, sentence,
+        sources=_noisy_sources(), message='What results would this plan produce?', business_id=None))
+    assert calls == [True]
+
+
+def test_prefix_budget_diagnostic_is_content_free_and_scoped(caplog):
+    import chief_request_timing
+    import time
+    token = chief_request_timing.CURRENT.set(chief_request_timing.Trace(time.perf_counter(), 'prefix-test'))
+    sources = {'context:summary': {'kind': 'context', 'complete': True,
+                                   'text': 'Tuesday PRIVATE CONTENT ' * 1000}}
+    try:
+        with caplog.at_level('INFO', logger=truth.logger.name):
+            assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
+                sources=sources, message='Which day is busiest?', business_id=None))
+    finally:
+        chief_request_timing.CURRENT.reset(token)
+    assert '"request_id":"prefix-test"' in caplog.text
+    assert '"reason":"evidence_budget"' in caplog.text
+    assert 'PRIVATE CONTENT' not in caplog.text and 'Your busiest day' not in caplog.text
+
+
 @pytest.mark.parametrize('sentence', [
     'The message is on its way. ', 'The text is on the way. ', 'It is on its way. ',
     'That is taken care of. ', 'It is handled. ', 'The booking went through. ',

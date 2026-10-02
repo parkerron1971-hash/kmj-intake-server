@@ -2232,12 +2232,29 @@ def _stream_review_sources(sources, sentence, preceding, message):
     for sid, src in valid.items():
         text = str(src.get('text') or '')
         words = {_stem(word) for word in _words(sid + ' ' + text)}
-        if (terms & words or sid == 'context:context_quality'
-                or _HEDGED_ITEM.search(text)):
+        # A hedge does not make an unrelated source relevant. Including every
+        # draft/historical note filled this entire budget before a sentence
+        # check could even dispatch. Matching sources still all survive,
+        # including contradictory, stale and failed evidence. Global context
+        # availability is always retained independently of sentence wording.
+        if terms & words or sid == 'context:context_quality':
             selected[sid] = src
     if not selected or sum(len(str(src.get('text') or '')) for src in selected.values()) > STREAM_REVIEW_EVIDENCE_CHARS:
+        _prefix_review_diagnostic('evidence_budget' if selected else 'no_relevant_sources',
+            available_sources=len(valid), selected_sources=len(selected),
+            selected_chars=sum(len(str(src.get('text') or '')) for src in selected.values()))
         return None, list(valid)
     return selected, [sid for sid in valid if sid not in selected]
+
+
+def _prefix_review_diagnostic(reason, **counts):
+    """Why early speech waited, without logging sentence or record contents."""
+    import chief_request_timing
+    trace = chief_request_timing.CURRENT.get()
+    logger.info('[chief prefix review] %s', json.dumps({
+        'request_id': trace.request_id if trace else '', 'reason': reason,
+        **counts,
+    }, separators=(',', ':')))
 
 
 async def review_stream_prefix(client, prefix, *, sources, message, business_id):
@@ -2245,9 +2262,12 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
     The caller limits it to two attempts/four seconds; no repair or unchecked
     fallback. Existing provenance checks still decide whether it may stream.
     """
-    if not prefix or len(prefix) > 1800 or has_completion_claim(prefix) \
-            or _DONE_CLAIM.search(_asserted_text(prefix)) \
+    if not prefix or len(prefix) > 1800:
+        _prefix_review_diagnostic('prefix_size', prefix_chars=len(prefix or ''))
+        return False
+    if has_completion_claim(prefix) or _DONE_CLAIM.search(_asserted_text(prefix)) \
             or re.search(r'\[\s*ACTION', prefix, re.I):
+        _prefix_review_diagnostic('action_guard')
         return False
     sentences = [s for s in re.split(r'(?<=[.!?])\s+|\n+', prefix.strip()) if s.strip()]
     if not sentences:
@@ -2261,34 +2281,44 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
     payload = {'owner_message': (message or '')[:1200], 'preceding_text': preceding,
                'sentence': sentence, 'sources': sources, 'omitted_sources': omitted,
                'unavailable': sorted(turn.unavailable) if turn else []}
+    _prefix_review_diagnostic('dispatch', selected_sources=len(sources),
+        selected_chars=sum(len(str(src.get('text') or '')) for src in sources.values()))
     raw = await review_reply(client, STREAM_PREFIX_REVIEW_SYSTEM,
         [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
         max_tokens=256, business_id=business_id, model_lane='fast', schema=None)
     try:
         result = _review_json(_strip_fences(raw))
     except (ValueError, TypeError):
+        _prefix_review_diagnostic('invalid_json')
         return False
     if not isinstance(result, dict) or set(result) != {'supported', 'source_id', 'quote'} \
             or result.get('supported') is not True:
+        _prefix_review_diagnostic('not_supported')
         return False
     sid, quote = result.get('source_id'), result.get('quote')
     if not isinstance(sid, str) or not isinstance(quote, str):
+        _prefix_review_diagnostic('invalid_citation')
         return False
     if not sid:
         # A vacuous review must not release an uncited business assertion.
-        return not quote and not (_weather_assertions(sentence) or _ABOUT_THE_BUSINESS.search(sentence)
+        safe = not quote and not (_weather_assertions(sentence) or _ABOUT_THE_BUSINESS.search(sentence)
             or _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence)
             or _RECORD_NOUN.search(sentence)
             or _fast_lane_names(sentence) or _numbers(sentence))
+        _prefix_review_diagnostic('accepted' if safe else 'uncited_claim')
+        return safe
     if sid not in sources or not quote:
+        _prefix_review_diagnostic('missing_citation')
         return False
     if _UNPROVABLE_STATE.search(sentence) and not sources[sid].get('complete'):
+        _prefix_review_diagnostic('incomplete_source')
         return False
     # The model selects evidence; it cannot invent a citation or waive the
     # normal checks for figures, source provenance or completed actions.
     review = json.dumps({'verdict': 'supported', 'claims': [{
         'text': sentence, 'kind': 'fact', 'source_id': sid, 'quote': quote}]})
     verdict, _, _ = assess_review(review, sentence, sources)
+    _prefix_review_diagnostic('accepted' if verdict == 'supported' else 'citation_rejected')
     return verdict == 'supported'
 
 
