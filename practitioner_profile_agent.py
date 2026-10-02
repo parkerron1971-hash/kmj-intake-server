@@ -108,14 +108,28 @@ def _sb_url() -> str:
     return os.environ.get("SUPABASE_URL", "").rstrip("/")
 
 
-def _sb_anon() -> str:
-    return os.environ.get("SUPABASE_ANON", "")
+def _sb_key() -> str:
+    """SERVICE ROLE. Renamed from `_sb_anon` on 2026-09-01, and the rename
+    is the point rather than tidiness.
+
+    This module wrote practitioner_profiles with the anon key — a server
+    path on a tenant table, which docs/RLS_MODEL.md Rule 1 forbids.
+
+    The obvious fix was to leave the name and change the body, which is
+    what business_profile_agent did during its own migration. That left a
+    function called `_sb_anon` returning the service-role key, and a
+    reviewer later grepped the name, believed this module was unmigrated,
+    and filed a correction that had to be corrected (#768). One
+    misleading name cost two commits and a false claim about production.
+
+    So the name goes with the key it returns."""
+    return os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
 def _sb_headers() -> Dict[str, str]:
     return {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
+        "apikey": _sb_key(),
+        "Authorization": f"Bearer {_sb_key()}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
