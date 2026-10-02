@@ -144,6 +144,15 @@ async def hermes_tick() -> Dict[str, Any]:
                     "and a platform-quality signal for us. Consider nudging the practitioner(s).",
                 )
 
+            # 3a. Ask Twilio about texts still marked `sent`: a delivery
+            # report can beat the row it updates, so `sent` alone is not
+            # evidence that delivery failed (twilio_sms.reconcile_sent).
+            try:
+                from twilio_sms import reconcile_sent
+                details["delivery_reconciled"] = await reconcile_sent()
+            except Exception as e:
+                details["delivery_reconciled"] = {"error": str(e)[:200]}
+
             # 3. Stuck at 'sent' (> 24h, no delivery confirmation)
             stuck_cutoff = (now - timedelta(hours=STUCK_SENT_HOURS)).isoformat()
             stuck = await _count(c, headers, "sms_messages", {
