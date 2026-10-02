@@ -1,4 +1,4 @@
-﻿---
+---
 title: Chief maturity cache misses load independent signals together
 date: 2026-10-02
 agent: Codex (GPT-6)
@@ -14,3 +14,5 @@ A slow post-deploy Chief context load included maturity-cache recomputation. Its
 
 Validation: 22 focused tests pass across test_maturity_parallel_reads.py and test_lgs_phase2_maturity_voice.py. Synchronization barriers prove overlap without elapsed-time assertions. Tests cover exact business filters and results, caller context isolation, fresh-cache short circuit, settings preservation and write ordering, soft failures, exception drainage, and nonfatal cache-write failures. Independent review also verified concurrent tenant context isolation. A read-only live comparison returned identical signals in 2,315 ms serially versus 976 ms in parallel, with five reads per version and zero cache writes. This measures the read group, not complete voice latency. Protected CI, deployment and final playback evidence are recorded in PR #1214.
 
+
+CI follow-up: preserved BOM-free frontmatter for the worklog parser and corrected an existing member-session test to always change the signature, instead of occasionally replacing its suffix with the same bytes. No member-session implementation changed.

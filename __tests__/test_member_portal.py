@@ -55,7 +55,9 @@ def test_session_round_trip_and_scope():
     assert c["em"] == "ana@example.com" and c["cid"] == "c1"
     assert mp.read_session(v, OTHER) is None                # another church's key
     payload, sig = v.split(".")
-    assert mp.read_session(payload + "." + sig[:-2] + "AA", BIZ) is None
+    # A fixed suffix can equal the real signature. Change a significant byte.
+    tampered_sig = ("A" if sig[0] != "A" else "B") + sig[1:]
+    assert mp.read_session(payload + "." + tampered_sig, BIZ) is None
     assert mp.read_session("garbage", BIZ) is None
     old = mp.mint_session(BIZ, "ana@example.com", "c1", now=int(time.time()) - mp.SESSION_TTL_SECONDS - 5)
     assert mp.read_session(old, BIZ) is None                 # expired
