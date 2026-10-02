@@ -34,6 +34,7 @@ from chief_of_staff import router as chief_router
 from notification_engine import router as notification_router
 from whisper_proxy import router as whisper_router
 from voice_stream import router as voice_stream_router
+from speech_stream import router as speech_stream_router
 from public_site import router as public_site_router
 from email_sender import router as email_router
 from meta_oauth import router as meta_router
@@ -248,6 +249,8 @@ app.include_router(link_wallet_router)
 import lane_purchases  # Register purchase routes before mounting the shared Lane router.
 from lane_wallet import router as lane_wallet_router
 app.include_router(lane_wallet_router)
+from agentcard_wallet import router as agentcard_wallet_router
+app.include_router(agentcard_wallet_router)
 from connected_ai import router as connected_ai_router
 app.include_router(connected_ai_router)
 # The standing agent's switch (2026-09-04): GET/POST /agents/chief/agent.
@@ -270,6 +273,7 @@ app.include_router(chief_week_router)
 app.include_router(notification_router)
 app.include_router(whisper_router)
 app.include_router(voice_stream_router)
+app.include_router(speech_stream_router)
 app.include_router(email_router)
 app.include_router(meta_router)
 app.include_router(google_router)
@@ -325,6 +329,32 @@ app.include_router(giving_router)
 # subdomain catch-all.
 from events_rsvp_router import router as events_rsvp_router
 app.include_router(events_rsvp_router)
+# A member's own page at <church site>/my — the POSTs (/my/code, /my/verify,
+# …) and the owner switch (/member-portal/...). BEFORE public_site_router.
+from member_portal import router as member_portal_router
+app.include_router(member_portal_router)
+from member_portal_church import router as member_portal_church_router
+app.include_router(member_portal_church_router)
+# Families and children (households, children, pickups, care notes) —
+# server-only tables, seat-checked here. Kevin, 2026-09-29.
+from kids_router import router as kids_router
+app.include_router(kids_router)
+# Children's check-in and pickup (codes, texts, release) — Kevin, 2026-09-29.
+from kids_checkin import router as kids_checkin_router
+app.include_router(kids_checkin_router)
+# Check-in stations: a PIN-locked tablet and a family self check-in kiosk.
+from kids_station import router as kids_station_router
+app.include_router(kids_station_router)
+# Live: the team runs a live service and moderates its chat (live_router);
+# members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
+from live_router import router as live_router
+app.include_router(live_router)
+from member_portal_live import router as member_portal_live_router
+app.include_router(member_portal_live_router)
+# Live group meetings (video) — a group's approved leaders host from the
+# member app. Kevin, 2026-09-29.
+from member_portal_group_live import router as member_portal_group_live_router
+app.include_router(member_portal_group_live_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
@@ -430,6 +460,9 @@ app.include_router(setup_plan_router)
 # Phase I.3 — Period closing
 from accounting_periods_router import router as accounting_periods_router
 app.include_router(accounting_periods_router)
+# The Bookkeeping room's front page: where the books stand, in one read
+from bookkeeping_overview import router as bookkeeping_overview_router
+app.include_router(bookkeeping_overview_router)
 # Phase I.3 PR2 — soft-lock audit trail
 from period_overrides_router import router as period_overrides_router
 app.include_router(period_overrides_router)
@@ -450,6 +483,9 @@ from platform_marketing import router as platform_marketing_router
 app.include_router(platform_marketing_router)
 from platform_marketing_campaigns import router as platform_marketing_campaigns_router
 app.include_router(platform_marketing_campaigns_router)
+# The Monday plan: signals -> diagnosis -> plays -> a week of drafts for review.
+from marketing_engine import router as marketing_engine_router
+app.include_router(marketing_engine_router)
 # Arc 25 - practitioner referral loop (codes + attribution + rewards)
 from referrals import router as referrals_router
 app.include_router(referrals_router)
@@ -544,6 +580,10 @@ app.include_router(lead_admin_diag_router)
 # Tauri app.
 from platform_console import router as platform_console_router
 app.include_router(platform_console_router)
+# Mission Control → Today (2026-10-01 redesign): the ranked, deduplicated
+# "needs you" queue + pulse + overnight in one owner-only read.
+from platform_today import router as platform_today_router
+app.include_router(platform_today_router)
 from platform_chief_authority import router as platform_chief_authority_router
 app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
@@ -563,6 +603,8 @@ from dev_bridge import router as dev_bridge_router
 app.include_router(dev_bridge_router)
 from chief_local_work import router as chief_local_work_router
 app.include_router(chief_local_work_router)
+from creative_director import router as creative_director_router
+app.include_router(creative_director_router)
 # The fix queue (2026-09-02) — support tickets ranked, dispatched into dev
 # tasks, walked back when the fix ships, and answered by email.
 # /platform/support/* (owner JWT) + /dev-bridge/tickets* (device token, so
@@ -574,6 +616,8 @@ app.include_router(support_queue_router)
 # /billing/webhook (Stripe signature-verified), /billing/status (open).
 from stripe_billing import router as stripe_billing_router
 app.include_router(stripe_billing_router)
+from stripe_discounts import router as stripe_discounts_router
+app.include_router(stripe_discounts_router)
 # Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
 # over the existing email/SMS rails. /campaigns/* (all JWT-authed,
 # ownership verified); the send sweep registers in startup() below.
@@ -610,6 +654,12 @@ async def health():
         "scheduler": scheduler.running,
         "next_followup_check": str(scheduler.get_job("followup_check").next_run_time)
                                if scheduler.get_job("followup_check") else None,
+        # Which commit this process is running. Railway sets it on every
+        # GitHub-triggered deploy. The deploy check (.github/workflows/
+        # deploy-check.yml) compares it with each merge, because "merged"
+        # has twice not meant "live": an unpaid Railway bill silently
+        # skipped deploys while every health check stayed green.
+        "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA") or None,
     }
 
 
@@ -1257,6 +1307,29 @@ async def startup():
             import hermes_agent as _hermes
             scheduler.add_job(g("hermes_tick", _hermes.hermes_tick), "interval", hours=1,
                               id="hermes_tick")
+            # Money auditor (agent ops Wave 2) — the daily read of the billing
+            # rails, same sense pattern as Hermes. 10:00 UTC = 6 AM Eastern.
+            # Support desk (agent ops Wave 3): draft replies for tickets
+            # waiting on an answer. Drafts only; a person sends.
+            import support_drafts as _support_drafts
+            scheduler.add_job(g("support_drafts", _support_drafts.drafts_tick), "interval",
+                              minutes=5, id="support_drafts", max_instances=1)
+            # Chief quality & cost (agent ops Wave 3) — the nightly sense over
+            # model_route_log and api_usage. 07:00 UTC = 3 AM Eastern.
+            import chief_quality as _chief_quality
+            scheduler.add_job(g("chief_quality", _chief_quality.quality_tick), "cron",
+                              hour=7, minute=0, id="chief_quality")
+            # Customer health (agent ops, Agent 9) — 14:00 UTC = 10 AM Eastern.
+            import customer_health as _customer_health
+            scheduler.add_job(g("customer_health", _customer_health.health_tick), "cron",
+                              hour=14, minute=0, id="customer_health")
+            import money_auditor as _money
+            scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
+                              hour=10, minute=0, id="money_auditor")
+            # App-granted trials end on their own, like Stripe trials do.
+            import trial_expiry as _trial_expiry
+            scheduler.add_job(g("trial_expiry", _trial_expiry.expire_tick), "interval",
+                              hours=1, id="trial_expiry")
             # Email domain drift (setup room, Phase 1) — hourly re-check of
             # every VERIFIED sending domain. Without it a DNS record that
             # vanishes flips sends back to the platform address in
@@ -1446,6 +1519,10 @@ async def startup():
                           "interval", hours=1, id="platform_marketing_metrics", max_instances=1)
         scheduler.add_job(g("platform_marketing_status", _marketing.reconcile_tick),
                           "interval", minutes=10, id="platform_marketing_status", max_instances=1)
+        # Plans the week on Monday morning (ET); drafts only. MARKETING_ENGINE=off stops it.
+        from marketing_engine import engine_tick
+        scheduler.add_job(g("platform_marketing_engine", engine_tick),
+                          "interval", hours=1, id="platform_marketing_engine", max_instances=1)
     except Exception as e:
         print(f"   [warn] platform marketing not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:
@@ -1627,18 +1704,22 @@ async def startup():
                           next_run_time=_dt.now(_tz.utc) + _td(minutes=5))
     except Exception as e:
         print(f"   [warn] ledger anchor sweep not scheduled: {e}")
-    # Lifecycle emails (2026-09-01) — the daily pass that tells a
+    # Lifecycle emails: hourly eligibility checks plus welcome recovery tell a
     # practitioner their trial ends soon / has ended. Once per business
     # per email, stamped in businesses.settings; quiet while enforcement
-    # is off. 14:30 UTC = a working-morning inbox across the US.
+    # is off. Hourly checks allow safe retries inside Resend's 24h key window.
     # Kill switch: LIFECYCLE_EMAILS=off.
     try:
         import lifecycle_emails as _lifecycle
         scheduler.add_job(g("lifecycle_emails", _lifecycle.sweep_tick),
-                          "cron", hour=14, minute=30, id="lifecycle_emails")
+                          "cron", minute=30, id="lifecycle_emails")
+        scheduler.add_job(g("welcome_retry", _lifecycle.welcome_retry_tick),
+                          "interval", minutes=15, id="welcome_retry")
+        scheduler.add_job(g("signup_reminders", _lifecycle.signup_reminders_tick),
+                          "cron", minute=5, id="signup_reminders")
         # The week (2026-09-02): day-three and day-seven beats, once each.
         scheduler.add_job(g("week_beats", _lifecycle.week_beats_tick),
-                          "cron", hour=14, minute=45, id="week_beats")
+                          "cron", minute=45, id="week_beats")
     except Exception as e:
         print(f"   [warn] lifecycle email sweep not scheduled: {e}")
 

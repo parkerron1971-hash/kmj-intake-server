@@ -398,11 +398,20 @@ async def store_checkout(body: StoreCheckoutBody) -> Dict[str, Any]:
     collect_address = needs_shipping and rate.get("code") != shipping_rates.PICKUP
     total_cents = subtotal_cents + tax_cents + shipping_cents
 
+    # Native tax/shipping: Stripe recalculates tax AFTER the coupon and
+    # keeps shipping outside the merchandise discount.
+    tax_rate_id = None
     if tax_cents > 0:
-        line_items.append({"name": "Sales tax", "amount_cents": tax_cents, "quantity": 1})
-    if shipping_cents > 0:
-        line_items.append({"name": rate.get("label") or "Shipping",
-                           "amount_cents": shipping_cents, "quantity": 1})
+        from stripe_discounts import stripe_request
+        import hashlib
+        tax_form = {"display_name": "Sales tax", "inclusive": False,
+                    "percentage": str(ss["tax_rate_pct"])}
+        tax_key = hashlib.sha256((biz["stripe_account_id"] + ":" +
+                                  str(ss["tax_rate_pct"])).encode()).hexdigest()
+        tax_rate = await stripe_request("POST", "/tax_rates",
+                                        account=biz["stripe_account_id"],
+                                        form=tax_form, key="store-tax:" + tax_key)
+        tax_rate_id = tax_rate["id"]
 
     # Create the order (pending) before Stripe so the webhook has a row.
     created = sb_clients.sb_post_as_service("/orders", {
@@ -435,6 +444,10 @@ async def store_checkout(body: StoreCheckoutBody) -> Dict[str, Any]:
             customer_email=(body.customer_email or "").strip().lower() or None,
             collect_shipping=collect_address,
             shipping_countries=ship_cfg["countries"],
+            allow_promotion_codes=True,
+            tax_rate_id=tax_rate_id,
+            shipping_amount_cents=shipping_cents,
+            shipping_label=rate.get("label") or "Shipping",
         )
     except Exception as e:
         sb_clients.sb_patch_as_service(f"/orders?id=eq.{order['id']}",
@@ -461,11 +474,17 @@ def mark_order_paid(order_id: str, *, payment_intent_id: Optional[str],
         logger.warning(f"[store] webhook for unknown order {order_id}")
         return
     order = rows[0]
+    settlement = {}
+    if session and (session.get("metadata") or {}).get("discount_checkout_v1") == "true":
+        from discount_settlement import order_settlement
+        settlement = order_settlement(order, session)
     if order.get("paid_at"):
         return
 
     patch: Dict[str, Any] = {"status": "paid", "paid_at": _now_iso(),
                              "updated_at": _now_iso()}
+    patch.update(settlement)
+    order.update(settlement)
     if payment_intent_id:
         patch["stripe_payment_intent_id"] = payment_intent_id
     if charge_id:

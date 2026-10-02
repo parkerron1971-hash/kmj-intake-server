@@ -230,16 +230,24 @@ class TestAlerting:
 
 
 class TestCallSites:
-    def test_chief_passes_the_business_explicitly(self):
+    def test_chief_passes_the_business_explicitly(self, monkeypatch):
         """_call_claude is reached from paths that never went through
         chief_chat and so carry no ambient context. There, the parameter
         is the only thing keeping one tenant from being measured against
         the shared platform ceiling."""
-        import inspect
-
+        import asyncio
         import chief_of_staff
-        src = inspect.getsource(chief_of_staff._call_claude)
-        assert "spend_guard.over_budget(business_id)" in src
+        seen = []
+
+        def reject(business_id):
+            seen.append(business_id)
+            return True
+
+        monkeypatch.setattr(spend_guard, "over_budget", reject)
+        result = asyncio.run(chief_of_staff._call_claude(
+            None, "System", [], business_id=BUSY))
+        assert seen == [BUSY]
+        assert result == spend_guard.block_message()
 
     def test_ai_proxy_attributes_before_it_checks(self):
         """over_budget() reads the ambient tenant to decide WHICH

@@ -87,25 +87,9 @@ def _year_bounds(year: int) -> tuple[str, str]:
 
 def _paid_gifts(business_id: str, year: int,
                 contact_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Paid, refund-adjusted gifts for the tax year.
-
-    Mirrors gl_reports_t4.donor_report's source and its refund handling on
-    purpose — a donor's statement and the finance team's report disagreeing
-    about the same year would be worse than either being slightly wrong.
-    """
-    import sb_clients
-    start, end = _year_bounds(year)
-    q = (f"/invoices?business_id=eq.{business_id}&status=eq.paid"
-         f"&paid_at=gte.{start}T00:00:00Z&paid_at=lte.{end}T23:59:59Z"
-         f"&select=id,total,paid_at,category,notes,refund_amount_cents,"
-         f"contact_id,contacts(name,email)&order=paid_at.asc&limit=5000")
-    if contact_id:
-        q += f"&contact_id=eq.{contact_id}"
-    try:
-        return sb_clients.sb_get_as_service(q) or []
-    except Exception as e:
-        logger.warning(f"[giving] gift read failed: {e}")
-        return []
+    from giving_records import read_gifts
+    return read_gifts(business_id, f"{year}-01-01T00:00:00Z",
+                      f"{year + 1}-01-01T00:00:00Z", contact_id)
 
 
 def _net_amount(inv: Dict[str, Any]) -> float:
@@ -150,7 +134,7 @@ def statement_for_contact(business_id: str, contact_id: str, year: int,
         line = {
             "date": str(g.get("paid_at") or "")[:10],
             "amount": amt,
-            "fund": (g.get("category") or "").strip() or "General",
+            "fund": (g.get("gift_fund") or g.get("category") or "").strip() or "General",
             "refunded": bool(g.get("refund_amount_cents")),
         }
         lines.append(line)

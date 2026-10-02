@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("booking_page_renderer")
@@ -36,9 +37,38 @@ def _esc(s: Optional[str]) -> str:
 
 
 def _brand_kit(business: Dict[str, Any]) -> Dict[str, Any]:
-    """Pull brand_kit out of business settings; tolerate missing."""
+    """Pull brand_kit out of business settings, in the keys _css_vars reads.
+
+    _css_vars asks for accent / surface / text_primary / font_heading…,
+    but a real kit (brand_engine._normalize_brand_kit) stores
+    colors.{primary,secondary,accent,background,text} and
+    font_pair.{heading,body}, plus flat legacy keys. Nothing translated
+    between them, so every booking, event RSVP and giving page (all three
+    render through here) wore the purple/white defaults whatever the
+    owner's brand was. Keys already in the old shape still win."""
     settings = business.get("settings") or {}
-    return settings.get("brand_kit") or {}
+    kit = settings.get("brand_kit") or {}
+    colors = kit.get("colors") if isinstance(kit.get("colors"), dict) else {}
+    fonts = kit.get("font_pair") if isinstance(kit.get("font_pair"), dict) else {}
+    out = dict(kit)
+    out.setdefault("accent", colors.get("accent") or kit.get("accent_color")
+                   or colors.get("primary") or kit.get("primary_color"))
+    out.setdefault("accent_hover", colors.get("primary") or kit.get("primary_color"))
+    out.setdefault("surface", colors.get("background") or kit.get("background_color"))
+    out.setdefault("text_primary", colors.get("text") or kit.get("text_color"))
+    out.setdefault("text_secondary", colors.get("text") or kit.get("text_color"))
+    # A bare family name becomes a stack with a fallback. Unquoted and
+    # reduced to letters, digits, spaces and hyphens: _css_vars
+    # HTML-escapes every value, and a quote would reach the stylesheet as
+    # "&#x27;", which is not CSS.
+    def stack(name: Any, fallback: str) -> Optional[str]:
+        first = str(name or "").split(",")[0]   # an old stack: keep its lead face
+        clean = re.sub(r"[^A-Za-z0-9 \-]", "", first).strip()
+        return f"{clean}, {fallback}" if clean else None
+
+    out["font_heading"] = stack(fonts.get("heading") or kit.get("font_heading"), "Georgia, serif")
+    out["font_body"] = stack(fonts.get("body") or kit.get("font_body"), "system-ui, sans-serif")
+    return {k: v for k, v in out.items() if v}
 
 
 def _booking_page_settings(business: Dict[str, Any]) -> Dict[str, Any]:
@@ -64,6 +94,20 @@ def _css_vars(brand: Dict[str, Any]) -> str:
         f"--font-body: {_esc(brand.get('font_body') or 'system-ui, sans-serif')};"
         "}"
     )
+
+
+def _font_links(brand: Dict[str, Any]) -> str:
+    """<link> tags that load the brand's two faces from Google Fonts.
+
+    _css_vars names the faces (--font-heading / --font-body) but nothing
+    loaded them, so every booking, event and giving page fell back to
+    Georgia / system-ui whatever the owner chose. Reuses the public forms'
+    loader, which skips generic families and escapes the URL."""
+    from public_form_theme import font_links
+    return font_links({
+        "font_heading": str(brand.get("font_heading") or "system-ui"),
+        "font_body": str(brand.get("font_body") or "system-ui"),
+    })
 
 
 def render_booking_page(
@@ -121,6 +165,7 @@ def render_booking_page(
     # Brand kit → CSS variables. Shadow-DOM widget reads these via
     # theme_tokens but inheriting on the document root means the
     # surrounding page also matches the practitioner's brand.
+    parts.append(_font_links(brand))
     parts.append(f"<style>{css_vars}</style>")
     parts.append(
         "<style>"
@@ -197,6 +242,7 @@ def render_not_published_page(
         f"<title>{_esc(name)}</title>",
         '<meta name="robots" content="noindex,nofollow">',
         f'<link rel="canonical" href="{_esc(canonical_url)}">',
+        _font_links(brand),
         f"<style>{css_vars}</style>",
         "<style>html,body{margin:0;padding:0;font-family:var(--font-body);"
         "color:var(--text-primary);background:var(--surface);min-height:100vh;}"

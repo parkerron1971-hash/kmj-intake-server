@@ -46,6 +46,8 @@ class _Mail:
 
 @pytest.fixture
 def fake(monkeypatch):
+    from lifecycle_delivery_fake import install_delivery_fake
+    install_delivery_fake(monkeypatch)
     fb = FakeSB()
     import sb_clients
     monkeypatch.setattr(sb_clients, "sb_get_as_service", fb.get)

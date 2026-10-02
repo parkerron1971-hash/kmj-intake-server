@@ -398,3 +398,13 @@ def put_client_sources(business_id: str, body: ClientSourcesBody,
         "client_sources": value,
         "labels": [bta.CLIENT_SOURCES[k]["label"] for k in value["sources"]],
     }
+
+
+@router.get("/{business_id}/knowledge")
+def knowledge(business_id: str,
+              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """What is on file for this business, area by area — read from the
+    real stores, not only the coach's notes. See business_knowledge."""
+    biz = _gate(business_id, user, "member")
+    import business_knowledge
+    return business_knowledge.knowledge_for(biz)

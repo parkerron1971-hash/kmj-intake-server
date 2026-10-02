@@ -50,3 +50,41 @@ def test_validate_grades_a_page_with_the_builders_laws(tmp_path):
     assert "14 years" not in tenure, "the owner's stated years pass"
     assert "25 years" in tenure, "an invented number still fails"
     assert out["violations_total"] >= 1
+    assert "craft_floor" in out and "soft_total" in out
+
+
+def test_objects_writes_the_library_contact_sheet(tmp_path):
+    out = _run("objects", "--out", str(tmp_path))
+    sheet = tmp_path / "objects.html"
+    assert str(sheet) in out or "objects.html" in out
+    html = sheet.read_text(encoding="utf-8")
+    assert 'data-sx-object="boarding-pass"' in html
+    assert "example.com" not in html, "photo urls are swapped for stand-ins"
+
+
+def test_the_directors_prompt_carries_the_concept_dial():
+    out = _run("director", "--fixture", FIXTURE)
+    assert "THE CONCEPT (how far this site's idea goes)" in out
+    assert "intensity: signature" in out, "a barbershop defaults to signature"
+
+
+# ─── the dial on the bench (2026-10-01, the concept-layer plan) ──────
+# Three fixtures across the three settings: Marrow & Steel (a barbershop,
+# Signature by default), Calm Counsel (a therapist, Plain by default) and
+# Wheelhouse Ceramics (the owner picked World on one offer page).
+
+def _fixture(name):
+    return os.path.join(ROOT, "scripts", "fixtures", name)
+
+
+def test_a_therapist_is_plain_by_default():
+    out = _run("director", "--fixture", _fixture("calm_counsel.json"))
+    assert "intensity: plain" in out and "trade's default" in out
+    assert "RECENT CONCEPTS" not in out
+
+
+def test_an_owners_world_offer_pick_reaches_the_director():
+    out = _run("director", "--fixture", _fixture("wheelhouse_course.json"))
+    assert "intensity: world" in out and "owner chose this" in out
+    assert "ONE OFFER PAGE" in out and "Six-Week Wheel Course" in out
+    assert "a term at an art school" in out

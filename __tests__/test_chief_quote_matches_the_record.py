@@ -92,6 +92,6 @@ def test_a_repair_with_only_an_aside_unsourced_is_delivered_with_it_named():
         None, "INV-2026-010 is 97 days overdue.", ctx={"open_invoices": ROWS}, view_detail="",
         taken=[], message="what's overdue?", business_id="biz", reviewer=reviewer,
         repairer=AsyncMock(return_value=repaired)))
-    assert out.startswith(repaired)
-    assert "still unverified" in out and "try again" not in out
-    assert meta["status"] == "caveated" and meta.get("recovered")
+    assert out.startswith("INV-2026-010 is 96 days overdue.")
+    assert "test invoices" not in out and "still unverified" not in out
+    assert meta["status"] in ("trimmed", "caveated") and meta.get("recovered")

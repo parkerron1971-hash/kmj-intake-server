@@ -96,6 +96,36 @@ def remove_rule(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(
     return JSONResponse(result)
 
 
+# ─── The voice lab (Brand Studio phase 5) — see voice_lab.py ───────────
+# Both read the owner's own samples and SUGGEST; neither writes anything.
+
+@router.post("/lab/{owner_id}/analyze")
+def lab_analyze(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    """Body: {tone_words?: [...]} — words already chosen, so they aren't suggested again."""
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
+    import voice_lab
+    try:
+        return JSONResponse(voice_lab.analyze_voice(owner_id, (body or {}).get("tone_words") or []))
+    except voice_lab.VoiceLabError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+
+@router.post("/lab/{owner_id}/test")
+def lab_test(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    """Body: {scenario: 'after_first_call'|'no_show'|'invite', business_name?, tone_words?}"""
+    if user.id != owner_id:
+        raise HTTPException(status_code=403, detail="Not your voice profile")
+    import voice_lab
+    b = body or {}
+    try:
+        return JSONResponse(voice_lab.test_voice(
+            owner_id, str(b.get("scenario") or ""), str(b.get("business_name") or ""),
+            b.get("tone_words") or []))
+    except voice_lab.VoiceLabError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+
 @router.post("/depth/{owner_id}/observe")
 def observe(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
     if user.id != owner_id:
