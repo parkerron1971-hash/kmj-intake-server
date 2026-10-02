@@ -519,7 +519,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     name = (biz.get("name") or "").strip() or "Your church"
     logo = theme.get("logo_url") or ""
     mark = f'<img src="{_e(logo)}" alt="">' if logo else _e(ui.initials(name))
-    avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me">{_e(ui.initials(who.get("name")))}</a>'
+    # Me lives on the profile picture (Kevin, 10/02: the Bible took a tab).
+    here = ' aria-current="page"' if tab == "me" else ""
+    avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me"{here}>{_e(ui.initials(who.get("name")))}</a>'
               if who else "")
     signed_in = tab is not None
     # Giving is one tap from every screen (Kevin, 2026-09-30).
@@ -915,6 +917,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                                             asyncio.to_thread(mps.load_library, biz["id"]))
         return _page(mpl.render_live(biz, site, request, me, cur, occasions=occ, library=lib),
                      503 if cur is None else 200)
+    # The Bible (member_portal_bible.py).
+    if sub == "/my/bible" or sub.startswith("/my/bible/"):
+        import member_portal_bible as mpb
+        return await mpb.serve(request, biz, site, me, sub)
     # Sermons, inside the app (member_portal_sermons.py).
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
         lib = await asyncio.to_thread(mps.load_library, biz["id"])
@@ -923,7 +929,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             series = str(request.query_params.get("series") or "")
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else ""),
                          200 if lib is not None else 503)
-        page = mps.render_sermon(biz, site, me, lib, rest, give_url) if UUID_RE.match(rest) else None
+        import member_portal_bible as mpb
+        page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0])
+                if UUID_RE.match(rest) else None)
         if page is None:
             return RedirectResponse("/my/sermons", status_code=303, headers=_SECURE_HEADERS)
         return _page(page, 200 if lib is not None else 503)

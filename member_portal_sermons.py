@@ -56,11 +56,15 @@ def _titles(lib: Dict[str, Any]) -> Dict[str, str]:
     return {str(x["id"]): x.get("title") or "" for x in lib.get("series") or []}
 
 
-def meta(s: Dict[str, Any]) -> str:
-    """'Pastor Ana · 1 Corinthians 11:3 · September 27, 2026' — escaped."""
+def meta(s: Dict[str, Any], *, linked: bool = False) -> str:
+    """'Pastor Ana · 1 Corinthians 11:3 · September 27, 2026' — escaped;
+    `linked` makes the scripture open in the Bible."""
     from sermons_public import day_label, _esc
-    bits = [s.get("speaker") or "", s.get("scripture") or "", day_label(s.get("preached_on"))]
-    return " · ".join(_esc(b) for b in bits if b)
+    bits = [_esc(s.get("speaker") or ""), "", _esc(day_label(s.get("preached_on")))]
+    if s.get("scripture"):
+        import member_portal_bible as mpb
+        bits[1] = mpb.scripture_links(s["scripture"]) if linked else _esc(s["scripture"])
+    return " · ".join(b for b in bits if b)
 
 
 def _part(lib: Dict[str, Any], s: Dict[str, Any]) -> str:
@@ -150,7 +154,7 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
 
 
 def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
-                  give_url: str = "") -> Optional[str]:
+                  give_url: str = "", bible: str = "kjv") -> Optional[str]:
     """One message, or None when it isn't published here (the caller
     sends the member back to the shelf)."""
     import member_app_ui as ui
@@ -178,13 +182,16 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
              f'{ui.icon("back", 16)}{_e(series or "All sermons")}</a>',
              f'<div class="mb-player">{player}</div>',
              f'<p class="mp-when" style="margin-top:18px">{_e(eyebrow)}</p>',
-             f'<h1 style="margin:0 0 6px">{_e(s.get("title"))}</h1>', f'<p class="mb-meta">{meta(s)}</p>',
+             f'<h1 style="margin:0 0 6px">{_e(s.get("title"))}</h1>', f'<p class="mb-meta">{meta(s, linked=True)}</p>',
              f'<div class="mb-acts"><button class="mp-go mp-go-2" type="button" data-share="/sermons/{_e(s["id"])}" '
              f'data-title="{_e(s.get("title"))}">{ui.icon("share", 16)}<span>Share</span></button>{give}</div>']
     if not (s.get("video_url") or s.get("audio_url") or "").strip():
         parts.append('<p class="mp-muted" style="margin-top:14px">The recording for this message isn\'t posted yet.</p>')
     if s.get("summary"):
         parts.append(f'<p class="mb-text" style="margin-top:18px">{_e(s["summary"])}</p>')
+    if s.get("scripture"):
+        import member_portal_bible as mpb
+        parts.append(mpb.passage_card(s["scripture"], bible))
     if s.get("questions"):
         parts.append('<section class="mb-q" aria-labelledby="mb-q"><h2 id="mb-q">For your group this week</h2>'
                      f'<p class="mb-text">{_e(s["questions"])}</p></section>')

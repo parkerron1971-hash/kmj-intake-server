@@ -32,15 +32,16 @@ TABS = (
     ("home", "/my", "Home",
      '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>'),
     ("sermons", "/my/sermons", "Sermons",
+     '<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/>'
+     '<path d="M12 19v3"/>'),
+    ("bible", "/my/bible", "Bible",
      '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/>'),
-    ("live", "/my/live", "Live",
-     '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49'
-     'M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>'),
     ("groups", "/my/groups", "Groups",
      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>'
      '<path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
-    ("me", "/my/me", "Me",
-     '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>'),
+    ("live", "/my/live", "Live",
+     '<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49'
+     'M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>'),
 )
 
 ICONS = {
@@ -289,6 +290,42 @@ a{{color:var(--accent);}}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
 .mb-avatar{{width:38px;height:38px;flex:none;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;
   text-decoration:none;color:var(--text-primary);border:1.5px solid {_rgba(p['text'], .3)};background:{_rgba(p['text'], .08)};}}
+.mb-avatar[aria-current]{{border-color:var(--accent);box-shadow:0 0 0 3px var(--mb-soft);}}
+.bb-head{{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}}
+.bb-head h1{{margin-bottom:8px;}}
+.bb-tr{{display:inline-flex;padding:3px;border-radius:999px;background:var(--mb-surface-2);border:1px solid var(--mb-line);flex:none;}}
+.bb-tr a{{min-width:52px;min-height:34px;padding:0 12px;display:grid;place-items:center;border-radius:999px;font-size:13px;font-weight:800;
+  letter-spacing:.04em;color:var(--text-secondary);text-decoration:none;}}
+.bb-tr a[aria-current]{{background:var(--accent);color:var(--accent-text);}}
+.bb-go{{display:flex;gap:8px;margin:8px 0 4px;}}
+.bb-go .mp-input{{flex:1;min-width:0;border-radius:999px;padding:0 18px;min-height:50px;}}
+.bb-go .mp-go{{width:50px;flex:none;padding:0;border-radius:50%;display:grid;place-items:center;}}
+.bb-cont .mb-list-text{{flex:1;}}
+.bb-cont strong{{font-family:var(--font-heading);font-size:20px;font-weight:800;}}
+.bb-books{{list-style:none;margin:0 0 6px;padding:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}}
+.bb-books a{{display:flex;align-items:center;min-height:46px;padding:0 14px;border-radius:12px;background:var(--mb-surface);
+  border:1px solid var(--mb-line);color:var(--text-primary);text-decoration:none;font-size:15px;font-weight:600;}}
+.bb-chapters{{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:8px;}}
+.bb-chapters a{{display:grid;place-items:center;aspect-ratio:1;border-radius:12px;background:var(--mb-surface);border:1px solid var(--mb-line);
+  color:var(--text-primary);text-decoration:none;font-weight:800;font-variant-numeric:tabular-nums;}}
+.bb-text{{font-family:var(--font-heading);font-size:19px;line-height:1.7;letter-spacing:.005em;margin:6px 0 0;}}
+.bb-text p{{margin:0 0 14px;}}
+.bb-text i{{font-style:italic;opacity:.92;}}
+.bb-lines p{{margin:0 0 8px;}}
+.bb-n{{font-family:var(--font-body);font-size:11px;font-weight:800;color:var(--accent);margin-right:3px;vertical-align:super;line-height:0;
+  scroll-margin-top:90px;}}
+.bb-hl{{background:var(--mb-soft);color:inherit;border-radius:4px;box-shadow:0 0 0 3px var(--mb-soft);-webkit-box-decoration-break:clone;box-decoration-break:clone;}}
+.bb-steps{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:22px 0 0;}}
+.bb-step{{display:flex;align-items:center;gap:8px;min-height:62px;padding:10px 14px;border-radius:16px;background:var(--mb-surface);
+  border:1px solid var(--mb-line);color:var(--text-primary);text-decoration:none;}}
+.bb-step span{{display:flex;flex-direction:column;font-size:12px;color:var(--text-muted);min-width:0;}}
+.bb-step strong{{font-size:15px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}}
+.bb-next{{justify-content:flex-end;text-align:right;}}
+.bb-src{{margin:18px 0 0;font-size:12px;}}
+.bb-ref{{color:var(--accent);font-weight:700;text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:3px;}}
+.bb-pass{{margin-top:16px;}}
+.bb-pass .bb-text{{font-size:17px;}}
+.bb-pass-ref{{margin:10px 0 2px;}}
 .mb-date{{font-size:13px;color:var(--text-secondary);margin:22px 0 4px;letter-spacing:.02em;min-height:1em;}}
 h1{{font-family:var(--font-heading);font-size:30px;font-weight:800;line-height:1.05;letter-spacing:-.02em;margin:18px 0 8px;text-wrap:balance;}}
 .mb-hello{{font-size:34px;margin:0;}}
