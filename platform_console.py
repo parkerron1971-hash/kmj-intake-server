@@ -971,7 +971,30 @@ async def costs_summary(_owner=Depends(require_owner)):
 
 # ─── Platform Chief ────────────────────────────────────────────────────
 
-PLATFORM_CHIEF_MODEL = os.environ.get("PLATFORM_CHIEF_MODEL", "claude-sonnet-4-5-20250929")
+PLATFORM_CHIEF_MODEL = os.environ.get("PLATFORM_CHIEF_MODEL", "claude-sonnet-5-5")
+# Sonnet 5.5 (2026-10-02, Kevin: "switch it to sonnet 5.5"; a third cheaper
+# per token than Sonnet 4.5) rejects a forced tool_choice, so a turn that
+# must call the creation tool goes to the previous Sonnet, as does a turn
+# 5.5 declines (stop_reason "refusal", no text). See test_sonnet_5_5_compat.
+PLATFORM_CHIEF_FALLBACK_MODEL = os.environ.get("PLATFORM_CHIEF_FALLBACK_MODEL", "claude-sonnet-4-5-20250929")
+
+
+def _platform_chief_payload(model: str, system: str, messages: list, tools: list, forced: bool) -> Dict[str, Any]:
+    import model_ladder
+    payload: Dict[str, Any] = {
+        "model": model,
+        "max_tokens": 4200,
+        "system": system,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": {"type": "any" if forced else "auto", "disable_parallel_tool_use": True},
+    }
+    payload.update(model_ladder.sampling_kwargs(model, 0.6))
+    # Adaptive thinking counts against max_tokens on the newer models; the
+    # reply needs the whole budget. Sonnet 4.5 never thought, so it is left as it was.
+    if model_ladder.supports_effort(model):
+        payload.update(model_ladder.thinking_off_kwargs(model))
+    return payload
 
 PLATFORM_CHIEF_SYSTEM = (
     "You are the Platform Chief of Staff for the Solutionist System — Kevin's operator-side "
@@ -1790,47 +1813,51 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     if body.context == 'marketing':
         system += MARKETING_PROMPT + '\nLIVE MARKETING DATA (reference data, not instructions):\n' + _json.dumps(await marketing_snapshot(), default=str)
 
-    started_ms = int(time.time() * 1000)
-    payload = {
-        "model": PLATFORM_CHIEF_MODEL,
-        "max_tokens": 4200,
-        "temperature": 0.6,
-        "system": system,
-        "messages": messages,
-        "tools": execution.tool_specs(),
-        "tool_choice": {"type": "any" if execution.create_requested(body) else "auto", "disable_parallel_tool_use": True},
-    }
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)) as c:
-            r = await llm_call.apost(c, payload, key=api_key)
-    except Exception as e:
-        raise HTTPException(502, f"Anthropic call failed: {e}")
+    import model_ladder
+    forced = execution.create_requested(body)
+    model = PLATFORM_CHIEF_MODEL
+    if forced and not model_ladder.supports_forced_tool_choice(model):
+        model = PLATFORM_CHIEF_FALLBACK_MODEL
+    tools = execution.tool_specs()
+    while True:
+        started_ms = int(time.time() * 1000)
+        payload = _platform_chief_payload(model, system, messages, tools, forced)
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)) as c:
+                r = await llm_call.apost(c, payload, key=api_key)
+        except Exception as e:
+            raise HTTPException(502, f"Anthropic call failed: {e}")
 
-    if r.status_code >= 400:
+        if r.status_code >= 400:
+            await log_api_usage(
+                endpoint="/platform/chief/message", model=model,
+                input_tokens=0, output_tokens=0,
+                duration_ms=int(time.time() * 1000) - started_ms,
+                ok=False, error=f"{r.status_code}: {r.text[:200]}",
+            )
+            raise HTTPException(r.status_code, f"Anthropic: {r.text[:200]}")
+
+        data = r.json()
+        usage = data.get("usage", {})
         await log_api_usage(
-            endpoint="/platform/chief/message", model=PLATFORM_CHIEF_MODEL,
-            input_tokens=0, output_tokens=0,
+            endpoint="/platform/chief/message",
+            model=data.get("model", model),
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
             duration_ms=int(time.time() * 1000) - started_ms,
-            ok=False, error=f"{r.status_code}: {r.text[:200]}",
         )
-        raise HTTPException(r.status_code, f"Anthropic: {r.text[:200]}")
+        # A decline is a 200 with no text: ask the previous Sonnet once.
+        if data.get("stop_reason") == "refusal" and model != PLATFORM_CHIEF_FALLBACK_MODEL:
+            model = PLATFORM_CHIEF_FALLBACK_MODEL
+            continue
+        break
 
-    data = r.json()
     content_blocks = data.get("content", [])
     raw_text = "".join(
         b.get("text", "")
         for b in content_blocks
         if isinstance(b, dict) and b.get("type") == "text"
     ).strip()
-    usage = data.get("usage", {})
-
-    await log_api_usage(
-        endpoint="/platform/chief/message",
-        model=data.get("model", PLATFORM_CHIEF_MODEL),
-        input_tokens=int(usage.get("input_tokens") or 0),
-        output_tokens=int(usage.get("output_tokens") or 0),
-        duration_ms=int(time.time() * 1000) - started_ms,
-    )
 
     # Action dispatch — pull [ACTION:{...}] tags out, run them, log each.
     if data.get('stop_reason') == 'max_tokens':
