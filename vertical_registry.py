@@ -48,7 +48,20 @@ CANONICAL: Dict[str, Dict] = {
                                        "counseling", "counselling", "psychotherapist",
                                        "psychotherapy", "mental_health", "lmft", "lcsw",
                                        "lpc", "psychologist"]},
-    "personal_services":  {"label": "Personal Services",   "aliases": []},
+    # Chair-and-appointment work. Salons and barbers ARE this vertical
+    # (the desk, the dictionary and the salon bands all key on it), but
+    # until 2026-09-26 it had no aliases, so a business stamped "barber"
+    # or "salon" resolved to "custom" and lost everything keyed here —
+    # the hours step, the terminology, the archetype lens. The spellings
+    # are the ones both repos' type maps already route to this vertical
+    # (workspace_archetypes.VERTICAL_LEAN, verticalDesks.canonicalType).
+    # Keep in lockstep with the app's verticalCanonical.ts.
+    "personal_services":  {"label": "Personal Services",
+                           "aliases": ["personal_service", "barber", "barbers",
+                                       "barbershop", "barber_shop", "salon",
+                                       "salons", "hair_salon", "beauty",
+                                       "beauty_salon", "stylist", "hairstylist",
+                                       "hair_stylist", "spa", "nail_salon"]},
     # Trades. Distinct from service_provider (the deliberate generic
     # baseline) because the work has a shape service_provider does not
     # model: a JOB at a site, quoted before it starts, with materials and
