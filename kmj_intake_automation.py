@@ -1307,6 +1307,11 @@ async def startup():
             import support_drafts as _support_drafts
             scheduler.add_job(g("support_drafts", _support_drafts.drafts_tick), "interval",
                               minutes=5, id="support_drafts", max_instances=1)
+            # Chief quality & cost (agent ops Wave 3) — the nightly sense over
+            # model_route_log and api_usage. 07:00 UTC = 3 AM Eastern.
+            import chief_quality as _chief_quality
+            scheduler.add_job(g("chief_quality", _chief_quality.quality_tick), "cron",
+                              hour=7, minute=0, id="chief_quality")
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
