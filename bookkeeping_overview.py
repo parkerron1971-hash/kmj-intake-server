@@ -670,7 +670,10 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
     # ── Bank ──
     stamps = [s for s in (_ts(i.get("last_sync_at")) for i in items) if s]
     last_sync = max(stamps) if stamps else None
-    linked_twice = accounts_linked_twice(accounts)
+    # Only accounts in the books can double their rows. Counting a copy that
+    # was already switched off kept "Fix in Settings" up with nothing to fix
+    # (KMJ, 2026-10-02, right after both copies came out).
+    linked_twice = accounts_linked_twice(included)
     bank = {
         "linked": bool(items),
         "read": "bank" not in failed,
