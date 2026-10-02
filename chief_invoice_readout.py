@@ -60,19 +60,36 @@ async def serve_request(client, req, session, biz):
     Returning None means no action has run; once attempted, never fall through
     and repeat it through a model turn.
     """
-    action = request_action(req)
+    from chief_invoice_scope import eligible_request, planning_input, resolve
+    if not eligible_request(req):
+        return None
     owner_id = str(getattr(getattr(session, 'user', None), 'id', '') or '')
-    if (action is None or not isinstance(biz, dict) or not owner_id
+    if (not isinstance(biz, dict) or not owner_id
             or str(biz.get('id') or '') != str(req.business_id)
             or str(biz.get('owner_id') or '') != owner_id):
         return None
     import chief_of_staff as chief
     import chief_stream_replay as replay
     import chief_speech_boundary as speech
+    recovered = replay.recover(req, owner_id)
+    if recovered is not None:
+        return recovered
     if chief._STREAM_SINK.get() is None:
         recovered = await replay.recover_async(req, owner_id)
         if recovered is not None:
             return recovered
+    action = request_action(req)
+    history_scope = planning_input(req)
+    if history_scope is None:
+        return None
+    if action is not None and (history_scope['requires_model']
+            or             action['filter'] != history_scope['required_filter']
+            or action['form'] != history_scope['required_form']):
+        action = None
+    if action is None:
+        action = await resolve(client, req, biz['id'])
+    if action is None:
+        return None
     taken = await chief._execute_actions(client, biz, [action], user_id=owner_id,
                                          owner_text=req.message)
     if any(chief._action_failed(row) for row in taken):

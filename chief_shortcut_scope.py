@@ -44,7 +44,12 @@ def constrained(req, topic):
         relevant = bool(_TOPICS[topic].search(text))
         if _REFERENCE.search(text.strip()):
             return True
-        qualified_invoice = topic == 'invoice' and re.search(r'\b(?:paid|unpaid|draft|overdue) invoices?\b', text, re.I)
+        if topic == 'invoice':
+            from chief_invoice_scope import ambiguous_followup
+            if ambiguous_followup(text.strip()):
+                return True
+        qualified_invoice = topic == 'invoice' and re.search(
+            r'\b(?:paid|unpaid|draft|overdue) invoices?\b|\b(?:all|every)\b.*\binvoices?\b|\b(?:chart|timeline)\b', text, re.I)
         if _ACK.fullmatch(text.strip()):
             continue
         if _plain_history_request(text.strip()) and not qualified_invoice:
