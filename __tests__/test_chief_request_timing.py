@@ -233,3 +233,49 @@ def test_background_work_does_not_inherit_foreground_trace(monkeypatch):
             timing.CURRENT.reset(token)
     asyncio.run(run())
     assert observed == [None,None,None]
+
+
+def test_empty_thinking_exhaustion_is_diagnosable_without_content(clock, caplog):
+    caplog.set_level(logging.INFO, logger="chief.request_timing")
+    trace = timing.Trace(10, "empty-turn")
+    call = trace.start("main", "model", "sse")
+    call.observe({"type": "content_block_start", "content_block": {"type": "thinking", "thinking": "private reasoning"}})
+    call.observe({"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "more private"}})
+    call.observe({"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 1400}})
+    call.observe({"type": "message_stop"})
+    call.finish("complete")
+    data = trace.snapshot()["calls"][0]
+    assert data["stop_reason"] == "max_tokens" and data["output_tokens"] == 1400
+    assert data["thinking_blocks"] == 1 and data["tool_blocks"] == 0
+    assert data["first_text_ms"] is None and data["text_chars"] == 0
+    assert "private" not in caplog.text
+    # Unknown provider values cannot accidentally log provider-supplied prose.
+    call.observe({"type": "message_delta", "delta": {"stop_reason": "private detail"}})
+    assert call.data["stop_reason"] == "max_tokens"
+
+
+def test_backup_provider_is_visible_in_same_request_trace(clock, monkeypatch):
+    from unittest.mock import AsyncMock
+    import fallback_brain
+    import api_usage_logger
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
+    monkeypatch.setenv("FALLBACK_BRAIN", "on")
+    monkeypatch.setattr(api_usage_logger, "log_api_usage", AsyncMock())
+    monkeypatch.setattr(fallback_brain, "_notify_owner", AsyncMock())
+    class Client:
+        async def post(self, *args, **kwargs):
+            clock[0] += .5
+            return httpx.Response(200, json={"choices": [{"message": {"content": "Fixture advice."}}], "usage": {}})
+    trace = timing.Trace(10, "backup-turn")
+    async def run():
+        token = timing.CURRENT.set(trace)
+        try:
+            return await fallback_brain.call_fallback(Client(), "system", [], 100)
+        finally:
+            timing.CURRENT.reset(token)
+    assert asyncio.run(run()) == "Fixture advice."
+    call = trace.snapshot()["calls"][0]
+    assert call["role"] == "fallback" and call["model"] == fallback_brain._model()
+    assert call["start_ms"] == 0 and call["end_ms"] == 500
+    assert call["outcome"] == "complete"
+    assert call["first_text_ms"] is None and call["headers_ms"] is None

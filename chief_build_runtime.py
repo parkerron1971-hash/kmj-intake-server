@@ -165,6 +165,17 @@ LEFTOVER_NOTE = ("Queued. Before you reply: if anything else the owner asked for
 
 async def handle_submit_work_order(client, biz, action):
     import chief_of_staff as chief
+    # A model-selected kind is a routing error, not a missing owner detail.
+    # Reject before storage/ownership reads; never infer a replacement job.
+    from chief_code import KINDS
+    kind = action.get('kind')
+    if not isinstance(kind, str) or kind not in KINDS:
+        label = "I couldn't start that work because I chose an unsupported build type. Nothing was queued."
+        return {'type': 'submit_work_order', 'label': label, 'result': label,
+                'failed': True, 'nav': None, 'error_code': 'invalid_build_kind',
+                'for_chief': 'Tool selection failed, not missing user information. Do not ask the owner '
+                    'to choose a build type. Answer their current question. Only if they requested '
+                    'a write, use a supported tool for that request; do not invent a replacement job.'}
     ctx = turn_scope.get()
     if ctx:
         ctx['tainted'] = bool(chief.untrusted_taint())
@@ -830,7 +841,7 @@ def routing_instructions():
         return ''
     return '''CURRENT BUILD ROUTING POLICY (instructions, not business data):
 For workshops, forms, flyers and Events pages, these rules replace the earlier examples that call generate_image, create_client_form, or individual event setup actions.
-Call submit_work_order exactly once. Do not plan or perform its component actions in this conversation turn. Put the user's known facts in facts, with one of these kinds:
+For those requested builds, call submit_work_order exactly once. Do not perform its component actions in this conversation turn. Put the user's known facts in facts, with one of these kinds:
 - event_setup: title, starts_at (ISO date and time), timezone (IANA name), location, price, capacity, wants_registration_form, wants_flyer. Workshop registration and the website link belong to this ONE order.
 - form_and_link: name, fields (form field objects with label/type/required), form_type, optional send_to and channel. An event registration must use form_type=event. For form_type=event, also supply description, starts_at (ISO date and time), timezone (IANA), location and admission. These event details are mandatory public page content, separate from visitor questions. Use the owner's confirmed facts; never invent them. Ask whether to include a flyer unless the owner has already chosen; include_flyer=true/false records that choice. If true, flyer_url must be the chosen public image URL. A flyer is optional and never substitutes for written event details. If the owner asks to create a flyer, prepare it through the flyer workflow, then attach its published image URL with update_client_form; never claim a private preview or pending image is attached. For an existing form, update_client_form accepts event_details and the same detail fields; include_flyer=false removes its flyer.
 - flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.
@@ -839,5 +850,5 @@ Call submit_work_order exactly once. Do not plan or perform its component action
 Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form or generate_image for those build steps.
 Questions about a job in BUILDS IN PROGRESS are read-only: answer with its summary_label verbatim, without extra execution claims or follow-up offers. Never create another build to check progress.
 An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer; a plan's question is answered with field plan_answer.
-After submitting or responding, read only the returned label; queued work is not finished work.
+After submitting or responding, use the returned label for its execution status; queued work is not finished work. Still answer any question the owner asked alongside the work. A request to discuss, calculate, or explain a plan is not a request to save or queue it; use ordinary prose. Goal trackers use create_goal, milestone initiatives use create_growth_objective, and notes use save_note when requested; there is no goal_setup build kind.
 '''

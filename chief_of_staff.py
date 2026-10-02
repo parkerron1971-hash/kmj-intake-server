@@ -1494,11 +1494,16 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         for _round in range(rounds_cap):
           round_done = False
           mute_course_retry = False
+          empty_budget_recovery = False
+          immediate_retry = False
           for attempt in range(3):
-              if attempt:
+              if attempt and not immediate_retry:
                   await asyncio.sleep(1.5 * attempt)
+              immediate_retry = False
               full_parts: List[str] = []
               blocks: Dict[int, Dict[str, Any]] = {}
+              block_counts = {"text": 0, "tool_use": 0, "server_tool_use": 0,
+                              "thinking": 0, "redacted_thinking": 0}
               import chief_search_steps
               searches = chief_search_steps.SearchSteps(_emit_stream_step)
               stop_reason = ""
@@ -1548,6 +1553,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           if et == "content_block_start":
                               idx = int(evt.get("index") or 0)
                               cb = evt.get("content_block") or {}
+                              if cb.get("type") in block_counts:
+                                  block_counts[cb["type"]] += 1
                               searches.block_start(idx, cb)
                               if cb.get("type") == "tool_use":
                                   blocks[idx] = {"type": "tool_use", "id": cb.get("id"),
@@ -1612,6 +1619,15 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               else:
                   searches.close()
                   text = "".join(full_parts).strip()
+                  import chief_request_timing as _crt
+                  _trace = _crt.CURRENT.get()
+                  logger.info("[chief stream result] %s", json.dumps({
+                      "request_id": _trace.request_id if _trace else "",
+                      "model": model, "round": _round + 1, "attempt": attempt + 1,
+                      "stop_reason": str(stop_reason)[:64], "text_chars": len(text),
+                      "blocks": block_counts, "output_tokens": out_tok,
+                      "empty_budget_recovery": empty_budget_recovery,
+                  }, separators=(",", ":")))
                   await log_api_usage(
                       endpoint="/chief/backend", model=model,
                       input_tokens=in_tok, output_tokens=out_tok,
@@ -1682,6 +1698,27 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           break                  # next ROUND, fresh attempts
                   if text or turn_streamed:
                       return "".join(turn_parts + [text]).strip()
+                  if stop_reason == "max_tokens":
+                      # A completed request that consumed its entire budget is
+                      # not a transport hiccup. Repeating the identical request
+                      # can spend three budgets thinking without saying a word.
+                      # Try the SAME model once with its supported minimal
+                      # thinking controls; keep tools, prior receipts, and the
+                      # token limit intact. Never execute truncated tool input.
+                      import model_ladder as _ml
+                      recovery = {**_ml.thinking_off_kwargs(model),
+                                  **_ml.effort_kwargs(model, "low")}
+                      has_tool_blocks = (block_counts["tool_use"]
+                                         or block_counts["server_tool_use"])
+                      changed = any(payload.get(k) != v for k, v in recovery.items())
+                      if (not has_tool_blocks and not empty_budget_recovery
+                              and changed and attempt < 2):
+                          payload.update(recovery)
+                          empty_budget_recovery = True
+                          immediate_retry = True
+                          continue
+                      fb_reason = "stream empty at max_tokens"
+                      break
                   # A 200 that streamed no text at all — treat as transient.
                   logger.warning(f"Claude stream returned empty (attempt {attempt + 1}/3)")
                   fb_reason = fb_reason or "stream empty"
@@ -1691,8 +1728,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               continue
           break
 
-        # Three attempts with backoff have failed — this is an outage, a
-        # rate-limit wall, or a bad key. One shot on the backup brain
+        # Transient retries or bounded empty-budget recovery failed.
+        # One shot on the backup brain
         # before conceding the turn, exactly like the non-streaming path.
         # (If earlier ROUNDS already streamed text, return that instead --
         # the practitioner heard it; a fallback would contradict it.)
@@ -2294,57 +2331,53 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id'),
     )]
 
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = await asyncio.gather(*tasks)
+    # Start each dependent read as soon as its own scoped prerequisite is
+    # available. A slow mailbox/contact query must not postpone owner profiles
+    # or module counts. All sources still join before prompt construction.
+    primary = [asyncio.ensure_future(a) for a in tasks]
 
+    async def _owner_context():
+        scoped_business = await primary[0]
+        owner_id = (scoped_business[0] if scoped_business else {}).get("owner_id")
+        if not owner_id:
+            return "", {}, ""
+        return await asyncio.gather(
+            _soft(asyncio.to_thread(pp_chief_context_block, owner_id), ""),
+            _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id), {}),
+            _soft(asyncio.to_thread(voice_chief_context_block, owner_id), ""),
+        )
+
+    async def _module_counts():
+        scoped_business = await primary[0]
+        if not scoped_business:
+            return []
+        scoped_modules = await primary[6]
+        return await asyncio.gather(*[
+            _sb_count(client,
+                f"/module_entries?business_id=eq.{biz_id}&module_id=eq.{m['id']}&status=eq.active&select=id")
+            for m in (scoped_modules or [])
+        ])
+
+    dependent = [asyncio.create_task(_owner_context()), asyncio.create_task(_module_counts())]
+    try:
+        if not await primary[0]:
+            return {}
+        primary_values, owner_values, module_entry_rows, early_values = await asyncio.gather(
+            asyncio.gather(*primary), *dependent, asyncio.gather(*early))
+    finally:
+        # Cancellation/error must not leave reads using this turn's closed client.
+        for task in [*primary, *dependent, *early]:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*primary, *dependent, *early, return_exceptions=True)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = primary_values
     if not biz_rows:
-        for t in early:
-            t.cancel()
-        await asyncio.gather(*early, return_exceptions=True)
         return {}
     biz = biz_rows[0]
-
-    # ── Wave 2 (latency round 4, 2026-08-26) ─────────────────────────
-    # These context blocks had become TEN SEQUENTIAL awaits — one
-    # Supabase round trip after another, 2-4s of the context leg every
-    # turn. That is the exact serial-reads class the 8/14 fix (#584)
-    # cured in wave 1, regrown BEHIND it as new blocks accreted one
-    # try/except at a time. Every one depends only on biz_id or
-    # owner_id (which wave 1's business row supplies), so they run as
-    # ONE gather. Each keeps its own fail-open fallback — a block that
-    # errors degrades to empty exactly as it always did, never the turn.
-    #
-    # The semantic memory match rides in the same wave — and moves OFF
-    # the event loop while it's at it: chief_memory_semantic.match does
-    # a SYNCHRONOUS OpenAI embedding call (httpx.post) that was running
-    # directly on the loop every turn, blocking the whole process —
-    # including other requests' SSE streams — for the length of an
-    # external API round trip.
-    owner_id_for_pp = (biz or {}).get("owner_id")
-
-    # The rest of wave 2: practitioner-keyed blocks (Build 3 / Pass 2.5b)
-    # need owner_id, because they follow the human across all their
-    # businesses; the module counts need wave 1's module list. They join
-    # whatever of the early wave is still running.
-    module_entries_tasks = [
-        _sb_count(client,
-            f"/module_entries?business_id=eq.{biz_id}&module_id=eq.{m['id']}&status=eq.active&select=id")
-        for m in (modules or [])
-    ]
-    late = await asyncio.gather(
-        _soft(asyncio.to_thread(pp_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
-        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
-              if owner_id_for_pp else _const({}), {}),
-        _soft(asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
-        *early,
-        *module_entries_tasks,
-    )
-    practitioner_block, practitioner_profile_raw, voice_block = late[0:3]
+    practitioner_block, practitioner_profile_raw, voice_block = owner_values
     (foundation_block, business_profile_block, _mat_block, _growth_block,
      business_profile_raw, brand_block, playbook_block, _semantic_hits,
-     blueprint_block, exact_contact_total) = late[3:3 + len(early)]
-    module_entry_rows = list(late[3 + len(early):])
+     blueprint_block, exact_contact_total) = early_values
 
     contacts_available = contacts is not None
     # A server-side row cap can be lower than our requested limit. Even a
@@ -2742,7 +2775,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     # ─── Business JIT section ──────────────────────────────────
     biz_section = ""
     try:
-        biz_missing = business_profile_agent.get_missing_jit_fields(biz_id)
+        biz_missing = (business_profile_agent.missing_jit_fields_from_profile(ctx["business_profile_raw"])
+                       if "business_profile_raw" in ctx
+                       else business_profile_agent.get_missing_jit_fields(biz_id))
     except Exception as e:
         logger.warning(f"[jit] business get_missing_jit_fields failed: {e}")
         biz_missing = []
@@ -2789,7 +2824,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     owner_id = (ctx.get("business") or {}).get("owner_id")
     if owner_id:
         try:
-            p_missing = practitioner_profile_agent.get_missing_jit_fields(owner_id)
+            p_missing = (practitioner_profile_agent.missing_jit_fields_from_profile(ctx["practitioner_profile_raw"])
+                         if "practitioner_profile_raw" in ctx
+                         else practitioner_profile_agent.get_missing_jit_fields(owner_id))
         except Exception as e:
             logger.warning(f"[jit] practitioner get_missing_jit_fields failed: {e}")
             p_missing = []
@@ -2837,7 +2874,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     voice_section = ""
     if voice_depth_agent and owner_id:
         try:
-            v_missing = voice_depth_agent.get_missing_voice_jit_fields(owner_id)
+            v_missing = (voice_depth_agent.missing_voice_jit_fields_from_profile(ctx["practitioner_profile_raw"])
+                         if "practitioner_profile_raw" in ctx
+                         else voice_depth_agent.get_missing_voice_jit_fields(owner_id))
         except Exception as e:
             logger.warning(f"[jit] voice get_missing_voice_jit_fields failed: {e}")
             v_missing = []
@@ -11851,7 +11890,9 @@ _POST_ACTION_REPLY_SYSTEM = """\
 You are the Chief, replying to the practitioner AFTER actions you tagged \
 in your previous turn have already run. Some may have succeeded; some may \
 have failed. Your job in this single message is to give the practitioner \
-an HONEST account of what actually happened.
+an HONEST answer to their request, including what actually happened. Preserve the \
+useful explanation, calculations, or advice from the draft; receipts supplement \
+the requested answer, not replace it. Correct unsupported premises and arithmetic.
 
 RULES (load-bearing — failing these breaks practitioner trust):
 1. REWRITE — do not append to or amend the draft. If any action failed, \
@@ -11864,15 +11905,15 @@ warmth + specificity you'd use normally. Don't be over-formal.
 3. For failures, explain the reason in plain words (translate technical \
 errors). If you can identify what should have been done instead — \
 especially when a sibling action exists that would have worked — say so \
-and offer to retry. Examples of common alternatives:
+without requesting the same permission again. Do not claim a retry is running. Examples of common alternatives:
    - update_product failed for a service-shaped name → update_offering \
      (the canonical service catalog)
    - update_offering failed because the name wasn't found → suggest \
      list_offerings to see what's on file
-4. Keep it short. 1–3 sentences typically. Match the practitioner's tone.
+4. Keep it short, while retaining the substance needed to answer their question. Match the practitioner's tone.
 5. Do NOT emit any [ACTION:...] tags in this reply — actions already ran. \
-If a retry is appropriate, describe it in prose and the practitioner will \
-confirm or re-ask.
+Do not turn a question into extra work, or ask the practitioner to re-authorize \
+a request they already made. Report any remaining gap without inventing a new job.
 6. Don't ramble about HOW the system works internally. Speak from the \
 practitioner's frame: their goal, the outcome, the next step.
 7. SUBSTITUTION CHECK: if the practitioner asked for X (a module, a \
@@ -14010,6 +14051,10 @@ async def chief_chat(
         if not req.message:
             raise HTTPException(400, "message is required")
 
+        # Include admission checks in preparation timing; they precede context
+        # reads and previously disappeared from the stage breakdown.
+        _t = _TurnClock()
+
         # Per-user rate limit (beta-readiness audit) — one tester can't
         # fire thousands of Chief turns. Fail-open.
         # These gates read the database with a SYNCHRONOUS client, so they
@@ -14027,6 +14072,8 @@ async def chief_chat(
             raise
         except Exception:
             pass
+
+        _t.mark("rate_limit")
 
         # 7/30 tier arc — the Chief backend never consulted the allowance
         # (only /ai/proxy did). Dormant behind BILLING_ENFORCE; the 402
@@ -14049,7 +14096,7 @@ async def chief_chat(
         # these stamps say which STAGE was slow, so the next change goes
         # where the time actually is instead of where it is suspected.
         # Durations and counts only; nothing here is content.
-        _t = _TurnClock()
+        _t.mark("billing_gates")
 
         async with httpx.AsyncClient() as client:
             # Recurrence "cron" — generate any due invoice instances
