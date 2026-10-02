@@ -1,6 +1,7 @@
 """Invoice visual scope and recovery from server-authored display rows."""
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -32,6 +33,77 @@ _DISPLAY_ONLY = re.compile(
 def invoice_display_request(message):
     """Whole-message display intent only; advice, mutations and filters stay modeled."""
     return bool(_DISPLAY_ONLY.fullmatch(message or ''))
+
+
+def request_action(req):
+    """Only an explicit, self-contained display request can skip model planning."""
+    if getattr(req, 'image_ids', None) or (getattr(req, 'mode', None) or '') not in ('', 'chief'):
+        return None
+    from chief_shortcut_scope import constrained
+    if constrained(req, 'invoice'):
+        return None
+    message = getattr(req, 'message', '') or ''
+    if not invoice_display_request(message):
+        return None
+    status = re.search(r'\b(open|paid|draft|overdue)\s+invoices?\b', message, re.I)
+    form = re.search(r'\b(chart|timeline|list)\b', message, re.I)
+    return {'type': 'show_view', 'view': 'invoices',
+            'filter': status[1].lower() if status else ('all' if _ALL_INVOICES.search(message) else 'open'),
+            'form': form[1].lower() if form else 'list'}
+
+
+async def serve_request(client, req, session, biz):
+    """After admission/recurrence and a scoped business read, use the normal door.
+
+    The owner equality is deliberately stricter than merely receiving an RLS
+    row. Collaborator seats retain the existing full-context permission path.
+    Returning None means no action has run; once attempted, never fall through
+    and repeat it through a model turn.
+    """
+    action = request_action(req)
+    owner_id = str(getattr(getattr(session, 'user', None), 'id', '') or '')
+    if (action is None or not isinstance(biz, dict) or not owner_id
+            or str(biz.get('id') or '') != str(req.business_id)
+            or str(biz.get('owner_id') or '') != owner_id):
+        return None
+    import chief_of_staff as chief
+    import chief_stream_replay as replay
+    import chief_speech_boundary as speech
+    if chief._STREAM_SINK.get() is None:
+        recovered = await replay.recover_async(req, owner_id)
+        if recovered is not None:
+            return recovered
+    taken = await chief._execute_actions(client, biz, [action], user_id=owner_id,
+                                         owner_text=req.message)
+    if any(chief._action_failed(row) for row in taken):
+        answer = chief._deterministic_fallback_reply(taken)
+        grounding = {'status': 'receipts', 'sources': []}
+    else:
+        # Unsafe free-text cells may disqualify the detailed readout, but its
+        # validated numeric/status summary can still answer without a model.
+        answer = direct_invoice_answer(req.message, taken) or invoice_view_answer(taken)
+        grounding = {'status': 'records', 'sources': ['result:0']}
+        if not answer:
+            answer = "I couldn't read the invoice list reliably."
+            grounding = {'status': 'withheld', 'sources': []}
+    answer = speech.final_reply(answer, req.message)
+    result = {'response': answer, 'actions_taken': taken, 'grounding': grounding}
+    sink = chief._STREAM_SINK.get()
+    if sink is not None:
+        sink(chief.PROSE_PREFIX + answer)
+    await chief._archive_turn(client, biz, req.message, answer, taken)
+    await chief._log_chief_activity(client, user_id=owner_id, business_id=biz['id'],
+                                    source=req.client_surface, taken=taken)
+    try:
+        import audit_log
+        await asyncio.to_thread(audit_log.record_chief_turn, user_id=owner_id,
+            business_id=biz['id'], source=req.client_surface, taken=taken,
+            action_failed=chief._action_failed)
+    except Exception as exc:
+        chief.logger.warning('Invoice readout audit hook unavailable: %s', type(exc).__name__)
+    if chief._STREAM_SINK.get() is not None:
+        replay.remember(req, owner_id, result)
+    return result
 
 
 def invoice_display_evidence(taken):
