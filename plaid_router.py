@@ -522,10 +522,13 @@ def update_account(
             txs = sb_clients.sb_get_as_service(
                 f"/plaid_transactions?account_id=eq.{account_id}&business_id=eq.{biz}"
                 f"&pending=eq.false&select=transaction_id&limit=20000") or []
-            if txs:
-                sb_clients.sb_post_as_service("/gl_sync_queue", [
+            # op is NOT NULL on gl_sync_queue. Without it every toggle's
+            # re-queue was rejected and, unchecked, never said so.
+            if txs and sb_clients.sb_post_as_service("/gl_sync_queue", [
                     {"business_id": biz, "source_table": "plaid_transactions",
-                     "source_id": t["transaction_id"]} for t in txs], prefer=None)
+                     "source_id": t["transaction_id"], "op": "update"} for t in txs],
+                    prefer=None) is None:
+                logger.warning(f"[plaid] account-toggle GL enqueue rejected for {account_id}")
     except Exception as e:
         logger.warning(f"[plaid] account-toggle GL enqueue failed: {e}")
     return {"ok": True, **fields}
