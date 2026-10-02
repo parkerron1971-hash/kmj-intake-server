@@ -653,6 +653,16 @@ def _slots_per_offering(
     if not isinstance(bookings, list):
         bookings = []
 
+    # Busy times from the practitioner's other calendar (outside_calendar).
+    # Read once for the window; fails soft to [] (nothing connected / not
+    # set up), which leaves the slots exactly as before.
+    try:
+        import outside_calendar
+        outside_busy = outside_calendar.busy_blocks_for_dates(business["id"], today, horizon)
+    except Exception as e:  # pragma: no cover — never break the widget
+        logger.warning(f"outside busy read failed: {type(e).__name__}")
+        outside_busy = []
+
     out: Dict[str, List[Dict[str, Any]]] = {}
     for off in offerings or []:
         oid = off.get("id")
@@ -667,6 +677,7 @@ def _slots_per_offering(
                 offering_duration_min=int(dur),
                 from_date=today,
                 to_date=horizon,
+                busy_blocks=outside_busy,
             )
             out[oid] = slots
         except Exception as e:  # pragma: no cover — never break widget
@@ -859,8 +870,8 @@ async def book_anon(
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
-    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
-                                 business=biz):
+    if not _check_public_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
+                                        business=biz):
         raise HTTPException(
             status_code=409,
             detail="Sorry — that time was just booked. Please pick another.",
@@ -955,8 +966,8 @@ async def book(
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
-    if not _check_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
-                                 business=biz):
+    if not _check_public_slot_available(business_id, str(appt_iso or ""), int(dur_min or 0),
+                                        business=biz):
         raise HTTPException(
             status_code=409,
             detail="Sorry — that time was just booked. Please pick another.",
@@ -1193,6 +1204,55 @@ def _find_or_create_customer(
     return created[0]["id"]
 
 
+def _pg_ts(dt) -> str:
+    """A datetime that survives a PostgREST query string.
+
+    isoformat() on an aware datetime ends in '+00:00', and a '+' in a URL
+    query decodes to a SPACE, so `appointment_at=gte.2026-10-01T02:27:47
+    +00:00` reaches Postgres as '... 00:00' and 400s with 22007. Same bug
+    chief_of_staff._ts fixed on 2026-09-03; Sentry found it here on
+    2026-10-01. The 400 came back as None, which the callers read as
+    "no bookings": the double-book guard passed every slot, and the
+    booking session sync mirrored and cancelled nothing. Aware datetimes
+    are sent as UTC with a Z; naive ones carry no '+' and pass as-is."""
+    if dt.tzinfo is None:
+        return dt.isoformat()
+    from datetime import timezone as _tz
+    return dt.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _check_public_slot_available(
+    business_id: str,
+    appointment_at_iso: str,
+    duration_min: int,
+    business: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """The guard for bookings a CLIENT makes (book-anon, book, and the
+    agent site + Site Concierge, which ride book-anon): busy on the
+    practitioner's other calendar (outside_calendar) is a conflict at any
+    capacity, then the usual double-book guard.
+
+    Practitioner-made bookings (Chief, the calendar's New booking, weekly
+    series) call _check_slot_available directly and are NOT refused on
+    an outside-busy time: someone moving in from Calendly already has
+    "Jane, Tue 3pm" on the Google Calendar they linked, because Calendly
+    wrote it there, and re-entering Jane must not clash with Jane. Those
+    paths book and say "that time is also busy on your other calendar".
+
+    The outside check fails soft (nothing connected, not set up, a read
+    error) to "no conflict", and runs first because a feed can gain a
+    busy block between the slot list and the submit."""
+    if appointment_at_iso and duration_min > 0:
+        try:
+            import outside_calendar
+            if outside_calendar.busy_overlap(business_id, appointment_at_iso, duration_min):
+                return False
+        except Exception as e:  # pragma: no cover — never break a booking on a read
+            logger.warning(f"outside busy re-check failed: {type(e).__name__}")
+    return _check_slot_available(business_id, appointment_at_iso, duration_min,
+                                 business=business)
+
+
 def _check_slot_available(
     business_id: str,
     appointment_at_iso: str,
@@ -1200,6 +1260,10 @@ def _check_slot_available(
     business: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Phase D.4 — submit-side double-book guard.
+
+    Bookings only (this business's own calendar). Client-made bookings go
+    through _check_public_slot_available, which also refuses times that
+    are busy on the practitioner's other calendar.
 
     The customer's UI shows slots that were free at config-anon snapshot
     time, but two customers can race the same slot. This re-verifies at
@@ -1245,8 +1309,8 @@ def _check_slot_available(
         # Pad the query window by 4h either side so we don't miss a
         # long booking whose appointment_at lands outside the immediate
         # window but whose end-time spills in.
-        lo = (slot_start - timedelta(hours=4)).isoformat()
-        hi = (slot_start + timedelta(hours=4)).isoformat()
+        lo = _pg_ts(slot_start - timedelta(hours=4))
+        hi = _pg_ts(slot_start + timedelta(hours=4))
     except Exception:
         # If we can't parse the slot, don't block the booking; the
         # check is opportunistic.
@@ -1343,7 +1407,7 @@ async def booking_session_sync_tick() -> None:
 
     def _sync() -> None:
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
+        now = _pg_ts(datetime.now(timezone.utc))
         mods = sb_clients.sb_get_as_service(
             "/custom_modules?archetype=eq.booking_calendar&is_active=eq.true"
             "&select=id,business_id&limit=500") or []

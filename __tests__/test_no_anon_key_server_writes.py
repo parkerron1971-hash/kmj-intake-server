@@ -103,25 +103,106 @@ def _python_files():
 # A mutating HTTP call, and an anon-key reference. Both have to appear in
 # the same small window for the pair to mean anything.
 _MUTATING = re.compile(r"\.(post|patch|put|delete)\s*\(")
-_ANON_REF = re.compile(r"SUPABASE_ANON(_KEY)?\b|_supabase_anon\s*\(|anon_key\b")
+_ENV_ANON = re.compile(r"SUPABASE_ANON(_KEY)?\b")
 _WINDOW = 20   # lines above a call — a headers dict sits well inside this
+
+# Helper functions whose NAME suggests the anon key. Whether they actually
+# return it is a separate question, and the whole reason _anon_helpers()
+# exists — see below.
+_HELPER_DEF = re.compile(r"^def (_sb_anon|_supabase_anon)\s*\(", re.M)
+_ANY_DEF = re.compile(r"^def ([a-zA-Z_][a-zA-Z0-9_]*)\s*\(", re.M)
+
+
+def _anon_helpers(src: str) -> set:
+    """Which anon-NAMED helpers in this file genuinely return the anon key.
+
+    THE TRAP THIS ENCODES, which cost a real correction in PR #768: a
+    module can define `_sb_anon()` that returns
+    SUPABASE_SERVICE_ROLE_KEY. `business_profile_agent` does exactly
+    that — the name is a leftover from its migration off the anon key.
+    A reviewer grepped for the name, saw the file, and filed a claim that
+    the module was unmigrated. It wasn't. The correction is a commit on
+    main.
+
+    A guard that keyed on the name alone would repeat that accusation
+    every build, forever, about a module that is already correct — and
+    the fix would be an exemption entry, which is how a guard rots into
+    a list of things it has agreed not to look at.
+
+    So the name is a candidate and the BODY is the evidence. Any mention
+    of the service-role key in the helper's body means it is not an anon
+    call site: `sms_service` returns service-role with an anon fallback
+    (deliberate, so a half-configured env limps visibly rather than
+    failing dark), and that is service-role-preferring, not a violation.
+
+    THE SECOND INDIRECTION, and the reason the first version of this
+    guard passed while three modules were plainly writing with the anon
+    key. Nobody puts `_sb_anon()` next to their `.post()`. They write
+    `_sb_headers()` once at the top of the file and call it four hundred
+    lines later, so a window around the call site sees a helper name and
+    nothing incriminating. The chain has to be followed:
+
+        _sb_anon()  ->  _sb_headers()  ->  client.post(headers=...)
+
+    So this returns BOTH kinds of name: helpers that yield the key, and
+    the header builders that embed one.
+    """
+    anon = set()
+    lines = src.splitlines()
+
+    def _body_of(match_start):
+        start = src[:match_start].count("\n")
+        body = []
+        for line in lines[start + 1:start + 30]:
+            if line and not line[0].isspace() and not line.startswith(")"):
+                break
+            body.append(line)
+        return "\n".join(body)
+
+    for m in _HELPER_DEF.finditer(src):
+        body_text = _body_of(m.start())
+        if "SUPABASE_SERVICE_ROLE_KEY" in body_text:
+            continue          # service-role, whatever it is called
+        if _ENV_ANON.search(body_text):
+            anon.add(m.group(1))
+
+    # Header builders that embed one of those (or the env var directly).
+    for m in _ANY_DEF.finditer(src):
+        name = m.group(1)
+        if name in anon:
+            continue
+        body_text = _body_of(m.start())
+        if "apikey" not in body_text:
+            continue
+        if "SUPABASE_SERVICE_ROLE_KEY" in body_text:
+            continue
+        if _ENV_ANON.search(body_text) or any(
+                re.search(rf"\b{re.escape(h)}\s*\(", body_text) for h in anon):
+            anon.add(name)
+    return anon
 
 
 def test_no_anon_key_at_a_rest_write_call_site():
     """No mutating /rest/v1 call is made with the anon key in its headers.
 
     Scoped to the CALL SITE, not the file, and that distinction is the
-    whole test. The first cut asked "does this file mention the anon key
-    AND contain a mutating call AND mention /rest/v1" — which flagged
-    marketing_pages and practitioner_profile_agent, two modules whose
-    anon reference and whose POST are hundreds of lines and several
-    unrelated services apart. A guard with false positives gets muted by
-    exemptions until it guards nothing, so it has to be right about what
-    it accuses.
+    whole test — a guard with false positives gets muted by exemptions
+    until it guards nothing, so it has to be right about what it accuses.
 
-    It kept one accusation when narrowed, and that one was true:
-    public_site._sb_post wrote /events and /sessions with the anon key in
-    both headers.
+    CORRECTION, 2026-09-01. An earlier version of this docstring called
+    marketing_pages and practitioner_profile_agent false positives whose
+    "anon reference and POST are hundreds of lines apart." That was
+    wrong, and wrong in the direction that matters: BOTH were real.
+    marketing_pages builds its anon key twelve lines above a POST to
+    marketing_leads — the table lead_admin reads — and
+    practitioner_profile_agent reaches its POST through _sb_headers().
+    The dismissal came from a narrow grep that happened to show neither.
+
+    So the guard was right twice and its author talked it out of both.
+    That is the actual failure mode of a check like this: not that it
+    cries wolf, but that a plausible story about why a hit is spurious
+    is always available and costs nothing to believe. A hit gets
+    dismissed only by reading the call site.
     """
     offenders = []
     for path, rel in _python_files():
@@ -131,16 +212,52 @@ def test_no_anon_key_at_a_rest_write_call_site():
             raw = open(path, encoding="utf-8", errors="ignore").read()
         except OSError:
             continue
-        lines = _code_only(raw).splitlines()
+        code = _code_only(raw)
+        # An anon reference in THIS file: the env var directly, or a
+        # locally-defined helper whose body proves it returns the anon key.
+        helpers = _anon_helpers(code)
+        pattern = "|".join([r"SUPABASE_ANON(_KEY)?\b"]
+                           + [rf"{re.escape(h)}\s*\(" for h in helpers])
+        anon_ref = re.compile(pattern)
+
+        lines = code.splitlines()
         for n, line in enumerate(lines):
             if not _MUTATING.search(line):
                 continue
-            window = "\n".join(lines[max(0, n - _WINDOW):n + 1])
-            if "/rest/v1" in window and _ANON_REF.search(window):
+            # SYMMETRIC. A multi-line call puts its headers= argument
+            # BELOW the .post( line:
+            #     r = await client.post(f"{_sb_url()}/rest/v1{path}",
+            #                           headers=_sb_headers(), ...)
+            # A backwards-only window read three real violations as clean
+            # — foundation_agent's two writes and one of
+            # practitioner_profile_agent's — for no reason but line order.
+            window = "\n".join(lines[max(0, n - _WINDOW):n + _WINDOW])
+            if "/rest/v1" in window and anon_ref.search(window):
                 offenders.append(f"{rel}:{n + 1}")
     assert not offenders, (
         "mutating /rest/v1 call sites carrying the anon key — use "
         f"SUPABASE_SERVICE_ROLE_KEY (RLS_MODEL.md Rule 1): {offenders}")
+
+
+def test_the_helper_resolver_reads_bodies_not_names():
+    """Pin the #768 trap directly, so nobody 'simplifies' the resolver
+    back into a name match.
+
+    business_profile_agent._sb_anon returns SUPABASE_SERVICE_ROLE_KEY.
+    sms_service._sb_anon prefers service-role with an anon fallback.
+    Neither is an anon call site; both are named as if they were.
+    """
+    def helpers_of(rel):
+        src = _code_only(open(os.path.join(REPO, rel),
+                              encoding="utf-8", errors="ignore").read())
+        return _anon_helpers(src)
+
+    assert "_sb_anon" not in helpers_of("business_profile_agent.py"), \
+        "business_profile_agent._sb_anon returns the SERVICE ROLE key (#768)"
+    assert "_sb_anon" not in helpers_of("sms_service.py"), \
+        "sms_service._sb_anon prefers service-role with an anon fallback"
+    # And the resolver still SEES a genuine one, or it proves nothing.
+    assert "_sb_anon" in helpers_of("agents/director_agent/refine.py")
 
 
 def test_the_leads_writer_uses_service_role():

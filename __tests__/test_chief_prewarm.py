@@ -294,3 +294,34 @@ def test_the_throttle_opens_again_once_the_entry_ages(stubs, monkeypatch):
     monkeypatch.setattr(chief_prewarm, "MIN_REWARM_SECONDS", 0.0)
     assert _prewarm()["warmed"] == len(EXPECTED_SOURCES)
     assert all(v == 2 for v in stubs.values())
+
+
+def test_saved_style_refresh_bypasses_mic_throttle_without_context_sweep(stubs, monkeypatch):
+    import chief_fast_track as fast
+    monkeypatch.setattr(fast, "_STYLES", {})
+    _prewarm()
+    before = dict(stubs)
+    async def saved_business(client, method, path, body=None):
+        assert method == "GET" and "voice_profile" in path
+        return [{**_BIZ, "voice_profile": {"chief_tone": {"tone": "formal"}}}]
+    monkeypatch.setattr(cos, "_sb", saved_business)
+    result = asyncio.run(cos.chief_prewarm_endpoint(
+        cos.PrewarmRequest(business_id="biz-1", refresh_style=True), _Session()))
+    assert result["style_refreshed"] is True
+    assert stubs == before
+    assert '"tone": "formal"' in fast.style_for("user-1", "biz-1")
+    assert '"tone": "formal"' not in fast.style_for("user-2", "biz-1")
+    assert '"tone": "formal"' not in fast.style_for("user-1", "biz-2")
+
+
+def test_style_refresh_still_requires_authorized_business_read(monkeypatch):
+    import chief_fast_track as fast
+    monkeypatch.setattr(fast, "_STYLES", {})
+    async def unavailable(client, method, path, body=None):
+        return []
+    monkeypatch.setattr(cos, "_sb", unavailable)
+    result = asyncio.run(cos.chief_prewarm_endpoint(
+        cos.PrewarmRequest(business_id="another-business", refresh_style=True), _Session()))
+    assert result["warmed"] == 0
+    assert not result.get("style_refreshed")
+    assert fast._STYLES == {}

@@ -93,7 +93,7 @@ def test_reviewer_failure_preserves_queued_status_and_never_says_finished():
         ctx={}, view_detail={}, taken=[{'type': 'enqueue_job', 'result': 'queued',
             'label': 'Course build queued'}], message='Build course', business_id='biz',
         reviewer=AsyncMock(side_effect=RuntimeError('offline'))))
-    assert result == 'Course build queued'
+    assert result == 'Course build queued.'
     assert meta['status'] == 'receipts'
 
 
@@ -390,9 +390,9 @@ def test_a_prose_gap_is_delivered_with_the_doubt_named():
     result, meta = asyncio.run(truth.finalize_reply(None, 'There are 725 contacts. Most of them are active.',
         ctx={'contacts_total': 725}, view_detail={}, taken=[], message='How many contacts?', business_id='biz',
         reviewer=AsyncMock(return_value=raw)))
-    assert result.startswith('There are 725 contacts. Most of them are active.')
-    assert 'These parts of my answer are still unverified:\n- “Most of them are active.”' in result
-    assert meta['status'] == 'caveated' and meta['gaps'] == ['Most of them are active.']
+    assert result == 'There are 725 contacts.'
+    assert 'still unverified' not in result
+    assert meta['status'] == 'trimmed' and meta['gaps'] == ['Most of them are active.']
 
 
 def test_a_gap_never_lets_a_completion_claim_or_a_bad_figure_through():

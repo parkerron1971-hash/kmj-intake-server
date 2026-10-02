@@ -312,3 +312,31 @@ def test_the_per_request_lines_reach_the_logs():
     import logging
     for lg in (route_ledger.logger, vm.logger):
         assert lg.isEnabledFor(logging.INFO) and lg.handlers
+
+
+def test_useful_answer_flow_durations_are_separate_from_first_sound(report, caplog):
+    _post(request_id='flow', ttfa_ms=500, first_audio='lead', reply_audio_ms=4000,
+          first_answer_text_ms=3500, answer_tts_ms=500, max_audio_gap_ms=1800)
+    row=report[-1]
+    assert row['ttfa_ms']==500 and row['reply_audio_ms']==4000
+    assert row['first_answer_text_ms']==3500 and row['max_audio_gap_ms']==1800
+    assert '[voice flow]' in caplog.text and '1800' in caplog.text
+    _post(first_answer_text_ms=-1, answer_tts_ms=600001, max_audio_gap_ms=-10)
+    assert all(report[-1][key] is None for key in vm._FLOW_LOG_FIELDS)
+
+
+def test_new_flow_metrics_do_not_require_database_columns(monkeypatch):
+    import sb_clients
+    sent=[]
+    monkeypatch.setenv('VOICE_LOG_DB','on')
+    monkeypatch.setattr(vm,'_skip_db_until',0)
+    monkeypatch.setattr(sb_clients,'sb_post_as_service',lambda path,row:sent.append(row) or [{'id':'saved'}])
+    class ImmediateThread:
+        def __init__(self,target,**kwargs):self.target=target
+        def start(self):self.target()
+    monkeypatch.setattr(vm.threading,'Thread',ImmediateThread)
+    row=vm.row_for(vm.VoiceTurn(reply_audio_ms=2000,first_answer_text_ms=1700,max_audio_gap_ms=500),USER.id,BIZ)
+    vm._write(row)
+    assert sent and sent[0]['reply_audio_ms']==2000
+    assert not (vm._FLOW_LOG_FIELDS & sent[0].keys())
+    assert row['max_audio_gap_ms']==500

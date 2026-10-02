@@ -149,6 +149,30 @@ def _jsonld(page: str, dials: dict) -> str:
     return '<script type="application/ld+json">' + body.replace("</", "<\\/") + "</script>\n"
 
 
+def _founder_sentence() -> str:
+    """The founding-seat line the home page's "ask" answer ends with, from the
+    same live dials as the founder strip — or nothing when there is no seat to
+    offer. That answer used to hand-type "$199 a month", an "Elite" plan at $399
+    and a founding price of $149; none of the three was the real price (found
+    2026-10-01). Plain text only: it lands inside a JS template literal."""
+    import marketing_pages as mp
+    import pricing_config
+    import stripe_billing
+    try:
+        if not stripe_billing._founder_price_ids():
+            return ""
+        limit = stripe_billing._founder_seat_limit()
+        left = max(0, limit - mp._founder_seats_taken_sync())
+        price = pricing_config.tier_price_cents().get("founder", 0) // 100
+    except Exception:
+        return ""
+    if not left or not price:
+        return ""
+    seats = f"{left} of {limit} seats left" if left < limit else f"{limit} seats, first come"
+    return (f" And right now a founding seat locks Professional at ${price} a month for as long as you "
+            f"keep it: {seats}.")
+
+
 def render_home_v2() -> str:
     import marketing_founder_ad
     import marketing_pages as mp
@@ -161,6 +185,8 @@ def render_home_v2() -> str:
             .replace("{{STARTER_PRICE}}", str(starter))
             .replace("{{PRO_PRICE}}", str(dials["professional"]["price_num"]))
             .replace("{{SOL_PRICE}}", str(dials["practice"]["price_num"]))
+            .replace("{{PRO_CREDITS}}", dials["professional"]["credits"])
+            .replace("{{FOUNDER_SENTENCE}}", _founder_sentence())
             .replace("{{FOUNDER_AD_CSS}}", ad_css)
             .replace("{{FOUNDER_AD_MARKUP}}", ad_markup)
             .replace("{{PIXEL}}", mp._pixel_script())

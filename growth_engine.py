@@ -203,20 +203,23 @@ async def _gather_briefing_data(client: httpx.AsyncClient, biz: Dict) -> Dict:
     payment_events = [e for e in events if e["event_type"] in PAYMENT_EVENT_TYPES]
     payment_sum = _sum_amount(payment_events)
 
-    # Agent queue activity
-    queue_window = await _sb(client, "GET",
+    # Agent queue activity. The onboarding welcome note is not a draft
+    # anyone is waiting on, so week one's briefing does not count it.
+    import onboarding_welcome
+    queue_window = onboarding_welcome.without_welcome(await _sb(client, "GET",
         f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{window_start}"
-        f"&select=agent,status&limit=300"
-    ) or []
+        f"&select=status,{onboarding_welcome.SELECT_COLUMNS}&limit=300"
+    )) or []
     drafts_by_agent: Dict[str, Dict[str, int]] = {}
     for q in queue_window:
         bucket = drafts_by_agent.setdefault(q["agent"], {"draft": 0, "approved": 0, "dismissed": 0, "sent": 0})
         bucket[q["status"]] = bucket.get(q["status"], 0) + 1
 
-    pending = await _sb(client, "GET",
+    pending = onboarding_welcome.without_welcome(await _sb(client, "GET",
         f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
-        f"&select=id,agent,action_type,subject,priority&order=priority.asc&limit=5"
-    ) or []
+        f"&select=id,action_type,subject,priority,{onboarding_welcome.SELECT_COLUMNS}"
+        f"&order=priority.asc&limit=5"
+    )) or []
 
     # Sessions
     sessions_completed = await _sb(client, "GET",
@@ -443,11 +446,15 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
     at_risk = await _sb(client, "GET",
         f"/contacts?business_id=eq.{biz_id}&health_score=lt.40"
         f"&status=in.(active,lead,vip)&order=health_score.asc&limit={ACTION_CAP_AT_RISK}"
-        f"&select=id,name,role,health_score,last_interaction"
+        f"&select=id,name,role,health_score,last_interaction,metadata"
     ) or []
 
+    import contact_fields
     for c in at_risk:
         if _cap_reached(): break
+        # An unsubscribe holds: no automated check-in is drafted for them.
+        if contact_fields.email_opted_out(c):
+            continue
         existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
         if existing:
             actions.append({
@@ -489,11 +496,13 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
         f"&status=in.(active,lead,vip)"
         f"&last_interaction=lt.{inactive_cutoff}"
         f"&order=last_interaction.asc&limit={ACTION_CAP_INACTIVE}"
-        f"&select=id,name,role,health_score,last_interaction"
+        f"&select=id,name,role,health_score,last_interaction,metadata"
     ) or []
 
     for c in inactive:
         if _cap_reached(): break
+        if contact_fields.email_opted_out(c):
+            continue
         existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
         if existing:
             actions.append({

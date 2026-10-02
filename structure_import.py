@@ -352,37 +352,41 @@ def _sheet_verdict(sheet: Dict[str, Any], cols: List[Dict[str, Any]]) -> Tuple[s
 
 
 def _contacts_columns(cols: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Map a people-sheet onto the six contact fields. Everything else is
-    dropped BY NAME."""
-    taken: set = set()
+    """Map a people-sheet with the SAME rules the Contacts importer uses
+    (contact_fields.guess_columns) — first and last names, company,
+    birthday, address, unsubscribes, and every other column kept as a
+    detail under its own heading. Only empty columns and old-tool system
+    noise are dropped, and they are dropped BY NAME."""
+    import contact_fields
+    headers = [c["header"] for c in cols]
+    depth = max((len(c.get("values") or []) for c in cols), default=0)
+    sample = [[(c["values"][r] if r < len(c.get("values") or []) else "") for c in cols]
+              for r in range(depth)]
+    guesses = contact_fields.guess_columns(headers, sample)
+    # The rubric's own name evidence backs up a header contact_fields
+    # does not know ("Attendee", "Patient").
+    if not any(g["field"] in ("name", "first_name", "last_name") for g in guesses):
+        for c, g in zip(cols, guesses):
+            if g["field"] == "detail" and c.get("name_like") and c["type"] in ("text", "contact_link"):
+                g.update(field="name", label=contact_fields.LABELS["name"], note="Their name.")
+                break
     out: List[Dict[str, Any]] = []
     dropped: List[str] = []
-
-    def claim(target: str, pred, note: str) -> None:
-        c = _pick(cols, lambda c: c["index"] not in taken and not c["empty"] and pred(c))
-        if c is None:
-            return
-        taken.add(c["index"])
-        out.append({"header": c["header"], "decision": "map", "confidence": "high",
-                    "field": {"name": target, "type": "text", "label": humanize(target)},
-                    "note": note})
-
-    claim("name", lambda c: c["name_like"] and c["type"] in ("text", "contact_link"), "Their name.")
-    claim("email", lambda c: c["type"] == "email", "How to reach them.")
-    claim("phone", lambda c: c["type"] == "phone", "How to reach them.")
-    claim("status", lambda c: c["distinct"] <= MAX_SELECT_OPTIONS
-          and _header_has(c["header"], _STAGE_HEADERS + ("type",)),
-          "Kept as their status.")
-    claim("tags", lambda c: _header_has(c["header"], ("tag", "label", "group", "category")), "Kept as tags.")
-    claim("note", lambda c: c["type"] == "textarea" or _header_has(c["header"], ("note", "comment", "description")),
-          "Kept on the record.")
-    for c in cols:
-        if c["index"] not in taken:
+    for c, g in zip(cols, guesses):
+        f = g["field"]
+        if f == "skip":
             dropped.append(c["header"])
             out.append({"header": c["header"], "decision": "drop", "confidence": "high",
-                        "field": None,
-                        "note": "Empty in every sampled row." if c["empty"]
-                        else "Contacts keep name, email, phone, status, tags and a note — this column has no home there yet."})
+                        "field": None, "note": g["note"] or "Left out."})
+            continue
+        if f == "detail":
+            note = g["note"] or f"Kept on their record as “{c['header']}”."
+            label = humanize(c["header"])
+        else:
+            note = g["note"] or f"{contact_fields.LANDS[f]}."
+            label = contact_fields.LABELS[f]
+        out.append({"header": c["header"], "decision": "map", "confidence": "high",
+                    "field": {"name": f, "type": "text", "label": label}, "note": note})
     return out, dropped
 
 

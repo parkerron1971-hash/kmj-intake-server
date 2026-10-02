@@ -29,6 +29,8 @@ Kill switch: SCHEDULER_LOCK=off forces leader (legacy single-instance).
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import os
 import time
@@ -183,11 +185,31 @@ async def renew_tick() -> None:
 
 
 def gate(job_name: str, fn):
-    """Wrap a scheduled coroutine so it only runs on the leader. Logs a
-    skip on followers (debug-level — not noise)."""
+    """Wrap a scheduled job so it only runs on the leader. Logs a skip on
+    followers (debug-level — not noise).
+
+    Takes a coroutine function OR a plain one. Five jobs are plain
+    functions (lead_response.reconcile_tick, balance_sweep.sweep_tick,
+    vertical_distill.tick, vertical_knowledge.seed_tick,
+    vertical_playbook.curate_tick), and `await fn()` on them ran the whole
+    job synchronously ON THE EVENT LOOP, blocking every request for its
+    duration, and then raised "object dict can't be used in 'await'
+    expression" on the result. Sentry caught it on its first night:
+    lead_response_reconcile, every 15 minutes, 31 times in 7 hours. A
+    plain function now runs on a worker thread, so it neither blocks the
+    API nor crashes on its return value."""
+    is_coroutine = inspect.iscoroutinefunction(fn)
+
     async def _wrapped():
         if not is_leader():
             logger.debug(f"[scheduler_lock] not leader — skipping {job_name}")
             return
-        return await fn()
+        if is_coroutine:
+            return await fn()
+        result = await asyncio.to_thread(fn)
+        # A plain callable that hands back a coroutine (a lambda around an
+        # async function) is still awaited, here on the loop.
+        if inspect.isawaitable(result):
+            result = await result
+        return result
     return _wrapped

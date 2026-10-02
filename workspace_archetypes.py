@@ -76,12 +76,13 @@ VERTICAL_LEAN: Dict[str, Dict[str, float]] = {
     "service_provider":   {"consultant": 4.0, "trades": 3.0},
     "custom":             {},
 
-    # `personal_services` is the canonical key but carries no aliases in
-    # vertical_registry, so a practitioner who typed "barbershop" arrives
-    # here unresolved. These are the self-descriptions that actually show
-    # up in intake, mapped straight through rather than left to the
-    # keyword pass — what someone calls their business is signal 1, not
-    # signal 2.
+    # These are the self-descriptions that actually show up in intake,
+    # mapped straight through rather than left to the keyword pass — what
+    # someone calls their business is signal 1, not signal 2. (Since
+    # 2026-09-26 vertical_registry also resolves most of them to
+    # personal_services; they stay here because the raw string gets first
+    # refusal in _resolve_vertical, and med_spa is deliberately not a
+    # registry alias.)
     "salon":              {"salon": 10.0},
     "barber":             {"salon": 10.0},
     "barbershop":         {"salon": 10.0},
