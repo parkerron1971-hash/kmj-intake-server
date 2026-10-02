@@ -10,7 +10,16 @@ error, on any model, without losing the prefill benefit elsewhere.
 """
 from unittest import mock
 
+import pytest
+
 import agents.composer.drl.passes as passes
+
+
+@pytest.fixture(autouse=True)
+def _fresh_prefill_memory(monkeypatch):
+    # the rejection is remembered per model per process (2026-08-29);
+    # every test here starts with nothing remembered
+    monkeypatch.setattr(passes, "_PREFILL_REJECTED", set())
 
 
 class _Block:
@@ -25,6 +34,26 @@ class _Msg:
         self.content = [_Block(text)]
         self.model = model
         self.usage = None
+
+
+class _FakeStream:
+    """What client.messages.stream returns: a context manager whose
+    text_stream yields the text and whose get_final_message is the
+    Message (the DRL call streams since 2026-08-29)."""
+
+    def __init__(self, msg):
+        self._msg = msg
+        self.text_stream = iter([b.text for b in msg.content])
+        self.drained = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        return self._msg
 
 
 class _PrefillRejectingClient:
@@ -47,6 +76,9 @@ class _PrefillRejectingClient:
                         "assistant message prefill. The conversation must "
                         "end with a user message.")
                 return _Msg('{"ok":true}')
+
+            def stream(_s, **kw):
+                return _FakeStream(_s.create(**kw))
 
         self.messages = _Messages(self)
 
@@ -77,6 +109,9 @@ def test_prefill_still_applied_when_model_accepts_it():
             class _Messages:
                 def create(_s, **kw):
                     return _Msg(',"rest":1}')
+
+                def stream(_s, **kw):
+                    return _FakeStream(_s.create(**kw))
             self.messages = _Messages()
 
     with mock.patch.object(passes.model_ladder, "call_with_ladder",
@@ -85,3 +120,64 @@ def test_prefill_still_applied_when_model_accepts_it():
                            temperature=0.5, business_id="biz",
                            task="dro", prefill='{"dro_version"')
     assert out.startswith('{"dro_version"')
+
+
+
+# ─── THE CUT SENTENCE (2026-08-28, MaCnificent Hair Co) ──────────────
+# Both full-DRO calls came back at exactly the 9000-token cap with the
+# JSON cut mid-"because"; the parse retry re-rolled into the same cap
+# and the build ran on the minimal brain.
+
+def test_looks_truncated_knows_a_cut_object_from_prose_or_a_fence():
+    assert passes._looks_truncated('{"dro_version": 1, "decisions": {"palette": {"because": "warm')
+    assert not passes._looks_truncated('{"dro_version": 1}')
+    assert not passes._looks_truncated("I cannot produce that.")
+    assert not passes._looks_truncated('```json\n{"a": 1}\n```')
+    assert not passes._looks_truncated("")
+
+
+def test_a_cut_response_is_continued_with_the_partial_as_prefill():
+    calls = []
+
+    def _fake_call(client, system, user, *, max_tokens, temperature,
+                   business_id, task, prefill=""):
+        calls.append(prefill)
+        return prefill + ' and unhurried"}}}'
+
+    with mock.patch.object(passes, "_call", _fake_call):
+        out = passes._continue_cut_response(
+            None, "sys", "user", '{"decisions": {"palette": {"because": "warm  ',
+            business_id="biz")
+    # the prefill is the partial with trailing whitespace stripped (the API
+    # rejects a prefill ending in whitespace), and the result is whole
+    assert calls == ['{"decisions": {"palette": {"because": "warm']
+    assert passes._parse_json(out) == {"decisions": {"palette": {"because": "warm and unhurried"}}}
+
+
+def test_author_dro_continues_a_cut_response_instead_of_rerolling():
+    """The attempt sees a cut object → ONE continuation call carrying the
+    partial as prefill — not a bare re-roll with the 'not parseable' nag."""
+    seen = []
+    cut = '{"dro_version": 1, "decisions": {"palette": {"because": "warm'
+
+    def _fake_call(client, system, user, *, max_tokens, temperature,
+                   business_id, task, prefill=""):
+        seen.append({"prefill": prefill, "user": user, "max_tokens": max_tokens})
+        if prefill == cut:
+            return cut + '"}}}'      # continued, still not a valid DRO — fine
+        return cut                   # every fresh attempt is cut at the cap
+
+    with mock.patch.object(passes, "_call", _fake_call), \
+         mock.patch.object(passes, "_author_dro_minimal",
+                           lambda *a, **k: None), \
+         mock.patch.object(passes, "_select_exemplars", lambda s: []), \
+         mock.patch.dict(passes.os.environ, {"ANTHROPIC_API_KEY": "k"}), \
+         mock.patch.object(passes, "Anthropic", lambda *a, **k: object(),
+                           create=True):
+        passes.author_dro("biz", signals=[], recent=[])
+    prefills = [c["prefill"] for c in seen]
+    assert cut in prefills, "the cut response was never continued"
+    # the continuation rides the taller cap, and the very next fresh call
+    # (if any) is the parse retry, not a blind second roll at the old cap
+    assert all(c["max_tokens"] == passes.DRO_MAX_TOKENS for c in seen)
+    assert passes.DRO_MAX_TOKENS >= 14000

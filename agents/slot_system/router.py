@@ -19,11 +19,10 @@ User-facing endpoints (PART 5):
   POST /slots/{business_id}/{slot_name}/remove    — hide from the site
   POST /slots/{business_id}/{slot_name}/restore   — un-hide
 
-Owner gating: NONE at this layer. Matches the existing pattern across
-practitioner_profile_router, voice_depth_agent, public_site.py — all
-business mutations are gated only by Supabase anon-key access. A real
-per-business JWT layer is planned for Pass 4.0c+ and will retrofit
-across all mutation surfaces in one shot rather than per-router.
+Owner gating: `business_access` on every path-scoped route, `assert_access`
+when the business id arrives in a body. Reads are `viewer`; writes (and
+DALL-E spend diagnostics) are `admin`. The owner always passes — `role_of`
+ranks them above admin even with no `business_users` row.
 
 Registration order: BEFORE `public_site_router` in
 `kmj_intake_automation.py`, alongside the other agent routers. The
@@ -36,11 +35,11 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from auth_supabase import require_user, AuthedUser
+from auth_supabase import require_user, UserSession
 from pydantic import BaseModel
 
 import sb_clients
-from auth_supabase import UserSession
+from business_access import assert_access, business_access
 
 from agents.slot_system.unsplash_client import (
     build_unsplash_query,
@@ -181,17 +180,17 @@ class DiagDalleRequest(BaseModel):
 @router.post("/_diag/dalle")
 def diag_dalle_generate(
     req: DiagDalleRequest,
-    _: UserSession = Depends(sb_clients.authed_request),
+    session: UserSession = Depends(sb_clients.authed_request),
 ):
     """Diagnostic: generate one DALL-E image, rehost to Supabase, log
     spend, persist as the slot's default. Returns the Supabase URL +
     cost. Subject to PER_SITE_DAILY_CAP_USD ($0.50) — a request that
     would breach the cap returns 402 with the current spend.
 
-    Used by PART 3 verification curls (Royal Palace HD generation +
-    cost cap rejection test). The endpoint is intentionally permissive
-    (no auth) since it requires a valid business_id and is gated by
-    the spend cap."""
+    business_id is in the body, so the FastAPI dependency cannot see it
+    (it would look for a query string). assert_access is the same gate.
+    """
+    assert_access(req.business_id, session.user, "admin")
     enriched_brief = {
         "inferred_vibe": req.inferred_vibe or "",
         "brand_metaphor": req.brand_metaphor or "",
@@ -271,7 +270,7 @@ def diag_dalle_generate(
 @router.get("/_diag/dalle_spend")
 def diag_dalle_spend(
     business_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Diagnostic: report current DALL-E spend for a business, plus
     a sample-cost can-generate flag for HD 1024 ($0.08)."""
@@ -297,7 +296,7 @@ class SimulateSpendRequest(BaseModel):
 @router.post("/_diag/storage_probe")
 def diag_storage_probe(
     business_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Diagnostic: upload a 1KB synthetic PNG to the site_images bucket
     to isolate Supabase Storage failures from OpenAI download issues.
@@ -322,7 +321,7 @@ def diag_storage_probe(
 @router.post("/_diag/dalle_spend_simulate")
 def diag_simulate_spend(
     req: SimulateSpendRequest,
-    _: UserSession = Depends(sb_clients.authed_request),
+    session: UserSession = Depends(sb_clients.authed_request),
 ) -> Dict[str, Any]:
     """Diagnostic: append a synthetic spend entry so the budget cap
     can be exercised without burning real DALL-E generations. The
@@ -331,6 +330,7 @@ def diag_simulate_spend(
 
     Used in PART 3 verification: pre-load $0.45, then attempt a real
     $0.08 generation, expect 402."""
+    assert_access(req.business_id, session.user, "admin")
     ok = add_synthetic_spend_for_testing(
         business_id=req.business_id,
         cost_usd=req.cost_usd,
@@ -351,7 +351,7 @@ def diag_simulate_spend(
 @router.post("/_diag/dalle_spend_clear")
 def diag_dalle_spend_clear(
     business_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Diagnostic: drop synthetic spend entries (slot_name=='_synthetic_test')
     so PART 5 verification can fire a real DALL-E reroll without the
@@ -361,10 +361,9 @@ def diag_dalle_spend_clear(
 
 # ─── PART 5 — Practitioner-facing endpoints ─────────────────────────
 #
-# Owner gating: NONE (matches existing single-tenant pattern across
-# practitioner_profile_router, voice_depth_agent, public_site.py). A
-# real per-business JWT layer is planned for Pass 4.0c+ to retrofit
-# every mutation surface in one shot.
+# Writes go through business_access("admin"); the GET manifest is
+# viewer. Same ranks as brand_engine_router — seeing the slot cards is
+# not an administrative act; changing the live site is.
 
 # Allowed MIME types for slot uploads. Must match the bucket's accepted
 # types in Supabase Studio (image/jpeg, image/png, image/webp, image/avif).
@@ -465,7 +464,7 @@ def _slot_record_for_response(
 @router.get("/{business_id}")
 def get_slot_manifest(
     business_id: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("viewer")),
 ) -> Dict[str, Any]:
     """Full slot manifest for a business. Returns ALL 11 slots from
     SLOT_DEFINITIONS (not just slots that have been populated), so the
@@ -485,7 +484,7 @@ async def upload_slot(
     business_id: str,
     slot_name: str,
     file: UploadFile = File(...),
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Practitioner upload endpoint. Validates size + MIME + dimensions,
     stores in Supabase site_images bucket, sets slot custom_url. Custom
@@ -576,7 +575,7 @@ async def upload_slot(
 def clear_slot(
     business_id: str,
     slot_name: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Revert a slot from custom upload back to default suggestion.
     Does NOT delete the uploaded file from Supabase Storage — kept for
@@ -607,7 +606,7 @@ def clear_slot(
 def remove_slot(
     business_id: str,
     slot_name: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Hide a slot's image from the served site entirely. The resolver
     strips the tag — no image, no placeholder box — so the page simply
@@ -639,7 +638,7 @@ def remove_slot(
 def restore_slot(
     business_id: str,
     slot_name: str,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Lift a /remove: the slot resolves normally again (custom upload
     wins, else default suggestion, else placeholder)."""
@@ -673,7 +672,7 @@ def reroll_slot(
     business_id: str,
     slot_name: str,
     req: Optional[RerollRequest] = None,
-    _: UserSession = Depends(sb_clients.authed_request),
+    _biz: Dict[str, Any] = Depends(business_access("admin")),
 ) -> Dict[str, Any]:
     """Re-fire the slot's default-resolution strategy with stored context.
 

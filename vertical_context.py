@@ -28,6 +28,7 @@ from vertical_intelligence import (
     get_voice,
     get_offering_suggestions,
     get_invoice_line_templates,
+    is_mapped,
     list_known_verticals,
 )
 from vertical_terminology import VERTICAL_TERMS, BASE_TERMS
@@ -41,8 +42,18 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
     Always returns a non-empty string — callers can append unconditionally.
     """
     business_type = (business or {}).get("type")
-    bt = (business_type or "").lower().strip()
-    is_known = bt in VERTICAL_INTELLIGENCE_KEYS
+    # Resolve ALIASES once, here, and use the canonical key for every
+    # lookup below. `businesses.type` legitimately holds alias strings —
+    # 'agency', 'church', 'plumber' — because several surfaces still write
+    # them; keyed raw, all three read the generic block while the
+    # practitioner's own screens read the vertical dictionary.
+    import vertical_registry
+    bt = vertical_registry.resolve(business_type)
+    # "Mapped" is a different question from "which profile" now that
+    # resolve() answers 'custom' for anything unrecognised: an unknown type
+    # still GETS the custom profile, and labelling that block as though it
+    # were a deliberate match would be a lie the prompt tells Chief.
+    is_known = is_mapped(business_type)
     profile = get_profile(bt)
     voice = get_voice(bt)
 
@@ -122,6 +133,13 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
     except Exception:
         pass
 
+    # Private rules follow the shared defaults so the owner's corrections
+    # govern every existing consumer of this context, across sessions.
+    if (business or {}).get("id"):
+        import business_learning
+        private = business_learning.context_block(business)
+        if private:
+            lines.append(private)
     return "\n".join(lines)
 
 
@@ -134,8 +152,25 @@ LEARNED_MAX_ITEMS = 5
 
 def build_vertical_learned_block(business: Optional[Dict[str, Any]],
                                  query_text: str) -> str:
-    """Feed 2 — what OTHER businesses in this vertical have taught the
-    system, retrieved for the situation at hand.
+    """Retrieved vertical depth, for the situation at hand.
+
+    Two sources, deliberately kept apart in the output:
+
+      curated  (vertical_playbook)  how this TRADE works — mechanisms,
+               seasons, objections. Written by us and reviewed in a diff.
+      learned  (vertical_distill)   what businesses in this vertical have
+               actually taught the system, behind a k-anonymity floor.
+
+    They are labelled separately because they are different claims. "Several
+    businesses like yours do this" is evidence about a population; "this is
+    how the trade works" is domain knowledge. Merged under one heading Chief
+    would weigh them alike, and the weaker one would borrow the other's
+    authority — which matters most right now, when the curated shelf is full
+    and the learned one is empty.
+
+    Seed rows are still excluded: they are a projection of the profiles
+    already in the static block above, so surfacing them would make the
+    prompt say everything twice.
 
     Separate from `build_vertical_context_block` on purpose, and not merged
     into it, for three reasons: this one does I/O and can be slow, it is
@@ -144,42 +179,54 @@ def build_vertical_learned_block(business: Optional[Dict[str, Any]],
     year.
 
     Returns "" — not a placeholder — when there is nothing, so callers can
-    concatenate unconditionally and get exactly today's prompt back if Feed
-    2 is empty, disabled, or broken. Never raises."""
+    concatenate unconditionally and get exactly today's prompt back if
+    retrieval is empty, disabled, or broken. Never raises."""
     try:
         bt = ((business or {}).get("type") or "").lower().strip()
         if not bt or not (query_text or "").strip():
             return ""
+        # vk.match canonicalises the key itself, so an alias-typed business
+        # ('church', 'agency') reaches its vertical's partition instead of
+        # querying one that by construction holds nothing.
         import vertical_knowledge as vk
         rows = vk.match(bt, query_text, limit=LEARNED_MAX_ITEMS)
         if not rows:
             return ""
 
-        out, used = [], 0
+        curated, learned, used = [], [], 0
         for r in rows:
             content = (r.get("content") or "").strip()
-            if not content:
+            source = r.get("source")
+            if not content or source not in ("curated", "learned"):
                 continue
-            # Seeded knowledge is already in the block above; only surface
-            # what was actually LEARNED, or the prompt says it twice.
-            if r.get("source") != "learned":
-                continue
+            # One budget across both, so adding the curated shelf cannot
+            # quietly double what this block costs every turn.
             if used + len(content) > LEARNED_BLOCK_MAX_CHARS:
                 break
-            out.append(f"- {content}")
+            (curated if source == "curated" else learned).append(f"- {content}")
             used += len(content)
-        if not out:
+        if not curated and not learned:
             return ""
 
-        # The framing matters. These are observed tendencies across a
-        # category, not instructions and not facts about THIS business —
-        # Chief should weigh them, and the business's own data always wins.
-        return ("=== WHAT WORKS FOR BUSINESSES LIKE THIS ===\n"
-                "Patterns observed across other businesses of this type. "
-                "Useful priors, not rules — this business's own history and "
-                "stated preferences always win.\n" + "\n".join(out))
+        parts = []
+        if curated:
+            parts.append("=== HOW THIS TRADE WORKS ===\n"
+                         "Operating knowledge about this kind of business, "
+                         "selected for what was just asked. Apply it as "
+                         "judgement, not as facts about THIS business — its "
+                         "own numbers and history always win.\n"
+                         + "\n".join(curated))
+        if learned:
+            # The framing matters. These are observed tendencies across a
+            # category, not instructions and not facts about THIS business —
+            # Chief should weigh them, and the business's own data always wins.
+            parts.append("=== WHAT WORKS FOR BUSINESSES LIKE THIS ===\n"
+                         "Patterns observed across other businesses of this type. "
+                         "Useful priors, not rules — this business's own history and "
+                         "stated preferences always win.\n" + "\n".join(learned))
+        return "\n\n".join(parts)
     except Exception:
-        # Vertical context has worked without Feed 2 for a year. It keeps
+        # Vertical context has worked without this block for a year. It keeps
         # working the moment anything here breaks.
         return ""
 
@@ -218,6 +265,16 @@ def _vertical_specific_reminders(bt: str, profile: Dict[str, Any]) -> list:
     if bt == "consultant":
         return [
             "Scope + deliverables + milestones",
+        ]
+    if bt == "ecommerce":
+        return [
+            "Sales tax collected is held for the state, not revenue",
+            "Stock and shipping windows are promises — give a window, never a date",
+        ]
+    if bt == "saas":
+        return [
+            "An annual plan is cash now, revenue across twelve months",
+            "Usage leads, billing lags — a signup without usage is not a customer",
         ]
     if bt == "creative":
         return [

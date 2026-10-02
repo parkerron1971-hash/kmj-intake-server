@@ -63,7 +63,7 @@ def _drl_model() -> str:
 # Arc 7 quality floor: 1800 truncated the signal JSON on rich intakes —
 # a parse failure silently returned [] and the DRO authored blind while
 # still reporting dro_status='applied'. Roomy cap + parse-retry below.
-SIGNAL_MAX_TOKENS = 3200
+SIGNAL_MAX_TOKENS = 6000      # 5-family hidden reasoning counts (2026-08-29)
 SIGNAL_TEMPERATURE = 0.2                       # extraction — low/deterministic
 # Arc 7: how much intake material the signal pass reads. The owner's
 # freshest evidence leads the transcript (site_composer._assemble_intake_text
@@ -86,7 +86,23 @@ THIN_BRIEF_MIN_SIGNALS = 3
 # signal WITH its evidence quotes — prime truncation suspect for the
 # full DRO JSON dying at the old 6000 cap (every build since the bridge
 # fell to minimal). Slimmer echo above + a taller cap below.
-DRO_MAX_TOKENS = 9000
+# THE CUT SENTENCE (2026-08-28, MaCnificent Hair Co): both full-DRO calls
+# returned EXACTLY 9000 output tokens — the cap — with the JSON cut mid-
+# "because", and the parse retry re-rolled straight into the same cap.
+# The build ran on the minimal brain (dro_mode=minimal) and the page
+# went out on a thin rationale. The audit fields (inventions, echo_plan,
+# exception_log) and richer signal echoes have grown the object since
+# the 9000 was set. Taller cap, and — below — a cut response is
+# CONTINUED from where it stopped, never re-rolled.
+# THE RATIONALE STREAMS (2026-08-29). On the 5-family, output tokens
+# include hidden reasoning: a run-3 DRO came back at EXACTLY 14,000
+# tokens with 5,390 visible characters — the JSON cut before halfway
+# (run 2: 8,235 tokens for 10,900 chars, 9,100 for 2,914). 14k was never
+# the rationale's budget, it was the reasoning's. The call streams now
+# (the SDK refuses a non-streaming request that could run past ten
+# minutes), so the cap can be what a whole rationale needs; you pay
+# only for what is generated.
+DRO_MAX_TOKENS = 32000
 DRO_TEMPERATURE = 0.4                          # reasoning with creative latitude
 
 
@@ -121,6 +137,11 @@ def _set_fail(out: Optional[Dict[str, str]], stage: str, detail: str) -> None:
 # task → the ladder's timeout family ('signals' streams less than a DRO).
 _TASK_FAMILY = {"signals": "signals"}   # everything else = "dro"
 
+# Models that 400 on assistant prefill, remembered per process — the
+# 2026-07-24 fallback retried bare on EVERY call, so each rationale paid
+# a doomed round trip first (10+ per build in the 2026-08-29 ledger).
+_PREFILL_REJECTED: set = set()
+
 
 def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
           temperature: float, business_id: str, task: str,
@@ -145,6 +166,18 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
         _messages.append({"role": "assistant", "content": prefill})
     _prefill_applied = {"v": False}
 
+    def _stream_final(**kw):
+        """One STREAMING generation returned as the final Message — the
+        same shape the non-streaming call returned, so the ladder, the
+        usage log and the text join are untouched (the builder's idiom,
+        BE#740). A non-streaming request is one HTTP response held open
+        for the whole generation; the SDK caps that at ten minutes of
+        expected output, which a 32k cap exceeds."""
+        with client.messages.stream(**kw) as _s:
+            for _ in _s.text_stream:
+                pass
+            return _s.get_final_message()
+
     def _do(model: str, max_tokens: int, timeout: float):
         # PREFILL FALLBACK (2026-07-24, the silent-brain killer): newer
         # model families 400 on assistant prefill ("This model does not
@@ -155,9 +188,9 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
         # the practitioner's approved spec never reached an author.
         # Reactive, model-agnostic: try prefilled, retry bare on that
         # specific 400. Never let a shape optimization kill the brain.
-        use_prefill = bool(prefill)
+        use_prefill = bool(prefill) and model not in _PREFILL_REJECTED
         try:
-            msg = client.messages.create(
+            msg = _stream_final(
                 model=model, max_tokens=max_tokens,
                 system=system,
                 messages=_messages if use_prefill
@@ -169,9 +202,10 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
             return msg
         except Exception as e:
             if use_prefill and "prefill" in str(e).lower():
+                _PREFILL_REJECTED.add(model)
                 logger.warning(f"[drl] {model} rejects assistant prefill "
-                               f"— retrying bare (task={task})")
-                msg = client.messages.create(
+                               f"— retrying bare (task={task}); remembered")
+                msg = _stream_final(
                     model=model, max_tokens=max_tokens,
                     system=system,
                     messages=[{"role": "user", "content": user}],
@@ -204,7 +238,7 @@ def _call(client: Anthropic, system: str, user: str, *, max_tokens: int,
             msg = site_llm.create_message(
                 model=_drl_model(), max_tokens=max_tokens,
                 temperature=temperature, system=system, user_content=user,
-                timeout=model_ladder.timeout_for(family, _drl_model()) + 120.0,
+                timeout=model_ladder.timeout_for(family, _drl_model(), max_tokens) + 120.0,
                 task=f"drl/{task}")
             used_model = getattr(msg, "model", "moonshot")
         except Exception as _ms_err:
@@ -236,6 +270,30 @@ def _parse_json(raw: str) -> Optional[Any]:
         return json.loads(_strip_code_fence(raw))
     except Exception:
         return None
+
+
+def _looks_truncated(raw: str) -> bool:
+    """A JSON object that started and never closed: the shape of a
+    response cut by the token cap (or a dropped stream) — as opposed to
+    prose, a refusal, or a fenced answer, which the parse retry handles."""
+    t = _strip_code_fence(raw or "").strip()
+    if not t.startswith("{") or t.endswith("}"):
+        return False
+    return t.count("{") > t.count("}")
+
+
+def _continue_cut_response(client, system: str, user: str, raw: str, *,
+                           business_id: str) -> str:
+    """Finish a cut response by prefilling the assistant turn with what
+    already came back — the model continues the object from the exact
+    character it stopped at. _call returns prefill + continuation when
+    the prefill was applied, or a fresh full answer when the model
+    rejected prefill (the 2026-07-24 fallback); either way the result is
+    a complete candidate. One call, same cap, no re-roll."""
+    partial = (raw or "").rstrip()          # a prefill may not end in whitespace
+    return _call(client, system, user, max_tokens=DRO_MAX_TOKENS,
+                 temperature=DRO_TEMPERATURE, business_id=business_id,
+                 task="dro", prefill=partial)
 
 
 # ─── Enums derived from the schema (validation target) ──────────────────
@@ -997,6 +1055,18 @@ def author_dro(business_id: str, signals: List[Dict[str, Any]],
                            f"{business_id}: {last['detail']}")
             return None
         parsed = _parse_json(raw)
+        if not isinstance(parsed, dict) and _looks_truncated(raw):
+            # THE CUT SENTENCE: continue from where it stopped. A re-roll
+            # at the same cap dies at the same place (it did, twice).
+            try:
+                raw = _continue_cut_response(client, system, user + extra,
+                                             raw, business_id=business_id)
+                parsed = _parse_json(raw)
+                logger.info(f"[drl] DRO continued after a cut response for "
+                            f"{business_id}: parsed={isinstance(parsed, dict)}")
+            except Exception as e:
+                logger.warning(f"[drl] DRO continuation failed for "
+                               f"{business_id} ({type(e).__name__}): {e}")
         if isinstance(parsed, dict):
             _pop_audit_fields(parsed, business_id)
         if not isinstance(parsed, dict):
@@ -1131,10 +1201,136 @@ def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
 
 
 # ─── Orchestrator ────────────────────────────────────────────────────────
+def parallel_directions_enabled() -> bool:
+    """DRO_DIRECTIONS_PARALLEL=on authors the two candidates at once
+    (see _author_directions). Off by default, like the switches around
+    it — flip it in Railway; unset restores the serial road."""
+    return (os.environ.get("DRO_DIRECTIONS_PARALLEL") or "off").strip().lower() \
+        in ("on", "1", "true", "yes")
+
+
+def _pair_collides(a: Dict[str, Any], b: Dict[str, Any],
+                   owner_direction: Optional[Dict[str, Any]],
+                   reference_analysis: Optional[List[Dict[str, Any]]]) -> bool:
+    """The same collision test author_dro applies against a cohort —
+    same threshold, same owner-explicit exemptions — applied to the two
+    candidates after they authored side by side."""
+    od = owner_direction if isinstance(owner_direction, dict) else {}
+    exempt = owner_exempt_axes(
+        site_prefs=od.get("site_prefs"),
+        reference_analysis=reference_analysis,
+        fonts_pinned=bool(od.get("fonts_pinned")))
+    return _collides(b, [a], exempt=exempt)
+
+
+def _author_directions(business_id: str, signals: List[Dict[str, Any]],
+                       recent: List[Dict[str, Any]], *,
+                       reference_analysis: Optional[List[Dict[str, Any]]],
+                       creative: Optional[Dict[str, Any]],
+                       failure_out: Dict[str, str],
+                       owner_direction: Optional[Dict[str, Any]],
+                       facts_text: str = "") -> Optional[Dict[str, Any]]:
+    """TWO DIRECTIONS + A JUDGE (2026-08-29, builder bench step 5). Off
+    (DRO_DIRECTIONS unset) → exactly the single author_dro call this
+    replaced. On → candidate A (concept-literal, today's default) and
+    candidate B (the stance the owner's energy argues for), B authored
+    with A in its cohort so the existing collision check keeps them
+    apart; then directions_judge picks on the acceptance test. Any
+    failure past A keeps A — a judged build can never fail harder than
+    a single-direction build. The verdict rides the winner's meta."""
+    import directions_judge as dj
+    if not dj.enabled():
+        return author_dro(business_id, signals, recent,
+                          reference_analysis=reference_analysis,
+                          creative=creative, failure_out=failure_out,
+                          owner_direction=owner_direction)
+    a_key, b_key = dj.pick_pair(signals, owner_direction)
+    st = dj.stances()
+    common = dict(reference_analysis=reference_analysis, creative=creative,
+                  owner_direction=owner_direction)
+
+    def _author_b(cohort: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        try:
+            return author_dro(business_id, signals, cohort, failure_out={},
+                              stance=st.get(b_key), **common)
+        except Exception as e:                   # pragma: no cover — belt
+            logger.warning(f"[directions] candidate B raised for {business_id[:8]}: {e}")
+            return None
+
+    if parallel_directions_enabled():
+        # TWO AT ONCE (2026-09-01). Each candidate is one ~160s call on
+        # the DRL model; authored one after the other they cost every
+        # build ~2.7 minutes of wall-clock for nothing — B never READ A,
+        # it was only handed A as cohort so the collision check kept the
+        # pair apart. Now both author concurrently and the pair is
+        # checked AFTER they land: if B shares the collision threshold
+        # of axes with A (owner-explicit axes exempt, as everywhere), B
+        # is re-authored once with A in its cohort — exactly the serial
+        # road, paid only when it is needed. And because B's call is
+        # already paid for by the time A's answer is known, an A that
+        # fails no longer throws B away: B ships as the direction.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2,
+                                thread_name_prefix="dro-direction") as pool:
+            fa = pool.submit(author_dro, business_id, signals, recent,
+                             failure_out=failure_out, stance=st.get(a_key),
+                             **common)
+            fb = pool.submit(_author_b, list(recent))
+            a = fa.result()
+            b = fb.result()
+        if a is None:
+            if b is None:
+                return None
+            logger.info(f"[directions] first candidate ({a_key}) did not "
+                        f"author for {business_id[:8]} — keeping {b_key}")
+            b.setdefault("meta", {})["directions"] = {
+                "candidates": [{"stance": b_key}],
+                "judge": {"winner": b_key, "by": "default",
+                          "because": f"first candidate ({a_key}) did not author"}}
+            return b
+        if b is not None and _pair_collides(a, b, owner_direction,
+                                             reference_analysis):
+            logger.info(f"[directions] {a_key} and {b_key} converged for "
+                        f"{business_id[:8]} — re-authoring {b_key} with "
+                        f"{a_key} in its cohort")
+            b = _author_b([a] + list(recent))
+    else:
+        a = author_dro(business_id, signals, recent, failure_out=failure_out,
+                       stance=st.get(a_key), **common)
+        if a is None:
+            return None
+        b = _author_b([a] + list(recent))
+    if b is None:
+        logger.info(f"[directions] second candidate ({b_key}) failed for "
+                    f"{business_id[:8]} — keeping {a_key}")
+        a.setdefault("meta", {})["directions"] = {
+            "candidates": [{"stance": a_key}],
+            "judge": {"winner": a_key, "by": "default",
+                      "because": f"second candidate ({b_key}) did not author"}}
+        return a
+    try:
+        verdict = dj.judge(business_id, signals, [(a_key, a), (b_key, b)],
+                           facts_text=facts_text, owner_direction=owner_direction,
+                           recent_signatures=[distinctiveness_signature(r) for r in recent])
+    except Exception as e:                       # pragma: no cover — belt
+        verdict = {"winner": 0, "by": "default", "because": "judge raised",
+                   "loser_weakness": "", "detail": f"{type(e).__name__}: {e}"[:200]}
+    if int(verdict.get("winner") or 0) == 1:
+        winner, loser, w_key, l_key = b, a, b_key, a_key
+    else:
+        winner, loser, w_key, l_key = a, b, a_key, b_key
+    dj.record(winner, loser, w_key, l_key, verdict)
+    logger.info(f"[directions] {business_id[:8]}: A={a_key} B={b_key} → "
+                f"{w_key} by {verdict.get('by')}: "
+                f"{str(verdict.get('because') or '')[:160]}")
+    return winner
+
+
 def produce_dro(business_id: str, transcript: str,
                 reference_analysis: Optional[List[Dict[str, Any]]] = None,
                 creative: Optional[Dict[str, Any]] = None,
                 owner_direction: Optional[Dict[str, Any]] = None,
+                facts_text: str = "",
                 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
     """Full pass: detect signals → fetch recent → author DRO (with
     distinctiveness) → persist. Returns (dro, failure): the DRO (with `id`
@@ -1193,10 +1389,11 @@ def produce_dro(business_id: str, transcript: str,
             if isinstance(s.get("confidence"), (int, float))
             and sig.is_consumable(s["confidence"]))
         recent = fetch_recent_dros(business_id)
-        dro = author_dro(business_id, signals, recent,
-                         reference_analysis=reference_analysis,
-                         creative=creative, failure_out=auth_fail,
-                         owner_direction=owner_direction)
+        dro = _author_directions(business_id, signals, recent,
+                                 reference_analysis=reference_analysis,
+                                 creative=creative, failure_out=auth_fail,
+                                 owner_direction=owner_direction,
+                                 facts_text=facts_text)
         if dro is None:
             failure = {
                 "stage": auth_fail.get("stage") or "authoring",

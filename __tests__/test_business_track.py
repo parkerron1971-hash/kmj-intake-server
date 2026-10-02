@@ -81,9 +81,10 @@ def test_a_populated_phase_counts():
 BUILD_PAGES = {
     "strategy-track", "business-track", "course-studio", "business-profile",
     "about-me", "foundation-track", "brand", "media-library",
-    "print-materials", "my-site", "link-page", "booking", "intake-forms",
-    "custom-modules", "module-builder", "social-media", "email-templates",
-    "resources", "products", "analytics", "integrations", "settings",
+    "print-materials", "my-site", "link-page", "booking", "booking-share",
+    "intake-forms", "custom-modules", "module-builder", "structure-import",
+    "social-media", "email-templates", "resources", "products", "analytics",
+    "integrations", "settings",
 }
 OPERATE_SUBS = {
     "dashboard", "queue", "contacts", "email", "sms", "projects", "calendar",

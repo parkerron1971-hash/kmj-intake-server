@@ -28,6 +28,7 @@ import pytest
 os.environ.setdefault("AUDITOR_LINK_SECRET", "test-secret-for-step-up")
 
 import ledger_unlock as L
+from __tests__._chief_source import chief_source  # noqa: E402
 
 
 class _Req:
@@ -232,7 +233,7 @@ def test_public_booking_text_is_defused_like_sms_and_email():
     import inspect
     import chief_of_staff as cos
 
-    src = inspect.getsource(cos)
+    src = chief_source()
     # The session block: title, contact name and notes all defused.
     assert 'stitle = _neutralize_untrusted' in src
     assert '_neutralize_untrusted((s.get("contacts") or {}).get("name")' in src

@@ -1,6 +1,6 @@
 # Billing Go-Live Runbook — locked pricing (2026-07-21)
 
-Kevin's pricing ruling: **Starter $79 · Professional $199 · Solutionist $399**
+Kevin's pricing ruling (re-set 2026-09-04): **Starter $79 / 3,000 credits · Professional $149 / 7,500 · Solutionist $299 / 17,500**
 (renamed from "Practice" 2026-08-19 — display only, the plan key and env
 vars stay `PRACTICE`),
 annual = 2 months free, **Founding Member = Professional at $149/mo locked
@@ -36,15 +36,15 @@ products, each with a monthly and a yearly recurring price:
 | Product name | Monthly price | Yearly price |
 |---|---|---|
 | Solutionist Starter | $79.00 / month | $790.00 / year |
-| Solutionist Professional | $199.00 / month | $1,990.00 / year |
-| The Solutionist | $399.00 / month | $3,990.00 / year |
+| Solutionist Professional | $149.00 / month | $1,490.00 / year |
+| The Solutionist | $299.00 / month | $2,990.00 / year |
 
 Then ONE more product for the founder cohort (its own product so the
 invoice line reads right):
 
 | Product name | Monthly price | Yearly price (optional) |
 |---|---|---|
-| Solutionist Professional — Founding Member | $149.00 / month | $1,490.00 / year |
+| Solutionist Professional — Founding Member | $99.00 / month (6,000 credits) | $990.00 / year |
 
 Every price: **Recurring**, USD. Copy each price id (`price_…`) as you go —
 8 ids total (6 if you skip the founder-annual and starter-annual variants;

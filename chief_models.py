@@ -29,6 +29,11 @@ Lanes:
               so it gets the strongest model.
   background  mechanical work: classification, consolidation,
               summarization. Cheap and fast.
+  fast        the two-track reply's first track: the opening words of
+              every streamed turn, and whole answers for turns that need
+              no records and no action (chief_fast_track).
+  route       the router's tie-breaker for requests its heuristics
+              cannot place (model_router).
 
 Override any lane with CHIEF_MODEL_<LANE>, e.g. CHIEF_MODEL_DEEP.
 NOTE: Sonnet 5 / Opus 4.8 / Fable reject the `temperature` param
@@ -38,13 +43,34 @@ from __future__ import annotations
 
 import os
 
+# Sonnet 5.5 (2026-09-28): same price per token as Sonnet 5. Benched on
+# the Chief turn eval (2 runs each) it scored the same (67-68/69), ran
+# the median turn in 7.9-9.1 s vs 11.2 s and cost ~5% less per turn; the
+# factual eval passed 24/24 on both, answer drafts 2.7 s vs 3.9 s and the
+# answer check 2.6 s vs 3.2 s. The four conversational lanes move
+# together so they keep sharing one model (see "voice" above). Roll back
+# with CHIEF_MODEL_<LANE>=claude-sonnet-5.
 _LANE_DEFAULTS = {
-    "chat":       "claude-sonnet-5",
-    "voice":      "claude-sonnet-5",
+    "chat":       "claude-sonnet-5-5",
+    "voice":      "claude-sonnet-5-5",
     "deep":       "claude-opus-4-8",
-    "draft":      "claude-sonnet-5",
+    "draft":      "claude-sonnet-5-5",
     "insight":    "claude-opus-4-8",
     "background": "claude-haiku-4-5-20251001",
+    # The answer check is a mechanical JSON task that ran on the chat
+    # model and took 12-15s of every turn (2026-09-14 timing lines:
+    # review=15509ms of total=37576ms). Its own lane, so it can be
+    # moved and measured on its own.
+    "review":     "claude-sonnet-5-5",
+    # The two-track reply (chief_fast_track, 2026-09-25). `fast` writes the
+    # opening that goes out in the first half-second of every streamed
+    # turn, and answers alone the turns that need no records and no action
+    # (model_router). `route` is the tie-breaker the router asks only when
+    # its heuristics are unsure. Both are small prompts on the fastest
+    # model: measured first token 383ms median, 433ms p95.
+    # Same model id as `background`, so metering and pricing already know it.
+    "fast":       "claude-haiku-4-5-20251001",
+    "route":      "claude-haiku-4-5-20251001",
 }
 
 # Per-lane reply budgets. Voice is deliberately tight: replies are read
@@ -160,14 +186,45 @@ def max_tokens_for(lane: str, default: int = 1600) -> int:
     return _LANE_MAX_TOKENS.get((lane or "").strip().lower(), default)
 
 
+# How hard the model thinks before it answers (output_config.effort).
+# Unset, Sonnet 5 runs adaptive thinking at its default ("high"): a live
+# 9/23 turn asking for pricing help spent 2,507 output tokens and 46 s on
+# a ~250-token answer — most of a minute of silence was thinking nobody
+# reads. A conversation lane answers at "medium"; a spoken turn, where a
+# pause is felt most, at "low". The deep lane (coaches, heavy analysis)
+# keeps the model default. Override per lane with CHIEF_EFFORT_<LANE>
+# (low / medium / high / xhigh / max; "default" = the model's own).
+#
+# Chat moved medium -> low with Sonnet 5.5 (2026-09-28), whose levels are
+# recalibrated: at medium and up it thinks before nearly every reply. On
+# five advice questions (pricing, a 30-day client plan, rescheduling,
+# group vs 1:1, this week's focus) low gave full, specific answers in a
+# median 12.4-14.5 s vs 17.2 s at medium and 19.4 s at high, at 6.2c vs
+# 7.3c / 7.4c; the action eval scored the same at low and medium.
+_LANE_EFFORT = {
+    "chat": "low",
+    "voice": "low",
+}
+_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def effort_for(lane: str) -> str | None:
+    key = (lane or "chat").strip().lower()
+    env = (os.environ.get(f"CHIEF_EFFORT_{key.upper()}") or "").strip().lower()
+    if env:
+        return env if env in _EFFORTS else None
+    return _LANE_EFFORT.get(key)
+
+
 # Appended to the DYNAMIC tail of the system prompt (after
 # [[CHIEF_CACHE_SPLIT]]) on voice turns — never to the cached prefix,
 # so the cache stays byte-identical across voice and text turns.
 VOICE_DELIVERY_BLOCK = """
 VOICE DELIVERY — this message arrived by voice and your reply will be spoken aloud via text-to-speech:
 - Keep it under ~110 words: one or two short spoken paragraphs. No markdown, no bullet lists, no headers, no emoji — they sound broken when read aloud.
+- For a question with multiple parts, finish the useful answer before one optional follow-up. If a fact is missing, say so briefly and continue with what you know; save requests for that fact until the end. No repeated caveats or extra offers to refine/save what they only asked you to explain. Keep your natural warmth and contractions.
 - Say numbers and dates naturally ("about twelve hundred dollars", "next Tuesday").
-- [ACTION:{...}] tags still work exactly as normal and are stripped before speech — emit them whenever you act, same as ever.
+- [ACTION:{...}] tags still work exactly as normal and are stripped before speech — emit them whenever you act, same as ever. Tools that act work here too; a tool call is silent, so say aloud what its result says.
 - If the answer wants a screen (any list, table, or set of figures), PUT IT THERE — emit the show_view tag and say the headline aloud while it lands: "Collection's at seventy-six percent — here, look at this." Never say it is on their screen without emitting the tag that puts it there; on a voice surface there is no transcript behind you, so an unaccompanied "it's on your screen" points at nothing.
 - Anything that SENDS, CHARGES, DELETES or PUBLISHES holds the first time you ask for it here and comes back "HELD FOR A SPOKEN YES". That is not a failure and not a refusal — say what is about to happen, out loud, including who it goes to and any amount, then ask them to say "send it" or "go ahead". When they do, emit the same action again and it runs. NEVER say it is done while it is held; nothing has happened yet.
 - Speak the shape, not the rows. Once the view is up, say what it MEANS ("three are genuinely late, about two thousand between them") — reading a table aloud is what the screen is for.

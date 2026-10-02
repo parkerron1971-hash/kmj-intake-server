@@ -48,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -56,7 +56,7 @@ from pydantic import BaseModel
 from sms_service import (
     _pq, _sb_get, _sb_post, _sb_patch, _sb_headers, _store_sms, _log_event,
     _find_contact_by_phone, normalize_phone, record_inbound_sms,
-    _twilio_configured, is_opted_out,
+    _twilio_configured, is_opted_out, sender_for, business_for_number,
 )
 
 logger = logging.getLogger("sms_routing")
@@ -97,9 +97,15 @@ CONTINUITY_HOURS = 72
 
 # ─── Outbound (single seam for auto-replies + broadcast) ──────────────
 
-async def _send_platform_sms(to_number: str, body: str) -> str:
+async def _send_platform_sms(to_number: str, body: str, *,
+                             business_id: str,
+                             client: Optional[httpx.AsyncClient] = None) -> str:
     """Send one SMS as the platform brand via Twilio's Messaging
-    Service. Returns the provider message id; raises on hard failure.
+    Service, FROM the number that business texts from (sender_for —
+    the platform number until the business has its own). business_id
+    is keyword-only and required: every caller has it, and a send that
+    cannot name its business cannot name its sender. Returns the
+    provider message id; raises on hard failure.
 
     This used to fall through to Telnyx when Twilio was unconfigured.
     That branch was only reachable in an environment with no Twilio
@@ -113,7 +119,9 @@ async def _send_platform_sms(to_number: str, body: str) -> str:
             "SMS is not configured — set the TWILIO_* vars in Railway.")
     from starlette.concurrency import run_in_threadpool
     import twilio_sms
-    return await run_in_threadpool(twilio_sms.send_sms, to_number, body)
+    from_number = await sender_for(client, business_id)
+    return await run_in_threadpool(
+        twilio_sms.send_sms, to_number, body, from_number=from_number)
 
 
 # ─── Routing helpers ──────────────────────────────────────────────────
@@ -187,16 +195,73 @@ async def route_inbound(
     text: str,
     provider_id: str = "",
     media: Optional[List[Dict[str, Any]]] = None,
+    to_number: str = "",
 ) -> Dict[str, Any]:
     """Layered per the module docstring. Order:
-    STOP/START/HELP → keyword? bind+confirm → binding(s)? route →
-    disambiguate → prompt. Returns {action, ...}; the caller has
-    already validated the Twilio signature (layer 0)."""
+    OWN NUMBER? (the To number is the routing) → STOP/START/HELP →
+    keyword? bind+confirm → binding(s)? route → disambiguate → prompt.
+    Returns {action, ...}; the caller has already validated the Twilio
+    signature (layer 0)."""
     phone = normalize_phone(from_number) or from_number
     body = (text or "").strip()
     first_word = body.split()[0].upper() if body.split() else ""
 
     async with httpx.AsyncClient() as client:
+        # ── Dedicated number (2026-09-02): To IS the routing ──
+        # A customer who texts a business's own line has already said
+        # which business — no keyword, no disambiguation. Consent words
+        # scope to that business (sms_opt_outs.business_id was built
+        # for exactly this). The customer is also bound, so a later
+        # text to the SHARED number still finds them.
+        own = await business_for_number(client, to_number) if to_number else None
+        if own:
+            business_id = own["business_id"]
+            if first_word in STOP_WORDS:
+                logger.info(f"[ROUTE] STOP from {phone} on biz {business_id[:8]}'s own number — scoped opt-out")
+                await _sb_post(client, "/sms_opt_outs?on_conflict=phone,business_id", {
+                    "phone": phone, "business_id": business_id,
+                })
+                return {"action": "opt_out", "business_id": business_id, "reply": None}
+            if first_word in START_WORDS:
+                logger.info(f"[ROUTE] START from {phone} on biz {business_id[:8]}'s own number — scoped opt-out cleared")
+                try:
+                    await client.delete(
+                        f"{os.environ.get('SUPABASE_URL', '').rstrip('/')}/rest/v1"
+                        f"/sms_opt_outs?phone=eq.{_pq(phone)}&business_id=eq.{business_id}",
+                        headers=_sb_headers(),
+                    )
+                except Exception as e:
+                    logger.warning(f"[ROUTE] scoped opt-out clear failed: {e}")
+                return {"action": "opt_in", "business_id": business_id, "reply": None}
+            if first_word in HELP_WORDS:
+                name = await _biz_name(client, business_id)
+                logger.info(f"[ROUTE] HELP from {phone} on biz {business_id[:8]}'s own number")
+                return {"action": "help", "business_id": business_id, "reply": (
+                    f"{sender_brand()}: You've reached {name}. Email "
+                    f"{os.environ.get('SUPPORT_EMAIL', 'kmjcreativesolution@gmail.com')} for help. "
+                    f"Msg & data rates may apply. Reply STOP to opt out."
+                )}
+            logger.info(f"[ROUTE] own-number {phone} → biz {business_id[:8]} (direct)")
+            await _bind(client, phone, business_id)
+            await _ensure_contact(client, business_id, phone)
+            await record_inbound_sms(
+                client, from_number=phone, text=body,
+                provider_id=provider_id, media=media, business_id=business_id,
+            )
+            return {"action": "routed_direct", "business_id": business_id, "reply": None}
+
+        if to_number:
+            import twilio_sms
+            to_clean = normalize_phone(to_number)
+            if to_clean and twilio_sms.platform_number() and to_clean != twilio_sms.platform_number():
+                # A number in the pool that no live row claims — a
+                # released line, or a race with provisioning. Never
+                # dropped: it takes the shared path and says so.
+                import pii_mask
+                logger.warning(
+                    f"[ROUTE] unknown To {pii_mask.mask_phone(to_clean)} — not in sms_numbers "
+                    f"and not the platform number; falling through to the shared path")
+
         # ── Consent keywords (platform-level, before any routing) ──
         if first_word in STOP_WORDS:
             logger.info(f"[ROUTE] STOP from {phone} — platform-wide opt-out recorded")
@@ -334,11 +399,19 @@ class OptInBody(BaseModel):
 
 
 @router.post("/api/sms/opt-in")
-async def sms_opt_in(body: OptInBody):
+async def sms_opt_in(body: OptInBody, request: Request):
     """Records a web-form SMS consent (sms_consents audit row). Public —
     it backs the crawlable /sms page that A2P reviewers verify. Light
-    in-memory rate limit (same approach as the intake endpoint)."""
+    in-memory rate limit (same approach as the intake endpoint).
+
+    Per IP as well as per phone (2026-09-04): the per-phone limit is
+    keyed on a value the caller chooses, and the rows this writes are
+    the carrier-facing consent audit trail — poisoning it has
+    regulatory cost, not just storage cost. Strict."""
     import time as _time
+    import rate_limit
+    if not rate_limit.allow_strict("sms_opt_in", rate_limit.trusted_client_ip(request)):
+        return JSONResponse({"error": "Too many attempts — try again in a little while."}, 429)
     if not body.consent:
         return JSONResponse({"error": "The consent box must be checked to sign up."}, 400)
     phone = normalize_phone(body.phone)
@@ -375,6 +448,12 @@ class KeywordBody(BaseModel):
 
 @router.get("/sms/keyword")
 async def get_keyword(business_id: str, user: AuthedUser = Depends(require_user)):
+    # See the note on /sms/send: `require_user` proves the caller is
+    # signed in, not that this business is theirs. A keyword is the word
+    # a stranger texts to reach a practitioner — reading someone else's
+    # is reading the key to their front door.
+    import business_access
+    business_access.assert_access(str(business_id), user, "viewer")
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(
             client, f"/sms_keywords?business_id=eq.{business_id}&select=keyword&limit=1",
@@ -384,6 +463,13 @@ async def get_keyword(business_id: str, user: AuthedUser = Depends(require_user)
 
 @router.post("/sms/keyword")
 async def set_keyword(body: KeywordBody, user: AuthedUser = Depends(require_user)):
+    # Admin, not member: under the one-number model the keyword IS the
+    # business's inbound identity, and the uniqueness check below made
+    # this look safe from the wrong angle — it stops you STEALING a
+    # keyword somebody else claimed, and did nothing about setting or
+    # rewriting the keyword of a business that is not yours.
+    import business_access
+    business_access.assert_access(str(body.business_id), user, "admin")
     word = (body.keyword or "").strip().upper()
     if not KEYWORD_RE.match(word):
         return JSONResponse({"error": "Keyword must be 3-20 letters/numbers."}, 400)
@@ -423,6 +509,17 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
     """Send to every contact WITH a phone on THIS practitioner's list.
     Scoping by business_id is what makes cross-contamination
     structurally impossible; opted-out numbers are skipped."""
+    # THE ONE THIS MATTERS MOST FOR. The docstring says scoping by
+    # business_id is "what makes cross-contamination structurally
+    # impossible" — but the business_id was the CALLER'S to choose. Any
+    # signed-in account could text up to 500 of another practitioner's
+    # contacts, from the shared platform number, under that
+    # practitioner's brand name, billed to the platform and charged
+    # against their 10DLC standing. The scoping was real; the
+    # authorisation for it was missing. Admin, because this is bulk
+    # outbound to the whole list.
+    import business_access
+    business_access.assert_access(str(body.business_id), user, "admin")
     msg = (body.message or "").strip()
     if not msg:
         return JSONResponse({"error": "Message body required"}, 400)
@@ -455,15 +552,16 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
             if not phone:
                 skipped += 1
                 continue
-            if await is_opted_out(client, phone):
+            if await is_opted_out(client, phone, body.business_id):
                 skipped += 1
                 continue
             try:
-                sid = await _send_platform_sms(phone, msg)
+                sid = await _send_platform_sms(
+                    phone, msg, business_id=body.business_id, client=client)
                 await _store_sms(
                     client, business_id=body.business_id, contact_id=c.get("id"),
                     phone_number=phone, message=msg, direction="outbound",
-                    telnyx_id=sid, status="sent",
+                    telnyx_id=sid, status="sent", sent_by="practitioner",
                 )
                 sent += 1
             except Exception as e:

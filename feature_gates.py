@@ -12,7 +12,9 @@ STRIPE_PRICE_ID_{STARTER,PROFESSIONAL,PRACTICE} env vars.
 """
 from __future__ import annotations
 
+import contextvars
 import os
+from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 import pricing_config
@@ -21,7 +23,8 @@ PLANS = ("starter", "professional", "practice")
 _PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3}
 
 # Gate-ready map: feature → minimum tier. Working pricing hypothesis
-# (2026-06-09 review): Starter $79 / Professional $199 / Practice $399.
+# (2026-06-09 review): Starter $79 / Professional $199 / Practice $399;
+# re-set 2026-09-04 to $79 / $149 / $299 with a $99 Founder seat.
 FEATURE_MIN_PLAN: Dict[str, str] = {
     # Starter — operational core (incl. reconciliation: it's the upgrade wedge)
     "bookkeeping_basic": "starter",        # transactions + cash flow + reconciliation
@@ -48,11 +51,16 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # (site_concierge.py) — an AI
                                            # surface, so it rides the hero
                                            # tier with chief_unlimited
-    "agent_connector": "professional",     # connect the business to the AI
+    "agent_connector": "starter",          # connect the business to the AI
                                            # the practitioner already carries
                                            # (mcp_server.py + mcp_oauth.py).
-                                           # Same rule as site_concierge: an
-                                           # AI surface rides the hero tier.
+                                           # READ on every plan (2026-09-04):
+                                           # their model does the thinking, so
+                                           # a read costs the platform nothing,
+                                           # and feeling it is the upgrade path.
+    "agent_connector_write": "professional",  # the write key — records kept
+                                           # by an outside agent — rides the
+                                           # hero tier, like site_concierge.
                                            # NOT Practice — that tier is
                                            # collaboration and compliance
                                            # deliverables, and this is
@@ -68,6 +76,10 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # plan (data is never plan-
                                            # locked).
     # Practice — collaboration + compliance deliverables + scale
+    "dedicated_sms_number": "practice",    # a private texting line (sms_numbers_router).
+                                           # Kevin's call 2026-09-02: included at
+                                           # Practice first; a Professional add-on
+                                           # is a later, separate change.
     "accountant_collaborator": "practice",
     "audit_trail": "practice",
     "vertical_reports": "practice",        # Trust Reconciliation, 990 prep (I.10)
@@ -87,7 +99,8 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
     config-driven launch ruling: we ship conservative opening defaults
     and refine against real data once the meter works.
 
-    Opening defaults 3,000 / 10,000 / 25,000, up ~10x from the
+    Opening defaults 3,000 / 10,000 / 25,000 (7,500 / 17,500 for the two
+    bigger tiers since the 2026-09-04 ladder), up ~10x from the
     300/1000/3000 of the 2026-07-12 spec. That rescale is what makes
     per-action pricing expressible at all — a build priced at 600 is
     impossible against a 300 tank. Beyond the allowance, prepaid credits
@@ -99,13 +112,16 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
     return {
         "starter":      {"max_businesses": 1,
                          "chief_messages_monthly": credits["starter"],
-                         "max_seats": 1, "plaid_connections": 2},
+                         "max_seats": 1, "plaid_connections": 2,
+                         "open_assignments": 1},
         "professional": {"max_businesses": 1,
                          "chief_messages_monthly": credits["professional"],
-                         "max_seats": 1, "plaid_connections": 5},
+                         "max_seats": 1, "plaid_connections": 5,
+                         "open_assignments": 3},
         "practice":     {"max_businesses": 3,
                          "chief_messages_monthly": credits["practice"],
-                         "max_seats": 5, "plaid_connections": None},
+                         "max_seats": 5, "plaid_connections": None,
+                         "open_assignments": 10},
     }
 
 
@@ -118,7 +134,36 @@ def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[in
     plan = plan_of(business_row)
     if not plan:
         return limits["starter"].get(limit)
+    if limit == "chief_messages_monthly":
+        return monthly_credits(business_row, plan)
     return limits.get(plan, {}).get(limit)
+
+
+def is_founder_price(business_row: Optional[Dict[str, Any]]) -> bool:
+    """Is this business on the Founder seat? Decided by the Stripe price
+    id it subscribes to, never by a flag someone could set by hand."""
+    pid = str((business_row or {}).get("subscription_plan") or "").strip()
+    if not pid:
+        return False
+    founder = {(os.environ.get("STRIPE_PRICE_ID_FOUNDER") or "").strip(),
+               (os.environ.get("STRIPE_PRICE_ID_FOUNDER_ANNUAL") or "").strip()} - {""}
+    return pid in founder
+
+
+def monthly_credits(business_row: Optional[Dict[str, Any]],
+                    plan: Optional[str] = None) -> Optional[int]:
+    """The monthly tank for this business: the plan's, except on the
+    Founder seat, which carries Professional's features with its own
+    smaller tank (pricing_config.founder_credits). A comped business is
+    never on the founder tank — comp_tier wins in plan_of and the comp
+    is the whole plan. None when there is no plan."""
+    plan = plan or plan_of(business_row)
+    if not plan:
+        return None
+    comp = str((business_row or {}).get("comp_tier") or "").strip().lower()
+    if plan == "professional" and comp not in PLANS and is_founder_price(business_row):
+        return pricing_config.founder_credits()
+    return (plan_limits().get(plan) or {}).get("chief_messages_monthly")
 
 
 # Price-id env aliases → the tier they entitle (2026-07-21 pricing
@@ -171,7 +216,8 @@ def plan_of(business_row: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def access_state(business_row: Optional[Dict[str, Any]],
-                 grandfathered: bool = False) -> Dict[str, Any]:
+                 grandfathered: bool = False,
+                 trial_spent: bool = False) -> Dict[str, Any]:
     """Subscription access enforcement (2026-07-03, Kevin's ruling:
     'if no person paid then they lose access').
 
@@ -179,8 +225,15 @@ def access_state(business_row: Optional[Dict[str, Any]],
       'full'   — use the app normally
       'grace'  — payment failed; warn loudly, don't lock yet (Stripe
                  Smart Retries run during past_due/incomplete)
-      'locked' — no live subscription; the frontend shows the paywall
-                 (data is never deleted; export stays available)
+      'locked' — no live subscription, OR a trial that has run out of
+                 credits; the frontend shows the paywall (data is never
+                 deleted; export stays available)
+
+    A trial ends on WHICHEVER COMES FIRST, the calendar or the tank
+    (2026-08-24). `trial_spent` is the tank half — the caller passes
+    usage_metering.trial_credits_exhausted(), because this function is
+    deliberately pure and does not read the database. Left False, the
+    behaviour is exactly what it was: the calendar alone.
 
     Dormant like everything else: enforcement_on() off → always full.
     Grandfathered users and comp_tier businesses never lock.
@@ -197,6 +250,8 @@ def access_state(business_row: Optional[Dict[str, Any]],
     if status == "active":
         return {"state": "full", "reason": "active"}
     if status == "trialing":
+        if trial_spent:
+            return {"state": "locked", "reason": "trial_credits_spent"}
         trial_end = (row.get("trial_ends_at") or "").strip()
         if trial_end:
             from datetime import datetime, timezone
@@ -213,7 +268,28 @@ def access_state(business_row: Optional[Dict[str, Any]],
             "reason": "canceled" if status == "canceled" else "no_subscription"}
 
 
+# THE REHEARSAL (2026-09-04). Every gate short-circuits on enforcement_on(),
+# which made "what would the flip do?" unanswerable without flipping.
+# Inside rehearsal(), enforcement_on() answers True for THIS task only —
+# a contextvar, so a concurrent request on the same process keeps the
+# real value. billing_rehearsal uses it to ask every decision
+# hypothetically; nothing else should.
+_REHEARSAL: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "billing.rehearsal", default=False)
+
+
+@contextmanager
+def rehearsal():
+    token = _REHEARSAL.set(True)
+    try:
+        yield
+    finally:
+        _REHEARSAL.reset(token)
+
+
 def enforcement_on() -> bool:
+    if _REHEARSAL.get():
+        return True
     return (os.environ.get("BILLING_ENFORCE") or "off").lower() == "on"
 
 

@@ -125,6 +125,17 @@ def _w(rev: str, why: str, bulk: bool = False) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────
 
 REGISTRY: Dict[str, Dict[str, Any]] = {
+    'submit_work_order': {**_w('A', 'queues a durable build; each effect is separately authorized'), 'chief_only': True},
+    'respond_work_order': {**_w('A', 'answers or resumes the exact reviewed build; approval is server-bound'), 'chief_only': True},
+    "list_connected_agents": {**_r("owner-approved bot capabilities; private to Chief and owner", sensitive=True), "chief_only": True},
+    "connected_agent_assignments": {**_r("delegated briefs and untrusted returned results; not shared between bots", sensitive=True), "chief_only": True},
+    "delegate_to_agent": {**_w("A", "creates a cancellable brief; release is restricted by the owner's saved per-agent coordination permission"), "chief_only": True},
+    "get_dashboard_layout": _r("reads only the signed-in person's dashboard and landing preferences", sensitive=True),
+    "inspect_video": _r("reads private video projects and exact revision hashes", sensitive=True),
+    "set_dashboard_focus": _w("A", "changes the signed-in person's featured dashboard page; clear restores the default"),
+    "set_start_page": _w("A", "changes the signed-in person's opening page; clear restores Home"),
+    "growth_report": _r("business-scoped growth metrics and saved growth records"),
+    "save_growth_record": _w("A", "creates or revises one analytical growth record; no payment, posting or sending; archive is reversible"),
 
     # ── reads ────────────────────────────────────────────────────────
     # Verified: each fetches and formats, and reaches nothing that writes.
@@ -140,6 +151,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "list_offerings":      _r("lists offerings"),
     "list_products":       _r("lists products"),
     "list_projects":       _r("lists projects"),
+    "list_tasks":          _r("lists open tasks by when they are due"),
     "list_scheduled":      _r("reads queued chief_scheduled_actions"),
     "offering_readiness":  _r("offering_profiles.business_readiness — pure report"),
     "recall_conversation": _r("searches prior conversation"),
@@ -170,6 +182,21 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                  "carries the step's own class"),
     "abandon_mission":        _w("A", "flips an open mission to abandoned; steps already "
                                  "run stay run, nothing new executes"),
+    "create_assignment":      _w("A", "one chief_assignments row: an outcome, a measurable "
+                                 "target and a deadline for the standing agent to work. "
+                                 "Executes nothing itself; stop_assignment undoes it "
+                                 "completely, and moves the agent makes toward it each "
+                                 "go through the door under their own class"),
+    "stop_assignment":        _w("A", "flips an open assignment to stopped; moves already "
+                                 "made stay made, nothing new happens"),
+    "grant_standing_permission":  _w("C", "lets Chief run one KIND of class-C proposal on its own "
+                                     "after a recall window — the verb that releases future sends "
+                                     "is classified by what it can set in motion; the practitioner's "
+                                     "own words are the approval"),
+    "revoke_standing_permission": _w("A", "removes one standing permission; every later send waits "
+                                     "for a tap again, nothing already sent changes"),
+    "assignment_status":   _r("reads open and recent assignments with progress and the "
+                              "moves log — operational state, same class as mission_status"),
     "mission_status":      _r("reads open missions with per-step status — operational "
                               "state, same class as list_scheduled"),
     "show_view":           _r("fetches a bounded read-only list (invoices / contacts / "
@@ -231,6 +258,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "update_contact_status":         _w("A", "sets a status field"),
     "create_note":                   _w("A", "creates a note"),
     "create_task":                   _w("A", "creates a task"),
+    "delete_task":                   _w("A", "removes a task Chief created within the undo window; "
+                                            "the inverse of create_task, refused for done or old tasks"),
     "complete_task":                 _w("A", "flips a task's done flag; re-openable"),
     "create_goal":                   _w("A", "creates a goal"),
     "add_reminder":                  _w("A", "creates a reminder"),
@@ -243,6 +272,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "create_module_entry":           _w("A", "creates a module row"),
     "update_module_entry":           _w("A", "edits a module row"),
     "ensure_module":                 _w("A", "creates a module if absent"),
+    # Class A: a form is INERT until the practitioner embeds it, and the
+    # off switch (is_active) is part of update. Nothing is sent, nothing
+    # reaches a client, and submissions already captured live in events +
+    # contacts and survive any edit to the form that collected them.
+    "create_client_form":            _w("A", "writes ONE intake_forms row — a public "
+                                             "questionnaire that captures nothing until it "
+                                             "is embedded, and deactivates in one edit"),
+    "update_client_form":            _w("A", "edits one intake_forms row the business owns: "
+                                             "name, questions, thank-you message, module "
+                                             "wiring, on/off. Captured submissions untouched"),
+    "list_client_forms":             _r("lists the business's own forms with a submission tally"),
     # Class A because it is ADDITIVE ONLY — a field can be removed again
     # and no data is touched. The verb deliberately cannot rename, retype
     # or delete a field: those do not destroy module_entries.data (it is
@@ -260,6 +300,21 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "remember":                      _w("A", "writes a chief_memories row; deactivatable via forget"),
     "add_testimonial":               _w("A", "adds a testimonial"),
     "update_business_profile_field": _w("A", "sets one profile field"),
+
+    # Workspace composer, phase one. All three write the same
+    # business_profiles row (archetype + validated layout + terminology)
+    # and nothing else — no send, no money, no outside world. Switching
+    # back is one further call, and the layout is rebuilt from a static
+    # preset rather than being edited in place, so a wrong choice is a
+    # tap away from right. Class A on those grounds.
+    "choose_workspace":    _w("A", "classifies the business and stores the matching layout "
+                                   "preset; re-runnable, and switch_workspace reverses it"),
+    "switch_layout":       _w("A", "opens the workspace on a different layout of the same archetype; marks the choice user_override so the picker never overrules it, and switch_layout reverses it"),
+    "switch_workspace":    _w("A", "swaps the stored archetype for another of the five "
+                                   "presets; the previous one is a call away, and every "
+                                   "user_override terminology row is carried across"),
+    "rename_term":         _w("A", "sets what the practitioner calls one noun and stamps the "
+                                   "row user_override; passing null restores the preset word"),
 
     # Verified individually beyond the adopted set.
     "forget":               _w("A", "deactivates a memory (is_active flip), does not delete"),
@@ -311,16 +366,56 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "Worth noting separately that a silently-cancelled client "
                                       "appointment is a product question, not a classification one"),
     "reschedule_booking":     _w("A", "moves an appointment; sends nothing, same as cancel"),
-    "create_course":          _w("A", "scaffolds academy_courses + academy_lessons rows"),
+    "inspect_course": _r("owner-scoped course and lesson content; includes private answer keys"),
+    "save_course_content": _w("A", "atomically authors course lessons, workbooks, quizzes and live details; published course edits are student-visible"),
+    "create_course":          _w("A", "atomically creates a draft course and complete lessons"),
     "create_growth_objective": _w("A", "materializes an objective plus its modules/workflows/"
                                        "milestones — a lot of rows, all ordinary records"),
     "enroll_student":         _w("A", "inserts an academy_enrollments row"),
     "mark_reply_read":        _w("A", "flips email_replies.read; re-markable"),
     "mark_sms_read":          _w("A", "flips sms_messages.read; re-markable"),
+    # Texting setup. Both are configuration — no message leaves, no client
+    # is contacted, and each verb reports the state it changed FROM so the
+    # practitioner can put it back.
+    "set_sms_keyword":        _w("A", "claims or rewrites ONE sms_keywords row — the "
+                                      "word a client texts to reach this business. "
+                                      "Re-claimable; existing bindings survive a change"),
+    "set_sms_alerts":         _w("A", "flips businesses.settings.sms_alerts "
+                                      "{confirmations, reminders}. A toggle, and the only "
+                                      "writer of a key sms_alerts has always read"),
+    "sms_status":             _r("keyword, provider readiness, alert switches, the "
+                                 "business's own number and an opt-out tally; writes nothing"),
+    "email_setup_status":     _r("sending identity (own domain vs platform), DNS/verify "
+                                 "state incl. drift, connected inbox + sync freshness, last "
+                                 "test; names the next setup step. Writes nothing"),
+    # Dedicated numbers (2026-09-02). Buying a line is a recurring charge
+    # on the platform's carrier bill and a number clients start texting.
+    "provision_sms_number":   _w("C", "buys a phone number on the platform's carrier account "
+                                      "and attaches it to the sender pool — a monthly cost and "
+                                      "a line the outside world starts using. Money-touching"),
+    "release_sms_number":     _w("C", "hands a number back: texts to it stop reaching the "
+                                      "practitioner at once, and after the 14-day window the "
+                                      "sweep releases it from the account for good"),
+    "restore_sms_number":     _w("A", "flips a releasing sms_numbers row back to active inside "
+                                      "its window — the undo for release_sms_number"),
     "notify_practitioner":    _w("A", "in-app notification + push to the OWNER. It does leave the "
                                       "device, but never reaches a client, so it is not the "
                                       "client-facing send class B exists for"),
+    "generate_image":         _w("C", "pays for image generation and saves a private original; explicit requests only"),
+    "study_website":          _w("A", "screenshots a public website at phone and desktop width, reads its design with a vision model, and saves the lessons to this business's site design notes (discovery dossier); no publishing, no site change"),
+    "capture_website_references": _w("A", "captures a public website and logo into the authenticated business private image gallery; no publishing or paid generation"),
+    "find_images":            _r("reads the authenticated business image gallery", sensitive=True),
     "plan_content":           _w("A", "adds a planned post to settings.content_calendar"),
+    "learn_business": _w("A", "saves private business operating knowledge with source evidence"),
+    "create_video": _w("A", "creates a private editable video project and scene plan"),
+    "revise_video": _w("A", "saves a new private video revision without replacing earlier work"),
+    "render_video": _w("C", "consumes rendering and narration resources for an explicitly approved revision; never publishes"),
+    "recall_business_knowledge": _r("reads the current business's private operating profile"),
+    "correct_business_knowledge": _w("A", "versions an owner correction to private operating knowledge"),
+    "capture_business_knowledge": _w("A", "immediately saves quoted owner answers and labels tentative plans"),
+    "propose_business_from_idea": _w("A", "lays a whole business out from an idea: the map row "
+                                          "(status=blueprint, never accepted) plus module and "
+                                          "offering DRAFTS — nothing live until each card is accepted"),
     "propose_module_from_intake": _w("A", "writes ModuleSpec DRAFTS that accept_module_spec later "
                                           "materializes — the draft itself changes nothing live"),
     "record_edit_pattern":    _w("A", "silent observation row in edit_observations"),
@@ -357,13 +452,24 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "save_swot":              _w("A", "saves a strategy-track deliverable"),
     "session_summary":        _w("A", "appends a coaching-session summary to phases.session_log"),
     "save_email_template":    _w("A", "saves a reusable template into settings; editable"),
-    "save_note":              _w("A", "files a note (chief_memories, category='note')"),
+    "save_note":              _w("A", "files a note (chief_memories, a '[note:<kind>]' marker on content)"),
     "set_availability_day":       _w("A", "sets one day's weekly hours; re-settable"),
     "set_availability_override":  _w("A", "sets a date-specific override; re-settable"),
     "set_lead_time":              _w("A", "sets required booking lead time"),
     "set_slot_granularity":       _w("A", "sets the slot grid spacing"),
     "set_business_timezone":      _w("A", "sets the canonical timezone"),
     "set_site_capability":        _w("A", "records a capability into the discovery dossier"),
+    "edit_site_text":             _w("A", "sets one editable text on the public site via a text "
+                                        "override (the row Edit Mode writes); revert_site_text "
+                                        "puts the stored copy back"),
+    "revert_site_text":           _w("A", "removes one site text override; the stored copy shows again"),
+    "set_module_feel":            _w("A", "sets a module's presentation tone / empty line — display "
+                                          "only, re-settable, no field or row touched"),
+    "check_module":               _w("A", "queues a visual check of one module — screenshots at two "
+                                          "widths + a vision verdict; writes only a job row and its "
+                                          "report, never the module"),
+    "check_site":                 _w("A", "queues a visual check of the live site (screenshots + "
+                                        "findings filed on the site row); changes nothing on the site"),
     "update_contact_health":      _w("A", "sets a contact's health score"),
     "update_practitioner_profile_field": _w("A", "sets one practitioner_profiles field (owner-scoped)"),
     "upgrade_module_archetype":   _w("A", "refines an existing module's archetype params"),
@@ -479,6 +585,14 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "AND bulk — the worst combination in the registry", bulk=True),
     "publish_post":         _w("C", "publishes to Facebook/Instagram via Meta. There is an unpublish, "
                                     "but a post that was seen cannot be unseen"),
+    "publish_to_site":      _w("C", "publishes to the practitioner's OWN news page. Still C: it is "
+                                    "public the moment it lands, and search may index it before "
+                                    "anyone reads it twice. It is the one publishing verb the "
+                                    "owner's autonomy dial may exempt from per-post approval "
+                                    "(site_publish.GOVERNS) — because it is their domain, their "
+                                    "server, nobody else's terms, and removing the post removes "
+                                    "the page. That reasoning does not reach publish_post and the "
+                                    "allow-list is written so it cannot be made to"),
     "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
                                     "(send_confirmation defaults true). The send is what makes this "
                                     "C while cancel/reschedule are A"),
@@ -500,6 +614,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "'A' recommendation made before reading the handler.)"),
     "send_invoice":         _w("C", "sends an invoice and touches Stripe"),
     "mark_invoice_paid":    _w("C", "records payment — a ledger fact with a compliance trail"),
+    "delete_invoice":       _w("C", "hard-deletes only an explicitly identified unsent unpaid draft"),
+    "void_invoice":         _w("C", "cancels an unpaid invoice and disables its verified payment link"),
+    "archive_invoice":      _w("A", "reversible archive timestamp; invoice status and financial records remain intact"),
+    "restore_invoice":      _w("A", "clears the archive timestamp without altering the invoice or payment"),
     "cancel_recurring_invoice": _w("C", "stops or cancels recurring billing; money-touching"),
     "approve_bookkeeping_proposal": _w("C", "executes a categorization/match against the books. The "
                                             "module's own header refuses to offer bulk approval "
@@ -514,6 +632,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "complete_strategy_track": _w("C", "composite finaliser: creates a products module and entries, "
                                        "seeds an intake form, GENERATES THE SITE, and flips the "
                                        "business to launched. Site generation alone earns the C"),
+    "view_website": {**_r("renders a public web page in a guarded browser and returns its screenshot and visible text; sign-in pages refused; nothing saved to the business. Drives the server's browser, so Chief only, never an outside agent", sensitive=True), "chief_only": True},
+    "lane_wallet": {**_w("C", "look at merchant pages, prepare owner-bound Lane purchase drafts and saved merchant links after the owner's go-ahead, and read saved status; approval and checkout only in Wallet"), "chief_only": True},
+    "agentcard_wallet": {**_w("C", "prepare a customer-owned Agentcard cart or check status; confirmation and payment only in Wallet"), "chief_only": True},
+    "link_wallet_pilot":    {**_w("C", "private owner-only Link authorization and simulated payment rehearsal; never live spending"), "chief_only": True},
+    "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
+    "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),
+    "stop_errand":          _w("A", "stops further browser actions; does not reverse a submitted order"),
+    "errand_status":        _r("reads the current errand and sanitized receipt; Secure Entry metadata stays in authenticated Chief chat", sensitive=True),
+    "use_browser_hand":     _w("C", "proposes a bounded browser task for approval; the run "
+                               "acts on third-party sites the practitioner named, so the "
+                               "proposal itself is held to the run's class"),
     "queue_build_request":  _w("C", "the builder bridge — files a GitHub issue for the owner, a "
                                     "support ticket for everyone else. Leaves the system"),
     "schedule_action":      _w("C", "meta-verb: schedules ANY toolkit action for later. Its own "
@@ -639,7 +768,7 @@ def may_expose_to_agent(verb: str, allow_writes: bool = False) -> bool:
     "can this break anything"; sensitivity answers "may a third party see
     it". Those are different questions and donor giving records are where
     they diverge."""
-    if is_sensitive(verb):
+    if is_sensitive(verb) or (classification(verb) or {}).get("chief_only"):
         return False
     kind = effect(verb)
     if kind == READ:

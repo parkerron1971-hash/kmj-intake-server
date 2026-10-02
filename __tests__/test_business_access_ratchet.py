@@ -54,8 +54,43 @@ RESIDUAL = [h for h in UNGUARDED
 # one that is a bug list. The total includes surfaces that are anonymous
 # on purpose (public sites, public forms, signature-verified webhooks) —
 # still worth pinning, so that set cannot grow quietly either.
+# 52 -> 46 (2026-08-26): the six SMS practitioner handlers
+# (/sms/send, /sms/conversation, /sms/session-reminder,
+# /sms/keyword x2, /sms/broadcast) now assert_access. They used to
+# sit inside PUBLIC_BY_DESIGN's 'inbound webhooks' entry, which was
+# never true of them — the webhooks are in twilio_sms.py. Lowered
+# rather than left, because six units of new slack is how a ratchet
+# stops ratcheting.
+# 46 -> 44 (2026-08-26, billing audit): booking_series' two handlers
+# stopped being false positives. They always called
+# _require_member_writer -> require_role; the sweep could see through
+# neither the function-local import nor the aliased _HTTPException,
+# and the module had been parked on PUBLIC_BY_DESIGN to quieten it.
+# Both blind spots are fixed, so the entry is gone and the two
+# handlers now resolve as what they are: guarded.
+# 44 -> 45 (2026-09-05, in-chat booking): site_concierge gained a
+# third anonymous WRITE, /public/concierge/{slug}/booking/book — a
+# website visitor booking a time inside the chat, no account by
+# design (the same person, the same walk-in flow, as the booking
+# widget's book_anon). It sits behind the IP cap, the client policy
+# verdict, and book_anon's own guards. The residual stays at ZERO;
+# this raise records one deliberate public door, not slack.
+# 45 -> 46 (2026-09-18, the client form's page): intake_endpoint gained
+# GET /public/widget/form/{form_id} — the page behind the link Chief
+# hands out for a client form (it had been a 404 on every host). A
+# visitor with the link, no account, by design — the same person who
+# then POSTs to /intake/submit, which was already public. A READ of an
+# active form's own fields (the composed site already exposes the same
+# list); the business is read only to brand the page. The residual
+# stays at ZERO; this raise records one deliberate public door.
+# 46 -> 47 (2026-09-30, check-in stations): kids_station.pair — a church
+# tablet typing the one-time pairing code a manager read out, before it
+# has any credential. Strictly rate-limited per network, the code lasts
+# 15 minutes and works once. Every other station route resolves its
+# device token through station_from_token (a HINT in ownership_sweep).
+# The residual stays at ZERO; one deliberate public door.
 #
-# 52 -> 53 on 2026-08-24, and this is the raise the comment above says
+# 47 -> 48 (merged 2026-10-02; written 2026-08-24 as 52 -> 53), and this is the raise the comment above says
 # not to make, so it carries its reason. whisper_proxy.transcribe gained
 # an OPTIONAL business_id used for one thing: naming the tenant on the
 # api_usage row, so /ai/whisper — 19.8% of the AI bill — stops being
@@ -68,7 +103,7 @@ RESIDUAL = [h for h in UNGUARDED
 # QUIETLY. It grew loudly: a hand-read entry in ownership_sweep, a reason
 # recorded there, and this number moved in the same commit. The residual
 # ceiling below — the one that is a bug list — stays at ZERO.
-MAX_UNGUARDED_TOTAL = 53
+MAX_UNGUARDED_TOTAL = 48
 MAX_UNGUARDED_RESIDUAL = 0
 
 

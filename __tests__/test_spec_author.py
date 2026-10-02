@@ -415,11 +415,39 @@ def test_save_spec_bumps_revision_when_the_write_lands(monkeypatch):
     assert fake.config["design_spec"]["text"] == "a fresh document"
 
 
-def test_save_spec_returns_none_without_a_site_row(monkeypatch):
-    """No site to attach to is a DIFFERENT condition from a failed
-    write — harmless, and must not raise."""
+def test_save_spec_creates_the_row_for_a_business_without_one(monkeypatch):
+    """THE DOSSIER NEEDS A ROW (2026-08-28). "No site to attach to" was
+    called harmless; it was not — the spec had been authored, charged
+    for, and returned with nothing in the database. A business with no
+    business_sites row gets one on the first write."""
+    import sb_clients
+    fake = _FakeSB(has_row=False)
+    _wire(monkeypatch, fake)
+    posted = []
+
+    def _get(path):
+        if path.startswith("/businesses?"):
+            return [{"id": "biz-1", "name": "MaCnificent Hair Co"}]
+        if path.startswith("/business_sites?business_id=") and posted:
+            return [{"id": "site-new", "site_config": {}}]
+        return []
+
+    def _post(path, body):
+        posted.append((path, body))
+        return [{"id": "site-new", **body}]
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _get)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", _post)
+    saved = spec_author.save_spec("biz-1", "doc")
+    assert saved and saved["revision"] == 1
+    assert posted and posted[0][1]["slug"] == "macnificent-hair-co"
+    assert fake.patches and fake.patches[-1]["site_config"]["design_spec"]["text"] == "doc"
+
+
+def test_save_spec_returns_none_when_the_business_is_missing(monkeypatch):
+    """Only a business that does not exist has nowhere to write."""
     _wire(monkeypatch, _FakeSB(has_row=False))
-    assert spec_author.save_spec("biz-1", "doc") is None
+    assert spec_author.save_spec("ghost", "doc") is None
 
 
 def test_set_status_also_verifies_its_write(monkeypatch):
@@ -544,3 +572,54 @@ def test_approve_route_handles_a_failed_write_as_503_not_500(monkeypatch):
     with pytest.raises(HTTPException) as ei2:
         site_composer.approve_design_spec(body, sess)
     assert ei2.value.status_code == 409
+
+
+def test_one_section_count_when_no_plan_is_composed():
+    """The skeleton said 8-11 and the no-plan line said 6-9 (2026-10-01)."""
+    line = spec_author._digest_plan([])
+    assert "8-11" in line and "6-9" not in line
+
+
+# ─── THE CONCEPT LAYER (2026-10-01, the concept-layer plan) ───────────
+
+def test_the_director_is_taught_the_concept_law_and_the_object_catalog():
+    import site_objects
+    s = spec_author._SYSTEM
+    assert "{CONCEPT_LAW}" not in s and "{OBJECT_CATALOG}" not in s
+    assert "THE CONCEPT LAW" in s and "PLAIN-WORD RULE" in s
+    for key in site_objects.OBJECT_KEYS:
+        assert f"- {key}:" in s, f"the Director cannot name {key}"
+    assert "0. THE CONCEPT" in s and "6. THE OFFER PAGE" in s
+    assert s.index("0. THE CONCEPT") < s.index("1. OVERVIEW")
+
+
+def test_the_concept_block_rides_the_directors_message():
+    out = spec_author.build_user_prompt(
+        "DOSSIER", [], concept="== THE CONCEPT (how far this site's idea goes) ==\n"
+                               "- intensity: plain (the trade's default)")
+    assert "THE CONCEPT (how far" in out and "intensity: plain" in out
+
+
+def test_author_spec_attaches_the_concept_for_the_trade(monkeypatch):
+    seen = {}
+
+    def _fake(system, user, business_id, image_urls=None, mark_urls=None):
+        seen["user"] = user
+        return "0. THE CONCEPT\nINTENSITY: plain\n1. OVERVIEW\nA calm page."
+
+    monkeypatch.setattr(spec_author, "_call_llm", _fake)
+    ctx = {"business": {"name": "Calm Counsel", "type": "Licensed therapist"},
+           "site": {"site_config": {}}}
+    text = spec_author.author_spec("biz-1", ctx, None, [])
+    assert text and "INTENSITY: plain" in text
+    assert "intensity: plain" in seen["user"] and "trade's default" in seen["user"]
+    assert ctx["concept"]["intensity"] == "plain"
+
+
+def test_the_language_block_tells_the_director_how_objects_wear_it(monkeypatch):
+    import design_languages as dl
+    monkeypatch.setattr(dl, "resolve", lambda ctx, dro: ("ledger", "the owner chose it", "owner"))
+    ctx = {}
+    assert spec_author.attach_language(ctx, None) == "ledger"
+    assert "OBJECTS IN THIS LANGUAGE" in ctx["language_brief_text"]
+    assert 'data-finish="metal"' in ctx["language_brief_text"]

@@ -94,6 +94,12 @@ def _swap(verb: str, keys: tuple) -> Callable:
 
 INVERSES: Dict[str, Inverse] = {
 
+    # Undo prepares a class-A cancellation plan; a separate approval is required
+    # before anything touches the supplier. Unknown windows produce a draft only.
+    "approve_errand": Inverse("plan_errand", "prepare a cancellation request for that order",
+        lambda a,r: {'type':'plan_errand','kind':'cancel_order','original_errand_id':r['errand_id']}
+        if r.get('status')=='done' and r.get('errand_id') else None),
+
     "add_block_range": Inverse(
         "remove_block_range",
         "un-block those dates",
@@ -145,6 +151,14 @@ INVERSES: Dict[str, Inverse] = {
                        "is_active": True}
                       if (a.get("offering_id") or _first_id(r, "offering_id", "id"))
                       else None)),
+
+    # create_task carries the new row's id back; delete_task (2026-09-14)
+    # removes that row while it is fresh and still open.
+    "create_task": Inverse(
+        "delete_task",
+        "remove that task again",
+        lambda a, r: ({"type": "delete_task", "task_id": _first_id(r, "task_id", "id")}
+                      if _first_id(r, "task_id", "id") else None)),
 
     # complete_task flips a done flag the registry calls "re-openable".
     "complete_task": Inverse(
@@ -201,6 +215,24 @@ INVERSES: Dict[str, Inverse] = {
         lambda a, r: ({"type": "archive_offering",
                        "offering_id": _first_id(r, "offering_id", "id")}
                       if _first_id(r, "offering_id", "id") else None)),
+    # ── site copy — an edit is an override row; reverting deletes it, and
+    # re-applying the revert writes the same words back. The target path
+    # comes from the RESULT (edit resolves `find` to it), so an undo never
+    # re-runs a fuzzy match.
+    "edit_site_text": Inverse(
+        "revert_site_text",
+        "put that site text back",
+        lambda a, r: ({"type": "revert_site_text",
+                       "target": _first_id(r, "target_path")}
+                      if _first_id(r, "target_path") else None)),
+    "revert_site_text": Inverse(
+        "edit_site_text",
+        "re-apply that site edit",
+        lambda a, r: ({"type": "edit_site_text",
+                       "target": _first_id(r, "target_path"),
+                       "text": _first_id(r, "previous_text")}
+                      if _first_id(r, "target_path") and _first_id(r, "previous_text")
+                      else None)),
 }
 
 # S11 resolution (2026-07-31): write_off_time is GONE from INVERSES. It
@@ -243,7 +275,6 @@ NOT_UNDOABLE_REASON: Dict[str, str] = {
                        "reaches those — open the contact and use Delete there."),
     # No delete verb exists for these creates; inventing one belongs to
     # chief_of_staff (owned elsewhere this wave), not to undo.
-    "create_task": "There's no verb that deletes a task yet — mark it done or edit it directly.",
     "create_goal": "There's no verb that removes a goal yet — edit it in Goals directly.",
     "create_note": "Contact notes have no delete verb yet — the note stays on the record.",
     # save_note rows carry no id back, and 'forget' matches by content

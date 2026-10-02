@@ -19,3 +19,28 @@ os.environ.setdefault("SITE_V2_VISION_LOOP", "off")
 # wiring tests flip it to "sync" via mock.patch.dict, which is also the
 # only mode in which they can assert anything.
 os.environ.setdefault("LEAD_SCORING_MODE", "off")
+
+
+# Chief's per-turn state lives in contextvars that a real turn resets at
+# its start and that a test which calls the door or the tool loop
+# directly never does. The taint counter was the one that bit: a
+# grounding test that defuses a poisoned email bumped it, and every
+# trust-gate test after it in the same process saw "suspicious content
+# in inbox" and held a batch email (six order-dependent failures on
+# trunk, 2026-09-14). Every test starts from a fresh turn.
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _fresh_chief_turn():
+    try:
+        import chief_of_staff as _cos
+        _cos._UNTRUSTED_TAINT.set(0)
+    except Exception:  # pragma: no cover - a test that never imports Chief
+        pass
+    try:
+        import chief_tool_loop as _loop
+        _loop.reset_turn()
+    except Exception:  # pragma: no cover
+        pass
+    yield

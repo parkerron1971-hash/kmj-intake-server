@@ -96,3 +96,23 @@ def test_character_sheets_mention_every_language_and_none():
     for key in dl.LANGUAGES:
         assert f'"{key}"' in sheets
     assert "none" in sheets.lower()
+
+
+# ─── the objects in each language (2026-10-01, the concept-layer plan) ─
+
+def test_every_language_gives_its_objects_a_finish():
+    import design_languages as dl
+    assert set(dl.OBJECT_FINISH) == set(dl.LANGUAGES)
+    for key, (finish, note) in dl.OBJECT_FINISH.items():
+        assert finish in ("paper", "inverse", "glow", "metal"), key
+        assert len(note) > 30, key
+        assert f'data-finish=\\"{finish}\\"' not in dl.objects_line(key)
+        assert f'data-finish="{finish}"' in dl.objects_line(key)
+    assert dl.objects_line("nope") == ""
+
+
+def test_inverse_is_only_worn_on_a_light_ground():
+    """The eleven-language contact sheet: inverse on a dark ground turned
+    Runway's and Arena's objects into black panels on black."""
+    import design_languages as dl
+    assert [k for k, (f, _) in dl.OBJECT_FINISH.items() if f == "inverse"] == ["signal"]

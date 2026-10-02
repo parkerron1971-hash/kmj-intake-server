@@ -19,14 +19,17 @@ strings already existed and were all discarded.
 
 WHAT THIS DELIBERATELY DOES NOT DO. It is not a new gate that silently
 changes what the product allows. Every existing block stays exactly as it
-was, and the engine BLOCKS only three things:
+was, and the engine BLOCKS only four things:
 
   1. verbs the action registry does not classify (drift fails closed,
      matching _gate_class_c),
   2. bulk verbs running unattended (the registry's own standing rule,
      which the scheduler and workflow paths were quietly violating),
   3. client-facing actions running unattended for a REGULATED vertical
-     whose owner never enabled that (see below).
+     whose owner never enabled that (see below),
+  4. ANY unattended action for a business whose practitioner has paused
+     automations (see is_paused — the switch that four of the five paths
+     that act have never read).
 
 Everything else is RECORDED, not refused — including class-C verbs on a
 recurrence. Recurring invoices are a real feature; whether they should
@@ -132,6 +135,36 @@ def client_facing_autonomy(biz: Dict[str, Any]) -> str:
     return "disabled" if is_regulated(biz) else "enabled"
 
 
+def is_paused(biz: Dict[str, Any]) -> bool:
+    """Has the practitioner switched their own automations off?
+
+    settings.automations_paused has existed since the rules arc and was
+    read by exactly two call sites — rules_engine's trigger loop and the
+    trusted-autonomy sweep. The scheduler, the workflow runner and the
+    autopilot sweep never consulted it, so a practitioner who paused
+    automations still had Chief executing scheduled actions, advancing
+    workflows and sending auto-approved email. A switch that stops one
+    automation in five is worse than no switch at all, because the person
+    who flipped it believes they have stopped.
+
+    Delegates to rules_engine, which has owned this predicate from the
+    start — re-reading the same setting here is precisely the drift this
+    module exists to end. Lazy import: rules_engine is heavy and this is
+    on the hot path of every write.
+
+    The fallback reads the flag off the row we are already holding rather
+    than defaulting either way. Guessing "paused" on an import error
+    would stop the platform; guessing "running" would silently discard
+    the practitioner's instruction. Reading the row does neither.
+    """
+    try:
+        from rules_engine import business_paused
+        return bool(business_paused(biz))
+    except Exception as e:
+        logger.warning(f"[policy] pause predicate unavailable, reading directly: {e}")
+        return bool(((biz or {}).get("settings") or {}).get("automations_paused"))
+
+
 def role_of(business_id: str, user_id: Optional[str]) -> Optional[str]:
     """Best-effort seat role. Never raises: the engine records what it
     knows, and an unavailable role must not take an action down."""
@@ -161,6 +194,13 @@ def evaluate(business_id: str, *, verb: str, surface: str,
     if not business_id or not verb:
         return Verdict(False, "policy:invalid", "Missing business or verb.")
 
+    if verb in {'link_wallet_pilot', 'lane_wallet', 'agentcard_wallet'} and (not prompted or surface != 'chat'):
+        return Verdict(False, 'link-pilot:chat-required', 'The private Link pilot requires the owner\'s current chat turn.')
+
+    if verb=='approve_errand' and (not prompted or surface not in ('chat','notification')):
+        return Verdict(False,'errand:explicit-approval-required',
+                       'Approve this errand yourself on its card or in the current chat turn.')
+
     role = role_of(business_id, user_id)
 
     try:
@@ -183,6 +223,33 @@ def evaluate(business_id: str, *, verb: str, surface: str,
     if effect in ("read", "ui"):
         return Verdict(True, f"{surface}:{effect}", "Read-only action.", role)
 
+    # The business row is resolved BEFORE the unattended rules now, because
+    # the pause check below needs it. Reads still return above without ever
+    # touching the database, which is what kept this cheap.
+    biz = _biz(business_id, biz_row)
+
+    # THE PAUSE SWITCH, finally read on every path that acts.
+    #
+    # Checked here rather than at five call sites so that the sixth
+    # unattended path — whatever it turns out to be — inherits it without
+    # anyone remembering to add it. That is the same argument the bulk
+    # rule lost on the scheduler and workflow paths before Stage 0.
+    #
+    # FIRST among the unattended rules, so the refusal names the reason
+    # the practitioner will recognise. "You paused automations" is an
+    # answer they can act on; "bulk verbs cannot run unattended" is a true
+    # sentence about a state they already turned off.
+    #
+    # Prompted actions are deliberately untouched: pausing automations
+    # pauses what runs on its own, not what the practitioner asks for by
+    # hand. Someone who pauses their automations and then tells Chief to
+    # send an invoice has not contradicted themselves.
+    if not prompted and is_paused(biz):
+        return Verdict(False, "business:automations_paused",
+                       "Automations are paused for this business, so this "
+                       "did not run. Turn them back on in Settings, or do "
+                       "it yourself and it will go through.", role)
+
     # Bulk is never autonomy-eligible at any class — the registry's rule,
     # unenforced on the scheduler and workflow paths until Stage 0/1b.
     if bulk and not prompted:
@@ -190,8 +257,6 @@ def evaluate(business_id: str, *, verb: str, surface: str,
                        f"{verb} affects many records at once and cannot run "
                        "unattended. Open the screen and confirm the list.",
                        role)
-
-    biz = _biz(business_id, biz_row)
 
     # THE PROMISE. A regulated business whose owner has not enabled
     # client-facing autonomy does not get Chief contacting clients on its
@@ -222,3 +287,150 @@ def evaluate(business_id: str, *, verb: str, surface: str,
     # append-only, uncorrectable record. The role is still resolved and
     # returned on the Verdict for the day it becomes load-bearing.
     return Verdict(True, f"{surface}:{rev or effect}", "Allowed.", role)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# THE CLIENT SIDE — a separate evaluator, deliberately
+# ─────────────────────────────────────────────────────────────────────
+#
+# evaluate() above answers exactly one question, in every branch: MAY
+# CHIEF DO THIS ON THE PRACTITIONER'S BEHALF, UNPROMPTED, INSIDE THEIR
+# BUSINESS? The seat role, the pause switch, the bulk rule, the
+# client-facing autonomy promise and the class-C-unattended record are
+# all shapes of that one question.
+#
+# A client acting on their own record is not that question. They hold no
+# seat, so role_of() answers None and every role-shaped rule is
+# vacuous. They are not an automation, so the pause switch — which
+# stops what runs ON ITS OWN — must not stop them; a practitioner who
+# paused their automations has not told their clients to stop booking.
+# And the action registry classifies CHIEF's verbs: create_booking is
+# class C because Chief inventing an appointment and emailing a client
+# about it is not something Chief should do unprompted. That reasoning
+# does not transfer to a client booking themselves, and routing client
+# actions through a registry that would refuse them all is not a gate,
+# it is a category error.
+#
+# So the client gets its own evaluator with its own closed vocabulary.
+# This is the parallel-surface ruling applied to authorization: clients
+# do not get a rank on the practitioner's ladder, and they do not get a
+# branch inside the practitioner's evaluator either.
+#
+# WHAT IT KEEPS FROM evaluate(): fail closed on an unknown verb, a
+# stable greppable rule string, and the discipline that the rule names
+# what actually ran.
+#
+# WHAT IT DROPS, AND WHY: there is no `prompted` parameter. Promptedness
+# exists to separate "a human asked for this now" from "a sweep decided
+# it" — and every client action is asked for by the client, including
+# the ones their agent carries out on their instruction. What differs
+# between a client and their agent is WHO TYPED, which is authorship,
+# not authority. Both get the client's authority; audit_log.ai_model
+# records that a machine was involved.
+
+# The client vocabulary. Closed, and it grows the day a client surface
+# actually needs a verb — never speculatively. Every entry names a
+# surface that exists today; the engagement-record verbs land with the
+# engagement record, in its own change, so this set never describes
+# capability the system does not have.
+CLIENT_VERBS: Dict[str, Dict[str, str]] = {
+    "client_view_booking_config": {
+        "effect": "read",
+        "why": "reads the practitioner's brand kit + bookable services to "
+               "render the booking form. GET /widgets/booking/{biz}/config",
+    },
+    "client_book_appointment": {
+        "effect": "write",
+        "why": "books the client's own appointment, sends their own "
+               "confirmation email + SMS. POST /widgets/booking/{biz}/book",
+    },
+    "client_request_link": {
+        "effect": "write",
+        "why": "re-issues an expired client link to the address already on "
+               "the record. POST /widgets/request-fresh-link",
+    },
+}
+
+# Who may hold the client's authority. Both act AS the client; the split
+# is authorship. Kept as a set rather than a bool so a third case (a
+# practitioner acting on a client's behalf at the front desk, say) has
+# somewhere to land without changing the signature.
+CLIENT_ACTORS = ("client", "client_agent")
+
+
+def evaluate_client(business_id: str, *, verb: str,
+                    actor: str = "client",
+                    customer_id: Optional[str] = None,
+                    biz_row: Optional[Dict[str, Any]] = None) -> Verdict:
+    """Evaluate one action taken by a client on their own record.
+
+    actor       — 'client' (they did it) or 'client_agent' (their agent
+                  did it on their instruction). Same authority, different
+                  authorship.
+    customer_id — the business_customers row the caller was bound to. Not
+                  used as a gate here: the binding is proved
+                  cryptographically upstream by require_customer_token_dep
+                  before this is ever called. It is carried so the
+                  refusal path can say WHICH client was refused without
+                  the caller having to thread it separately.
+
+    The returned Verdict.rule lands in audit_log.authorized_by, where it
+    has to survive being queried a year from now — so these strings are
+    stable and greppable, and none of them is a sentence.
+    """
+    if not business_id or not verb:
+        return Verdict(False, "policy:invalid", "Missing business or verb.")
+
+    if actor not in CLIENT_ACTORS:
+        # Fail closed on an actor nobody declared. A caller passing
+        # 'user' here is reaching for the wrong evaluator.
+        return Verdict(False, "client:unknown_actor",
+                       f"{actor!r} is not a client-side actor.")
+
+    entry = CLIENT_VERBS.get(verb)
+    if not entry:
+        # Same posture as registry:unclassified above. Drift on the
+        # client surface fails closed for the same reason it does on the
+        # practitioner's: a verb nobody classified is a verb nobody
+        # reasoned about.
+        return Verdict(False, "client:unclassified",
+                       f"{verb} is not a client-side action.")
+
+    biz = _biz(business_id, biz_row)
+
+    # THE VERTICAL GATE. A practice whose vertical has no client surface
+    # does not get one through a verb, and this is checked on every
+    # action rather than only at enable time — enablement can predate a
+    # vertical being reclassified, and a therapist practice that was
+    # stamped 'coach' on Tuesday must not keep a client portal on
+    # Wednesday.
+    #
+    # Checked BEFORE the read short-circuit below, deliberately. A
+    # refused vertical is refused the whole surface, not just its
+    # writes: "your client may not book but may read your service menu
+    # through the client portal" is not a boundary anyone drew.
+    try:
+        import vertical_scope
+        if not vertical_scope.client_surface_allowed(biz.get("type")):
+            return Verdict(
+                False, "vertical:client_surface_denied",
+                vertical_scope.client_surface_refusal(biz.get("type"))
+                or "A client-facing portal is not available for this practice.")
+    except Exception as e:
+        # Fail CLOSED. This is the HIPAA boundary; a check that cannot
+        # run is not a permission to proceed. Note this is the opposite
+        # of the surrounding module's fail-open habits, and deliberately
+        # so — the same reasoning mcp_tokens gives for its own posture.
+        logger.error(f"[policy] client surface gate unavailable for "
+                     f"{business_id}: {e}")
+        return Verdict(False, "vertical:scope_unavailable",
+                       "The vertical scope check is unavailable.")
+
+    rule_actor = "self" if actor == "client" else "agent"
+
+    if entry["effect"] == "read":
+        return Verdict(True, f"client:{rule_actor}:read",
+                       "Client read of their own record.")
+
+    return Verdict(True, f"client:{rule_actor}",
+                   "Client acting on their own record.")

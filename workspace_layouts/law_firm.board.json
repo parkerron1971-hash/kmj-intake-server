@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "archetype": "law_firm",
+  "label": "Law Firm",
+  "vertical": "lawyer",
+  "identity": "lawyer",
+  "terminology": {
+    "client": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "clients": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "contact": {
+      "value": "Client",
+      "origin": "preset"
+    },
+    "contacts": {
+      "value": "Clients",
+      "origin": "preset"
+    },
+    "project": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "projects": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "service": {
+      "value": "Matter",
+      "origin": "preset"
+    },
+    "services": {
+      "value": "Matters",
+      "origin": "preset"
+    },
+    "appointment": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "appointments": {
+      "value": "Consultations",
+      "origin": "preset"
+    },
+    "session": {
+      "value": "Consultation",
+      "origin": "preset"
+    },
+    "invoice": {
+      "value": "Invoice",
+      "origin": "preset"
+    },
+    "schedule": {
+      "value": "Docket",
+      "origin": "preset"
+    }
+  },
+  "rationale": "The same firm read by stage instead of by date. A matter that has had no step taken in six weeks is invisible in a list ordered by deadline — it simply never comes near the top — but laid across its stages the stall is a SHAPE: one column carrying weight nobody has moved. Chief opens here when matters are ageing rather than when filings are due, because those are different emergencies and the docket answers only the second one.",
+  "suppressed": [
+    {
+      "primitive": "timeline_day",
+      "reason": "Wrong for a firm for the same reason it is wrong on the docket: a matter runs for months and touches the calendar a handful of times."
+    },
+    {
+      "primitive": "week_grid",
+      "reason": "A week cannot show a matter that has not moved in six of them, which is the entire question this layout exists to answer."
+    },
+    {
+      "primitive": "ledger",
+      "reason": "Trust accounting is real and it is not a dashboard. It belongs in the ledger surfaces where it can be done properly."
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "matters_by_stage",
+      "primitive": "priority_docket",
+      "role": "lead",
+      "title": "Matters by stage",
+      "rationale": "Laid across the stages rather than down a list. The column carrying weight nobody has moved is visible before a word is read, and that is something a date-ordered list structurally cannot show. The metric is days since the matter opened, so a long-running file in an early stage reads as the problem it is.",
+      "bindings": {
+        "rows": {
+          "source": "module_entries",
+          "scope": "business",
+          "filter": {
+            "status": "active"
+          },
+          "fields": {
+            "id": "id",
+            "title": "data.matter_name",
+            "metric_value": {
+              "column": "created_at",
+              "derive": "days_since"
+            },
+            "subtitle": "data.client_name",
+            "stage": "data.stage",
+            "owner": "data.responsible_attorney"
+          },
+          "order": "created_at.asc",
+          "limit": 60
+        }
+      },
+      "options": {
+        "sort": "stage",
+        "stage_layout": "columns",
+        "numbered": false,
+        "banding": "none",
+        "metric_label": "Open",
+        "metric_unit": "days",
+        "urgent_threshold_days": 40,
+        "stages": [
+          "Discovery",
+          "Hearing",
+          "Settlement",
+          "Advice"
+        ]
+      }
+    },
+    {
+      "id": "the_cascade",
+      "primitive": "benchmark_panel",
+      "role": "secondary",
+      "title": "Where the hours go",
+      "rationale": "An hour has to survive three things to become money: being recorded, being billed at close to full value, and being paid. These multiply, which is why they belong in one cascade rather than three gauges — at industry averages only about thirty per cent of working time ever reaches the bank.",
+      "bindings": {
+        "rows": {
+          "source": "business_benchmarks",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "utilization",
+              "realization",
+              "collection"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "average": "average",
+            "target": "target",
+            "floor": "floor",
+            "scale_max": "scale_max",
+            "unit": "unit",
+            "direction": "direction",
+            "reading": "reading",
+            "source": "source"
+          },
+          "order": "key.asc",
+          "expect_items": 3
+        }
+      },
+      "options": {
+        "format": "percent",
+        "show_average": true,
+        "cascade": true,
+        "cascade_label": "of working time reaches the bank"
+      }
+    },
+    {
+      "id": "firm_position",
+      "primitive": "metric_row",
+      "role": "footer",
+      "title": "Position",
+      "rationale": "Three figures at rest at the bottom of the screen. Unbilled, work in progress, trust. Read on the way past, never acted on from here.",
+      "bindings": {
+        "metrics": {
+          "source": "business_metrics",
+          "scope": "business",
+          "filter": {
+            "key": [
+              "unbilled_amount",
+              "wip_amount",
+              "trust_balance"
+            ]
+          },
+          "fields": {
+            "id": "key",
+            "label": "label",
+            "value": "value",
+            "unit": "unit",
+            "trend": "trend"
+          },
+          "order": "key.asc",
+          "expect_items": 3
+        }
+      },
+      "options": {
+        "format": "currency"
+      }
+    }
+  ],
+  "room": {
+    "eyebrow": "matters by stage",
+    "meta": {
+      "matters_by_stage": "grouped by stage",
+      "the_cascade": "where the hours go",
+      "firm_position": "unbilled and held"
+    }
+  }
+}

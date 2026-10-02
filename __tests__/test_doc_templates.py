@@ -63,7 +63,9 @@ def test_library_shape_and_uniqueness():
     # __tests__/test_nonprofit_doc_templates.py for what may NOT be
     # added: nothing the IRS or an auditor issues.
     ids = [t["id"] for t in dt.TEMPLATES]
-    assert len(ids) == len(set(ids)) == 17
+    # 17 -> 18 on 2026-09-01: the loan agreement (promissory note) —
+    # the first template where the business is the one paying.
+    assert len(ids) == len(set(ids)) == 18
     for t in dt.TEMPLATES:
         assert t["title"] and t["description"] and t["category"]
         assert t["suggested_for"], f"{t['id']} suggests nothing"
@@ -179,7 +181,7 @@ def test_routes_exist_and_are_authed():
 def test_list_ranks_suggested_first(fake):
     out = asyncio.run(dtr.doctemplates_list(BIZ, _User()))
     ts = out["templates"]
-    assert len(ts) == 17
+    assert len(ts) == 18
     # lawyer templates lead; once a non-suggested appears, no suggested follows
     seen_unsuggested = False
     for t in ts:
@@ -342,17 +344,21 @@ def test_first_contract_teaches_then_second_fills_itself(patchable, wired):
     fake = patchable
     biz = fake.rows("businesses")[0]
 
-    # FIRST document: fee + state given explicitly → generated AND saved.
+    # FIRST document: fee + how-the-fee-works + state given explicitly
+    # → generated AND saved. fee_model is required (the system will not
+    # guess how somebody charges) and sticky, so it is asked once here
+    # and then rides every later document like the rest of them.
     out = asyncio.run(handle_generate_document(None, biz, {
         "type": "generate_document", "template": "engagement_letter",
         "contact_name": "Dana",
         "params": {"scope": "The Northside lease", "fee": "$300/hour",
-                   "state": "Georgia"},
+                   "fee_model": "hourly", "state": "Georgia"},
     }))
     assert not out.get("failed")
     assert "I've saved" in out["result"] and "fee" in out["result"]
     saved = fake.rows("businesses")[0]["settings"]["doc_defaults"]
-    assert saved == {"fee": "$300/hour", "state": "Georgia"}
+    assert saved == {"fee": "$300/hour", "fee_model": "hourly",
+                     "state": "Georgia"}
     # engagement facts are never saved
     assert "scope" not in saved
 
@@ -525,7 +531,7 @@ def test_custom_delete_scoped_to_owner(patchable, monkeypatch):
 
 _AGREEMENTS = ("engagement_letter", "retainer_agreement", "service_agreement",
                "consulting_agreement", "coaching_agreement", "mutual_nda",
-               "independent_contractor")
+               "independent_contractor", "loan_agreement")
 
 
 def _min_body(tid):
@@ -541,7 +547,7 @@ def test_every_agreement_carries_the_back_page():
         body = _min_body(tid)
         assert "GENERAL TERMS" in body, tid
         assert "Entire agreement" in body and "Severability" in body, tid
-        # e-sign validity is load-bearing: execution runs through BoldSign
+        # e-sign validity is load-bearing: execution runs through DocuSeal
         assert "electronic signatures" in body, tid
         # the signature block stays last
         assert body.count("By: ___") == 2 and "ACCEPTED AND AGREED" in body, tid

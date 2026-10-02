@@ -168,13 +168,25 @@ def test_pricing_is_a_door_and_not_a_404():
 
 def test_host_guard_prefers_the_site_on_a_site_host():
     """The guard must reach the site renderer for a slug host, and only
-    fall through to the platform page when no site owns the host."""
+    fall through to the platform page when no site owns the host.
+
+    The rule itself moved into _site_response_or_none when robots.txt
+    and sitemap.xml on the apex needed to apply exactly the same host
+    test while answering with something that is not HTML.
+    _platform_page_or_site is now its HTML caller. Both halves are
+    pinned here, so splitting them again cannot quietly drop one.
+    """
     import inspect
+    rule = inspect.getsource(ps._site_response_or_none)
+    assert "_serve_site_by_slug" in rule
+    assert "_serve_site_by_custom_domain" in rule
+    # A slug host is decided before a custom domain is even looked up.
+    assert rule.index("_serve_site_by_slug") < rule.index("_serve_site_by_custom_domain")
+
     src = inspect.getsource(ps._platform_page_or_site)
-    assert "_serve_site_by_slug" in src
-    assert "_serve_site_by_custom_domain" in src
-    # The platform render is the LAST resort, after both site lookups.
-    assert src.index("_serve_site_by_slug") < src.index("return HTMLResponse")
+    assert "_site_response_or_none" in src
+    # The platform render is the LAST resort, after the site lookups.
+    assert src.index("_site_response_or_none") < src.index("return HTMLResponse")
 
 
 def test_both_serve_paths_pass_the_custom_domain_into_augment():

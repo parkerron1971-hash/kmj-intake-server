@@ -35,6 +35,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
+from untrusted_text import ACTION_TAGLIKE_RE
 
 logger = logging.getLogger("fallback_brain")
 # Every other module in this service attaches its own handler; this one
@@ -100,7 +101,8 @@ def _flatten_system(system: Any) -> str:
     else:
         text = str(system or "")
     return (text.replace("[[CHIEF_GLOBAL_SPLIT]]", "\n")
-                .replace("[[CHIEF_CACHE_SPLIT]]", "\n").strip())
+                .replace("[[CHIEF_CACHE_SPLIT]]", "\n")
+                .replace("[[CHIEF_TURN_SPLIT]]", "\n").strip())
 
 
 # ─── The trim (2026-07-28) ───────────────────────────────────────────
@@ -140,9 +142,9 @@ rules follow from that, and they matter more than anything else here:
 1. You CANNOT take actions right now. No creating, editing, sending,
    invoicing, booking, publishing or deleting — none of it is wired up on
    this path. Never emit an [ACTION:...] tag; it will not run.
-2. If asked to DO something, say plainly that you will handle it as soon
-   as the connection is back, and answer whatever part of the question you
-   can answer with what you know.
+2. If asked to DO something, say plainly that you cannot carry it out
+   right now. Nothing is queued for later. Answer whatever part of the
+   question you can answer with what you know.
 
 Otherwise be yourself: direct, warm, concrete. Lead with the answer. Use
 the real names and numbers below rather than generalities. Keep it short —
@@ -157,6 +159,10 @@ def _fallback_system(system: Any) -> str:
     # string, not the block list built for Anthropic's cache.
     if "[[CHIEF_CACHE_SPLIT]]" in raw:
         stable, _, dynamic = raw.partition("[[CHIEF_CACHE_SPLIT]]")
+        # Cache round 3 split the tail again; the fallback wants the
+        # whole live state as one piece, without a marker leaking into
+        # the prompt text.
+        dynamic = dynamic.replace("[[CHIEF_TURN_SPLIT]]", "\n")
     else:
         stable, dynamic = raw, ""
     if "[[CHIEF_GLOBAL_SPLIT]]" in stable:
@@ -292,13 +298,17 @@ async def call_fallback(client: httpx.AsyncClient, system: Any,
 
     started_ms = int(time.time() * 1000)
     try:
-        resp = await client.post(
+        operation = client.post(
             OPENAI_CHAT_URL,
             headers={"Authorization": f"Bearer {key}",
                      "Content-Type": "application/json"},
             json={"model": model, "messages": oai_messages,
                   "max_completion_tokens": max_tokens},
             timeout=60.0)
+        import chief_request_timing
+        trace = chief_request_timing.CURRENT.get()
+        resp = (await chief_request_timing.post_response(operation, trace, "fallback", model)
+                if trace is not None else await operation)
     except httpx.HTTPError as e:
         logger.warning(f"[fallback] OpenAI request failed: {e}")
         return ""
@@ -313,6 +323,15 @@ async def call_fallback(client: httpx.AsyncClient, system: Any,
     except (ValueError, AttributeError, IndexError) as e:
         logger.warning(f"[fallback] OpenAI response parse failed: {e}")
         return ""
+
+    # The no-action boundary must hold even when the backup ignores its
+    # prompt. Its text goes through Chief's normal ACTION parser next.
+    # Reject the whole response: stripping only tags could leave a false
+    # "done" claim in the sentence the user hears. Match malformed and
+    # incomplete tags too, without logging their business payloads.
+    if ACTION_TAGLIKE_RE.search(text):
+        logger.warning("[fallback] blocked action-bearing response")
+        text = "I couldn't complete that request right now. Please try again in a moment."
 
     try:
         from api_usage_logger import log_api_usage

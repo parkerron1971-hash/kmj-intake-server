@@ -144,6 +144,14 @@ PROPOSAL_FRAMING: Dict[str, str] = {
                           "partnership serves the congregation",
     "nonprofit":          "a program partnership proposal with mission alignment, "
                           "impact metrics, and reporting commitments",
+    "ecommerce":          "TERMS OF SALE — what is being sold, price and taxes, "
+                          "shipping window, and the returns and refunds policy. "
+                          "For a wholesale or custom order, purchase terms with "
+                          "quantities, lead time and payment schedule",
+    "saas":               "a SUBSCRIPTION AGREEMENT — plan and price, billing "
+                          "period and renewal, cancellation, service levels if "
+                          "any are promised, and what happens to the customer's "
+                          "data when they leave",
     "custom":             _GENERIC_FRAMING,
 }
 
@@ -186,6 +194,15 @@ PROPOSAL_GUIDANCE: Dict[str, str] = {
                           "alignment. Pastoral, never salesy.",
     "nonprofit":          "Mission alignment, community impact, collaboration, "
                           "and how impact will be reported.",
+    "ecommerce":          "Transactional and short. Shipping WINDOWS, never "
+                          "guaranteed dates — the carrier owns the date. Say who "
+                          "pays return shipping and what condition a return has "
+                          "to come back in. Wholesale is a different document "
+                          "from a consumer sale; be clear which this is.",
+    "saas":               "Plain subscription terms. What renews, when, and how "
+                          "to stop it. Say what happens to the customer's data "
+                          "after cancellation. Never write a roadmap item into "
+                          "the agreement as a promise.",
     "custom":             "Professional and clear. Scope, terms, next steps.",
 }
 
@@ -958,6 +975,12 @@ class PdfRequest(BaseModel):
     contact_id: Optional[str] = None
     proposal_body: str
     subject: str
+    # The agent_queue row this body came from, when it came from one.
+    # Optional because this endpoint has always accepted a raw body, and
+    # a caller that supplies no id is printing something we did not
+    # write — there is nothing to check and nothing is claimed about it.
+    queue_id: Optional[str] = None
+    override_blockers: bool = False
 
 
 @router.post("/agents/contract/pdf")
@@ -968,6 +991,21 @@ async def contract_pdf(req: PdfRequest, user: AuthedUser = Depends(require_user)
     # contact — this is a disclosure endpoint, not just a render one.
     import business_access
     business_access.assert_access(str(req.business_id), user, "member")
+
+    # Printing is publishing: the PDF is the artifact that gets attached
+    # to an email or uploaded for signature. Gated only when the caller
+    # names the queue row, which is what the Documents room does.
+    if (req.queue_id or "").strip():
+        import doc_guard
+        try:
+            row = doc_guard.load_document(req.queue_id.strip(), str(req.business_id))
+        except HTTPException:
+            row = None
+        if row:
+            doc_guard.require_sendable(
+                row, business_id=str(req.business_id), actor_id=str(user.id),
+                override=bool(req.override_blockers), door="pdf")
+
     async with httpx.AsyncClient() as client:
         # Fetch business + contact for header/recipient info
         businesses = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")

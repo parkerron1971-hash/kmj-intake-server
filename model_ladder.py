@@ -75,7 +75,7 @@ _MIN_REDUCED_TOKENS = 256
 
 # task → (fast-family ceiling, slow-family ceiling), seconds.
 #   "signals" — DRL signal detection (SIGNAL_MAX_TOKENS≈3200)
-#   "dro"     — DRO authoring incl. minimal mode (DRO_MAX_TOKENS≈6000)
+#   "dro"     — DRO authoring incl. minimal mode (DRO_MAX_TOKENS=32000, streamed)
 #   "atelier" — bespoke section authoring (ATELIER_MAX_TOKENS≈8000)
 #   "spec"    — page-spec/copy composition (SPEC_MAX_TOKENS=4000)
 # Slow-family (Opus/Fable) ceilings are ~2x: Opus streams ~2-3x slower
@@ -96,7 +96,7 @@ _DEFAULT_TIMEOUTS = (120.0, 240.0)
 _SLOW_FAMILY_MARKERS = ("opus", "fable", "mythos")
 
 # Model families that REJECT sampling params (temperature/top_p/top_k → 400).
-_NO_SAMPLING_MARKERS = ("opus-4-7", "opus-4-8", "fable", "mythos", "sonnet-5")
+_NO_SAMPLING_MARKERS = ("opus-4-7", "opus-4-8", "opus-5", "fable", "mythos", "sonnet-5")
 
 # 400s that mean "the model id itself is the problem" (vs. a payload bug).
 _MODEL_ERR_MARKERS = ("not_found", "not found", "does not exist",
@@ -109,11 +109,32 @@ def _is_slow_family(model: str) -> bool:
     return any(k in m for k in _SLOW_FAMILY_MARKERS)
 
 
-def timeout_for(task: str, model: str) -> float:
-    """Per-call ceiling scaled by task output budget AND model family.
-    Opus: signals 120s / DRO 240s / atelier 240s. Sonnet: 75/120/120."""
+# THE CEILING FOLLOWS THE OUTPUT (2026-08-29). A per-call timeout has to
+# fit the tokens it asks for. Sonnet 5 streams ~40 tok/s: a 14k-token DRO
+# needs ~350s, and the 120s "fast family" ceiling timed out EVERY
+# rationale; the -35% retry then hit its own cap mid-JSON, and the
+# api_usage ledger showed every DRO at exactly 9,100 output tokens
+# (14000 x 0.65) — paid for, unparseable, and the reason builds fell to
+# minimal mode. The family ceiling stays as the FLOOR; the output size
+# raises it: max_tokens / 30 tok/s + 30s of connect-and-first-token.
+_MIN_TOKENS_PER_SECOND = 30.0
+_CEILING_OVERHEAD_S = 30.0
+
+
+def timeout_for(task: str, model: str, max_tokens: Optional[int] = None) -> float:
+    """Per-call ceiling: the family floor (Opus: signals 120s / DRO 240s /
+    atelier 240s; Sonnet: 75/120/120) raised to what `max_tokens` needs at
+    a conservative streaming rate. Callers that know their output budget
+    pass it; the bare form keeps the old floors."""
     fast, slow = _TIMEOUTS.get(task, _DEFAULT_TIMEOUTS)
-    return slow if _is_slow_family(model) else fast
+    floor = slow if _is_slow_family(model) else fast
+    try:
+        n = int(max_tokens or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return floor
+    return max(floor, n / _MIN_TOKENS_PER_SECOND + _CEILING_OVERHEAD_S)
 
 
 def supports_sampling(model: str) -> bool:
@@ -121,6 +142,56 @@ def supports_sampling(model: str) -> bool:
     (Opus 4.7/4.8, Sonnet 5, Fable/Mythos)."""
     m = (model or "").lower()
     return not any(k in m for k in _NO_SAMPLING_MARKERS)
+
+
+# Families that REJECT a forced tool_choice (`any` / `tool` → 400). Only
+# `auto` and `none` are accepted there.
+_NO_FORCED_TOOL_MARKERS = ("opus-5-5", "fable-5-1", "mythos-5-1", "sonnet-5-5")
+
+
+def supports_forced_tool_choice(model: str) -> bool:
+    m = (model or "").lower()
+    return not any(k in m for k in _NO_FORCED_TOOL_MARKERS)
+
+
+# Families that accept `output_config.effort` (Opus 4.5 takes low/medium/high
+# only; everything newer takes the full range). Haiku 4.5 and Sonnet 4.5
+# return a 400 for it.
+_EFFORT_MARKERS = ("opus-4-5", "opus-4-6", "opus-4-7", "opus-4-8", "opus-5",
+                   "sonnet-4-6", "sonnet-5", "fable", "mythos")
+
+
+def supports_effort(model: str) -> bool:
+    m = (model or "").lower()
+    return any(k in m for k in _EFFORT_MARKERS)
+
+
+def effort_kwargs(model: str, effort: Optional[str]) -> dict:
+    """`{"output_config": {"effort": e}}` where the model accepts it, `{}`
+    where it would 400. Effort bounds adaptive thinking, which otherwise
+    counts against max_tokens: a mechanical JSON task at default effort
+    can spend its whole output budget thinking and return no text."""
+    if not effort or not supports_effort(model):
+        return {}
+    return {"output_config": {"effort": effort}}
+
+
+def thinking_off_kwargs(model: str) -> dict:
+    """The lowest thinking setting a model accepts, as request fields, or
+    `{}` where thinking cannot be turned off (the caller then bounds it
+    with a low effort instead).
+
+    Sonnet 5 and older Sonnets take `{"type": "disabled"}`. Sonnet 5.5
+    rejects that with a 400 and takes `{"type": "between_tools"}` instead
+    (no extended thinking; notes between tool calls come back as thinking
+    blocks), which no other model accepts. Opus 5.5 / Fable / Mythos cannot
+    turn thinking off at all."""
+    m = (model or "").lower()
+    if "sonnet-5-5" in m:
+        return {"thinking": {"type": "between_tools"}}
+    if "sonnet" in m:
+        return {"thinking": {"type": "disabled"}}
+    return {}
 
 
 def sampling_kwargs(model: str, temperature: Optional[float]) -> dict:
@@ -217,10 +288,10 @@ def call_with_ladder(do_call: Callable[..., Any], *, model: str, task: str,
                               to_model=FALLBACK_MODEL,
                               reason=f"{why}: {type(orig).__name__}: {orig}")
         return (do_call(model=FALLBACK_MODEL, max_tokens=tokens,
-                        timeout=timeout_for(task, FALLBACK_MODEL)),
+                        timeout=timeout_for(task, FALLBACK_MODEL, tokens)),
                 FALLBACK_MODEL)
 
-    primary_timeout = timeout_for(task, model)
+    primary_timeout = timeout_for(task, model, max_tokens)
     try:
         return do_call(model=model, max_tokens=max_tokens,
                        timeout=primary_timeout), model
@@ -236,7 +307,7 @@ def call_with_ladder(do_call: Callable[..., Any], *, model: str, task: str,
                 f"max_tokens={reduced} (-35%)")
             try:
                 return do_call(model=model, max_tokens=reduced,
-                               timeout=primary_timeout), model
+                               timeout=timeout_for(task, model, reduced)), model
             except Exception as e2:
                 if not (is_timeout_error(e2)
                         or is_model_unavailable_error(e2)):

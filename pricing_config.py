@@ -79,15 +79,26 @@ def starter_credits() -> int:
 
 
 def pro_credits() -> int:
-    return _dial("PRO_CREDITS", "CREDITS_", 10000)
+    return _dial("PRO_CREDITS", "CREDITS_", 7500)
 
 
 def practice_credits() -> int:
-    return _dial("PRACTICE_CREDITS", "CREDITS_", 25000)
+    return _dial("PRACTICE_CREDITS", "CREDITS_", 17500)
+
+
+def founder_credits() -> int:
+    """The Founder seat's monthly tank (2026-09-04 ruling): Professional's
+    features at $99, locked for life, with 6,000 credits — under the
+    standard Professional grant on purpose. The seat's perk is the price;
+    the tank is sized so its worst case (every credit on chat) stays under
+    the forty-percent line (6,000 / 12 x 7.37c = $36.85 against $99).
+    feature_gates.monthly_credits() is what reads it, off the price id."""
+    return _dial("FOUNDER_CREDITS", "CREDITS_", 6000)
 
 
 def tier_credits() -> Dict[str, int]:
-    """plan key -> monthly included credits. Keys match feature_gates.PLANS."""
+    """plan key -> monthly included credits. Keys match feature_gates.PLANS.
+    The founder seat is not a plan; see founder_credits()."""
     return {
         "starter":      starter_credits(),
         "professional": pro_credits(),
@@ -305,6 +316,43 @@ def voice_input_price() -> int:
     return _dial("VOICE_INPUT_PRICE", "PRICE_", 0)
 
 
+# ─── The trial tank ──────────────────────────────────────────────────
+
+def trial_credits() -> int:
+    """What a business may spend during its free trial, whichever runs
+    out first — these credits or the calendar.
+
+    ONE NUMBER FOR EVERY TIER (Kevin, 2026-08-24). Before this, a trial
+    inherited the tier's whole MONTHLY allowance, because plan_of()
+    treats 'trialing' exactly like 'active': trialing Solutionist meant
+    25,000 credits free, ~$154 of measured cost, and the rational move
+    was to trial the most expensive tier for the biggest free tank and
+    downgrade after. A flat tank removes the move entirely.
+
+    Sized against the 1,000-credit ruling: with the first build free
+    (see trial_build_free) that is 83 Chief turns, ~12 a day across a
+    7-day trial, for about $8 of measured cost — a hard ceiling, versus
+    the $154-$307 a trial could cost before.
+
+    An opening default like every dial here. Raise it in Railway the
+    moment real trials say 1,000 is thin."""
+    return _dial("TRIAL_CREDITS", "PRICE_", 1000)
+
+
+def trial_build_free() -> bool:
+    """Whether a trial's FIRST site build is on the house.
+
+    A build is 600 credits — 60% of the trial tank — and it is also the
+    single most persuasive thing the product does: the workspace and the
+    site arriving already speaking the practitioner's trade. Charging
+    the trial for it left 33 Chief turns behind and spent the tank on
+    the demo.
+
+    It costs us ~$1.90, and buys back 50 Chief turns. Set
+    PRICE_TRIAL_BUILD_FREE=0 to charge for it."""
+    return _dial("TRIAL_BUILD_FREE", "PRICE_", 1) != 0
+
+
 # ─── Does the tank pay for itself? ───────────────────────────────────
 
 # Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.
@@ -488,16 +536,17 @@ DEFAULT_WEIGHT = 1
 # the pack guard below compares against.
 
 def tier_price_cents() -> Dict[str, int]:
-    """Monthly list price per tier, in cents. `founder` is the launch
-    cohort's Professional price locked for the subscription's life — it
-    buys the Professional grant, so it is the CHEAPEST subscription
-    credit on the platform and therefore the binding constraint on how
-    cheap a top-up pack may be."""
+    """Monthly list price per tier, in cents (2026-09-04 ladder: $79 /
+    $149 / $299). `founder` is the launch cohort's seat: Professional's
+    features at $99, locked for the subscription's life, with its own
+    tank (founder_credits). At 1.65c a credit it is the CHEAPEST
+    subscription credit on the platform and therefore the binding
+    constraint on how cheap a top-up pack may be."""
     return {
         "starter":      _dial("TIER_STARTER_CENTS", "PRICE_", 7900),
-        "professional": _dial("TIER_PROFESSIONAL_CENTS", "PRICE_", 19900),
-        "practice":     _dial("TIER_PRACTICE_CENTS", "PRICE_", 39900),
-        "founder":      _dial("TIER_FOUNDER_CENTS", "PRICE_", 14900),
+        "professional": _dial("TIER_PROFESSIONAL_CENTS", "PRICE_", 14900),
+        "practice":     _dial("TIER_PRACTICE_CENTS", "PRICE_", 29900),
+        "founder":      _dial("TIER_FOUNDER_CENTS", "PRICE_", 9900),
     }
 
 
@@ -519,7 +568,7 @@ def tier_cents_per_credit() -> Dict[str, float]:
     """What one credit costs inside each subscription."""
     prices, credits = tier_price_cents(), tier_credits()
     grant = dict(credits)
-    grant["founder"] = credits["professional"]   # founder = the pro grant
+    grant["founder"] = founder_credits()          # the seat has its own tank
     return {t: (prices[t] / grant[t]) for t in prices if grant.get(t)}
 
 
@@ -570,12 +619,12 @@ def tier_cents_per_credit() -> Dict[str, float]:
 
 def credit_packs() -> Dict[str, Dict[str, int]]:
     return {
-        "small":  {"cents": _dial("PACK_SMALL_CENTS", "PRICE_", 1200),
+        "small":  {"cents": _dial("PACK_SMALL_CENTS", "PRICE_", 1300),
                    "units": _dial("PACK_SMALL_UNITS", "PRICE_", 740)},
         "medium": {"cents": _dial("PACK_MEDIUM_CENTS", "PRICE_", 2500),
-                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 1555)},
+                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 1440)},
         "large":  {"cents": _dial("PACK_LARGE_CENTS", "PRICE_", 5000),
-                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 3120)},
+                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 2880)},
     }
 
 
@@ -586,7 +635,7 @@ def pack_economics() -> Dict[str, object]:
         Otherwise a heavy user rationally buys packs forever instead of
         upgrading, and the tier ladder stops meaning anything. The
         comparison is against the CHEAPEST tier rate — today the Founder
-        seat at $149 for the Professional grant (1.490c/credit).
+        seat at $99 for 6,000 credits (1.650c/credit).
 
     (2) EVERY PACK MUST COMPLETE AT LEAST ONE FULL ACTION AND HAVE
         SOMETHING LEFT. A pack that funds 90% of a build is a refund

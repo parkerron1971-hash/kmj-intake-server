@@ -9,6 +9,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import pytest
+from starlette.requests import Request
+import ledger_unlock
+
+
+def _request():
+    token = ledger_unlock.mint('owner', scope=ledger_unlock.SCOPE_DANGER)['token']
+    return Request({'type': 'http', 'headers': [(b'x-ledger-unlock', token.encode())]})
 
 from test_i2_gl_sync import FakeSB
 import gl_engine as gl
@@ -23,6 +30,7 @@ class _U:
 
 @pytest.fixture
 def fake(monkeypatch):
+    monkeypatch.setattr(ledger_unlock, '_secret', lambda: b'test-financial-step-up-key')
     fb = FakeSB()
     import sb_clients
     monkeypatch.setattr(sb_clients, "sb_get_as_service", fb.get)
@@ -51,7 +59,7 @@ def stripe_ok(monkeypatch):
 def test_pay_creates_transfer_bill_and_gl(fake, stripe_ok):
     import asyncio
     out = asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=850.0,
-                                                description="June sprint"), user=_U()))
+                                                description="June sprint"), request=_request(), user=_U()))
     assert out["ok"] and out["transfer_id"] == "tr_test123"
     # Stripe called with cents + Express destination + D.4 metadata pattern.
     path, data = stripe_ok[0]
@@ -81,7 +89,7 @@ def test_pay_blocked_until_onboarded(fake, stripe_ok):
     from fastapi import HTTPException
     fake.rows("contractors")[0]["onboarding_status"] = "pending"
     with pytest.raises(HTTPException) as e:
-        asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=100), user=_U()))
+        asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=100), request=_request(), user=_U()))
     assert e.value.status_code == 409
     assert fake.rows("outbound_transfers") == []        # nothing recorded
 
@@ -94,7 +102,7 @@ def test_stripe_failure_marks_transfer_failed(fake, monkeypatch):
         raise HTTPException(502, "insufficient platform balance")
     monkeypatch.setattr(cr, "_stripe_post", _fail)
     with pytest.raises(HTTPException):
-        asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=100), user=_U()))
+        asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=100), request=_request(), user=_U()))
     ot = fake.rows("outbound_transfers")[0]
     assert ot["status"] == "failed" and "insufficient" in ot["failure_message"]
     assert fake.rows("bills") == []                     # no bill on failure
@@ -102,8 +110,8 @@ def test_stripe_failure_marks_transfer_failed(fake, monkeypatch):
 
 def test_1099_summary_aggregates_and_thresholds(fake, stripe_ok):
     import asyncio
-    asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=450.0), user=_U()))
-    asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=250.0), user=_U()))
+    asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=450.0), request=_request(), user=_U()))
+    asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=250.0), request=_request(), user=_U()))
     # Plus a manual 1099-eligible vendor bill (no contractor).
     fake.rows("bills").append({
         "id": "mb1", "business_id": "biz1", "vendor_name": "Freelance Bob", "amount": 200,

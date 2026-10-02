@@ -123,6 +123,13 @@ async def _create_stripe_payment_link(
     metadata so webhook handlers can resolve back to the originating
     Solutionist row even when querying cross-account.
     """
+    from financial_policy import require_operational_write, require_stripe_write
+    if business_id:
+        require_operational_write(business_id)
+    if connected_account_id:
+        require_stripe_write(connected_account_id)
+    if not business_id and not connected_account_id:
+        raise HTTPException(409, 'A business is required for a payment link.')
     key = os.environ.get("STRIPE_SECRET_KEY")
     if not key:
         raise HTTPException(500, "Stripe not configured on server — set STRIPE_SECRET_KEY")
@@ -978,6 +985,21 @@ async def payments_providers(business_id: str):
     know what to render before fetching the full business settings.
     Falls back to legacy settings.payments.stripe_link if the new shape
     isn't present yet.
+
+    ANONYMOUS, AND THEREFORE MINIMAL.
+    This endpoint takes a business id from the caller, has no auth, and
+    reads `businesses.settings` with the SERVICE ROLE key — so whatever
+    it returns, it returns to anybody who can name a business. Business
+    ids are not secret: they ride in the intake-form embed snippet on the
+    practitioner's own website, and in the submit payload.
+
+    It stays anonymous on purpose — a storefront decides whether to draw
+    a Buy button before its visitor has signed in to anything. But it
+    used to answer with `connect_account_id` and `oauth_merchant_id`,
+    which turned a render hint into an enumerable directory of the
+    platform's merchant accounts. Nothing that draws a button needs a
+    merchant id. They are no longer returned; a caller that genuinely
+    needs one is authenticated and can read settings directly.
     """
     if not SUPABASE_KEY:
         raise HTTPException(500, "Supabase key not configured on server")
@@ -1011,8 +1033,11 @@ async def payments_providers(business_id: str):
             "type": slot.get("type") or "manual",
             "has_link": bool(link),
             "label": slot.get("label") or "",
-            "connect_account_id": slot.get("connect_account_id"),
-            "oauth_merchant_id": slot.get("oauth_merchant_id"),
+            # Deliberately NOT connect_account_id / oauth_merchant_id —
+            # see the docstring. `connected` answers the only question a
+            # renderer actually has about them.
+            "connected": bool(slot.get("connect_account_id")
+                              or slot.get("oauth_merchant_id")),
         }
 
     return {

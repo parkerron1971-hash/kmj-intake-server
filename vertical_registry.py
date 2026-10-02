@@ -71,6 +71,26 @@ CANONICAL: Dict[str, Dict] = {
                                        "synagogue", "mosque", "temple", "congregation", "ministries"]},
     "nonprofit":          {"label": "Nonprofit",
                            "aliases": ["non_profit", "not_for_profit", "nonprofit_org"]},
+    # Selling PRODUCTS rather than time. Distinct from every vertical above
+    # because the unit is an ORDER that must be picked, packed and shipped:
+    # stock can run out, a carrier owns the delivery date, sales tax is
+    # collected on behalf of a state, and a return is a routine cost rather
+    # than a failure. None of the service verticals model any of that.
+    # `business_type_archetypes` has carried an 'ecommerce' row for a long
+    # time, so businesses could already be STAMPED this — they just had no
+    # profile, no dictionary and no playbook behind the stamp.
+    "ecommerce":          {"label": "E-commerce / Online Store",
+                           "aliases": ["e_commerce", "ecom", "online_store", "store",
+                                       "retail", "dtc", "merch", "dropshipping",
+                                       "print_on_demand"]},
+    # Recurring software revenue. Distinct because the money is subscribed
+    # rather than sold once: an annual plan is paid up front and earned
+    # monthly, churn is decided long before the renewal, and usage — not
+    # billing — is the leading indicator. A SaaS business modelled as a
+    # consultancy reads its own numbers wrong.
+    "saas":               {"label": "SaaS / Software",
+                           "aliases": ["software", "software_company", "saas_company",
+                                       "micro_saas", "app", "platform"]},
     "custom":             {"label": "Something else",      "aliases": ["other", "general"]},
 }
 

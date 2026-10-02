@@ -460,3 +460,48 @@ def test_min_businesses_is_documented_as_load_bearing():
     head = src[:src.index("MIN_BUSINESSES = 3")]
     assert "never leave your account" in head, (
         "the link between MIN_BUSINESSES and the UI promise must stay documented")
+
+
+def test_knowledge_rows_are_keyed_canonically(monkeypatch):
+    """Reads and writes both land on the CANONICAL partition.
+
+    seed_tick iterates registry.canonical_keys() and the distiller groups
+    by alias_to_canonical(), so every row that exists is stored under a
+    canonical key. A read keyed on the raw alias therefore searched a
+    partition that by construction held nothing — and because this module
+    fails open, zero rows was indistinguishable from "nothing learned
+    yet". A business stamped 'church' would never have seen a single
+    ministry pattern, silently, forever.
+    """
+    seen = {}
+
+    monkeypatch.setattr(vk, "_enabled", lambda: True)
+    monkeypatch.setattr(vk.chief_memory_semantic, "embed", lambda t: [0.1] * 8)
+    monkeypatch.setattr(vk.chief_memory_semantic, "_vec_literal", lambda e: "[]")
+
+    def fake_post(path, row, **kw):
+        seen["written_vertical"] = row["vertical"]
+    monkeypatch.setattr(vk.sb_clients, "sb_post_as_service", fake_post)
+
+    assert vk.upsert("church", vk.KIND_PATTERN, "members reply on Sundays")
+    assert seen["written_vertical"] == "ministry", (
+        "an alias-keyed write would create a partition nothing reads")
+
+    def fake_get(q):
+        seen["listed_query"] = q
+        return []
+    monkeypatch.setattr(vk.sb_clients, "sb_get_as_service", fake_get)
+    vk.list_for_vertical("agency")
+    assert "vertical=eq.creative" in seen["listed_query"]
+
+    class _Resp:
+        status_code = 200
+        def json(self): return []
+    def fake_rpc(url, headers=None, json=None, timeout=None):
+        seen["matched_vertical"] = json["p_vertical"]
+        return _Resp()
+    monkeypatch.setattr(vk.httpx, "post", fake_rpc)
+    monkeypatch.setattr(vk.sb_clients, "sb_url", lambda: "https://x")
+    monkeypatch.setattr(vk.sb_clients, "sb_headers_service", lambda: {})
+    vk.match("plumber", "how do I bill for the extra materials")
+    assert seen["matched_vertical"] == "contractor"

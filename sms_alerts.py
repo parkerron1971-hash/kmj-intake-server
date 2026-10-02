@@ -107,6 +107,25 @@ def _alert_setting(settings: Optional[Dict[str, Any]], kind: str) -> bool:
     return True if v is None else bool(v)
 
 
+def _paused(biz: Optional[Dict[str, Any]]) -> bool:
+    """settings.automations_paused — the practitioner's blanket stop.
+
+    Distinct from the sms_alerts.reminders toggle above: that one says
+    "not this kind of message, ever", this one says "nothing automatic,
+    for now". Both have to be off for the sweep to text anyone.
+
+    Delegates to rules_engine so there is one reading of the flag. Falls
+    back to the row we already hold rather than defaulting either way —
+    guessing "paused" silences a working alert rail on an import error,
+    guessing "running" discards the practitioner's instruction."""
+    try:
+        import rules_engine
+        return bool(rules_engine.business_paused(biz))
+    except Exception as e:
+        logger.warning(f"[ALERT] pause predicate unavailable, reading directly: {e}")
+        return bool(((biz or {}).get("settings") or {}).get("automations_paused"))
+
+
 # ─── Consent (the shared rule) ────────────────────────────────────────
 
 async def _positive_consent(client: httpx.AsyncClient, business_id: str,
@@ -138,7 +157,7 @@ async def has_sms_consent(client: httpx.AsyncClient, business_id: str,
     phone = normalize_phone(phone) or (phone or "")
     if not phone:
         return False
-    if await is_opted_out(client, phone):
+    if await is_opted_out(client, phone, business_id):
         return False
     return await _positive_consent(client, business_id, phone)
 
@@ -237,7 +256,8 @@ async def send_booking_confirmation(
             first = (customer_name or "").strip().split()[0] if (customer_name or "").strip() else "there"
             body = confirmation_text(first, biz_name, parts["date"], parts["time"])
 
-            provider_id = await _send_platform_sms(phone, body)
+            provider_id = await _send_platform_sms(
+                phone, body, business_id=biz_id, client=client)
 
             # Record exactly like /sms/send does: sms_messages row + event.
             contact = await _find_contact_by_phone(client, biz_id, phone)
@@ -245,7 +265,7 @@ async def send_booking_confirmation(
             msg_id = await _store_sms(
                 client, business_id=biz_id, contact_id=contact_id,
                 phone_number=phone, message=body, direction="outbound",
-                telnyx_id=provider_id, status="sent",
+                telnyx_id=provider_id, status="sent", sent_by="system",
             )
             await _log_event(client, biz_id, contact_id, "sms_confirmation_sent", {
                 "to": phone,
@@ -356,12 +376,23 @@ async def reminder_sweep() -> Dict[str, int]:
                 if not _alert_setting(biz.get("settings"), "reminders"):
                     stats["skipped_toggled_off"] += 1
                     continue
+                # The pause switch. Counted with the toggle because that
+                # is what it is — a second, broader "not right now" that
+                # this sweep has never read, so a practitioner who paused
+                # their automations still had Chief texting their clients
+                # the next morning. Reminders resume on the hourly pass
+                # after it is switched back on; a session whose window has
+                # closed by then simply does not get one, which is the
+                # correct reading of "pause my automations".
+                if _paused(biz):
+                    stats["skipped_toggled_off"] += 1
+                    continue
                 contact = contact_map.get(s.get("contact_id")) or {}
                 phone = normalize_phone(contact.get("phone"))
                 if not phone:
                     stats["skipped_no_phone"] += 1
                     continue
-                if await is_opted_out(client, phone):
+                if await is_opted_out(client, phone, biz["id"]):
                     stats["skipped_optout"] += 1
                     continue
                 if not await _positive_consent(client, biz["id"], phone):
@@ -376,12 +407,13 @@ async def reminder_sweep() -> Dict[str, int]:
                 body = reminder_text(biz.get("name") or "the business",
                                      parts["day"], parts["time"])
                 try:
-                    provider_id = await _send_platform_sms(phone, body)
+                    provider_id = await _send_platform_sms(
+                        phone, body, business_id=biz["id"], client=client)
                     msg_id = await _store_sms(
                         client, business_id=biz["id"],
                         contact_id=contact.get("id"), phone_number=phone,
                         message=body, direction="outbound",
-                        telnyx_id=provider_id, status="sent",
+                        telnyx_id=provider_id, status="sent", sent_by="system",
                     )
                     # The dedupe marker — logged AFTER a successful send
                     # so failures retry on the next hourly pass.

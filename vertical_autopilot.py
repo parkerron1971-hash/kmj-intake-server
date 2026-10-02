@@ -194,6 +194,24 @@ DEFAULT_AUTOPILOT: Dict[str, List[Dict[str, Any]]] = {
              "invoices. Admin only — never client outreach."),
     ],
 
+    # A store's leaks are physical: an order nobody packed, a product that
+    # quietly hit zero, a return sitting undecided. All three are visible in
+    # the data and invisible in the day.
+    "ecommerce": [
+        _job("store_review", "Store review", "briefing", "weekly", 11,
+             "Weekly read on orders still unshipped, products at or below "
+             "their reorder point, and returns waiting on a decision."),
+    ],
+
+    # Churn is decided weeks before the renewal reveals it, so the job that
+    # earns its place looks at accounts that have gone quiet — not at the
+    # invoice, which is the last place it shows.
+    "saas": [
+        _job("account_review", "Account review", "briefing", "weekly", 11,
+             "Weekly read on renewals coming up, accounts that have gone "
+             "quiet, and subscriptions past due."),
+    ],
+
     # The two deliberately-generic verticals still get the briefing — a
     # generic voice is not a reason to ship no autopilot at all.
     "service_provider": [

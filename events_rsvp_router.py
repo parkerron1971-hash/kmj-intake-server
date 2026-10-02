@@ -141,6 +141,54 @@ def resolve_fields(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def occasion_roles(data: Dict[str, Any],
+                   module_roles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The roles ONE occasion needs. The app lets each occasion carry its
+    own list in entry.data['_roles'] (Christmas Eve needs more ushers than
+    a Wednesday class); an occasion without one uses the module's default
+    list. An empty list the practitioner saved is respected. Mirrors the
+    frontend's event_roster/types.ts occasionRoles."""
+    own = (data or {}).get("_roles")
+    if not isinstance(own, list):
+        return module_roles
+    return [r for r in own
+            if isinstance(r, dict) and r.get("id") and r.get("label")]
+
+
+# Who may see one occasion (Kevin, 2026-09-29: "meetings that could be set
+# public or private or invite, so everything won't be shared").
+#   public   the public events page and every member's own page
+#   private  the church only: never listed outside the app
+#   invite   only the people it was shared with (entry.data._invited) or
+#            already on its roster, on their own member page; never public
+# An occasion that never chose is public — how every occasion behaved
+# before the choice existed. Mirrors event_roster/types.ts.
+VISIBILITIES = ("public", "private", "invite")
+
+
+def occasion_visibility(data: Dict[str, Any]) -> str:
+    v = (data or {}).get("_visibility")
+    return v if v in VISIBILITIES else "public"
+
+
+def is_public(data: Dict[str, Any]) -> bool:
+    return occasion_visibility(data) == "public"
+
+
+def visible_to_member(data: Dict[str, Any], contact_id: str, signups_field: str) -> bool:
+    """May this person see (and answer) this occasion on their own page?"""
+    v = occasion_visibility(data)
+    if v == "public":
+        return True
+    if v == "private" or not contact_id:
+        return False
+    invited = (data or {}).get("_invited")
+    if isinstance(invited, list) and str(contact_id) in {str(x) for x in invited}:
+        return True
+    return any(str(s.get("contact_id") or "") == str(contact_id)
+               for s in read_signups(data, signups_field))
+
+
 def read_signups(data: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
     raw = (data or {}).get(field)
     if not isinstance(raw, list):
@@ -190,6 +238,7 @@ def build_occasions(
     modules: List[Dict[str, Any]],
     entries_by_module: Dict[str, List[Dict[str, Any]]],
     today: Optional[date] = None,
+    include=None,
 ) -> List[Dict[str, Any]]:
     """The page's data: dated, upcoming occasions across every roster
     module, soonest first. Undated entries are skipped — internally an
@@ -201,6 +250,10 @@ def build_occasions(
         f = resolve_fields(mod.get("archetype_params"))
         for e in entries_by_module.get(str(mod.get("id"))) or []:
             data = e.get("data") or {}
+            # Who may see it: public ones only unless the caller says
+            # otherwise (the member page passes its own rule).
+            if not (include(data, f) if include else is_public(data)):
+                continue
             d = _parse_day(data.get(f["date_field"]))
             if d is None or d < today or (d - today).days > UPCOMING_WINDOW_DAYS:
                 continue
@@ -221,7 +274,8 @@ def build_occasions(
                                if capacity is not None else None),
                 "full": full,
                 "occasion_noun": f["occasion_noun"],
-                "roles": [role_fill(r, signups) for r in f["roles"]],
+                "roles": [role_fill(r, signups)
+                          for r in occasion_roles(data, f["roles"])],
             })
     out.sort(key=lambda o: o["date"])
     return out[:MAX_OCCASIONS]
@@ -312,8 +366,10 @@ async def public_event_rsvp(
     on the list for the occasion (idempotent double-tap, not an error).
     """
     # Rate limit FIRST — before any read or write (pinned in tests).
-    from rate_limit import client_ip
-    ip = client_ip(request)
+    # The trusted (last) hop, not the first: the first is caller-typed,
+    # and a limiter keyed on it is decorative (2026-09-04).
+    from rate_limit import trusted_client_ip
+    ip = trusted_client_ip(request)
     if not _check_rsvp_rate(ip):
         raise HTTPException(429, "Too many attempts. Please try again in a minute.")
 
@@ -358,7 +414,7 @@ async def public_event_rsvp(
     entries = sb_clients.sb_get_as_service(
         f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}"
         f"&business_id=eq.{business_id}&status=eq.active"
-        f"&select=id,module_id,data&limit=1"
+        f"&select=id,module_id,data,updated_at&limit=1"
     ) or []
     if not entries:
         raise HTTPException(404, "that occasion wasn't found")
@@ -367,62 +423,67 @@ async def public_event_rsvp(
                    if str(m.get("id")) == str(entry.get("module_id"))), None)
     if not module:
         raise HTTPException(404, "that occasion wasn't found")
+    # A private or invite-only occasion is not on the public page, so the
+    # public signup cannot reach it either — same answer as a wrong id.
+    if not is_public(entry.get("data") or {}):
+        raise HTTPException(404, "that occasion wasn't found")
 
-    f = resolve_fields(module.get("archetype_params"))
-    data = dict(entry.get("data") or {})
-    signups = read_signups(data, f["signups_field"])
+    import hashlib
+    # Stable registration identity survives duplicate contact-create races and
+    # contact lookup failures without placing an email address in public data.
+    registration_key = hashlib.sha256(f'{business_id}:{entry_id}:{email}'.encode()).hexdigest()
+    contact_id = None
+    for attempt in range(5):
+        f = resolve_fields(module.get("archetype_params"))
+        original_data = entry.get("data") or {}
+        data = dict(original_data)
+        signups = read_signups(data, f["signups_field"])
+        keys = dict(data.get('_registration_keys') or {})
+        if registration_key in keys:
+            return {"ok": True, "already": True, "attending": attending_count(signups)}
+        if contact_id is None:
+            contact_id = _find_or_create_attendee(business_id, name, email)
+        if contact_id and any(s.get('contact_id') == contact_id and (s.get('status') or 'yes') == 'yes' for s in signups):
+            return {"ok": True, "already": True, "attending": attending_count(signups)}
+        capacity = _capacity_of(data, f['capacity_field'])
+        if capacity is not None and attending_count(signups) >= capacity:
+            raise HTTPException(409, 'this occasion is full')
+        if role_id:
+            role = next((r for r in occasion_roles(data, f['roles'])
+                         if r.get('id') == role_id), None)
+            if not role:
+                raise HTTPException(400, 'unknown role')
+            fill = role_fill(role, signups)
+            if fill['full']:
+                raise HTTPException(409, f"the {fill['label']} role is already filled")
+        new_signup = {'name': name, 'status': 'yes'}
+        if contact_id:
+            new_signup['contact_id'] = contact_id
+        if role_id:
+            new_signup['role'] = role_id
+        data[f['signups_field']] = signups + [new_signup]
+        data['_registration_keys'] = {**keys, registration_key: True}
+        # A compact revision avoids sending the whole roster in the URL.
+        revision = entry.get('updated_at')
+        if not revision:
+            raise HTTPException(503, 'Signup storage is not ready. Please retry later.')
+        expected = urllib.parse.quote(str(revision), safe='')
+        updated = sb_clients.sb_patch_as_service(
+            f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
+            f"&status=eq.active&updated_at=eq.{expected}", {'data': data})
+        if updated is None:
+            raise HTTPException(503, 'Registration could not be saved. Please try again.')
+        if updated:
+            return {'ok': True, 'already': False, 'attending': attending_count(data[f['signups_field']])}
+        rows = sb_clients.sb_get_as_service(
+            f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
+            '&status=eq.active&select=id,module_id,data,updated_at&limit=1') or []
+        if not rows or str(rows[0].get('module_id')) != str(module['id']):
+            raise HTTPException(404, "that occasion wasn't found")
+        entry = rows[0]
+    raise HTTPException(409, 'Registration changed while saving. Please try again.')
 
-    # ── Capacity honored server-side, whatever the page showed ──
-    capacity = _capacity_of(data, f["capacity_field"])
-    if capacity is not None and attending_count(signups) >= capacity:
-        raise HTTPException(409, "this occasion is full")
 
-    # ── Role validation: must exist; must have an open slot ──
-    if role_id:
-        role = next((r for r in f["roles"] if r.get("id") == role_id), None)
-        if not role:
-            raise HTTPException(400, "unknown role")
-        fill = role_fill(role, signups)
-        if fill["full"]:
-            raise HTTPException(
-                409, f"the {fill['label']} role is already filled")
-
-    # ── Contact find-or-create (dedup by email within the business) ──
-    contact_id = _find_or_create_attendee(business_id, name, email)
-
-    # Idempotent double-tap: this person is already on the list.
-    if contact_id and any(
-        s.get("contact_id") == contact_id
-        and (s.get("status") or "yes") == "yes"
-        for s in signups
-    ):
-        return {"ok": True, "already": True,
-                "attending": attending_count(signups)}
-
-    # ── Append the signup — the exact Signup shape internal.tsx reads
-    #    and writes ({contact_id?, name, status, role?}), so a public
-    #    signup renders indistinguishably from an operator-typed one ──
-    new_signup: Dict[str, Any] = {"name": name, "status": "yes"}
-    if contact_id:
-        new_signup["contact_id"] = contact_id
-    if role_id:
-        new_signup["role"] = role_id
-    data[f["signups_field"]] = signups + [new_signup]
-
-    updated = sb_clients.sb_patch_as_service(
-        f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}"
-        f"&business_id=eq.{business_id}",
-        {"data": data})
-    if updated is None:
-        logger.warning(f"[rsvp] signup append failed biz={business_id[:8]} "
-                       f"entry={entry_id[:8]}")
-        raise HTTPException(500, "something went wrong — please try again")
-
-    logger.info(f"[rsvp] signup recorded biz={business_id[:8]} "
-                f"entry={entry_id[:8]}"
-                + (f" role={role_id}" if role_id else ""))
-    return {"ok": True, "already": False,
-            "attending": attending_count(read_signups(data, f["signups_field"]))}
 
 
 # ─── Owner config endpoints ──────────────────────────────────────────
@@ -505,6 +566,12 @@ def _brand_css_vars(business: Dict[str, Any]) -> str:
     return _css_vars(_brand_kit(business))
 
 
+def _brand_font_links(business: Dict[str, Any]) -> str:
+    """The brand's faces, loaded — the partner of _brand_css_vars."""
+    from booking_page_renderer import _font_links, _brand_kit
+    return _font_links(_brand_kit(business))
+
+
 def _occasion_card(o: Dict[str, Any]) -> str:
     """One occasion card: facts, open roles, and the signup form (or the
     Full state)."""
@@ -569,6 +636,7 @@ def render_events_page(
     slug: str,
     *,
     api_origin: str,
+    site=None,
 ) -> str:
     """The public events page. Mobile-first by design — members RSVP
     from phones: single column, ≤480px shell (the /give shell), 44px+
@@ -581,7 +649,10 @@ def render_events_page(
 
     title = f"Events — {name}"
     description = f"See what's coming up at {name} and let us know you're coming."
-    css_vars = _brand_css_vars(business)
+    from public_form_theme import resolve_theme, css_vars as theme_css, font_links
+    theme = resolve_theme(business, site)
+    css_vars = theme_css(theme)
+    logo_url = theme["logo_url"]
 
     logo_html = (f'<img class="ev-logo" src="{_esc(logo_url)}" alt="{_esc(name)} logo">'
                  if logo_url else "")
@@ -609,6 +680,7 @@ def render_events_page(
 <meta property="og:url" content="{_esc(canonical_url)}">
 <meta property="og:type" content="website">
 {og_image_html}
+{font_links(theme)}
 <style>{css_vars}</style>
 <style>
 html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);
@@ -620,7 +692,7 @@ background:var(--surface);min-height:100vh;}}
 .ev-name{{font-family:var(--font-heading);font-size:24px;font-weight:700;margin:0;}}
 .ev-kicker{{font-family:var(--font-heading);font-size:15px;font-weight:600;
 color:var(--text-secondary);margin:6px 0 0;letter-spacing:.06em;text-transform:uppercase;}}
-.ev-card{{border:1px solid var(--border);border-radius:16px;padding:18px 16px;
+.ev-card{{border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;
 margin-bottom:16px;}}
 .ev-when{{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
 color:var(--accent);}}
@@ -639,15 +711,16 @@ border:1px solid var(--border);border-radius:999px;padding:4px 10px;}}
 .ev-role.done{{opacity:.55;text-decoration:line-through;}}
 .ev-form{{margin-top:14px;display:flex;flex-direction:column;gap:8px;}}
 .ev-input{{width:100%;padding:12px 14px;font-size:16px;border:1.5px solid var(--border);
-border-radius:12px;background:transparent;color:var(--text-primary);min-height:48px;
+border-radius:var(--radius);background:var(--input-surface);color:var(--text-primary);min-height:48px;
 font-family:var(--font-body);}}
 .ev-go{{width:100%;padding:14px 0;font-size:16px;font-weight:700;border:0;
-border-radius:12px;background:var(--accent);color:#fff;cursor:pointer;min-height:48px;
+border-radius:var(--radius);background:var(--accent);color:var(--accent-text);cursor:pointer;min-height:48px;
 font-family:var(--font-body);}}
 .ev-go:disabled{{opacity:.55;cursor:default;}}
 .ev-msg{{display:none;font-size:13px;line-height:1.5;}}
 .ev-msg.ok{{display:block;color:var(--text-primary);font-weight:600;}}
-.ev-msg.err{{display:block;color:#b3261e;}}
+.ev-msg.err{{display:block;color:var(--error);}}
+.ev-input:focus-visible,.ev-go:focus-visible{{outline:2px solid var(--focus);outline-offset:3px;}}
 .ev-fullnote{{margin-top:12px;font-size:13px;color:var(--text-muted);line-height:1.5;}}
 .ev-empty{{text-align:center;padding:32px 16px;color:var(--text-secondary);
 border:1px dashed var(--border);border-radius:16px;font-size:14px;line-height:1.6;}}
@@ -735,6 +808,7 @@ def render_events_unavailable_page(business: Dict[str, Any],
         f"<title>{_esc(name)}</title>",
         '<meta name="robots" content="noindex,nofollow">',
         f'<link rel="canonical" href="{_esc(canonical_url)}">',
+        _brand_font_links(business),
         f"<style>{css_vars}</style>",
         "<style>html,body{margin:0;padding:0;font-family:var(--font-body);"
         "color:var(--text-primary);background:var(--surface);min-height:100vh;}"

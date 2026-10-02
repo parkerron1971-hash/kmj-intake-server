@@ -30,6 +30,13 @@ BASE_TERMS: Dict[str, str] = {
     "contacts":     "Contacts",
     "service":      "Service",
     "services":     "Services",
+    # The unit of WORK, as distinct from the thing sold. `service` is
+    # what a practice OFFERS; `project` is one running instance of it —
+    # the module_entries row a lawyer calls a Matter and a contractor a
+    # Job. Added alongside the studio's dictionary.ts, whose Home strip
+    # was the caller that needed it.
+    "project":      "Project",
+    "projects":     "Projects",
     "appointment":  "Appointment",
     "appointments": "Appointments",
     "booking":      "Booking",
@@ -80,6 +87,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "contacts":     "Clients",
         "service":      "Matter",
         "services":     "Matters",
+        "project":      "Matter",
+        "projects":     "Matters",
         "appointment":  "Consultation",
         "appointments": "Consultations",
         "booking":      "Consultation",
@@ -131,6 +140,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "contacts":     "Clients",
         "service":      "Engagement",
         "services":     "Engagements",
+        "project":      "Engagement",
+        "projects":     "Engagements",
         "appointment":  "Meeting",
         "appointments": "Meetings",
         "booking":      "Meeting",
@@ -252,6 +263,8 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         # site, with a start and an end.
         "service":      "Job",
         "services":     "Jobs",
+        "project":      "Job",
+        "projects":     "Jobs",
         # The price list they quote from is still Services — that is the
         # menu, distinct from the Job that gets scheduled off it.
         "offering":     "Service",
@@ -304,26 +317,65 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "offering":     "Package",
         "offerings":    "Packages",
     },
+    # Products, not time. `customer` already reads "Customer" in BASE and is
+    # exactly right here, so it is NOT repeated — this map holds only what
+    # DIFFERS, and restating a base term is how two maps drift apart.
+    # `appointment`/`booking` are left alone deliberately: a store does not
+    # book anything, and bending them to "Order" would put that word in
+    # front of scheduling UI, where it reads as nonsense.
+    "ecommerce": {
+        "contact":      "Customer",
+        "contacts":     "Customers",
+        "service":      "Product",
+        "services":     "Products",
+        "offering":     "Product",
+        "offerings":    "Products",
+        "project":      "Order",
+        "projects":     "Orders",
+    },
+    # Subscriptions. `contact` becomes Account because the thing a SaaS
+    # business holds a relationship with is the account, which is often
+    # several people rather than one.
+    "saas": {
+        "contact":      "Account",
+        "contacts":     "Accounts",
+        "service":      "Plan",
+        "services":     "Plans",
+        "offering":     "Plan",
+        "offerings":    "Plans",
+        "project":      "Subscription",
+        "projects":     "Subscriptions",
+    },
 }
+
+
+def terms_for(business_type: Optional[str]) -> Dict[str, str]:
+    """The override block for a vertical, resolving ALIASES first.
+
+    VERTICAL_TERMS is keyed canonically, so the raw-string lookup this
+    replaces returned {} for every alias — a business stamped 'church' got
+    the BASE dictionary while a 'ministry' two rows over got 'Member'. The
+    frontend fixed the same bug in verticalCanonical.ts; this keeps the
+    backend's copy of the dictionary agreeing with it."""
+    import vertical_registry
+    return VERTICAL_TERMS.get(vertical_registry.resolve(business_type)) or {}
 
 
 def get_term(business_type: Optional[str], key: str) -> str:
     """Resolve a terminology key for a given vertical.
 
-    business_type: the businesses.type value (None / unknown ok).
+    business_type: the businesses.type value (None / unknown / an alias ok).
     key: a BASE_TERMS key. Unknown keys return the key itself
          (defensive — caller bug, not data bug).
 
     Falls back through:
-      VERTICAL_TERMS[business_type].get(key)  →
-      BASE_TERMS.get(key)                     →
-      key                                     (defensive)
+      VERTICAL_TERMS[canonical(business_type)].get(key)  →
+      BASE_TERMS.get(key)                                →
+      key                                                (defensive)
     """
     if not key:
         return ""
-    bt = (business_type or "").lower().strip()
-    vertical = VERTICAL_TERMS.get(bt) or {}
-    return vertical.get(key) or BASE_TERMS.get(key) or key
+    return terms_for(business_type).get(key) or BASE_TERMS.get(key) or key
 
 
 def apply_substitutions(template: str, business_type: Optional[str]) -> str:

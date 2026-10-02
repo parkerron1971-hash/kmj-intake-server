@@ -59,15 +59,33 @@ def _future_iso(days=30):
 
 # ─── Waitlist ────────────────────────────────────────────────────────
 
-def test_waitlist_idempotent_and_validated(fake):
+class _AnonReq:
+    """The request the limiter reads (2026-09-04: /waitlist is
+    rate-limited per trusted IP). No forwarded header, no peer."""
+    headers: dict = {}
+    client = None
+
+
+def test_waitlist_idempotent_and_validated(fake, monkeypatch):
     fb = fake
-    out = la.join_waitlist(la.WaitlistBody(email="New@Person.com", name="New"))
+    import rate_limit
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda bucket, key: True)
+    out = la.join_waitlist(la.WaitlistBody(email="New@Person.com", name="New"), _AnonReq())
     assert out["ok"]
-    la.join_waitlist(la.WaitlistBody(email="new@person.com"))   # dup, case-folded
+    la.join_waitlist(la.WaitlistBody(email="new@person.com"), _AnonReq())   # dup, case-folded
     assert len(fb.rows("waitlist")) == 1
     assert fb.rows("waitlist")[0]["email"] == "new@person.com"
     with pytest.raises(HTTPException):
-        la.join_waitlist(la.WaitlistBody(email="not-an-email"))
+        la.join_waitlist(la.WaitlistBody(email="not-an-email"), _AnonReq())
+
+
+def test_waitlist_refuses_when_the_limiter_says_so(fake, monkeypatch):
+    import rate_limit
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda bucket, key: False)
+    with pytest.raises(HTTPException) as e:
+        la.join_waitlist(la.WaitlistBody(email="new@person.com"), _AnonReq())
+    assert e.value.status_code == 429
+    assert fake.rows("waitlist") == []
 
 
 # ─── Invite validate + redeem ────────────────────────────────────────
@@ -217,9 +235,7 @@ def test_plaid_connection_cap(fake, monkeypatch):
 def test_readiness_preflight(fake, monkeypatch):
     fb = fake
     for k in ("STRIPE_PRICE_ID_STARTER", "STRIPE_PRICE_ID_PROFESSIONAL",
-              "STRIPE_PRICE_ID_PRACTICE", "STRIPE_PRICE_ID_STARTER_OVERAGE",
-              "STRIPE_PRICE_ID_PROFESSIONAL_OVERAGE", "STRIPE_PRICE_ID_PRACTICE_OVERAGE",
-              "STRIPE_WEBHOOK_SECRET"):
+              "STRIPE_PRICE_ID_PRACTICE", "STRIPE_WEBHOOK_SECRET"):
         monkeypatch.delenv(k, raising=False)
     fb.rows("user_profiles").append({"user_id": "gf", "is_grandfathered": True})
     fb.rows("businesses").append({
@@ -232,10 +248,37 @@ def test_readiness_preflight(fake, monkeypatch):
     assert any("price ids missing" in i for i in out["preflight_issues"])
     # Fix everything → ready.
     for k in ("STRIPE_PRICE_ID_STARTER", "STRIPE_PRICE_ID_PROFESSIONAL",
-              "STRIPE_PRICE_ID_PRACTICE", "STRIPE_PRICE_ID_STARTER_OVERAGE",
-              "STRIPE_PRICE_ID_PROFESSIONAL_OVERAGE", "STRIPE_PRICE_ID_PRACTICE_OVERAGE"):
+              "STRIPE_PRICE_ID_PRACTICE"):
         monkeypatch.setenv(k, "price_x")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_x")
     fb.rows("user_profiles").append({"user_id": "stranger", "is_grandfathered": True})
     out2 = la.billing_readiness(_owner=None)
     assert out2["ready_to_flip"] is True
+
+
+def test_readiness_ignores_retired_overage_price_ids(fake, monkeypatch):
+    """Pricing v2 retired postpaid overage (2026-07-12) — overage draws
+    down prepaid credits, and report_overage_to_stripe() is a permanent
+    no-op. STRIPE_PRICE_ID_*_OVERAGE is config that SHOULD be absent, so
+    a clean platform must read ready_to_flip=True without it. Asserting
+    on it pinned the panel to 'not ready' forever (found 2026-08-29:
+    production had every real price id set and still showed 2 issues)."""
+    fb = fake
+    for k in ("STRIPE_PRICE_ID_STARTER_OVERAGE",
+              "STRIPE_PRICE_ID_PROFESSIONAL_OVERAGE",
+              "STRIPE_PRICE_ID_PRACTICE_OVERAGE"):
+        monkeypatch.delenv(k, raising=False)
+    for k in ("STRIPE_PRICE_ID_STARTER", "STRIPE_PRICE_ID_PROFESSIONAL",
+              "STRIPE_PRICE_ID_PRACTICE"):
+        monkeypatch.setenv(k, "price_x")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_x")
+    fb.rows("user_profiles").append({"user_id": "gf", "is_grandfathered": True})
+    fb.rows("businesses").append({
+        "id": "b1", "owner_id": "gf", "is_active": True, "name": "b1",
+        "subscription_status": None, "subscription_plan": None})
+    out = la.billing_readiness(_owner=None)
+    assert not any("verage" in i for i in out["preflight_issues"]), out["preflight_issues"]
+    assert out["preflight_issues"] == []
+    assert out["ready_to_flip"] is True
+    # The retired model must not be reported as configuration either.
+    assert "overage" not in out["stripe_env"]

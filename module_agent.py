@@ -10,6 +10,9 @@ agent_queue rows when triggers fire:
                  entry's status is not in agent_config.closed_statuses
   field_change — a module_field_changed event exists in the last 24h
                  matching the trigger's field/from/to
+  target_reached — (progress_tracker only) a subject's latest reading,
+                 created in the last 24h, crossed the module's target
+                 and the reading before it had not
 
 ═══════════════════════════════════════════════════════════════════════
 DEPLOYMENT
@@ -532,6 +535,158 @@ async def _handle_field_change(client, biz, module, trigger, cap_remaining: int)
     return results
 
 
+def _to_number(v: Any) -> Optional[float]:
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n == n else None          # NaN is not a reading
+
+
+def _crossed(prev: Optional[float], now: float, target: float, direction: str) -> bool:
+    """Did the series cross the target between the previous reading and
+    this one? A subject already past the target does not re-trigger on
+    every later reading — that would notify the practitioner about the
+    same win once a month. No previous reading counts as crossing when
+    the first reading is already there: they have reached it, and the
+    practitioner has not been told."""
+    if direction == "down":
+        reached, was = now <= target, (prev is not None and prev <= target)
+    else:
+        reached, was = now >= target, (prev is not None and prev >= target)
+    return reached and not was
+
+
+async def _handle_target_reached(client, biz, module, trigger, cap_remaining: int) -> List[Dict]:
+    """progress_tracker's trigger. Reads the archetype params for which
+    field is the number, which is the subject and what the target is;
+    then, per subject, asks whether the latest reading crossed the line
+    and the one before it had not. Only readings created inside the
+    lookback window can fire, so a module backfilled with history does
+    not draft a notification for every client who crossed 720 last year.
+
+    Count mode: each row is one unit, so the "reading" is the row count
+    per subject (rows since the last redeemed one, when a `redeemed`
+    checkbox exists) and crossing means the row that took them to the
+    target landed in the window."""
+    results: List[Dict] = []
+    if (module.get("archetype") or "") != "progress_tracker":
+        return results
+    params = module.get("archetype_params") or {}
+    mode = params.get("mode") or "reading"
+    direction = params.get("direction") or "up"
+    value_field = params.get("value_field")
+    subject_field = params.get("subject_field")
+    date_field = params.get("date_field")
+    target_field = params.get("target_field")
+    fixed_target = _to_number(params.get("target"))
+    if mode == "reading" and not value_field:
+        return results
+    if fixed_target is None and not target_field:
+        return results
+
+    rows = await _sb(client, "GET",
+        f"/module_entries?module_id=eq.{module['id']}&status=eq.active"
+        f"&order=created_at.asc&limit=2000&select=*"
+    ) or []
+    if not rows:
+        return results
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=NEW_ENTRY_LOOKBACK_HOURS)
+
+    def _when(row: Dict) -> str:
+        d = (row.get("data") or {})
+        v = d.get(date_field) if date_field else None
+        return str(v or row.get("created_at") or "")
+
+    by_subject: Dict[str, List[Dict]] = {}
+    for r in rows:
+        d = r.get("data") or {}
+        key = str(d.get(subject_field) or "") if subject_field else "__self__"
+        by_subject.setdefault(key, []).append(r)
+
+    for subject, series in by_subject.items():
+        if len(results) >= cap_remaining:
+            break
+        series.sort(key=_when)
+        latest = series[-1]
+        created = latest.get("created_at") or ""
+        try:
+            created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if created_at < cutoff:
+            continue                       # nothing new for this subject
+
+        target = fixed_target
+        if target_field:
+            target = _to_number((latest.get("data") or {}).get(target_field))
+        if target is None:
+            continue
+
+        if mode == "count":
+            # Rows since the last redemption, if the module tracks one.
+            counted = 0
+            prev_count = 0
+            for r in series:
+                d = r.get("data") or {}
+                if d.get("redeemed") is True:
+                    counted = 0
+                    continue
+                counted += 1
+                if r is not latest:
+                    prev_count = counted
+            now_v, prev_v = float(counted), float(prev_count)
+        else:
+            now_v = _to_number((latest.get("data") or {}).get(value_field))
+            if now_v is None:
+                continue
+            prev_v = None
+            for r in reversed(series[:-1]):
+                prev_v = _to_number((r.get("data") or {}).get(value_field))
+                if prev_v is not None:
+                    break
+
+        if not _crossed(prev_v, now_v, target, direction):
+            continue
+
+        # Dedup — one notification per crossing reading.
+        notified = await _sb(client, "GET",
+            f"/events?business_id=eq.{biz['id']}&event_type=eq.module_target_reached"
+            f"&data->>entry_id=eq.{latest['id']}&select=id&limit=1"
+        )
+        if notified:
+            continue
+
+        contact_id = (latest.get("data") or {}).get(subject_field) if subject_field else None
+        contact_name = await _resolve_contact_name(client, contact_id)
+        data_for_template = {**(latest.get("data") or {}), "value": now_v, "target": target}
+        subject_line = _render_template(
+            trigger.get("template", f"{{{{contact_name}}}} reached the {module['name']} goal"),
+            data_for_template, module["name"], contact_name,
+        ) or f"{module['name']}: goal reached"
+        unit = params.get("unit") or ""
+        reasoning = (f"target_reached trigger — {contact_name or subject or 'the tracked value'} "
+                     f"went from {prev_v if prev_v is not None else 'no prior reading'} to "
+                     f"{now_v:g}{(' ' + unit) if unit else ''}, target {target:g} ({direction}).")
+
+        # A milestone is worth telling the practitioner about the day it
+        # lands, not in next week's digest.
+        qid = await _draft_and_insert(client, biz, module, latest, trigger, subject_line, reasoning, priority="high")
+        if qid:
+            await _sb(client, "POST", "/events", {
+                "business_id": biz["id"], "contact_id": contact_id,
+                "event_type": "module_target_reached",
+                "data": {"module_id": module["id"], "entry_id": latest["id"], "queue_id": qid,
+                         "value": now_v, "target": target, "subject": subject},
+                "source": "module_agent",
+            })
+            results.append({"module": module["name"], "trigger": "target_reached",
+                            "entry_id": latest["id"], "queue_id": qid,
+                            "value": now_v, "target": target})
+    return results
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # ROUTER
 # ═══════════════════════════════════════════════════════════════════════
@@ -582,6 +737,8 @@ async def run_module_check(business_id: str) -> Dict[str, Any]:
                         r = await _handle_overdue(client, biz, module, trigger, cap_remaining)
                     elif ttype == "field_change":
                         r = await _handle_field_change(client, biz, module, trigger, cap_remaining)
+                    elif ttype == "target_reached":
+                        r = await _handle_target_reached(client, biz, module, trigger, cap_remaining)
                     else:
                         r = []
                     module_results.extend(r)
@@ -606,7 +763,7 @@ async def run_module_check(business_id: str) -> Dict[str, Any]:
 
             per_module_stats.append({
                 "module": module["name"],
-                "drafts_created": len([r for r in module_results if r.get("trigger") in ("new_entry", "overdue", "field_change")]),
+                "drafts_created": len([r for r in module_results if r.get("trigger") in ("new_entry", "overdue", "field_change", "target_reached")]),
                 "entries_created": len(internal_results),
             })
             all_results.extend(module_results)

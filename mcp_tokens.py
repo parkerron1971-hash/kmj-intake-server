@@ -62,10 +62,28 @@ _SECRET_ENVS = ("MCP_TOKEN_SECRET", "CUSTOMER_TOKEN_SECRET")
 
 DEFAULT_TTL_SECONDS = 90 * 24 * 60 * 60      # 90 days
 SCOPE_READ = "read"
-KNOWN_SCOPES = (SCOPE_READ,)
+# `write` lets the holder call the class A verbs the MCP surface offers —
+# reversible records only. It is NOT "everything Chief can do": class C
+# (sends, money, hard deletes) has no scope and never will, and class B
+# does not exist until an outbox does. See action_registry's header.
+SCOPE_WRITE = "write"
+KNOWN_SCOPES = (SCOPE_READ, SCOPE_WRITE, "coordinate")
+
+
+def normalize_scopes(scopes: Optional[List[str]]) -> List[str]:
+    """Unknown scopes are dropped, never honoured; the result is never
+    empty; and `write` always carries `read` with it, because an agent
+    that can change a record it cannot look at is a worse credential,
+    not a narrower one."""
+    keep = [s for s in (scopes or []) if s in KNOWN_SCOPES]
+    if (SCOPE_WRITE in keep or "coordinate" in keep) and SCOPE_READ not in keep:
+        keep.append(SCOPE_READ)
+    return sorted(set(keep)) or [SCOPE_READ]
 
 
 def _secret() -> bytes:
+    """The ROOT. Since 2026-09-04 it never signs a key directly; each
+    business signs with a key derived from it (see _signing_key)."""
     for env in _SECRET_ENVS:
         s = (os.environ.get(env) or "").strip()
         if s:
@@ -75,6 +93,33 @@ def _secret() -> bytes:
     raise RuntimeError(
         "no token secret configured — set MCP_TOKEN_SECRET (preferred) or "
         "CUSTOMER_TOKEN_SECRET before minting or verifying MCP tokens")
+
+
+# PER-BUSINESS SIGNING KEYS (2026-09-04). An agent key lives in somebody
+# else's config file, which is the strongest reason for containment: a
+# key recovered for one business must not be able to mint for another.
+# HKDF over `agent-key|v2|<business_id>` from the root, the same helper
+# and the same shape customer_token adopted the same day. Tokens carry
+# `v: 2`; a token with no `v` was signed by the root directly and
+# verifies against it until LEGACY_SUNSET (every such token has expired
+# by then — 90-day TTL, and OAuth refreshes reissue in the new format).
+# When the sunset passes, delete the legacy branch; a test says so.
+TOKEN_VERSION = 2
+LEGACY_SUNSET = "2026-12-04"
+_PURPOSE = "agent-key"
+
+
+def _signing_key(business_id: str) -> bytes:
+    from customer_token import derive_key
+    return derive_key(_PURPOSE, str(business_id), root=_secret())
+
+
+def _peek(payload_b64: str) -> Optional[Dict[str, Any]]:
+    try:
+        claims = json.loads(_b64url_decode(payload_b64))
+    except Exception:
+        return None
+    return claims if isinstance(claims, dict) else None
 
 
 def _b64url_encode(b: bytes) -> str:
@@ -102,7 +147,7 @@ def mint(business_id: str, *, label: str = "unnamed",
     to the owner immediately; there is no path to recover it afterwards,
     by design.
     """
-    scopes = [s for s in (scopes or [SCOPE_READ]) if s in KNOWN_SCOPES] or [SCOPE_READ]
+    scopes = normalize_scopes(scopes or [SCOPE_READ])
     now = int(time.time())
     jti = secrets.token_urlsafe(16)
     payload = {
@@ -111,10 +156,12 @@ def mint(business_id: str, *, label: str = "unnamed",
         "scp": sorted(scopes),
         "iat": now,
         "exp": now + int(ttl_seconds),
+        "v": TOKEN_VERSION,
     }
     payload_b64 = _b64url_encode(
         json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
-    sig = hmac.new(_secret(), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    sig = hmac.new(_signing_key(business_id), payload_b64.encode("utf-8"),
+                   hashlib.sha256).digest()
     token = f"{payload_b64}.{_b64url_encode(sig)}"
 
     row = {
@@ -150,19 +197,26 @@ def verify_mcp_token(token: str) -> Optional[Dict[str, Any]]:
         payload_b64, sig_b64 = token.split(".", 1)
     except ValueError:
         return None
+    # The claims pick the key (they are not secret — base64 in a header);
+    # nothing is trusted until the signature holds. A forged `biz` only
+    # selects a key that will not.
+    claims = _peek(payload_b64)
+    if not claims or not claims.get("biz"):
+        return None
+    version = claims.get("v")
     try:
-        expected = hmac.new(_secret(), payload_b64.encode("utf-8"),
+        if version == TOKEN_VERSION:
+            key = _signing_key(str(claims["biz"]))
+        elif version is None:
+            key = _secret()          # LEGACY — dead after LEGACY_SUNSET
+        else:
+            return None
+        expected = hmac.new(key, payload_b64.encode("utf-8"),
                             hashlib.sha256).digest()
         actual = _b64url_decode(sig_b64)
     except Exception:
         return None
     if not hmac.compare_digest(expected, actual):
-        return None
-    try:
-        claims = json.loads(_b64url_decode(payload_b64))
-    except Exception:
-        return None
-    if not isinstance(claims, dict):
         return None
     exp = claims.get("exp")
     if not isinstance(exp, int) or exp <= int(time.time()):

@@ -85,6 +85,8 @@ _REMAP_DESCRIPTIONS: Dict[str, str] = {
     "create_module_entry":  "Add a row to a custom module. Fields: module (slug or id), values{}",
     "update_module_entry":  "Update a module row. Fields: entry_id, values{}",
     "ensure_module":        "Make sure a custom module exists (creates it if missing). Fields: name, fields?",
+    "create_client_form":   "Create a public client form / intake questionnaire. Fields: name, fields[{label,type,required?}]?, form_type?, confirmation_message?, link_module?",
+    "update_client_form":   "Change a client form. Fields: form_id (or form_name), new_name?, add_fields?, remove_fields?, confirmation_message?, is_active?",
     "create_offering":      "Create a service/offering. Fields: name, category?, price?, duration_min?",
     "update_offering":      "Update an offering. Fields: offering_id (or slug), price?, description?",
     "draft_email":          "Draft an email — QUEUED for approval, NOT sent. Fields: contact_id, intent, subject?",

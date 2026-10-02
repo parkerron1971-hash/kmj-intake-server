@@ -6,8 +6,9 @@ Two lanes, one list:
   • cloud — a GitHub issue tagged @claude (the existing builder bridge);
     Claude Code runs in GitHub's cloud, opens the PR, auto-merges when green.
   • local — a row Solution Space (Kevin's Electron app) polls for; a task
-    arriving there opens a real Claude Code session in the task's project,
-    seeds the brief, and submits it.
+    arriving there opens a live coding-agent session in the task's project —
+    Claude Code by default, or Codex when the task names it — seeds the
+    brief, and submits it.
 
 Both lanes report back into dev_tasks, which the Dev Desk panel renders.
 Auth: /platform/dev-desk/* uses the owner's JWT (require_owner) like every
@@ -18,10 +19,12 @@ session working the task can post its result.
 
 import hashlib
 import logging
+import ntpath
 import os
 import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -44,6 +47,11 @@ LOCAL_PROJECTS = {
     "frontend": r"C:\Users\kmccl\solutionist-studio\solutionist-studio",
     "backend": r"C:\Users\kmccl\kmj-intake-server",
 }
+
+# The coding agents a local task can ask for. Claude Code is the default and
+# every task before 2026-09-24 ran on it. The cloud lane is Claude only: it
+# is the @claude GitHub workflow.
+AGENTS = ("claude", "codex")
 
 _BUILD_LABEL = "chief-build"
 _GH_REPOS = {
@@ -91,6 +99,11 @@ async def _get_task(c: httpx.AsyncClient, task_id: str) -> Dict[str, Any]:
 
 async def _append_note(c: httpx.AsyncClient, task: Dict[str, Any],
                        sender: str, text: str) -> None:
+    if _is_work(task):
+        from chief_local_work import db
+        await db('POST', '/rpc/chief_work_note', {'task_id': task['id'], 'note': {
+            'id': str(uuid4()), 'from': sender, 'text': text[:4000], 'at': _now()}})
+        return
     notes = list(task.get("notes") or [])
     notes.append({"from": sender, "text": text[:4000], "at": _now()})
     await _sb_patch(c, "dev_tasks", {"id": f"eq.{task['id']}"},
@@ -103,7 +116,8 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-async def _require_device(c: httpx.AsyncClient, authorization: Optional[str]) -> Dict[str, Any]:
+async def _require_device(c: httpx.AsyncClient, authorization: Optional[str],
+                          agents: Optional[List[str]] = None) -> Dict[str, Any]:
     token = (authorization or "").removeprefix("Bearer ").strip()
     if not token:
         raise HTTPException(401, "Device token required")
@@ -115,33 +129,87 @@ async def _require_device(c: httpx.AsyncClient, authorization: Optional[str]) ->
     if not rows:
         raise HTTPException(401, "Unknown or revoked device token")
     device = rows[0]
+    beat: Dict[str, Any] = {"last_seen_at": _now()}
+    if agents is not None:
+        # What this build of Solution Space can open, so the Dev Desk can say
+        # whether Codex is reachable before a task sits in the queue for it.
+        beat["agents"] = agents
     try:
-        await _sb_patch(c, "dev_bridge_devices", {"id": f"eq.{device['id']}"},
-                        {"last_seen_at": _now()})
+        await _sb_patch(c, "dev_bridge_devices", {"id": f"eq.{device['id']}"}, beat)
     except HTTPException:
         pass  # a failed heartbeat must not block the queue read
     return device
 
 
+def _device_agents(raw: Optional[str]) -> List[str]:
+    """The agents a polling device says it can run. A build that predates
+    agents sends nothing, and it can only open Claude Code, so that is what
+    it is offered: a Codex task must never be opened as Claude by an old
+    build that ignores the field."""
+    named = [a.strip().lower() for a in (raw or "").split(",")]
+    supported = [a for a in AGENTS if a in named]
+    return supported or ["claude"]
+
+
 # ─── The seeded brief ─────────────────────────────────────────────────
 
 def _compose_prompt(task: Dict[str, Any]) -> str:
-    """The text Solution Space pastes into the fresh Claude Code session:
-    the brief itself, plus how to file the finished-work report that shows
-    up in the Dev Desk."""
+    """The text Solution Space hands the fresh Claude Code session: the brief
+    itself, plus how the conversation with Kevin works while he is away —
+    his replies arrive in the session, and reports land in the Dev Desk."""
     body = (task.get("details") or "").strip() or task.get("title", "")
+    if _is_work(task):
+        body += ('\nYour final report may include work_result: {"summary":"What you produced and file paths", '
+                 '"plan":null}. For strategy work, plan must match the schema in the brief. '
+                 'Report editable output paths and any missing evidence. Never include credentials in reports.')
     report_url = f"{PUBLIC_BASE_URL}/dev-bridge/tasks/{task['id']}/report"
     return (
         f"{body}\n\n"
         "---\n"
-        "This task came from Mission Control's Dev Desk. When you finish, "
-        "file your report so Kevin sees the result in the Dev Desk:\n"
-        f"  POST {report_url}\n"
-        "  JSON body with three fields: key (given below), status "
-        "('done', or 'failed' with the reason, or 'working' for a progress "
-        "update on a long task), and note (a short plain-language summary of "
-        "what you did, where, and anything Kevin should check).\n"
+        "This task came from Mission Control's Dev Desk. Kevin is most likely "
+        "away from this machine, so nobody is at the keyboard: work the task "
+        "through on your own, and talk to Kevin through the Dev Desk.\n\n"
+        "To report, POST to:\n"
+        f"  {report_url}\n"
+        "  JSON body with three fields: key (given below), status, and note.\n"
+        "  status is 'working' for a progress update or a question, 'done' "
+        "when finished, or 'failed' with the reason. note is a short "
+        "plain-language message to Kevin: what you did, where, and anything "
+        "he should check.\n"
         f"  key: {task.get('report_key', '')}\n"
+        "  If this task came from a support ticket, the final 'done' report "
+        "may also carry a fourth field, for_practitioner: ONE plain sentence "
+        "saying what the person who reported it will now see differently. It "
+        "is shown to them as-is, so write it in their language — nothing "
+        "about repos, branches, PRs or the tooling.\n\n"
+        "If you need a decision from Kevin, post a 'working' report that asks "
+        "the question, then wait. His reply will arrive here as a new message "
+        "in this session, prefixed 'Kevin (from the Dev Desk)'. Always finish "
+        "with a 'done' or 'failed' report — a task without one reads as still "
+        "running.\n"
+    )
+
+
+def _reopen_brief(task: Dict[str, Any]) -> str:
+    """For an agent that cannot resume a past conversation by itself: the
+    original brief plus what has been said on the Dev Desk since, so a fresh
+    session picks the task up where it was left. Terminal captures are left
+    out — they are screen noise, not conversation."""
+    lines = []
+    for n in (task.get("notes") or [])[-16:]:
+        who = {"kevin": "Kevin", "dev": "You (report)", "device": "Solution Space"}.get(n.get("from"))
+        text = (n.get("text") or "").strip()
+        if who and text:
+            lines.append(f"- {who}: {text[:1200]}")
+    history = "\n".join(lines) or "- (nothing yet)"
+    return (
+        f"{_compose_prompt(task)}\n"
+        "---\n"
+        "You are picking this task up again in a new session. What has been "
+        "said on the Dev Desk so far, oldest first:\n"
+        f"{history}\n\n"
+        "Kevin's newest message is the last line above. Check the working tree "
+        "for what was already done before changing anything, then continue.\n"
     )
 
 
@@ -153,6 +221,7 @@ class DispatchBody(BaseModel):
     details: Optional[str] = None
     repo: Optional[str] = None  # 'frontend' | 'backend'
     project_path: Optional[str] = None
+    agent: Optional[str] = None  # 'claude' (default) | 'codex' — local lane only
 
 
 class NoteBody(BaseModel):
@@ -164,20 +233,26 @@ class PairBody(BaseModel):
 
 
 @router.get("/platform/dev-desk")
-async def dev_desk(_owner=Depends(require_owner)):
+async def dev_desk(lite: bool = False, _owner=Depends(require_owner)):
     """Everything the Dev Desk panel shows, one call. Fails soft on the
-    GitHub half so the task list never blanks because of a rate limit."""
+    GitHub half so the task list never blanks because of a rate limit.
+
+    `lite` skips the GitHub half entirely. The panel polls it every few
+    seconds while a conversation is live, which would otherwise spend three
+    GitHub API calls a poll on lists that change a few times a day."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         tasks = await _sb_get(c, "dev_tasks", {
-            "select": "id,created_at,updated_at,lane,status,title,details,repo,"
+            "select": "id,created_at,updated_at,lane,status,title,details,repo,agent,"
                       "project_path,issue_url,notes,picked_up_at,finished_at",
             "order": "created_at.desc",
             "limit": "50",
         })
         devices = await _sb_get(c, "dev_bridge_devices", {
-            "select": "id,name,created_at,last_seen_at,revoked",
+            "select": "id,name,created_at,last_seen_at,revoked,agents",
             "order": "created_at.desc",
         })
+        if lite:
+            return {"ok": True, "tasks": tasks, "devices": devices}
         cloud_open = await _open_build_issues(c)
     try:
         from platform_console import _recent_merged_prs
@@ -226,6 +301,27 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
     if not title:
         raise HTTPException(422, "title required")
     repo = (body.repo or "frontend").strip().lower()
+    if repo not in LOCAL_PROJECTS:
+        raise HTTPException(422, "Choose the frontend or backend project.")
+    agent = (body.agent or "claude").strip().lower()
+    if agent not in AGENTS:
+        raise HTTPException(422, "Choose Claude Code or Codex.")
+    if lane == "cloud" and agent != "claude":
+        raise HTTPException(422, "Codex works in Solution Space on Kevin's machine — "
+                                 "the cloud builder is Claude on GitHub.")
+    from platform_chief_authority import current_authorization, digest
+    approved = current_authorization.get()
+    scope = {'lane': lane, 'repo': repo, 'title': title, 'details': body.details,
+             'project_path': body.project_path or LOCAL_PROJECTS[repo]}
+    # Named only when it is not the default, so a Claude task's scope hashes
+    # exactly as it did before agents existed.
+    if agent != "claude":
+        scope['agent'] = agent
+    authorization = {'owner_id': str(_owner.id), 'approved_at': _now(),
+                     'source': 'chief_review' if approved else 'dev_desk',
+                     'approval_id': approved[1]['id'] if approved else None,
+                     'scope_hash': digest(scope), 'scope': scope,
+                     'deployment': 'owner_review_required'}
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         if lane == "cloud":
@@ -234,6 +330,7 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
             from chief_of_staff import _fire_build_issue
             issue_url = await _fire_build_issue(c, title, body.details or title, repo)
             row = await _sb_insert(c, "dev_tasks", {
+                "authority_record": authorization,
                 "lane": "cloud",
                 "status": "dispatched" if issue_url else "failed",
                 "title": title,
@@ -248,11 +345,13 @@ async def dispatch_task(body: DispatchBody, _owner=Depends(require_owner)):
 
         project_path = (body.project_path or "").strip() or LOCAL_PROJECTS.get(repo, "")
         row = await _sb_insert(c, "dev_tasks", {
+            "authority_record": authorization,
             "lane": "local",
             "status": "queued",
             "title": title,
             "details": body.details,
             "repo": repo,
+            "agent": agent,
             "project_path": project_path,
             "report_key": secrets.token_hex(16),
         })
@@ -266,13 +365,26 @@ async def add_owner_note(task_id: str, body: NoteBody, _owner=Depends(require_ow
         raise HTTPException(422, "text required")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         task = await _get_task(c, task_id)
+        if _is_work(task):
+            from chief_local_work import reply, Reply
+            await reply(UUID(task_id), Reply(id=uuid4(), text=text), _owner)
+            return {'ok': True, 'posted_to_issue': False, 'reopened': task.get('status') in _FINISHED_STATUSES}
         await _append_note(c, task, "kevin", text)
         # Cloud-lane follow-ups go to the issue too, so the cloud builder
         # actually sees them — a note only the Dev Desk shows would dead-end.
         posted_to_issue = False
         if task.get("lane") == "cloud" and task.get("issue_url"):
             posted_to_issue = await _comment_on_issue(c, task["issue_url"], text)
-    return {"ok": True, "posted_to_issue": posted_to_issue}
+        # The Dev Desk is a conversation: a reply on a finished local task
+        # picks it back up. Replies are only delivered on active tasks, so
+        # without this the message would sit on the row and reach no one.
+        reopened = False
+        if task.get("lane") == "local" and task.get("status") in _FINISHED_STATUSES:
+            await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"},
+                            {"status": "working", "finished_at": None,
+                             "updated_at": _now()})
+            reopened = True
+    return {"ok": True, "posted_to_issue": posted_to_issue, "reopened": reopened}
 
 
 async def _comment_on_issue(c: httpx.AsyncClient, issue_url: str, text: str) -> bool:
@@ -326,41 +438,175 @@ async def pair_device(body: PairBody, _owner=Depends(require_owner)):
 class StatusBody(BaseModel):
     status: str
     note: Optional[str] = None
+    sender: Optional[str] = None  # 'device' (default) | 'session'
 
 
 class ReportBody(BaseModel):
     key: str
     status: str
     note: Optional[str] = None
+    # One plain sentence for the person who reported the problem, when this
+    # task came from a support ticket. It is shown to them verbatim if it
+    # passes the practitioner guard, so it must read like something a human
+    # would say about their own business — never about the work.
+    for_practitioner: Optional[str] = None
+    work_result: Optional[Dict[str, Any]] = None
+
+
+def _is_work(task):
+    return (task.get('authority_record') or {}).get('scope', {}).get('account_mode') == 'subscription'
+
+
+async def _bound_work(task, device):
+    if not _is_work(task):
+        return
+    from chief_local_work import db
+    rows = await db('GET', f"/platform_chief_work?id=eq.{UUID(task['id'])}&device_id=eq.{UUID(device['id'])}&limit=1")
+    if not rows:
+        raise HTTPException(409, 'This conversation is not claimed by this device.')
+
+
+@router.post('/dev-bridge/tasks/{task_id}/claim')
+async def bridge_claim(task_id: UUID, authorization: Optional[str] = Header(None)):
+    from chief_local_work import db
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        device = await _require_device(c, authorization)
+    claimed = await db('POST', '/rpc/chief_work_claim', {'task_id': str(task_id), 'device': device['id']})
+    if claimed is not True:
+        raise HTTPException(409, 'Conversation was already claimed or this desktop needs updating.')
+    return {'ok': True}
 
 
 @router.get("/dev-bridge/queue")
-async def bridge_queue(authorization: Optional[str] = Header(None)):
+async def bridge_queue(authorization: Optional[str] = Header(None),
+                       agents: Optional[str] = None, capabilities: Optional[str] = None):
+    # Only work for an agent this device can open. The rest waits in the
+    # queue for a device that can — see _device_agents.
+    can_run = _device_agents(agents)
+    workbench = 'workbench-v1' in (capabilities or '').split(',')
+    agent_filter = f"in.({','.join(can_run)})"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        await _require_device(c, authorization)
+        device = await _require_device(c, authorization, can_run + (['workbench-v1'] if workbench else []))
         rows = await _sb_get(c, "dev_tasks", {
             "lane": "eq.local",
             "status": "eq.queued",
-            "select": "id,title,details,repo,project_path,report_key,created_at",
+            "agent": agent_filter,
+            "select": "id,title,details,repo,agent,project_path,report_key,created_at,authority_record,notes",
+            **({} if workbench else {'authority_record->scope->>account_mode': 'is.null'}),
             "order": "created_at.asc",
             "limit": "5",
         })
+        # Kevin's replies on tasks a session is already working. The device
+        # types each one into that session and acks it; until the ack lands
+        # the note keeps coming back, so a crash between the two never loses
+        # a reply (the device de-duplicates by timestamp).
+        active = await _sb_get(c, "dev_tasks", {
+            "lane": "eq.local",
+            "status": f"in.({','.join(sorted(_ACTIVE_STATUSES))})",
+            "agent": agent_filter,
+            "select": "id,title,details,repo,agent,project_path,report_key,notes,authority_record",
+            **({} if workbench else {'authority_record->scope->>account_mode': 'is.null'}),
+            "order": "updated_at.asc",
+            "limit": "20",
+        })
     tasks = []
     for t in rows:
-        name = os.path.basename((t.get("project_path") or "").rstrip("\\/")) or None
+        if _is_work(t) and not workbench:
+            continue
+        # ntpath, not os.path: these are Windows paths and this runs on Linux,
+        # where os.path.basename of a C: path is the whole string — which is
+        # how Solution Space once gained a project named by its full path.
+        name = ntpath.basename((t.get("project_path") or "").rstrip("\\/")) or None
         tasks.append({
             "id": t["id"],
             "title": t.get("title"),
-            "prompt": _compose_prompt(t),
+            "prompt": _reopen_brief(t) if _is_work(t) and t.get('notes') else _compose_prompt(t),
+            "account_mode": 'subscription' if _is_work(t) else 'configured',
+            "reply_stamps": [n['at'] for n in _undelivered_replies(t)] if _is_work(t) else [],
             "project_path": t.get("project_path"),
             "project_name": name,
             "repo": t.get("repo"),
+            "agent": t.get("agent") or "claude",
             "created_at": t.get("created_at"),
         })
-    return {"ok": True, "tasks": tasks}
+    followups = []
+    for t in active:
+        if _is_work(t):
+            if not workbench:
+                continue
+            try:
+                await _bound_work(t, device)
+            except HTTPException as e:
+                if e.status_code == 409:
+                    continue
+                raise
+        pending = _undelivered_replies(t)
+        if pending:
+            followups.append({
+                "task_id": t["id"],
+                "account_mode": 'subscription' if _is_work(t) else 'configured',
+                "title": t.get("title"),
+                "project_path": t.get("project_path"),
+                "agent": t.get("agent") or "claude",
+                "notes": pending,
+                # For when the task's session is gone and its agent cannot
+                # resume one: a fresh session gets the whole story instead.
+                "reopen_brief": _reopen_brief(t),
+            })
+    return {"ok": True, "tasks": tasks, "followups": followups}
+
+
+# Statuses in which a session may still be at work on a task, and so can
+# still take a reply from Kevin.
+_ACTIVE_STATUSES = {"picked_up", "opened", "working"}
+_FINISHED_STATUSES = {"done", "failed", "cancelled"}
+
+
+def _undelivered_replies(task: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Kevin's notes on a task that no device has acked yet."""
+    out = []
+    for n in task.get("notes") or []:
+        if n.get("from") == "kevin" and not n.get("delivered_at") and n.get("at"):
+            out.append({"at": n["at"], "text": n.get("text") or ""})
+    return out
+
+
+class AckBody(BaseModel):
+    """Timestamps (the notes' `at`) the device has typed into the session."""
+    at: List[str]
+
+
+@router.post("/dev-bridge/tasks/{task_id}/notes/ack")
+async def bridge_ack_notes(task_id: str, body: AckBody,
+                           authorization: Optional[str] = Header(None)):
+    wanted = set(body.at or [])
+    if not wanted:
+        raise HTTPException(422, "at required")
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        device = await _require_device(c, authorization)
+        task = await _get_task(c, task_id)
+        await _bound_work(task, device)
+        if _is_work(task):
+            from chief_local_work import db
+            await db('POST', '/rpc/chief_work_ack', {'task_id': str(UUID(task_id)), 'stamps': list(wanted)})
+            return {'ok': True, 'acked': len(wanted)}
+        notes = list(task.get("notes") or [])
+        acked = 0
+        for n in notes:
+            if n.get("from") == "kevin" and n.get("at") in wanted and not n.get("delivered_at"):
+                n["delivered_at"] = _now()
+                acked += 1
+        if acked:
+            await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"},
+                            {"notes": notes, "updated_at": _now()})
+    return {"ok": True, "acked": acked}
 
 
 _DEVICE_STATUSES = {"picked_up", "opened", "working", "failed"}
+# Who a device-lane note is shown as: the device itself (Solution Space
+# talking about what it did) or the session (the terminal's own output,
+# relayed so Kevin can read it from the Dev Desk).
+_DEVICE_SENDERS = {"device", "session"}
 
 
 @router.post("/dev-bridge/tasks/{task_id}/status")
@@ -369,17 +615,28 @@ async def bridge_status(task_id: str, body: StatusBody,
     status = (body.status or "").strip().lower()
     if status not in _DEVICE_STATUSES:
         raise HTTPException(422, f"status must be one of {sorted(_DEVICE_STATUSES)}")
+    sender = (body.sender or "device").strip().lower()
+    if sender not in _DEVICE_SENDERS:
+        raise HTTPException(422, f"sender must be one of {sorted(_DEVICE_SENDERS)}")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        await _require_device(c, authorization)
+        device = await _require_device(c, authorization)
         task = await _get_task(c, task_id)
-        patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
-        if status == "picked_up" and not task.get("picked_up_at"):
-            patch["picked_up_at"] = _now()
-        if status == "failed":
-            patch["finished_at"] = _now()
-        await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
+        await _bound_work(task, device)
+        if _is_work(task) and status == 'picked_up':
+            raise HTTPException(409, 'Claim this conversation before opening it.')
+        # A session's relayed output can arrive after its own 'done' report;
+        # that must not flip a finished task back to 'working'. The note still
+        # lands — it is the final answer Kevin wants to read.
+        settled = task.get("status") in _FINISHED_STATUSES
+        if not (settled and (status == "working" or _is_work(task))):
+            patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
+            if status == "picked_up" and not task.get("picked_up_at"):
+                patch["picked_up_at"] = _now()
+            if status == "failed":
+                patch["finished_at"] = _now()
+            await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
         if body.note:
-            await _append_note(c, task, "device", body.note)
+            await _append_note(c, task, sender, body.note)
     return {"ok": True}
 
 
@@ -398,10 +655,30 @@ async def bridge_report(task_id: str, body: ReportBody):
         key = task.get("report_key")
         if not key or not secrets.compare_digest(str(body.key or ""), str(key)):
             raise HTTPException(401, "Bad report key")
+        if _is_work(task):
+            if task.get('status') in ('queued', 'cancelled'):
+                raise HTTPException(409, 'This conversation is not active.')
+            if task.get('status') in ('done', 'failed') and status != task['status']:
+                raise HTTPException(409, 'This conversation is already settled. Send an owner reply to continue it.')
+            if body.work_result is not None:
+                from chief_local_work import save_result
+                await save_result(task, body.work_result)
         patch: Dict[str, Any] = {"status": status, "updated_at": _now()}
         if status in ("done", "failed"):
             patch["finished_at"] = _now()
         await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
         if body.note:
             await _append_note(c, task, "dev", body.note)
-    return {"ok": True}
+
+    # If this task came from a support ticket, the person who reported the
+    # problem hears about it now — in the session's own sentence when it is
+    # fit to send, and the standard one when it is not. Fail-soft: a task
+    # report must never fail because the telling did.
+    told = False
+    if status == "done":
+        try:
+            from support_router import note_fix_shipped
+            told = await note_fix_shipped(task_id, body.for_practitioner)
+        except Exception as e:
+            logger.warning(f"ticket walk-back failed for {task_id}: {e}")
+    return {"ok": True, "told_the_practitioner": told}

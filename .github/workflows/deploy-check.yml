@@ -1,0 +1,114 @@
+name: Deploy check
+
+# "Merged" is not "live". Twice it has not been: an unpaid Railway bill
+# silently skipped deploys, and every health check stayed green because
+# the OLD code was healthy. Nothing compared what was merged with what
+# was running.
+#
+# This does. After every push to main it waits for the backend's /health
+# to report the merged commit (`version`, from RAILWAY_GIT_COMMIT_SHA),
+# then confirms /health/ready. If the new version never shows up, it
+# opens an issue, the same way the uptime check does, because an issue
+# needs only GitHub. It never redeploys or rolls back; that is a person's
+# call.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+# A newer merge supersedes this one: Railway deploys the latest commit,
+# so waiting for an older one would fail for no reason.
+concurrency:
+  group: deploy-check
+  cancel-in-progress: true
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for the merged commit to be live
+        id: wait
+        env:
+          BACKEND: https://kmj-intake-server-production.up.railway.app
+          WANT: ${{ github.sha }}
+        run: |
+          set +e
+          # Railway usually builds and swaps in 3–8 minutes. 25 minutes
+          # leaves room for a slow build without calling a normal deploy
+          # an incident.
+          deadline=$(( $(date +%s) + 25*60 ))
+          seen=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            curl -s --max-time 15 "$BACKEND/health" -o /tmp/health.json
+            # grep, not a JSON parser: the uptime check learned that a
+            # missing tool here fails silently and looks like an outage.
+            seen=$(grep -Eo '"version"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' /tmp/health.json \
+                     | grep -Eo '[0-9a-f]{7,}' || true)
+            echo "$(date -u +%H:%M:%S) live=${seen:-unknown} want=${WANT:0:7}"
+            if [ "$seen" = "$WANT" ]; then
+              echo "live=yes" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            sleep 30
+          done
+          echo "seen=${seen:-unknown}" >> "$GITHUB_OUTPUT"
+
+          if [ "$seen" = "$WANT" ]; then
+            code=$(curl -s --max-time 20 -o /tmp/ready.json -w '%{http_code}' "$BACKEND/health/ready")
+            echo "/health/ready -> $code"
+            if [ "$code" != "200" ] || ! grep -Eq '"ready"[[:space:]]*:[[:space:]]*true' /tmp/ready.json; then
+              echo "ready=no" >> "$GITHUB_OUTPUT"
+            else
+              echo "ready=yes" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Raise the alarm
+        if: steps.wait.outputs.live != 'yes' || steps.wait.outputs.ready != 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          WANT: ${{ github.sha }}
+          SEEN: ${{ steps.wait.outputs.seen }}
+          LIVE: ${{ steps.wait.outputs.live }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create deploy --color d93f0b \
+            --description "A merge did not go live" --force || true
+          if [ "$LIVE" = "yes" ]; then
+            what="The merged commit \`${WANT:0:7}\` is live, but \`/health/ready\` is not reporting ready."
+          elif [ "$SEEN" = "unknown" ]; then
+            what="The backend did not report which version it is running, so this merge (\`${WANT:0:7}\`) could not be confirmed live. Check that the deploy finished on Railway, and that \`RAILWAY_GIT_COMMIT_SHA\` is set."
+          else
+            what="Merged \`${WANT:0:7}\` 25 minutes ago, but the backend is still running \`${SEEN:0:7}\`. The deploy did not happen or did not finish. Check Railway: the build log, and whether billing or a paused service stopped it."
+          fi
+          body="$what
+
+          Nothing was redeployed or rolled back; that is a person's call.
+
+          [run]($RUN)"
+          existing=$(gh issue list --label deploy --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --label deploy --title "Deploy check: a merge is not live on the backend" --body "$body"
+          fi
+          exit 1
+
+      - name: Close the alarm once a merge lands
+        if: steps.wait.outputs.live == 'yes' && steps.wait.outputs.ready == 'yes'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          WANT: ${{ github.sha }}
+        run: |
+          existing=$(gh issue list --label deploy --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Recovered: \`${WANT:0:7}\` is live and ready at $(date -u '+%Y-%m-%d %H:%M UTC')."
+            gh issue close "$existing"
+          fi

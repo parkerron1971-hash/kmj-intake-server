@@ -261,7 +261,12 @@ def update_field(owner_id: str, field_path: str, new_value: Any) -> Optional[Dic
 
 
 def get_missing_jit_fields(owner_id: str) -> List[str]:
-    profile = get_profile(owner_id) or {}
+    return missing_jit_fields_from_profile(get_profile(owner_id))
+
+
+def missing_jit_fields_from_profile(profile: Optional[Dict[str, Any]]) -> List[str]:
+    """Inspect a practitioner snapshot using the same missing-value rules."""
+    profile = profile or {}
     missing: List[str] = []
     for field_path in JIT_FIELDS_V1:
         if not profile.get(field_path):

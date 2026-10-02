@@ -167,16 +167,38 @@ def _sb_headers() -> Dict[str, str]:
     }
 
 
+# Tables the server owns outright. business_sites has RLS on with one
+# policy: anon may read a published site (2026-06-04). There is no policy
+# for a signed-in practitioner, on purpose — the site is edited through
+# the server's owner-checked routes, never from the client. So under a
+# bound practitioner JWT (business_access binds one since 2026-08-09) the
+# row reads back empty and a patch is refused and swallowed as None: the
+# slot manifest showed every slot unpopulated, set-site-type answered
+# "site not found", a reroll could not save (found 2026-09-14, the day
+# the same shape emptied Chief's undo log). The caller has passed the
+# owner check by the time it is here; the row is written as the server.
+_SERVER_OWNED_PATHS = ("/business_sites",)
+
+
+def _server_owned(path: str) -> bool:
+    return path.startswith(_SERVER_OWNED_PATHS)
+
+
 def _sb_get(path: str) -> Optional[Any]:
     """RLS-readiness migration — delegates to sb_clients.sb_get_current_context.
     User JWT bound by the handler (via sb_clients.set_user_jwt) is forwarded
     automatically. Falls back to service-role when no JWT is bound
-    (server-initiated paths)."""
+    (server-initiated paths). Server-owned tables are read as the server."""
+    if _server_owned(path):
+        return sb_clients.sb_get_as_service(path)
     return sb_clients.sb_get_current_context(path, allow_service_fallback=True)
 
 
 def _sb_patch(path: str, body: Dict[str, Any]) -> Optional[Any]:
-    """RLS-readiness migration — delegates to sb_clients.sb_patch_current_context."""
+    """RLS-readiness migration — delegates to sb_clients.sb_patch_current_context.
+    Server-owned tables are written as the server."""
+    if _server_owned(path):
+        return sb_clients.sb_patch_as_service(path, body)
     return sb_clients.sb_patch_current_context(path, body, allow_service_fallback=True)
 
 
@@ -1216,6 +1238,254 @@ def restore_snapshot(business_id: str, snapshot_idx: int = 0) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────
+# THE DRAFT — edits that survive leaving the page, until Publish
+# ─────────────────────────────────────────────────────────────
+#
+# Brand Studio used to hold every unsaved colour, face and word in the
+# browser tab. Navigate away, reload, or switch devices and an
+# afternoon's work was gone — the save bar could only warn.
+#
+# The draft lives in its OWN columns (businesses.brand_kit_draft +
+# brand_kit_draft_at), not in settings. save_brand_kit rewrites the
+# whole settings object, and a draft autosaves every few seconds; had
+# the draft lived in settings, every keystroke would have been a
+# read-modify-write of the assistant name, the theme and the site
+# brief, racing whatever else was editing them. A column written alone
+# can only ever overwrite itself.
+#
+# A draft is never live. Nothing reads it but Brand Studio. Publishing
+# is save_brand_kit (which snapshots the current kit into history, so
+# the live version is always restorable) followed by clearing the draft.
+
+BRAND_DRAFT_MAX_BYTES = 64_000
+
+
+class BrandDraftError(Exception):
+    """A draft write that did not land. Raised, never swallowed: a draft
+    that silently failed to save is the exact loss it exists to prevent.
+    `status` is the HTTP answer: 400 for a bad request, 502 when the
+    database did not take the write."""
+
+    def __init__(self, message: str, status: int = 502):
+        super().__init__(message)
+        self.status = status
+
+
+def _draft_path(business_id: str) -> str:
+    # select=id keeps the PATCH representation to one tiny column instead
+    # of echoing the whole business row back on every autosave.
+    return f"/businesses?id=eq.{business_id}&select=id"
+
+
+def get_brand_draft(business_id: str) -> Dict[str, Any]:
+    rows = _sb_get(f"/businesses?id=eq.{business_id}"
+                   f"&select=brand_kit_draft,brand_kit_draft_at&limit=1") or []
+    row = rows[0] if rows and isinstance(rows[0], dict) else {}
+    draft = row.get("brand_kit_draft")
+    if not isinstance(draft, dict) or not draft:
+        return {"draft": None, "draft_at": None}
+    return {"draft": draft, "draft_at": row.get("brand_kit_draft_at")}
+
+
+def save_brand_draft(business_id: str, kit: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(kit, dict):
+        raise BrandDraftError("draft must be an object", 400)
+    if len(json.dumps(kit)) > BRAND_DRAFT_MAX_BYTES:
+        raise BrandDraftError("draft is too large", 400)
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    res = _sb_patch(_draft_path(business_id),
+                    {"brand_kit_draft": kit, "brand_kit_draft_at": now})
+    # None = the request failed; [] = RLS filtered it (not your row).
+    if not res:
+        raise BrandDraftError("draft did not save")
+    return {"draft_at": now}
+
+
+def clear_brand_draft(business_id: str) -> None:
+    res = _sb_patch(_draft_path(business_id),
+                    {"brand_kit_draft": None, "brand_kit_draft_at": None})
+    if not res:
+        raise BrandDraftError("draft did not clear")
+
+
+def publish_brand_draft(business_id: str,
+                        kit: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Make the draft the live brand. `kit` is what the page is showing
+    — it wins over the stored draft, because the last keystroke may not
+    have autosaved yet. Without one, the stored draft is published."""
+    if not isinstance(kit, dict) or not kit:
+        kit = get_brand_draft(business_id).get("draft")
+    if not kit:
+        raise BrandDraftError("there is no draft to publish", 400)
+    bundle = save_brand_kit(business_id, kit)
+    try:
+        clear_brand_draft(business_id)
+    except BrandDraftError:
+        # Published but the draft lingers. It now equals the live kit, so
+        # the studio reads it as "no changes" — logged, not raised, since
+        # the thing the owner asked for did happen.
+        logger.warning(f"published {business_id[:8]} but the draft did not clear")
+    return bundle
+
+
+def refresh_site_after_publish(business_id: str) -> str:
+    """Carry a published brand onto the live website, and SAY whether it
+    did.
+
+    A composed site is a stored page. Nothing refreshed it on a brand
+    save — the new colours reached emails and the booking page, while the
+    website kept the old look until some unrelated edit re-rendered it.
+    This starts the same no-LLM re-render offerings and Media Library
+    already use (site_composer.refresh_if_composed_async).
+
+    Returns what the Publish sheet may truthfully say:
+      'refreshing'   — a composed or canvas site is re-rendering now
+      'not_composed' — the site is built another way (manual / legacy),
+                       and this refresh would be a no-op
+      'no_site'      — there is no site yet
+      'unknown'      — the site row could not be read
+    """
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=html_source:site_config->>html_source&limit=1") or []
+    except Exception as e:
+        logger.warning(f"site lookup after publish failed for {business_id[:8]}: {e}")
+        return "unknown"
+    if not rows:
+        return "no_site"
+    if (rows[0] or {}).get("html_source") not in ("module-composer", "canvas"):
+        return "not_composed"
+    import site_composer   # lazy: site_composer imports this module
+    site_composer.refresh_if_composed_async(business_id)
+    return "refreshing"
+
+
+# ─────────────────────────────────────────────────────────────
+# WHERE THE BRAND LIVES — which surfaces still wear an older look
+# ─────────────────────────────────────────────────────────────
+#
+# Brand Studio's Home shows, per surface, whether it is in step with the
+# current brand. Only surfaces with a real, dated record can be judged:
+#   website — business_sites.site_config.html_generated_at (every
+#             render_and_persist stamps it; updated_at is NOT a render
+#             time, /sites/{id}/invalidate bumps it without rendering)
+#   print   — settings.print_materials.<piece>.generated_at
+#   images  — image_artworks.created_at (flyers and generated images)
+# Emails, invoices, the store and the booking page render from the kit
+# at send / request time, so they are always in step and need no check.
+#
+# "When did the look last change" is NOT the last save: an override or
+# the font lock also goes through save_brand_kit. It is found by walking
+# brand_kit_history for the newest version whose colours, faces or
+# tagline differ from the current kit.
+
+def _ts(value: Any) -> Optional[datetime]:
+    try:
+        s = str(value or "").strip()
+        if not s:
+            return None
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _look_signature(kit: Any) -> str:
+    k = kit if isinstance(kit, dict) else {}
+    c = k.get("colors") if isinstance(k.get("colors"), dict) else {}
+    fp = k.get("font_pair") if isinstance(k.get("font_pair"), dict) else {}
+    look = {
+        role: str(c.get(role) or k.get(f"{role}_color") or "").strip().lower()
+        for role in ("primary", "secondary", "accent", "background", "text")
+    }
+    look["heading"] = str(fp.get("heading") or k.get("font_heading") or "").strip().lower()
+    look["body"] = str(fp.get("body") or k.get("font_body") or "").strip().lower()
+    look["tagline"] = str(k.get("tagline") or "").strip()
+    return json.dumps(look, sort_keys=True)
+
+
+def look_changed_at(business: Dict[str, Any]) -> Optional[str]:
+    """When the CURRENT look (colours, faces, tagline) took over. History is
+    newest first and history[i].saved_at is when history[i].kit was
+    replaced, so the first entry that looks different marks the change.
+    None when there is no kit or no older look on record."""
+    current = (business.get("settings") or {}).get("brand_kit")
+    if not current:
+        return None
+    sig = _look_signature(current)
+    for entry in business.get("brand_kit_history") or []:
+        if not isinstance(entry, dict):
+            continue
+        if _look_signature(entry.get("kit")) != sig:
+            return entry.get("saved_at")
+    return None
+
+
+_PRINT_LABEL = {
+    "business_card": "Business card",
+    "one_pager": "One-pager",
+    "connect_card": "Connect card",
+    "service_menu": "Service menu",
+}
+
+
+def where_it_lives(business_id: str) -> Dict[str, Any]:
+    business = _safe_get_one("businesses", "id", business_id) or {}
+    if not business:
+        return {"ok": False, "error": "Business not found"}
+    changed_raw = look_changed_at(business)
+    changed = _ts(changed_raw)
+
+    def older(when: Any) -> bool:
+        t = _ts(when)
+        return bool(changed and t and t < changed)
+
+    # Website
+    site: Dict[str, Any] = {"status": "unknown"}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            "&select=status,html_source:site_config->>html_source,"
+            "generated_at:site_config->>html_generated_at&limit=1") or []
+        if not rows:
+            site = {"status": "no_site"}
+        else:
+            r = rows[0] or {}
+            if r.get("html_source") not in ("module-composer", "canvas"):
+                site = {"status": "not_composed"}
+            else:
+                site = {"status": "behind" if older(r.get("generated_at")) else "in_step",
+                        "rendered_at": r.get("generated_at"),
+                        "published": r.get("status") == "published"}
+    except Exception as e:
+        logger.warning(f"where-it-lives site lookup failed for {business_id[:8]}: {e}")
+
+    # Print materials (Brand → Print Materials)
+    pm = (business.get("settings") or {}).get("print_materials") or {}
+    pieces = [(k, v.get("generated_at")) for k, v in pm.items()
+              if isinstance(v, dict) and (v.get("html") or v.get("generated_at"))]
+    print_block = {
+        "total": len(pieces),
+        "behind": [_PRINT_LABEL.get(k, k.replace("_", " ").capitalize())
+                   for k, g in pieces if older(g)],
+    }
+
+    # Flyers and generated images
+    images: Dict[str, Any] = {"total": 0, "behind": 0}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/image_artworks?business_id=eq.{business_id}&status=eq.ready"
+            "&select=created_at&order=created_at.desc&limit=500") or []
+        images = {"total": len(rows), "behind": sum(1 for r in rows if older((r or {}).get("created_at")))}
+    except Exception as e:
+        logger.warning(f"where-it-lives images lookup failed for {business_id[:8]}: {e}")
+
+    return {"ok": True, "look_changed_at": changed_raw, "website": site,
+            "print": print_block, "images": images}
+
+
+# ─────────────────────────────────────────────────────────────
 # Generation paths (Claude-backed; do NOT save — frontend confirms)
 # ─────────────────────────────────────────────────────────────
 
@@ -1299,13 +1569,13 @@ def _call_claude_for_kit(system_prompt: str, user_message: str) -> Dict[str, Any
         return {"ok": False, "error": str(e)}
 
 
-def generate_from_context(business_id: str) -> Dict[str, Any]:
-    """Rich generation using FULL context: business name, archetype,
-    voice_profile, brand_voice, Strategy Track outputs, Practitioner Profile.
-    Returns a brand kit dict (not yet saved). Frontend confirms then calls save."""
+def _brand_context_lines(business_id: str) -> Optional[List[str]]:
+    """What the model is told about the business — shared by the single
+    kit (generate_from_context) and the three directions, so the two can
+    never be briefed differently. None when the business does not exist."""
     business = _safe_get_one("businesses", "id", business_id) or {}
     if not business or not business.get("id"):
-        return {"ok": False, "error": "Business not found"}
+        return None
 
     profile = _safe_get_one("business_profiles", "business_id", business_id) or {}
     archetype = _safe_get_one(
@@ -1339,7 +1609,140 @@ def generate_from_context(business_id: str) -> Dict[str, Any]:
             parts.append(f"Unique value: {disc['unique_value_proposition']}")
         if disc.get("target_audience"):
             parts.append(f"Audience detail: {disc['target_audience']}")
+    return parts
 
+
+# ─── THREE DIRECTIONS ────────────────────────────────────────────────
+#
+# "Rethink my brand" used to return ONE kit, all or nothing — take it
+# whole or discard it. Brand Studio now shows three contrasting
+# directions and lets the owner take the colours from one and the type
+# from another. One model call, not three: three separate calls would
+# drift toward the same safe answer, while one call asked for CONTRAST
+# is told outright that the three must differ.
+
+_DIRECTIONS_SYSTEM_PROMPT = """You are a brand designer. Propose THREE clearly different brand directions for one practitioner.
+Output ONLY valid JSON, no other text:
+{
+  "directions": [
+    {
+      "name": "two or three evocative words",
+      "why": "one plain sentence: the feeling, and who it suits",
+      "kit": {
+        "tagline": "one line, max 8 words",
+        "elevator_pitch": "2-3 sentences in the practitioner's voice",
+        "colors": {"primary": "#RRGGBB", "secondary": "#RRGGBB", "accent": "#RRGGBB", "background": "#RRGGBB", "text": "#RRGGBB"},
+        "font_pair": {"heading": "Google Font family", "body": "Google Font family"},
+        "tone_words": ["word", "word", "word", "word"],
+        "visual_style": "one sentence"
+      }
+    }
+  ]
+}
+
+Rules:
+- Exactly three directions, and they must genuinely differ: different primary hues, different heading faces, different moods (for example one grounded and calm, one clear and professional, one warm and bold).
+- Every font is a real Google Fonts family. Never use Inter, Roboto, Arial, Open Sans or Montserrat as a heading.
+- Background is light unless the direction is deliberately dark; text must be readable on the background.
+- If the practitioner gave a tagline, pitch or tone words, keep them at the heart of every direction; you may tighten the wording but never replace their meaning.
+- Match the voice they described. Don't invent a personality they didn't describe."""
+
+_HEX_RE = None
+
+
+def _clean_direction(d: Any) -> Optional[Dict[str, Any]]:
+    """One direction, or None when it can't be shown honestly: every
+    colour a real 6-digit hex, both faces named."""
+    global _HEX_RE
+    if _HEX_RE is None:
+        import re
+        _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+    if not isinstance(d, dict) or not isinstance(d.get("kit"), dict):
+        return None
+    kit = d["kit"]
+    colors = kit.get("colors") if isinstance(kit.get("colors"), dict) else {}
+    roles = ("primary", "secondary", "accent", "background", "text")
+    if not all(isinstance(colors.get(r), str) and _HEX_RE.match(colors[r].strip()) for r in roles):
+        return None
+    fonts = kit.get("font_pair") if isinstance(kit.get("font_pair"), dict) else {}
+    heading = str(fonts.get("heading") or "").strip()
+    body = str(fonts.get("body") or "").strip()
+    if not heading or not body:
+        return None
+    tone = [str(w).strip() for w in (kit.get("tone_words") or []) if str(w or "").strip()][:6]
+    return {
+        "name": str(d.get("name") or "").strip()[:40] or "A direction",
+        "why": str(d.get("why") or "").strip()[:200],
+        "kit": {
+            "tagline": str(kit.get("tagline") or "").strip()[:120],
+            "elevator_pitch": str(kit.get("elevator_pitch") or "").strip()[:600],
+            "colors": {r: colors[r].strip().upper() for r in roles},
+            "font_pair": {"heading": heading[:60], "body": body[:60]},
+            "tone_words": tone,
+            "visual_style": str(kit.get("visual_style") or "").strip()[:200],
+        },
+    }
+
+
+def generate_directions(business_id: str,
+                        essence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Three contrasting kits, not saved. `essence` is what the owner has
+    just told Brand Studio (tagline, pitch, tone words) — fresher than
+    anything stored, so it leads the brief."""
+    parts = _brand_context_lines(business_id)
+    if parts is None:
+        return {"ok": False, "error": "Business not found"}
+    ess = essence if isinstance(essence, dict) else {}
+    told: List[str] = []
+    if str(ess.get("tagline") or "").strip():
+        told.append(f"Their tagline: {str(ess['tagline']).strip()[:160]}")
+    if str(ess.get("elevator_pitch") or "").strip():
+        told.append(f"What they do, in their words: {str(ess['elevator_pitch']).strip()[:600]}")
+    tone = [str(w).strip() for w in (ess.get("tone_words") or []) if str(w or "").strip()][:8]
+    if tone:
+        told.append(f"How they want to sound: {', '.join(tone)}")
+    user_message = ("Propose three brand directions for:\n\n" + "\n".join(parts)
+                    + ("\n\nWhat the practitioner just told us:\n" + "\n".join(told) if told else ""))
+
+    api_key = _anthropic_key()
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
+    try:
+        with httpx.Client(timeout=90.0) as client:
+            r = llm_call.post_with(client, {
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 3500,
+                "system": _DIRECTIONS_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_message}],
+            }, key=api_key, task="brand_directions", business_id=business_id)
+        if r.status_code != 200:
+            logger.warning(f"directions: Anthropic error {r.status_code}: {r.text[:200]}")
+            return {"ok": False, "error": "Couldn't sketch directions just now. Try again."}
+        text = _strip_code_fences("".join(
+            c.get("text", "") for c in r.json().get("content", []) if c.get("type") == "text"))
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            start, end = text.find("{"), text.rfind("}")
+            parsed = json.loads(text[start:end + 1]) if start >= 0 and end > start else {}
+    except Exception as e:
+        logger.warning(f"generate_directions failed: {e}")
+        return {"ok": False, "error": "Couldn't sketch directions just now. Try again."}
+
+    raw = parsed.get("directions") if isinstance(parsed, dict) else None
+    directions = [c for c in (_clean_direction(d) for d in (raw or [])) if c][:3]
+    if not directions:
+        return {"ok": False, "error": "The directions came back unusable. Try again."}
+    return {"ok": True, "directions": directions}
+
+
+def generate_from_context(business_id: str) -> Dict[str, Any]:
+    """Rich generation using FULL context: business name, archetype,
+    voice_profile, brand_voice, Strategy Track outputs, Practitioner Profile.
+    Returns a brand kit dict (not yet saved). Frontend confirms then calls save."""
+    parts = _brand_context_lines(business_id)
+    if parts is None:
+        return {"ok": False, "error": "Business not found"}
     user_message = "Generate a brand kit for:\n\n" + "\n".join(parts)
     return _call_claude_for_kit(_GEN_SYSTEM_PROMPT, user_message)
 
@@ -1375,14 +1778,19 @@ def learn_from_url(business_id: str, url: str) -> Dict[str, Any]:
     proposal. Returns the kit (not yet saved). Frontend confirms then calls save."""
     if not url or not url.startswith(("http://", "https://")):
         return {"ok": False, "error": "Invalid URL"}
+    # Public addresses only, redirects included (2026-09-22: this fetched
+    # with follow_redirects and no address check, so a link or a redirect
+    # to an internal address was read by the server).
     try:
-        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-            page = client.get(url)
-        if page.status_code != 200:
-            return {"ok": False, "error": f"Could not fetch URL: {page.status_code}"}
-        html_snippet = page.text[:8000]
+        from website_image_references import fetch_public_page_sync
+        status, text = fetch_public_page_sync(url)
+        if status != 200:
+            return {"ok": False, "error": f"Could not fetch URL: {status}"}
+        html_snippet = text[:8000]
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     except Exception as e:
-        return {"ok": False, "error": f"Fetch failed: {e}"}
+        return {"ok": False, "error": f"Fetch failed: {type(e).__name__}"}
 
     # Defuse action-tag syntax before the model ever sees it.
     #

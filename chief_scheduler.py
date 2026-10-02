@@ -163,6 +163,15 @@ async def _execute_row(row: Dict[str, Any]) -> None:
             detail = f"unknown action '{atype}'"
         else:
             try:
+                # Every run from here is unattended by definition. Set
+                # rather than defaulted, and set on the dict the handler
+                # actually receives, so a stored payload cannot arrive
+                # claiming otherwise: a schedule that could declare
+                # itself prompted would be a schedule that approves its
+                # own irreversible actions. Handlers that don't care
+                # ignore it; publish_post uses it to demand a recorded
+                # human approval before posting in public.
+                action["_unattended"] = True
                 async with httpx.AsyncClient() as client:
                     result = await handler(client, biz, action)
                 res_text = str((result or {}).get("result") or "")

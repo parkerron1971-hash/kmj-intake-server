@@ -72,8 +72,11 @@ def run_turn(monkeypatch):
     async def _instant(value=None):
         return value
 
+    calls = []
+
     def _staged(name, value):
         async def inner(*a, **k):
+            calls.append(name)
             if delays.get(name):
                 await asyncio.sleep(delays[name])
             return value
@@ -97,6 +100,8 @@ def run_turn(monkeypatch):
     monkeypatch.setattr(cos, "_analyze_relationships", lambda *a, **k: _instant([]))
     monkeypatch.setattr(cos, "_build_system_prompt", lambda *a, **k: "SYSTEM")
     monkeypatch.setattr(cos, "_call_claude", _staged("model", "All good."))
+    import chief_truth
+    monkeypatch.setattr(chief_truth, "review_reply", _staged("review", ""))
     monkeypatch.setattr(cos, "_log_chief_activity", lambda *a, **k: _instant(None))
     monkeypatch.setattr(cos, "_learn_patterns_async", lambda *a, **k: _instant(None))
 
@@ -114,13 +119,23 @@ def run_turn(monkeypatch):
         if slow:
             delays[slow] = seconds
         chief_prewarm.clear()
+
+        async def _drive():
+            out = await cos.chief_chat(
+                cos.ChatRequest(business_id="biz-1", message=message), _Session())
+            # The sweeps run off the turn's path now (latency arc round 2)
+            # — drain them INSIDE the loop so their side effects are
+            # deterministic for the assertions below.
+            await cos._drain_turn_sweeps()
+            return out
+
         with caplog.at_level(logging.INFO, logger="chief"):
-            out = asyncio.run(cos.chief_chat(
-                cos.ChatRequest(business_id="biz-1", message=message), _Session()))
+            out = asyncio.run(_drive())
         lines = [r.getMessage() for r in caplog.records
                  if "[Chief timing]" in r.getMessage()]
         return out, lines
 
+    _run.calls = calls
     return _run
 
 
@@ -134,7 +149,10 @@ def _fields(line):
 
 def test_every_turn_logs_its_timing(run_turn, caplog):
     out, lines = run_turn(caplog)
+    # The fixture has no answer reviewer: nothing checked the answer, so it
+    # flows marked unchecked while the timing instrument still runs normally.
     assert out["response"] == "All good."
+    assert out['grounding']['status'] == 'unchecked'
     assert len(lines) == 1, (
         "exactly one timing line per turn — none means the instrument is "
         "silent, more than one means it is double-counting"
@@ -145,7 +163,7 @@ def test_the_line_carries_every_stage(run_turn, caplog):
     _, lines = run_turn(caplog)
     f = _fields(lines[0])
     for stage in ("total", "recurrence", "sweeps", "context", "enrich",
-                  "prompt", "model", "warm"):
+                  "prompt", "model", "actions", "review", "warm"):
         assert stage in f, f"{stage} missing from: {lines[0]}"
     assert "lane=chat" in lines[0]
 
@@ -164,7 +182,7 @@ def test_the_numbers_are_real_not_zeroes(run_turn, caplog):
 # 2. The stages are attributed, not averaged
 # ─────────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("stage", ["recurrence", "sweeps", "context", "model"])
+@pytest.mark.parametrize("stage", ["recurrence", "context", "model", "review"])
 def test_slowing_a_stage_moves_only_that_stage(run_turn, caplog, stage):
     """The whole point is aiming the next fix, so a slow stage has to show
     up as ITS OWN number. A total is exactly the number that cannot aim it.
@@ -202,6 +220,31 @@ def test_slowing_a_stage_moves_only_that_stage(run_turn, caplog, stage):
             f"not separated | baseline: {base_lines[0]} | "
             f"slowed: {slow_lines[0]}"
         )
+
+
+def test_the_sweeps_no_longer_bill_the_turn(run_turn, caplog):
+    """Latency arc round 2 (2026-08-25, Kevin: 'why it feels so slow'):
+    [Chief timing] showed sweeps=870-1900ms of autopilot/escalation
+    bookkeeping billed to the practitioner's wait on EVERY turn. The
+    sweeps now run off the turn's critical path — so making the sweep
+    slow must NOT move the turn's own numbers... and the sweep must
+    still actually run, or 'faster' would just mean 'dropped'."""
+    run_turn.calls.clear()
+    _, slow_lines = run_turn(caplog, slow="sweeps", seconds=0.4)
+    slow = _fields(slow_lines[0])
+
+    # The direct contract: a 400ms sweep must not appear in the turn's
+    # own sweeps stage — that stage is spawn-only now. (Cross-run total
+    # comparisons flake under full-suite load; the stage number is the
+    # precise, jitter-proof form of the same claim.)
+    assert int(slow["sweeps"]) < 300, (
+        f"a 400ms sweep still bills the turn's sweeps stage: "
+        f"{slow['sweeps']}ms | {slow_lines[0]}"
+    )
+    assert "sweeps" in run_turn.calls, (
+        "the sweep never ran — off the critical path must not mean "
+        "dropped on the floor"
+    )
 
 
 def test_the_prewarm_hit_count_is_reported(run_turn, caplog):

@@ -287,3 +287,13 @@ def plugins(business_id: str,
         "done_count": sum(1 for p in items if p["done"]),
         "total": len(items),
     }
+
+
+@router.get("/{business_id}/knowledge")
+def knowledge(business_id: str,
+              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """What is on file for this business, area by area — read from the
+    real stores, not only the coach's notes. See business_knowledge."""
+    biz = _gate(business_id, user, "member")
+    import business_knowledge
+    return business_knowledge.knowledge_for(biz)

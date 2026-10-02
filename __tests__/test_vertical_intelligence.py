@@ -15,6 +15,7 @@ from vertical_intelligence import (
     get_onboarding_questions,
     get_profile,
     get_voice,
+    is_mapped,
     list_known_verticals,
 )
 from vertical_context import build_vertical_context_block
@@ -38,10 +39,102 @@ def test_get_profile_known_vertical():
 
 
 def test_get_profile_unknown_vertical_falls_back():
-    assert get_profile("florist") is GENERIC
-    assert get_profile(None) is GENERIC
-    assert get_profile("") is GENERIC
-    assert get_profile("  agency  ") is GENERIC   # not in v1 dictionary
+    # 'florist' is in no alias list, so it resolves to 'custom' — which is
+    # itself the deliberate catch-all profile, not GENERIC-the-object.
+    assert get_profile("florist") is VERTICAL_INTELLIGENCE["custom"]
+    assert get_profile(None) is VERTICAL_INTELLIGENCE["custom"]
+    assert get_profile("") is VERTICAL_INTELLIGENCE["custom"]
+    # ...and it is not MAPPED, which is the distinction the context block's
+    # "(generic — vertical not explicitly mapped)" label rests on.
+    assert not is_mapped("florist")
+    assert not is_mapped(None)
+
+
+def test_get_profile_resolves_registry_aliases():
+    """The bug this file used to assert as correct.
+
+    The old line here was `assert get_profile("  agency  ") is GENERIC` with
+    the comment "not in v1 dictionary". That was true when it was written
+    and stopped being true the moment vertical_registry listed 'agency' as
+    an alias of 'creative' — but the test kept passing, so it pinned the
+    stale side of the drift instead of catching it. 'agency' was the most
+    common businesses.type in the live table at the time; every one of
+    those businesses was getting a generic Chief.
+
+    Assert the CONTRACT — every alias the registry recognises reaches its
+    vertical's profile — rather than any one string, so the next alias
+    added to the registry is covered without editing this test."""
+    import vertical_registry as reg
+
+    for alias, canonical in reg.alias_to_canonical().items():
+        assert get_profile(alias) is VERTICAL_INTELLIGENCE[canonical], (
+            f"alias '{alias}' should resolve to the '{canonical}' profile")
+        assert is_mapped(alias), f"alias '{alias}' should count as mapped"
+
+    # The specific strings the live table actually held, spelled out so a
+    # regression names the business that would break.
+    assert get_profile("agency") is VERTICAL_INTELLIGENCE["creative"]
+    assert get_profile("church") is VERTICAL_INTELLIGENCE["ministry"]
+    assert get_profile("attorney") is VERTICAL_INTELLIGENCE["lawyer"]
+    assert get_profile("plumber") is VERTICAL_INTELLIGENCE["contractor"]
+    assert get_profile("therapy") is VERTICAL_INTELLIGENCE["therapist"]
+
+
+def test_alias_gets_the_same_prompt_block_as_its_canonical():
+    """The bug's actual cost was in the prompt, so assert it there too.
+
+    A church read 'Member' on its own screens while Chief was told
+    'customer=Customer' in the same request. Same business, two
+    vocabularies, and only one of them visible to the practitioner."""
+    import vertical_registry as reg
+
+    def knowledge(bt):
+        # Everything EXCEPT the "Business type:" line, which correctly
+        # echoes the stored string — Chief seeing "Business type: coaching"
+        # is truthful. It is the vocabulary, voice and reminders under it
+        # that have to be the canonical vertical's.
+        return [ln for ln in build_vertical_context_block({"type": bt}).split("\n")
+                if not ln.startswith("Business type:")]
+
+    for alias, canonical in reg.alias_to_canonical().items():
+        if alias == canonical:
+            continue
+        assert knowledge(alias) == knowledge(canonical), (
+            f"'{alias}' gets different knowledge than '{canonical}'")
+
+    church = build_vertical_context_block({"type": "church"})
+    assert "customer=Member" in church
+    assert "generic" not in church.split("\n")[0]
+
+
+def test_terminology_resolves_aliases_too():
+    """vertical_terminology was keyed raw the same way; the dictionary and
+    the profile have to agree or the prompt contradicts itself."""
+    import vertical_terminology as vt
+
+    assert vt.get_term("church", "customer") == vt.get_term("ministry", "customer")
+    assert vt.get_term("agency", "customer") == vt.get_term("creative", "customer")
+    assert vt.get_term("plumber", "service") == vt.get_term("contractor", "service")
+    # Unrecognised types still fall through to the base dictionary.
+    assert vt.get_term("florist", "customer") == vt.BASE_TERMS["customer"]
+
+
+def test_bookkeeping_resolves_aliases_too():
+    """A firm stamped 'attorney' needs the IOLTA line, not the generic
+    'set aside for taxes' one — booking trust-account movement as revenue
+    is the specific mistake the lawyer entry exists to prevent."""
+    from vertical_intelligence import get_bookkeeping, _BOOKKEEPING_GENERIC
+
+    assert get_bookkeeping("attorney") == get_bookkeeping("lawyer")
+    assert "trust" in get_bookkeeping("attorney")["category_note"].lower()
+    assert get_bookkeeping("agency") == get_bookkeeping("creative")
+    assert get_bookkeeping("coaching") == get_bookkeeping("coach")
+    assert get_bookkeeping("plumber") == get_bookkeeping("contractor")
+    # A type with no entry still gets the baseline, not a KeyError.
+    # 'florist' resolves to 'custom', the one vertical left deliberately
+    # without bookkeeping framing.
+    assert get_bookkeeping("florist") == _BOOKKEEPING_GENERIC
+    assert get_bookkeeping(None) == _BOOKKEEPING_GENERIC
 
 
 def test_get_profile_case_insensitive():
@@ -204,3 +297,155 @@ def test_build_context_block_under_token_budget():
     for vertical in list_known_verticals():
         block = build_vertical_context_block({"type": vertical})
         assert len(block) < 1500, f"{vertical} block is {len(block)} chars"
+
+
+# ─── Bookkeeping coverage ───────────────────────────────────────────
+
+
+def test_every_vertical_has_bookkeeping_framing_except_custom():
+    """Nine of fourteen verticals used to fall to _BOOKKEEPING_GENERIC.
+
+    That single line — "Set aside for taxes as money comes in" — was what
+    Chief had to go on when booking a contractor's customer deposit, a
+    church's designated gift and a nonprofit's restricted grant. All three
+    are money the business holds and does not own, and all three were
+    bookable as revenue with nothing in the prompt saying otherwise.
+
+    'custom' is the deliberate exception: the registry marks it
+    "intentionally GENERIC — triggers Chief interactive discovery", so
+    writing it a bookkeeping note would mean inventing the vertical."""
+    import vertical_registry as reg
+    from vertical_intelligence import BOOKKEEPING_BY_VERTICAL, get_bookkeeping
+
+    missing = [v for v in reg.canonical_keys()
+               if v != "custom" and v not in BOOKKEEPING_BY_VERTICAL]
+    assert not missing, f"verticals with no bookkeeping framing: {missing}"
+
+    assert "custom" not in BOOKKEEPING_BY_VERTICAL
+    assert get_bookkeeping("custom")["category_note"] == ""
+
+    for vertical, entry in BOOKKEEPING_BY_VERTICAL.items():
+        assert entry.get("category_note"), f"{vertical} has an empty note"
+        assert entry.get("nudges"), f"{vertical} has no nudges"
+
+
+def test_restricted_fund_verticals_say_the_money_is_not_available():
+    """The specific error each of these exists to prevent: treating money
+    held under someone else's conditions as spendable revenue."""
+    from vertical_intelligence import get_bookkeeping
+
+    assert "restricted" in get_bookkeeping("nonprofit")["category_note"].lower()
+    assert "designated" in get_bookkeeping("ministry")["category_note"].lower()
+    assert "trust" in get_bookkeeping("lawyer")["category_note"].lower()
+    # A deposit is the same shape of error in a trade.
+    assert "deposit" in get_bookkeeping("contractor")["category_note"].lower()
+
+
+def test_therapist_bookkeeping_stays_out_of_clinical_scope():
+    """The therapist vertical launched with clinical records out of scope
+    (vertical_scope.py). Bookkeeping framing is admin and billing, and has
+    to stay that way — a note that reached for session content would put
+    the narrowed launch's whole premise in the prompt."""
+    from vertical_intelligence import get_bookkeeping
+
+    entry = get_bookkeeping("therapist")
+    blob = (entry["category_note"] + " " + " ".join(entry["nudges"])).lower()
+    for forbidden in ("diagnosis", "progress note", "clinical note",
+                      "session content", "treatment plan", "symptom"):
+        assert forbidden not in blob, (
+            f"therapist bookkeeping framing must not mention '{forbidden}'")
+
+
+def test_bookkeeping_framing_does_not_pose_as_tax_advice():
+    """Jurisdiction- and circumstance-dependent claims point at the
+    practitioner's accountant instead of answering for them. The module
+    comment says so; this asserts the one entry most likely to drift."""
+    from vertical_intelligence import get_bookkeeping
+
+    ministry = " ".join(get_bookkeeping("ministry")["nudges"]).lower()
+    assert "housing allowance" in ministry
+    assert "accountant" in ministry, (
+        "the housing-allowance nudge must defer, not rule")
+
+
+# ─── ecommerce + saas (added 2026-08-31) ────────────────────────────
+
+
+def test_registry_has_no_duplicate_aliases():
+    """`alias_to_canonical()` flattens every alias into ONE dict, so the same
+    string listed under two verticals does not collide loudly — the second
+    silently wins by iteration order, and one vertical quietly starts
+    answering for the other's businesses.
+
+    Nothing else asserts this, and the alias table is where it is easiest to
+    add a plausible-sounding synonym that another vertical already claims."""
+    import collections
+    import vertical_registry as reg
+
+    seen = collections.defaultdict(list)
+    for key, meta in reg.CANONICAL.items():
+        seen[key].append(key)
+        for alias in meta.get("aliases", []):
+            seen[alias].append(key)
+    dupes = {a: owners for a, owners in seen.items() if len(owners) > 1}
+    assert not dupes, f"alias claimed by more than one vertical: {dupes}"
+
+
+def test_ecommerce_and_saas_are_first_class():
+    """Both types have existed in business_type_archetypes for a long time,
+    so a business could be STAMPED 'ecommerce' or 'saas' — there was just
+    nothing behind the stamp. They now resolve to real profiles rather than
+    the catch-all."""
+    from vertical_intelligence import get_bookkeeping
+    import vertical_playbook as vpb
+    import vertical_terminology as vt
+
+    for vertical in ("ecommerce", "saas"):
+        assert is_mapped(vertical)
+        assert get_profile(vertical) is VERTICAL_INTELLIGENCE[vertical]
+        assert get_profile(vertical) is not GENERIC
+        assert get_profile(vertical) is not VERTICAL_INTELLIGENCE["custom"]
+        assert vt.terms_for(vertical), f"{vertical} has no terminology"
+        assert get_bookkeeping(vertical)["category_note"]
+        assert vpb.PLAYBOOK[vertical]
+
+    # Their aliases reach them too.
+    assert get_profile("online_store") is VERTICAL_INTELLIGENCE["ecommerce"]
+    assert get_profile("dropshipping") is VERTICAL_INTELLIGENCE["ecommerce"]
+    assert get_profile("micro_saas") is VERTICAL_INTELLIGENCE["saas"]
+    assert get_profile("software") is VERTICAL_INTELLIGENCE["saas"]
+
+
+def test_ecommerce_and_saas_speak_their_own_nouns():
+    """The distinguishing vocabulary — a store sells Products, a SaaS sells
+    Plans. Both keep BASE 'Customer', which is already correct for them, so
+    the override maps stay minimal."""
+    import vertical_terminology as vt
+
+    assert vt.get_term("ecommerce", "service") == "Product"
+    assert vt.get_term("ecommerce", "offerings") == "Products"
+    assert vt.get_term("ecommerce", "project") == "Order"
+    assert vt.get_term("ecommerce", "customer") == "Customer"
+
+    assert vt.get_term("saas", "service") == "Plan"
+    assert vt.get_term("saas", "offerings") == "Plans"
+    assert vt.get_term("saas", "contact") == "Account"
+    assert vt.get_term("saas", "project") == "Subscription"
+
+    # A store does not book anything; bending 'appointment' to "Order" would
+    # put that word in front of scheduling UI, so it stays at BASE.
+    assert vt.get_term("ecommerce", "appointment") == vt.BASE_TERMS["appointment"]
+
+
+def test_the_money_shape_each_one_gets_wrong():
+    """The single miscategorisation each vertical's bookkeeping entry exists
+    to prevent: a store booking collected sales tax as revenue, and a SaaS
+    booking a year's cash as a month's revenue."""
+    from vertical_intelligence import get_bookkeeping
+
+    store = get_bookkeeping("ecommerce")["category_note"].lower()
+    assert "sales tax" in store and "not revenue" in store
+
+    saas = get_bookkeeping("saas")["category_note"].lower()
+    assert "deferred revenue" in saas
+    assert "annual" in saas

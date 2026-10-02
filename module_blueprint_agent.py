@@ -13,9 +13,15 @@ Writes:
   custom_modules                  — one row per provisioned module
 
 Design notes:
-  • Mirrors business_profile_agent.py's sync REST-helper pattern (anon key).
+  • Reads and writes with the SERVICE ROLE. custom_modules RLS is scoped to
+    the `authenticated` role with no anon policy, and this agent runs
+    server-side with no user JWT — the anon key this file used to use could
+    neither read nor write it. See the helpers section for the evidence.
   • Idempotent: never creates a module whose slug already exists for the business
     (custom_modules has UNIQUE(business_id, slug); we also pre-check to avoid 409s).
+    That pre-check only became REAL with the service role — under the anon key
+    _existing_slugs returned an empty set every time and the constraint was
+    doing all the deduplication.
   • Maturity-gated: only provisions core modules at/under PROVISION_MAX_STAGE so a
     brand-new business doesn't get empty downstream modules (e.g. Invoices) on day 1.
     Full maturity computation lands in Phase 2; this is the conservative default.
@@ -31,6 +37,8 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 import httpx
+
+import sb_clients
 
 logger = logging.getLogger("module_blueprint_agent")
 if not logger.handlers:
@@ -48,24 +56,72 @@ PROVISION_MAX_STAGE = "launching"
 
 
 # ──────────────────────────────────────────────────────────────
-# Supabase REST helpers (mirrors business_profile_agent.py)
+# Supabase REST helpers
 # ──────────────────────────────────────────────────────────────
+#
+# THE SERVICE ROLE, NOT THE ANON KEY — and this is the second half of a
+# bug that had two halves.
+#
+# This file used to say it "mirrors business_profile_agent.py's sync
+# REST-helper pattern (anon key)", and it did. That pattern predates the
+# RLS tightening on custom_modules: every policy on that table is now
+# scoped to the `authenticated` role and there is NO anon policy. This
+# agent runs server-side with no user JWT, so the anon key is neither
+# authenticated nor the owner, and Postgres refuses it. Verified against
+# production rather than inferred:
+#
+#   POST /custom_modules -> 401
+#   {"code":"42501","message":"new row violates row-level security
+#    policy for table \"custom_modules\""}
+#
+# Two consequences, both silent:
+#   1. provision_modules could not create ANY module. _sb_post returned
+#      None, the slug went into report["failed"], and the caller's
+#      non-fatal wrapper swallowed it.
+#   2. _existing_slugs returned an empty set for every business, because
+#      the anon key cannot SELECT either — so the idempotency pre-check
+#      this module's docstring promises was blind. It never deduplicated
+#      anything; the UNIQUE(business_id, slug) constraint was doing that
+#      work alone.
+#
+# The service role is the right credential here: this is system-initiated
+# provisioning on a business's behalf, with the business_id supplied by
+# the caller rather than chosen by a request. Same choice sb_clients
+# already makes for every other server-side agent.
+#
+# CORRECTION to the note this replaces, which said business_profile_agent
+# "still uses the anon key". It does not, and that claim was wrong.
+#
+# business_profile_agent has already been migrated: its _sb_get delegates
+# to sb_clients.sb_get_current_context (user JWT when bound, service-role
+# fallback for server-initiated paths), and its helper reads
+# SUPABASE_SERVICE_ROLE_KEY. Verified against production — bpa.get_profile()
+# returns the same row the service role sees.
+#
+# THE TRAP, because it cost a wrong conclusion: the function there is still
+# NAMED `_sb_anon()` and returns the SERVICE ROLE key. The name is a
+# leftover from that migration. Grepping for SUPABASE_ANON or for _sb_anon
+# tells you nothing about which credential a file actually uses — read the
+# body.
+#
+# So this file was a copy taken BEFORE that migration and left stranded,
+# which is exactly why it was the one still broken.
+#
+# STILL UNVERIFIED, and deliberately not claimed either way: refine.py,
+# practitioner_profile_agent.py and voice_depth_agent.py each define
+# _sb_anon() returning a genuine SUPABASE_ANON, and write to
+# site_chat_history / practitioner_profiles — both of which have RLS on
+# with `authenticated`-only policies, the same shape that refused this
+# module. Both tables DO hold rows, so something writes them successfully;
+# whether it is these agents or a JWT-bearing router was not established.
+# Worth a write probe before assuming either way.
 
 def _sb_url() -> str:
-    return os.environ.get("SUPABASE_URL", "").rstrip("/")
-
-
-def _sb_anon() -> str:
-    return os.environ.get("SUPABASE_ANON", "")
+    return sb_clients.sb_url()
 
 
 def _sb_headers() -> Dict[str, str]:
-    return {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+    return sb_clients.sb_headers_service()
 
 
 def _sb_get(path: str) -> Optional[Any]:
@@ -103,12 +159,31 @@ def _sb_post(path: str, body: Any) -> Optional[Any]:
 # ──────────────────────────────────────────────────────────────
 
 def get_blueprint(business_type: str) -> List[Dict[str, Any]]:
-    """All blueprint rows for a business type, ordered by sort_order."""
+    """All blueprint rows for a business type, ordered by sort_order.
+
+    Resolves ALIASES first. The table is keyed canonically, so the raw
+    lookup this replaces returned zero rows for every alias — and zero
+    rows is indistinguishable from "this vertical has no blueprint":
+    `provision_modules` creates nothing and reports success, so a business
+    stamped 'agency', 'church' or 'coaching' got an empty workspace with
+    no error raised anywhere. 'agency' was the most common type in the
+    live businesses table.
+
+    Fixed here rather than by adding duplicate rows per alias: the alias
+    set grows, and a data copy per synonym drifts the moment one side is
+    edited."""
     if not business_type:
         return []
+    try:
+        import vertical_registry
+        key = vertical_registry.resolve(business_type)
+    except Exception:
+        # Registry unavailable — fall back to the raw string rather than
+        # returning nothing. A canonical type still provisions correctly.
+        key = (business_type or "").strip().lower()
     rows = _sb_get(
         f"/business_type_module_blueprint"
-        f"?business_type=eq.{business_type}&order=sort_order.asc"
+        f"?business_type=eq.{key}&order=sort_order.asc"
     )
     return rows if isinstance(rows, list) else []
 
@@ -141,8 +216,35 @@ def provision_modules(
     Phase 2: when max_stage is None (the normal call), the ceiling is the
     business's COMPUTED maturity stage (maturity_engine) rather than a flat
     'launching' — so a business that has grown into operating/scaling gets its
-    operating-stage core modules too, while a brand-new business stays
-    conservative. Callers may still pass an explicit max_stage to override.
+    operating-stage core modules too. Callers may still pass an explicit
+    max_stage to override.
+
+    THE CEILING IS FLOORED AT PROVISION_MAX_STAGE, and that is not a
+    belt-and-braces nicety — without it this function could never provision
+    anything at signup:
+
+        a new business has 0 modules and 0 entries
+        -> maturity_engine's 'launching' band needs module_count >= 1 AND
+           entry_count >= 1, so derive_stage returns 'idea'
+        -> every one of the 66 core blueprint rows is maturity_stage
+           'launching'
+        -> _stage_le('launching', 'idea') is False for all of them
+        -> nothing is created, an empty report is returned, and NOTHING
+           ERRORS
+
+    A brand-new business needed at least one module to reach the stage that
+    permits it to be given its first module. Eleven of the twelve most
+    recently created businesses had zero modules because of it — across
+    creative, personal_services, service_provider, ministry, lawyer and
+    coach, every one of which had blueprint rows waiting.
+
+    The giveaway that this was a bug and not a design: the except branch
+    below already fell back to PROVISION_MAX_STAGE, so a maturity lookup
+    that FAILED provisioned more than one that succeeded.
+
+    The gate keeps its real purpose — the 11 'operating' and 'scaling' rows
+    still wait for a business to grow into them. It just no longer holds
+    back the launching set it was never meant to block.
 
     Idempotent and per-module non-fatal. Returns a small report:
         {"created": [...slugs], "skipped": [...slugs], "failed": [...slugs]}
@@ -158,10 +260,19 @@ def provision_modules(
         except Exception as e:
             logger.warning(f"maturity lookup failed, falling back to {PROVISION_MAX_STAGE}: {e}")
             max_stage = PROVISION_MAX_STAGE
+        # Floor it. A computed stage BELOW the provisioning floor means the
+        # business has not done anything yet — which is exactly when it needs
+        # its starting modules, not when it should be denied them.
+        if not _stage_le(PROVISION_MAX_STAGE, max_stage):
+            logger.info(
+                f"maturity stage {max_stage!r} is below the provisioning floor; "
+                f"using {PROVISION_MAX_STAGE!r} so the core set can land")
+            max_stage = PROVISION_MAX_STAGE
 
     blueprint = get_blueprint(business_type or "custom")
     if not blueprint:
-        logger.info(f"no blueprint for business_type={business_type!r}; nothing to provision")
+        report.update(status="needs_discovery", ok=False)
+        logger.info(f"no blueprint for business_type={business_type!r}; business discovery required")
         return report
 
     existing = _existing_slugs(business_id)

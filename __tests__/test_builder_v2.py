@@ -288,3 +288,508 @@ def test_filled_space_rule_rides_builder_prompt_and_inspector():
     assert "FILLED SPACE" in v2._SYSTEM
     assert "transition-delay" in v2._SYSTEM
     assert "FILLED SPACE" in v2._INSPECTOR
+
+
+# ─── the stand-in law (2026-08-28, MaCnificent Hair Co) ──────────────
+
+_DROP = ('<div class="sx-drop" data-sx-slot="hero_braids">A full head of '
+         'medium box braids seen from behind, warm light</div>')
+
+
+def test_stand_in_law_flags_visible_frames_and_spares_hidden_drops():
+    """The first no-photo build shipped tinted 'slot-frame' boxes with an
+    italic 'slot-note' describing the photograph that was not there."""
+    bad = ('<section id="gallery"><div class="frame"><div class="slot-frame">'
+           '<p class="slot-note">Braids from behind, clean parts.</p></div>'
+           '</div>' + _DROP + '</section>')
+    found = v2.check_stand_ins(bad)
+    assert len(found) == 1 and "VISIBLE STAND-IN" in found[0]
+    assert "'slot-frame'" in found[0] and "'slot-note'" in found[0]
+    assert "typographic" in found[0]
+    # the hidden drop slot alone is the contract, not a violation — and
+    # a real <img> whose class happens to say "slot" is a real image
+    good = ('<section id="gallery"><img class="slot-img" src="https://x/a.jpg" '
+            'alt="braids">' + _DROP + '</section>')
+    assert v2.check_stand_ins(good) == []
+
+
+def test_stand_in_law_flags_a_caption_echo():
+    """The shot direction inside the hidden drop, repeated as visible
+    copy beside it, is a description of a photo that is not there."""
+    echo = ('<section id="top">' + _DROP + '<p class="lead">A full head of '
+            'medium box braids seen from behind in warm light.</p></section>')
+    found = v2.check_stand_ins(echo)
+    assert len(found) == 1 and "CAPTION ECHO" in found[0]
+    # different copy beside the drop is fine
+    fine = ('<section id="top">' + _DROP + '<p class="lead">Book your chair '
+            'and leave with a finish you will keep looking at.</p></section>')
+    assert v2.check_stand_ins(fine) == []
+
+
+def test_stand_in_rule_rides_prompt_and_inspector():
+    assert "NO VISIBLE STAND-INS" in v2._SYSTEM
+    assert "typographic hero" in v2._SYSTEM
+    assert "STAND-INS" in v2._INSPECTOR
+
+
+def _law_passing_doc(endpoint: str, extra: str = "") -> str:
+    return ("<!DOCTYPE html><html><head><title>Studio</title>"
+            '<meta name="description" content="A braiding studio by hand">'
+            '<meta property="og:title" content="Studio">'
+            '<meta property="og:description" content="A braiding studio">'
+            '<meta property="og:image" content="https://x/a.jpg">'
+            "<style>body{margin:0}</style></head><body>"
+            '<nav><a href="#top">Top</a></nav><main id="top"><h1>Braids worn '
+            "like their own kind of magnificent.</h1>" + extra + "</main>"
+            f'<form method="POST" action="{endpoint}"><input name="name">'
+            '<input name="email"><button>Send</button></form>'
+            "<footer>Studio</footer></body></html>")
+
+
+def test_stand_ins_cost_a_repair_but_never_the_fallback(monkeypatch):
+    """A stand-in is a quality defect, not an invented fact. It earns the
+    surgical round; if the author will not let go of it, the page still
+    ships — and the report says what is still on it."""
+    endpoint = "https://api.example/contact/biz-1"
+    standin = ('<div class="slot-frame"><p class="slot-note">Braids from '
+               "behind, clean parts.</p></div>")
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint, standin)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"] is not None                 # never the fallback
+    assert len(calls) == 2 and "SURGICAL REPAIR" in calls[1]
+    assert "VISIBLE STAND-IN" in calls[1]
+    assert out["report"]["stand_ins"] and "slot-frame" in out["report"]["stand_ins"][0]
+    assert not out["report"]["fallbacks"]
+    # …and a clean page reports an empty list, no repair round
+    calls.clear()
+    monkeypatch.setattr(v2, "_call",
+                        lambda s, u, b, spend=None: _law_passing_doc(endpoint))
+    out2 = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out2["html"] and out2["report"]["stand_ins"] == []
+
+
+# ─── the dead shop door (2026-08-28, MaCnificent Hair Co) ────────────
+
+def test_store_off_is_said_out_loud_and_a_shop_on_the_page_is_a_violation(monkeypatch):
+    """With no products the store line was simply ABSENT from the
+    connected block, and the author invented "The shop — browse and
+    order online" linking to /store on the site's own origin."""
+    import offering_profiles
+    monkeypatch.setattr(offering_profiles, "business_state", lambda b: {
+        "booking_enabled": False, "booking_url": "",
+        "store_url": "https://macnificent-hair-co.mysolutionist.app/store"})
+    monkeypatch.setattr(v2, "_store_has_products", lambda ctx: False)
+    block = v2.connected_systems_block("biz-1", {})
+    assert "- STORE: OFF" in block and "/store" in block
+    page = ('<html><body><nav><a href="#store">Shop</a></nav>'
+            '<section id="store"><h2>The shop</h2><a href="https://'
+            'macnificent-hair-co.mysolutionist.app/store">Visit the shop</a>'
+            "</section></body></html>")
+    found = v2.check_connected(page, block)
+    assert len(found) == 1 and "DEAD DOOR" in found[0]
+    assert "1 shop link(s)" in found[0] and "1 shop section(s)" in found[0]
+    # a page that simply has no shop passes; a store that is ON keeps
+    # the existing MISSING-door law and never trips the dead-door one
+    assert v2.check_connected("<html><body>braids</body></html>", block) == []
+    monkeypatch.setattr(v2, "_store_has_products", lambda ctx: True)
+    on = v2.connected_systems_block("biz-1", {})
+    assert "- STORE: ON" in on
+    assert v2.check_connected(page, on) == []
+    assert any("MISSING" in p for p in
+               v2.check_connected("<html><body>braids</body></html>", on))
+
+
+# ─── THE BUILDER LETS A PAGE FINISH (2026-08-29, the builder bench) ────
+
+class _Usage:
+    def __init__(self, i, o):
+        self.input_tokens, self.output_tokens = i, o
+
+
+class _Block:
+    type = "text"
+    def __init__(self, text):
+        self.text = text
+
+
+class _Msg:
+    def __init__(self, text, stop="end_turn", i=1000, o=500):
+        self.content = [_Block(text)]
+        self.stop_reason = stop
+        self.usage = _Usage(i, o)
+
+
+class _FakeStream:
+    """A scripted client: each messages.stream() call pops the next
+    (text, stop_reason) and records the messages it was given."""
+    def __init__(self, script):
+        self.script = list(script)
+        self.seen = []
+        outer = self
+
+        class _Messages:
+            def stream(_s, **kw):
+                outer.seen.append(kw)
+                text, stop = outer.script.pop(0)
+
+                class _Ctx:
+                    def __enter__(self_):
+                        return self_
+                    def __exit__(self_, *a):
+                        return False
+                    text_stream = iter([text])
+                    def get_final_message(self_):
+                        return _Msg(text, stop, i=1000, o=len(text) // 4)
+                return _Ctx()
+        self.messages = _Messages()
+
+
+def _ladder_passthrough(fn, model, task, business_id, max_tokens):
+    return fn(model, max_tokens, 60.0), model
+
+
+def test_call_streams_and_returns_the_text(monkeypatch):
+    fake = _FakeStream([("<!DOCTYPE html><html>whole</html>", "end_turn")])
+    monkeypatch.setattr(v2.llm_call, "sdk_client", lambda **k: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    import model_ladder
+    monkeypatch.setattr(model_ladder, "call_with_ladder", _ladder_passthrough)
+    spend = v2.new_spend()
+    out = v2._call("sys", "user", "biz", spend=spend)
+    assert out == "<!DOCTYPE html><html>whole</html>"
+    assert len(fake.seen) == 1 and fake.seen[0]["messages"][0]["role"] == "user"
+    assert spend["calls"] == 1 and spend["output_tokens"] > 0 and spend["cost_cents"] > 0
+
+
+def test_a_cut_page_is_continued_not_rerolled(monkeypatch):
+    """Opus 5 and Fable 5 both came back at exactly max_tokens on the
+    bench: cut before </html>. The cut text rides back as an assistant
+    turn with a continue instruction — one more call, same model."""
+    fake = _FakeStream([("<!DOCTYPE html><html><body>half", "max_tokens"),
+                        (" the rest</body></html>", "end_turn")])
+    monkeypatch.setattr(v2.llm_call, "sdk_client", lambda **k: fake)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    import model_ladder
+    monkeypatch.setattr(model_ladder, "call_with_ladder", _ladder_passthrough)
+    spend = v2.new_spend()
+    out = v2._call("sys", "user", "biz", spend=spend)
+    assert out == "<!DOCTYPE html><html><body>half the rest</body></html>"
+    assert len(fake.seen) == 2
+    turns = fake.seen[1]["messages"]
+    assert [t["role"] for t in turns] == ["user", "assistant", "user"]
+    assert turns[1]["content"] == "<!DOCTYPE html><html><body>half"
+    assert "Continue EXACTLY" in turns[2]["content"]
+    assert spend["calls"] == 2
+
+
+def test_the_ceiling_and_the_budget_are_taller_than_the_cut(monkeypatch):
+    monkeypatch.delenv("BUILDER_V2_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("BUILDER_V2_OUTPUT_BUDGET", raising=False)
+    assert v2._max_tokens() >= 64000
+    assert v2._output_budget() >= v2._max_tokens()
+    import model_ladder
+    assert not model_ladder.supports_sampling("claude-opus-5")
+
+
+def test_budget_skips_the_repair_round_and_keeps_the_document(monkeypatch):
+    """A stand-in on the first draft would normally cost a repair round.
+    With the purse empty, the round is skipped, the document ships, and
+    the report says so — no second charge for nothing."""
+    endpoint = "https://api.example/contact/biz-1"
+    standin = ('<div class="slot-frame"><p class="slot-note">Braids from '
+               "behind, clean parts.</p></div>")
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        if spend is not None:
+            spend["calls"] += 1
+            spend["output_tokens"] += 10 ** 6      # one call empties the purse
+        return _law_passing_doc(endpoint, standin)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"] is not None
+    assert len(calls) == 1                                # no repair call
+    assert out["report"]["spend"]["skipped"] == ["repair"]
+    assert any("budget reached" in f["detail"] for f in out["report"]["fallbacks"])
+    assert out["report"]["stand_ins"]                     # still reported
+
+
+# ─── THE EYES SAY WHY THEY CLOSED (2026-08-29, the proof build) ───────
+
+def test_eyes_record_why_when_the_verdict_is_cut(monkeypatch):
+    """On Opus 5 the inspector's reply hit its 1200-token cap mid-JSON and
+    the eyes silently reported 'did not run'. The cap is taller now, and a
+    None always carries its reason onto the report."""
+    assert v2.INSPECTOR_MAX_TOKENS >= 4000
+    assert v2.VISION_SETTLE_MS >= 1500
+    monkeypatch.setattr(v2, "_screenshot_walk", lambda html: [("1440px top", b"jpeg")])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+
+    class _U:
+        input_tokens, output_tokens = 10, 4000
+
+    class _B:
+        type = "text"
+        text = '{"verdict":"repair","violations":[{"where":"hero","what":"cut mid'
+
+    class _M:
+        content = [_B()]
+        stop_reason = "max_tokens"
+        usage = _U()
+
+    class _Client:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                assert kw["max_tokens"] == v2.INSPECTOR_MAX_TOKENS
+                return _M()
+
+    monkeypatch.setattr(v2.llm_call, "sdk_client", lambda **k: _Client())
+    import model_ladder
+    monkeypatch.setattr(model_ladder, "call_with_ladder",
+                        lambda fn, model, task, business_id, max_tokens: (fn(model, max_tokens, 60.0), model))
+    why = {}
+    assert v2.inspect_with_eyes("<html></html>", "SPEC", "biz", why=why) is None
+    assert "max_tokens" in why["reason"] and "cap" in why["reason"]
+
+
+def test_run_carries_the_eyes_reason_onto_the_report(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    monkeypatch.setattr(v2, "_call", lambda s, u, b, spend=None: _law_passing_doc(endpoint))
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+
+    def _closed(doc, spec, biz, why=None):
+        if why is not None:
+            why["reason"] = "no screenshots (playwright unavailable or the render failed)"
+        return None
+
+    monkeypatch.setattr(v2, "inspect_with_eyes", _closed)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"] and out["report"]["vision"]["ran"] is False
+    assert "no screenshots" in out["report"]["vision"]["reason"]
+
+
+# ─── THE MEASURED RENDER (2026-10-01, the concept-layer plan) ─────────
+
+def test_role_navigation_counts_as_a_nav():
+    rd = "CONTACT FORM ENDPOINT (the form's action): https://e/x"
+    page = ('<div role="navigation"><a href="#a">A</a></div>'
+            '<form action="https://e/x"></form><footer></footer>')
+    assert not any("nav" in p for p in v2.check_coverage(page, rd))
+    assert any("nav" in p for p in v2.check_coverage("<form></form><footer></footer>", rd))
+
+
+def test_render_findings_name_only_certain_defects():
+    measures = {
+        "390": {"overflow_x": True, "scroll_width": 612, "empty_headings": 1,
+                "overlaps": [{"a": 'h2.title "Our work"', "b": 'p.lede "We cut"', "y": 900},
+                             {"a": 'img.hero ""', "b": 'h1 "Cut sharp"', "y": 0}]},
+        "1440": {"overflow_x": False, "scroll_width": 1440, "empty_headings": 0,
+                 "overlaps": []},
+    }
+    found = v2.render_findings(measures)
+    joined = " ".join(found)
+    assert "612px wide" in joined and "sideways" in joined
+    assert "heading(s) render with no text" in joined
+    assert "h2.title" in joined and "data-overlap-ok" in joined
+    assert "img.hero" not in joined, "a photo behind a headline is usually layering"
+    assert v2.render_findings(None) == [] and v2.render_findings({}) == []
+
+
+def test_walk_measurements_are_read_once_per_document():
+    v2._record_measure("<html>a</html>", 390, {"overflow_x": True, "scroll_width": 500})
+    assert v2.walk_measurements("<html>b</html>") is None
+    got = v2.walk_measurements("<html>a</html>")
+    assert got == {"390": {"overflow_x": True, "scroll_width": 500}}
+    assert v2.walk_measurements("<html>a</html>") is None
+
+
+def test_a_measured_defect_earns_the_vision_repair_without_a_verdict(monkeypatch):
+    """The eyes may not answer (no key, cut reply), but a page measured as
+    scrolling sideways on a phone still gets its repair round."""
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    def _eyes(doc, spec, biz, why=None):
+        v2._record_measure(doc, 390, {"overflow_x": True, "scroll_width": 700,
+                                      "empty_headings": 0, "overlaps": []})
+        if why is not None:
+            why["reason"] = "no ANTHROPIC_API_KEY"
+        return None
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+    monkeypatch.setattr(v2, "inspect_with_eyes", _eyes)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"]
+    assert out["report"]["vision"]["ran"] is False
+    assert out["report"]["vision"]["measured"]
+    assert len(calls) == 2, "author + one repair for the measured defect"
+    assert "MEASURED IN THE RENDER" in calls[1] and "700px wide" in calls[1]
+    assert out["report"]["vision"].get("repaired") is True
+
+
+def test_the_system_prompt_teaches_layering_on_purpose():
+    assert "data-overlap-ok" in v2._SYSTEM
+    # 17,458 chars with all thirteen move primitives inline (before
+    # 2026-10-01); the rules now fit well under that, moves arrive per build.
+    assert len(v2._SYSTEM) < 14000, "the system prompt is growing back toward the old 17k"
+
+
+# ─── THE CRAFT FLOOR (2026-10-01, the concept-layer plan) ─────────────
+
+def test_the_type_floor_is_a_numbered_rule_in_order():
+    s = v2._SYSTEM
+    assert s.index("15. FILLED SPACE") < s.index("16. THE TYPE FLOOR") < s.index("CRAFT FLOOR:")
+    for must in ("one <h1>", "14px", "11px", "tabular-nums", "text-wrap: balance",
+                 "font: inherit", "opsz"):
+        assert must in s, must
+
+
+def test_the_typographer_rides_the_mechanical_armor(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    quoted = '<p>"Walk-ins welcome," the sign says. Open 10am - 7pm.</p>'
+    monkeypatch.setattr(v2, "_call", lambda s, u, b, spend=None: _law_passing_doc(endpoint, quoted))
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert "“Walk-ins welcome,”" in out["html"]
+    assert "10am–7pm" in out["html"], "the spaced range is set, not flagged"
+    assert out["report"]["mechanical"]["typography_fixes"] > 0
+    assert not out["report"]["violations"]
+
+
+def test_craft_misses_earn_the_repair_but_never_the_fallback(monkeypatch):
+    """Two h1s and an image with no alt are quality defects, not lies:
+    one surgical round, and the page ships even if they survive it."""
+    endpoint = "https://api.example/contact/biz-1"
+    sloppy = '<h1>Second headline</h1><img src="https://x/a.jpg">'
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint, sloppy)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"], "a craft miss never sends the build to the fallback"
+    assert len(calls) == 2
+    assert "2 <h1>" in calls[1] and "alt attribute" in calls[1]
+    craft = " ".join(out["report"]["craft"])
+    assert "2 <h1>" in craft, "what survived the repair is reported"
+
+
+def test_craft_render_findings_ride_the_measured_list(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    def _eyes(doc, spec, biz, why=None):
+        v2._record_measure(doc, 390, {"overflow_x": False, "scroll_width": 390,
+                                      "empty_headings": 0, "overlaps": []})
+        v2._record_measure(doc, 390, {"small_text": [{"label": 'p "Over five weeks"', "px": 9}]})
+        return {"verdict": "ship", "violations": []}
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+    monkeypatch.setattr(v2, "inspect_with_eyes", _eyes)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    measured = " ".join(out["report"]["vision"]["measured"])
+    assert "under 14px" in measured, "merged from the second measurement"
+    assert len(calls) == 2 and "MEASURED IN THE RENDER" in calls[1]
+
+
+# ─── THE OBJECT LIBRARY (2026-10-01, the concept-layer plan) ──────────
+
+def test_named_objects_arrive_with_their_source():
+    import site_objects
+    spec = ("0. CONCEPT\nINTENSITY: world\nOBJECTS: tear-off tickets (paper), seal (metal)\n"
+            "1. OVERVIEW\nA take-a-number counter.")
+    user = v2.build_user_prompt(spec, "BUSINESS: x")
+    assert site_objects.OBJECTS["ticket"].css in user
+    assert site_objects.OBJECTS["seal"].css in user
+    assert site_objects.OBJECTS["letter"].css not in user
+    assert user.index("THE APPROVED SPEC") < user.index("WORKING SOURCE") < user.index("THE REAL DATA")
+    plain = v2.build_user_prompt("0. CONCEPT\nINTENSITY: plain\n1. OVERVIEW\nx", "BUSINESS: x")
+    assert "WORKING SOURCE" not in plain
+
+
+def test_url_is_allowed_only_for_the_library_grain():
+    assert "the one exception: the object library's own paper grain" in v2._SYSTEM
+
+
+def test_the_page_ceiling_is_450_kb():
+    """Kevin, 2026-10-01: richer pages with library objects must not fall
+    to the fallback engine for size alone."""
+    assert v2.DOC_MAX_BYTES == 450 * 1024
+    body = "<p>" + ("x" * 1000) + "</p>"
+    doc = "<!DOCTYPE html><html><body>" + body * 400 + "</body></html>"
+    assert 300 * 1024 < len(doc.encode()) < 450 * 1024
+    assert v2._parse_doc(doc) is not None
+    assert v2._parse_doc(doc.replace("</body>", body * 80 + "</body>")) is None
+
+
+# ─── THE CONCEPT (2026-10-01, the concept-layer plan) ─────────────────
+
+_WORLD_SPEC = ("0. THE CONCEPT\nINTENSITY: world\nSCOPE: site\n"
+               "IDEA: The shop is a take-a-number counter.\n"
+               "VOCABULARY: Book -> Take a number\n"
+               "OBJECTS: ticket (paper), letterboard (paper)\n"
+               "1. OVERVIEW\nA counter.")
+
+
+def test_rule_17_teaches_the_concept_and_the_plain_word():
+    s = v2._SYSTEM
+    assert "17. THE CONCEPT" in s and "plain word" in s
+    assert s.index("16. THE TYPE FLOOR") < s.index("17. THE CONCEPT") < s.index("CRAFT FLOOR:")
+
+
+def test_a_page_that_ignores_its_concept_earns_the_repair(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2(_WORLD_SPEC, {}, "biz-1")
+    assert out["html"], "a concept miss never sends the build to the fallback"
+    assert out["report"]["concept"]["intensity"] == "world"
+    assert len(calls) == 2 and "CONCEPT:" in calls[1]
+    assert "ticket" in calls[1] and "letterboard" in calls[1]
+    assert "WORKING SOURCE" in calls[0], "the named objects arrived with the author's brief"

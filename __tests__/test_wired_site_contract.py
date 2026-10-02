@@ -120,7 +120,10 @@ def test_connected_block_skips_empty_store():
                     return_value=dict(_STATE)), \
          mock.patch.object(v2, "_store_has_products", return_value=False):
         block = v2.connected_systems_block("b1", _ctx())
-    assert "STORE" not in block and "BOOKING: ON" in block
+    # 2026-08-28 (build quality 3/6): an empty store is no longer silent —
+    # the block says OFF out loud so the author never invents a shop door.
+    assert "STORE: ON" not in block and "STORE: OFF" in block
+    assert "BOOKING: ON" in block
 
 
 def test_check_connected_flags_missing_door_url():

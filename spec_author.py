@@ -36,14 +36,16 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("spec_author")
 
-SPEC_MAX_TOKENS = 12000  # room to FINISH: both live drafts died
-                         # mid-sentence in section 4 at the 6K cap
+SPEC_MAX_TOKENS = 14000  # room to FINISH: both live drafts died
+                         # mid-sentence in section 4 at the 6K cap;
+                         # 2026-10-01: +2K for the concept sheet (section
+                         # 0) and an offer page (section 6)
 SPEC_TEMPERATURE = 0.7
 # The spec leads the canvas brief — cap what rides downstream so the
 # builder's context stays sane even if a model over-writes. Sized
 # above the token budget so the char slice never truncates a document
-# the model completed (12K tokens ≈ 45K chars worst case).
-SPEC_MAX_CHARS = 48000
+# the model completed (14K tokens ≈ 52K chars worst case).
+SPEC_MAX_CHARS = 56000
 
 
 def _model() -> str:
@@ -90,6 +92,9 @@ A vague brief gets filled with the median of the internet. Your spec leaves NO d
 - Decide the interactions: what moves, when, and what every hover/click does. One signature interaction maximum; name it.
 - Decide the mobile behavior in one line per non-obvious section.
 
+THE FACTS LAW (2026-08-29 — the standing rule that stops a true sentence being deleted):
+Every year, number, count, price, stat and link you write comes from THE FACTS block below, verbatim. A fact that block says is NOT ON FILE is unknown: you do not estimate it, round it, or imply it — no "since 2022", no "4 years", no "hundreds of clients", no 5-star anything unless THE FACTS carries it. Decidedness is about design and words, never about facts you were not given. Doors (booking, shop) use the exact urls in THE FACTS; a door not listed does not exist on this page.
+
 {MOVES_VOCABULARY}
 MICRO-DELIGHT is a floor, not a move: every interactive element answers its hover with something small and intentional (a lift, a fill, an underline drawing itself) — 21st-century pages feel alive at the fingertips.
 Motion discipline is unchanged and absolute: ONE signature motion moment per page, scroll reveals scroll-position driven, prefers-reduced-motion shows everything instantly.
@@ -111,10 +116,12 @@ THE FILLED-SPACE LAW (the owner's standing rule, 2026-07-25 — emptiness is a d
 THE GENEROSITY RULE (learned the hard way — the first live spec produced an austere concept poster and the owner rejected it on sight):
 A business site is GENEROUS. Rich sections executed cleanly beat austere concept pages, every time. Restraint disciplines COLOR and MOTION — never CONTENT. A visitor should always have something to look at, and every piece of the business should have a home. If the finished page could be described as "minimal," you have failed this business. Your concept is the thread that runs THROUGH a full site — never a substitute for one.
 
+{CONCEPT_LAW}
+
 THE COVERAGE LAW (equal in force to the truth law):
 Every real asset in the dossier gets a home on the page. Omitting real material is a violation exactly as serious as inventing fake material.
 - A fixed NAVIGATION with the business name and section links. Always.
-- EVERY real service/offering appears — each with its own cell/card and copy.
+- EVERY real service/offering appears — each with its own cell/card and copy, its price, and its duration when the inventory carries duration_min (a service menu that says $45 and not 45 minutes is half a menu).
 - EVERY real portfolio/gallery image appears, referenced by its exact url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists. AUTHOR a proper display caption for each piece (a caption describes what the piece is — it is copy, yours to write; a raw filename is data and must never render as a caption). CAPTION TRUTH: describe only what the labeled image actually shows — a caption bound to the wrong url is a truth violation. NO CONDITIONAL ENTRIES: the inventory is definitive; never write "(if provided — otherwise omit)" rows. Spec what exists, exactly.
 - The owner's PORTRAIT appears if provided (about section).
 - Every real testimonial/quote appears.
@@ -123,15 +130,17 @@ Every real asset in the dossier gets a home on the page. Omitting real material 
 - A FOOTER. Always.
 - Real stats/proof points if provided (never invented — mark a confirm-then-publish placeholder only when the owner has signaled a number exists).
 
-THE DENSITY SKELETON — the default shape of a complete business site (deviate creatively in STYLE, never by omission of FUNCTION). Aim for 8-11 sections:
+THE DENSITY SKELETON — the default shape of a complete business site (deviate creatively in STYLE, never by omission of FUNCTION; where the WHAT A SITE OF THIS KIND MUST DECIDE block below names a different shape or a feature, that block wins). Aim for 8-11 sections:
 nav → full-viewport hero (display headline + real proof stats) → a brand moment (ticker/marquee/band) → services grid (all of them) → a second-family strip (method/studio/values) → portfolio with the real work (filters if 5+ pieces) → process steps → about with portrait → contact with form → footer.
 
 STRUCTURE — output the document in exactly this anatomy, plain text with section rules (=====) and numbered sections:
+0. THE CONCEPT — the labeled sheet THE CONCEPT LAW defines, at the intensity THE CONCEPT block sets. Always present, even when it says INTENSITY: plain.
 1. OVERVIEW — what this site is, one paragraph. The page's single memorable move, named.
 2. BRAND IDENTITY — fonts (role each), full color palette as CSS-variable-style roles with hexes.
 3. LAYOUT & SECTIONS (top to bottom) — every section numbered, each with: composition decided, the REAL copy written out, which words carry accents, what imagery goes where (only real provided images or clearly-labeled slots). When the composition WANTS an image the inventory doesn't carry, spec an art-directed DROP SLOT with one line of shot direction in plain words ("DROP SLOT hero_portrait: you at the chair, mid-cut, warm light") — the builder renders it as a fillable frame the owner can click to upload, and your shot directions become the owner's photo shot list. Never fake imagery; real, or a directed drop slot.
 4. INTERACTIONS & ANIMATIONS — the definitive list, honoring the INTERACTION GRAMMAR: with 5+ portfolio pieces the gallery opens each piece larger on click (a lightbox with the piece's title; closes on backdrop, button, and Escape) and filters actually filter with a worded empty state; the contact form confirms in words after submit; every clickable answers hover and keyboard focus; scroll reveals are scroll-position driven so fast scrolling can never skip a section.
 5. DESIGN RULES (do / don't) — the taste laws for THIS page, including every learned ban from the judge's notes.
+6. THE OFFER PAGE — ONLY when section 0 says SCOPE: offer. The offer's own page at WORLD intensity, wearing section 2's identity exactly: its sections top to bottom with the real copy written out (what it is, who it is for, what happens week by week or step by step, what it costs and how to pay, proof, questions, the one action), the objects that hold each part, and its in-world vocabulary with every plain word kept. The home page (section 3) stays at SIGNATURE and links to this page from the navigation and from the offer's own moment.
 
 TRUTH LAW (absolute): every fact, price, service, testimonial, stat and claim in your spec must come from the DOSSIER below. Real or removed — if the dossier doesn't provide a number, do not invent one. Real portfolio images are listed; reference them by their given names/urls only.
 
@@ -150,13 +159,23 @@ OUTPUT: the document only. No preamble, no commentary, no code."""
 _SYSTEM = _SYSTEM_TEMPLATE.replace(
     "{MOVES_VOCABULARY}", design_moves.director_block())
 
+# THE CONCEPT LAW (2026-10-01, the concept-layer plan): the dial and the
+# sheet (site_concept), with the object catalog generated from the same
+# registry the builder is handed (site_objects), so the Director cannot
+# name an object no builder has source for.
+import site_concept as _concept
+import site_objects as _objects
+_SYSTEM = _SYSTEM.replace("{CONCEPT_LAW}", _concept.DIRECTOR_LAW.replace(
+    "{OBJECT_CATALOG}", _objects.director_block()))
+
 
 def _digest_plan(spec_plan: List[Dict[str, Any]]) -> str:
     """The composed section plan as a one-line-per-section digest —
     the Director decides content AROUND this structure (data sections
     render from real rows; creative sections are fully authorable)."""
     if not spec_plan:
-        return "(no composed plan yet — propose a section list yourself, 6-9 sections)"
+        return ("(no composed plan yet — propose a section list yourself, "
+                "following THE DENSITY SKELETON: 8-11 sections)")
     lines = []
     for i, s in enumerate(spec_plan, 1):
         mid = str(s.get("module") or "?")
@@ -233,7 +252,9 @@ def _inventory_digest(ctx: Dict[str, Any],
 
 def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
                       prior_spec: str = "", feedback: str = "",
-                      inventory: str = "", discovery: str = "") -> str:
+                      inventory: str = "", discovery: str = "",
+                      facts: str = "", vertical: str = "",
+                      concept: str = "") -> str:
     """Pure prompt assembly (testable, no IO). `dossier` is the canvas
     brief — everything the system knows, already compiled; `inventory`
     is the itemized asset list the coverage law binds to; `discovery`
@@ -263,6 +284,23 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
             inventory.strip(),
             "",
         ]
+    if facts.strip():
+        parts += [
+            "== THE FACTS (the only years, numbers, counts, prices and links "
+            "you may write — THE FACTS LAW applies) ==",
+            facts.strip(),
+            "",
+        ]
+    if vertical.strip():
+        # WHAT A SITE OF THIS KIND MUST DECIDE (2026-09-04, the barbershop
+        # bench): the decisions a visitor to this kind of business comes
+        # for, which the density skeleton never named. See
+        # site_vertical_features.
+        parts += [vertical.strip(), ""]
+    if concept.strip():
+        # THE CONCEPT (2026-10-01): how far this site's idea goes, set by
+        # the owner's Design Coach pick or the trade's default.
+        parts += [concept.strip(), ""]
     parts += [
         "== THE CURRENT SECTION PLAN (the page's chapters, in order) ==",
         _digest_plan(spec_plan),
@@ -470,6 +508,28 @@ def _call_llm(system: str, user: str, business_id: str,
         return None
 
 
+def attach_language(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]]) -> Optional[str]:
+    """THE PICK BINDS (2026-09-04): resolve the design language onto ctx
+    before the brief compiles, so the Director's document speaks the
+    language the owner chose (or the rationale's, or the rubric's).
+    canvas_brief prints THE DESIGN LANGUAGE block only when ctx carries
+    language_key + language_brief_text, and only the canvas run used to
+    set them; the Director never saw a language at all. Fail-open."""
+    try:
+        import design_languages as dl
+        key, because, by = dl.resolve(ctx, dro)
+        if key:
+            ctx["language_key"] = key
+            ctx["language_because"] = because
+            ctx["language_by"] = by
+            ctx["language_brief_text"] = dl.brief_for(key) + (
+                "\n" + dl.objects_line(key) if dl.objects_line(key) else "")
+        return key
+    except Exception as e:
+        logger.info(f"[spec] language attach skipped: {e}")
+        return None
+
+
 def author_spec(business_id: str, ctx: Dict[str, Any],
                 dro: Optional[Dict[str, Any]],
                 spec_plan: List[Dict[str, Any]],
@@ -478,6 +538,7 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
     surfaces the failure; nothing is persisted here)."""
     try:
         import canvas_brief
+        attach_language(ctx, dro)
         dossier = canvas_brief.compile_canvas_brief(ctx, dro, spec_plan)
     except Exception as e:
         logger.warning(f"[spec] dossier compile failed ({e}) — minimal dossier")
@@ -497,8 +558,32 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
         disc = _disc.dossier_digest(_dd)
     except Exception as e:
         logger.info(f"[spec] discovery digest skipped: {e}")
+    facts_text = ""
+    try:
+        import site_facts
+        facts_text = site_facts.facts_block(site_facts.build_facts(ctx, business_id))
+    except Exception as e:
+        logger.info(f"[spec] facts block skipped: {e}")
+    vertical_block = ""
+    try:
+        import site_vertical_features
+        vertical_block = site_vertical_features.block_for(
+            str((ctx.get("business") or {}).get("type") or ""))
+    except Exception as e:
+        logger.info(f"[spec] vertical features skipped: {e}")
+    concept_block = ""
+    try:
+        concept_block = _concept.brief_block(_concept.attach(ctx))
+        if (ctx.get("concept") or {}).get("intensity") in ("signature", "world"):
+            recent = _concept.recent_block(_concept.recent_concepts(business_id))
+            if recent:
+                concept_block = concept_block + "\n\n" + recent
+    except Exception as e:
+        logger.info(f"[spec] concept skipped: {e}")
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
-                             inventory=inventory, discovery=disc)
+                             inventory=inventory, discovery=disc,
+                             facts=facts_text, vertical=vertical_block,
+                             concept=concept_block)
     marks = _brand_mark_urls(ctx, business_id)
     work = [u for u in _image_urls(ctx) if u not in marks]
     text = (_call_llm(_SYSTEM, user, business_id,
@@ -613,12 +698,20 @@ def apply_spec_overrides(html: str, spec_text: str) -> str:
         return html
 
 
-def _site_row(business_id: str):
+def _site_row(business_id: str, create: bool = False):
+    """create=True: a business with no row yet gets one before the
+    Blueprint is written (discovery.ensure_site_row — the dossier and
+    the spec share the row, and a July signup had none)."""
     import sb_clients
     rows = sb_clients.sb_get_as_service(
         f"/business_sites?business_id=eq.{business_id}"
         "&select=id,site_config&limit=1") or []
-    return rows[0] if rows else None
+    if rows:
+        return rows[0]
+    if not create:
+        return None
+    import discovery
+    return discovery.ensure_site_row(business_id)
 
 
 def get_spec(business_id: str) -> Optional[Dict[str, Any]]:
@@ -669,9 +762,11 @@ def save_spec(business_id: str, text: str,
     """Persist the spec document. Bumps revision when one exists.
 
     Raises SpecSaveFailed if the write does not land — see
-    _patch_site_config. Returns None only when there is no site row to
-    write to, which is a different (and harmless) condition."""
-    row = _site_row(business_id)
+    _patch_site_config. A business with no site row gets one here (it
+    was not harmless: the spec was authored, charged for, and returned
+    with nothing in the database). Returns None only when the row could
+    not be created either."""
+    row = _site_row(business_id, create=True)
     if not row:
         return None
     cfg = dict(row.get("site_config") or {})

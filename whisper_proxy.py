@@ -32,10 +32,12 @@ Response:
     { "text": "...", "language": "en", ... }
 """
 
+import asyncio
 import logging
 import os
 import time
-from typing import Optional
+from collections import OrderedDict
+from typing import AsyncIterator, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -68,10 +70,55 @@ OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech"
 # accurate than whisper-1 on the same /audio/transcriptions endpoint
 # (default json response = same {"text": ...} shape the client reads).
 WHISPER_MODEL = "gpt-4o-mini-transcribe"
-TTS_MODEL_DEFAULT = "tts-1"           # faster, good quality
-TTS_MODEL_HD = "tts-1-hd"             # slower, best quality
+# Voice latency arc 2026-09-08: gpt-4o-mini-tts replaces tts-1 as the
+# standard voice — cheaper per character, more natural prosody, and the
+# same /audio/speech endpoint. Clients that saved "tts-1" in their
+# settings keep working: the name is an alias for the default, so nobody
+# has to touch a preference to get the upgrade.
+TTS_MODEL_DEFAULT = "gpt-4o-mini-tts"  # fast, natural — the standard voice
+TTS_MODEL_HD = "tts-1-hd"              # slower, richest sample quality
+TTS_MODEL_ALIASES = {"tts-1": TTS_MODEL_DEFAULT}
 TTS_VOICES = {"nova", "alloy", "echo", "fable", "onyx", "shimmer"}
 TTS_MAX_CHARS = 4096                  # OpenAI's hard limit
+# Wire formats. "mp3" is the historical contract (KAI, mobile, the voice
+# preview) and stays the default. "pcm" is raw signed 16-bit little-endian
+# mono at 24 kHz — the web app asks for it so it can schedule audio on the
+# Web Audio clock as the bytes land, instead of waiting for a whole mp3 to
+# download and decode before the first word. Same bytes OpenAI emits;
+# nothing is transcoded here.
+TTS_FORMATS = {"mp3", "pcm"}
+TTS_PCM_SAMPLE_RATE = 24000
+TTS_MEDIA_TYPES = {"mp3": "audio/mpeg", "pcm": "audio/pcm"}
+
+
+def resolve_tts_model(requested: Optional[str]) -> str:
+    """Map a client's model name onto what we actually send OpenAI.
+    Unknown names (and the legacy "tts-1") become the default; only the
+    HD tier is honoured as a distinct choice."""
+    name = (requested or "").strip()
+    name = TTS_MODEL_ALIASES.get(name, name)
+    if name not in (TTS_MODEL_DEFAULT, TTS_MODEL_HD):
+        return TTS_MODEL_DEFAULT
+    return name
+
+
+def resolve_tts_format(requested: Optional[str]) -> str:
+    fmt = (requested or "mp3").strip().lower()
+    return fmt if fmt in TTS_FORMATS else "mp3"
+
+
+def tts_response_headers(fmt: str) -> dict:
+    """Cache-Control plus, for PCM, the parameters a decoder needs. The
+    Content-Type alone is what the web client branches on; the X- headers
+    document the stream for anyone else reading it."""
+    headers = {"Cache-Control": "no-store"}
+    if fmt == "pcm":
+        headers.update({
+            "X-Audio-Sample-Rate": str(TTS_PCM_SAMPLE_RATE),
+            "X-Audio-Channels": "1",
+            "X-Audio-Encoding": "s16le",
+        })
+    return headers
 
 # ── ElevenLabs (optional second TTS provider) ────────────────────────
 # Voice ids arrive from the client prefixed "el:<voice_id>" — the speak
@@ -80,8 +127,11 @@ TTS_MAX_CHARS = 4096                  # OpenAI's hard limit
 # is empty and el: requests fall back to OpenAI nova (never a dead end).
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v1/voices"
-ELEVENLABS_MODEL = "eleven_turbo_v2_5"   # low-latency tier — right for conversation
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
 ELEVENLABS_MAX_CHARS = 4096              # match the OpenAI clamp
+# One short wait before giving up on ElevenLabs for a reply: the
+# concurrent-request cap is usually the previous sentence still playing out.
+ELEVENLABS_BUSY_RETRY_S = 0.6
 
 # Per-business monthly ElevenLabs character allowance. Premium voice is
 # metered per business (rows land in api_usage with endpoint /ai/tts-el,
@@ -108,6 +158,136 @@ def _openai_key() -> str:
 
 def _elevenlabs_key() -> str:
     return os.environ.get("ELEVENLABS_API_KEY", "")
+
+
+# ── A warm connection to the speech providers (2026-09-25) ───────────
+# Every spoken sentence group used to open its own AsyncClient: a fresh
+# TCP + TLS handshake to OpenAI or ElevenLabs per group, paid before the
+# first byte of audio (Dev Desk, the voice output brief: "a warm persistent
+# connection ... so no handshake cost is paid per turn"). One keep-alive
+# pool per event loop now serves every request, and while a call is going
+# (speech in the last ten minutes) a free request every 45s keeps the
+# connection from idling shut between turns. Neither provider offers a
+# plain streaming-TTS socket both can share, and a pooled HTTP/1.1
+# connection removes exactly the cost the brief names — the handshake.
+_TTS_HTTP: Optional[httpx.AsyncClient] = None
+_TTS_HTTP_LOOP = None
+_TTS_LAST_USE = {"openai": 0.0, "elevenlabs": 0.0}
+_TTS_WARM_TASK = None
+TTS_WARM_EVERY_S = 45
+TTS_WARM_FOR_S = 600
+
+
+def _tts_http(provider: str = "openai") -> httpx.AsyncClient:
+    """The shared keep-alive client. Callers close their RESPONSE, never
+    this client."""
+    global _TTS_HTTP, _TTS_HTTP_LOOP, _TTS_WARM_TASK
+    loop = asyncio.get_running_loop()
+    if (_TTS_HTTP is None or getattr(_TTS_HTTP, "is_closed", False)
+            or _TTS_HTTP_LOOP is not loop):
+        _TTS_HTTP = httpx.AsyncClient(
+            timeout=TTS_TIMEOUT,
+            limits=httpx.Limits(max_keepalive_connections=16, max_connections=48,
+                                keepalive_expiry=120.0))
+        _TTS_HTTP_LOOP = loop
+    _TTS_LAST_USE[provider] = time.monotonic()
+    if (os.environ.get("TTS_KEEP_WARM") or "on").lower() != "off" and (
+            _TTS_WARM_TASK is None or _TTS_WARM_TASK.done()):
+        try:
+            _TTS_WARM_TASK = loop.create_task(_keep_tts_warm())
+        except Exception:  # pragma: no cover
+            _TTS_WARM_TASK = None
+    return _TTS_HTTP
+
+
+async def _keep_tts_warm() -> None:
+    while True:
+        await asyncio.sleep(TTS_WARM_EVERY_S)
+        now = time.monotonic()
+        live = {p for p, t in _TTS_LAST_USE.items() if now - t < TTS_WARM_FOR_S}
+        c = _TTS_HTTP
+        if not live or c is None or getattr(c, "is_closed", False):
+            return
+        try:
+            if "openai" in live and _openai_key():
+                await c.get("https://api.openai.com/v1/models",
+                            headers={"Authorization": f"Bearer {_openai_key()}"}, timeout=5.0)
+            if "elevenlabs" in live and _elevenlabs_key():
+                await c.get("https://api.elevenlabs.io/v1/models",
+                            headers={"xi-api-key": _elevenlabs_key()}, timeout=5.0)
+        except Exception:
+            pass
+
+
+# ── Short phrases, already spoken (2026-09-25) ───────────────────────
+# The words that start a call turn are a small fixed set: the call's own
+# openers ("Let me take a look."), the leads the reply's first track sends
+# ("One second.", "On it.") and a few pleasantries. Their audio is the
+# same every time for the same voice, so it is kept once rendered and
+# served from memory — no provider call, no provider wait, no provider
+# charge. Only short texts are kept (a reply sentence is not a phrase),
+# bounded by count and bytes.
+PHRASE_AUDIO_MAX_CHARS = 60
+PHRASE_AUDIO_MAX_ENTRIES = 400
+PHRASE_AUDIO_MAX_BYTES = 32 * 1024 * 1024
+_PHRASE_AUDIO: "OrderedDict[tuple, bytes]" = OrderedDict()
+_PHRASE_AUDIO_BYTES = {"n": 0}
+
+
+def _phrase_key(provider: str, voice: str, model: str, fmt: str, spoken: str):
+    if (os.environ.get("TTS_PHRASE_CACHE") or "on").lower() == "off":
+        return None
+    if not spoken or len(spoken) > PHRASE_AUDIO_MAX_CHARS:
+        return None
+    return (provider, voice, model, fmt, " ".join(spoken.split()).lower())
+
+
+def _phrase_get(key) -> Optional[bytes]:
+    if key is None:
+        return None
+    audio = _PHRASE_AUDIO.get(key)
+    if audio is not None:
+        _PHRASE_AUDIO.move_to_end(key)
+    return audio
+
+
+def _phrase_put(key, audio: bytes) -> None:
+    if key is None or not audio or len(audio) > 2 * 1024 * 1024:
+        return
+    old = _PHRASE_AUDIO.pop(key, None)
+    if old is not None:
+        _PHRASE_AUDIO_BYTES["n"] -= len(old)
+    _PHRASE_AUDIO[key] = audio
+    _PHRASE_AUDIO_BYTES["n"] += len(audio)
+    while _PHRASE_AUDIO and (len(_PHRASE_AUDIO) > PHRASE_AUDIO_MAX_ENTRIES
+                             or _PHRASE_AUDIO_BYTES["n"] > PHRASE_AUDIO_MAX_BYTES):
+        _, gone = _PHRASE_AUDIO.popitem(last=False)
+        _PHRASE_AUDIO_BYTES["n"] -= len(gone)
+
+
+def _phrase_response(audio: bytes, fmt: str) -> Response:
+    headers = tts_response_headers(fmt)
+    headers["X-TTS-Cache"] = "hit"
+    return Response(content=audio, media_type=TTS_MEDIA_TYPES[fmt], headers=headers)
+
+
+def _relay(upstream: httpx.Response, key) -> "AsyncIterator[bytes]":
+    """Forward the provider's audio as it arrives; keep a copy of a short
+    phrase's bytes once the stream has ended cleanly."""
+    async def _stream():
+        kept: Optional[list] = [] if key is not None else None
+        complete = False
+        try:
+            async for chunk in upstream.aiter_bytes(chunk_size=4096):
+                if kept is not None:
+                    kept.append(chunk)
+                yield chunk
+            complete = True
+        finally:
+            await upstream.aclose()
+            if complete and kept:
+                _phrase_put(key, b"".join(kept))
+    return _stream()
 
 
 # ── Per-business voice metering helpers ──────────────────────────────
@@ -293,6 +473,9 @@ class TTSRequest(BaseModel):
     # metering. Optional: anonymous/unattributed requests still speak
     # (OpenAI voices only).
     business_id: Optional[str] = None
+    # Wire format — "mp3" (default, the historical contract) or "pcm"
+    # (raw s16le mono 24 kHz, for clients that play as the bytes land).
+    format: Optional[str] = "mp3"
 
 
 @router.post("/ai/tts/speak")
@@ -322,13 +505,14 @@ async def text_to_speech(req: TTSRequest, request: Request,
     # the signed-in caller actually owns it (these rows feed the billing
     # rails; never trust a bare body field).
     biz_id = (req.business_id or "").strip() or None
-    metered_biz = biz_id if (user and biz_id and _owns_business(user.id, biz_id)) else None
+    metered_biz = biz_id if (user and biz_id and await asyncio.to_thread(_owns_business, user.id, biz_id)) else None
 
     # ElevenLabs routing — "el:<voice_id>" ids go to the ElevenLabs
     # streamer when the caller qualifies. EVERY deny falls back to the
     # OpenAI path below so a stale saved voice choice, a signed-out
     # session, or an exhausted allowance never silences the Chief.
     raw_voice = (req.voice or "nova").strip()
+    fmt = resolve_tts_format(req.format)
     if raw_voice.startswith("el:"):
         el_key = _elevenlabs_key()
         el_voice_id = raw_voice[3:].strip()
@@ -336,20 +520,38 @@ async def text_to_speech(req: TTSRequest, request: Request,
             logger.warning("ElevenLabs voice requested but key or voice id missing — falling back to OpenAI nova")
         elif not metered_biz:
             logger.warning("ElevenLabs voice requires a signed-in owner + business_id — falling back to OpenAI nova")
-        elif not _el_allowance_ok(metered_biz):
+        elif not await asyncio.to_thread(_el_allowance_ok, metered_biz):
             logger.info(f"ElevenLabs monthly char cap reached for business {metered_biz} — falling back to OpenAI nova")
         else:
-            return await _elevenlabs_speak(text, el_voice_id, el_key,
-                                           business_id=metered_biz,
-                                           user_id=user.id if user else None)
+            spoken = await _elevenlabs_speak(text, el_voice_id, el_key,
+                                             business_id=metered_biz,
+                                             user_id=user.id if user else None,
+                                             fmt=fmt)
+            if spoken is None:
+                # The concurrent-request cap is a moment, not an outage:
+                # the previous sentence of the SAME reply is usually the
+                # request still in flight. One short wait and a second
+                # try keeps Chief's voice the same across a call instead
+                # of switching to Nova mid-sentence (2026-09-19 log:
+                # "concurrent_limit_exceeded" → "falling back to OpenAI nova").
+                await asyncio.sleep(ELEVENLABS_BUSY_RETRY_S)
+                spoken = await _elevenlabs_speak(text, el_voice_id, el_key,
+                                                 business_id=metered_biz,
+                                                 user_id=user.id if user else None,
+                                                 fmt=fmt)
+            if spoken is not None:
+                return spoken
+            # ElevenLabs was busy (429, concurrent-request cap on the
+            # shared account) or down (5xx). Seen live 2026-09-14: a
+            # voice turn that took 37s and then said nothing, because
+            # the reply was withheld by the provider, not by Chief.
+            logger.warning("ElevenLabs unavailable for this reply — falling back to OpenAI nova")
 
     voice = raw_voice.lower()
     if voice not in TTS_VOICES:
         voice = "nova"
 
-    model = req.model or TTS_MODEL_DEFAULT
-    if model not in (TTS_MODEL_DEFAULT, TTS_MODEL_HD):
-        model = TTS_MODEL_DEFAULT
+    model = resolve_tts_model(req.model)
 
     # Symbols become words at the wire, so "$1,234.56" is spoken the same
     # way no matter which client called us — the web app normalizes for
@@ -357,9 +559,17 @@ async def text_to_speech(req: TTSRequest, request: Request,
     # app do not, and they reach this endpoint too.
     spoken = normalize_for_speech(text)[:TTS_MAX_CHARS]
 
+    # A short phrase already rendered in this voice: no provider call.
+    phrase_key = _phrase_key("openai", voice, model, fmt, spoken)
+    cached = _phrase_get(phrase_key)
+    if cached is not None:
+        logger.info(f"TTS phrase cache hit: chars={len(spoken)} voice={voice} format={fmt}")
+        return _phrase_response(cached, fmt)
+
     # Use httpx streaming so we forward chunks as OpenAI produces them,
-    # instead of buffering the entire mp3 in memory first.
-    client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
+    # instead of buffering the entire mp3 in memory first — over the shared
+    # keep-alive connection (no handshake per sentence).
+    client = _tts_http("openai")
 
     try:
         upstream = await client.send(
@@ -374,30 +584,27 @@ async def text_to_speech(req: TTSRequest, request: Request,
                     "model": model,
                     "input": spoken,
                     "voice": voice,
-                    "response_format": "mp3",
+                    "response_format": fmt,
                 },
             ),
             stream=True,
         )
     except httpx.TimeoutException:
-        await client.aclose()
         logger.warning("TTS request timed out")
         raise HTTPException(504, "TTS API timed out")
     except httpx.HTTPError as e:
-        await client.aclose()
         logger.error(f"TTS request failed: {e}")
         raise HTTPException(502, f"TTS request failed: {e}")
 
     if upstream.status_code >= 400:
         body = (await upstream.aread()).decode("utf-8", errors="replace")[:300]
         await upstream.aclose()
-        await client.aclose()
         logger.warning(f"TTS {upstream.status_code}: {body}")
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
     logger.info(
         f"TTS streaming: chars={len(text)} spoken={len(spoken)} "
-        f"voice={voice} model={model}")
+        f"voice={voice} model={model} format={fmt}")
     # Metering (beta-readiness audit): every spoken reply was dark. TTS is
     # priced per character — pass the char count as input_tokens; the
     # tts-1 / tts-1-hd table entries are per-1M-char so the cost is exact.
@@ -416,29 +623,30 @@ async def text_to_speech(req: TTSRequest, request: Request,
     except Exception:
         pass
 
-    async def _stream():
-        try:
-            async for chunk in upstream.aiter_bytes(chunk_size=4096):
-                yield chunk
-        finally:
-            await upstream.aclose()
-            await client.aclose()
-
     return StreamingResponse(
-        _stream(),
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
+        _relay(upstream, phrase_key),
+        media_type=TTS_MEDIA_TYPES[fmt],
+        headers=tts_response_headers(fmt),
     )
+
+
+# ElevenLabs' name for each wire format. pcm_24000 is on every tier
+# (only pcm_44100 is gated), and matches OpenAI's PCM rate so the client
+# decodes both providers the same way.
+_EL_OUTPUT_FORMATS = {"mp3": "mp3_44100_128", "pcm": "pcm_24000"}
 
 
 async def _elevenlabs_speak(text: str, voice_id: str, key: str,
                             business_id: Optional[str] = None,
-                            user_id: Optional[str] = None) -> StreamingResponse:
-    """Stream ElevenLabs TTS back to the client — same mp3-over-HTTP
-    contract as the OpenAI path, so the frontend audio pipeline doesn't
-    know or care which provider spoke."""
+                            user_id: Optional[str] = None,
+                            fmt: str = "mp3") -> Optional[Response]:
+    """Stream ElevenLabs TTS back to the client — same audio-over-HTTP
+    contract as the OpenAI path (mp3 or raw PCM, chosen by `fmt`), so
+    the frontend audio pipeline doesn't know or care which provider
+    spoke."""
     if len(text) > ELEVENLABS_MAX_CHARS:
         text = text[:ELEVENLABS_MAX_CHARS]
+    fmt = fmt if fmt in _EL_OUTPUT_FORMATS else "mp3"
 
     # Symbols become words at the wire. turbo_v2_5 does NOT normalize on
     # its own — apply_text_normalization is Enterprise-only on the v2.5
@@ -447,36 +655,46 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
     # note below.
     spoken = normalize_for_speech(text)[:ELEVENLABS_MAX_CHARS]
 
-    client = httpx.AsyncClient(timeout=TTS_TIMEOUT)
+    # A short phrase already rendered in this voice: served from memory. No
+    # ElevenLabs characters are spent, so none count against the cap.
+    phrase_key = _phrase_key("elevenlabs", voice_id, ELEVENLABS_MODEL, fmt, spoken)
+    cached = _phrase_get(phrase_key)
+    if cached is not None:
+        logger.info(f"ElevenLabs phrase cache hit: chars={len(spoken)} voice={voice_id}")
+        return _phrase_response(cached, fmt)
+
+    client = _tts_http("elevenlabs")
     try:
         upstream = await client.send(
             client.build_request(
                 "POST",
-                f"{ELEVENLABS_TTS_URL}/{voice_id}/stream?output_format=mp3_44100_128",
+                f"{ELEVENLABS_TTS_URL}/{voice_id}/stream?output_format={_EL_OUTPUT_FORMATS[fmt]}",
                 headers={"xi-api-key": key, "Content-Type": "application/json"},
                 json={"text": spoken, "model_id": ELEVENLABS_MODEL},
             ),
             stream=True,
         )
     except httpx.TimeoutException:
-        await client.aclose()
         logger.warning("ElevenLabs TTS timed out")
         raise HTTPException(504, "TTS API timed out")
     except httpx.HTTPError as e:
-        await client.aclose()
         logger.error(f"ElevenLabs TTS failed: {e}")
         raise HTTPException(502, f"TTS request failed: {e}")
 
     if upstream.status_code >= 400:
         body = (await upstream.aread()).decode("utf-8", errors="replace")[:300]
         await upstream.aclose()
-        await client.aclose()
         logger.warning(f"ElevenLabs TTS {upstream.status_code}: {body}")
+        # Busy or broken upstream: None tells the caller to speak with the
+        # included voice instead. A 4xx that is about THIS request (a bad
+        # voice id, an unauthorized key) still surfaces as an error.
+        if upstream.status_code == 429 or upstream.status_code >= 500:
+            return None
         raise HTTPException(upstream.status_code, f"TTS error: {body}")
 
     logger.info(
         f"ElevenLabs TTS streaming: chars={len(text)} spoken={len(spoken)} "
-        f"voice={voice_id} biz={business_id}")
+        f"voice={voice_id} biz={business_id} format={fmt}")
     # Metering — per character (input_tokens), attributed to the business.
     # Endpoint /ai/tts-el is DISTINCT from /ai/tts on purpose: it bills
     # 1 unit per chunk on the plan-allowance rails (usage_metering
@@ -490,29 +708,24 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
     # true billed characters by the width of the expansion (money-bearing
     # text only, single digits of percent). If that ever needs to be
     # exact, the fix is a second field, not a bigger number here.
-    try:
-        await log_api_usage(
-            endpoint="/ai/tts-el", model=ELEVENLABS_MODEL,
-            input_tokens=len(text), output_tokens=0,
-            business_id=business_id, user_id=user_id)
-    except Exception:
-        pass
     if business_id:
         _note_el_chars(business_id, len(text))
 
-    async def _stream():
+    async def metered_audio():
         try:
-            async for chunk in upstream.aiter_bytes(chunk_size=4096):
+            async for chunk in _relay(upstream, phrase_key):
                 yield chunk
         finally:
-            await upstream.aclose()
-            await client.aclose()
+            # Do not hold ready audio behind a database round trip.
+            try:
+                await log_api_usage(endpoint="/ai/tts-el", model=ELEVENLABS_MODEL,
+                    input_tokens=len(text), output_tokens=0,
+                    business_id=business_id, user_id=user_id)
+            except Exception:
+                pass
 
-    return StreamingResponse(
-        _stream(),
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
-    )
+    return StreamingResponse(metered_audio(), media_type=TTS_MEDIA_TYPES[fmt],
+        headers=tts_response_headers(fmt))
 
 
 # In-process cache — the voice list changes rarely; don't hit the

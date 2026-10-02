@@ -73,16 +73,40 @@ _rate_buckets: Dict[str, deque] = defaultdict(deque)
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
+    """The LAST X-Forwarded-For hop — the one Railway observed.
+
+    Until 2026-09-04 this read the FIRST hop, which is whatever the
+    caller typed into the header. On an anonymous surface that WRITES
+    (book-anon creates bookings; request-fresh-link sends email) that
+    made the limiter a courtesy: one header per request and the 10/hour
+    budget never filled. rate_limit.trusted_client_ip exists for exactly
+    this and intake_endpoint already used it; this surface did not.
+    """
+    import rate_limit
+    return rate_limit.trusted_client_ip(request)
+
+
+_SHARED_BUCKETS = {
+    "config-anon": "booking_config_anon",
+    "book-anon": "booking_book_anon",
+    "request-fresh-link": "booking_fresh_link",
+}
 
 
 def _rate_limit(bucket_key: str, request: Request) -> None:
-    """Raises HTTPException(429) if the bucket exceeded _RATE_LIMIT in
-    the past _RATE_WINDOW_SEC seconds."""
+    """Raises HTTPException(429) when the caller is over budget.
+
+    2026-09-04: rides rate_limit.allow_strict — strict, keyed on the
+    trusted hop, and SHARED across web replicas (the TODO above, done).
+    The numbers are unchanged: 10 an hour per IP per route, registered
+    in rate_limit._LIMITS. The old deque stays for a bucket name nobody
+    registered, so a new call site cannot silently run unlimited."""
+    import rate_limit
+    shared = _SHARED_BUCKETS.get(bucket_key)
+    if shared:
+        if not rate_limit.allow_strict(shared, _client_ip(request)):
+            raise HTTPException(status_code=429, detail="rate limit exceeded — try again later")
+        return
     ip = _client_ip(request)
     key = f"{bucket_key}::{ip}"
     now = time.time()
@@ -1169,6 +1193,23 @@ def _find_or_create_customer(
     return created[0]["id"]
 
 
+def _pg_ts(dt) -> str:
+    """A datetime that survives a PostgREST query string.
+
+    isoformat() on an aware datetime ends in '+00:00', and a '+' in a URL
+    query decodes to a SPACE, so `appointment_at=gte.2026-10-01T02:27:47
+    +00:00` reaches Postgres as '... 00:00' and 400s with 22007. Same bug
+    chief_of_staff._ts fixed on 2026-09-03; Sentry found it here on
+    2026-10-01. The 400 came back as None, which the callers read as
+    "no bookings": the double-book guard passed every slot, and the
+    booking session sync mirrored and cancelled nothing. Aware datetimes
+    are sent as UTC with a Z; naive ones carry no '+' and pass as-is."""
+    if dt.tzinfo is None:
+        return dt.isoformat()
+    from datetime import timezone as _tz
+    return dt.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _check_slot_available(
     business_id: str,
     appointment_at_iso: str,
@@ -1221,8 +1262,8 @@ def _check_slot_available(
         # Pad the query window by 4h either side so we don't miss a
         # long booking whose appointment_at lands outside the immediate
         # window but whose end-time spills in.
-        lo = (slot_start - timedelta(hours=4)).isoformat()
-        hi = (slot_start + timedelta(hours=4)).isoformat()
+        lo = _pg_ts(slot_start - timedelta(hours=4))
+        hi = _pg_ts(slot_start + timedelta(hours=4))
     except Exception:
         # If we can't parse the slot, don't block the booking; the
         # check is opportunistic.
@@ -1319,7 +1360,7 @@ async def booking_session_sync_tick() -> None:
 
     def _sync() -> None:
         from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).isoformat()
+        now = _pg_ts(datetime.now(timezone.utc))
         mods = sb_clients.sb_get_as_service(
             "/custom_modules?archetype=eq.booking_calendar&is_active=eq.true"
             "&select=id,business_id&limit=500") or []
@@ -1390,6 +1431,23 @@ def _create_appointment(
             })
         except Exception as _re_err:
             logger.warning(f"rules emit booking_created failed soft: {_re_err}")
+        # The spine (2026-09-04): the standing agent's cursor is the
+        # events table, and until now a booking never reached it. Names
+        # and a service, never the notes — a form answer is third-party
+        # text and the event row is read by a model later.
+        try:
+            import event_spine
+            d = data or {}
+            event_spine.emit("booking_created", business_id, {
+                "booking_id": created[0].get("id"),
+                "contact_name": d.get("name") or d.get("customer_name"),
+                "offering": d.get("service_name_at_booking") or d.get("offering_name")
+                or d.get("offering"),
+                "starts_at": d.get("appointment_at") or d.get("starts_at"),
+                "created_by": created_by,
+            }, contact_id=d.get("contact_id"), source=created_by)
+        except Exception as _ev_err:
+            logger.warning(f"spine emit booking_created failed soft: {_ev_err}")
         _notify_practitioner_of_booking(business_id, data or {})
         return created[0]
     # C22 polish — same friendly-error treatment as contact + customer

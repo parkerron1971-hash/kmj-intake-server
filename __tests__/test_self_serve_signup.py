@@ -55,6 +55,18 @@ def test_no_page_still_says_beta(path):
         assert phrase not in html, f"{path} still says {phrase!r}"
 
 
+def test_the_share_card_does_not_say_beta_either():
+    """These tests scanned the PAGES only, so the claim survived for
+    months in the one place with the widest reach: the og:image is
+    rendered from this file and shown on every share of every page,
+    including from surfaces that never render page HTML at all."""
+    import pathlib
+    card = (pathlib.Path(__file__).resolve().parent.parent
+            / "static" / "brand" / "solutionist-og-card.html")
+    src = card.read_text(encoding="utf-8")
+    assert "beta" not in src.lower(), "the share card still carries beta language"
+
+
 @pytest.mark.parametrize("path", sorted(PAGES))
 def test_every_page_has_a_door_to_the_trial(path):
     """Not one page may be a dead end: whatever a visitor is reading,
@@ -153,7 +165,15 @@ HOST = {"host": "mysolutionist.app"}
 def test_start_sends_you_to_the_app(client):
     r = client.get("/start", headers=HOST)
     assert r.status_code == 302
-    assert r.headers["location"] == "https://system.mysolutionist.app/"
+    assert r.headers["location"] == "https://system.mysolutionist.app/?signup=1"
+
+
+def test_start_opens_the_app_on_create_account(client):
+    """Everyone at /start pressed a start button. The app used to open on
+    "Welcome back / Sign in", and every September Start click stopped there."""
+    loc = client.get("/start?utm_source=meta&plan=founder", headers=HOST).headers["location"]
+    assert "signup=1" in loc and "utm_source=meta" in loc and "plan=founder" in loc
+    assert client.get("/start?signup=0", headers=HOST).headers["location"].count("signup=") == 1
 
 
 def test_start_carries_the_campaign_across_the_origin_hop(client):

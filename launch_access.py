@@ -85,7 +85,14 @@ class WaitlistBody(BaseModel):
 
 
 @router.post("/waitlist")
-def join_waitlist(body: WaitlistBody, request: Request = None) -> Dict[str, Any]:
+def join_waitlist(body: WaitlistBody, request: Request) -> Dict[str, Any]:
+    # Anonymous insert per novel email, and until 2026-09-04 no limiter,
+    # no captcha, no honeypot — a script varying the local part filled
+    # the table for free. Strict, per trusted IP, per hour. The answer
+    # stays non-enumerating either way.
+    import rate_limit
+    if not rate_limit.allow_strict("waitlist", rate_limit.trusted_client_ip(request)):
+        raise HTTPException(429, "Too many attempts — try again in a little while.")
     email = (body.email or "").strip().lower()
     if not email or "@" not in email or len(email) > 320:
         raise HTTPException(400, "valid email required")
@@ -227,6 +234,51 @@ def _attribution_from_funnel(email: Optional[str]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _seed_new_business(row: Dict[str, Any], business_type: str,
+                       voice_profile: Optional[Dict[str, Any]], owner_id: str) -> Dict[str, bool]:
+    """Everything a new business should be born with, run server-side
+    right after the row exists: the profile defaults for its archetype,
+    the blueprint module set, and the vertical's default autopilot.
+
+    Until 2026-09-02 all three hung off a SEPARATE client call
+    (POST /business-profile/profile/seed-from-onboarding) that the
+    frontend made one second after creation — and that call answered
+    404 from May to September (route-order bug, #777), so no real
+    business ever received any of it, and nothing noticed because the
+    client called the failure "non-fatal". The client call still exists
+    and is idempotent (it only fills empty fields), so a practitioner
+    with an older tab loses nothing; this just stops the birth of a
+    business depending on a second request nobody monitors.
+
+    Never raises. Each step is its own try, each failure its own
+    warning, and the result names what ran so a test can see it."""
+    biz_id = str((row or {}).get("id") or "")
+    out = {"profile": False, "modules": False, "autopilot": False}
+    if not biz_id:
+        return out
+    try:
+        import business_profile_agent as bp
+        out["profile"] = bp.seed_from_onboarding(
+            business_id=biz_id, business_type=business_type,
+            tones=None, voice_profile=voice_profile or None) is not None
+    except Exception as e:
+        logger.warning(f"[access] seed profile failed for {biz_id}: {e}")
+    try:
+        import module_blueprint_agent
+        provision = module_blueprint_agent.provision_modules(biz_id, business_type)
+        out["modules"] = bool(provision.get("created") or provision.get("skipped"))
+    except Exception as e:
+        logger.warning(f"[access] blueprint provision failed for {biz_id}: {e}")
+    try:
+        import vertical_autopilot
+        vertical_autopilot.seed_defaults(
+            business_id=biz_id, business_type=business_type, owner_id=owner_id)
+        out["autopilot"] = True
+    except Exception as e:
+        logger.warning(f"[access] autopilot seed failed for {biz_id}: {e}")
+    return out
+
+
 @router.post("/businesses/create")
 def create_business(body: CreateBusinessBody,
                     user: AuthedUser = Depends(require_user),
@@ -298,6 +350,31 @@ def create_business(body: CreateBusinessBody,
     if not row:
         raise HTTPException(500, "business insert failed")
 
+    # Born whole (2026-09-02): profile defaults, blueprint modules and the
+    # vertical autopilot, after the response, no second request needed.
+    try:
+        if background_tasks is not None:
+            background_tasks.add_task(_seed_new_business, row, btype,
+                                      body.voice_profile or None, uid)
+            from chief_business_learning_actions import seed_custom_business
+            background_tasks.add_task(seed_custom_business, row)
+    except Exception as e:
+        logger.warning(f"[access] seed schedule failed: {e}")
+    # Day one for everyone who never reaches Stripe. Comped, invited and
+    # grandfathered accounts have no subscription and so no `trialing`
+    # webhook ever fires — an arc that only opened from Stripe would skip
+    # exactly the people we hand-picked.
+    #
+    # For a self-serve signup this fires first (checkout comes minutes
+    # later, from the paywall) and the subscription then aligns the arc
+    # to the real trial start. Best-effort: a practitioner whose business
+    # was created must never see that fail because a side table did.
+    try:
+        import first_run_arc
+        first_run_arc.begin(row.get("id"), source="signup")
+    except Exception as e:
+        logger.warning(f"[access] first-run arc begin failed (non-fatal): {e}")
+
     # Growth arc Rung 2 — tell Meta a signup completed, after the
     # response. No-op unless the pixel + CAPI token are configured.
     try:
@@ -312,7 +389,36 @@ def create_business(body: CreateBusinessBody,
     except Exception as e:
         logger.warning(f"[access] capi registration schedule failed: {e}")
 
+    # Lifecycle (2026-09-01) — the welcome email, after the response.
+    # send_welcome decides for itself whether this is the owner's first
+    # business and never raises; a signup must not fail on mail.
+    try:
+        import lifecycle_emails
+        if background_tasks is not None:
+            background_tasks.add_task(
+                lifecycle_emails.send_welcome, row,
+                getattr(user, "email", None),
+                (settings.get("practitioner_name") or None))
+    except Exception as e:
+        logger.warning(f"[access] welcome email schedule failed: {e}")
+
     return {"ok": True, "business": row}
+
+
+@router.post("/onboarding-started")
+def onboarding_started(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Enroll only this authenticated user when business onboarding opens.
+
+    Reopening or StrictMode mounting twice never resets the reminder clock.
+    The reminder query independently excludes staff and completed accounts.
+    """
+    result = sb_clients.sb_post_as_service(
+        "/lifecycle_signup_intents?on_conflict=user_id",
+        {"user_id": str(user.id)},
+        prefer="resolution=ignore-duplicates,return=representation")
+    if result is None:
+        raise HTTPException(503, "Setup reminder enrollment is temporarily unavailable")
+    return {"ok": True}
 
 
 @router.get("/open")
@@ -600,8 +706,14 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
 
     tiers_env = {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}") or "").strip())
                  for p in feature_gates.PLANS}
-    overage_env = {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}_OVERAGE") or "").strip())
-                   for p in feature_gates.PLANS}
+    # No STRIPE_PRICE_ID_*_OVERAGE check here, deliberately (2026-08-29).
+    # Pricing v2 retired postpaid overage on 2026-07-12: usage past the
+    # allowance draws down PREPAID credits (credit_ledger), and
+    # usage_metering.report_overage_to_stripe() is a permanent no-op so
+    # nothing ever reaches a Stripe metered item -- that would
+    # double-charge. Those env vars SHOULD be absent, so asserting on
+    # them pinned ready_to_flip to False forever and told the owner to
+    # go add config that would be wrong to add.
     would_break = []
     if unsubscribed:
         would_break.append(f"{len(unsubscribed)} active business(es) with no plan and a "
@@ -609,9 +721,6 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
     if not all(tiers_env.values()):
         would_break.append("Subscription price ids missing: "
                            + ", ".join(p for p, v in tiers_env.items() if not v))
-    if not all(overage_env.values()):
-        would_break.append("Overage (metered) price ids missing: "
-                           + ", ".join(p for p, v in overage_env.items() if not v))
     if not os.environ.get("STRIPE_WEBHOOK_SECRET"):
         would_break.append("STRIPE_WEBHOOK_SECRET not set — subscription state won't sync.")
 
@@ -623,7 +732,7 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
         "subscribers_by_tier": by_plan,
         "unsubscribed_non_grandfathered_businesses": len(unsubscribed),
         "weighted_usage_this_month_platform": weighted,
-        "stripe_env": {"tiers": tiers_env, "overage": overage_env,
+        "stripe_env": {"tiers": tiers_env,
                        "webhook_secret": bool(os.environ.get("STRIPE_WEBHOOK_SECRET"))},
         "preflight_issues": would_break,
         "ready_to_flip": not would_break,

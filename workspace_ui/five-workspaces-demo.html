@@ -1,0 +1,2906 @@
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   CHIEF OPENS YOUR BUSINESS
+
+   Built on the Solutionist System's own tokens (solutionist-studio/
+   src/index.css): --bg-1..4, --border-*, --text-*, --accent #ff6b35 with
+   its gradient and glow, Inter + JetBrains Mono, radii 4/6/8/12/16,
+   .page-label with its gradient dash, .card, .badge-*, .stat-*.
+
+   Three things drive the design, and each answers a failure in the
+   version before it:
+
+   1  THE FINDING LEADS.  A dashboard shows four numbers. Chief's reason
+      to exist is saying which one matters, so exactly one statement per
+      business opens the page at monumental scale, and everything near it
+      stays small.
+
+   2  THE PAGE CHANGES SHAPE.  The lead primitive sets a STANCE, and the
+      stance rebuilds the page — not just the card contents:
+        board     a timeline leads → a full-bleed dispatch wall on a
+                  darker inset ground, lanes edge to edge
+        calendar  a week leads → seven columns across the full measure,
+                  airier, lighter surfaces
+        document  a docket leads → a reading measure, no card at all,
+                  hairline rules, set like a brief
+      Seven businesses that all render as card-card-card would have made
+      the structural claim a lie at page level.
+
+   3  CHIEF HAS A VOICE.  Its reasoning sits in the margin aligned to
+      what it describes, and what it left out collapses behind a
+      disclosure instead of filling the gutter with a changelog.
+
+   One accent variable moves per business. Every house component reads
+   it, so re-pointing --accent re-tints gradient, bloom, chips, badges
+   and focus rings with no per-vertical CSS anywhere. --danger stays
+   reserved for real urgency in all seven.
+   ═══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg-0: #060607;
+  --bg-1: #09090b;
+  --bg-2: #0f0f11;
+  --bg-3: #18181b;
+  --bg-4: #1f1f23;
+  --bg-hover: #27272a;
+  --border-subtle: rgba(255, 255, 255, .06);
+  --border-default: rgba(255, 255, 255, .10);
+  --border-strong: rgba(255, 255, 255, .15);
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-inverse: #09090b;
+
+  --accent: #ff6b35;
+  --accent-secondary: #f7931e;
+  --danger: #ef4444;
+  --success: #22c55e;
+  --warning: #eab308;
+  --info: #3b82f6;
+
+  --field: #101012;
+  --field2: #17171b;
+
+  --display: Inter, system-ui, sans-serif;
+  --sans: Inter, -apple-system, "Segoe UI", sans-serif;
+  /* Chief's voice. One editorial serif, constant across all seven
+     businesses — Chief is the constant, the workspace is the variable.
+     Prose at 12px Inter is a UI size doing a paragraph's job; this is
+     the fix, not a decoration. */
+  --voice: Newsreader, Georgia, "Times New Roman", serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --r: 24px;
+  --dur: .45s;
+  --ease: cubic-bezier(.22, .61, .36, 1);
+}
+
+/* Accent-dependent values are never derived at :root. A custom property
+   inherits its COMPUTED value, so a gradient or color-mix written here
+   would bake in the root orange and every business downstream would keep
+   it however many times --accent is re-pointed. They are computed at
+   each use site instead. --danger never moves, so it derives once. */
+:root { --danger-bg: color-mix(in srgb, var(--danger) 15%, transparent); }
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg-0: #f3f4f6; --bg-1: #ffffff; --bg-2: #f9fafb; --bg-3: #f3f4f6;
+    --bg-4: #ffffff; --bg-hover: #e5e7eb;
+    --border-subtle: rgba(0, 0, 0, .05);
+    --border-default: rgba(0, 0, 0, .10);
+    --border-strong: rgba(0, 0, 0, .15);
+    --text-primary: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+    --text-inverse: #ffffff;
+  }
+}
+:root[data-theme="light"] {
+  --bg-0: #f3f4f6; --bg-1: #ffffff; --bg-2: #f9fafb; --bg-3: #f3f4f6;
+  --bg-4: #ffffff; --bg-hover: #e5e7eb;
+  --border-subtle: rgba(0, 0, 0, .05);
+  --border-default: rgba(0, 0, 0, .10);
+  --border-strong: rgba(0, 0, 0, .15);
+  --text-primary: #111827; --text-secondary: #4b5563; --text-muted: #9ca3af;
+  --text-inverse: #ffffff;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--bg-1);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5 { font-weight: 500; }
+ol, ul { list-style: none; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+summary { cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 9999px; }
+
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 4px var(--accent);
+  border-radius: 8px;
+}
+
+/* ── house components ─────────────────────────────────────────────── */
+
+.page-label {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 10px; font-weight: 500;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--accent);
+}
+.page-label::before {
+  content: ""; width: 16px; height: 2px; border-radius: 9999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
+}
+
+.badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 4px;
+  font-size: 10px; font-weight: 500;
+  letter-spacing: .06em; text-transform: uppercase;
+  white-space: nowrap;
+}
+.badge-primary { background: color-mix(in srgb, var(--accent) 15%, transparent);
+                 color: var(--accent); }
+.badge-default { background: var(--bg-hover); color: var(--text-secondary); }
+.badge-danger  { background: var(--danger-bg); color: var(--danger); }
+.badge-good    { background: color-mix(in srgb, var(--success) 15%, transparent);
+                 color: var(--success); }
+.badge-warn    { background: color-mix(in srgb, var(--warning) 18%, transparent);
+                 color: var(--warning); }
+.badge-info    { background: color-mix(in srgb, var(--info) 16%, transparent);
+                 color: var(--info); }
+.badge-plain   { background: var(--bg-3); color: var(--text-muted); }
+
+.stat-label {
+  font-size: 10px; font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.stat-value { font-size: 26px; font-weight: 600; line-height: 1.1; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.num  { font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+
+/* ── the page ─────────────────────────────────────────────────────── */
+/* FOUR STANCES, FOUR PAGE ARCHITECTURES.
+   Seven businesses that all render as hero / cards / right-hand sidebar
+   are seven skins of one page, however different their accents are. The
+   lead surface therefore decides the whole composition — including where
+   Chief stands, which is the most visible structural choice available:
+
+     board     a dispatch wall needs every pixel of width, so Chief drops
+               to a strip along the bottom
+     pipeline  a stage flow scrolls sideways and would be crowded by a
+               neighbour, so Chief goes below it too
+     calendar  a week is wide but shallow; there is genuinely room beside
+               it, and Chief sits to the right
+     register  a register is a document, and marginalia belong in a
+               document's LEFT margin
+
+   Every one of those is derived from the layout schema. */
+
+.app { position: relative; }
+
+/* Film grain over everything. On a dark interface this is the single
+   highest-leverage layer: it turns the ground from a void into a
+   material, and at 3.5% it is felt rather than seen. Generated, not
+   fetched — the artifact CSP allows no external images. */
+.app::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 40;
+  opacity: .04;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .app::after { opacity: .055; mix-blend-mode: multiply; }
+}
+:root[data-theme="light"] .app::after { opacity: .055; mix-blend-mode: multiply; }
+
+.wrap { max-width: 1640px; margin: 0 auto; padding: 0 34px; }
+
+/* ── the hero: a chromatic field, not a dark page with an accent ──── */
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 46px 0 62px;
+  background: linear-gradient(158deg, var(--field) 0%, var(--field2) 62%, var(--field) 100%);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background .55s var(--ease);
+}
+/* A wash of the accent thrown across the field so it is lit rather than
+   flat, and a vignette at the foot so the switcher has something to sit
+   against. */
+.hero::before {
+  content: ""; position: absolute; pointer-events: none;
+  left: -10%; top: -70%; width: 70%; height: 190%;
+  background: radial-gradient(closest-side,
+    color-mix(in srgb, var(--accent) 22%, transparent), transparent 72%);
+}
+.hero::after {
+  content: ""; position: absolute; inset: auto 0 0; height: 42%;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--bg-1) 55%, transparent));
+}
+
+.hero__inner { position: relative; z-index: 1; }
+
+/* The business's name at poster scale, ghosted, bleeding off the right.
+   The only place the per-vertical display face gets to be loud. */
+.hero__name {
+  position: absolute; right: -2%; top: 50%;
+  transform: translateY(-52%);
+  font-family: var(--display);
+  font-size: clamp(5rem, 15vw, 13.5rem);
+  font-weight: 500;
+  line-height: .8;
+  letter-spacing: -.055em;
+  white-space: nowrap;
+  color: var(--text-primary);
+  opacity: .05;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero__find {
+  position: relative; z-index: 1;
+  display: grid; gap: 26px 40px;
+  align-items: start;
+  margin-top: 26px;
+}
+/* Wide businesses read the finding across; tall ones read it down. */
+.app[data-hero="wide"] .hero__find { grid-template-columns: auto minmax(0, 1fr); }
+.app[data-hero="stacked"] .hero__find { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+
+/* THE one oversized element. Everything within reach of it stays small. */
+.hero__stat {
+  font-size: clamp(4.2rem, 10.5vw, 8.6rem);
+  font-weight: 300;
+  line-height: .82;
+  letter-spacing: -.055em;
+  white-space: nowrap;
+  background: linear-gradient(135deg, var(--accent), var(--accent-secondary));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-variant-numeric: tabular-nums;
+}
+.app[data-hero="wide"] .hero__stat { padding-top: .06em; }
+
+.hero__label {
+  font-size: 11px; font-weight: 500;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 13px;
+}
+.hero__line {
+  font-family: var(--voice);
+  font-size: clamp(1.16rem, 1.55vw, 1.48rem);
+  line-height: 1.5;
+  letter-spacing: -.004em;
+  color: var(--text-primary);
+  max-width: 60ch;
+  text-wrap: pretty;
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 30px; position: relative; z-index: 1; }
+.chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 12px 5px 10px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--bg-1) 55%, transparent);
+  border: 1px solid var(--border-subtle);
+  backdrop-filter: blur(6px);
+  font-size: 11.5px; color: var(--text-secondary);
+}
+.chip::before {
+  content: ""; width: 5px; height: 5px; border-radius: 9999px; background: var(--accent);
+}
+
+/* ── the switcher: straddles the boundary between field and ground ── */
+
+.switch {
+  position: relative; z-index: 3;
+  display: flex; gap: 8px;
+  margin-top: -27px; padding-bottom: 30px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.switch::-webkit-scrollbar { display: none; }
+
+.biz {
+  flex: 0 0 auto;
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: 11px; align-items: center;
+  padding: 11px 15px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-default);
+  text-align: left;
+  box-shadow: 0 10px 26px -18px rgba(0, 0, 0, .9);
+  transition: background .16s, border-color .16s, transform .16s, box-shadow .16s;
+}
+.biz:hover { background: var(--bg-3); transform: translateY(-2px); }
+.biz[aria-current="true"] {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--biz-accent) 18%, transparent), transparent 72%),
+    var(--bg-2);
+  border-color: var(--biz-line);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--biz-accent) 45%, transparent),
+    0 12px 30px -16px color-mix(in srgb, var(--biz-accent) 60%, transparent);
+}
+.biz__name { display: block; font-size: 13px; font-weight: 500; line-height: 1.25; }
+.biz[aria-current="true"] .biz__name { color: var(--biz-accent); }
+.biz__shape {
+  display: block; margin-top: 2px;
+  font-family: var(--mono); font-size: 10px; color: var(--text-muted);
+}
+.biz__glyph { display: block; width: 26px; height: 20px; }
+.biz__glyph .g-fill  { fill: var(--biz-accent); opacity: .95; }
+.biz__glyph .g-ghost { fill: currentColor; opacity: .22; }
+.biz__glyph .g-rule  { stroke: currentColor; opacity: .32; stroke-width: 1; fill: none; }
+
+/* ── the stage: Chief stands somewhere different per stance ───────── */
+
+.stage { display: grid; gap: 34px; align-items: start; padding-bottom: 54px; }
+
+.app[data-chief="right"] .stage {
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-areas: "work chief";
+}
+.app[data-chief="left"] .stage {
+  grid-template-columns: 296px minmax(0, 1fr);
+  grid-template-areas: "chief work";
+}
+.app[data-chief="below"] .stage {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "work" "chief";
+}
+
+.work { grid-area: work; display: flex; flex-direction: column; gap: 38px; min-width: 0; }
+.margin { grid-area: chief; min-width: 0; }
+
+.app[data-chief="right"] .margin,
+.app[data-chief="left"] .margin { position: sticky; top: 26px; }
+
+.surface {
+  opacity: 1; transform: none;
+  transition: opacity var(--dur) var(--ease) var(--delay, 0ms),
+              transform var(--dur) var(--ease) var(--delay, 0ms);
+  min-width: 0;
+}
+[data-entering] .surface { opacity: 0; transform: translateY(16px); transition: none; }
+
+.surface__head {
+  display: flex; align-items: baseline; gap: 12px;
+  padding-bottom: 12px; margin-bottom: 18px;
+  border-bottom: 0;
+  background: linear-gradient(90deg, var(--border-default), transparent 82%)
+              bottom left / 100% 1px no-repeat;
+}
+.surface__head h3 {
+  font-family: var(--display);
+  font-size: 15px; font-weight: 600; letter-spacing: -.008em;
+}
+.surface[data-role="lead"] .surface__head {
+  padding-bottom: 15px; margin-bottom: 22px;
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 60%, transparent) 0 60px,
+      var(--border-default) 60px, transparent 88%)
+    bottom left / 100% 1px no-repeat;
+}
+.surface[data-role="lead"] .surface__head h3 { font-size: 23px; font-weight: 500; }
+.surface__n {
+  font-family: var(--mono); font-size: 9.5px;
+  color: var(--text-muted); letter-spacing: .08em;
+}
+.surface[data-role="lead"] .surface__n { color: var(--accent); }
+.surface__meta {
+  margin-left: auto;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: .04em; color: var(--text-muted); white-space: nowrap;
+}
+
+/* Panels are LAYERED, not filled: a top inner highlight so the edge
+   catches light, a gradient rather than a flat colour, and a long soft
+   shadow. The difference between a card and a rectangle. */
+.surface__body { border-radius: 14px; }
+.app[data-stance="board"] .surface[data-role="lead"] .surface__body {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--text-primary) 2.5%, transparent), transparent 38%),
+    var(--bg-0);
+  border: 1px solid var(--border-subtle);
+  padding: 20px 18px;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent),
+    0 24px 52px -34px rgba(0, 0, 0, .95);
+}
+.app[data-stance="calendar"] .surface[data-role="lead"] .surface__body {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--text-primary) 3%, transparent), transparent 42%),
+    var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  padding: 20px;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
+    0 22px 48px -34px rgba(0, 0, 0, .9);
+}
+/* A register and a pipeline sit bare on the page — hairlines organise
+   them, and a card around a table is a box around a box. */
+.app[data-stance="register"] .surface[data-role="lead"] .surface__body,
+.app[data-stance="pipeline"] .surface[data-role="lead"] .surface__body,
+.app[data-stance="document"] .surface[data-role="lead"] .surface__body {
+  background: none; border: 0; padding: 0;
+}
+
+.surface[data-role="secondary"] .surface__body,
+.surface[data-role="footer"] .surface__body {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--text-primary) 3%, transparent), transparent 42%),
+    var(--bg-2);
+  border: 1px solid var(--border-subtle);
+  padding: 20px;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
+    0 18px 42px -34px rgba(0, 0, 0, .85);
+}
+
+/* A calendar's week is shallow, so the quiet surfaces below it sit side
+   by side instead of stacking into a long scroll. */
+.app[data-stance="calendar"] .work > .surface[data-role="secondary"] ~ .surface {
+  margin-top: 0;
+}
+
+/* ── Chief ────────────────────────────────────────────────────────── */
+
+.margin { display: flex; flex-direction: column; gap: 22px; }
+
+.voice {
+  font-family: var(--voice);
+  font-size: 14.5px; line-height: 1.62;
+  color: var(--text-secondary);
+  padding-left: 16px;
+  background: linear-gradient(180deg, var(--accent), transparent) left top / 2px 100% no-repeat;
+  text-wrap: pretty;
+}
+
+.kept { display: flex; flex-direction: column; gap: 20px; position: relative; padding-left: 30px; }
+.kept::before {
+  content: ""; position: absolute; left: 9px; top: 6px; bottom: 6px; width: 1px;
+  background: linear-gradient(180deg, var(--border-default), transparent);
+}
+
+.note { position: relative; opacity: 1; transition: opacity var(--dur) var(--ease) var(--delay, 0ms); }
+[data-entering] .note { opacity: 0; transition: none; }
+
+.note__n {
+  position: absolute; left: -30px; top: 1px;
+  width: 19px; text-align: center;
+  font-family: var(--mono); font-size: 9.5px;
+  color: var(--text-muted); background: var(--bg-1); padding: 2px 0;
+}
+.note[data-kind="kept"] .note__n { color: var(--accent); }
+.note__top { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.note__what { font-size: 12.5px; font-weight: 600; letter-spacing: -.005em; }
+.note__why {
+  font-family: var(--voice);
+  font-size: 13.5px; line-height: 1.6; color: var(--text-secondary);
+  text-wrap: pretty;
+}
+.note[data-kind="refused"] {
+  padding: 14px 14px 14px 16px; border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.cuts { border-top: 1px solid var(--border-subtle); padding-top: 16px; }
+.cuts summary {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11.5px; color: var(--text-muted); list-style: none;
+}
+.cuts summary::after {
+  content: ""; margin-left: auto; width: 6px; height: 6px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px); transition: transform .18s var(--ease);
+}
+.cuts[open] summary::after { transform: rotate(-135deg) translateY(-2px); }
+.cuts summary:hover { color: var(--text-secondary); }
+.cuts__list { display: flex; flex-direction: column; gap: 14px; padding-top: 16px; }
+.cut__what { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.cut__what s { text-decoration-thickness: 1px; }
+.cut__why {
+  font-family: var(--voice); font-size: 13px; line-height: 1.55;
+  color: var(--text-muted); text-wrap: pretty;
+}
+.override { font-size: 11.5px; line-height: 1.6; color: var(--text-muted); }
+
+/* Chief along the bottom is a STRIP, not a column: the notes run across
+   in a row so the board above keeps its full width. */
+.app[data-chief="below"] .margin {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 26px;
+  display: grid; gap: 26px 34px;
+  grid-template-columns: minmax(240px, 1fr) minmax(0, 2.2fr) minmax(220px, .9fr);
+  align-items: start;
+}
+.app[data-chief="below"] .kept {
+  padding-left: 0; display: grid; gap: 22px 30px;
+  grid-template-columns: repeat(auto-fit, minmax(228px, 1fr));
+}
+.app[data-chief="below"] .kept::before { display: none; }
+.app[data-chief="below"] .note__n { position: static; display: inline-block; width: auto; background: none; padding: 0; margin-right: 6px; }
+.app[data-chief="below"] .cuts { border-top: 0; padding-top: 0; }
+
+/* ── colophon ─────────────────────────────────────────────────────── */
+
+.colophon {
+  display: flex; flex-wrap: wrap; gap: 8px 24px;
+  padding: 20px 0 44px;
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: .04em; color: var(--text-muted);
+}
+.colophon b { font-weight: 400; color: var(--accent); }
+
+/* ═══ primitives ═══════════════════════════════════════════════════ */
+
+/* ── timeline_day ─────────────────────────────────────────────────── */
+
+.tl { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 8px; }
+.tl__hours { position: relative; height: 520px; }
+.tl__hour {
+  position: absolute; left: 0; right: 0; transform: translateY(-50%);
+  text-align: right; padding-right: 8px;
+  font-family: var(--mono); font-size: 9.5px; color: var(--text-muted);
+}
+
+.tl__lanes {
+  display: grid; grid-auto-flow: column;
+  grid-auto-columns: minmax(128px, 1fr); gap: 6px;
+  overflow-x: auto; padding-bottom: 4px;
+}
+.tl__laneHead { padding-bottom: 9px; margin-bottom: 8px; border-bottom: 1px solid var(--border-default); }
+.tl__laneHead h4 { font-size: 12px; font-weight: 500; }
+.tl__laneHead p { font-size: 10px; color: var(--text-muted); }
+
+.tl__track {
+  position: relative; height: 520px;
+  border-radius: 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+}
+
+.tl__event {
+  position: absolute; left: 3px; right: 3px; overflow: hidden;
+  padding: 5px 8px; border-radius: 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-subtle);
+  border-left: 2px solid var(--accent);
+}
+.tl__event h5 { font-size: 11px; font-weight: 500; line-height: 1.25; }
+.tl__event p { font-size: 10px; line-height: 1.3; color: var(--text-muted); }
+.tl__time { display: block; font-family: var(--mono); font-size: 9px; color: var(--accent); }
+.tl__event[data-short="yes"] { display: flex; align-items: baseline; gap: 6px; padding: 3px 8px; }
+.tl__event[data-short="yes"] h5 { font-size: 10.5px; font-weight: 400; }
+
+/* A gap is absence — outlined, never filled, so it can never compete
+   with real work for attention. */
+.tl__gap {
+  position: absolute; left: 3px; right: 3px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  border: 1px dashed var(--border-default);
+}
+.tl__gap span {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: .06em; color: var(--text-muted);
+  background: var(--bg-1); padding: 1px 5px; white-space: nowrap;
+}
+
+/* ── priority_docket ──────────────────────────────────────────────── */
+
+.dk__head { display: flex; justify-content: flex-end; padding-bottom: 8px; }
+
+.dk__group + .dk__group { margin-top: 18px; }
+.dk__groupHead { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
+.dk__groupHead::after { content: ""; flex: 1; height: 1px; background: var(--border-subtle); }
+
+.dk__row {
+  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px; align-items: center;
+  padding: 12px 12px 12px 14px;
+  border-radius: 8px;
+  transition: background .15s;
+}
+.dk__row + .dk__row { box-shadow: 0 -1px 0 var(--border-subtle); }
+.dk__row:hover { background: var(--bg-2); }
+
+.dk__row h5 { font-size: 13.5px; font-weight: 500; line-height: 1.3; }
+.dk__row p {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-top: 3px; font-size: 11.5px; color: var(--text-muted);
+}
+.dk__owner { font-family: var(--mono); font-size: 10px; }
+
+.dk__metric { text-align: right; white-space: nowrap; }
+.dk__metric strong { font-size: 22px; font-weight: 600; line-height: 1; }
+.dk__metric span {
+  display: block; margin-top: 2px;
+  font-size: 10px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Urgency is --danger, in every vertical, whatever the room accent is. */
+.dk__row[data-urgent]::before {
+  content: ""; position: absolute; left: 0; top: 10px; bottom: 10px;
+  width: 2px; border-radius: 9999px; background: var(--danger);
+}
+.dk__row[data-urgent] .dk__metric strong { color: var(--danger); }
+
+.dk__empty { font-size: 12px; color: var(--text-muted); padding: 6px 14px; }
+
+/* ── week_grid ────────────────────────────────────────────────────── */
+
+.wk__grid {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px;
+}
+.wk__day {
+  display: flex; flex-direction: column; gap: 8px;
+  min-height: 216px; padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+}
+.wk__day[data-empty] { background: transparent; }
+
+/* The uneven shape IS the information — Sunday's weight and Thursday's
+   emptiness legible before a word is read. */
+.wk__load { height: 3px; border-radius: 9999px; background: var(--accent); opacity: calc(.16 + var(--load, 0) * .84); }
+.wk__day[data-empty] .wk__load { background: var(--border-default); opacity: 1; }
+
+.wk__dayHead { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.wk__dayNum { font-size: 15px; font-weight: 600; }
+.wk__day[data-empty] .wk__dayNum { color: var(--text-muted); font-weight: 400; }
+
+.wk__event { padding-top: 8px; border-top: 1px solid var(--border-subtle); }
+.wk__event time { display: block; font-family: var(--mono); font-size: 9px; color: var(--accent); }
+.wk__event h5 { font-size: 11px; font-weight: 500; line-height: 1.25; margin-top: 1px; }
+.wk__event p { font-size: 10px; line-height: 1.3; color: var(--text-muted); }
+.wk__count { font-family: var(--mono); font-size: 9px; color: var(--text-muted); }
+.wk__quiet { margin-top: auto; font-size: 13px; color: var(--border-strong); }
+
+/* ── attention_queue ──────────────────────────────────────────────── */
+
+.q__item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px; align-items: center;
+  padding: 11px 12px; border-radius: 8px;
+  transition: background .15s;
+}
+.q__item + .q__item { box-shadow: 0 -1px 0 var(--border-subtle); }
+.q__item:hover { background: var(--bg-2); }
+.q__item h5 { font-size: 13px; font-weight: 500; }
+.q__item p { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+.q__age { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.q__age strong { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.q__item[data-overdue] .q__age strong { color: var(--danger); }
+
+.q__more { padding: 10px 12px 0; font-size: 11.5px; color: var(--text-muted); }
+
+/* ── metric_row ───────────────────────────────────────────────────── */
+
+.mx { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px; }
+.mx dt { margin-bottom: 6px; }
+.mx dd { margin: 0; }
+
+/* ── benchmark_panel ──────────────────────────────────────────────── */
+/* The band is the component. A bare 38% is noise; 38% sitting left of a
+   52% average and a 50% target, with one line saying what to do about the
+   gap, is a decision.
+
+   Colour discipline (dataviz): the FILL carries magnitude in the room's
+   accent — one hue, no rainbow. Standing (strong / fair / weak) is carried
+   by a worded badge in the reserved status colours, never by the bar alone,
+   so the reading survives colour-blindness and greyscale print. */
+
+.bn__row { padding: 16px 0; border-bottom: 1px solid var(--border-subtle); }
+.bn__row:first-child { padding-top: 4px; }
+.bn__row:last-child { border-bottom: 0; padding-bottom: 4px; }
+
+.bn__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.bn__head h5 { font-size: 13px; font-weight: 500; }
+.bn__val {
+  margin-left: auto; font-size: 19px; font-weight: 600;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em;
+}
+
+/* A bullet chart, which is the right form for a measure against
+   qualitative ranges: the territory sits behind as bands, and the value
+   is a THINNER bar drawn through them. The first attempt drew both at
+   full height, so the fill covered the bands it was meant to be read
+   against and they may as well not have been there. */
+.bn__track {
+  position: relative; height: 11px; border-radius: 3px;
+  background: var(--bg-3); overflow: visible;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .4);
+}
+.bn__zone { position: absolute; top: 0; bottom: 0; }
+.bn__zone--weak { background: color-mix(in srgb, var(--danger) 13%, transparent); }
+.bn__zone--good { background: color-mix(in srgb, var(--success) 12%, transparent); }
+.bn__track > .bn__zone:first-of-type { border-radius: 3px 0 0 3px; }
+
+/* The measure. Lit at its end — a gradient plus a soft bloom where the
+   value lands — so the eye is pulled to where it stopped rather than to
+   the length of the bar. */
+.bn__fill {
+  position: absolute; top: 3.5px; bottom: 3.5px; left: 0;
+  border-radius: 2px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 55%, transparent), var(--accent));
+  box-shadow: 0 0 10px -1px color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+/* Ticks sit ON the track and must stay legible over the fill, so each
+   carries a 2px ring in the surface colour. */
+.bn__tick {
+  position: absolute; top: -3px; width: 2px; height: 17px;
+  border-radius: 1px; transform: translateX(-1px);
+  box-shadow: 0 0 0 2px var(--bg-2);
+}
+.bn__tick--avg { background: var(--text-muted); }
+.bn__tick--target { background: var(--text-primary); }
+
+.bn__scale {
+  display: flex; gap: 16px; margin-top: 8px;
+  font-size: 10px; letter-spacing: .04em; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.bn__scale i { font-style: normal; display: inline-flex; align-items: center; gap: 5px; }
+.bn__scale i::before {
+  content: ""; width: 2px; height: 9px; border-radius: 1px; background: currentColor;
+}
+.bn__scale .bn__k--target { color: var(--text-secondary); }
+
+/* The readings are the densest prose on the page and were set at a UI
+   size in a UI face. Newsreader at 14 on a 58ch measure is the same
+   information and a completely different reading experience. The lead
+   clause carries more weight so the eye has an entry point instead of
+   meeting a uniform grey block. */
+.bn__reading {
+  margin-top: 11px;
+  font-family: var(--voice);
+  font-size: 14px; line-height: 1.62;
+  color: var(--text-muted);
+  max-width: 58ch;
+  text-wrap: pretty;
+}
+.bn__reading b { font-weight: 500; color: var(--text-secondary); }
+.bn__src {
+  display: block; margin-top: 6px;
+  font-family: var(--mono); font-size: 9.5px; font-style: normal;
+  letter-spacing: .04em; color: var(--text-muted);
+}
+
+/* The product line. Only a cascade has one, and it is the whole reason
+   those rows sit together rather than as three separate gauges. */
+.bn__product {
+  margin-top: 16px; padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  font-size: 12.5px; color: var(--text-secondary);
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px;
+}
+.bn__product b {
+  font-size: 22px; font-weight: 600; color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.bn__product em {
+  font-style: normal; font-family: var(--mono); font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+/* ── ledger ───────────────────────────────────────────────────────── */
+
+.lg__closing {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding-bottom: 14px; margin-bottom: 6px;
+  border-bottom: 1px solid var(--border-default);
+}
+.lg__wrap { overflow-x: auto; }
+.lg__t { width: 100%; border-collapse: collapse; }
+.lg__t th {
+  text-align: left; padding: 0 12px 10px 0;
+  font-size: 10px; font-weight: 500;
+  letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-muted); white-space: nowrap;
+}
+.lg__t td {
+  padding: 10px 12px 10px 0; font-size: 12px;
+  border-top: 1px solid var(--border-subtle); white-space: nowrap;
+}
+.lg__t td:nth-child(2) { white-space: normal; min-width: 190px; }
+.lg__t th:last-child, .lg__t td:last-child { padding-right: 0; }
+.lg__n { text-align: right; }
+.lg__run { font-weight: 600; }
+.lg__date { font-family: var(--mono); font-size: 10.5px; color: var(--text-muted); }
+.lg__more { padding-top: 10px; font-size: 11.5px; color: var(--text-muted); }
+
+
+/* ═══ signature moves ══════════════════════════════════════════════ */
+/* Each of these is driven by a primitive OPTION out of the layout
+   schema. None of them knows which business it is drawing — the engine
+   still cannot tell a salon from a law firm, and that is the point. */
+
+/* ── the live moment (timeline_day: show_now) ─────────────────────── */
+.tl__now {
+  position: absolute; left: 0; right: 0; height: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--accent) 78%, transparent);
+  z-index: 3; pointer-events: none;
+}
+.tl__now span {
+  position: absolute; left: 0; top: -9px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: .06em;
+  color: var(--text-inverse);
+  background: var(--accent);
+  padding: 2px 5px; border-radius: 3px;
+}
+.tl__lanes { position: relative; }
+
+/* ── what a gap MEANS (timeline_day: gap_tone) ────────────────────── */
+/* Free minutes on a floor are an opportunity and are drawn as an empty
+   slot. Travel on a dispatch board is a cost, and is drawn in hi-vis
+   hatching because it is the thing to attack. */
+.tl__gap span b { font-weight: 600; font-size: 11px; color: var(--text-secondary); }
+.tl__gap[data-tone="open"] { border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+.tl__gap[data-tone="travel"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--warning) 26%, transparent);
+  background: repeating-linear-gradient(135deg,
+    color-mix(in srgb, var(--warning) 9%, transparent) 0 6px,
+    transparent 6px 13px);
+}
+.tl__gap[data-tone="travel"] span b { color: var(--warning); }
+
+/* ── the anchor day (week_grid: anchor_day) ───────────────────────── */
+/* A church week is not seven equal columns. Sunday takes the width and
+   the other six compress around it, so the shape of the week is legible
+   before a single gathering is read. */
+.wk__grid { grid-template-columns: var(--cols, repeat(7, minmax(0, 1fr))); }
+.wk__day[data-anchor] {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 9%, transparent), transparent 46%),
+    var(--bg-1);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.wk__day[data-anchor] .wk__dayNum { font-size: 21px; color: var(--accent); }
+.wk__day[data-anchor] .wk__load { height: 4px; }
+.wk__day[data-anchor] .wk__event h5 { font-size: 12.5px; }
+
+/* ── days that are not the working week (week_grid: dim_days) ─────── */
+/* Rendering Saturday at full strength implies an availability a private
+   practice does not offer. */
+.wk__day[data-dim] { background: transparent; border-style: dashed; opacity: .45; }
+.wk__day[data-dim] .wk__load { display: none; }
+
+/* ── the book across its stages (priority_docket: stage_layout) ───── */
+/* A stage that has stopped moving is only visible as a column with four
+   things parked in it; a vertical stack hides exactly that finding. */
+.dk__cols {
+  display: grid; grid-auto-flow: column;
+  grid-auto-columns: minmax(196px, 1fr);
+  gap: 10px; overflow-x: auto; padding-bottom: 6px;
+}
+.dk__cols .dk__group { margin: 0 !important; min-width: 0; }
+.dk__cols .dk__groupHead {
+  padding-bottom: 10px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.dk__cols .dk__groupHead::after { display: none; }
+.dk__cols .dk__row {
+  display: block; padding: 11px 12px; border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+.dk__cols .dk__row + .dk__row { margin-top: 7px; box-shadow: none; }
+.dk__cols .dk__row h5 { font-size: 12.5px; line-height: 1.35; }
+.dk__cols .dk__row p { font-size: 11px; margin-top: 4px; }
+.dk__cols .dk__metric { text-align: left; margin-top: 9px; display: flex; align-items: baseline; gap: 6px; }
+.dk__cols .dk__metric strong { font-size: 17px; }
+.dk__cols .dk__metric span { margin: 0; }
+.dk__cols .dk__row[data-urgent] { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.dk__cols .dk__row[data-urgent]::before { display: none; }
+.dk__cols .dk__empty { padding: 10px 0; }
+
+/* ── a list called over (priority_docket: numbered) ───────────────── */
+.dk[data-numbered] .dk__row { grid-template-columns: 30px minmax(0, 1fr) auto; }
+.dk__seq {
+  font-family: var(--mono); font-size: 11px;
+  color: var(--text-muted); padding-top: 3px;
+}
+.app[data-stance="document"] .dk[data-numbered] .dk__row {
+  grid-template-columns: 34px minmax(0, 1fr) 92px;
+}
+
+/* ── the surface meta, in the business's own words ────────────────── */
+.surface__meta {
+  margin-left: auto;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: .04em; color: var(--text-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .dk__cols { grid-auto-flow: row; grid-auto-columns: auto; }
+  .surface__meta { display: none; }
+}
+
+
+/* ── the register (priority_docket: banding = horizon) ───────────── */
+/* A firm's docket report is a wide table cut into deadline horizons,
+   not seven rows stacked in a reading column. The band answers "how
+   long have I got" before a single number is read, and the columns give
+   the width something to do. */
+.dk[data-banded] .dk__group + .dk__group { margin-top: 26px; }
+.dk[data-banded] .dk__groupHead {
+  padding-bottom: 9px; margin-bottom: 2px;
+  background: linear-gradient(90deg, var(--border-default), transparent 70%)
+              bottom left / 100% 1px no-repeat;
+}
+.dk[data-banded] .dk__row {
+  grid-template-columns: 34px minmax(0, 2.1fr) minmax(0, 1fr) 118px 86px;
+  align-items: baseline; gap: 20px;
+  padding: 13px 12px 13px 14px;
+}
+.dk[data-banded] .dk__row h5 { font-size: 14.5px; line-height: 1.3; }
+.dk[data-banded] .dk__party,
+.dk[data-banded] .dk__who {
+  font-size: 12px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dk[data-banded] .dk__who { font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; }
+.dk[data-banded] .dk__row > div:first-of-type p { display: none; }
+.dk[data-banded] .dk__metric strong { font-size: 21px; }
+
+/* ── the funder grid (priority_docket: stage_layout = grid) ───────── */
+/* Peers, not a sequence. Nothing moves from one funder to the next, so
+   these are cards side by side rather than columns in a flow. */
+.dk__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: 12px;
+}
+.dk__grid .dk__group {
+  margin: 0 !important; min-width: 0;
+  border-radius: 10px; padding: 14px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--text-primary) 3%, transparent), transparent 44%),
+    var(--bg-1);
+  border: 1px solid var(--border-subtle);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 5%, transparent);
+}
+.dk__grid .dk__groupHead {
+  padding-bottom: 11px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.dk__grid .dk__groupHead::after { display: none; }
+.dk__grid .dk__row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px; padding: 11px 0; border-radius: 0;
+}
+.dk__grid .dk__row:hover { background: transparent; }
+.dk__grid .dk__row + .dk__row { box-shadow: 0 -1px 0 var(--border-subtle); }
+.dk__grid .dk__row h5 { font-size: 13px; line-height: 1.3; }
+.dk__grid .dk__row p { font-size: 11px; margin-top: 3px; }
+.dk__grid .dk__metric strong { font-size: 17px; }
+.dk__grid .dk__row[data-urgent] { padding-left: 10px; }
+.dk__grid .dk__row[data-urgent]::before { top: 11px; bottom: 11px; }
+.dk__grid .dk__empty { padding: 8px 0; }
+
+@media (max-width: 900px) {
+  .dk[data-banded] .dk__row {
+    grid-template-columns: 30px minmax(0, 1fr) auto; gap: 12px;
+  }
+  .dk[data-banded] .dk__party, .dk[data-banded] .dk__who { display: none; }
+  .dk[data-banded] .dk__row > div:first-of-type p { display: flex; }
+}
+
+/* ═══ stance overrides ═════════════════════════════════════════════ */
+
+/* board — the timeline sits on the darker inset, so its own track needs
+   to drop the second ground or it reads as a box inside a box. */
+.app[data-stance="board"] .tl__track { background: transparent; border-color: var(--border-subtle); }
+.app[data-stance="board"] .tl__gap span { background: var(--bg-0); }
+.app[data-stance="board"] .tl__event { background: var(--bg-2); }
+.app[data-stance="board"] .tl__lanes { gap: 8px; }
+
+/* document — the docket is set like a brief. Bigger rows, more leading,
+   the metric in a wider gutter, hairline rules doing the organising. */
+.app[data-stance="document"] .dk__row {
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: 28px; padding: 17px 0 17px 14px; border-radius: 0;
+}
+.app[data-stance="document"] .dk__row:hover { background: transparent; }
+.app[data-stance="document"] .dk__row + .dk__row { box-shadow: 0 -1px 0 var(--border-subtle); }
+.app[data-stance="document"] .dk__row h5 {
+  font-size: 16px; font-weight: 500; line-height: 1.35; letter-spacing: -.011em;
+}
+.app[data-stance="document"] .dk__row p { font-size: 12px; margin-top: 5px; }
+.app[data-stance="document"] .dk__metric strong { font-size: 26px; font-weight: 500; }
+.app[data-stance="document"] .dk__group + .dk__group { margin-top: 30px; }
+.app[data-stance="document"] .dk__row[data-urgent]::before { top: 15px; bottom: 15px; }
+
+/* calendar — the week gets air. */
+.app[data-stance="calendar"] .wk__day { min-height: 244px; padding: 12px; }
+.app[data-stance="calendar"] .wk__grid { gap: 8px; }
+
+/* ═══ small screens — a genuinely different form ═══════════════════ */
+
+@media (max-width: 1320px) {
+  .wrap { padding: 0 24px; }
+  .app[data-chief="right"] .stage { grid-template-columns: minmax(0, 1fr) 286px; }
+  .app[data-chief="left"] .stage { grid-template-columns: 262px minmax(0, 1fr); }
+  .app[data-chief="below"] .margin { grid-template-columns: minmax(0, 1fr) minmax(0, 1.8fr); }
+  .app[data-chief="below"] .cuts { grid-column: 1 / -1; }
+}
+
+@media (max-width: 1020px) {
+  :root { --r: 20px; }
+  .wrap { padding: 0 16px; }
+  .hero { padding: 32px 0 48px; }
+  .hero__name { display: none; }
+  /* The finding always stacks on a phone. Side by side it squeezes the
+     line into a four-word measure, and the line is the argument. */
+  .app[data-hero="wide"] .hero__find,
+  .app[data-hero="stacked"] .hero__find {
+    grid-template-columns: minmax(0, 1fr); gap: 12px;
+  }
+
+  /* Chief always drops below on a narrow screen: none of the three
+     placements survives a single-column page, and a sidebar squeezed to
+     40% of a phone is worse than one honestly stacked. */
+  .app .stage {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-areas: "work" "chief" !important;
+  }
+  .app[data-chief="below"] .margin,
+  .app[data-chief="right"] .margin,
+  .app[data-chief="left"] .margin {
+    position: static;
+    grid-template-columns: minmax(0, 1fr);
+    border-top: 1px solid var(--border-subtle); padding-top: 24px;
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  .app[data-chief="below"] .kept { display: flex; flex-direction: column; padding-left: 30px; }
+  .app[data-chief="below"] .kept::before { display: block; }
+  .app[data-chief="below"] .note__n {
+    position: absolute; left: -30px; width: 19px; background: var(--bg-1);
+    padding: 2px 0; margin: 0;
+  }
+  .margin { position: static; }
+
+  /* The finding stacks rather than shrinking — it is the one thing on
+     the page that must not get quieter on a phone. */
+  .find { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .find__body { padding-top: 0; }
+
+  /* The timeline stops pretending to be a grid: one stacked lane per
+     resource, times inline. A sideways-scrolling grid on a phone is a
+     lie about what the screen can do. */
+  .tl { grid-template-columns: minmax(0, 1fr); }
+  .tl__hours { display: none; }
+  .tl__lanes { grid-auto-flow: row; grid-auto-columns: auto; gap: 18px; overflow: visible; }
+  .tl__track {
+    height: auto; border: 0; background: none; border-radius: 0;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  .tl__event, .tl__gap {
+    position: static; height: auto !important; top: auto !important;
+    left: auto; right: auto;
+  }
+  .tl__event { padding: 9px 11px; }
+  .tl__event h5 { font-size: 12.5px; }
+  .tl__event p { font-size: 11px; }
+  .tl__gap { padding: 7px 11px; justify-content: flex-start; }
+
+  /* Seven columns become seven rows; the week's shape survives in the
+     load bars running down the left edge. */
+  .wk__grid { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .wk__day, .app[data-stance="calendar"] .wk__day {
+    min-height: 0;
+    display: grid; grid-template-columns: 3px 54px minmax(0, 1fr);
+    gap: 12px; align-items: start; padding: 12px;
+  }
+  .wk__load { height: auto; width: 3px; align-self: stretch; min-height: 24px; }
+  .wk__dayHead { flex-direction: column; align-items: flex-start; gap: 0; }
+  .wk__quiet { margin: 0; }
+}
+
+@media (max-width: 620px) {
+  .find__stat { font-size: clamp(2.6rem, 15vw, 3.4rem); }
+  .app[data-stance="document"] .dk__row { grid-template-columns: minmax(0, 1fr) auto; gap: 14px; }
+  .app[data-stance="document"] .dk__row h5 { font-size: 14.5px; }
+  .app[data-stance="document"] .dk__metric strong { font-size: 21px; }
+  .surface[data-role="secondary"] .surface__body,
+  .surface[data-role="footer"] .surface__body,
+  .app[data-stance="board"] .surface[data-role="lead"] .surface__body,
+  .app[data-stance="calendar"] .surface[data-role="lead"] .surface__body { padding: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .surface, .note, [data-entering] .surface, [data-entering] .note {
+    opacity: 1; transform: none; transition: none;
+  }
+  * { transition-duration: .001ms !important; }
+}
+</style>
+
+<div class="app" id="app">
+
+  <header class="hero">
+    <div class="wrap hero__inner">
+      <h2 class="hero__name" id="heroName" aria-hidden="true"></h2>
+      <span class="page-label" id="eyebrow"></span>
+      <div class="hero__find">
+        <p class="hero__stat" id="findStat"></p>
+        <div>
+          <p class="hero__label" id="findLabel"></p>
+          <p class="hero__line" id="findLine"></p>
+        </div>
+      </div>
+      <ul class="chips" id="chips" aria-label="What Chief keyed on"></ul>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <nav class="switch" id="switch" aria-label="Business type"></nav>
+
+    <div class="stage">
+      <div class="work" id="workspace"></div>
+
+      <aside class="margin" aria-live="polite" aria-label="What Chief decided">
+        <p class="voice" id="voice"></p>
+        <div class="kept" id="kept"></div>
+        <div>
+          <details class="cuts" id="cuts">
+            <summary id="cutsSummary"></summary>
+            <div class="cuts__list" id="cutsList"></div>
+          </details>
+          <p class="override">
+            Chief proposes; you correct it. Pick any other business above and
+            the workspace is rebuilt — anything you have renamed yourself is kept.
+          </p>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="colophon" id="colophon"></footer>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* Fonts load without blocking. A stylesheet in the document holds up
+     the script below it, which holds up DOMContentLoaded, which stops a
+     sandboxed frame ever telling its host it is ready — the page then
+     sits invisible behind the host's timeout. Every face declares a real
+     fallback, so the page is legible from first paint. */
+  (function fonts() {
+    var l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2'
+      + '?family=Inter:wght@300;400;500;600;700'
+      + '&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400'
+      + '&family=JetBrains+Mono:wght@400;500'
+      + '&family=Playfair+Display:wght@500;600'
+      + '&family=Libre+Baskerville:wght@400;700'
+      + '&family=Cormorant+Garamond:wght@600;700'
+      + '&family=IBM+Plex+Serif:wght@500;600'
+      + '&family=Oswald:wght@400;500'
+      + '&display=swap';
+    document.head.appendChild(l);
+  })();
+
+  /* ═══════════════════════════════════════════════════════════════
+     THE LAYOUT SCHEMAS — copied from workspace_layouts/*.json.
+     Nothing below reads an archetype name to decide what to draw.
+     ═══════════════════════════════════════════════════════════════ */
+
+  var LAYOUTS = {
+
+    salon: {
+      archetype: 'salon', label: 'Salon / Barber', vertical: 'personal_services',
+      rationale: 'For a salon the day IS the product. What gets sold is a block of a named person’s time in a named chair, and the only question that matters before noon is where the holes are. So the workspace opens on one day across chair lanes with the hours running down the side — not a list of bookings, because a list cannot show you a ninety-minute gap at 2pm. Everything else is subordinate to the floor.',
+      suppressed: [
+        { primitive: 'priority_docket', reason: 'A docket ranks by days remaining. Nothing on a salon floor is measured in days — the unit is the fifteen-minute slot, and a deadline column would be blank on every row.' },
+        { primitive: 'week_grid', reason: 'The week is real but it is not where decisions happen. A stylist looking at seven columns cannot see the gap they could still fill this afternoon.' },
+        { primitive: 'ledger', reason: 'Salon money settles at the chair, same day, card present. There is no running balance to carry, so a ledger would show a column of zeros.' },
+        { primitive: 'metric_row', reason: 'Held back deliberately. Utilisation and average ticket are real numbers, but putting them on the opening screen turns a working board into a report, and the floor is what needs working.' }
+      ],
+      surfaces: [
+        { id: 'floor_today', primitive: 'timeline_day', role: 'lead', title: 'The floor today',
+          rationale: 'Chairs as lanes, hours down the side. Gaps over thirty minutes are called out because those are the only minutes anyone can still do something about.',
+          bindings: { lanes: {}, events: {} },
+          options: { day_start: 9, day_end: 19, gap_threshold_minutes: 30, show_gaps: true,
+                     lane_noun: 'Chair', show_now: true, gap_tone: 'open' } },
+        { id: 'rebook_lapsed', primitive: 'attention_queue', role: 'secondary', title: 'Past their rebook',
+          rationale: 'A salon does not lose clients loudly. It loses them by a six-week cut quietly becoming a nine-week one, so the queue is ordered by how long it has been.',
+          bindings: { items: {} },
+          options: { age_unit: 'weeks', escalate_after_days: 56, max_visible: 6 } },
+        { id: 'floor_health', primitive: 'benchmark_panel', role: 'footer', title: 'How the floor is really doing',
+          rationale: 'Rebooking decides whether this business compounds, and almost no booking system surfaces it — you have to dig it out of a report. Putting it on the home screen next to its band is the whole point.',
+          bindings: { rows: {} },
+          options: { format: 'percent', show_average: true } }
+      ],
+      room: {
+        eyebrow: 'The floor',
+        meta: {
+          'floor_today': '9am – 7pm · 4 chairs',
+          'rebook_lapsed': '8 clients drifting',
+          'floor_health': 'measured against the industry'
+        }
+      },
+      terminology: { contact: { value: 'Client' }, project: { value: 'Appointment' }, schedule: { value: 'The floor' } },
+      theme: { display_font: '"Playfair Display", Georgia, serif', accent_name: 'orange',
+        palette: { accent: '#ea580c', accent2: '#f97316' , field: '#FFF7F1', field2: '#FFEADC'},
+        dark:    { accent: '#ff6b35', accent2: '#f7931e' , field: '#1B100B', field2: '#2C1710'} }
+    },
+
+    trades: {
+      archetype: 'trades', label: 'Trades / Home Services', vertical: 'contractor',
+      rationale: 'A trades business sells crew-hours against addresses, and the thing that quietly destroys a day is not a missed job — it is forty minutes of driving between two jobs nobody sequenced. So the workspace opens on the same one-day timeline a salon uses, but the lanes are crews rather than chairs and the gaps are read as travel, not as idle time. Beneath it sits money owed, because trades work is the one shape here that takes a deposit up front and carries a balance to the end.',
+      suppressed: [
+        { primitive: 'priority_docket', reason: 'Jobs do have deadlines, but a crew cannot act on days-remaining at 7am. They can act on where the truck goes next, which is what the timeline answers.' },
+        { primitive: 'week_grid', reason: 'The week matters for scheduling and is the wrong surface for dispatch. Seven columns cannot show that the 10am and the 11:30 are twenty-two miles apart.' },
+        { primitive: 'attention_queue', reason: 'Held back on purpose. Unreturned quotes are real work, but putting a second ranked list next to a live dispatch board splits the crew’s attention on the one screen that has to be unambiguous before the trucks roll.' },
+        { primitive: 'metric_row', reason: 'Job margin and close rate matter monthly, not at 7am. The ledger below already carries the only number that changes today, which is what is still owed.' }
+      ],
+      surfaces: [
+        { id: 'crew_day', primitive: 'timeline_day', role: 'lead', title: 'Crews today',
+          rationale: 'Crew lanes with the hours down the side, and every gap over twenty minutes flagged — on a trades board an open gap is usually drive time, and drive time is the cost nobody quotes for.',
+          bindings: { lanes: {}, events: {} },
+          options: { day_start: 7, day_end: 18, gap_threshold_minutes: 20, show_gaps: true,
+                     lane_noun: 'Crew', show_now: true, gap_tone: 'travel' } },
+        { id: 'unsold_estimates', primitive: 'attention_queue', role: 'secondary', title: 'Quoted, never answered',
+          rationale: 'The biggest revenue item on a trades board is not on the board. Work already quoted and never followed up is the cheapest money in the business, and it outranks the ledger because the ledger only tells you about work you already won.',
+          bindings: { items: {} },
+          options: { age_unit: 'days', escalate_after_days: 14, max_visible: 6 } },
+        { id: 'deposits_and_balances', primitive: 'ledger', role: 'footer', title: 'Deposits and balances due',
+          rationale: 'Trades is the one archetype here that takes money before the work and the rest after it. Debits, credits and a running balance, because the question is always how much of this job is still outstanding.',
+          bindings: { entries: {} },
+          options: { currency: 'USD', max_visible: 6 } },
+        { id: 'trade_health', primitive: 'benchmark_panel', role: 'footer', title: 'What the day is worth',
+          rationale: 'Four numbers decide whether a trades business makes money: whether the job gets fixed first time, whether paid hours are billable, whether quotes close, and whether customers are on a plan.',
+          bindings: { rows: {} },
+          options: { format: 'percent', show_average: true } }
+      ],
+      room: {
+        eyebrow: 'Dispatch',
+        meta: {
+          'crew_day': '7am – 6pm · 3 crews out',
+          'unsold_estimates': '$50,230 quoted',
+          'deposits_and_balances': 'asset accounts',
+          'trade_health': 'measured against the industry'
+        }
+      },
+      terminology: { contact: { value: 'Customer' }, project: { value: 'Job' }, schedule: { value: 'Dispatch' } },
+      theme: { display_font: 'Oswald, "Arial Narrow", sans-serif', accent_name: 'amber',
+        palette: { accent: '#b45309', accent2: '#d97706' , field: '#FFFBEE', field2: '#FCF0D2'},
+        dark:    { accent: '#eab308', accent2: '#f59e0b' , field: '#171308', field2: '#261C0C'} }
+    },
+
+
+    therapist: {
+      archetype: 'therapist', label: 'Therapist / Counsellor', vertical: 'therapist',
+      rationale: 'A private practice runs on a standing weekly hour — the same client, the same slot, week after week. So the working surface is the week, not the day and not a deadline list. What breaks a practice is never a bad week; it is the slow erosion of a caseload, where a client moves a session, then moves it again, then stops. Underneath the week sits exactly that.',
+      refused: [
+        { what: 'Anything clinical', reason: 'Session content, progress notes and clinical detail are refused outright — not hidden, refused. Storing them would make this platform a business associate under HIPAA, which needs a signed agreement with every downstream processor that could touch the data. That posture does not exist yet, so the vertical ships narrow and genuinely useful: scheduling, billing and admin, which carry no protected health information beyond the contact record any business already keeps.' }
+      ],
+      suppressed: [
+        { primitive: 'timeline_day', reason: 'A therapist\u2019s day is four or five hours in the same room. Hourly lanes would draw one column with five blocks in it — a calendar entry pretending to be a board.' },
+        { primitive: 'priority_docket', reason: 'Nothing in clinical work is ranked by days remaining. A docket would impose a deadline frame on a relationship, and every number in it would be invented.' },
+        { primitive: 'ledger', reason: 'Superbills and insurance remittance are real and they are their own surface. A running balance beside a caseload reads as though clients are accounts, which is the wrong frame on the screen that opens every morning.' },
+        { primitive: 'metric_row', reason: 'Bare figures would say nothing about whether a practice is healthy. Retention and no-shows only mean something against their bands, so they went to the panel instead.' }
+      ],
+      surfaces: [
+        { id: 'caseload_week', primitive: 'week_grid', role: 'lead', title: 'This week',
+          rationale: 'The standing hour is the unit of a private practice, so the week is the working surface. Seven columns show the recurring shape and, more usefully, the holes in it — a Tuesday that has quietly emptied out is a caseload problem you can see two weeks before it reaches the bank.',
+          bindings: { week_of: {}, events: {} },
+          options: { week_start: 'mon', show_counts: false, count_noun: 'booked',
+                     dim_days: ['sat', 'sun'] } },
+        { id: 'drifting_clients', primitive: 'attention_queue', role: 'secondary', title: 'Haven\u2019t been seen',
+          rationale: 'A caseload does not end, it thins. Someone moves a session, then moves it again, then stops answering, and six weeks later a standing hour is gone and nobody decided anything.',
+          bindings: { items: {} },
+          options: { age_unit: 'weeks', escalate_after_days: 21, max_visible: 6 } },
+        { id: 'practice_health', primitive: 'benchmark_panel', role: 'footer', title: 'Is the practice holding',
+          rationale: 'Two questions decide whether a private practice survives: is the caseload held, and does a booked hour actually get paid for. Neither is visible from a calendar.',
+          bindings: { rows: {} },
+          options: { format: 'percent', show_average: true } }
+      ],
+      room: {
+        eyebrow: 'The week',
+        meta: {
+          'caseload_week': 'Mon – Fri · initials only',
+          'drifting_clients': '6 not seen recently',
+          'practice_health': 'measured against the profession'
+        }
+      },
+      terminology: { contact: { value: 'Client' }, project: { value: 'Episode' }, appointment: { value: 'Session' }, schedule: { value: 'The week' } },
+      theme: { display_font: '"Cormorant Garamond", Georgia, serif', accent_name: 'indigo',
+        palette: { accent: '#4f46e5', accent2: '#6366f1' , field: '#F3F4FF', field2: '#E7E9FF'},
+        dark:    { accent: '#818cf8', accent2: '#a5b4fc' , field: '#101021', field2: '#1B1C38'} }
+    },
+
+    ministry: {
+      archetype: 'ministry', label: 'Ministry / Church', vertical: 'ministry',
+      rationale: 'A church’s unit of time is the week, and it is not a flat week — Sunday carries most of the weight, Wednesday carries some, and the shape of that is information a list destroys. So the workspace opens on seven columns with gatherings placed where they fall, because a leader needs to see the rhythm and the empty days at the same time. Under it sits the thing a week grid cannot show: the person who came once and has not been contacted since.',
+      suppressed: [
+        { primitive: 'timeline_day', reason: 'A ministry’s Tuesday is mostly empty and its Sunday is three services deep. One day of hourly lanes would be a wall of white space six days out of seven.' },
+        { primitive: 'priority_docket', reason: 'Ministry work is not deadline-shaped. Ranking a congregation by days-remaining would impose a legal frame on pastoral work, and the numbers would be arbitrary.' },
+        { primitive: 'ledger', reason: 'Giving is real money and it belongs in the giving surfaces where restricted funds can be handled honestly. A running balance next to a gathering calendar invites the wrong reading of both.' },
+        { primitive: 'metric_row', reason: 'Attendance figures are available and are deliberately not on the opening screen. A number at the top of a ministry workspace becomes the target, and the first-time guest queue below is the actual work.' }
+      ],
+      surfaces: [
+        { id: 'week_of_gatherings', primitive: 'week_grid', role: 'lead', title: 'This week',
+          rationale: 'Seven columns, gatherings where they fall. The uneven shape is the point — you should be able to see Sunday’s weight and Thursday’s emptiness in the same glance.',
+          bindings: { week_of: {}, events: {} },
+          options: { week_start: 'sun', show_counts: true, count_noun: 'expected',
+                     anchor_day: 'sun' } },
+        { id: 'first_time_guests', primitive: 'attention_queue', role: 'secondary', title: 'Came once, nobody has called',
+          rationale: 'The gap a calendar cannot show. Sorted by how long they have been waiting, because the second week is when a first-time guest decides.',
+          bindings: { items: {} },
+          options: { age_unit: 'days', escalate_after_days: 14, max_visible: 6 } },
+        { id: 'back_door', primitive: 'benchmark_panel', role: 'footer', title: 'The back door',
+          rationale: 'A church counts the front door and almost never counts the back one. Read together these say whether the problem is outreach or assimilation, which no attendance total can answer.',
+          bindings: { rows: {} },
+          options: { format: 'percent', show_average: true } }
+      ],
+      room: {
+        eyebrow: 'This week',
+        meta: {
+          'week_of_gatherings': 'Sunday anchors the week',
+          'first_time_guests': '6 waiting on a call',
+          'back_door': 'measured against growing churches'
+        }
+      },
+      terminology: { contact: { value: 'Guest' }, project: { value: 'Ministry' }, schedule: { value: 'The calendar' } },
+      theme: { display_font: '"Cormorant Garamond", Georgia, serif', accent_name: 'teal',
+        palette: { accent: '#0d9488', accent2: '#14b8a6' , field: '#EFFBF9', field2: '#DAF4F0'},
+        dark:    { accent: '#2dd4bf', accent2: '#14b8a6' , field: '#07181B', field2: '#0E262B'} }
+    },
+
+    consultant: {
+      archetype: 'consultant', label: 'Consultant / Coach', vertical: 'consultant',
+      rationale: 'A consultant’s book is a handful of engagements, each sitting at a stage — scoping, in delivery, awaiting sign-off. The risk is never a missed hour, it is an engagement quietly parked at the same stage for five weeks. So the workspace opens on a docket like a law firm’s, but sorted by stage rather than by deadline, so a column that has stopped moving is visible as a column. Underneath, the retainer hours drawn down, because that is the number that decides whether this month was profitable.',
+      suppressed: [
+        { primitive: 'timeline_day', reason: 'Consulting time is not chair time. A day of hourly lanes would show three calls and six hours of unstructured work the calendar never sees, which flatters the day and tells you nothing.' },
+        { primitive: 'week_grid', reason: 'Same problem one grain out. The week is not the unit; the engagement is, and engagements run for months across a shifting set of days.' },
+        { primitive: 'attention_queue', reason: 'Deliberately withheld even though it would fit. The stage-sorted docket already surfaces what is stuck; adding an age-ranked queue beside it splits the same signal into two lists that disagree.' },
+        { primitive: 'ledger', reason: 'A consultant bills against a retainer, not a running balance. Draw-down is one figure in the metric row, and a debit-and-credit table would restate it at ten times the size.' }
+      ],
+      surfaces: [
+        { id: 'engagement_board', primitive: 'priority_docket', role: 'lead', title: 'Engagements',
+          rationale: 'Grouped by stage rather than ranked by deadline. What matters is not what is due soonest, it is what has not moved — a stage with four engagements parked in it is the finding.',
+          bindings: { rows: {} },
+          options: { sort: 'stage', metric_label: 'At this stage', metric_unit: 'days',
+                     stages: ['Scoping', 'Proposal out', 'In delivery', 'Awaiting sign-off', 'Wrapping'],
+                     stage_layout: 'columns', urgent_threshold_days: 21 } },
+        { id: 'retainer_drawdown', primitive: 'metric_row', role: 'secondary', title: 'Retainer',
+          rationale: 'Hours drawn against hours sold, and the work already done that has not been billed yet. Three figures in the same unit, no chart — this is a thing you check, not a thing you study.',
+          bindings: { metrics: {} },
+          options: { format: 'duration' } },
+        { id: 'book_health', primitive: 'benchmark_panel', role: 'footer', title: 'Capacity and pipeline',
+          rationale: 'This is two businesses at once — delivery and pipeline — and the dashboard has to hold both. Forward capacity is what makes it different from every other vertical here.',
+          bindings: { rows: {} },
+          options: { format: 'percent', show_average: true } }
+      ],
+      room: {
+        eyebrow: 'The book',
+        meta: {
+          'engagement_board': '7 live · 5 stages',
+          'going_quiet': '6 going quiet',
+          'retainer_drawdown': 'this month',
+          'book_health': 'measured against the profession'
+        }
+      },
+      terminology: { contact: { value: 'Client' }, project: { value: 'Engagement' }, schedule: { value: 'The book' } },
+      theme: { display_font: '"IBM Plex Serif", Georgia, serif', accent_name: 'purple',
+        palette: { accent: '#7c3aed', accent2: '#8b5cf6' , field: '#F7F4FF', field2: '#ECE5FF'},
+        dark:    { accent: '#a78bfa', accent2: '#8b5cf6' , field: '#141022', field2: '#201936'} }
+    },
+
+
+    nonprofit: {
+      archetype: 'nonprofit', label: 'Nonprofit', vertical: 'nonprofit',
+      rationale: 'A nonprofit is the one shape here where the deadline and the relationship carry equal weight. A grant report filed late costs the next grant, so the working surface is a docket ordered by days remaining — the same shape a law firm needs, for the same reason. But underneath it sits something no law firm has: three out of four first-time donors never give again, and that leak is invisible in a total.',
+      suppressed: [
+        { primitive: 'timeline_day', reason: 'A nonprofit\u2019s Tuesday is meetings and grant writing. Hourly lanes would show a calendar rather than the work, and the work is measured in reporting periods.' },
+        { primitive: 'week_grid', reason: 'Programs run on a calendar and it is genuinely useful — just not here. Seven columns answer \u201cwhen\u201d, and the question that decides funding is \u201chow long until this is due\u201d.' },
+        { primitive: 'ledger', reason: 'Restricted fund accounting is real, consequential, and absolutely not a dashboard. A running balance beside a donor list invites somebody to spend restricted money, which is the most expensive mistake in the sector.' },
+        { primitive: 'metric_row', reason: 'Total raised is the figure everyone reports and the one that hides the most. It moved into the panel, where retention sits beside it and the totals stop doing the talking.' }
+      ],
+      surfaces: [
+        { id: 'obligations', primitive: 'priority_docket', role: 'lead', title: 'What is owed, and when',
+          rationale: 'Grant reports, acquittals and renewals, ordered by days remaining. A late report does not cost a late fee, it costs the next grant — so this is ranked exactly like a legal docket, and anything inside a fortnight reads as urgent.',
+          bindings: { rows: {} },
+          options: { sort: 'stage', metric_label: 'Due in', metric_unit: 'days',
+                     stages: ['Thornbury Family Trust', 'City of Marrickville',
+                              'Ardleigh Foundation', 'Fitzhardinge estate', 'Board', 'Statutory'],
+                     stage_layout: 'grid', urgent_threshold_days: 14 } },
+        { id: 'lapsing_donors', primitive: 'attention_queue', role: 'secondary', title: 'Gave once, never again',
+          rationale: 'The largest and quietest loss in the sector. A total-raised figure looks fine right up until the base has gone.',
+          bindings: { items: {} },
+          options: { age_unit: 'days', escalate_after_days: 400, max_visible: 6 } },
+        { id: 'base_health', primitive: 'benchmark_panel', role: 'footer', title: 'Is the base holding',
+          rationale: 'The base underneath the total — whether donors come back, whether new ones ever give twice, and how much of the income recurs.',
+          bindings: { rows: {} },
+          options: { format: 'percent', show_average: true } }
+      ],
+      room: {
+        eyebrow: 'What we owe',
+        meta: {
+          'obligations': '8 owed · 6 funders',
+          'lapsing_donors': '6 lapsed',
+          'base_health': 'measured against the sector'
+        }
+      },
+      terminology: { contact: { value: 'Donor' }, project: { value: 'Program' }, payment: { value: 'Gift' }, schedule: { value: 'The calendar' } },
+      theme: { display_font: '"IBM Plex Serif", Georgia, serif', accent_name: 'pink',
+        palette: { accent: '#be185d', accent2: '#db2777' , field: '#FFF2F8', field2: '#FFE1EE'},
+        dark:    { accent: '#f472b6', accent2: '#f9a8d4' , field: '#1B0B15', field2: '#2C1124'} }
+    },
+
+    law_firm: {
+      archetype: 'law_firm', label: 'Law Firm', vertical: 'lawyer',
+      rationale: 'A law firm does not run on a clock, it runs on a calendar of consequences. What is due in four days outranks what is happening at four o’clock, and a missed filing is not a gap you can fill later. So the workspace opens on a docket ordered by days remaining, with the number right-aligned so the eye can run down the column and stop at whatever is too small. There is deliberately no timeline anywhere on this layout.',
+      suppressed: [
+        { primitive: 'timeline_day', reason: 'The single most important removal. A lawyer’s day is not the unit of work — a matter runs for eight months and touches the calendar six times. Leading with today’s hours would bury the filing due Thursday under a lunch.' },
+        { primitive: 'week_grid', reason: 'Same objection at a coarser grain. Seven columns still answers “when”, and the docket’s question is “how long have I got”.' },
+        { primitive: 'attention_queue', reason: 'Withheld because the docket already IS the queue. Two ranked lists on one screen compete, and the practitioner has to work out which one is authoritative.' },
+        { primitive: 'ledger', reason: 'Trust accounting is real and it is not a dashboard. IOLTA reconciliation belongs in the ledger surfaces where it can be done properly, not summarised into five rows here.' }
+      ],
+      surfaces: [
+        { id: 'matter_docket', primitive: 'priority_docket', role: 'lead', title: 'Docket',
+          rationale: 'Ordered by days to the next deadline, not by when it was opened and not by client name. Anything inside a week reads as urgent.',
+          bindings: { rows: {} },
+          options: { sort: 'urgency_days', metric_label: 'Due in', metric_unit: 'days',
+                     numbered: true, banding: 'horizon', urgent_threshold_days: 7 } },
+        { id: 'the_cascade', primitive: 'benchmark_panel', role: 'secondary', title: 'Where the hours go',
+          rationale: 'An hour has to survive three things to become money: being recorded, being billed at close to full value, and being paid. They multiply, which is why they belong in one cascade rather than three gauges.',
+          bindings: { rows: {} },
+          options: { format: 'percent', show_average: true, cascade: true, cascade_label: 'of working time reaches the bank' } },
+        { id: 'firm_position', primitive: 'metric_row', role: 'footer', title: 'Position',
+          rationale: 'Three figures at rest at the foot of the page. Unbilled, work in progress, trust. Read on the way past, never acted on from here.',
+          bindings: { metrics: {} },
+          options: { format: 'currency' } },
+        { id: 'lockup', primitive: 'benchmark_panel', role: 'footer', title: 'What is stuck',
+          rationale: 'Lockup is the number a solo actually feels: how many days of annual revenue are sitting as work you have not billed, or invoices nobody has paid. Split in two, because which half is stuck decides what you do on Monday.',
+          bindings: { rows: {} },
+          options: { format: 'days', show_average: true } }
+      ],
+      room: {
+        eyebrow: 'The docket',
+        meta: {
+          'matter_docket': '7 matters · 4 horizons',
+          'the_cascade': 'hours to cash',
+          'firm_position': 'at rest',
+          'lockup': 'days of revenue stuck'
+        }
+      },
+      terminology: { contact: { value: 'Client' }, project: { value: 'Matter' }, schedule: { value: 'Docket' } },
+      theme: { display_font: '"Libre Baskerville", "Times New Roman", serif', accent_name: 'blue',
+        palette: { accent: '#2563eb', accent2: '#3b82f6' , field: '#F1F6FF', field2: '#E1EBFF'},
+        dark:    { accent: '#3b82f6', accent2: '#60a5fa' , field: '#0A101F', field2: '#111A31'} }
+    }
+  };
+
+  var ORDER = ['salon', 'trades', 'therapist', 'ministry', 'consultant',
+               'nonprofit', 'law_firm'];
+
+  var SHAPE = {
+    salon:      'chair lanes · one day',
+    trades:     'crew lanes · one day',
+    therapist:  'the standing hour',
+    ministry:   'seven columns',
+    consultant: 'docket by stage',
+    nonprofit:  'docket by deadline',
+    law_firm:   'docket by deadline'
+  };
+
+  /* The structural decision, in the fewest words that still say it.
+     Rendered as the accent-gradient <strong> in the page title. */
+  var CLAIM = {
+    salon:      ['Chief built a workspace where ', 'the day is the product'],
+    trades:     ['Chief built a workspace around ', 'where the truck goes next'],
+    therapist:  ['Chief built a workspace that protects ', 'the standing hour'],
+    ministry:   ['Chief built a workspace around ', 'the shape of the week'],
+    consultant: ['Chief built a workspace that shows ', 'what has stopped moving'],
+    nonprofit:  ['Chief built a workspace that guards ', 'the next grant'],
+    law_firm:   ['Chief built a workspace that answers ', 'how long have I got']
+  };
+
+  /* ═══════════════════════════════════════════════════════════════
+     RESOLVED DATA — what the server hands the renderer: already
+     fetched, tenant-scoped, field-mapped. data[surfaceId][binding].
+     ═══════════════════════════════════════════════════════════════ */
+
+  /* Local time throughout. `new Date('2026-08-23')` parses as UTC
+     midnight, so west of Greenwich getDay() answers Saturday for a
+     Sunday and the week grid builds the wrong seven days;
+     toISOString() shifts it back the other way. */
+  function dayKey(d) {
+    var m = d.getMonth() + 1, day = d.getDate();
+    return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (day < 10 ? '0' : '') + day;
+  }
+  function parseDay(v) {
+    var b = String(v == null ? '' : v).slice(0, 10).split('-');
+    var y = Number(b[0]), m = Number(b[1]), d = Number(b[2]);
+    return (!y || !m || !d) ? null : new Date(y, m - 1, d);
+  }
+  function isoDay(off) {
+    var d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + off); return dayKey(d);
+  }
+  function sunday(off) {
+    var d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - d.getDay() + off); return dayKey(d);
+  }
+
+  var DATA = {
+    salon: {
+      floor_today: {
+        lanes: [
+          { id: 'renata',  label: 'Renata Okoye',    subtitle: 'Colour' },
+          { id: 'dmitri',  label: 'Dmitri Vasquez',  subtitle: 'Barbering' },
+          { id: 'camille', label: 'Camille Boateng', subtitle: 'Cut & style' },
+          { id: 'sol',     label: 'Sol Ferreira',    subtitle: 'Colour · Tue–Sat' }
+        ],
+        events: [
+          { id: 's1', lane_id: 'renata', start: '09:30', duration_minutes: 180, title: 'Balayage + gloss', subtitle: 'Priya Raghunathan' },
+          { id: 's2', lane_id: 'renata', start: '13:30', duration_minutes: 90, title: 'Root touch-up', subtitle: 'Denise Whitlock' },
+          { id: 's3', lane_id: 'renata', start: '15:30', duration_minutes: 30, title: 'Colour consult', subtitle: 'Walk-in' },
+          { id: 's4', lane_id: 'dmitri', start: '09:00', duration_minutes: 30, title: 'Skin fade', subtitle: 'Marcus Bell' },
+          { id: 's5', lane_id: 'dmitri', start: '09:45', duration_minutes: 30, title: 'Beard + hot towel', subtitle: 'Tobenna Nwosu' },
+          { id: 's6', lane_id: 'dmitri', start: '10:30', duration_minutes: 30, title: 'Skin fade', subtitle: 'Ray Castellanos' },
+          { id: 's7', lane_id: 'dmitri', start: '11:15', duration_minutes: 45, title: 'Cut', subtitle: 'Joaquín Herrera' },
+          { id: 's8', lane_id: 'dmitri', start: '14:00', duration_minutes: 30, title: 'Cut', subtitle: 'Ade Fashola' },
+          { id: 's9', lane_id: 'dmitri', start: '14:45', duration_minutes: 45, title: 'Cut + beard', subtitle: 'Sam Oyelaran' },
+          { id: 's10', lane_id: 'camille', start: '10:00', duration_minutes: 75, title: 'Cut & blow-dry', subtitle: 'Hannah Lindqvist' },
+          { id: 's11', lane_id: 'camille', start: '12:00', duration_minutes: 120, title: 'Bridal trial', subtitle: 'Aoife Brennan' },
+          { id: 's12', lane_id: 'camille', start: '16:00', duration_minutes: 60, title: 'Cut', subtitle: 'Nadia Kaur' },
+          { id: 's13', lane_id: 'sol', start: '11:00', duration_minutes: 210, title: 'Full head foils', subtitle: 'Beatriz Almeida' }
+        ],
+        day: { date: isoDay(0) }
+      },
+      rebook_lapsed: {
+        items: [
+          { id: 'r1', title: 'Georgia Sutcliffe', age_days: 71, subtitle: 'Cut & colour with Renata · usually every 6 weeks' },
+          { id: 'r2', title: 'Bill Achterberg',   age_days: 63, subtitle: 'Fortnightly with Dmitri, then stopped' },
+          { id: 'r3', title: 'Marisol Peña',      age_days: 58, subtitle: 'Balayage · last in before the shop moved' },
+          { id: 'r4', title: 'Tomas Lindqvist',   age_days: 41, subtitle: 'Cut with Camille' },
+          { id: 'r5', title: 'Ruth Ojo',          age_days: 37, subtitle: 'Foils with Sol · rebook never taken' },
+          { id: 'r6', title: 'Kenji Watanabe',    age_days: 33, subtitle: 'Skin fade · walk-in twice' },
+          { id: 'r7', title: 'Elodie Marchand',   age_days: 29, subtitle: 'Cut & blow-dry' },
+          { id: 'r8', title: 'Declan Moriarty',   age_days: 26, subtitle: 'Beard trim' }
+        ]
+      }
+    },
+
+    trades: {
+      crew_day: {
+        lanes: [
+          { id: 'crew-a', label: 'Crew A — Kowalski', subtitle: 'Plumbing · 2 up' },
+          { id: 'crew-b', label: 'Crew B — Ruiz', subtitle: 'HVAC · 2 up' },
+          { id: 'crew-c', label: 'Dempsey', subtitle: 'Service calls · solo' }
+        ],
+        events: [
+          { id: 't1', lane_id: 'crew-a', start: '07:30', duration_minutes: 150, title: 'Hot water replacement', subtitle: '14 Fernleigh Rd' },
+          { id: 't2', lane_id: 'crew-a', start: '10:45', duration_minutes: 180, title: 'Rough-in, unit 4', subtitle: 'Lot 22 Barran Estate' },
+          { id: 't3', lane_id: 'crew-a', start: '14:30', duration_minutes: 90, title: 'Leak trace', subtitle: '9 Ophir St' },
+          { id: 't4', lane_id: 'crew-b', start: '08:00', duration_minutes: 120, title: 'Ducted service', subtitle: '31 Calder Ave' },
+          { id: 't5', lane_id: 'crew-b', start: '10:45', duration_minutes: 195, title: 'Split system install', subtitle: '7 Wattle Cl' },
+          { id: 't6', lane_id: 'crew-b', start: '15:00', duration_minutes: 45, title: 'Quote — ducted upgrade', subtitle: 'Marchetti residence' },
+          { id: 't7', lane_id: 'crew-c', start: '07:15', duration_minutes: 60, title: 'No hot water', subtitle: '88 Renwick Tce' },
+          { id: 't8', lane_id: 'crew-c', start: '08:45', duration_minutes: 75, title: 'Blocked main', subtitle: '3 Palgrave Ln' },
+          { id: 't9', lane_id: 'crew-c', start: '10:30', duration_minutes: 45, title: 'Tap replacement × 3', subtitle: '12 Ormond Way' },
+          { id: 't10', lane_id: 'crew-c', start: '12:00', duration_minutes: 60, title: 'Cistern rebuild', subtitle: '5 Halloran Ct' },
+          { id: 't11', lane_id: 'crew-c', start: '14:00', duration_minutes: 30, title: 'Quote — bathroom', subtitle: 'Sanderson' }
+        ],
+        day: { date: isoDay(0) }
+      },
+      unsold_estimates: {
+        items: [
+          { id: 'u1', title: 'Full bathroom \u2014 Sanderson', age_days: 34, subtitle: '$18,400 \u00b7 quoted, opened twice, no reply' },
+          { id: 'u2', title: 'Ducted upgrade \u2014 Marchetti', age_days: 26, subtitle: '$11,900 \u00b7 asked for a payment plan' },
+          { id: 'u3', title: 'Hot water system \u2014 42 Kestrel Rd', age_days: 19, subtitle: '$3,850 \u00b7 comparing quotes' },
+          { id: 'u4', title: 'Re-pipe \u2014 Ormond Way', age_days: 12, subtitle: '$9,200 \u00b7 waiting on strata' },
+          { id: 'u5', title: 'Split system \u00d7 2 \u2014 Renwick Tce', age_days: 8, subtitle: '$6,100 \u00b7 sent, unopened' },
+          { id: 'u6', title: 'Leak detection \u2014 Palgrave Ln', age_days: 4, subtitle: '$780 \u00b7 sent Friday' }
+        ]
+      },
+      deposits_and_balances: {
+        entries: [
+          { id: 'l1', date: isoDay(0), description: 'Deposit — Barran Estate Lot 22', credit: 4800 },
+          { id: 'l2', date: isoDay(-1), description: 'Invoice 1188 — 14 Fernleigh Rd', debit: 2340 },
+          { id: 'l3', date: isoDay(-1), description: 'Payment — 31 Calder Ave (card)', credit: 1180 },
+          { id: 'l4', date: isoDay(-2), description: 'Invoice 1187 — 31 Calder Ave', debit: 1180 },
+          { id: 'l5', date: isoDay(-4), description: 'Deposit — 7 Wattle Cl split install', credit: 900 },
+          { id: 'l6', date: isoDay(-5), description: 'Invoice 1185 — 9 Ophir St', debit: 640 },
+          { id: 'l7', date: isoDay(-6), description: 'Materials rebate — Reece', credit: 212 },
+          { id: 'l8', date: isoDay(-7), description: 'Invoice 1183 — Marchetti residence', debit: 3150 },
+          { id: 'l9', date: isoDay(-9), description: 'Payment — Halloran Ct', credit: 480 },
+          { id: 'l10', date: isoDay(-11), description: 'Invoice 1179 — 88 Renwick Tce', debit: 415 }
+        ],
+        opening_balance: { value: 0 }
+      }
+    },
+
+    ministry: {
+      week_of_gatherings: {
+        week_of: { date: sunday(0) },
+        events: [
+          { id: 'g1', date: sunday(0), time: '08:30', title: 'Early gathering', subtitle: 'Chapel', attendance: 96 },
+          { id: 'g2', date: sunday(0), time: '10:30', title: 'Main gathering', subtitle: 'Auditorium · Ps. Adeola preaching', attendance: 241 },
+          { id: 'g3', date: sunday(0), time: '17:00', title: 'Youth', subtitle: 'The Shed', attendance: 54 },
+          { id: 'g4', date: sunday(2), time: '06:30', title: 'Men’s prayer', subtitle: 'Room 2', attendance: 18 },
+          { id: 'g5', date: sunday(3), time: '18:30', title: 'Midweek study', subtitle: 'Haggai, week 4', attendance: 72 },
+          { id: 'g6', date: sunday(3), time: '19:45', title: 'Worship rehearsal', subtitle: 'Auditorium', attendance: 14 },
+          { id: 'g7', date: sunday(4), time: '10:00', title: 'Mums & bubs', subtitle: 'Hall', attendance: 23 },
+          { id: 'g8', date: sunday(5), time: '19:00', title: 'Young adults', subtitle: 'At the Kowalczyks’', attendance: 38 },
+          { id: 'g9', date: sunday(6), time: '09:00', title: 'Working bee', subtitle: 'Grounds & car park', attendance: 11 }
+        ]
+      },
+      first_time_guests: {
+        items: [
+          { id: 'v1', title: 'The Adeyemi family',  age_days: 19, subtitle: 'Came 10:30 · brought by the Kowalczyks' },
+          { id: 'v2', title: 'Nathan Priest',       age_days: 12, subtitle: 'Came 10:30 · card filled in, no phone number' },
+          { id: 'v3', title: 'Chiara Vitale',       age_days: 9,  subtitle: 'Came 08:30 · new to the area' },
+          { id: 'v4', title: 'Hemi & Aroha Ngata',  age_days: 6,  subtitle: 'Came 10:30 · asked about the youth group' },
+          { id: 'v5', title: 'Sunita Balakrishnan', age_days: 4,  subtitle: 'Came 10:30 with a neighbour' },
+          { id: 'v6', title: 'Owen Tapper',         age_days: 2,  subtitle: 'Came 17:00 · year 11' }
+        ]
+      }
+    },
+
+
+    therapist: {
+      caseload_week: {
+        week_of: { date: sunday(1) },
+        events: [
+          { id: 'p1', date: sunday(1), time: '09:00', title: 'R.M.', subtitle: 'Standing \u00b7 wk 14' },
+          { id: 'p2', date: sunday(1), time: '10:00', title: 'D. & A. K.', subtitle: 'Couples \u00b7 wk 6' },
+          { id: 'p3', date: sunday(1), time: '13:00', title: 'S.O.', subtitle: 'Standing \u00b7 wk 31' },
+          { id: 'p4', date: sunday(1), time: '14:00', title: 'Intake \u2014 new referral', subtitle: 'Referred by Dr Whitfield' },
+          { id: 'p5', date: sunday(2), time: '09:00', title: 'J.T.', subtitle: 'Standing \u00b7 wk 8' },
+          { id: 'p6', date: sunday(2), time: '11:00', title: 'Supervision', subtitle: 'Group \u00b7 monthly' },
+          { id: 'p7', date: sunday(2), time: '15:00', title: 'M.B.', subtitle: 'Standing \u00b7 wk 22' },
+          { id: 'p8', date: sunday(3), time: '09:00', title: 'L.F.', subtitle: 'Standing \u00b7 wk 3' },
+          { id: 'p9', date: sunday(3), time: '10:00', title: 'H.N.', subtitle: 'Standing \u00b7 wk 19' },
+          { id: 'p10', date: sunday(4), time: '09:00', title: 'R.M.', subtitle: 'Moved from Monday' },
+          { id: 'p11', date: sunday(4), time: '14:00', title: 'C.A.', subtitle: 'Fortnightly \u00b7 wk 11' },
+          { id: 'p12', date: sunday(5), time: '10:00', title: 'Admin and notes', subtitle: 'Blocked' }
+        ]
+      },
+      drifting_clients: {
+        items: [
+          { id: 'd1', title: 'T.W.', age_days: 38, subtitle: 'Moved twice, then stopped replying \u00b7 was weekly' },
+          { id: 'd2', title: 'P.G.', age_days: 31, subtitle: 'Cancelled on the day \u00b7 no reschedule taken' },
+          { id: 'd3', title: 'E.M.', age_days: 27, subtitle: 'Standing Thursday, empty three weeks' },
+          { id: 'd4', title: 'K.R.', age_days: 22, subtitle: 'Asked to \u201cpause for a bit\u201d' },
+          { id: 'd5', title: 'A.D.', age_days: 17, subtitle: 'Session 2 of 6, no third booked' },
+          { id: 'd6', title: 'N.S.', age_days: 12, subtitle: 'Intake done, never booked in' }
+        ]
+      }
+    },
+
+    nonprofit: {
+      obligations: {
+        rows: [
+          { id: 'o1', title: 'Q3 acquittal', subtitle: 'Acquittal', stage: 'Thornbury Family Trust', metric_value: 6, owner: 'Programs' },
+          { id: 'o2', title: 'Youth program — grant report', subtitle: 'Grant report', stage: 'City of Marrickville', metric_value: 11, owner: 'Ops' },
+          { id: 'o3', title: 'Renewal application', subtitle: 'Renewal', stage: 'Ardleigh Foundation', metric_value: 19, owner: 'ED' },
+          { id: 'o4', title: 'Multi-year renewal — stage two', subtitle: 'Renewal', stage: 'Thornbury Family Trust', metric_value: 22, owner: 'ED' },
+          { id: 'o5', title: 'Annual report to members', subtitle: 'Statutory report', stage: 'Board', metric_value: 24, owner: 'ED' },
+          { id: 'o6', title: 'Restricted fund statement', subtitle: 'Fund statement', stage: 'Fitzhardinge estate', metric_value: 33, owner: 'Finance' },
+          { id: 'o7', title: 'Community centre — final report', subtitle: 'Grant report', stage: 'City of Marrickville', metric_value: 41, owner: 'Programs' },
+          { id: 'o8', title: 'DGR compliance review', subtitle: 'Compliance', stage: 'Statutory', metric_value: 48, owner: 'Finance' }
+        ]
+      },
+      lapsing_donors: {
+        items: [
+          { id: 'n1', title: 'The Okonkwo family', age_days: 610, subtitle: 'Gave three years running, then nothing' },
+          { id: 'n2', title: 'Hollis & Wray Pty Ltd', age_days: 480, subtitle: 'Corporate match \u00b7 contact left the company' },
+          { id: 'n3', title: 'Margaret Ellery', age_days: 425, subtitle: 'Monthly giver, card expired, never re-set' },
+          { id: 'n4', title: 'Sione Fifita', age_days: 390, subtitle: 'First gift at the gala, never a second' },
+          { id: 'n5', title: 'Deirdre Colquhoun', age_days: 355, subtitle: 'Ten years of gifts \u00b7 nothing this year' },
+          { id: 'n6', title: 'The Vasquez-Lin household', age_days: 310, subtitle: 'First-time donor, appeal only' }
+        ]
+      }
+    },
+
+    consultant: {
+      engagement_board: {
+        rows: [
+          { id: 'e1', title: 'Halden Foods — operations diagnostic', subtitle: 'Halden Foods', stage: 'Scoping', metric_value: 4, owner: 'RM' },
+          { id: 'e2', title: 'Verity Health — board advisory', subtitle: 'Verity Health Group', stage: 'Scoping', metric_value: 11, owner: 'RM' },
+          { id: 'e3', title: 'Kestrel Logistics — network redesign', subtitle: 'Kestrel Logistics', stage: 'Proposal out', metric_value: 26, owner: 'PT' },
+          { id: 'e4', title: 'Brightwater Council — service review', subtitle: 'Brightwater Council', stage: 'In delivery', metric_value: 8, owner: 'RM' },
+          { id: 'e5', title: 'Ncube & Partners — growth sprint', subtitle: 'Ncube & Partners', stage: 'In delivery', metric_value: 15, owner: 'PT' },
+          { id: 'e6', title: 'Larkspur Retail — pricing pilot', subtitle: 'Larkspur Retail', stage: 'Awaiting sign-off', metric_value: 33, owner: 'RM' },
+          { id: 'e7', title: 'Fen & Oak — brand strategy', subtitle: 'Fen & Oak', stage: 'Wrapping', metric_value: 3, owner: 'PT' }
+        ]
+      },
+      retainer_drawdown: {
+        metrics: [
+          { id: 'retainer_hours_drawn', label: 'Hours drawn', value: 84.5, unit: 'hours' },
+          { id: 'retainer_hours_remaining', label: 'Hours remaining', value: 35.5, unit: 'hours' },
+          { id: 'wip_amount', label: 'Done, not billed', value: 12.25, unit: 'hours' }
+        ]
+      }
+    },
+
+    law_firm: {
+      matter_docket: {
+        rows: [
+          { id: 'm1', title: 'Okonjo v. Ridgeline Freight', subtitle: 'Amara Okonjo', metric_value: 3, owner: 'S. Whitfield' },
+          { id: 'm2', title: 'Estate of M. Halvorsen — probate inventory', subtitle: 'Halvorsen family', metric_value: 5, owner: 'R. Delacroix' },
+          { id: 'm3', title: 'Tran / Bayside LLC — operating agreement', subtitle: 'Linh Tran', metric_value: 9, owner: 'S. Whitfield' },
+          { id: 'm4', title: 'Castellanos v. Meridian — discovery cutoff', subtitle: 'Elena Castellanos', metric_value: 12, owner: 'A. Boateng' },
+          { id: 'm5', title: 'Ferrara Holdings — Reg D filing', subtitle: 'Ferrara Holdings Inc.', metric_value: 18, owner: 'R. Delacroix' },
+          { id: 'm6', title: 'In re: Bhattacharya minor guardianship', subtitle: 'Bhattacharya', metric_value: 24, owner: 'A. Boateng' },
+          { id: 'm7', title: 'Vance & Co. — trademark opposition response', subtitle: 'Vance & Co.', metric_value: 31, owner: 'S. Whitfield' }
+        ]
+      },
+      firm_position: {
+        metrics: [
+          { id: 'unbilled_amount', label: 'Unbilled', value: 48200, unit: 'USD' },
+          { id: 'wip_amount', label: 'Work in progress', value: 126, unit: 'hours' },
+          { id: 'trust_balance', label: 'In trust', value: 312750, unit: 'USD' }
+        ]
+      }
+    }
+  };
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     THE BENCHMARK ROWS
+
+     Every band below is sourced. Where a metric has no published
+     benchmark, `average` is left out rather than guessed, and the panel
+     renders the value with no comparison — which is the honest thing to
+     do and also demonstrates that the component handles it.
+     ═══════════════════════════════════════════════════════════════ */
+
+  var BENCH = {
+    salon: {
+      floor_health: { rows: [
+        { id: 'rebooking_rate', label: 'Rebooking rate', value: 38,
+          average: 52, target: 50, floor: 30,
+          reading: 'Clients who leave with the next appointment booked come back at 70-80%. Those who leave without one come back at 30-40%. This is the highest-leverage number on the floor, and most booking systems never surface it — you have to dig it out of a report.',
+          source: 'Blvd + Callpad salon benchmarks, 2026' },
+        { id: 'chair_utilization', label: 'Chair utilisation', value: 61,
+          average: 48, target: 65, floor: 55,
+          reading: 'The median salon runs 47-49%, so you are ahead of most of the industry — but the healthy band starts at 65%. Everything under it is chair time nobody paid for.',
+          source: 'Zenoti + Blvd, 2026' },
+        { id: 'retail_attach', label: 'Retail attach', value: 11,
+          average: 12, target: 20, floor: 8,
+          reading: 'Retail as a share of service revenue. Median independents run 8-15%; the top quartile clears 20-30%. A client who takes product home is markedly likelier to be back inside 30 days.',
+          source: 'Dall Italia, ~1,800 operators' },
+        { id: 'new_client_return', label: 'New clients who come back', value: 44,
+          average: 50, target: 65, floor: 40,
+          reading: 'About half of first-timers never return for a second visit. This sits upstream of every other number here — it is the single biggest leak in the business.',
+          source: 'Callpad + Zylu, 2026' }
+      ] }
+    },
+
+    trades: {
+      trade_health: { rows: [
+        { id: 'first_time_fix', label: 'First-time fix rate', value: 78,
+          average: 75, target: 86, floor: 70,
+          reading: 'Median across 157 service organisations is 75%; the top fifth reach 86% and the bottom fifth sit at 53%. Under 70% is a dispatch and parts problem, not a skill problem — the tech arrived without what the job needed.',
+          source: 'Aquant service benchmarks, 2025' },
+        { id: 'tech_utilization', label: 'Technician utilisation', value: 63,
+          average: 55, target: 75, floor: 50,
+          reading: 'Share of paid hours that end up on an invoice. The benchmark is 75-85%. At 63%, better than a third of what you pay for is not billable.',
+          source: 'VSight + Simpro field-service KPIs, 2025' },
+        { id: 'estimate_close_rate', label: 'Estimate close rate', value: 47,
+          average: 50, target: 60, floor: 40,
+          reading: 'Healthy residential sits at 40-60%. Below 40% is almost always follow-up rather than price: 90% of contractors stop after the first or second touch, which is why the unsold queue above outranks the ledger.',
+          source: 'ContractorAccelerator, Sept 2025' },
+        { id: 'membership_attach', label: 'Membership attach', value: 44,
+          average: 45, target: 60, floor: 40,
+          reading: 'The number that predicts next year rather than this one. Baseline is 40-50%; best-in-class runs 60-90%, and members are worth several times a one-off customer over their life.',
+          source: 'Home-services operator benchmarks, 2025' }
+      ] }
+    },
+
+    therapist: {
+      practice_health: { rows: [
+        { id: 'client_retention', label: 'Clients reaching 8+ sessions', value: 81,
+          average: 85, target: 90, floor: 75,
+          reading: 'A healthy practice holds 80-85% of clients to eight sessions or more; strong group practices reach 90-95%. Early drop-off is the expensive kind — the intake work is already spent.',
+          source: 'Private-practice KPI benchmarks, 2025' },
+        { id: 'no_show_rate', label: 'No-show and late cancellation', value: 14,
+          average: 15, target: 8, floor: 20, scale_max: 30, direction: 'lower_better',
+          reading: 'Lower is better here. Under 15% keeps a schedule and its income stable; high performers sit at 5-8%. Behavioural health runs far worse than primary care, so the ceiling is real.',
+          source: 'Curogram + SimplePractice, 2025' },
+        { id: 'caseload_utilization', label: 'Caseload utilisation', value: 71,
+          average: 70, target: 80, floor: 65,
+          reading: '75-85% balances a full book against documentation, coordination and supervision. Above 85% is a hiring signal, not a win — it is the number that precedes burnout.',
+          source: 'Therapy clinic KPI benchmarks, 2025' },
+        { id: 'booked_before_leaving', label: 'Next session booked in the room', value: 64,
+          target: 80, floor: 50,
+          reading: 'No published benchmark exists for this one, so none is shown. It is the same mechanism as a salon rebook, and practices that do it hold caseloads visibly better than those that email later.',
+          source: 'No industry benchmark — measured against your own practice' }
+      ] }
+    },
+
+    ministry: {
+      back_door: { rows: [
+        { id: 'first_time_return', label: 'First-timers who come back', value: 11,
+          average: 10, target: 20, floor: 6,
+          reading: 'The average church sees 6-15% of first-time guests return for a second visit; growing churches reach about 20%. Around 70% of leaders say they have no effective process here, and 36% have none at all.',
+          source: 'Nieuwhof / PastorMentor / Unstuck Group' },
+        { id: 'second_time_return', label: 'Second-timers who come back', value: 31,
+          average: 25, target: 40, floor: 20,
+          reading: 'Once somebody comes twice, most of the work is done. Growing churches convert about 40% of second-time guests into third visits.',
+          source: 'Church retention benchmarks' },
+        { id: 'third_time_stay', label: 'Third-timers who stay', value: 42,
+          average: 35, target: 60, floor: 30,
+          reading: 'About 35% of third-time guests become regulars; in growing churches it approaches 60%. Three visits is the threshold worth designing around.',
+          source: 'Church retention benchmarks' },
+        { id: 'giving_participation', label: 'Households giving', value: 34,
+          average: 40, target: 45, floor: 25,
+          reading: 'The number a giving total hides. Income can be flat while participation falls, which means a handful of large gifts are masking disengagement across the base — and that is a very different problem from a bad year.',
+          source: 'ChurchTechToday' }
+      ] }
+    },
+
+    consultant: {
+      book_health: { rows: [
+        { id: 'utilization_now', label: 'Utilisation, this month', value: 68,
+          average: 70, target: 78, floor: 60,
+          reading: '75-85% is the working band. Above 90% you have no bench, and the next urgent client request has nowhere to go but your weekend.',
+          source: 'Consulting-firm KPI benchmarks, 2026' },
+        { id: 'utilization_projected', label: 'Utilisation, next six weeks', value: 52,
+          target: 70, floor: 40,
+          reading: 'Forward capacity — the number no other business here needs. At 52% you can take work on. At 90% you cannot, and the time to say so is now rather than in three weeks when you are already late.',
+          source: 'No industry benchmark — this is your own forward book' },
+        { id: 'proposal_win_rate', label: 'Proposal win rate', value: 41,
+          average: 40, target: 55, floor: 25,
+          reading: 'Proposals out against engagements signed. A leading indicator: it moves months before revenue does.',
+          source: 'Consulting-firm KPI benchmarks, 2026' },
+        { id: 'retainer_renewal', label: 'Retainer renewal', value: 78,
+          average: 75, target: 90, floor: 60,
+          reading: 'Winning a new client costs five to seven times what keeping one does, so this number is worth more attention than the pipeline above it.',
+          source: 'Professional-services benchmarks, 2026' }
+      ] }
+    },
+
+    nonprofit: {
+      base_health: { rows: [
+        { id: 'donor_retention', label: 'Donor retention', value: 47,
+          average: 45, target: 55, floor: 35,
+          reading: 'Sector average lands between the mid-forties and mid-fifties depending on how it is counted; the top quartile reaches about 70%.',
+          source: 'Fundraising Effectiveness Project / Virtuous, 2026' },
+        { id: 'first_time_donor_retention', label: 'First-time donors who give again', value: 22,
+          average: 24, target: 35, floor: 18,
+          reading: 'Three out of four first-time donors never give a second gift. It is the largest and quietest loss in the sector, and a total-raised figure will look healthy right up until the base has gone.',
+          source: 'Fundraising Effectiveness Project, 2025' },
+        { id: 'recurring_share', label: 'Income that recurs', value: 19,
+          average: 20, target: 35, floor: 12,
+          reading: 'Recurring donors are retained at about 83% against 45% for single-gift donors, and are worth several times as much over their life. Every point moved here compounds.',
+          source: 'Dataro + Bloomerang, 2025' },
+        { id: 'grants_on_time', label: 'Reports filed on time', value: 92,
+          target: 100, floor: 85,
+          reading: 'No industry benchmark, and it does not need one — a late acquittal does not cost a late fee, it costs the next grant. The only acceptable target is all of them.',
+          source: 'No industry benchmark — the target is 100%' }
+      ] }
+    },
+
+    law_firm: {
+      the_cascade: { rows: [
+        { id: 'utilization', label: 'Utilisation — hours captured', value: 41,
+          average: 38, target: 50, floor: 30,
+          reading: 'The average lawyer records 3.0 billable hours in an eight-hour day. A solo records 2.1; a lawyer in a firm of twenty-plus records 3.6. This is the stage with the most room in it.',
+          source: 'Clio Legal Trends Report, 2025' },
+        { id: 'realization', label: 'Realisation — hours billed', value: 86,
+          average: 88, target: 92, floor: 80,
+          reading: 'What you invoice against what you recorded. Write-downs happen at the invoice, and they are far easier to prevent than to recover.',
+          source: 'Clio Legal Trends Report, 2025' },
+        { id: 'collection', label: 'Collection — invoices paid', value: 91,
+          average: 93, target: 97, floor: 85,
+          reading: 'What you bank against what you billed. The last stage, and the one clients control.',
+          source: 'Clio Legal Trends Report, 2025' }
+      ] },
+      lockup: { rows: [
+        { id: 'realization_lockup', label: 'Days of work not yet billed', value: 51,
+          average: 43, target: 30, floor: 60, scale_max: 120, direction: 'lower_better',
+          reading: 'Days of annual revenue sitting as work you have done and not invoiced. This is the half you control directly — it is a billing habit, not a client problem.',
+          source: 'Clio Legal Trends Report, 2025 (median 43 days)' },
+        { id: 'collection_lockup', label: 'Days of invoices unpaid', value: 37,
+          average: 32, target: 25, floor: 50, scale_max: 120, direction: 'lower_better',
+          reading: 'Days sitting as invoices nobody has paid. Median total lockup across firms is 93 days — better than three months of revenue somewhere between done and banked.',
+          source: 'Clio Legal Trends Report, 2025 (median 32 days)' }
+      ] }
+    }
+  };
+
+  // Folded into DATA so the engine sees one bundle per surface and never
+  // learns that benchmarks are a special case.
+  Object.keys(BENCH).forEach(function (k) {
+    DATA[k] = DATA[k] || {};
+    Object.keys(BENCH[k]).forEach(function (sid) { DATA[k][sid] = BENCH[k][sid]; });
+  });
+
+  /* ═══════════════════════════════════════════════════════════════
+     THE PRIMITIVES. Each takes a declared contract and renders it.
+     None fetches. None knows which business it is drawing for.
+     ═══════════════════════════════════════════════════════════════ */
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  var MPH = 60;
+
+  function toMinutes(v) {
+    if (v == null) return null;
+    var s = String(v), t = s.indexOf('T') > -1 ? s.split('T')[1] : s, b = t.split(':');
+    var h = Number(b[0]), m = Number(b[1]);
+    return (isNaN(h) || isNaN(m)) ? null : h * MPH + m;
+  }
+  function clock(min) {
+    var h = Math.floor(min / MPH), suf = h < 12 ? 'am' : 'pm';
+    return (h % 12 === 0 ? 12 : h % 12) + suf;
+  }
+
+  function gapsFor(events, s0, s1, threshold) {
+    var bounds = events.map(function (e) {
+      var st = toMinutes(e.start);
+      return st == null ? null : [st, st + (Number(e.duration_minutes) || 0)];
+    }).filter(Boolean).sort(function (a, b) { return a[0] - b[0]; });
+
+    var out = [], cur = s0 * MPH;
+    bounds.forEach(function (b) {
+      if (b[0] - cur >= threshold) out.push({ from: cur, to: b[0] });
+      cur = Math.max(cur, b[1]);
+    });
+    if (s1 * MPH - cur >= threshold) out.push({ from: cur, to: s1 * MPH });
+    return out;
+  }
+
+  function renderTimelineDay(p) {
+    var o = p.options || {};
+    var s0 = o.day_start != null ? o.day_start : 8;
+    var s1 = o.day_end != null ? o.day_end : 20;
+    var thr = o.gap_threshold_minutes != null ? o.gap_threshold_minutes : 30;
+    var showGaps = o.show_gaps !== false;
+    var tone = o.gap_tone || 'open';
+    var showNow = !!o.show_now;
+    var lanes = p.lanes || [], events = p.events || [];
+    var span = Math.max(1, (s1 - s0) * MPH);
+    var pct = function (m) { return ((m - s0 * MPH) / span) * 100; };
+
+    var hours = '';
+    for (var h = s0; h <= s1; h++) {
+      hours += '<div class="tl__hour" style="top:' + pct(h * MPH) + '%">' + clock(h * MPH) + '</div>';
+    }
+
+    /* The live moment. A board consulted mid-shift needs to say where the
+       day has got to; one consulted the night before does not, which is
+       why it is an option and not a feature. Pinned inside the day so a
+       demo opened at 9pm still shows a sensible line. */
+    var nowLine = '';
+    if (showNow) {
+      var d = new Date();
+      var nowMin = Math.min(Math.max(d.getHours() * MPH + d.getMinutes(),
+                                     s0 * MPH + 20), s1 * MPH - 20);
+      nowLine = '<div class="tl__now" style="top:' + pct(nowMin) + '%">'
+        + '<span>' + clock(nowMin) + '</span></div>';
+    }
+
+    var laneHtml = lanes.map(function (lane) {
+      var mine = events.filter(function (e) { return String(e.lane_id) === String(lane.id); });
+      var gaps = showGaps ? gapsFor(mine, s0, s1, thr) : [];
+
+      // Gaps and events are emitted INTERLEAVED, in clock order. On the
+      // wide board every block is absolutely positioned so DOM order is
+      // invisible — but the small-screen form drops that positioning and
+      // stacks, and two separate groups then read as every gap first and
+      // all the work after it. Source order has to be the true order.
+      var blocks = mine.map(function (e) {
+        var st = toMinutes(e.start);
+        return st == null ? null : { at: st, kind: 'event', e: e };
+      }).filter(Boolean).concat(gaps.map(function (g) {
+        return { at: g.from, kind: 'gap', g: g };
+      })).sort(function (a, b) { return a.at - b.at; });
+
+      return '<section class="tl__lane">'
+        + '<header class="tl__laneHead"><h4>' + esc(lane.label) + '</h4>'
+        + (lane.subtitle ? '<p>' + esc(lane.subtitle) + '</p>' : '') + '</header>'
+        + '<div class="tl__track">'
+        + blocks.map(function (b) {
+            if (b.kind === 'gap') {
+              // The same empty block, two readings. On a floor it is
+              // bookable minutes; on a dispatch board it is the truck
+              // moving, which is a cost rather than an opportunity.
+              var mins = Math.round(b.g.to - b.g.from);
+              return '<div class="tl__gap" data-tone="' + tone + '" style="top:'
+                + pct(b.g.from) + '%;height:' + ((b.g.to - b.g.from) / span) * 100 + '%">'
+                + '<span><b>' + mins + '</b>'
+                + (tone === 'travel' ? ' min travel' : ' min free') + '</span></div>';
+            }
+            var dur = Number(b.e.duration_minutes) || 0;
+            // A block gets only as much text as it has room for; below
+            // ~45 minutes a subtitle clips mid-word and reads as a bug.
+            var roomy = dur >= 45;
+            return '<article class="tl__event" data-short="' + (roomy ? 'no' : 'yes') + '"'
+              + ' style="top:' + pct(b.at) + '%;height:' + (dur / span) * 100 + '%">'
+              + '<span class="tl__time">' + clock(b.at) + '</span>'
+              + '<h5>' + esc(b.e.title) + '</h5>'
+              + (roomy && b.e.subtitle ? '<p>' + esc(b.e.subtitle) + '</p>' : '')
+              + '</article>';
+          }).join('')
+        + '</div></section>';
+    }).join('');
+
+    return '<div class="tl" data-tone="' + tone + '">'
+      + '<div class="tl__hours" aria-hidden="true">' + hours + '</div>'
+      + '<div class="tl__lanes">' + nowLine + laneHtml + '</div></div>';
+  }
+
+  function renderPriorityDocket(p) {
+    var o = p.options || {};
+    var sort = o.sort || 'urgency_days';
+    var label = o.metric_label || 'Due in';
+    var unit = o.metric_unit || 'days';
+    var stages = o.stages || [];
+    var urgent = o.urgent_threshold_days != null ? o.urgent_threshold_days : 7;
+    var layout = o.stage_layout || 'stacked';
+    var columns = layout === 'columns';
+    var grid = layout === 'grid';
+    var banded = o.banding === 'horizon';
+    var numbered = !!o.numbered;
+    var rows = p.rows || [];
+
+    var groups;
+    if (sort !== 'stage' && banded) {
+      /* Deadline horizons. The thresholds come off urgent_threshold_days
+         rather than being declared separately, so the bands and the
+         urgency rule can never disagree about what urgent means. An
+         empty horizon is dropped — a band with nothing in it is a line
+         of furniture, not information. */
+      var t = urgent;
+      // Labelled as exclusive RANGES. "Inside 7 days" then "inside 14
+      // days" reads as though the second contains the first, and it
+      // does not — a register whose own headings overlap is worse than
+      // one with no headings at all.
+      var cuts = [
+        { label: 'Next ' + t + ' days', max: t },
+        { label: (t + 1) + ' – ' + (t * 2) + ' days', max: t * 2 },
+        { label: (t * 2 + 1) + ' – ' + (t * 4) + ' days', max: t * 4 },
+        { label: 'Beyond ' + (t * 4) + ' days', max: Infinity }
+      ];
+      var sorted = rows.slice().sort(function (a, b) {
+        return Number(a.metric_value) - Number(b.metric_value); });
+      groups = cuts.map(function (c, i) {
+        var lo = i === 0 ? -Infinity : cuts[i - 1].max;
+        return { key: c.label, label: c.label, band: true,
+          rows: sorted.filter(function (r) {
+            var v = Number(r.metric_value);
+            return v > lo && v <= c.max; }) };
+      }).filter(function (g) { return g.rows.length; });
+    } else if (sort !== 'stage') {
+      groups = [{ key: 'all', label: null, rows: rows.slice().sort(function (a, b) {
+        return Number(a.metric_value) - Number(b.metric_value); }) }];
+    } else {
+      var seen = {}, names = [];
+      stages.forEach(function (s) { seen[s] = 1; names.push(s); });
+      rows.forEach(function (r) {
+        var s = r.stage || 'Unassigned';
+        if (!seen[s]) { seen[s] = 1; names.push(s); }
+      });
+      groups = names.map(function (stage) {
+        return { key: stage, label: stage,
+          rows: rows.filter(function (r) { return (r.stage || 'Unassigned') === stage; })
+                    .sort(function (a, b) { return Number(b.metric_value) - Number(a.metric_value); }) };
+      });
+    }
+
+    var seq = 0;
+    return '<div class="dk" data-layout="' + layout + '"'
+      + (banded ? ' data-banded="true"' : '')
+      + (numbered ? ' data-numbered="true"' : '') + '>'
+      + '<div class="dk__head"><span class="stat-label">' + esc(label) + '</span></div>'
+      + (columns ? '<div class="dk__cols">' : '')
+      + (grid ? '<div class="dk__grid">' : '')
+      + groups.map(function (g) {
+          return '<section class="dk__group">'
+            + (g.label ? '<header class="dk__groupHead">'
+                + '<span class="badge ' + (g.band ? 'badge-default' : 'badge-primary') + '">'
+                + esc(g.label) + '</span>'
+                + '<span class="stat-label mono">' + g.rows.length + '</span></header>' : '')
+            + (g.rows.length
+              ? '<ol>' + g.rows.map(function (row) {
+                  var v = Number(row.metric_value);
+                  // Time-in-stage: high is bad. Time remaining: low is
+                  // bad. One column, opposite polarity — which is why
+                  // `sort` is an option and not a second component.
+                  var isUrgent = sort === 'stage' ? v >= urgent : v <= urgent;
+                  seq += 1;
+                  return '<li class="dk__row"' + (isUrgent ? ' data-urgent="true"' : '') + '>'
+                    + (numbered ? '<span class="dk__seq num">' + seq + '</span>' : '')
+                    + '<div><h5>' + esc(row.title) + '</h5><p><span>' + esc(row.subtitle || '') + '</span>'
+                    + (row.owner ? '<span class="dk__owner">' + esc(row.owner) + '</span>' : '')
+                    + '</p></div>'
+                    // In a banded register the client and the responsible
+                    // name earn their own columns instead of being packed
+                    // into a subtitle. CSS hides whichever pair the
+                    // current layout does not use.
+                    + (banded ? '<span class="dk__party">' + esc(row.subtitle || '') + '</span>'
+                        + '<span class="dk__who">' + esc(row.owner || '') + '</span>' : '')
+                    + '<div class="dk__metric"><strong class="num">' + esc(row.metric_value) + '</strong>'
+                    + '<span>' + esc(row.metric_unit || unit) + '</span></div></li>';
+                }).join('') + '</ol>'
+              : '<p class="dk__empty">Nothing at this stage.</p>')
+            + '</section>';
+        }).join('')
+      + (columns || grid ? '</div>' : '')
+      + '</div>';
+  }
+
+  var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  function renderWeekGrid(p) {
+    var o = p.options || {};
+    var weekStart = o.week_start || 'sun';
+    var showCounts = !!o.show_counts;
+    var noun = o.count_noun || 'attending';
+    var anchorDay = o.anchor_day && o.anchor_day !== 'none' ? o.anchor_day : null;
+    var dim = (o.dim_days || []).map(function (x) { return String(x).toLowerCase(); });
+    var events = p.events || [];
+
+    // Seven columns are a calendar fact, generated here, never bound —
+    // a layout that could bind them could ship a six-day week.
+    var anchor = (p.week_of && parseDay(p.week_of.date)) || new Date();
+    var target = weekStart === 'mon' ? 1 : 0;
+    var start = new Date(anchor);
+    start.setDate(anchor.getDate() - ((anchor.getDay() - target + 7) % 7));
+    start.setHours(0, 0, 0, 0);
+
+    var days = [], byDay = {};
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(start); d.setDate(start.getDate() + i);
+      var k = dayKey(d);
+      var name = DAYS[d.getDay()];
+      days.push({ key: k, label: name, num: d.getDate(),
+                  slug: name.toLowerCase() });
+      byDay[k] = [];
+    }
+    events.forEach(function (e) {
+      var k = String(e.date).slice(0, 10);
+      if (byDay[k]) byDay[k].push(e);
+    });
+
+    var heaviest = 1;
+    days.forEach(function (d) { heaviest = Math.max(heaviest, byDay[d.key].length); });
+
+    var cols = days.map(function (d) {
+      return (anchorDay && d.slug === anchorDay) ? '1.9fr' : '1fr';
+    }).join(' ');
+
+    return '<div class="wk"><ol class="wk__grid" style="--cols:' + cols + '">'
+      + days.map(function (day) {
+          var list = byDay[day.key];
+          // A church week is not seven equal columns. The anchor takes
+          // roughly double the width and the rest compress around it, so
+          // the shape of the week is legible before a word is read.
+          var isAnchor = anchorDay && day.slug === anchorDay;
+          var isDim = dim.indexOf(day.slug) > -1;
+          return '<li class="wk__day"' + (list.length ? '' : ' data-empty="true"')
+            + (isAnchor ? ' data-anchor="true"' : '')
+            + (isDim ? ' data-dim="true"' : '')
+            + ' style="--load:' + (list.length / heaviest).toFixed(2) + '">'
+            + '<span class="wk__load" aria-hidden="true"></span>'
+            + '<header class="wk__dayHead"><span class="stat-label">' + day.label + '</span>'
+            + '<span class="wk__dayNum num">' + day.num + '</span></header>'
+            + (list.length
+              ? '<ul>' + list.map(function (e) {
+                  return '<li class="wk__event">'
+                    + (e.time ? '<time>' + esc(e.time) + '</time>' : '')
+                    + '<h5>' + esc(e.title) + '</h5>'
+                    + (e.subtitle ? '<p>' + esc(e.subtitle) + '</p>' : '')
+                    + (showCounts && e.attendance != null
+                      ? '<span class="wk__count">' + esc(e.attendance) + ' ' + esc(noun) + '</span>' : '')
+                    + '</li>';
+                }).join('') + '</ul>'
+              : '<p class="wk__quiet">—</p>')
+            + '</li>';
+        }).join('')
+      + '</ol></div>';
+  }
+
+  function renderAttentionQueue(p) {
+    var o = p.options || {};
+    var unit = o.age_unit || 'days';
+    var escalate = o.escalate_after_days != null ? o.escalate_after_days : 30;
+    var maxV = o.max_visible != null ? o.max_visible : 8;
+
+    var ordered = (p.items || []).slice().sort(function (a, b) {
+      return Number(b.age_days) - Number(a.age_days); });
+    var visible = ordered.slice(0, maxV), hidden = ordered.length - visible.length;
+
+    function age(days) {
+      var n = Number(days);
+      if (isNaN(n)) return '—';
+      if (unit === 'weeks') { var w = Math.floor(n / 7); return w < 1 ? Math.round(n) + 'd' : w + 'w'; }
+      return Math.round(n) + 'd';
+    }
+
+    return '<div class="q"><ol>'
+      + visible.map(function (it) {
+          var over = Number(it.age_days) >= escalate;
+          return '<li class="q__item"' + (over ? ' data-overdue="true"' : '') + '>'
+            + '<div><h5>' + esc(it.title) + '</h5>'
+            + (it.subtitle ? '<p>' + esc(it.subtitle) + '</p>' : '') + '</div>'
+            + '<div class="q__age">'
+            + (over ? '<span class="badge badge-danger">Overdue</span>' : '')
+            + '<strong>' + age(it.age_days) + '</strong></div></li>';
+        }).join('')
+      + '</ol>'
+      + (hidden > 0 ? '<p class="q__more">' + hidden + ' more waiting.</p>' : '')
+      + '</div>';
+  }
+
+  function renderMetricRow(p) {
+    var style = (p.options || {}).format || 'number';
+
+    function fmt(v, unit) {
+      if (v == null || isNaN(Number(v))) return '—';
+      var n = Number(v);
+      if (style === 'currency') {
+        // Not every unit on a currency row is a currency code — the WIP
+        // figure is in hours. Fall through rather than throwing.
+        if (!/^[A-Z]{3}$/.test(String(unit || '').toUpperCase())) {
+          return n.toLocaleString() + (unit ? ' ' + unit : '');
+        }
+        return n.toLocaleString(undefined, { style: 'currency',
+          currency: String(unit).toUpperCase(), maximumFractionDigits: 0 });
+      }
+      if (style === 'duration') {
+        var h = Math.floor(n), m = Math.round((n - h) * 60);
+        return m ? h + 'h ' + m + 'm' : h + 'h';
+      }
+      if (style === 'percent') return n.toLocaleString() + '%';
+      return n.toLocaleString();
+    }
+
+    return '<dl class="mx">' + (p.metrics || []).map(function (m) {
+      return '<div><dt class="stat-label">' + esc(m.label) + '</dt>'
+        + '<dd><span class="stat-value num">' + esc(fmt(m.value, m.unit)) + '</span></dd></div>';
+    }).join('') + '</dl>';
+  }
+
+  /* Where a row stands, as a WORD in one of four distinct states.
+     Returned as a label as well as a colour, so standing never travels
+     as colour alone — and the four states get four colours, because
+     giving "ahead of average" and "behind average" the same amber makes
+     good news and bad news look identical at a glance. */
+  function standingOf(r) {
+    var lower = r.direction && r.direction !== 'higher_better';
+    if (r.value == null) return null;
+
+    var beats = function (a, b) { return lower ? a <= b : a >= b; };
+
+    if (r.target != null && beats(r.value, r.target)) {
+      return { key: 'good', word: 'At target' };
+    }
+    if (r.floor != null && beats(r.floor, r.value)) {
+      return { key: 'danger', word: 'Needs work' };
+    }
+    if (r.average != null) {
+      return beats(r.value, r.average)
+        ? { key: 'info', word: 'Ahead of average' }
+        : { key: 'warn', word: 'Behind average' };
+    }
+    return { key: 'plain', word: 'No benchmark' };
+  }
+
+  function renderBenchmarkPanel(p) {
+    var o = p.options || {};
+    var style = o.format || 'percent';
+    var showAvg = o.show_average !== false;
+    var cascade = !!o.cascade;
+    var rows = p.rows || [];
+
+    function fmt(v, unit) {
+      if (v == null || isNaN(Number(v))) return '—';
+      var n = Number(v);
+      if (style === 'percent') return (Number.isInteger(n) ? n : n.toFixed(1)) + '%';
+      if (style === 'days') return Math.round(n) + 'd';
+      if (style === 'duration') return n + 'h';
+      if (style === 'currency') {
+        return n.toLocaleString(undefined, { style: 'currency',
+          currency: (unit || 'USD').toUpperCase(), maximumFractionDigits: 0 });
+      }
+      return n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    }
+
+    // Each row carries its own scale, so a days figure and a percentage
+    // can share a panel without one flattening the other.
+    function scaleOf(r) {
+      if (r.scale_max != null) return Number(r.scale_max);
+      if (style === 'percent') return 100;
+      var vals = [r.value, r.average, r.target, r.floor]
+        .filter(function (v) { return v != null; }).map(Number);
+      return Math.max.apply(null, vals.concat([1])) * 1.2;
+    }
+    function at(v, max) {
+      if (v == null || !max) return null;
+      return Math.max(0, Math.min(100, (Number(v) / max) * 100));
+    }
+
+    /* Faint shading behind the track marking the weak end and the strong
+       end, so the bar reads as a scale with territory rather than a
+       single length. Tinted at 7-9% — felt, not seen. */
+    function zones(r, max) {
+      var lower = r.direction && r.direction !== 'higher_better';
+      var out = '';
+      var floorAt = at(r.floor, max), tgtAt = at(r.target, max);
+      if (floorAt != null) {
+        out += lower
+          ? '<span class="bn__zone bn__zone--weak" style="left:' + floorAt + '%;right:0"></span>'
+          : '<span class="bn__zone bn__zone--weak" style="left:0;width:' + floorAt + '%"></span>';
+      }
+      if (tgtAt != null) {
+        out += lower
+          ? '<span class="bn__zone bn__zone--good" style="left:0;width:' + tgtAt + '%"></span>'
+          : '<span class="bn__zone bn__zone--good" style="left:' + tgtAt + '%;right:0"></span>';
+      }
+      return out;
+    }
+
+    /* The first clause carries more weight, so a dense reading has an
+       entry point instead of presenting as a uniform grey block. */
+    function lead(text) {
+      var m = String(text).match(/^(.{18,96}?[.;—])(\s)([\s\S]*)$/);
+      if (!m) return esc(text);
+      return '<b>' + esc(m[1]) + '</b> ' + esc(m[3]);
+    }
+
+    var body = rows.map(function (r) {
+      var max = scaleOf(r);
+      var stand = standingOf(r);
+      var fillAt = at(r.value, max);
+      var avgAt = showAvg ? at(r.average, max) : null;
+      var tgtAt = at(r.target, max);
+
+      var label = esc(r.label) + ': ' + fmt(r.value, r.unit)
+        + (r.average != null ? ', industry average ' + fmt(r.average, r.unit) : '')
+        + (r.target != null ? ', target ' + fmt(r.target, r.unit) : '');
+
+      return '<li class="bn__row">'
+        + '<div class="bn__head"><h5>' + esc(r.label) + '</h5>'
+        + (stand ? '<span class="badge badge-' + stand.key + '">' + stand.word + '</span>' : '')
+        + '<span class="bn__val">' + fmt(r.value, r.unit) + '</span></div>'
+        + '<div class="bn__track" role="img" aria-label="' + label + '">'
+        + zones(r, max)
+        + '<span class="bn__fill" style="width:' + (fillAt || 0) + '%"></span>'
+        + (avgAt != null ? '<span class="bn__tick bn__tick--avg" style="left:' + avgAt + '%"></span>' : '')
+        + (tgtAt != null ? '<span class="bn__tick bn__tick--target" style="left:' + tgtAt + '%"></span>' : '')
+        + '</div>'
+        + '<div class="bn__scale">'
+        + (r.average != null && showAvg
+            ? '<i>Average ' + fmt(r.average, r.unit) + '</i>' : '')
+        + (r.target != null
+            ? '<i class="bn__k--target">Target ' + fmt(r.target, r.unit) + '</i>' : '')
+        + '</div>'
+        + (r.reading ? '<p class="bn__reading">' + lead(r.reading) + '</p>' : '')
+        + (r.source ? '<cite class="bn__src">' + esc(r.source) + '</cite>' : '')
+        + '</li>';
+    }).join('');
+
+    var product = '';
+    if (cascade) {
+      var rates = rows.map(function (r) { return Number(r.value); })
+                      .filter(function (n) { return !isNaN(n); });
+      if (rates.length > 1) {
+        var pr = rates.reduce(function (a, n) { return a * (n / 100); }, 1) * 100;
+        product = '<p class="bn__product"><b>' + pr.toFixed(0) + '%</b>'
+          + '<span>' + esc(o.cascade_label || 'survives') + '</span>'
+          + '<em>' + rates.map(function (n) { return n + '%'; }).join(' × ') + '</em></p>';
+      }
+    }
+
+    return '<div class="bn"><ol>' + body + '</ol>' + product + '</div>';
+  }
+
+  function renderLedger(p) {
+    var o = p.options || {};
+    var cur = o.currency || 'USD';
+    var maxV = o.max_visible != null ? o.max_visible : 10;
+
+    function money(v) {
+      if (v == null || isNaN(Number(v))) return '';
+      return Number(v).toLocaleString(undefined, { style: 'currency', currency: cur,
+        maximumFractionDigits: 2 });
+    }
+
+    // Accumulate oldest-first so the running balance is arithmetically
+    // real, then present newest-first, which is how a ledger is read.
+    var oldest = (p.entries || []).slice().sort(function (a, b) {
+      return String(a.date).localeCompare(String(b.date)); });
+    var run = Number((p.opening_balance || {}).value || 0);
+    var rows = oldest.map(function (e) {
+      if (e.balance != null) run = Number(e.balance);
+      else run += Number(e.debit || 0) - Number(e.credit || 0);
+      return { e: e, run: run };
+    }).reverse();
+
+    var visible = rows.slice(0, maxV);
+
+    return '<div class="lg">'
+      + '<div class="lg__closing"><span class="stat-label">Outstanding</span>'
+      + '<strong class="stat-value num">' + money(rows.length ? rows[0].run : 0) + '</strong></div>'
+      + '<div class="lg__wrap"><table class="lg__t"><thead><tr>'
+      + '<th>Date</th><th>Detail</th><th class="lg__n">Debit</th>'
+      + '<th class="lg__n">Credit</th><th class="lg__n">Balance</th></tr></thead><tbody>'
+      + visible.map(function (r) {
+          return '<tr><td class="lg__date">' + esc(String(r.e.date).slice(5, 10)) + '</td>'
+            + '<td>' + esc(r.e.description) + '</td>'
+            + '<td class="lg__n num">' + money(r.e.debit) + '</td>'
+            + '<td class="lg__n num">' + money(r.e.credit) + '</td>'
+            + '<td class="lg__n num lg__run">' + money(r.run) + '</td></tr>';
+        }).join('')
+      + '</tbody></table></div>'
+      + (rows.length > visible.length
+        ? '<p class="lg__more">' + (rows.length - visible.length) + ' earlier entries.</p>' : '')
+      + '</div>';
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     THE REGISTRY + THE ONE ENGINE.
+     A lookup, never a switch. If this ever grows an
+     `if (archetype === ...)`, the vertical has escaped the data.
+     ═══════════════════════════════════════════════════════════════ */
+
+  var PRIMITIVES = {
+    timeline_day: renderTimelineDay,
+    priority_docket: renderPriorityDocket,
+    week_grid: renderWeekGrid,
+    attention_queue: renderAttentionQueue,
+    benchmark_panel: renderBenchmarkPanel,
+    metric_row: renderMetricRow,
+    ledger: renderLedger
+  };
+
+  var ROLES = ['lead', 'secondary', 'footer'];
+
+  function makeTerm(terms) {
+    return function (key, fallback) {
+      var row = (terms || {})[key];
+      if (row && row.value) return row.value;
+      return fallback !== undefined ? fallback : key;
+    };
+  }
+
+  /** Everything the primitive needs, and nothing it could fetch with. */
+  function propsFor(surface, bundle, term) {
+    var props = { options: surface.options || {}, term: term };
+    Object.keys(surface.bindings || {}).forEach(function (b) {
+      props[b] = (bundle || {})[b];
+    });
+    return props;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     THE ENGINE'S OUTPUT
+
+     One renderer. A lookup, never a switch — if this ever grows an
+     `if (archetype === ...)`, the vertical has escaped the data.
+     ═══════════════════════════════════════════════════════════════ */
+
+  /** 01, 02, 03 — the index shared by a surface and the note about it. */
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  function renderWorkspace(layout, data, animate) {
+    var term = makeTerm(layout.terminology);
+    var meta = (layout.room || {}).meta || {};
+    return layout.surfaces.slice().sort(function (a, b) {
+      return ROLES.indexOf(a.role) - ROLES.indexOf(b.role);
+    }).map(function (surface, i) {
+      var draw = PRIMITIVES[surface.primitive];
+      return '<section class="surface" data-role="' + surface.role + '"'
+        + ' data-primitive="' + surface.primitive + '"'
+        + ' style="--delay:' + (animate ? 120 + i * 110 : 0) + 'ms">'
+        + '<header class="surface__head">'
+        + '<span class="surface__n">' + pad(i + 1) + '</span>'
+        + '<h3>' + esc(surface.title) + '</h3>'
+        // The role names are internal vocabulary and were leaking onto
+        // every page. What belongs here is what this surface IS, in the
+        // business's own words.
+        + '<span class="surface__meta">' + esc(meta[surface.id] || '') + '</span>'
+        + '</header>'
+        + '<div class="surface__body">'
+        + (draw ? draw(propsFor(surface, data[surface.id], term))
+                : '<p>This part of your workspace needs an update before it can load.</p>')
+        + '</div></section>';
+    }).join('');
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     THE PAGE
+     ═══════════════════════════════════════════════════════════════ */
+
+  var reduced = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* THE FINDING. A dashboard shows four numbers; Chief's reason to exist
+     is saying which one matters. Exactly one per business, and it is the
+     only oversized thing on the page.
+
+     Authored here rather than computed, because the arithmetic is the
+     easy half — the hard half is knowing that a salon's rebooking rate
+     outranks its revenue, and that is a judgment the product has to
+     carry. Every figure below is the same one the panel renders. */
+  var FINDING = {
+    salon: {
+      stat: '38%', label: 'rebooking rate · the number nobody shows you',
+      line: 'Clients who leave with the next appointment booked come back at 70–80%. Everyone else comes back at 30–40%. Nothing else on this screen moves the business as much, and most booking systems will not even show you the figure.'
+    },
+    trades: {
+      stat: '$50,230', label: 'quoted, and never followed up',
+      line: 'Six estimates are sitting unanswered, two of them a month old. Ninety per cent of contractors stop chasing after the second touch — which makes this the cheapest revenue in the business, and the reason the quote queue outranks the ledger.'
+    },
+    therapist: {
+      stat: '6', label: 'standing hours quietly drifting',
+      line: 'Six clients have moved or missed a session and not rebooked. A caseload does not end, it thins — and this is what that looks like eight weeks before it reaches the bank.'
+    },
+    ministry: {
+      stat: '9 in 10', label: 'first-time guests who never come back',
+      line: 'Eleven per cent return for a second visit. Seven in ten church leaders say they have no working process for this at all, and a third have none whatsoever — which makes the follow-up list below the most valuable thing on the screen.'
+    },
+    consultant: {
+      stat: '52%', label: 'of the next six weeks is committed',
+      line: 'Just under half your forward capacity is spoken for. That is a decision to make this week, while there is still time to fill it — not in three weeks when the gap has already happened.'
+    },
+    nonprofit: {
+      stat: '3 in 4', label: 'first-time donors who never gave again',
+      line: 'Twenty-two per cent came back for a second gift. This is the largest and quietest loss in the sector, and a total-raised figure looks perfectly healthy right up until the base has gone.'
+    },
+    law_firm: {
+      stat: '32%', label: 'of working time reaches the bank',
+      line: '41% of the day gets captured, 86% of that gets billed, 91% of that gets paid. The three multiply, which is why they belong in one cascade — and why the first of them is where nearly all the room is.'
+    }
+  };
+
+  /* What Chief keyed on, so the classification is shown rather than
+     asserted. These are the evidence strings the real classifier
+     returns from workspace_archetypes.classify(). */
+  var EVIDENCE = {
+    salon:      ['you told us you are a barbershop', 'you mentioned chairs and walk-ins', 'clients rebook on a cycle'],
+    trades:     ['you told us you are a contractor', 'you dispatch crews to sites', 'you take deposits and carry a balance'],
+    therapist:  ['you told us you are a therapist', 'your work is a standing weekly hour', 'clinical records are out of scope'],
+    ministry:   ['you told us you are a ministry', 'your week has a Sunday shape', 'you care about first-time guests'],
+    consultant: ['you told us you are a consultant', 'you work in engagements against a retainer', 'your work moves through stages'],
+    nonprofit:  ['you told us you are a nonprofit', 'you report to funders on a deadline', 'your income is giving, not invoicing'],
+    law_firm:   ['you told us you are a lawyer', 'you work in matters and filings', 'you named deadlines with legal consequences']
+  };
+
+  /* THE STANCE. The lead primitive decides the shape of the PAGE, not
+     just the contents of a card. Seven businesses that all render as
+     card-card-card would make the structural claim a lie at page level,
+     so the claim is enforced here — and it is still data driving it,
+     because the lead primitive comes out of the layout schema. */
+  /* FOUR STANCES. The lead surface decides the whole page composition,
+     not just the shape of one card — including where Chief stands, which
+     is the most visible structural choice on offer. Seven businesses
+     that all render as hero / cards / right-hand sidebar are seven skins
+     of one page however different their accents are. */
+  var STANCE = {
+    timeline_day: 'board',
+    week_grid: 'calendar',
+    priority_docket: 'document'
+  };
+
+  var CHIEF_AT = {
+    // A dispatch wall needs every pixel of width.
+    board: 'below',
+    // A stage flow scrolls sideways; a neighbour would crowd it.
+    pipeline: 'below',
+    // A week is wide but shallow — there is genuinely room beside it.
+    calendar: 'right',
+    // A register is a document, and marginalia belong in a document's
+    // left margin.
+    register: 'left',
+    document: 'right'
+  };
+
+  var HERO_FORM = {
+    board: 'wide', pipeline: 'wide',
+    calendar: 'stacked', register: 'stacked', document: 'stacked'
+  };
+
+  function stanceOf(layout) {
+    var lead = layout.surfaces.filter(function (s) { return s.role === 'lead'; })[0];
+    if (!lead) return 'document';
+    // A docket only wants a reading measure while it is a plain stacked
+    // list. Laid across its stages, spread as a grid of peers, or cut
+    // into deadline bands, it is a register — and a register needs the
+    // width. Reading the stance off the primitive alone gave all three a
+    // 78ch column with dead space beside it.
+    var o = lead.options || {};
+    // A docket is three different objects depending on how it is laid
+    // out, and each wants a different page around it.
+    if (o.stage_layout === 'columns') return 'pipeline';
+    if (o.stage_layout === 'grid' || o.banding === 'horizon') return 'register';
+    return STANCE[lead.primitive] || 'document';
+  }
+
+  var SHAPE = {
+    salon:      'chair lanes · one day',
+    trades:     'crew lanes · one day',
+    therapist:  'the standing hour',
+    ministry:   'seven columns',
+    consultant: 'docket by stage',
+    nonprofit:  'docket by deadline',
+    law_firm:   'docket by deadline'
+  };
+
+  /* Each glyph is that layout's own structure, so the seven read as
+     different before one is clicked. */
+  var GLYPHS = {
+    salon:
+      '<rect class="g-fill" x="1" y="2" width="4" height="9"/><rect class="g-ghost" x="1" y="13" width="4" height="5"/>' +
+      '<rect class="g-fill" x="7" y="2" width="4" height="4"/><rect class="g-fill" x="7" y="8" width="4" height="6"/>' +
+      '<rect class="g-fill" x="13" y="4" width="4" height="7"/><rect class="g-ghost" x="13" y="13" width="4" height="5"/>' +
+      '<rect class="g-fill" x="19" y="6" width="4" height="10"/>',
+    trades:
+      '<rect class="g-fill" x="1" y="2" width="6" height="6"/><rect class="g-ghost" x="1" y="10" width="6" height="3"/>' +
+      '<rect class="g-fill" x="1" y="15" width="6" height="4"/>' +
+      '<rect class="g-fill" x="9" y="2" width="6" height="4"/><rect class="g-ghost" x="9" y="8" width="6" height="3"/>' +
+      '<rect class="g-fill" x="9" y="13" width="6" height="6"/>' +
+      '<rect class="g-fill" x="17" y="3" width="6" height="14"/>',
+    therapist:
+      '<rect class="g-fill" x="1" y="4" width="2.2" height="12"/><rect class="g-fill" x="4.6" y="4" width="2.2" height="12"/>' +
+      '<rect class="g-ghost" x="8.2" y="4" width="2.2" height="12"/><rect class="g-fill" x="11.8" y="4" width="2.2" height="12"/>' +
+      '<rect class="g-fill" x="15.4" y="4" width="2.2" height="12"/><rect class="g-ghost" x="19" y="4" width="2.2" height="12"/>' +
+      '<rect class="g-ghost" x="22.6" y="4" width="2.2" height="12"/>',
+    ministry:
+      '<rect class="g-fill" x="1" y="2" width="2.2" height="16"/><rect class="g-ghost" x="4.5" y="11" width="2.2" height="7"/>' +
+      '<rect class="g-fill" x="8" y="8" width="2.2" height="10"/><rect class="g-fill" x="11.5" y="5" width="2.2" height="13"/>' +
+      '<rect class="g-fill" x="15" y="10" width="2.2" height="8"/><rect class="g-fill" x="18.5" y="7" width="2.2" height="11"/>' +
+      '<rect class="g-ghost" x="22" y="13" width="2.2" height="5"/>',
+    consultant:
+      '<rect class="g-fill" x="1" y="2" width="7" height="2"/>' +
+      '<line class="g-rule" x1="10" y1="3" x2="25" y2="3"/><line class="g-rule" x1="10" y1="6" x2="22" y2="6"/>' +
+      '<rect class="g-fill" x="1" y="9" width="7" height="2"/>' +
+      '<line class="g-rule" x1="10" y1="10" x2="24" y2="10"/>' +
+      '<rect class="g-fill" x="1" y="15" width="7" height="2"/>' +
+      '<line class="g-rule" x1="10" y1="16" x2="25" y2="16"/><line class="g-rule" x1="10" y1="19" x2="20" y2="19"/>',
+    nonprofit:
+      '<line class="g-rule" x1="1" y1="3" x2="17" y2="3"/><rect class="g-fill" x="20" y="1" width="5" height="4"/>' +
+      '<line class="g-rule" x1="1" y1="8" x2="20" y2="8"/><rect class="g-fill" x="22" y="6" width="3" height="4"/>' +
+      '<line class="g-rule" x1="1" y1="13" x2="14" y2="13"/><rect class="g-ghost" x="23" y="11" width="2" height="4"/>' +
+      '<circle class="g-fill" cx="3.5" cy="18" r="2"/><circle class="g-ghost" cx="9.5" cy="18" r="2"/><circle class="g-ghost" cx="15.5" cy="18" r="2"/>',
+    law_firm:
+      '<line class="g-rule" x1="1" y1="3" x2="18" y2="3"/><rect class="g-fill" x="21" y="1" width="4" height="4"/>' +
+      '<line class="g-rule" x1="1" y1="8" x2="16" y2="8"/><rect class="g-fill" x="22" y="6" width="3" height="4"/>' +
+      '<line class="g-rule" x1="1" y1="13" x2="19" y2="13"/><rect class="g-ghost" x="23" y="11" width="2" height="4"/>' +
+      '<line class="g-rule" x1="1" y1="18" x2="15" y2="18"/><rect class="g-ghost" x="23.5" y="16" width="1.5" height="4"/>'
+  };
+
+  /* Plain-language names. The practitioner never sees a slug. */
+  var PRIMITIVE_NAMES = {
+    timeline_day: 'A day across lanes',
+    priority_docket: 'A list ranked by urgency',
+    week_grid: 'A seven-day week',
+    attention_queue: 'A queue of people waiting',
+    benchmark_panel: 'The numbers that say if it is working',
+    metric_row: 'A row of figures',
+    ledger: 'A running balance'
+  };
+
+  /* One variable moves per business. Every house component reads
+     --accent, so re-pointing it re-tints the gradient, the bloom, the
+     chips, the badges and the focus rings with no per-vertical CSS.
+     Written as a stylesheet rather than decided in JS because the host
+     stamps its theme on <html> after this script runs — anything JS
+     measured at boot would be a race. */
+  (function themeSheet() {
+    var css = ORDER.map(function (key) {
+      var t = LAYOUTS[key].theme;
+      var a = '.app[data-biz="' + key + '"]';
+      var b = '.biz[data-biz="' + key + '"]';
+      function accent(p) {
+        return '--accent:' + p.accent + ';--accent-secondary:' + p.accent2 + ';'
+          + '--field:' + p.field + ';--field2:' + p.field2 + ';';
+      }
+      function chip(p) {
+        return '--biz-accent:' + p.accent + ';'
+          + '--biz-bg:color-mix(in srgb,' + p.accent + ' 12%,transparent);'
+          + '--biz-line:color-mix(in srgb,' + p.accent + ' 45%,transparent);';
+      }
+      return a + '{' + accent(t.dark) + '--display:' + t.display_font + ';}'
+        + b + '{' + chip(t.dark) + '}'
+        + '@media (prefers-color-scheme: light){'
+        +   ':root:not([data-theme="dark"]) ' + a + '{' + accent(t.palette) + '}'
+        +   ':root:not([data-theme="dark"]) ' + b + '{' + chip(t.palette) + '}}'
+        + ':root[data-theme="light"] ' + a + '{' + accent(t.palette) + '}'
+        + ':root[data-theme="light"] ' + b + '{' + chip(t.palette) + '}';
+    }).join('');
+    var s = document.createElement('style');
+    s.textContent = css;
+    document.head.appendChild(s);
+  })();
+
+  var app = document.getElementById('app');
+  var rail = document.getElementById('switch');
+  var workspace = document.getElementById('workspace');
+  var kept = document.getElementById('kept');
+  var cuts = document.getElementById('cuts');
+  var cutsList = document.getElementById('cutsList');
+  var colophon = document.getElementById('colophon');
+  var current = null;
+
+  ORDER.forEach(function (key) {
+    var layout = LAYOUTS[key];
+    var b = document.createElement('button');
+    b.className = 'biz';
+    b.type = 'button';
+    b.setAttribute('data-biz', key);
+    b.setAttribute('aria-current', 'false');
+    b.innerHTML =
+      '<svg class="biz__glyph" viewBox="0 0 26 20" aria-hidden="true">' + GLYPHS[key] + '</svg>'
+      + '<span><span class="biz__name">' + esc(layout.label) + '</span>'
+      + '<span class="biz__shape">' + esc(SHAPE[key]) + '</span></span>';
+    b.addEventListener('click', function () { show(key); });
+    rail.appendChild(b);
+  });
+
+  function narrate(layout) {
+    document.getElementById('voice').textContent = layout.rationale;
+    kept.innerHTML = '';
+    cutsList.innerHTML = '';
+
+    var order = ['lead', 'secondary', 'footer'];
+    var i = 0;
+
+    // A refusal is not a suppressed primitive — it is a capability Chief
+    // will not offer at all, and it outranks everything it merely left
+    // out, so it sits with the kept notes rather than behind the fold.
+    (layout.refused || []).forEach(function (r) {
+      var el = document.createElement('div');
+      el.className = 'note';
+      el.setAttribute('data-kind', 'refused');
+      el.style.setProperty('--delay', (reduced ? 0 : 200 + (i++) * 80) + 'ms');
+      el.innerHTML = '<span class="note__n">!</span>'
+        + '<div class="note__top"><span class="badge badge-danger">Refused</span>'
+        + '<span class="note__what">' + esc(r.what) + '</span></div>'
+        + '<p class="note__why">' + esc(r.reason) + '</p>';
+      kept.appendChild(el);
+    });
+
+    layout.surfaces.slice().sort(function (a, b) {
+      return order.indexOf(a.role) - order.indexOf(b.role);
+    }).forEach(function (s, n) {
+      var el = document.createElement('div');
+      el.className = 'note';
+      el.setAttribute('data-kind', 'kept');
+      el.style.setProperty('--delay', (reduced ? 0 : 200 + (i++) * 80) + 'ms');
+      // Same index as the surface it describes, so the column and the
+      // workspace can be read against each other.
+      el.innerHTML = '<span class="note__n">' + pad(n + 1) + '</span>'
+        + '<div class="note__top">'
+        + '<span class="badge badge-primary">'
+        + (s.role === 'lead' ? 'Leads with' : 'Underneath') + '</span>'
+        + '<span class="note__what">' + esc(s.title) + '</span></div>'
+        + '<p class="note__why">' + esc(s.rationale) + '</p>';
+      kept.appendChild(el);
+    });
+
+    var left = layout.suppressed || [];
+    document.getElementById('cutsSummary').textContent =
+      'And ' + left.length + ' things it deliberately left out';
+    left.forEach(function (c) {
+      var el = document.createElement('div');
+      el.innerHTML = '<p class="cut__what"><s>'
+        + esc(PRIMITIVE_NAMES[c.primitive] || c.primitive) + '</s></p>'
+        + '<p class="cut__why">' + esc(c.reason) + '</p>';
+      cutsList.appendChild(el);
+    });
+    cuts.open = false;
+  }
+
+  function show(key) {
+    if (key === current) return;
+    current = key;
+
+    var layout = LAYOUTS[key], data = DATA[key], find = FINDING[key];
+
+    Array.prototype.forEach.call(rail.querySelectorAll('.biz'), function (b) {
+      b.setAttribute('aria-current', b.getAttribute('data-biz') === key ? 'true' : 'false');
+    });
+
+    var stance = stanceOf(layout);
+    app.setAttribute('data-biz', key);
+    app.setAttribute('data-stance', stance);
+    app.setAttribute('data-chief', CHIEF_AT[stance] || 'right');
+    app.setAttribute('data-hero', HERO_FORM[stance] || 'stacked');
+    // The business's name at poster scale, ghosted behind the finding —
+    // the one place the per-vertical display face gets to be loud.
+    document.getElementById('heroName').textContent = layout.label.split(' / ')[0];
+
+    var room = layout.room || {};
+    document.getElementById('eyebrow').textContent =
+      'Chief · ' + (room.eyebrow || 'workspace composer');
+    document.getElementById('findStat').textContent = find.stat;
+    document.getElementById('findLabel').textContent = find.label;
+    document.getElementById('findLine').textContent = find.line;
+
+    var chips = document.getElementById('chips');
+    chips.innerHTML = (EVIDENCE[key] || []).map(function (e) {
+      return '<li class="chip">' + esc(e) + '</li>';
+    }).join('');
+
+    workspace.innerHTML = renderWorkspace(layout, data, !reduced);
+    narrate(layout);
+
+    var lead = layout.surfaces.filter(function (s) { return s.role === 'lead'; })[0];
+    colophon.innerHTML =
+      '<span>schema · <b>' + key + '.json</b></span>'
+      + '<span>stance · ' + stance + ' · chief ' + (CHIEF_AT[stance] || 'right') + '</span>'
+      + '<span>' + layout.surfaces.length + ' surfaces · '
+      + ((layout.suppressed || []).length + (layout.refused || []).length) + ' left out</span>'
+      + '<span>accent · ' + layout.theme.accent_name + '</span>'
+      + '<span>one engine, no per-vertical code</span>';
+
+    if (!reduced) {
+      // Released on a TIMER as well as a frame. requestAnimationFrame is
+      // suspended while this frame is not being rendered — the situation
+      // on first load, where the host keeps it hidden until it reports
+      // ready. Waiting on rAF alone leaves everything at opacity 0
+      // indefinitely; timers keep running.
+      workspace.setAttribute('data-entering', '');
+      kept.setAttribute('data-entering', '');
+      var done = false;
+      var release = function () {
+        if (done) return;
+        done = true;
+        workspace.removeAttribute('data-entering');
+        kept.removeAttribute('data-entering');
+      };
+      if (window.requestAnimationFrame) {
+        requestAnimationFrame(function () { requestAnimationFrame(release); });
+      }
+      setTimeout(release, 60);
+    }
+  }
+
+  // No theme listeners: the stylesheet above re-resolves on a theme flip
+  // in both directions without this script being told.
+
+  show('salon');
+})();
+</script>

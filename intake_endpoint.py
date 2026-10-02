@@ -70,7 +70,8 @@ import lead_identity
 import lead_scoring
 import llm_call
 import rate_limit
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from auth_supabase import AuthedUser, require_user
 from pydantic import BaseModel
 
 # Arc 29 — abuse gate for the anon intake endpoint. Each submission
@@ -160,14 +161,31 @@ async def supabase_request(
     path: str,
     body: Optional[Dict] = None,
 ) -> Any:
-    """Make a request to the Supabase REST API."""
+    """Make a request to the Supabase REST API AS THE SERVER.
+
+    This door is public by design (ownership_sweep.PUBLIC_BY_DESIGN): a
+    visitor with a form link and no account. Its reads of intake_forms,
+    businesses and contacts ran with the ANON key, and every row-level
+    policy on those tables is member-scoped — so once RLS landed, every
+    anonymous submission and every open of the form's page answered
+    "Form not found". No contact has come through this door since
+    2026-04-15 (checked 2026-09-18). The endpoint itself does the
+    scoping: the form must belong to the business_id the caller claims,
+    the honeypot and the rate limit run first, and it only ever touches
+    the rows of that one form. Falls back to anon only when no service
+    key is configured (local runs), which is the old behaviour."""
     url = f"{get_supabase_url()}/rest/v1{path}"
-    headers = {
-        "apikey": get_supabase_anon(),
-        "Authorization": f"Bearer {get_supabase_anon()}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+    try:
+        import sb_clients
+        headers = sb_clients.sb_headers_service(prefer="return=representation")
+        headers.setdefault("Content-Type", "application/json")
+    except Exception:
+        headers = {
+            "apikey": get_supabase_anon(),
+            "Authorization": f"Bearer {get_supabase_anon()}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation",
+        }
     resp = await client.request(
         method, url, headers=headers,
         content=json.dumps(body) if body else None,
@@ -468,6 +486,11 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
 
+        # Stop before contact creation, events, module routes, scoring or AI drafts.
+        from private_care import needs_private_care, save_submission
+        if needs_private_care(form_config, submission_data):
+            return await asyncio.to_thread(save_submission, req.business_id, req.form_id, submission_data)
+
         voice_profile = business.get("voice_profile", {})
         business_type = business.get("type", "general")
         business_name = business.get("name", "")
@@ -679,6 +702,49 @@ RESPOND ONLY WITH VALID JSON:
         }
 
 
+@router.get("/public/widget/form/{form_id}")
+async def public_form_page(form_id: str, request: Request):
+    """The page behind the link Chief hands out for a client form, served
+    on the API host (the site domains serve the same page via
+    public_site._serve_form_page). Until 2026-09-18 this path existed
+    only inside `embed_url` strings — a 404 wherever it was opened."""
+    from fastapi.responses import HTMLResponse
+    fid = (form_id or "").strip()
+    if not fid or len(fid) > 64:
+        raise HTTPException(status_code=404, detail="Form not found")
+    async with httpx.AsyncClient() as client:
+        forms = await supabase_request(
+            client, "GET",
+            f"/intake_forms?id=eq.{fid}&is_active=eq.true"
+            "&select=id,business_id,name,fields,settings,form_type&limit=1")
+        form = forms[0] if forms else None
+        if not form:
+            raise HTTPException(status_code=404, detail="Form not found")
+        from public_form_theme import SITE_SELECT
+        businesses, site_rows = await asyncio.gather(
+            supabase_request(client, "GET", f"/businesses?id=eq.{form['business_id']}&select=id,name,type,settings&limit=1"),
+            supabase_request(client, "GET", f"/business_sites?business_id=eq.{form['business_id']}&status=eq.published&select={SITE_SELECT}&limit=1"))
+        site_rows = site_rows or []
+        business = businesses[0] if businesses else None
+        if not business:
+            raise HTTPException(status_code=404, detail="Business not found")
+    from form_page_renderer import render_form_page
+    from chief_form_actions import public_form_url
+    canonical = await asyncio.to_thread(public_form_url, str(form["business_id"]), fid)
+    # Behind Railway's proxy request.base_url says http://; a browser
+    # will not POST from an https page to an http address (mixed
+    # content), so the submit url is pinned to https on the same host.
+    host = request.url.hostname or ""
+    local = host in ("localhost", "127.0.0.1")
+    scheme = "http" if local else "https"
+    port = f":{request.url.port}" if (local and request.url.port) else ""
+    html = render_form_page(business, form, submit_url=f"{scheme}://{host}{port}/intake/submit",
+                            canonical_url=canonical, site=site_rows[0] if site_rows else None,
+                            embedded=str(getattr(request, "query_params", {}).get("embed", "")) == "1")
+    return HTMLResponse(content=html, media_type="text/html",
+                        headers={"Cache-Control": "no-store"})
+
+
 @router.get("/intake/health")
 async def intake_health():
     """Liveness probe."""
@@ -687,3 +753,16 @@ async def intake_health():
         "supabase_configured": bool(get_supabase_url()),
         "anthropic_configured": bool(get_anthropic_key()),
     }
+
+
+@router.get("/intake/private-care/{business_id}")
+def private_care_requests(business_id: str, user: AuthedUser = Depends(require_user)):
+    from private_care import require_owner
+    import sb_clients
+    require_owner(business_id, user)
+    rows = sb_clients.sb_get_as_service(
+        f"/ministry_care_requests?business_id=eq.{business_id}"
+        "&select=id,created_at,status,submission&order=created_at.desc&limit=100")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "Private requests could not be loaded")
+    return {"requests": rows}

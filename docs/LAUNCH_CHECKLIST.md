@@ -29,7 +29,7 @@ already live in both repos.
 
 ### Billing enforcement (when you decide to start charging)
 Create the three products/prices in the Stripe dashboard first
-(Starter $79 / Professional $199 / Agency $399 monthly), then:
+(Starter $79 / Professional $149 / Solutionist $299 monthly, Founder $99), then:
 | Var | Value |
 |---|---|
 | `STRIPE_PRICE_ID_STARTER` | `price_…` |
@@ -38,7 +38,7 @@ Create the three products/prices in the Stripe dashboard first
 | `BILLING_ENFORCE` | `on` — THE switch. Until then trials/past-due never block. |
 
 ⚠ `feature_gates.py` marks **multi_seat as NOT BUILT** — don't market
-the Practice tier's collaboration until it ships.
+the Solutionist tier's collaboration (plan key `practice`) until it ships.
 
 ### Webhook hardening (this PR)
 | Var | Where to get it | Effect |

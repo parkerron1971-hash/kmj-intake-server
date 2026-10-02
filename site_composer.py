@@ -389,6 +389,16 @@ def _persist_site_prefs(business_id: str, prefs: Dict[str, Any]) -> None:
 
 # ─── Context gathering ────────────────────────────────────────────────
 
+def _owner_brief_cap() -> int:
+    """One cap for the owner's words (canvas_brief.OWNER_BRIEF_MAX_CHARS);
+    600 here used to cut a practitioner's prompt mid-sentence."""
+    try:
+        import canvas_brief
+        return int(canvas_brief.OWNER_BRIEF_MAX_CHARS)
+    except Exception:
+        return 2400
+
+
 def _slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (name or "site").lower()).strip("-")
     return s[:48] or "site"
@@ -518,6 +528,18 @@ def gather_context(business_id: str) -> Dict[str, Any]:
             giving = {"enabled": True, "url": give_url_for_site(site)}
     except Exception as e:
         logger.info(f"[composer] giving connection skipped: {e}")
+
+    # Public events (RSVP) — same connection pattern: on only when the
+    # /events page is actually live (operator toggle + an Events module),
+    # so a composed "Upcoming events" door can never dead-end.
+    events_door = {"enabled": False, "url": ""}
+    try:
+        from events_rsvp_router import (events_public_is_active, events_url_for_site,
+                                        roster_modules_for)
+        if site and slug and events_public_is_active(biz, roster_modules_for(business_id)):
+            events_door = {"enabled": True, "url": events_url_for_site(site)}
+    except Exception as e:
+        logger.info(f"[composer] events connection skipped: {e}")
 
     # Only real dict rows the owner left visible reach composed sites —
     # hidden quotes (show_on_website=False) must not render, inflate the
@@ -814,6 +836,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "business_picture": business_picture,
         "booking": booking,
         "giving": giving,
+        "events_door": events_door,
         "public_modules": _fetch_public_modules(business_id),
         "contact": contact,
         "footer": bundle.get("footer") or {},
@@ -1680,6 +1703,7 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
                       defaulted_modules: Optional[List[str]] = None,
                       previous_html: Optional[str] = None,
                       atelier_meta: Optional[Dict[str, Any]] = None,
+                      one_mind: bool = False,
                       ) -> tuple:
     """Conformance report over the final document. Returns
     (report_dict, fixes) where fixes is a list of fixable spec issues
@@ -1696,10 +1720,13 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
 
     # (a) every spec section produced non-empty HTML or was legitimately
     # dropped (renderer returned empty for lack of real data — logged).
+    # ONE-MIND PAGES (build quality 6/6): canvas / builder-v2 documents
+    # never stamp module DOM ids and follow the spec's fonts, so (a) and
+    # (b) are restated by _one_mind_checks and the loop below is skipped.
     missing: List[str] = []
     dropped: List[str] = []
     needs_resanitize = False
-    for s in spec:
+    for s in ([] if one_mind else spec):
         mid = s.get("module")
         mspec = site_modules.MODULES.get(mid)
         if not mspec:
@@ -1726,21 +1753,24 @@ def _run_quality_gate(business_id: str, spec: List[Dict[str, Any]],
     if dropped:
         logger.info(f"[composer.gate] sections legitimately dropped for "
                     f"{business_id[:8]} (no real data): {dropped}")
-    checks.append({
-        "name": "sections_rendered", "ok": not missing,
-        "detail": (f"missing from document: {missing}; " if missing else "")
-                  + (f"legitimately dropped (no data): {dropped}" if dropped
-                     else ("all sections present" if not missing else ""))})
-    if needs_resanitize:
-        fixes.append({"fix": "resanitize"})
+    if one_mind:
+        checks.extend(_one_mind_checks())
+    else:
+        checks.append({
+            "name": "sections_rendered", "ok": not missing,
+            "detail": (f"missing from document: {missing}; " if missing else "")
+                      + (f"legitimately dropped (no data): {dropped}" if dropped
+                         else ("all sections present" if not missing else ""))})
+        if needs_resanitize:
+            fixes.append({"fix": "resanitize"})
 
-    # (b) the chosen font families actually reach the emitted CSS/links.
-    typ = (ctx.get("dna") or {}).get("typography") or {}
-    fonts_wanted = [f for f in {typ.get("heading"), typ.get("body")} if f]
-    fonts_missing = [f for f in fonts_wanted if f not in html]
-    checks.append({"name": "fonts_embedded", "ok": not fonts_missing,
-                   "detail": (f"missing families: {fonts_missing}"
-                              if fonts_missing else f"present: {fonts_wanted}")})
+        # (b) the chosen font families actually reach the emitted CSS/links.
+        typ = (ctx.get("dna") or {}).get("typography") or {}
+        fonts_wanted = [f for f in {typ.get("heading"), typ.get("body")} if f]
+        fonts_missing = [f for f in fonts_wanted if f not in html]
+        checks.append({"name": "fonts_embedded", "ok": not fonts_missing,
+                       "detail": (f"missing families: {fonts_missing}"
+                                  if fonts_missing else f"present: {fonts_wanted}")})
 
     # (c) --sx-* palette variables + head meta/OG block when data existed.
     pal_missing = [v for v in ("--sx-bg:", "--sx-accent:", "--sx-text:")
@@ -1999,6 +2029,71 @@ def _apply_quality_fixes(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
         new_spec = sanitize_spec({"sections": new_spec}, ctx)
         changed = True
     return new_spec if changed else None
+
+
+def _inject_missing_head_meta(html: str, ctx: Dict[str, Any]) -> str:
+    """THE HEAD A ONE-MIND PAGE NEVER GOT (2026-08-28, build quality 6/6).
+    Module pages get description / canonical / OG / JSON-LD from
+    page_shell's _head_meta_block; canvas and builder-v2 documents bypass
+    page_shell, so every one of them failed the gate's meta_block check
+    on canonical + jsonld (KMJ and MaCnificent alike) and shipped without
+    a canonical url or a LocalBusiness record. The author writes title,
+    description and OG itself (rule 13) — add ONLY what is absent."""
+    if not html or "</head>" not in html:
+        return html
+    try:
+        meta = site_modules.build_page_meta(ctx) or {}
+    except Exception as e:
+        logger.info(f"[composer] head meta skipped: {e}")
+        return html
+    try:
+        from site_modules._base import safe as _safe, safe_url as _safe_url
+    except Exception:
+        import html as _h
+        _safe = _h.escape
+        _safe_url = _h.escape
+    add: List[str] = []
+    desc = str(meta.get("description") or "").strip()
+    canonical = str(meta.get("canonical") or "").strip()
+    og_title = str(meta.get("og_title") or "").strip()
+    if desc and '<meta name="description"' not in html:
+        add.append(f'<meta name="description" content="{_safe(desc)}">')
+    if canonical and 'rel="canonical"' not in html:
+        add.append(f'<link rel="canonical" href="{_safe_url(canonical)}">')
+    if og_title and 'property="og:title"' not in html:
+        add.append(f'<meta property="og:title" content="{_safe(og_title)}">')
+    if desc and 'property="og:description"' not in html:
+        add.append(f'<meta property="og:description" content="{_safe(desc)}">')
+    if canonical and 'property="og:url"' not in html:
+        add.append(f'<meta property="og:url" content="{_safe_url(canonical)}">')
+    if 'property="og:type"' not in html:
+        add.append('<meta property="og:type" content="website">')
+    jsonld = meta.get("jsonld") or {}
+    if jsonld and "application/ld+json" not in html:
+        payload = json.dumps(jsonld, ensure_ascii=False).replace("</", "<\\/")
+        add.append(f'<script type="application/ld+json">{payload}</script>')
+    if not add:
+        return html
+    return html.replace("</head>", "\n".join(add) + "\n</head>", 1)
+
+
+def _one_mind_checks() -> List[Dict[str, Any]]:
+    """The gate's rulers that belong to the module engine, restated for
+    a page one author wrote whole (build quality 6/6). sections_rendered
+    looked for module DOM ids a one-mind page never stamps, so every
+    canvas/v2 build reported six "missing" sections; fonts_embedded
+    looked for the DNA's families when rule 7 makes the SPEC's fonts law.
+    Both are covered upstream: the builder's coverage law (every offering
+    has a home, nav, form, footer) and the floor verifier."""
+    return [
+        {"name": "sections_rendered", "ok": True,
+         "detail": "one-mind page: the author's own sections; coverage "
+                   "(every offering has a home, nav, form, footer) is the "
+                   "builder's law, checked before this gate"},
+        {"name": "fonts_embedded", "ok": True,
+         "detail": "one-mind page: the spec's fonts are law (rule 7); the "
+                   "DNA families do not apply"},
+    ]
 
 
 def _ensure_og_image(html: str, slot_records: Dict[str, Any]) -> str:
@@ -2335,6 +2430,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     atelier_meta: Optional[Dict[str, Any]] = None
     if _canvas_html:
         html = _mark(_canvas_html)
+        html = _inject_missing_head_meta(html, ctx)
         # AUDIT FIX (2026-07-24): canvas/v2 documents bypass page_shell,
         # which is the ONLY place the Studio select-to-talk bridge was
         # emitted — so every v2 page shipped with Edit Mode's tap-to-
@@ -2591,7 +2687,8 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         quality_report, fixes = _run_quality_gate(
             business_id, spec, ctx, final_html, dro=dro,
             dro_status=dro_status, defaulted_modules=defaulted_modules,
-            previous_html=prev_html, atelier_meta=atelier_meta)
+            previous_html=prev_html, atelier_meta=atelier_meta,
+            one_mind=bool(_canvas_html))
         # Canvas Pass: the heal re-render rebuilds from the SPEC (module
         # path), which would destroy a canvas-authored page — the canvas
         # already ran its own fact-check + corrective retry upstream, so
@@ -2919,6 +3016,13 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # powers the "why your site looks this way" view — served by
         # GET /composer/rationale, rendered by DesignRationalePanel.tsx.
         cfg["design_rationale_id"] = dro_id
+    # TWO DIRECTIONS + A JUDGE — the verdict is visible on the site row
+    # too (which stance won, why, and what the loser was), not only
+    # inside the persisted rationale.
+    _dirs = ((dro.get("meta") or {}).get("directions")
+             if isinstance(dro, dict) else None)
+    if isinstance(_dirs, dict) and _dirs:
+        cfg["dro_directions"] = _dirs
     # Arc 8 — persist which sections went bespoke + the validated
     # fragments themselves (html/css keyed by module) so shuffle/refresh/
     # override re-renders reuse them without an LLM call. A full
@@ -3204,6 +3308,36 @@ def _owner_direction_evidence(ctx: Dict[str, Any]) -> Dict[str, Any]:
     return {"site_prefs": ctx.get("site_prefs"),
             "fonts_pinned": bool(design.get("fonts_owner_set"))
             and bool(design.get("fonts_locked"))}
+
+
+def _study_inspiration_sites(business_id: str, ctx: Dict[str, Any]) -> None:
+    """The sites pasted into the quick brief get the same study the Design
+    Session gives a pasted link: screenshots at phone and desktop width
+    read by a vision model, saved to the site's design notes (discovery
+    dossier). Until 2026-09-22 they only got the HTML/CSS palette scrape
+    below, which feeds this compose and never reached the Blueprint or
+    the builder. Fail-soft; a URL already studied cleanly is not studied
+    again."""
+    try:
+        import discovery
+        prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+        urls = [u.strip() for u in (prefs.get("inspiration_urls") or [])
+                if isinstance(u, str) and u.strip()][:3]
+        if not urls:
+            return
+        dossier = discovery.get_dossier(business_id) or {}
+        done = {r.get("url") for r in ((dossier.get("artifacts") or {}).get("references") or [])
+                if isinstance(r, dict) and not r.get("error")}
+        why = str(prefs.get("inspiration_notes") or "").strip()[:200]
+        for url in urls:
+            if url in done:
+                continue
+            entry = discovery.study_reference(business_id, url, "love", why)
+            if entry.get("error"):
+                logger.info(f"[composer] {business_id[:8]} inspiration study failed "
+                            f"for {url[:80]}: {str(entry['error'])[:80]}")
+    except Exception as e:
+        logger.warning(f"[composer] inspiration study skipped: {type(e).__name__}: {e}")
 
 
 def _maybe_analyze_references(business_id: str,
@@ -3720,7 +3854,7 @@ def compose_site(business_id: str, brief_notes: str = "",
     # canvas brief can lead with them verbatim. brief_notes already
     # steered the section plan; now the author hears them too.
     if (brief_notes or "").strip():
-        ctx["owner_brief"] = brief_notes.strip()[:600]
+        ctx["owner_brief"] = brief_notes.strip()[:_owner_brief_cap()]
     # Arc 3 — an APPROVED design spec is the law of the page: it leads
     # the canvas brief. Authoring/revision happen via /composer/spec/*
     # for pennies, so only decided designs pay for builds.
@@ -3743,6 +3877,10 @@ def compose_site(business_id: str, brief_notes: str = "",
     # both the DRL signal pass and the DRO author see the evidence.
     _report_progress(progress_cb, 15, "Listening to your style words")
     ref_analysis = _maybe_analyze_references(business_id, ctx)
+    if progress_cb is not None:
+        # A build job only: each study is two page loads and a vision call.
+        _report_progress(progress_cb, 17, "Looking at the sites you love")
+        _study_inspiration_sites(business_id, ctx)
 
     # Arc 6 — the owner's creative brief flows into DRO authoring on the
     # SINGLE compose path too (directions are opt-in, not a prerequisite).
@@ -3776,10 +3914,22 @@ def compose_site(business_id: str, brief_notes: str = "",
             try:
                 from agents.composer.drl.passes import produce_dro
                 intake = _assemble_intake_text(ctx)
+                # TWO DIRECTIONS + A JUDGE: the judge reads THE FACTS the
+                # Director and the truth law read (site_facts) — built only
+                # when the switch is on, so 'off' costs no extra reads.
+                _facts_text = ""
+                try:
+                    import directions_judge as _dj
+                    if _dj.enabled():
+                        import site_facts as _sf
+                        _facts_text = _sf.facts_block(_sf.build_facts(ctx, business_id))
+                except Exception as _fe:
+                    logger.info(f"[composer] facts for the judge skipped: {_fe}")
                 dro, dro_failure = produce_dro(
                     business_id, intake, reference_analysis=ref_analysis,
                     creative=creative,
-                    owner_direction=_owner_direction_evidence(ctx))
+                    owner_direction=_owner_direction_evidence(ctx),
+                    facts_text=_facts_text)
                 if dro is None:
                     # One retry — cheap insurance against a transient LLM/parse
                     # hiccup before accepting a rationale-less compose.
@@ -3788,7 +3938,8 @@ def compose_site(business_id: str, brief_notes: str = "",
                     dro, dro_failure = produce_dro(
                         business_id, intake, reference_analysis=ref_analysis,
                         creative=creative,
-                        owner_direction=_owner_direction_evidence(ctx))
+                        owner_direction=_owner_direction_evidence(ctx),
+                        facts_text=_facts_text)
                 if dro:
                     dro_id = dro.get("id")
                     dro_failure = None
@@ -3956,6 +4107,19 @@ def compose_site(business_id: str, brief_notes: str = "",
     # joins at the same seam the canvas uses; on any failure the ladder
     # continues below (canvas → modules), wearing the spec's tokens via
     # the bridge either way.
+    # THE OFFER PAGE (2026-10-01, Kevin: World lives on one offer page by
+    # default). Named before the home is built, so the home links to it.
+    if use_llm and _has_spec:
+        try:
+            import site_concept as _sconcept
+            import site_pages as _spages
+            _sheet = _sconcept.parse_sheet(ctx.get("design_spec_text") or "")
+            if _sheet.get("intensity") == "world" and _sheet.get("scope") == "offer" \
+                    and _offer_pages_enabled():
+                ctx["offer_page"] = {"path": _spages.offer_path(_sheet),
+                                     "name": _spages.offer_name(_sheet)}
+        except Exception as _oe:
+            logger.info(f"[composer] offer page not planned: {_oe}")
     if use_llm and _has_spec and canvas_html is None:
         try:
             import builder_v2 as _bv2
@@ -4169,6 +4333,17 @@ def compose_site(business_id: str, brief_notes: str = "",
     if _mp_slug:
         rebuild_secondary_pages(business_id, ctx, _mp_slug)
 
+    # THE PHOTO LIST (2026-10-01): what the page still wants photographed
+    # becomes one practitioner task, refreshed in place. Free; best-effort.
+    if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
+        file_photo_list(business_id, ctx)
+
+    # THE OFFER PAGE: built after the home is live (it never delays it),
+    # wearing the home's house style. A spec with no offer scope clears a
+    # page an earlier build made. Best-effort.
+    if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
+        build_offer_page(business_id, ctx, canvas_html, progress_cb=progress_cb)
+
     # Arc 19 weight-hole fix (2026-07-30): THE one billable row for this
     # build — the per-call authoring rows above it are priced 0, so one
     # build never bills per-LLM-call. Only a shipped LLM compose bills:
@@ -4197,6 +4372,20 @@ def compose_site(business_id: str, brief_notes: str = "",
                 # price the meter charges and the price the UI quotes.
                 _units = pricing_config.price_for_build(len(spec or []))
                 _kind = "site_build_marker"
+                # The trial's first build is free (2026-08-24). 600
+                # credits is 60% of the trial tank, and this build IS
+                # the pitch — charging the trial for it spent the tank
+                # on the demo. The marker still lands at units=0, so
+                # the build stays visible in usage and Costs.
+                try:
+                    import usage_metering
+                    if usage_metering.trial_first_build_is_free(business_id):
+                        _units = 0
+                        logger.info(f"[composer] trial first build free "
+                                    f"for {business_id[:8]}")
+                except Exception as _tb_e:
+                    logger.warning(f"[composer] trial-build check failed, "
+                                   f"charging normally: {_tb_e}")
             log_api_usage_sync(
                 endpoint="/composer/compose", model="site-build-marker",
                 input_tokens=0, output_tokens=0, business_id=business_id,
@@ -5008,7 +5197,7 @@ def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
 
     ctx, dro, plan = _spec_inputs(business_id)
     if (notes or "").strip() and not revise:
-        ctx["owner_brief"] = notes.strip()[:600]
+        ctx["owner_brief"] = notes.strip()[:_owner_brief_cap()]
 
     _report_progress(progress_cb, 25,
                      "Revising the blueprint" if revise else "Drafting the blueprint")
@@ -5045,10 +5234,19 @@ def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
 def get_design_spec(business_id: str,
                     session: UserSession = Depends(sb_clients.authed_request)
                     ) -> Dict[str, Any]:
-    """The current design spec document (draft or approved), or null."""
+    """The current design spec document (draft or approved), or null —
+    plus READINESS (build quality 5/6): what the next build will and
+    will not have, in plain lines, with revision chips. Read-only, no
+    model call; never fatal to the spec read."""
     _require_owner(business_id, session.user.id)
     import spec_author
-    return {"spec": spec_author.get_spec(business_id)}
+    readiness = None
+    try:
+        import build_readiness
+        readiness = build_readiness.spec_readiness(gather_context(business_id))
+    except Exception as e:
+        logger.info(f"[composer] readiness skipped: {e}")
+    return {"spec": spec_author.get_spec(business_id), "readiness": readiness}
 
 
 @router.post("/spec/author")
@@ -5896,6 +6094,152 @@ def choose_direction(body: ChooseDirectionBody,
 
 # ─── Arc 28b — live refresh on catalog change ─────────────────────────
 
+def _offer_pages_enabled() -> bool:
+    return (os.environ.get("SITE_OFFER_PAGE") or "on").strip().lower() not in (
+        "off", "0", "false", "no")
+
+
+def file_photo_list(business_id: str, ctx: Dict[str, Any]) -> Optional[str]:
+    """Read the served home (slots filled since are marked sx-filled) and
+    hand the owner what is still missing, with the concept's own photo
+    list. Never raises."""
+    try:
+        import site_concept
+        import site_photo_list
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=html_content&order=updated_at.desc&limit=1") or []
+        html = str((rows[0].get("html_content") if rows else "") or "")
+        sheet = site_concept.parse_sheet(ctx.get("design_spec_text") or "")
+        return site_photo_list.file_task(business_id, html, sheet)
+    except Exception as e:
+        logger.info(f"[composer] photo list skipped: {e}")
+        return None
+
+
+OFFER_KEY_PREFIX = "v2o/"
+
+
+def namespace_offer_page(html: str) -> str:
+    """Move a builder page's edit keys from v2/ to the offer page's own v2o/."""
+    return (html or "").replace('data-override-target="v2/', f'data-override-target="{OFFER_KEY_PREFIX}') \
+        .replace("data-override-target='v2/", f"data-override-target='{OFFER_KEY_PREFIX}")
+
+
+def _apply_page_overrides(html: str, business_id: str) -> str:
+    """The practitioner's text and colour edits, applied the way the home
+    page gets them. Keys are page-specific, so only this page's edits land."""
+    try:
+        from agents.override_system.override_resolver import resolve_html_overrides
+        html = resolve_html_overrides(html, business_id)
+    except Exception as e:
+        logger.info(f"[composer] offer text overrides skipped: {e}")
+    try:
+        html = _inject_color_overrides(html, business_id)
+    except Exception as e:
+        logger.info(f"[composer] offer color overrides skipped: {e}")
+    return html
+
+
+def _retire_offer_overrides(business_id: str) -> int:
+    """A rebuilt offer page is a new design: edits made against the old one
+    go stale (never deleted), the policy a full recompose applies to the
+    home page's colour tweaks."""
+    try:
+        from agents.override_system.override_storage import list_overrides, mark_overrides_status
+        ids = []
+        for kind in ("text", "color_role"):
+            for r in list_overrides(business_id, kind) or []:
+                if str(r.get("target_path") or "").startswith(OFFER_KEY_PREFIX) and r.get("id") \
+                        and str(r.get("status") or "active") != "stale":
+                    ids.append(r["id"])
+        if ids:
+            mark_overrides_status(ids, "stale")
+        return len(ids)
+    except Exception as e:
+        logger.info(f"[composer] offer override retire skipped: {e}")
+        return 0
+
+
+def refresh_offer_page(business_id: str) -> bool:
+    """Re-apply the practitioner's edits to the offer page from its base,
+    so an Edit Mode change (or a revert) shows without a rebuild. Free."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=site_config&order=updated_at.desc&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else {}) or {}
+        offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
+        base = str(offer.get("html_base") or "")
+        if not base:
+            return False
+        pages = dict(cfg.get("generated_pages") or {})
+        fresh = _apply_page_overrides(base, business_id)
+        if pages.get("offer") == fresh:
+            return False
+        pages["offer"] = fresh
+        cfg["generated_pages"] = pages
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{business_id}", {"site_config": cfg})
+        return True
+    except Exception as e:
+        logger.info(f"[composer] offer page refresh skipped: {e}")
+        return False
+
+
+def build_offer_page(business_id: str, ctx: Dict[str, Any], home_html: str,
+                     progress_cb=None) -> bool:
+    """One more builder_v2 run for the World concept's offer page, saved as
+    generated_pages["offer"] with site_config.offer_page {path, name}.
+    No offer planned: an offer page an earlier build left is removed, so a
+    practitioner who moves off World never keeps a stale page. Never
+    raises; returns True when a page was saved."""
+    from datetime import datetime, timezone
+    offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=site_config&order=updated_at.desc&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else {}) or {}
+        pages = dict(cfg.get("generated_pages") or {})
+        if not offer.get("path"):
+            if pages.pop("offer", None) is not None or cfg.get("offer_page"):
+                cfg["generated_pages"] = pages
+                cfg.pop("offer_page", None)
+                sb_clients.sb_patch_as_service(
+                    f"/business_sites?business_id=eq.{business_id}",
+                    {"site_config": cfg})
+            return False
+        import builder_v2 as _bv2
+        _report_progress(progress_cb, 92, "Building your offer page")
+        out = _bv2.run_builder_v2(ctx.get("design_spec_text") or "", ctx, business_id,
+                                  page="offer", house=_bv2.house_style(home_html))
+        html = (out or {}).get("html")
+        if not html:
+            logger.warning(f"[composer] offer page fell back for {business_id[:8]}: "
+                           f"{((out or {}).get('report') or {}).get('fallbacks')}")
+            return False
+        # ITS OWN EDIT KEYS (2026-10-01): builder pages number their editable
+        # elements by position (v2/f1, v2/f2 ...), so an offer page's v2/f4
+        # and the home page's v2/f4 are different words under one key. An
+        # Edit Mode change on the offer page would have rewritten the home
+        # page on the next refresh. The offer page answers to v2o/ keys.
+        base = namespace_offer_page(html)
+        _retire_offer_overrides(business_id)          # a new page, new words
+        pages["offer"] = _apply_page_overrides(base, business_id)
+        cfg["generated_pages"] = pages
+        cfg["offer_page"] = {"path": offer["path"], "name": offer.get("name") or "",
+                             "built_at": datetime.now(timezone.utc).isoformat(),
+                             "html_base": base}
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{business_id}", {"site_config": cfg})
+        logger.info(f"[composer] offer page saved at {offer['path']} for {business_id[:8]}")
+        return True
+    except Exception as e:
+        logger.warning(f"[composer] offer page skipped (non-fatal): {e}")
+        return False
+
+
 def rebuild_secondary_pages(business_id: str, ctx: Dict[str, Any],
                             slug: str) -> int:
     """Render About / Services / Contact and persist generated_pages.
@@ -5918,13 +6262,28 @@ def rebuild_secondary_pages(business_id: str, ctx: Dict[str, Any],
     try:
         import site_multipage
         title = (ctx.get("business") or {}).get("name") or "Welcome"
-        pages = site_multipage.build_secondary_pages(ctx, slug, title)
-        if not pages:
-            return 0
         rows = sb_clients.sb_get_as_service(
             f"/business_sites?business_id=eq.{business_id}"
-            f"&select=site_config&order=updated_at.desc&limit=1") or []
+            f"&select=site_config,html_content&order=updated_at.desc&limit=1") or []
         cfg = (rows[0].get("site_config") if rows else {}) or {}
+        home = str((rows[0].get("html_content") if rows else "") or "")
+        # PAGES THAT MATCH (2026-10-01): a builder home page gives up its own
+        # sections to About / Services / Contact, so the pages share its
+        # design and words instead of module templates with fixed copy.
+        pages: Dict[str, str] = {}
+        try:
+            import site_pages
+            if site_pages.is_builder_page(home):
+                pages = site_pages.slice_pages(home, title)
+        except Exception as _se:
+            logger.info(f"[composer] page cut skipped: {_se}")
+        if not pages:
+            pages = site_multipage.build_secondary_pages(ctx, slug, title)
+        if not pages:
+            return 0
+        _old = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
+        if _old.get("offer"):
+            pages["offer"] = _old["offer"]          # the offer page is its own build
         cfg["generated_pages"] = pages
         cfg["site_pages"] = ["home"] + list(site_multipage.SECONDARY_PAGES)
         sb_clients.sb_patch_as_service(
@@ -5993,6 +6352,8 @@ def refresh_if_composed(business_id: str) -> bool:
         # pages, and they go just as stale.
         if _mp:
             rebuild_secondary_pages(business_id, ctx, _mp)
+        # the World offer page keeps its own edits current too
+        refresh_offer_page(business_id)
         return True
     return False
 

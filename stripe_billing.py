@@ -76,7 +76,7 @@ import ledger_unlock
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from auth_supabase import AuthedUser, require_user
 from lead_admin import require_owner
@@ -106,6 +106,24 @@ def _stripe_key() -> str:
     return key
 
 
+def _stripe_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Headers for a Stripe call, pinning the API version when one is set.
+
+    Deliberately OPT-IN (STRIPE_API_VERSION, unset by default = the
+    account's own version, which is what every call has always used).
+    A pinned version is the right end state, but a WRONG version string
+    400s every call including checkout, and that is not a failure worth
+    risking to fix a display field. Set it in Railway once, verify a
+    checkout, and it is pinned from then on.
+
+    Whether or not it is pinned, _period_end below reads both shapes."""
+    headers = dict(extra or {})
+    version = (os.environ.get("STRIPE_API_VERSION") or "").strip()
+    if version:
+        headers["Stripe-Version"] = version
+    return headers
+
+
 def _success_url() -> str:
     return os.environ.get("STRIPE_SUCCESS_URL", "https://mysolutionist.app/billing/success")
 
@@ -130,7 +148,8 @@ async def _stripe_post(path: str, form: Dict[str, Any]) -> Dict[str, Any]:
             f"{STRIPE_API_BASE}{path}",
             auth=(_stripe_key(), ""),
             data=flat,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers=_stripe_headers(
+                {"Content-Type": "application/x-www-form-urlencoded"}),
         )
     if r.status_code >= 400:
         logger.error(f"Stripe {path} {r.status_code}: {r.text[:300]}")
@@ -171,14 +190,17 @@ async def _load_business(business_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
-async def _patch_business(business_id: str, body: Dict[str, Any]) -> None:
-    """PATCH a businesses row via the service role. Fire and check."""
+async def _patch_business(business_id: str, body: Dict[str, Any],
+                          match: Optional[Dict[str, str]] = None) -> None:
+    """PATCH a businesses row via the service role. Fire and check.
+    `match` adds PostgREST filters, so a patch can apply only when the
+    row is still in an expected state."""
     headers = _service_headers()
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         r = await c.patch(
             f"{SUPABASE_URL}/rest/v1/businesses",
             headers=headers,
-            params={"id": f"eq.{business_id}"},
+            params={"id": f"eq.{business_id}", **(match or {})},
             json=body,
         )
     if r.status_code >= 400:
@@ -215,10 +237,34 @@ def _founder_price_ids() -> list:
     ) if pid]
 
 
+# The seats sold before the 2026-09-04 ladder sit on the OLD founder
+# prices ($149 / $1,490). They are still founder seats — "existing
+# founders keep their terms" — so the cap and the public count must see
+# them, while checkout keeps routing new seats to the current price and
+# feature_gates keeps them on the Professional grant they were promised.
+# Env-overridable; the default is the two ids the ladder replaced.
+FOUNDER_LEGACY_PRICE_IDS = [
+    p.strip() for p in (os.environ.get("STRIPE_PRICE_ID_FOUNDER_LEGACY")
+                        or "price_1Tvf57Rh4utPVrAs9hjaXzTZ,price_1Tvf57Rh4utPVrAs1nV73EsQ").split(",")
+    if p.strip()
+]
+
+
+def _founder_seat_price_ids() -> list:
+    """Every price a founder seat has ever been sold at: the current
+    ids plus the legacy ones. This is what COUNTS a seat; checkout
+    routes with _founder_price_ids alone."""
+    out: list = []
+    for pid in _founder_price_ids() + FOUNDER_LEGACY_PRICE_IDS:
+        if pid and pid not in out:
+            out.append(pid)
+    return out
+
+
 async def _founder_seats_taken() -> int:
-    """Count businesses holding a founder price with a live (or
-    recoverable — past_due keeps the seat) subscription."""
-    ids = _founder_price_ids()
+    """Count businesses holding ANY founder price — current or legacy —
+    with a live (or recoverable — past_due keeps the seat) subscription."""
+    ids = _founder_seat_price_ids()
     if not ids:
         return 0
     headers = {**_service_headers(), "Prefer": "count=exact"}
@@ -269,7 +315,8 @@ async def _price_display(pid: str) -> Optional[Dict[str, Any]]:
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
             r = await c.get(f"{STRIPE_API_BASE}/prices/{pid}",
-                            auth=(_stripe_key(), ""))
+                            auth=(_stripe_key(), ""),
+                            headers=_stripe_headers())
         if r.status_code < 400:
             pr = r.json()
             return {
@@ -315,7 +362,11 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
         business = await _load_business(business_id)
         grandfathered = usage_metering.is_grandfathered_user(
             str(business.get("owner_id") or ""))
-        state = feature_gates.access_state(business, grandfathered)
+        # A trial ends on whichever runs out first, the calendar or the
+        # tank. access_state is pure, so the tank half is read here.
+        trial_spent = usage_metering.trial_credits_exhausted(
+            business_id, business)
+        state = feature_gates.access_state(business, grandfathered, trial_spent)
         return {
             "ok": True,
             **state,
@@ -395,7 +446,7 @@ async def billing_plans():
 
 @router.get("/entitlements")
 async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user)):
-    """Phase E gate-ready entitlements for a business (unenforced today)."""
+    """Owner-scoped entitlements plus the additive edition service profile."""
     import feature_gates
     business = await _load_business(biz)
     _require_owner_of(user, business)
@@ -414,6 +465,8 @@ async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user
     except Exception:
         out["grandfathered"] = False
     out["comp_tier"] = (business.get("comp_tier") or None)
+    import service_profile
+    out["service_profile"] = service_profile.describe(business, out)
     return out
 
 
@@ -423,6 +476,12 @@ class CheckoutBody(BaseModel):
     business_id: str
     price_id: Optional[str] = None  # explicit price override
     plan: Optional[str] = None      # 'starter' | 'professional' | 'practice'
+    # Skip the free trial and pay today (2026-09-04, Kevin: "if a person
+    # wants to bypass the 7 days trial"). The first charge lands at
+    # checkout and the full monthly tank is theirs at once, instead of
+    # the trial's smaller one. Off by default; the trial stays the door.
+    skip_trial: bool = False
+    promotion_code: Optional[str] = Field(default=None, max_length=64)
 
 
 def _price_for_plan(plan):
@@ -456,7 +515,8 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     # it; the founding member you'd have to claw back costs more in trust
     # than the seat.)
     plan_key = (body.plan or "").strip().lower()
-    if plan_key.startswith("founder") or price_id in _founder_price_ids():
+    is_founder = plan_key.startswith("founder") or price_id in _founder_price_ids()
+    if is_founder:
         limit = _founder_seat_limit()
         taken = await _founder_seats_taken()
         if taken >= limit:
@@ -486,7 +546,13 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     # PAYG overage line item is GONE — usage beyond the allowance draws
     # down prepaid credit packs instead. See /billing/credits/checkout.)
     line_items: list = [{"price": price_id, "quantity": 1}]
+    discount_options = {"allow_promotion_codes": True}
+    if body.promotion_code:
+        from stripe_discounts import resolve_code
+        promo = await resolve_code(body.promotion_code)
+        discount_options = {"discounts": [{"promotion_code": promo["id"]}]}
     session = await _stripe_post("/checkout/sessions", {
+        **discount_options,
         "mode": "subscription",
         "customer": customer_id,
         "line_items": line_items,
@@ -494,13 +560,25 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         "cancel_url":  _cancel_url(),
         # Echo business_id in metadata so the webhook can resolve back
         # even if the customer object's metadata is missing it.
-        "subscription_data": _subscription_data(biz, user),
-        "metadata": {
-            "business_id":  biz["id"],
-            "auth_user_id": user.id,
-        },
+        "subscription_data": _subscription_data(biz, user, skip_trial=bool(body.skip_trial)),
+        "metadata": _checkout_metadata(biz, user, price_id, is_founder),
     })
     return {"url": session.get("url"), "id": session.get("id")}
+
+
+def _checkout_metadata(biz, user, price_id: str, is_founder: bool) -> Dict[str, str]:
+    """The Checkout Session's own metadata. A founder checkout carries
+    founder_seat=1 so the success page can hand the new holder their
+    Founding Charter. The charter's copy is the monthly seat, so an
+    annual founder price says so and gets the plain page instead of a
+    charter that would quote the wrong cadence."""
+    meta = {"business_id": biz["id"], "auth_user_id": user.id}
+    if is_founder:
+        meta["founder_seat"] = "1"
+        annual = (os.environ.get("STRIPE_PRICE_ID_FOUNDER_ANNUAL") or "").strip()
+        if annual and price_id == annual:
+            meta["founder_interval"] = "year"
+    return meta
 
 
 # ─── Prepaid credit packs (Pricing v2 Phase C, 2026-07-12) ────────────
@@ -600,9 +678,10 @@ async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> D
     return s
 
 
-def _subscription_data(biz, user):
+def _subscription_data(biz, user, skip_trial: bool = False):
     """Checkout subscription_data: metadata + a free trial for FIRST
-    subscriptions only (re-subscribers do not get a second trial)."""
+    subscriptions only (re-subscribers do not get a second trial), and
+    none at all when the person chose to pay today."""
     data = {
         "metadata": {"business_id": biz["id"], "auth_user_id": user.id},
     }
@@ -613,8 +692,10 @@ def _subscription_data(biz, user):
         trial_days = int(os.environ.get("BILLING_TRIAL_DAYS") or "7")
     except ValueError:
         trial_days = 7
-    if trial_days > 0 and not biz.get("stripe_subscription_id"):
+    if trial_days > 0 and not biz.get("stripe_subscription_id") and not skip_trial:
         data["trial_period_days"] = trial_days
+    if skip_trial:
+        data["metadata"]["skipped_trial"] = "true"
     return data
 
 
@@ -684,7 +765,8 @@ async def _peek_checkout_session(session_id: Optional[str]) -> Optional[Dict[str
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
             r = await c.get(f"{STRIPE_API_BASE}/checkout/sessions/{sid}",
-                            auth=(_stripe_key(), ""))
+                            auth=(_stripe_key(), ""),
+                            headers=_stripe_headers())
         if r.status_code >= 400:
             logger.warning(f"session peek {sid} → {r.status_code}")
             return None
@@ -772,9 +854,69 @@ async def billing_success(session_id: Optional[str] = None,
         body = ("<p>Your payment method takes a little longer to clear. We'll "
                 "switch your account on the moment it does &mdash; no action "
                 "needed from you.</p>")
+    elif (sess and not credits and mode == "subscription"
+          and _is_founder_charter_session(sess)):
+        # A founding seat that went through: the holder gets their
+        # Founding Charter. Any failure building it falls through to the
+        # plain page below, never an error.
+        try:
+            return await _founder_charter_page(sess)
+        except Exception as e:
+            logger.warning(f"founder charter page failed, plain page instead: {e}")
 
     return _billing_page(title="Subscription started", eyebrow=eyebrow,
                          heading=heading, body_html=body)
+
+
+def _is_founder_charter_session(sess: Dict[str, Any]) -> bool:
+    """A founder-seat checkout (create_checkout marks it) on the monthly
+    founder price, the only cadence the charter's copy describes."""
+    meta = sess.get("metadata") or {}
+    return (str(meta.get("founder_seat") or "") == "1"
+            and str(meta.get("founder_interval") or "") != "year")
+
+
+async def _founder_charter_page(sess: Dict[str, Any]) -> HTMLResponse:
+    """The Founding Charter for a finished founder checkout. Every value
+    on it is read, not typed: the business row, the live founder count,
+    the pricing dials. Raises on anything missing; the caller falls back
+    to the plain success page."""
+    import founder_charter
+    import marketing_pages
+    import pricing_config
+
+    meta = sess.get("metadata") or {}
+    business_id = str(meta.get("business_id") or "").strip()
+    if not business_id:
+        raise ValueError("founder session without a business_id")
+    biz = await _load_business(business_id)
+
+    limit = _founder_seat_limit()
+    taken = await _founder_seats_taken()
+    # The webhook that writes the founder price onto the business can
+    # land after Stripe redirects the tab here. Until it does, this seat
+    # is not in the count yet, so it is the next one.
+    if (biz.get("subscription_plan") or "") not in _founder_seat_price_ids():
+        taken += 1
+    seat = min(max(taken, 1), max(limit, 1))
+
+    prices = pricing_config.tier_price_cents()
+    trial = bool(sess.get("subscription") and sess.get("amount_total") == 0)
+    html = founder_charter.render_page(
+        {
+            "business_name": biz.get("name") or "",
+            "seat": seat,
+            "seat_limit": limit,
+            "price_dollars": prices["founder"] // 100,
+            "list_dollars": prices["professional"] // 100,
+            "credits": pricing_config.founder_credits(),
+            "issued": founder_charter.issued_date(),
+            "trial": trial,
+            "app_home": APP_HOME,
+        },
+        render_shell=marketing_pages._render_shell,
+    )
+    return HTMLResponse(html)
 
 
 @router.get("/cancel", include_in_schema=False)
@@ -900,6 +1042,31 @@ async def _resolve_business_id_async(event):
     return rows[0]["id"] if rows else None
 
 
+def _period_end(sub_obj: Dict[str, Any]) -> Optional[int]:
+    """When the current billing period ends, from either shape.
+
+    THE BUG THIS FIXES: Stripe's Basil version (2025-03-31) REMOVED
+    current_period_start/end from the Subscription object and moved them
+    onto each subscription item, which each track their own period. We
+    pin no API version, so live calls run at the account's version —
+    Basil or later — and `sub_obj.get("current_period_end")` has been
+    coming back None. businesses.current_period_end has been writing
+    NULL, and /billing/entitlements has been serving that null to every
+    surface that wants to say when a subscription renews.
+
+    Item first (the current shape), subscription second (pre-Basil, or
+    if STRIPE_API_VERSION pins an older one). Our subscriptions carry a
+    single item, so item[0] IS the period; on a mixed-interval
+    subscription the earliest end is the honest answer to "when does
+    this renew", because that is when the customer is next charged."""
+    ends = [it.get("current_period_end")
+            for it in (((sub_obj.get("items") or {}).get("data")) or [])
+            if it.get("current_period_end")]
+    if ends:
+        return min(ends)
+    return sub_obj.get("current_period_end")
+
+
 def _ts_to_iso(ts: Optional[int]) -> Optional[str]:
     if not ts:
         return None
@@ -928,7 +1095,7 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         "subscription_status":     status_value,
         "subscription_plan":       price_id,
         "trial_ends_at":           _ts_to_iso(sub_obj.get("trial_end")),
-        "current_period_end":      _ts_to_iso(sub_obj.get("current_period_end")),
+        "current_period_end":      _ts_to_iso(_period_end(sub_obj)),
         "cancel_at_period_end":    bool(sub_obj.get("cancel_at_period_end")),
     }
     # 7/30 tier arc — businesses.tier was DEAD DATA: written once as
@@ -953,15 +1120,91 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
 
+    # Day one starts HERE. A subscription entering `trialing` is the only
+    # place the system learns a trial has begun, and until now nothing
+    # reacted to it — the trial_ends_at above was written and that was
+    # the end of it.
+    #
+    # Gated on the STATUS, not the event type: Stripe can deliver
+    # `updated` ahead of `created`, and begin() is idempotent, so
+    # whichever arrives first opens the arc and the other stands down.
+    #
+    # Best-effort, off the event loop, and swallowed. The patch above is
+    # what this webhook exists for; losing a billing event over a day-one
+    # nicety would be the wrong trade. first_run_arc is sync (sb_clients
+    # uses a blocking client), so it must not run on the loop.
+    if status_value == "trialing":
+        try:
+            import asyncio
+            import first_run_arc
+            await asyncio.to_thread(
+                first_run_arc.begin, business_id,
+                source="subscription",
+                trial_ends_at=patch.get("trial_ends_at"))
+        except Exception as e:
+            logger.warning(f"[first-run] arc begin failed (non-fatal): {e}")
 
-async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optional[str]) -> None:
-    """Bump status to past_due. Stripe will also fire
-    customer.subscription.updated which would do the same thing, but
-    we set it here too to be defensive."""
+
+# ─── Event order is not state ─────────────────────────────────────────
+# Stripe does not deliver events in order. Creative Genius's last payment
+# failed and Stripe cancelled the subscription in the same second
+# (2026-09-18): `customer.subscription.deleted` set the row to canceled,
+# then `invoice.payment_failed` blindly set it back to past_due, and the
+# business kept a seat for two weeks after Stripe ended it.
+# `invoice.paid` had the mirror bug (a late payment re-activated a
+# cancelled row). So billing events now apply the subscription as Stripe
+# holds it NOW, fetched by id, and only fall back to the event's own
+# payload, guarded so it never undoes a cancellation, when Stripe cannot
+# be read.
+
+_NOT_CANCELED = {"or": "(subscription_status.is.null,subscription_status.neq.canceled)"}
+
+
+async def _current_subscription(sub_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The subscription as Stripe holds it now, or None if unreadable."""
+    if not sub_id:
+        return None
+    try:
+        return await _stripe_get(f"/subscriptions/{sub_id}", [])
+    except Exception as e:
+        logger.warning(f"subscription {sub_id} unreadable, using the event payload: {e}")
+        return None
+
+
+def _invoice_subscription_id(inv: Dict[str, Any]) -> Optional[str]:
+    """The subscription an invoice belongs to (older and newer API shapes)."""
+    sub = inv.get("subscription")
+    if isinstance(sub, dict):
+        sub = sub.get("id")
+    if not sub:
+        sub = ((inv.get("parent") or {}).get("subscription_details") or {}).get("subscription")
+    return sub or None
+
+
+async def _apply_invoice_outcome(inv: Dict[str, Any], business_id: Optional[str],
+                                 fallback_status: str) -> None:
+    """An invoice event changes a business only through its subscription:
+    apply that subscription's current state, or, if Stripe can't be read,
+    the fallback status without ever overwriting a cancellation. A
+    one-off invoice (no subscription) changes nothing here."""
     if not business_id:
         return
-    await _patch_business(business_id, {"subscription_status": "past_due"})
-    logger.info(f"invoice.payment_failed: business {business_id} → past_due")
+    sub_id = _invoice_subscription_id(inv)
+    if not sub_id:
+        return
+    current = await _current_subscription(sub_id)
+    if current:
+        await _apply_subscription_state("customer.subscription.updated", current, business_id)
+        return
+    await _patch_business(business_id, {"subscription_status": fallback_status},
+                          match=_NOT_CANCELED)
+    logger.info(f"invoice event: business {business_id} → {fallback_status} (unless canceled)")
+
+
+async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optional[str]) -> None:
+    """A failed payment: apply the subscription's current state (usually
+    past_due; canceled when this was the last retry)."""
+    await _apply_invoice_outcome(inv, business_id, "past_due")
 
 
 # ─── Phase E v1.1 — numeric-limit surfaces (gate-ready, dormant) ─────
@@ -1022,7 +1265,8 @@ async def _stripe_get(path: str, params: list) -> Dict[str, Any]:
     """GET from Stripe with repeated-key params (lookup_keys[] etc.)."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         r = await c.get(f"{STRIPE_API_BASE}{path}",
-                        auth=(_stripe_key(), ""), params=params)
+                        auth=(_stripe_key(), ""), params=params,
+                        headers=_stripe_headers())
     if r.status_code >= 400:
         logger.error(f"Stripe GET {path} {r.status_code}: {r.text[:300]}")
         raise HTTPException(status_code=r.status_code,
@@ -1158,7 +1402,14 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
         if event_type in ("customer.subscription.created",
                           "customer.subscription.updated",
                           "customer.subscription.deleted"):
-            await _apply_subscription_state(event_type, obj, business_id)
+            # The subscription as it is now, not as this (possibly late)
+            # event saw it. Falls back to the payload when unreadable.
+            current = await _current_subscription(obj.get("id"))
+            if current:
+                await _apply_subscription_state("customer.subscription.updated",
+                                                current, business_id)
+            else:
+                await _apply_subscription_state(event_type, obj, business_id)
             if business_id:
                 import event_spine
                 event_spine.emit("subscription_updated", business_id,
@@ -1174,10 +1425,10 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                                   "status": "past_due"},
                                  source="stripe_webhook")
         elif event_type in ("invoice.payment_succeeded", "invoice.paid"):
-            # Recovery: a successful payment clears past_due. (The
-            # subscription.updated event also lands; this is defensive.)
-            if business_id:
-                await _patch_business(business_id, {"subscription_status": "active"})
+            # Recovery: a successful payment clears past_due, through the
+            # subscription's current state, never re-activating a
+            # cancelled one.
+            await _apply_invoice_outcome(obj, business_id, "active")
         elif event_type == "checkout.session.completed":
             meta = obj.get("metadata") or {}
             if meta.get("kind") == "credit_pack":

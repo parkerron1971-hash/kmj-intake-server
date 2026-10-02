@@ -119,14 +119,30 @@ def test_consulting_hourly():
     assert "laws of Texas" in body
 
 
-def test_no_fee_model_renders_clean_baseline():
-    # An old-style call with no fee_model: no payment-structure block at
-    # all — never a broken or wrong-concept clause.
+def test_no_fee_model_is_refused_rather_than_rendered_without_terms():
+    """This test used to assert the opposite, and the opposite was a bug.
+
+    It pinned "no fee_model → no payment-structure block at all", to
+    guarantee "never a broken or wrong-concept clause". That half still
+    holds and still matters. But the document it left behind named a fee
+    and then said nothing about when it was payable, and nothing
+    anywhere raised — the clauses were simply absent.
+
+    fee_model is required now. The system will not guess how somebody
+    charges (a wrong clause), and will not print a fee with no terms
+    (a missing one). It asks, once, and remembers the answer."""
+    import doc_templates as dt
+    t = dt.TEMPLATE_INDEX["engagement_letter"]
+    err = dt.validate_params(t, {"scope": "s", "fee": "$500", "deposit": "$100"})
+    assert err and "How the fee works" in err
+
+    # And with the answer given, the payment article is really there.
     body = _render("engagement_letter", {
-        "scope": "s", "fee": "$500", "deposit": "$100"}, "consultant")
+        "scope": "s", "fee": "$500", "deposit": "$100",
+        "fee_model": "hourly"}, "consultant")
     _no_unresolved(body)
-    assert "PAYMENT STRUCTURE" not in body and "RETAINER" not in body
-    assert "exhausted" not in body
+    assert "PAYMENT STRUCTURE" in body
+    assert "exhausted" not in body        # the retainer clause stays away
 
 
 def test_effective_date_and_signature_block():

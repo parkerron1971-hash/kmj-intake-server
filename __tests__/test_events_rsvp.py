@@ -57,7 +57,7 @@ def _entry(**data_over):
     data = {"title": "Church Picnic", "date": "2099-06-01",
             "location": "The park", "capacity": 3, "signups": []}
     data.update(data_over)
-    return {"id": ENTRY, "module_id": MOD, "data": data}
+    return {"id": ENTRY, "module_id": MOD, "data": data, "updated_at": "2026-01-01T00:00:00Z"}
 
 
 class FakeSB:
@@ -107,7 +107,12 @@ class FakeSB:
     def sb_patch_as_service(self, path, payload):
         self.patches.append((path, payload))
         if path.startswith("/module_entries") and self.entry:
-            self.entry = {**self.entry, **payload}
+            expected = urllib.parse.unquote(path.split("updated_at=eq.")[1].split("&")[0])
+            if expected != self.entry["updated_at"]:
+                return []
+            self.entry = {**self.entry, **payload, "updated_at": self.entry["updated_at"] + "1"}
+
+            return [self.entry]
         return []
 
 
@@ -278,6 +283,19 @@ def test_full_role_refuses_409(fake_sb):
     assert out["ok"] is True
 
 
+def test_occasion_own_roles_govern_the_signup(fake_sb):
+    # The app can give one occasion its own roles (entry.data._roles). A
+    # role only that occasion has is accepted; a default role it dropped
+    # is refused — the page and the write read the same list.
+    fake_sb.entry["data"]["_roles"] = [
+        {"id": "ushers", "label": "Ushers", "needed": 1}]
+    out = _rsvp(_body(role="ushers"))
+    assert out["ok"] is True
+    with pytest.raises(HTTPException) as exc:
+        _rsvp(_body(email="other@example.com", role="greeter"))
+    assert exc.value.status_code == 400
+
+
 def test_wrong_business_entry_is_404(fake_sb):
     fake_sb.entry = {"id": ENTRY, "module_id": "someone-elses-module",
                      "data": {}}
@@ -351,6 +369,25 @@ def test_occasion_capacity_and_role_math():
     assert greeter["full"] is False
     sound = next(r for r in o["roles"] if r["id"] == "sound")
     assert sound["filled"] == 0
+
+
+def test_occasion_roles_prefer_the_occasions_own_list():
+    from datetime import date
+    entries = {MOD: [
+        {"id": "own", "module_id": MOD,
+         "data": {"title": "Christmas Eve", "date": "2099-06-01",
+                  "_roles": [{"id": "ushers", "label": "Ushers", "needed": 4}],
+                  "signups": [{"name": "A", "status": "yes", "role": "ushers"}]}},
+        {"id": "none", "module_id": MOD,
+         "data": {"title": "Quiet week", "date": "2099-06-02", "_roles": [],
+                  "signups": []}},
+        {"id": "default", "module_id": MOD,
+         "data": {"title": "Sunday", "date": "2099-06-03", "signups": []}},
+    ]}
+    own, none, default = er.build_occasions(_mods(), entries, today=date(2099, 5, 20))
+    assert [(r["id"], r["filled"], r["needed"]) for r in own["roles"]] == [("ushers", 1, 4)]
+    assert none["roles"] == []          # a saved empty list is respected
+    assert {r["id"] for r in default["roles"]} == {"greeter", "sound"}
 
 
 def test_occasions_tolerate_junk():
@@ -442,3 +479,60 @@ def test_config_payload_reports_prerequisite():
     assert out["url"] == "https://first-light.mysolutionist.app/events"
     out2 = er._config_payload(biz_on, site, [])
     assert out2["has_roster_modules"] is False and out2["active"] is False
+
+
+def test_concurrent_registration_rechecks_last_seat(fake_sb, monkeypatch):
+    fake_sb.entry['data']['capacity'] = 1
+    original = fake_sb.sb_patch_as_service
+    attempts = []
+    def conflict(path, payload):
+        attempts.append(path)
+        assert '&updated_at=eq.' in path
+        fake_sb.entry['data']['signups'] = [{'name':'Other attendee','status':'yes'}]
+        return []
+    monkeypatch.setattr(fake_sb,'sb_patch_as_service',conflict)
+    with pytest.raises(HTTPException) as exc:
+        _rsvp(_body())
+    assert exc.value.status_code == 409
+    assert len(attempts) == 1
+    assert fake_sb.entry['data']['signups'][0]['name'] == 'Other attendee'
+
+
+def test_double_tap_when_last_seat_was_taken_still_replays(fake_sb):
+    fake_sb.entry['data']['capacity'] = 1
+    assert _rsvp(_body())['already'] is False
+    assert _rsvp(_body())['already'] is True
+
+
+# ─── visibility: public / private / invite ───────────────────────────
+
+
+def test_only_public_occasions_reach_the_public_page():
+    from datetime import date
+    entries = {MOD: [
+        {"id": "pub", "module_id": MOD, "data": {"title": "Sunday", "date": "2099-06-01", "signups": []}},
+        {"id": "prv", "module_id": MOD, "data": {"title": "Staff meeting", "date": "2099-06-02",
+                                                  "_visibility": "private", "signups": []}},
+        {"id": "inv", "module_id": MOD, "data": {"title": "Elders", "date": "2099-06-03",
+                                                  "_visibility": "invite", "_invited": ["c1"], "signups": []}},
+        {"id": "odd", "module_id": MOD, "data": {"title": "Old", "date": "2099-06-04",
+                                                  "_visibility": "whatever", "signups": []}},
+    ]}
+    out = er.build_occasions(_mods(), entries, today=date(2099, 5, 20))
+    assert [o["title"] for o in out] == ["Sunday", "Old"]     # unknown value = public, as before
+
+
+def test_public_signup_cannot_reach_a_private_occasion(fake_sb):
+    fake_sb.entry["data"]["_visibility"] = "private"
+    with pytest.raises(HTTPException) as exc:
+        _rsvp(_body())
+    assert exc.value.status_code == 404 and not fake_sb.patches
+
+
+def test_visible_to_member_rules():
+    d = {"_visibility": "invite", "_invited": ["c1"], "signups": [{"name": "B", "contact_id": "c2"}]}
+    assert er.visible_to_member(d, "c1", "signups")          # invited
+    assert er.visible_to_member(d, "c2", "signups")          # on the roster
+    assert not er.visible_to_member(d, "c3", "signups")
+    assert not er.visible_to_member({**d, "_visibility": "private"}, "c1", "signups")
+    assert er.visible_to_member({"signups": []}, "c3", "signups")

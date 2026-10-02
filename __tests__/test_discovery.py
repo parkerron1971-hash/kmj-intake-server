@@ -152,3 +152,65 @@ def test_dossier_digest_and_prompt_section():
     assert "outrank" in p                      # provenance weighting taught
     p2 = build_user_prompt("D", [])
     assert "THE DISCOVERY DOSSIER" not in p2   # absent when empty
+
+
+# ─── THE DOSSIER NEEDS A ROW (2026-08-28) ─────────────────────────────
+
+class _RowlessSB:
+    """A business that exists but has no business_sites row — a July
+    signup that never touched My Site. MaCnificent Hair Co, 2026-08-28:
+    a whole design session went nowhere because every save answered
+    False."""
+    def __init__(self):
+        self.rows = []
+        self.posts = []
+        self.patches = []
+
+    def sb_get_as_service(self, path):
+        if path.startswith("/businesses?"):
+            return [{"id": "biz-1", "name": "MaCnificent Hair Co"}]
+        if path.startswith("/business_sites?business_id="):
+            return list(self.rows)
+        if path.startswith("/business_sites?slug="):
+            return []
+        return []
+
+    def sb_post_as_service(self, path, body):
+        self.posts.append((path, body))
+        row = {"id": "site-new", **body}
+        self.rows = [{"id": "site-new", "site_config": body.get("site_config") or {}}]
+        return [row]
+
+    def sb_patch_as_service(self, path, body):
+        self.patches.append((path, body))
+        return [{"id": "site-new"}]
+
+
+def _wire_rowless(monkeypatch, fake):
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", fake.sb_get_as_service)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", fake.sb_post_as_service)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", fake.sb_patch_as_service)
+
+
+def test_save_dossier_creates_the_row_for_a_business_without_one(monkeypatch):
+    fake = _RowlessSB()
+    _wire_rowless(monkeypatch, fake)
+    assert discovery.save_dossier("biz-1", {"story": {"answers": {"x": 1}}}) is True
+    assert len(fake.posts) == 1
+    path, body = fake.posts[0]
+    assert path == "/business_sites"
+    assert body["business_id"] == "biz-1"
+    assert body["slug"] == "macnificent-hair-co"
+    assert body["status"] == "booking_only"      # nothing serves yet
+    # and the dossier landed on the new row
+    assert fake.patches and fake.patches[0][0] == "/business_sites?id=eq.site-new"
+    assert fake.patches[0][1]["site_config"]["discovery_dossier"]["story"]["answers"] == {"x": 1}
+
+
+def test_save_dossier_still_false_when_the_business_is_missing(monkeypatch):
+    fake = _RowlessSB()
+    fake.sb_get_as_service = lambda path: []
+    _wire_rowless(monkeypatch, fake)
+    assert discovery.save_dossier("ghost", {"story": {}}) is False
+    assert fake.posts == []
