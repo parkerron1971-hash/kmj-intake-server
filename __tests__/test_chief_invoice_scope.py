@@ -254,3 +254,89 @@ def test_email_description_cannot_hide_invoice_or_named_restriction(monkeypatch,
 
 def test_constraint_heavy_plan_does_not_get_plain_plan_exception():
     assert scope.planning_input(req([LONG_ALL, READONLY_PLAN + ' Only contact Ada.'])) is None
+
+
+@pytest.mark.parametrize('question', ['Only Acme?', 'For last month?', 'What about Ada?'])
+@pytest.mark.parametrize('debug', [False, True])
+@pytest.mark.parametrize('ack', ['Yes', 'Sure', 'Yes please', 'Go ahead', 'Sounds good', 'That works', 'That sounds good', 'Please do', 'No thanks', 'Use that scope'])
+def test_accepted_followup_question_inherits_invoice_antecedent(monkeypatch, question, debug, ack):
+    env = arrange(monkeypatch)
+    guard, api = provider(monkeypatch)
+    history = [{'role': 'user', 'content': 'Show all invoices'},
+               {'role': 'assistant', 'content': question}]
+    if debug:
+        history.append({'role': 'assistant', 'content': 'Voice debug ON'})
+    history.append({'role': 'user', 'content': ack})
+    query = request('Show invoices', conversation_history=history)
+    assert scope.planning_input(query) is None
+    assert asyncio.run(readout.serve_request(None, query, SESSION, BIZ)) is None
+    api.assert_not_awaited()
+    guard.assert_not_called()
+    env.db.assert_not_awaited()
+
+
+def test_separate_owner_topic_does_not_turn_weather_question_into_invoice_scope():
+    query = request('Show invoices', conversation_history=[
+        {'role': 'user', 'content': 'Show all invoices'},
+        {'role': 'user', 'content': 'What is the weather in Example Town?'},
+        {'role': 'assistant', 'content': 'Do you want the forecast?'},
+        {'role': 'user', 'content': 'Yes'},
+    ])
+    data = scope.planning_input(query)
+    assert data['required_filter'] == 'all'
+    assert data['requires_model'] is True
+
+
+FULL_EMAIL_DESCRIPTION = ("can read those emails only if they are in your contacts. "
+    "They just can't can't read random emails. So that's the reason why, yeah, that's why I was "
+    "like, oh, it knew its answer so it can't read random emails. And the reason why I said the "
+    "only e-mail they was able to see from the last from May 25th was because that was a test "
+    "e-mail that I did inside of this system. Other than that, it couldn't read it. Now the "
+    "reason why I had to establish that that rule is because.")
+
+
+def test_full_email_visibility_description_requires_model_and_retains_all():
+    data = scope.planning_input(req([LONG_ALL, FULL_EMAIL_DESCRIPTION]))
+    assert data['required_filter'] == 'all' and data['requires_model'] is True
+
+
+@pytest.mark.parametrize('restriction', ['Only Ada.', 'For Acme.', 'Show invoices for Ada.'])
+def test_full_email_description_does_not_hide_named_restriction(restriction):
+    assert scope.planning_input(req([LONG_ALL, FULL_EMAIL_DESCRIPTION + ' ' + restriction])) is None
+
+
+@pytest.mark.parametrize('history,current', [
+    (['Show all invoices'], 'Open invoices'),
+    (['Show all invoices', 'Open invoices'], 'Show invoices'),
+    (['Show all invoices'], 'Can you open invoices?'),
+])
+def test_imperative_open_does_not_override_inherited_all(history, current):
+    data = scope.planning_input(req(history, current))
+    assert data['required_filter'] == 'all'
+    assert readout.explicit_invoice_status(current) is None
+
+
+@pytest.mark.parametrize('text', ['Show open invoices', 'Open open invoices', 'Can you open open invoices?'])
+def test_open_status_modifier_still_overrides_all(text):
+    assert scope.planning_input(req(['Show all invoices'], text))['required_filter'] == 'open'
+
+
+def test_supported_invoice_history_uses_inherited_all_without_provider(monkeypatch):
+    env = arrange(monkeypatch)
+    guard, api = provider(monkeypatch)
+    result = asyncio.run(chief.chief_chat(req(['Show all invoices'], 'Open invoices'), SESSION))
+    assert result['actions_taken'][0]['filter'] == 'all'
+    api.assert_not_awaited()
+    guard.assert_not_called()
+    env.context.assert_not_awaited()
+    env.model.assert_not_awaited()
+
+
+def test_open_after_separate_plan_still_requires_strict_model_agreement(monkeypatch):
+    env = arrange(monkeypatch)
+    guard, api = provider(monkeypatch, '{"filter":"open","form":"list"}')
+    query = req(['Show all invoices', READONLY_PLAN], 'Open invoices')
+    assert scope.planning_input(query)['requires_model'] is True
+    assert asyncio.run(readout.serve_request(None, query, SESSION, BIZ)) is None
+    api.assert_awaited_once()
+    env.db.assert_not_awaited()
