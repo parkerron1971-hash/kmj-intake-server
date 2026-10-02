@@ -469,6 +469,7 @@ class Idea(BaseModel):
     landing_url: str = Field(default='https://mysolutionist.app/', max_length=1500)
     asset_id: UUID | None = None
     ai_assisted: bool = False
+    post_now: bool = False                         # the owner's own "Post now": approve it and send it in minutes
 
 
 OPEN_HOURS = (11, 15)          # the plan posts at 11:00; a one-off takes 11:00 or 15:00 (ET) on a free weekday
@@ -540,9 +541,80 @@ async def create_idea(req: Idea):
             'channels': [SERVICE_NAMES.get(c['service'], c['service']) for c in chosen]}
 
 
+POST_NOW_LEAD = timedelta(minutes=2)    # the approve RPC needs a future time; the delivery tick runs every minute
+
+
+def publishing_ready(cfg):
+    """Why a post cannot go out right away, or None. Checked before anything is
+    approved, so "post now" never leaves an approved post waiting on a switch."""
+    if os.environ.get('BUFFER_PUBLISHING', 'off').lower() != 'on' or not os.environ.get('BUFFER_API_KEY', '').strip():
+        return 'Publishing is switched off on the server, so nothing can go out right away.'
+    if cfg.get('paused'):
+        return 'Publishing is paused. Resume it on the desk, then post again.'
+    return None
+
+
+async def _approve_rows(rows, owner):
+    return await approve(Review(items=[ReviewItem(id=r['id'], revision=r['revision'], content_hash=r['content_hash'])
+                                       for r in rows]), owner)
+
+
+async def post_new_now(req: Idea, owner):
+    """The owner wrote it and pressed Post now: save it for every chosen channel
+    two minutes out and approve it as theirs in the same step."""
+    cfg = await config()
+    problem = publishing_ready(cfg)
+    if problem:
+        raise HTTPException(409, problem)
+    live = await live_destinations(cfg)
+    wanted = req.channel_ids if req.channel_ids is not None else [c['id'] for c in cfg['channels']]
+    if any(cid not in live for cid in wanted):
+        raise HTTPException(409, 'A channel is disconnected, locked or paused in Buffer. Nothing was sent.')
+    out = await create_idea(req.model_copy(update={'run_at': now() + POST_NOW_LEAD, 'post_now': False}))
+    if out.get('already_saved'):
+        return {**out, 'posting': True}
+    await _approve_rows(out['posts'], owner)
+    return {**out, 'posting': True}
+
+
 @router.post('/ideas')
-async def create_idea_route(req: Idea):
+async def create_idea_route(req: Idea, owner=Depends(require_owner)):
+    if req.post_now:
+        return await post_new_now(req, owner)
     return await create_idea(req)
+
+
+async def post_existing_now(items, owner, *, caption=None):
+    """Send one waiting (or missed) post now, exactly as reviewed. Every channel
+    post must still carry the revision and words the owner saw (content hash,
+    or the caption Chief froze on its card); only its time changes, to two
+    minutes from now, and the owner's approval follows in the same step."""
+    cfg = await config()
+    problem = publishing_ready(cfg)
+    if problem:
+        raise HTTPException(409, problem)
+    live = await live_destinations(cfg)
+    rows = []
+    for item in items:
+        found = await db('GET', f'/platform_marketing_posts?id=eq.{item.id}&limit=1')
+        row = found[0] if found else None
+        same = row and (row['content_hash'] == item.content_hash if getattr(item, 'content_hash', None)
+                        else caption is not None and row['payload'].get('text') == caption)
+        if not row or row['status'] != 'draft' or row['revision'] != item.revision or not same:
+            raise HTTPException(409, 'This post changed since it was reviewed, or it is no longer a draft. '
+                                     'Nothing was sent. Refresh and review it again.')
+        if row['payload']['channel_id'] not in live:
+            raise HTTPException(409, 'A channel is disconnected, locked or paused in Buffer. Nothing was sent.')
+        rows.append(row)
+    moved = await edit_slot(SlotEdit(items=[SlotItem(id=r['id'], revision=r['revision']) for r in rows],
+                                     run_at=now() + POST_NOW_LEAD))
+    await _approve_rows(moved['posts'], owner)
+    return {'posts': moved['posts'], 'posting': True, 'run_at': moved['posts'][0]['run_at']}
+
+
+@router.post('/post-now')
+async def post_now_route(req: Review, owner=Depends(require_owner)):
+    return await post_existing_now(req.items, owner)
 
 
 @router.get('/ideas/next-slot')
@@ -550,17 +622,23 @@ async def next_slot_route():
     return {'run_at': (await next_open_slot()).isoformat()}
 
 
-@router.post('/approve')
-async def approve(req: Review, owner=Depends(require_owner)):
-    # Refresh channel health once per batch before approving exact snapshots.
-    cfg = await config()
+async def live_destinations(cfg):
+    """Selected channels Buffer says can take a post right now."""
     try:
         async with httpx.AsyncClient() as client:
             channels = await BufferClient(client).channels(cfg['organization_id'])
     except BufferError as e:
         raise HTTPException(502, str(e)) from None
     allowed = {c['id'] for c in channels if not (c['isDisconnected'] or c['isLocked'] or c['isQueuePaused'])}
-    selected = {c['id'] for c in cfg['channels']}
+    return allowed & {c['id'] for c in cfg['channels']}
+
+
+@router.post('/approve')
+async def approve(req: Review, owner=Depends(require_owner)):
+    # Refresh channel health once per batch before approving exact snapshots.
+    cfg = await config()
+    live = await live_destinations(cfg)
+    allowed = selected = live
     for item in req.items:
         rows = await db('GET', f'/platform_marketing_posts?id=eq.{item.id}&limit=1')
         if not rows or rows[0]['payload']['organization_id'] != cfg['organization_id'] or rows[0]['payload']['channel_id'] not in allowed & selected:

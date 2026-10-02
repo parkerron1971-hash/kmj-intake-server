@@ -127,6 +127,14 @@ named channels). Leave out "run_at" to take the next open weekday slot (11:00 AM
 it only when the owner named a time. Instagram needs a picture: without asset_id it is left out and the
 result says so; offer to make a flyer for it. The action result says when and where it will go: tell the
 owner that, and that it waits for their OK on the desk. Keep links out of the caption (the post adds its own).
+POSTING RIGHT AWAY: when the owner wants something out now (now, right away, immediately, today
+rather than its slot), ask their permission with:
+[ACTION:{"type":"marketing_post_now","text":"the caption","channels":["facebook","x"]}]
+or, for a post already on the desk, [ACTION:{"type":"marketing_post_now","post_ids":["UUID","UUID"]}] (every
+post_id of that post). This never runs on its own: the owner gets a card showing the exact caption and
+channels, and it goes out within a few minutes only when they approve it there. Say you are asking for their
+OK on the card; never say it is posted until the result says so. Channels default to every connected channel,
+as with marketing_new_post. If publishing is paused or switched off, the result says so: relay it.
 To edit ONE existing post, use marketing_save_draft with its exact id and revision, preserving every field
 not asked to change:
 [ACTION:{"type":"marketing_save_draft","draft":{"id":"UUID","revision":1,"campaign":"...","text":"...","channel_id":"...","run_at":"ISO timestamp with timezone","landing_url":"https://mysolutionist.app/","asset_id":null}}]
@@ -156,8 +164,8 @@ say it has started, never that drafts are ready, until the desk shows them.
 Every planned post carries a flyer made from its own verified words (free to make), and Instagram gets
 only posts that have one. The week's lead play may carry one generated photograph, paid from the monthly
 design_budget. If budget_request is set, the budget ran out: say so plainly and that only the owner can
-raise it on the desk. You cannot change the budget. You can never approve posts: approving is the owner's,
-on the desk.
+raise it on the desk. You cannot change the budget. You can never approve posts yourself: the owner
+approves on the desk, or on the card of a post-now request.
 Saved posts remain drafts for review. Approval/resume happen through the page's exact-post review and
 publishing controls. Do not claim approval or publication. Action result cards establish success;
 describe proposed actions as requests, not completed work. Do not repeat an action already recorded
@@ -360,6 +368,83 @@ async def new_post(action):
             'post_ids': [r['id'] for r in out['posts']]}
 
 
+async def post_now_review(payload):
+    """Freeze what the owner's card shows and approves: the exact caption and
+    where it goes. The approval binds this frozen payload (its hash), and the
+    handler re-checks it, so what goes out is exactly what was approved."""
+    import platform_marketing as marketing
+    from marketing_desk import SERVICE
+    cfg = await marketing.config()
+    connected = cfg.get('channels') or []
+    review = {'type': 'marketing_post_now', 'goes_out': 'Within a few minutes of your approval'}
+    if payload.get('post_ids'):
+        try:
+            ids = list(dict.fromkeys(str(UUID(str(i))) for i in payload['post_ids']))
+        except (ValueError, TypeError):
+            ids = []
+        if not 1 <= len(ids) <= 10:
+            raise HTTPException(422, 'Name the post by every one of its post_ids from the desk.')
+        rows = await marketing.db('GET', f"/platform_marketing_posts?id=in.({','.join(ids)})&limit=10")
+        by_id = {r['id']: r for r in rows}
+        if len(by_id) != len(ids) or any(r['status'] != 'draft' for r in rows):
+            raise HTTPException(422, 'Only a draft on the desk can be posted right away.')
+        captions = {r['payload'].get('text') for r in rows}
+        if len(captions) != 1:
+            raise HTTPException(422, 'Those posts say different things; post them one at a time.')
+        return {**review, 'caption': captions.pop(), 'post_ids': ids, 'revisions': [by_id[i]['revision'] for i in ids],
+                'channels': sorted({SERVICE.get(r['payload']['service'], r['payload']['service']) for r in rows})}
+    caption = str(payload.get('text') or payload.get('caption') or '').strip()
+    if not caption:
+        raise HTTPException(422, 'There is no caption to post.')
+    if _LINK.search(caption):
+        raise HTTPException(422, 'A caption cannot carry a link; the post adds its own.')
+    chosen = connected
+    if payload.get('channels'):
+        services = {SERVICE_KEYS.get(str(c).strip().lower()) for c in payload['channels']}
+        chosen = [c for c in connected if c.get('service') in services]
+    asset_id = payload.get('asset_id') or None
+    left_out = None
+    if not asset_id and any(c['service'] == 'instagram' for c in chosen):
+        if all(c['service'] == 'instagram' for c in chosen):
+            raise HTTPException(422, 'Instagram needs a picture or video to post.')
+        chosen = [c for c in chosen if c['service'] != 'instagram']
+        left_out = 'Instagram: it needs a picture or video'
+    if not chosen:
+        raise HTTPException(422, 'None of those channels is connected.')
+    out = {**review, 'caption': caption, 'channels': [SERVICE.get(c['service'], c['service']) for c in chosen],
+           'channel_ids': [c['id'] for c in chosen]}
+    if asset_id:
+        out['asset_id'] = str(UUID(str(asset_id)))
+    if left_out:
+        out['left_out'] = left_out
+    return out
+
+
+async def post_now(action):
+    """Runs only from an approval card the owner approved (the review gate): posts
+    the frozen caption on the frozen channels within a few minutes."""
+    import platform_chief_authority as authority
+    import platform_marketing as marketing
+    from marketing_desk import _join
+    ctx = authority.current_authorization.get()
+    if not ctx or ctx[1].get('automatic', True) is not False:
+        return {'ok': False, 'label': 'Posting right away needs your approval on its card.'}
+    owner, approval = ctx
+    try:
+        if action.get('post_ids'):
+            items = [marketing.SlotItem(id=i, revision=r) for i, r in zip(action['post_ids'], action['revisions'])]
+            out = await marketing.post_existing_now(items, owner, caption=action['caption'])
+        else:
+            out = await marketing.post_new_now(marketing.Idea(
+                id=uuid5(UUID(str(approval['id'])), 'post-now'), text=action['caption'],
+                channel_ids=action['channel_ids'], asset_id=action.get('asset_id'), ai_assisted=True), owner)
+    except HTTPException as exc:
+        return {'ok': False, 'label': f'{exc.detail} Nothing was sent.'}
+    return {'ok': True, 'label': f"Approved by you and on its way to {_join(action['channels'])}. It goes out within a "
+                                 "few minutes; if it does not, your phone and Today will say so.",
+            'post_ids': [r['id'] for r in out['posts']]}
+
+
 async def cancel_post(action):
     import platform_marketing as marketing
     row = await marketing.cancel(UUID(action['id']), marketing.Revision(revision=action['revision']))
@@ -478,7 +563,8 @@ async def skip_slot(action):
 
 HANDLERS = {'marketing_save_draft': save_draft, 'marketing_cancel_post': cancel_post, 'marketing_pause': pause_marketing,
             'marketing_run_week': run_week, 'marketing_replan_week': replan_week,
-            'marketing_edit_slot': edit_slot, 'marketing_skip_slot': skip_slot, 'marketing_new_post': new_post}
+            'marketing_edit_slot': edit_slot, 'marketing_skip_slot': skip_slot, 'marketing_new_post': new_post,
+            'marketing_post_now': post_now}
 
 
 def prepare_actions(actions, request_id):
