@@ -7,8 +7,10 @@ turned on — see what was held by the check or reported by a member, in
 the Safety room. Opening a chat there needs a reason, is logged, and the
 people in that chat are told (member_portal_messaging shows the notice).
 
-  GET   /messaging/settings?business_id=        on/off, keep-for days, officers (any team member)
+  GET   /messaging/settings?business_id=        on/off, keep-for days, officers (any team member;
+                                                the owner also gets the team to choose from)
   PATCH /messaging/settings                     {business_id, enabled?, retention_days?} — the owner
+  POST  /messaging/officers                     {business_id, user_id, officer} — the owner
   GET   /messaging/safety?business_id=          held messages + open reports — officers only
   POST  /messaging/safety/open                  {business_id, thread_id, reason} — logged
   POST  /messaging/safety/message               {business_id, message_id, action: release|remove}
@@ -63,6 +65,21 @@ def require_officer(business_id: str, user: AuthedUser) -> None:
         raise HTTPException(403, "Only the church's safety officers can open the Safety room.")
 
 
+def team(business_id: str, owner_id: str, viewer: AuthedUser) -> List[Dict[str, Any]]:
+    """The people who can be officers: the owner and active seats."""
+    rows = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{_q(business_id)}&status=eq.active"
+        f"&select=user_id,invited_email,role&limit=200")
+    if not isinstance(rows, list):
+        raise _unavailable()
+    out = [{"user_id": str(owner_id), "role": "owner",
+            "label": "You" if str(viewer.id) == str(owner_id) else "The owner"}]
+    out += [{"user_id": str(r["user_id"]), "role": r.get("role") or "member",
+             "label": r.get("invited_email") or "Teammate"}
+            for r in rows if r.get("user_id") and str(r["user_id"]) != str(owner_id)]
+    return out
+
+
 def _biz_settings(business_id: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,owner_id,settings&limit=1")
     if not isinstance(rows, list):
@@ -96,11 +113,16 @@ class SettingsIn(BaseModel):
 @router.get("/messaging/settings")
 def get_settings(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id, "business_id")
-    require(biz, user, "member")
-    s = ((_biz_settings(biz).get("settings") or {}).get("messaging") or {})
+    require(biz, user, "viewer")
+    row = _biz_settings(biz)
+    s = ((row.get("settings") or {}).get("messaging") or {})
     offs = officers(biz)
-    return {"enabled": bool(s.get("enabled")), "retention_days": int(s.get("retention_days") or 365),
-            "officers": offs, "min_officers": MIN_OFFICERS, "you_are_officer": str(user.id) in offs}
+    out = {"enabled": bool(s.get("enabled")), "retention_days": int(s.get("retention_days") or 365),
+           "officers": offs, "min_officers": MIN_OFFICERS, "you_are_officer": str(user.id) in offs,
+           "you_are_owner": str(row.get("owner_id")) == str(user.id)}
+    if out["you_are_owner"]:
+        out["team"] = [{**p, "officer": p["user_id"] in offs} for p in team(biz, row.get("owner_id"), user)]
+    return out
 
 
 @router.patch("/messaging/settings")
@@ -121,6 +143,40 @@ def patch_settings(body: SettingsIn, user: AuthedUser = Depends(require_user)):
     if not saved:
         raise HTTPException(503, "That change didn't save. Please try again.")
     return {"enabled": bool(cfg.get("enabled")), "retention_days": int(cfg.get("retention_days") or 365)}
+
+
+class OfficerIn(BaseModel):
+    business_id: str
+    user_id: str
+    officer: bool
+
+
+@router.post("/messaging/officers")
+def set_officer(body: OfficerIn, user: AuthedUser = Depends(require_user)):
+    """The owner names (or stands down) a safety officer. While messaging
+    is on there are never fewer than two."""
+    biz_id = _uuid(body.business_id, "business_id")
+    require(biz_id, user, "owner")
+    who = _uuid(body.user_id, "user_id")
+    biz = _biz_settings(biz_id)
+    if who not in {p["user_id"] for p in team(biz_id, biz.get("owner_id"), user)}:
+        raise HTTPException(404, "That person isn't on your team.")
+    offs = officers(biz_id)
+    if body.officer:
+        if who not in offs:
+            saved = sb_clients.sb_post_as_service(
+                "/msg_safety_officers", {"business_id": biz_id, "user_id": who, "added_by": str(user.id)})
+            if not isinstance(saved, list) or not saved:
+                raise HTTPException(503, "That didn't save. Please try again.")
+    elif who in offs:
+        on = bool(((biz.get("settings") or {}).get("messaging") or {}).get("enabled"))
+        if on and len(offs) <= MIN_OFFICERS:
+            raise HTTPException(409, f"Messaging is on, so it needs {MIN_OFFICERS} safety officers. "
+                                     "Name another officer first, or turn messaging off.")
+        if not sb_clients.sb_delete_as_service(
+                f"/msg_safety_officers?business_id=eq.{_q(biz_id)}&user_id=eq.{_q(who)}"):
+            raise HTTPException(503, "That didn't save. Please try again.")
+    return {"officers": officers(biz_id)}
 
 
 # ─── the Safety room ─────────────────────────────────────────────────
@@ -152,7 +208,7 @@ class PauseIn(BaseModel):
 @router.get("/messaging/safety")
 def safety_queue(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id, "business_id")
-    require(biz, user, "member")
+    require(biz, user, "viewer")
     require_officer(biz, user)
     held = sb_clients.sb_get_as_service(
         f"/msg_messages?business_id=eq.{_q(biz)}&status=eq.held"
@@ -186,7 +242,7 @@ def safety_queue(business_id: str = Query(...), user: AuthedUser = Depends(requi
 def open_thread(body: OpenIn, user: AuthedUser = Depends(require_user)):
     """Open a whole chat. Logged with the reason; its people are told."""
     biz = _uuid(body.business_id, "business_id")
-    require(biz, user, "member")
+    require(biz, user, "viewer")
     require_officer(biz, user)
     tid = _uuid(body.thread_id, "thread_id")
     t = sb_clients.sb_get_as_service(f"/msg_threads?id=eq.{_q(tid)}&business_id=eq.{_q(biz)}&select=id,kind,group_id&limit=1")
@@ -210,7 +266,7 @@ def open_thread(body: OpenIn, user: AuthedUser = Depends(require_user)):
 @router.post("/messaging/safety/message")
 def act_on_message(body: MessageIn, user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.business_id, "business_id")
-    require(biz, user, "member")
+    require(biz, user, "viewer")
     require_officer(biz, user)
     if body.action not in ("release", "remove"):
         raise HTTPException(400, "Choose release or remove.")
@@ -228,7 +284,7 @@ def act_on_message(body: MessageIn, user: AuthedUser = Depends(require_user)):
 @router.post("/messaging/safety/report")
 def close_report(body: ReportIn, user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.business_id, "business_id")
-    require(biz, user, "member")
+    require(biz, user, "viewer")
     require_officer(biz, user)
     rid = _uuid(body.report_id, "report_id")
     saved = sb_clients.sb_patch_as_service(
@@ -243,7 +299,7 @@ def close_report(body: ReportIn, user: AuthedUser = Depends(require_user)):
 def pause_member(body: PauseIn, user: AuthedUser = Depends(require_user)):
     """Turn someone's messaging off (a manager can turn it back on)."""
     biz = _uuid(body.business_id, "business_id")
-    require(biz, user, "member")
+    require(biz, user, "viewer")
     require_officer(biz, user)
     cid = _uuid(body.contact_id, "contact_id")
     saved = sb_clients.sb_patch_as_service(

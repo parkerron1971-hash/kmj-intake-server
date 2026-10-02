@@ -396,3 +396,20 @@ def test_retention_keeps_held_and_reported_messages(env):
     finally:
         sb_clients.sb_get_as_service = real_get
     assert sorted(m["id"] for m in env.t["msg_messages"]) == ["m2", "m3", "m4"]
+
+
+def test_the_owner_names_safety_officers_and_never_drops_below_two_while_on(env):
+    owner = _team(env, OWNER)
+    s = owner.get("/messaging/settings", params={"business_id": BIZ}).json()
+    assert s["you_are_owner"] and {p["user_id"] for p in s["team"]} == {OWNER, OFF1, OFF2}
+    assert "team" not in _team(env, OFF1).get("/messaging/settings", params={"business_id": BIZ}).json()
+    assert _team(env, OFF1).post("/messaging/officers", json={"business_id": BIZ, "user_id": OFF1, "officer": True}).status_code == 403
+    stranger = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    assert owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": stranger, "officer": True}).status_code == 404
+    for u in (OFF1, OFF2):
+        assert owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": u, "officer": True}).status_code == 200
+    assert {r["user_id"] for r in env.t["msg_safety_officers"]} == {OFF1, OFF2}
+    r = owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": OFF2, "officer": False})
+    assert r.status_code == 409 and len(env.t["msg_safety_officers"]) == 2        # messaging is on
+    env.biz["settings"]["messaging"]["enabled"] = False
+    assert owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": OFF2, "officer": False}).json() == {"officers": [OFF1]}
