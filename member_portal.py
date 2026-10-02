@@ -526,6 +526,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     from giving_router import giving_is_active
     give = (f'<a class="mb-give mp-noprint" href="/give" aria-label="Give">{ui.icon("heart", 18)}<span>Give</span></a>'
             if signed_in and giving_is_active(biz) else "")
+    import member_portal_messaging as mpm
+    chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
+            if signed_in and mpm.turned_on(biz) else "")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -540,7 +543,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 </head>
 <body>
 <main class="mp-shell{' mb-has-nav' if signed_in else ''}">
-  <header class="mb-top"><span class="mb-brand"><span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p></span><span class="mb-top-right">{give}{avatar}</span></header>
+  <header class="mb-top"><span class="mb-brand"><span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p></span><span class="mb-top-right">{give}{chat}{avatar}</span></header>
   {body}
   <footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>
 </main>
@@ -685,6 +688,8 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
               this_year: int, flash: str = "") -> str:
     """Me: this person's giving (a year's total, month by month, each gift
     and the statement), then the ways to look after their own record."""
+    import member_portal_messaging as mpm
+    msgs_on = mpm.turned_on(biz)
     import member_app_ui as ui
     years = "".join(
         f'<a href="/my/me?year={y}"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
@@ -731,6 +736,7 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
   {link('/my/groups', 'users', 'My groups', 'Your groups, and ones you can join')}
   {link('/my/prayer', 'lock', 'Prayer', 'A private request to the pastor')}
   {link('/my/details', 'user', 'My details', 'Phone and mailing address')}
+  {link('/my/messages', 'chat', 'Messages', 'Your chats and group chats') if msgs_on else ''}
 </ul>
 <div class="mp-noprint" style="margin-top:12px">{switch}
 <form method="post" action="/my/signout"><button class="mp-link" type="submit">Sign out</button></form></div>""",
@@ -856,6 +862,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mpc.render_events(biz, site, request, occ, who=me))
     if sub == "/my/prayer":
         return _page(mpc.render_prayer(biz, site, request, who=me))
+    if sub == "/my/messages" or sub.startswith("/my/messages/"):
+        import member_portal_messaging as mpm
+        out = await mpm.serve(request, biz, site, me, sub)
+        if isinstance(out, tuple):
+            return _page(out[0], out[1])
+        return out
     if sub.startswith("/my/groups/live/"):
         import member_portal_group_live as mgl
         sid = sub[len("/my/groups/live/"):]

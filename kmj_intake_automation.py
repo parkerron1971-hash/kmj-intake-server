@@ -362,6 +362,12 @@ app.include_router(member_portal_group_live_router)
 # Staff drop-in to a group's live meeting (team side).
 from group_live_router import router as group_live_router
 app.include_router(group_live_router)
+# Member messaging: group chats + direct messages, screened, with the
+# safety officers' room (Kevin, 2026-10-02).
+from member_portal_messaging import router as member_portal_messaging_router
+app.include_router(member_portal_messaging_router)
+from messaging_router import router as messaging_router
+app.include_router(messaging_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
@@ -1337,6 +1343,10 @@ async def startup():
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
+            # Member messages are kept a year (each church can change it).
+            import member_portal_messaging as _msgs
+            scheduler.add_job(g("msg_retention", _msgs.retention_tick), "cron",
+                              hour=8, minute=30, id="msg_retention")
             # App-granted trials end on their own, like Stripe trials do.
             import trial_expiry as _trial_expiry
             scheduler.add_job(g("trial_expiry", _trial_expiry.expire_tick), "interval",
