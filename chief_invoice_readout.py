@@ -18,7 +18,6 @@ _BROAD_TAIL = re.compile(
     r"(?:\s*,?\s*so (?:that way )?I can (?:get an idea exactly |see )where things (?:are standing|stand))?"
     r"[.!?\s]*$", re.I)
 
-_NARROWED = re.compile(r"\b(?:not|don't|do not|only|except|open|unpaid|paid|overdue|draft|cancelled|canceled|void)\b", re.I)
 
 
 def owner_invoice_scope(action, owner_text):
@@ -31,7 +30,7 @@ def owner_invoice_scope(action, owner_text):
     prefix = (owner_text or '')[:match.start()] if match else ''
     tail = (owner_text or '')[match.end():] if match else ''
     if (action.get('type') == 'show_view' and action.get('view') == 'invoices'
-            and match and _BROAD_PREFIX.fullmatch(prefix) and _BROAD_TAIL.fullmatch(tail) and not _NARROWED.search(owner_text or '')):
+            and match and _BROAD_PREFIX.fullmatch(prefix) and _BROAD_TAIL.fullmatch(tail)):
         return {**action, 'filter': 'all'}
     return action
 

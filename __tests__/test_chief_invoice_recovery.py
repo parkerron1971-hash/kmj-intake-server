@@ -112,7 +112,7 @@ def test_model_label_and_summary_cannot_invent_recovered_figures(monkeypatch):
 
 
 @pytest.mark.parametrize('text', ['Show all invoices', 'Pull up all the invoices that I have, as a visual.',
-    'Show every invoice', 'List all of my invoices'])
+    'Show every invoice', 'List all of my invoices', 'Open all invoices', 'Open all my invoices as a chart'])
 def test_explicit_all_scope_corrects_model_open_default(text):
     action = {'type': 'show_view', 'view': 'invoices', 'filter': 'open'}
     assert owner_invoice_scope(action, text)['filter'] == 'all'
