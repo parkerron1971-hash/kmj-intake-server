@@ -31,3 +31,8 @@ A read-only production probe showed the new wording on Kevin's real data:
 this week missed their time".
 
 Before building more here, read docs/MARKETING_DESK.md.
+
+Later the same day Kevin found his approved post on Instagram, not Facebook:
+the editor had preselected one account. New posts (the desk's and Chief's)
+now go to every connected channel unless he chooses, at the next open slot
+unless he picks a time (`/ideas`, `marketing_new_post`).

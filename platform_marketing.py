@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
@@ -451,6 +451,105 @@ async def save_draft(req: Draft):
     return saved[0]
 
 
+class Idea(BaseModel):
+    """One new post, written once, for every channel it goes to.
+
+    Kevin, 2026-10-02: a hand-written post went to Instagram alone because
+    the editor preselected one account; a post now goes to every connected
+    channel unless the owner chooses, and to the next open slot unless the
+    owner picks a time. The same function is what Chief calls, so Chief can
+    make a post without first asking where or when."""
+    id: UUID = Field(default_factory=uuid4)        # each channel's post id derives from it: a retry is not a second post
+    text: str = Field(min_length=1, max_length=5000)
+    channel_ids: list[str] | None = Field(default=None, max_length=10)   # None: every connected channel
+    run_at: datetime | None = None                 # None: the next open slot
+    expires_at: datetime | None = None
+    campaign: str | None = Field(default=None, max_length=100)
+    campaign_id: UUID | None = None
+    landing_url: str = Field(default='https://mysolutionist.app/', max_length=1500)
+    asset_id: UUID | None = None
+    ai_assisted: bool = False
+
+
+OPEN_HOURS = (11, 15)          # the plan posts at 11:00; a one-off takes 11:00 or 15:00 (ET) on a free weekday
+
+
+def _ts(value):
+    return aware(value).timestamp()
+
+
+async def next_open_slot(at=None):
+    """The soonest weekday 11:00 or 15:00 (ET) at least an hour away with no post at that time."""
+    import marketing_engine
+    at = at or now()
+    since = at.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    until = (at + timedelta(days=62)).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    rows = await db('GET', f'/platform_marketing_posts?select=run_at&status=neq.cancelled&run_at=gte.{since}'
+                           f'&run_at=lt.{until}&order=run_at.asc&limit=1000')
+    if len(rows) >= 1000:
+        raise HTTPException(503, 'The calendar is too full to find an open time. Choose a time for this post.')
+    taken = {_ts(r['run_at']) for r in rows}
+    local = at.astimezone(marketing_engine.TZ)
+    for offset in range(60):
+        day = local.date() + timedelta(days=offset)
+        if day.weekday() >= 5:
+            continue
+        for hour in OPEN_HOURS:
+            slot = datetime.combine(day, time(hour), marketing_engine.TZ)
+            if slot > at + timedelta(hours=1) and slot.timestamp() not in taken:
+                return slot
+    raise HTTPException(422, 'There is no open weekday time in the next 60 days. Choose a time for this post.')
+
+
+SERVICE_NAMES = {'twitter': 'X', 'facebook': 'Facebook', 'instagram': 'Instagram', 'linkedin': 'LinkedIn'}
+
+
+async def create_idea(req: Idea):
+    """Save one post for every chosen channel in a single insert: all of them or none."""
+    import marketing_engine
+    cfg = await config()
+    connected = cfg.get('channels') or []
+    if req.channel_ids is None:
+        chosen = list(connected)
+    else:
+        wanted = set(req.channel_ids)
+        chosen = [c for c in connected if c['id'] in wanted]
+        if len(chosen) != len(wanted):
+            raise HTTPException(422, 'Choose from the connected channels.')
+    if not chosen:
+        raise HTTPException(422, 'Connect a channel first.')
+    skipped = []
+    if not req.asset_id:
+        others = [c for c in chosen if c['service'] != 'instagram']
+        if others and len(others) < len(chosen):
+            # Instagram refuses a post without a picture: leave it out and say so, rather than fail the post.
+            skipped.append({'channel': 'Instagram', 'reason': 'Instagram needs a picture or video.'})
+            chosen = others
+    run_at = aware(req.run_at) if req.run_at else await next_open_slot()
+    campaign = (req.campaign or '').strip() or f"post-{run_at.astimezone(marketing_engine.TZ):%Y-%m-%d}"
+    drafts = [Draft(id=uuid5(req.id, c['id']), campaign=campaign, campaign_id=req.campaign_id, text=req.text,
+                    channel_id=c['id'], landing_url=req.landing_url, asset_id=req.asset_id, run_at=run_at,
+                    expires_at=req.expires_at, ai_assisted=req.ai_assisted) for c in chosen]
+    ids = ','.join(str(d.id) for d in drafts)
+    existing = await db('GET', f'/platform_marketing_posts?id=in.({ids})&limit=10')
+    if existing:
+        return {'posts': existing, 'skipped': skipped, 'run_at': existing[0]['run_at'], 'already_saved': True}
+    rows = [await build_draft(d) for d in drafts]
+    saved = await db('POST', '/platform_marketing_posts', rows)
+    return {'posts': saved, 'skipped': skipped, 'run_at': run_at.isoformat(), 'already_saved': False,
+            'channels': [SERVICE_NAMES.get(c['service'], c['service']) for c in chosen]}
+
+
+@router.post('/ideas')
+async def create_idea_route(req: Idea):
+    return await create_idea(req)
+
+
+@router.get('/ideas/next-slot')
+async def next_slot_route():
+    return {'run_at': (await next_open_slot()).isoformat()}
+
+
 @router.post('/approve')
 async def approve(req: Review, owner=Depends(require_owner)):
     # Refresh channel health once per batch before approving exact snapshots.
@@ -497,7 +596,6 @@ class SlotCancel(BaseModel):
 
 
 EDITABLE = ('draft', 'approved', 'failed')
-SERVICE_NAMES = {'twitter': 'X', 'facebook': 'Facebook', 'instagram': 'Instagram', 'linkedin': 'LinkedIn'}
 
 
 async def _slot_rows(items, statuses):

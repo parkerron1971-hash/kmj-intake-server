@@ -119,10 +119,17 @@ Do not claim most businesses spend $200/month, replace 6-8 tools, setup in minut
 walls, no per-user fees or no card required unless that exact claim has a verified source.
 Treat prior assistant marketing copy as unverified drafts, never as evidence for new claims.
 When asked for suggestions or image comparison, only discuss; do not emit mutation actions.
-When the owner explicitly asks to save or edit a post, use:
-[ACTION:{"type":"marketing_save_draft","draft":{"campaign":"...","text":"...","channel_id":"...","run_at":"ISO timestamp with timezone","landing_url":"https://mysolutionist.app/","asset_id":null}}]
-For edits include the exact existing id and revision and preserve all fields not requested changed.
-Ask for a destination and time/timezone when unspecified; never guess among multiple channels.
+MAKING A POST: you lead. When the owner asks for a post, or says yes to one you suggested, write it and
+save it in the same reply; do not ask first where or when:
+[ACTION:{"type":"marketing_new_post","text":"the caption","channels":["facebook","instagram","x"],"run_at":"ISO timestamp with timezone","asset_id":null}]
+Leave out "channels" to send it to every connected channel (the default; include it only when the owner
+named channels). Leave out "run_at" to take the next open weekday slot (11:00 AM or 3:00 PM Eastern); include
+it only when the owner named a time. Instagram needs a picture: without asset_id it is left out and the
+result says so; offer to make a flyer for it. The action result says when and where it will go: tell the
+owner that, and that it waits for their OK on the desk. Keep links out of the caption (the post adds its own).
+To edit ONE existing post, use marketing_save_draft with its exact id and revision, preserving every field
+not asked to change:
+[ACTION:{"type":"marketing_save_draft","draft":{"id":"UUID","revision":1,"campaign":"...","text":"...","channel_id":"...","run_at":"ISO timestamp with timezone","landing_url":"https://mysolutionist.app/","asset_id":null}}]
 To cancel an explicitly identified post: [ACTION:{"type":"marketing_cancel_post","id":"UUID","revision":1}]
 To pause future delivery when requested: [ACTION:{"type":"marketing_pause"}]
 THE WEEKLY PLAN (this_week and desk in the snapshot): every Thursday at 7:00 AM ET the plan for NEXT
@@ -312,6 +319,47 @@ async def save_draft(action):
     return {'ok': True, 'label': 'Marketing draft saved for review.', 'post_id': row['id'], 'revision': row.get('revision')}
 
 
+SERVICE_KEYS = {'x': 'twitter', 'twitter': 'twitter', 'facebook': 'facebook', 'instagram': 'instagram',
+                'linkedin': 'linkedin'}
+
+
+async def new_post(action):
+    """Chief makes a post: every connected channel and the next open slot unless the owner chose."""
+    import platform_marketing as marketing
+    from marketing_desk import _join, clock, day_name
+    text = str(action.get('text') or '').strip()
+    if not text:
+        return {'ok': False, 'label': 'There was no caption to save.'}
+    if _LINK.search(text):
+        return {'ok': False, 'label': 'A caption cannot carry a link; the post adds its own.'}
+    channel_ids = None
+    if action.get('channels'):
+        cfg = await marketing.config()
+        services = {SERVICE_KEYS.get(str(c).strip().lower()) for c in action['channels']}
+        channel_ids = [c['id'] for c in cfg.get('channels') or [] if c.get('service') in services]
+        if not channel_ids:
+            return {'ok': False, 'label': 'None of those channels is connected.'}
+    try:
+        req = marketing.Idea(id=action.get('id') or uuid4(), text=text, channel_ids=channel_ids,
+                             run_at=action.get('run_at') or None, asset_id=action.get('asset_id') or None,
+                             landing_url=action.get('landing_url') or 'https://mysolutionist.app/', ai_assisted=True)
+    except ValidationError:
+        return {'ok': False, 'label': 'That time or picture could not be read. Give the time with its timezone.'}
+    try:
+        out = await marketing.create_idea(req)
+    except HTTPException as exc:
+        # An ordinary refusal (too long for X, Instagram alone with no picture, a time out of range)
+        # comes back as a sentence Chief can relay; nothing was saved on any channel.
+        return {'ok': False, 'label': f'{exc.detail} Nothing was saved.'}
+    when = f"{day_name(out['run_at'])} {clock(out['run_at'])}"
+    where = _join(out.get('channels') or sorted({r['payload']['service'] for r in out['posts']}))
+    left = ''.join(f" {s['channel']} was left out: {s['reason'][0].lower() + s['reason'][1:]}" for s in out['skipped'])
+    if out.get('already_saved'):
+        return {'ok': True, 'label': f'This post was already saved for {when}. It is on the desk waiting for your OK.'}
+    return {'ok': True, 'label': f'Drafted for {when} on {where}. It is on the desk waiting for your OK.{left}',
+            'post_ids': [r['id'] for r in out['posts']]}
+
+
 async def cancel_post(action):
     import platform_marketing as marketing
     row = await marketing.cancel(UUID(action['id']), marketing.Revision(revision=action['revision']))
@@ -430,7 +478,7 @@ async def skip_slot(action):
 
 HANDLERS = {'marketing_save_draft': save_draft, 'marketing_cancel_post': cancel_post, 'marketing_pause': pause_marketing,
             'marketing_run_week': run_week, 'marketing_replan_week': replan_week,
-            'marketing_edit_slot': edit_slot, 'marketing_skip_slot': skip_slot}
+            'marketing_edit_slot': edit_slot, 'marketing_skip_slot': skip_slot, 'marketing_new_post': new_post}
 
 
 def prepare_actions(actions, request_id):
@@ -439,4 +487,6 @@ def prepare_actions(actions, request_id):
         if action.get('type') == 'marketing_save_draft' and isinstance(action.get('draft'), dict):
             if action['draft'].get('revision') is None:
                 action['draft']['id'] = str(uuid5(request_id, f'marketing-draft-{i}'))
+        if action.get('type') == 'marketing_new_post':
+            action['id'] = str(uuid5(request_id, f'marketing-post-{i}'))
     return actions

@@ -58,6 +58,14 @@ https://claude.ai/artifact/R4YcBsj9xwtAgyDFsj19pW, which Kevin approved.
 - `/slot/edit` and `/slot/cancel` check every channel's revision and state
   before writing anything. A change in the instant between check and write is
   reported channel by channel.
+- New posts go everywhere by default (2026-10-02, after a hand-written post
+  went to Instagram alone). `POST /platform/marketing/ideas` saves one caption
+  for every connected channel in one insert unless `channel_ids` is given,
+  leaves Instagram out (and says so) without a picture, and takes the next open
+  slot (`GET /ideas/next-slot`: a weekday at 11:00 AM or 3:00 PM Eastern with no
+  post at that time) unless `run_at` is given. Chief's `marketing_new_post`
+  calls the same function, so Chief makes a post and says where and when,
+  instead of asking first.
 - The seven-caption generator (`POST /platform/marketing/week`) is retired.
   The weekly plan is the one way a week is drafted.
 - Today (`platform_today._marketing`) reads the weekly plan's posts. It used
