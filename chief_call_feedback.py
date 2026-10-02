@@ -5,6 +5,13 @@ import re
 def reply_for(message, *, voice=False):
     text = re.sub(r"[^\w\s]", " ", str(message or '').casefold())
     text = ' '.join(text.split())
+    # A recognizer endpoint can split a thinking pause into a whole turn.
+    # Only exact voice hesitations/incomplete wording qualify: short answers,
+    # names, other languages, and any additional request keep the normal path.
+    if voice and text in {'um', 'uh', 'erm', 'hmm'}:
+        return "Take your time."
+    if voice and text == 'this is':
+        return "I'm listening."
     if text in {'you can hear the background too', 'you are picking up background noise',
                 'you re picking up background noise', 'you picked up background speech'}:
         return ("Thanks for flagging that. Background speech may be getting picked up; "
