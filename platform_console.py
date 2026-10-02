@@ -1065,6 +1065,13 @@ PLATFORM_CHIEF_SYSTEM = (
     "  • pending_items — follow-ups not yet done. Surface these UNPROMPTED when relevant\n"
     "    (\"before you flip billing on, the log shows X is still pending\").\n"
     "  • recent_ships — merged pull requests from both repos = what actually shipped, with dates.\n"
+    "  • work_log — the summary every Claude Code / Codex session leaves (worklog/ in both repos):\n"
+    "    what it was asked, what it built (PRs, migrations), its status and what it left undone.\n"
+    "    BEFORE recommending or queueing a build, check work_log for the same or overlapping\n"
+    "    work and say so (\"we started this on Sep 26, PR #1059, left undone: …\"). When Kevin asks\n"
+    "    \"have we built X?\", answer from work_log + recent_ships, with PR numbers.\n"
+    "  • unfinished — this morning's open PRs ready for his yes, news drafts, conflicts, failing\n"
+    "    checks and migrations not yet applied. Surface it when he asks what's open or pending.\n"
     "Duties:\n"
     "  • When Kevin TELLS you something changed (\"I ran the migration\", \"campaign resubmitted\",\n"
     "    \"set the Stripe prices\") — LOG IT with log_platform_note, category config/decision, in the\n"
@@ -1260,6 +1267,18 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_changelog (one pending item per business), platform_agent_runs",
     },
     {
+        "id": "unfinished_work",
+        "name": "Unfinished work",
+        "kind": "watcher",
+        "beat": "Every morning: open PRs in both repos sorted into ready for your yes, "
+                "conflicts, failing, news drafts and stale; green PRs that fell behind are "
+                "brought up to date; migrations written but not applied; work-log entries "
+                "not shipped or with something left undone. One GitHub issue holds the list. "
+                "Never merges.",
+        "schedule": "daily 13:00 UTC",
+        "writes_to": "GitHub issue `unfinished-work`, platform_agent_runs, platform_changelog",
+    },
+    {
         "id": "money_auditor",
         "name": "Money auditor",
         "kind": "watcher",
@@ -1333,6 +1352,21 @@ async def get_agents(_owner=Depends(require_owner)):
     return {"ok": True, "registry": AGENT_REGISTRY, "runs": runs, "findings": findings}
 
 
+@router.get("/agents/live")
+async def get_agents_live(_owner=Depends(require_owner)):
+    """Agents at work: every agent (backend and GitHub) with a status light
+    and its last run, the activity feed in plain words, and today's tally."""
+    import agents_live
+    return {"ok": True, **(await agents_live.snapshot())}
+
+
+@router.post("/agents/{agent_id}/run-now")
+async def run_agent_now(agent_id: str, _owner=Depends(require_owner)):
+    """Run any backend agent now, or start a GitHub agent's workflow."""
+    import agents_live
+    return await agents_live.run(agent_id)
+
+
 @router.post("/agents/hermes/run")
 async def run_hermes_now(_owner=Depends(require_owner)):
     """Manual tick from the console — same pass the hourly schedule runs."""
@@ -1359,6 +1393,33 @@ async def run_customer_health_now(_owner=Depends(require_owner)):
     """Manual pass from the console — same as the morning schedule."""
     from customer_health import health_tick
     return await health_tick()
+
+
+@router.post("/agents/unfinished-work/run")
+async def run_unfinished_work_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the morning schedule."""
+    from unfinished_work import watch_tick
+    return await watch_tick()
+
+
+@router.get("/unfinished")
+async def get_unfinished(_owner=Depends(require_owner)):
+    """The latest unfinished-work lists; gathered fresh (without updating any
+    branch) when this process has not run the watcher yet."""
+    import unfinished_work
+    if unfinished_work.LAST:
+        return {"ok": True, **unfinished_work.LAST}
+    return {"ok": True, **(await unfinished_work.gather(update=False))}
+
+
+@router.get("/worklog")
+async def get_worklog(q: Optional[str] = None, _owner=Depends(require_owner)):
+    """The work log from both repos, or the entries that match `q`
+    ("have we built a refund flow?")."""
+    import worklog
+    items, errors = await worklog.entries()
+    found = worklog.search(items, q) if q else items[:60]
+    return {"ok": True, "entries": found, "total": len(items), "errors": errors}
 
 
 @router.post("/agents/money-auditor/run")
@@ -1650,6 +1711,27 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
         snap["operator_log_error"] = str(e)
     try:
         snap["recent_ships"] = await _recent_merged_prs()
+    except Exception:
+        pass
+
+    # The work log (2026-10-02): what every Claude Code / Codex session built,
+    # left undone or decided, from worklog/ in both repos. Lets Chief answer
+    # "have we built this already?" before anything new is queued.
+    try:
+        import worklog
+        items, _errs = await worklog.entries()
+        snap["work_log"] = [worklog.compact(e) for e in items[:40]]
+    except Exception as e:
+        snap["work_log_error"] = str(e)[:200]
+    # The unfinished-work watcher's latest lists (counts + what is ready).
+    try:
+        import unfinished_work
+        last = unfinished_work.LAST
+        if last:
+            snap["unfinished"] = {
+                k: (last.get(k) or [])[:12] if isinstance(last.get(k), list) else last.get(k)
+                for k in ("generated_at", "ready", "updated", "news", "conflicts",
+                          "failing", "migrations")}
     except Exception:
         pass
 

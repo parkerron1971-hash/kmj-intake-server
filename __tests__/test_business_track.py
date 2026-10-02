@@ -151,14 +151,20 @@ def test_vertical_filter_returns_real_keys_heaviest_first():
 
 
 def test_the_universal_plugins_reach_every_vertical():
-    # Importing your people and loading your prices are not vertical
-    # concerns — every business needs both, and they lead the list.
+    # Importing your people is not a vertical concern — every business
+    # needs it, and it leads the list. Prices are universal EXCEPT for the
+    # organisations whose money arrives as gifts (2026-09-26): a ministry
+    # or a nonprofit is not asked what it charges; it gets the giving
+    # page instead (test_setup_steps_fit_the_business).
     for vertical in ("coach", "barber", "lawyer", "ministry", "therapist",
                      "contractor", "nonprofit", "consultant", "unknown_vertical"):
         keys = bta.plugins_for_vertical(vertical)
         assert keys[0] == "import_contacts"
-        assert "offerings" in keys
         assert "payments" in keys
+        if vertical in ("ministry", "nonprofit"):
+            assert "offerings" not in keys and "giving" in keys
+        else:
+            assert "offerings" in keys
 
 
 # ─── the coach prompt ────────────────────────────────────────────────

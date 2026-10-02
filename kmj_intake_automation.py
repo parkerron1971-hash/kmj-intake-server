@@ -313,6 +313,10 @@ app.include_router(contacts_router)
 app.include_router(offerings_router)
 # Phase D.1.1 — availability + slot computation (customer-facing anon)
 app.include_router(availability_router)
+# The practitioner's other calendar (private iCal feed) → busy times that
+# block slots. Owner-gated; /availability/{biz}/calendar-feeds + busy-blocks.
+from calendar_feeds_router import router as calendar_feeds_router
+app.include_router(calendar_feeds_router)
 import booking_series; app.include_router(booking_series.router)  # weekly series (operator-side, authed) — one line by design
 # Phase D.2.1 — hosted booking page (practitioner-side config + URL resolver).
 # Registered BEFORE public_site_router so its /booking-page/... routes
@@ -1323,6 +1327,10 @@ async def startup():
             import customer_health as _customer_health
             scheduler.add_job(g("customer_health", _customer_health.health_tick), "cron",
                               hour=14, minute=0, id="customer_health")
+            # Unfinished-work watcher — 13:00 UTC = 9 AM Eastern.
+            import unfinished_work as _unfinished
+            scheduler.add_job(g("unfinished_work", _unfinished.watch_tick), "cron",
+                              hour=13, minute=0, id="unfinished_work")
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
@@ -1386,6 +1394,11 @@ async def startup():
                               id="notif_urgent_check")
             scheduler.add_job(g("notif_morning_brief", _notif.generate_morning_brief_for_all),
                               "cron", hour=13, minute=5, id="notif_morning_brief")
+            # The setup brief on a launching business's own clock
+            # (setup_brief.py). Hourly at :35, never :05, so it can't
+            # race the morning tick into writing two briefs.
+            scheduler.add_job(g("notif_setup_brief", _notif.setup_brief_local_morning_tick),
+                              "cron", minute=35, id="notif_setup_brief")
             scheduler.add_job(g("notif_midday_ping", _notif.generate_midday_ping_for_all),
                               "cron", hour=17, minute=5, id="notif_midday_ping")
             scheduler.add_job(g("notif_evening_summary", _notif.generate_evening_summary_for_all),
@@ -1509,6 +1522,18 @@ async def startup():
                           "interval", minutes=10, id="booking_session_sync")
     except Exception as e:
         print(f"   [warn] booking-session sync not scheduled: {e}")
+    # Outside calendars (2026-09-26): re-read every connected private
+    # calendar feed so its busy times keep blocking slots. The tick looks
+    # every 5 minutes; each feed is due 15 minutes after its last sync
+    # (longer after failures). Leader-gated here, and each feed is also
+    # claimed row-by-row, so a "Sync now" on another replica never
+    # interleaves. Kill switch: CALENDAR_FEEDS_SYNC=off.
+    try:
+        import outside_calendar as _outside_calendar
+        scheduler.add_job(g("calendar_feed_sync", _outside_calendar.sync_due_tick),
+                          "interval", minutes=5, id="calendar_feed_sync", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] calendar feed sync not scheduled: {e}")
     # Owner-only marketing: local schedules, exact content approval, Buffer delivery.
     try:
         import platform_marketing as _marketing

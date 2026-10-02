@@ -200,7 +200,12 @@ def _capture_signal(biz: str, ptype: str, original: Dict[str, Any],
         logger.warning(f"[proposals] signal capture failed: {e}")
 
 
-def _execute_proposal(biz: str, p: Dict[str, Any]) -> Dict[str, Any]:
+def _execute_proposal(biz: str, p: Dict[str, Any], *,
+                      unattended: bool = True) -> Dict[str, Any]:
+    """Run an approved proposal. unattended=True (the default, and what the
+    trusted sweep uses) means no person approved THIS one — so a follow-up
+    email to a contact who unsubscribed is skipped. approve() passes False:
+    the practitioner chose to send it, and it goes, with a note."""
     ptype = p.get("proposal_type")
     proposed = p.get("proposed") or {}
     payload = {"contact_id": proposed.get("contact_id"),
@@ -209,7 +214,8 @@ def _execute_proposal(biz: str, p: Dict[str, Any]) -> Dict[str, Any]:
     if ptype == "propose_followup_email":
         return rules_engine._exec_send_template_email(
             biz, {"subject": proposed.get("subject", ""),
-                  "body": proposed.get("body", "")}, payload)
+                  "body": proposed.get("body", "")}, payload,
+            unattended=unattended)
     if ptype == "propose_task" or ptype == "propose_schedule_followup":
         return rules_engine._exec_create_task(
             biz, {"title": proposed.get("title", "Follow up"),
@@ -538,7 +544,7 @@ def approve(proposal_id: str, body: ResolveBody,
     p = rows[0]
     if p.get("status") != "pending":
         return {"ok": True, "already": p.get("status")}
-    result = _execute_proposal(body.business_id, p)
+    result = _execute_proposal(body.business_id, p, unattended=False)
     sb_clients.sb_patch_as_service(
         f"/chief_proposals?id=eq.{proposal_id}",
         {"status": "approved", "resolved_at": _now_iso(),
