@@ -38,7 +38,8 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -726,6 +727,8 @@ def _ended_month(month: str) -> date:
 def _open_period_for_answers(biz: str, month: str, biz_row: Dict[str, Any]) -> Dict[str, Any]:
     if not checklist_supported():
         raise HTTPException(409, "Saving close checks needs the 2026-10-02 close checklist migration.")
+    import billing_limits
+    billing_limits.require_feature(biz, "period_close")   # the same plan gate as the lock
     m_start = _ended_month(month)
     period = _ensure_period(biz, m_start, biz_row, True)
     if period.get("status") == "closed":
@@ -733,11 +736,35 @@ def _open_period_for_answers(biz: str, month: str, biz_row: Dict[str, Any]) -> D
     return period
 
 
-def _save_checklist(biz: str, period: Dict[str, Any], checklist: Dict[str, Any]) -> None:
-    if sb_clients.sb_patch_as_service(
-            f"/accounting_periods?id=eq.{period['id']}&business_id=eq.{biz}",
-            {"close_checklist": checklist, "updated_at": datetime.now(timezone.utc).isoformat()}) is None:
-        raise HTTPException(502, "That didn't save. Try again.")
+_SAVE_TRIES = 3
+
+
+def _update_checklist(biz: str, period_id: str,
+                      change: Callable[[Dict[str, Any]], Dict[str, Any]],
+                      allow_closed: bool = False) -> Dict[str, Any]:
+    """Read, merge, write, without losing a save made at the same moment
+    (two tabs, or an owner and a manager). The write only lands if the
+    row's updated_at is still the one this merge started from; otherwise
+    it reads again and merges again."""
+    for _ in range(_SAVE_TRIES):
+        rows = _get(f"/accounting_periods?id=eq.{period_id}&business_id=eq.{biz}"
+                    f"&select=id,status,updated_at,close_checklist&limit=1")
+        if not rows:
+            raise HTTPException(404, "That month's record is gone.")
+        row = rows[0]
+        if row.get("status") == "closed" and not allow_closed:
+            raise HTTPException(409, "That month is closed. Reopen it to change its checks.")
+        merged = change(_checklist(row))
+        was = row.get("updated_at")
+        guard = f"&updated_at=eq.{quote(str(was), safe='')}" if was else "&updated_at=is.null"
+        res = sb_clients.sb_patch_as_service(
+            f"/accounting_periods?id=eq.{period_id}&business_id=eq.{biz}{guard}",
+            {"close_checklist": merged, "updated_at": datetime.now(timezone.utc).isoformat()})
+        if res is None:
+            raise HTTPException(502, "That didn't save. Try again.")
+        if res:            # the row matched: nobody saved in between
+            return merged
+    raise HTTPException(409, "Someone else saved this month at the same moment. Try again.")
 
 
 class StatementLine(BaseModel):
@@ -772,12 +799,17 @@ def save_statement(body: StatementBody, user: AuthedUser = Depends(require_user)
     allowed = {a["account_id"] for a in accts if a.get("type") in _BALANCE_TYPES}
     if any(line.account_id not in allowed for line in body.balances):
         raise HTTPException(400, "One of those accounts isn't in these books.")
-    checklist = _checklist(period)
-    statements = dict(checklist.get("statements") or {})
     stamp = datetime.now(timezone.utc).isoformat()
-    for line in body.balances:
-        statements[line.account_id] = {"balance": round(line.balance, 2), "at": stamp, "by": str(user.id)}
-    _save_checklist(biz, period, {**checklist, "statements": statements})
+
+    def add(checklist: Dict[str, Any]) -> Dict[str, Any]:
+        statements = dict(checklist.get("statements") or {})
+        for line in body.balances:
+            statements[line.account_id] = {"balance": round(line.balance, 2), "at": stamp, "by": str(user.id)}
+        return {**checklist, "statements": statements}
+    try:
+        _update_checklist(biz, str(period["id"]), add)
+    except SourceFailed as e:
+        raise HTTPException(503, f"Couldn't read your books just now ({e}).")
     return {"ok": True, "saved": len(body.balances)}
 
 
@@ -791,17 +823,17 @@ class ReviewedBody(BaseModel):
 def save_reviewed(body: ReviewedBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz = body.business_id
     biz_row = _manager(biz, user)
+    stamp = datetime.now(timezone.utc).isoformat()
+
+    def mark(checklist: Dict[str, Any]) -> Dict[str, Any]:
+        if body.reviewed:
+            return {**checklist, "reviewed": {"at": stamp, "by": str(user.id)}}
+        return {k: v for k, v in checklist.items() if k != "reviewed"}
     try:
         period = _open_period_for_answers(biz, body.month, biz_row)
+        _update_checklist(biz, str(period["id"]), mark)
     except SourceFailed as e:
         raise HTTPException(503, f"Couldn't read your books just now ({e}).")
-    checklist = _checklist(period)
-    if body.reviewed:
-        checklist = {**checklist, "reviewed": {"at": datetime.now(timezone.utc).isoformat(),
-                                               "by": str(user.id)}}
-    else:
-        checklist = {k: v for k, v in checklist.items() if k != "reviewed"}
-    _save_checklist(biz, period, checklist)
     return {"ok": True, "reviewed": body.reviewed}
 
 
@@ -824,7 +856,6 @@ def lock_month(body: LockBody, user: AuthedUser = Depends(require_user)) -> Dict
     supported = checklist_supported()
     try:
         view = build_close(biz, biz_row, body.month, with_summary=False)
-        period = _ensure_period(biz, m_start, biz_row, supported)
     except SourceFailed as e:
         raise HTTPException(503, f"Couldn't read your books just now ({e}).")
     open_steps = [s["key"] for s in view["steps"] if s["key"] != "close" and not s["done"]]
@@ -832,12 +863,18 @@ def lock_month(body: LockBody, user: AuthedUser = Depends(require_user)) -> Dict
         raise HTTPException(409, detail={
             "error": "checks_open", "open": open_steps,
             "message": f"{len(open_steps)} {_plural(len(open_steps), 'check is', 'checks are')} still open."})
+    try:   # only a close that's going ahead creates the month's record
+        period = _ensure_period(biz, m_start, biz_row, supported)
+    except SourceFailed as e:
+        raise HTTPException(503, f"Couldn't read your books just now ({e}).")
     result = accounting_periods_router.close(str(period["id"]), user)
+    # A two-signature close comes back pending, not closed: no note yet.
     if result.get("closed") and supported:
-        checklist = {**_checklist(period), "closed_with_open": open_steps,
-                     "closed_at": datetime.now(timezone.utc).isoformat()}
+        stamp = datetime.now(timezone.utc).isoformat()
         try:
-            _save_checklist(biz, period, checklist)
-        except HTTPException:   # the close stands; only the note was lost
+            _update_checklist(biz, str(period["id"]),
+                              lambda c: {**c, "closed_with_open": open_steps, "closed_at": stamp},
+                              allow_closed=True)
+        except (HTTPException, SourceFailed):   # the close stands; only the note was lost
             logger.warning(f"[bk-close] closed {biz} {body.month} but the checklist note didn't save")
     return {**result, "open": open_steps}
