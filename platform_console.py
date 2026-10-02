@@ -1319,9 +1319,13 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
 
 
 @router.get("/agents")
-async def get_agents(_owner=Depends(require_owner)):
+async def get_agents(agent: Optional[str] = None, limit: int = 20,
+                     _owner=Depends(require_owner)):
     """Registry + run history + recent findings — the whole flow in one
-    read: watchers → runs → findings → (operator log) → Business Chief."""
+    read: watchers → runs → findings → (operator log) → Business Chief.
+    `agent` narrows the findings to one agent (Mission Control → Agents
+    → What they found); `limit` is capped at 100."""
+    limit = max(1, min(int(limit or 20), 100))
     headers = _service_headers()
     runs: List[Dict[str, Any]] = []
     findings: List[Dict[str, Any]] = []
@@ -1341,9 +1345,9 @@ async def get_agents(_owner=Depends(require_owner)):
             r = await c.get(
                 f"{SUPABASE_URL}/rest/v1/platform_changelog",
                 headers=headers,
-                params={"agent": "not.is.null",
+                params={"agent": f"eq.{agent}" if agent and agent.replace("_", "").isalnum() else "not.is.null",
                         "select": "id,created_at,agent,category,title,detail,status",
-                        "order": "created_at.desc", "limit": "20"},
+                        "order": "created_at.desc", "limit": str(limit)},
             )
             if r.status_code < 400:
                 findings = r.json() or []
