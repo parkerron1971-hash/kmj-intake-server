@@ -89,7 +89,21 @@ RESIDUAL = [h for h in UNGUARDED
 # 15 minutes and works once. Every other station route resolves its
 # device token through station_from_token (a HINT in ownership_sweep).
 # The residual stays at ZERO; one deliberate public door.
-MAX_UNGUARDED_TOTAL = 47
+#
+# 47 -> 48 (merged 2026-10-02; written 2026-08-24 as 52 -> 53), and this is the raise the comment above says
+# not to make, so it carries its reason. whisper_proxy.transcribe gained
+# an OPTIONAL business_id used for one thing: naming the tenant on the
+# api_usage row, so /ai/whisper — 19.8% of the AI bill — stops being
+# unattributable. The id gates nothing and reaches no query, and it goes
+# through the same _owns_business() bool as its sibling text_to_speech,
+# which has sat on VERIFIED_BY_HAND for the identical reason since this
+# sweep was written.
+#
+# The rule the ceiling actually enforces is that this set cannot grow
+# QUIETLY. It grew loudly: a hand-read entry in ownership_sweep, a reason
+# recorded there, and this number moved in the same commit. The residual
+# ceiling below — the one that is a bug list — stays at ZERO.
+MAX_UNGUARDED_TOTAL = 48
 MAX_UNGUARDED_RESIDUAL = 0
 
 
@@ -279,8 +293,17 @@ class TestTheThreeThatWereReal:
 
 def test_the_verified_by_hand_list_does_not_grow_quietly():
     """The other way to make a zero ceiling pass. Every entry is a
-    handler someone read and justified; growing it is a decision."""
+    handler someone read and justified; growing it is a decision.
+
+    5 -> 6 on 2026-08-24: whisper_proxy.transcribe, for the same reason
+    its sibling text_to_speech has been here since this sweep was
+    written. It takes an OPTIONAL business_id used only to name the
+    tenant on an api_usage row; the id gates nothing, reaches no query,
+    and is filtered through the same _owns_business() bool — which
+    returns rather than raises, which is precisely why the gate rule
+    cannot see it. The reason is written out in ownership_sweep.py
+    alongside the other five, which is what "not quietly" means here."""
     import ownership_sweep
-    assert len(ownership_sweep.VERIFIED_BY_HAND) <= 5, (
+    assert len(ownership_sweep.VERIFIED_BY_HAND) <= 6, (
         "VERIFIED_BY_HAND grew — add the ownership check instead, or "
-        "explain the new entry the way the existing five are explained")
+        "explain the new entry the way the existing entries are explained")
