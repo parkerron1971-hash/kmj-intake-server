@@ -2211,6 +2211,12 @@ those they them their there here what which who when where why how can could
 would should will shall may might must not no all any only just more most
 about into than then so very also business chief owner
 """.split())
+# These may invalidate other sources without repeating their subject, e.g.
+# "all fetched summaries are stale". Ordinary draft/historical notes are
+# source-local labels; all other uncertainty warnings remain conservative.
+_STREAM_EVIDENCE_WARNING = re.compile(
+    r'\b(?:untrusted|stale|unverified|not verified|no current|conflict\w*|unknown|'
+    r'regardless|failed|unavailable|disregard|outdated|superseded)\b', re.I)
 
 
 def _stream_review_sources(sources, sentence, preceding, message):
@@ -2232,12 +2238,12 @@ def _stream_review_sources(sources, sentence, preceding, message):
     for sid, src in valid.items():
         text = str(src.get('text') or '')
         words = {_stem(word) for word in _words(sid + ' ' + text)}
-        # A hedge does not make an unrelated source relevant. Including every
-        # draft/historical note filled this entire budget before a sentence
-        # check could even dispatch. Matching sources still all survive,
-        # including contradictory, stale and failed evidence. Global context
-        # availability is always retained independently of sentence wording.
-        if terms & words or sid == 'context:context_quality':
+        # Draft/historical labels do not make an unrelated source relevant.
+        # Matching notes still all survive. Other uncertainty warnings can
+        # invalidate sources without repeating the sentence's subject, so
+        # retain them and global context availability independently of overlap.
+        if (terms & words or sid == 'context:context_quality'
+                or _STREAM_EVIDENCE_WARNING.search(text)):
             selected[sid] = src
     if not selected or sum(len(str(src.get('text') or '')) for src in selected.values()) > STREAM_REVIEW_EVIDENCE_CHARS:
         _prefix_review_diagnostic('evidence_budget' if selected else 'no_relevant_sources',

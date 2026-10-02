@@ -187,6 +187,31 @@ def test_global_context_quality_cannot_be_dropped_to_make_the_check_fit(monkeypa
         sources=sources, message='Which day is busiest?', business_id=None))
 
 
+def test_global_invalidation_without_shared_subject_still_reaches_reviewer(monkeypatch):
+    sources = _noisy_sources()
+    warning = {'kind': 'context', 'complete': True,
+               'text': 'All fetched summaries are stale; current database is unavailable.'}
+    sources['context:sync_status'] = warning
+    async def reviewer(client, system, messages, **kwargs):
+        payload = json.loads(messages[0]['content'])
+        assert payload['sources']['context:sync_status'] == warning
+        return json.dumps({'supported': False, 'source_id': '', 'quote': ''})
+    monkeypatch.setattr(truth, 'review_reply', reviewer)
+    assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
+        sources=sources, message='Which day is busiest?', business_id=None))
+
+
+def test_global_invalidation_cannot_be_omitted_to_fit_the_budget(monkeypatch):
+    sources = _noisy_sources()
+    sources['context:sync_status'] = {'kind': 'context', 'complete': True,
+        'text': 'All fetched summaries are stale. ' * 1000}
+    async def forbidden(*args, **kwargs):
+        raise AssertionError('uncertain global invalidation must defer early speech')
+    monkeypatch.setattr(truth, 'review_reply', forbidden)
+    assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
+        sources=sources, message='Which day is busiest?', business_id=None))
+
+
 def test_uncited_personal_forecast_still_waits_for_final_review(monkeypatch):
     # This persisted opening from the latency report is a separate gate:
     # omitting irrelevant drafts must not turn a forecast into proved fact.
