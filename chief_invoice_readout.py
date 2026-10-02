@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal, InvalidOperation
 import re
 
@@ -17,6 +18,76 @@ _BROAD_TAIL = re.compile(
     r"to show me a visual of (?:the|my|our) invoices)?"
     r"(?:\s*,?\s*so (?:that way )?I can (?:get an idea exactly |see )where things (?:are standing|stand))?"
     r"[.!?\s]*$", re.I)
+
+_DISPLAY_ONLY = re.compile(
+    r"^\s*(?:(?:ok(?:ay)?|all right|great|thanks|now)[,.!\s]+){0,5}"
+    r"(?:(?:can|could|would) you\s+)?(?:please\s+)?"
+    r"(?:show(?: me)?|list|pull up|display|open|give me)\s+"
+    r"(?:a (?:list|visual|chart|timeline) of\s+)?"
+    r"(?:(?:all|every)\s+(?:of\s+)?)?(?:(?:my|the|our)\s+)?"
+    r"(?:(?:open|paid|draft|overdue)\s+)?invoices?"
+    r"(?:\s+(?:as|in) a (?:visual|chart|list|timeline))?[.!?\s]*$", re.I)
+
+
+def invoice_display_request(message):
+    """Whole-message display intent only; advice, mutations and filters stay modeled."""
+    return bool(_DISPLAY_ONLY.fullmatch(message or ''))
+
+
+def invoice_display_evidence(taken):
+    """A bounded typed view, without trusting model labels, totals or speak prose."""
+    if not invoice_view_answer(taken):
+        return None
+    view = taken[0]
+    if len(view['rows']) > 25:
+        return None
+    rows = []
+    for row in view['rows']:
+        if any(not isinstance(row.get(key), str) or len(row[key]) > 160
+               or re.search(r'[\x00-\x1f\x7f]', row[key]) for key in ('number', 'client', 'due')):
+            return None
+        import chief_speech_boundary
+        import untrusted_text
+        if any(chief_speech_boundary.internal_scaffolding(row[key])
+               or untrusted_text.detect_injection(row[key])
+               or untrusted_text.ACTION_TAGLIKE_RE.search(row[key]) for key in ('number', 'client')):
+            return None
+        if row['due']:
+            try:
+                date.fromisoformat(row['due'])
+            except ValueError:
+                return None
+        rows.append({key: row[key] for key in ('number', 'client', 'amount', 'status', 'due')})
+    return {'view': 'invoices', 'filter': view['filter'], 'form': view['form'],
+            'limit_reached': bool(view.get('limit_reached')), 'rows': rows}
+
+
+def direct_invoice_answer(message, taken):
+    """Pure display answers are a readout of the actual card, not generated prose."""
+    if not invoice_display_request(message):
+        return None
+    data = invoice_display_evidence(taken)
+    if data is None:
+        return None
+    requested_status = re.search(r'\b(open|paid|draft|overdue)\s+invoices?\b', message, re.I)
+    if requested_status and requested_status[1].lower() != data['filter']:
+        return None
+    if not requested_status and _ALL_INVOICES.search(message) and data['filter'] != 'all':
+        return None
+    requested_form = re.search(r'\b(chart|timeline|list)\b', message, re.I)
+    if requested_form and requested_form[1].lower() != data['form']:
+        return None
+    answer = invoice_view_answer(taken)
+    lines = []
+    for row in data['rows'][:5]:
+        due = f", due {row['due']}" if row['due'] else ''
+        lines.append(f"Invoice {row['number']}, client {row['client']}: ${Decimal(str(row['amount'])):,.2f}, {row['status']}{due}.")
+    if lines:
+        answer += '\n\n' + '\n'.join(lines)
+    remaining = len(data['rows']) - len(lines)
+    if remaining:
+        answer += f'\nThe remaining {remaining} invoice' + ('s are' if remaining != 1 else ' is') + ' in the displayed view.'
+    return answer
 
 
 

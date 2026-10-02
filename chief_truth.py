@@ -2458,6 +2458,10 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):
         return chief._deterministic_fallback_reply(receipts), {'status': 'receipts', 'sources': []}
+    from chief_invoice_readout import direct_invoice_answer
+    invoice_answer = direct_invoice_answer(message, receipts)
+    if invoice_answer is not None:
+        return invoice_answer, {'status': 'records', 'sources': ['result:0']}
     if receipts and all(r.get('type') == 'link_wallet_pilot' for r in receipts):
         # This private payment rehearsal has only validated server states/URLs.
         # Its required connection/approval link must survive unavailable prose
