@@ -563,7 +563,10 @@ class _SentenceStreamer:
             accepted = await asyncio.wait_for(self._review(prefix), timeout=4.0)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            import chief_truth as _truth
+            _truth._prefix_review_diagnostic('timeout' if isinstance(exc, asyncio.TimeoutError)
+                                             else 'review_error', prefix_chars=len(prefix))
             accepted = False
         if not self.open:
             return
