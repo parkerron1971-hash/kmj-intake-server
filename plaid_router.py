@@ -574,13 +574,19 @@ def _sanitize_search(q: str) -> str:
 
 def _bucket_clause(buckets: List[str]) -> Optional[str]:
     """Build a PostgREST predicate for a 5-bucket multi-select that may
-    include the synthetic 'uncategorized' (business_category IS NULL)."""
-    wants_null = "uncategorized" in buckets
+    include the synthetic 'uncategorized'.
+
+    'uncategorized' means what every count of it means
+    (chief_bookkeeping.bookkeeping_counts, the Home nudge, the Transactions
+    hint, the Bookkeeping Overview): no bucket, OR the 'other' catch-all
+    Plaid falls back to. It used to mean NULL only, so "66 need a category,
+    tap to see just those" opened an empty list whenever the 66 were all
+    'other' (KMJ, 2026-10-01)."""
+    wants_uncat = "uncategorized" in buckets
     named = [b for b in buckets if b in plaid_categorization.ALL_BUCKETS]
-    if wants_null and named:
-        return f"or=(business_category.is.null,business_category.in.({','.join(named)}))"
-    if wants_null:
-        return "business_category=is.null"
+    if wants_uncat:
+        with_other = named + ([] if "other" in named else ["other"])
+        return f"or=(business_category.is.null,business_category.in.({','.join(with_other)}))"
     if named:
         return f"business_category=in.({','.join(named)})"
     return None
