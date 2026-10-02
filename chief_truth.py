@@ -501,6 +501,12 @@ WEATHER_UNVERIFIED_REPLY = "I couldn't verify the current weather, so I don't ha
 def _weather_assertions(reply):
     assertions = []
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
+        # An exact heading names the topic, not a condition. Keep the location
+        # shape strict so "... in Muskegon is rainy" remains an assertion.
+        if re.fullmatch(r"(?i:here(?: is|'s|\u2019s) the (?:current )?weather)"
+                        r"(?:(?i: (?:in|for) )[A-Z][A-Za-z'-]*(?:[ -][A-Z][A-Za-z'-]*)*(?:, [A-Z]{2})?)?[.!:]?",
+                        sentence.strip()):
+            continue
         # A conditional keeps its coordinated predicates: "If it is rainy
         # and windy, move indoors" describes a contingency, not conditions.
         # A separate "but/however" clause can still assert current weather.
@@ -529,13 +535,21 @@ def _weather_assertions(reply):
     return assertions
 
 
-def _weather_source(sid, source):
+def _weather_source(sid, source, assertion='', quote=''):
     if not isinstance(source, dict) or source.get('failed'):
         return False
     # Provider-delivered citations are recorded during this turn, never copied
     # from conversational history. Structured weather tools can supply records.
     if source.get('kind') == 'research' and sid.startswith(('web:https://', 'web:http://')):
         return True
+    if sid == 'tool:get_weather':
+        if source.get('kind') != 'record':
+            return False
+        try:
+            import chief_weather
+            return chief_weather.supports_claim(json.loads(source.get('text') or ''), assertion, quote)
+        except (ValueError, TypeError):
+            return False
     return (source.get('kind') == 'record'
             and bool(re.match(r'^(?:tool|lookup|read):.*weather', sid, re.I)))
 
@@ -547,7 +561,7 @@ def _weather_provenance_missing(reply, claims, sources):
             if not isinstance(claim, dict) or not isinstance(claim.get('text'), str):
                 continue
             sid = claim.get('source_id')
-            if (isinstance(sid, str) and _weather_source(sid, sources.get(sid))
+            if (isinstance(sid, str) and _weather_source(sid, sources.get(sid), assertion, claim.get('quote') or '')
                     and not _unsourced(claim)
                     and _squash(assertion).rstrip('.!?') in _squash(claim['text']).rstrip('.!?')):
                 covered = True
@@ -555,6 +569,18 @@ def _weather_provenance_missing(reply, claims, sources):
         if not covered:
             return True
     return False
+
+
+def _display_claim(text):
+    # Match a whole display assertion, never merely an "opened" fragment in
+    # "I opened an account" or a mixed display-and-payment completion claim.
+    target = (r"(?:(?:the|your|our|an?)\s+)?"
+              r"(?:(?:invoice|contact|session|product|paid|open|overdue|draft)\s+)?"
+              r"(?:view|chart|list|table|timeline|invoices?|contacts?|sessions?|products?)")
+    return bool(re.fullmatch(
+        rf"(?:{target} (?:is|are) (?:now )?(?:on (?:your|the) screen|displayed|shown)"
+        rf"|(?:I(?:'ve| have)?|we(?:'ve| have)?) (?:pulled up|opened|displayed|shown) {target}"
+        rf"|(?:I am|I'm) showing {target})(?: now| for you)?[.!]?", text.strip(), re.I))
 
 
 def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], str]:
@@ -711,6 +737,11 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                         reply, re.I):
                     return 'unsupported', [], _claim_fail('estimate without an explicit label', text_)
                 missing = set()
+            if claim['kind'] == 'action' and source.get('display_only'):
+                # A read can return a display receipt, never a sent/paid/changed
+                # invoice. Keep its authority limited to putting the view up.
+                if not _display_claim(text_):
+                    return 'unsupported', [], _claim_fail(ACTION_WITHOUT_RECEIPT, text_)
             if claim['kind'] == 'action' and source['kind'] != 'receipt':
                 return 'unsupported', [], _claim_fail(ACTION_WITHOUT_RECEIPT, text_)
             # A reviewer cannot bless a fabricated number with an unrelated
@@ -1635,12 +1666,16 @@ def evidence_for_review(ctx, view_detail, taken):
         # answered "I could not verify the explanation" (2026-09-19).
         # `effect` rides along so wrote_anything can still tell a
         # navigation from a write.
-        kind = 'receipt' if effect in (action_registry.WRITE, action_registry.UI) else 'record'
+        displayed = (item.get('type') == 'show_view' and not item.get('failed')
+                     and isinstance(item.get('rows'), list) and isinstance(item.get('columns'), list))
+        kind = 'receipt' if displayed or effect in (action_registry.WRITE, action_registry.UI) else 'record'
         text = json.dumps({k: v for k, v in item.items()
                            if k not in ('frontend_event', 'nav', 'toast')}, default=str, ensure_ascii=False)
         sources[f'result:{index}'] = {'kind': kind, 'effect': effect or 'read',
                                      'text': text[:MAX_SOURCE_CHARS],
-                                     'complete': kind == 'receipt' and len(text) <= MAX_SOURCE_CHARS}
+                                     'complete': kind == 'receipt' and len(text) <= MAX_SOURCE_CHARS
+                                                 and not (displayed and item.get('limit_reached')),
+                                     **({'display_only': True} if displayed else {})}
     # Latest results first, then context, then earlier reads. Excluded evidence
     # is unavailable to the review; it cannot be cited by guessing its ID.
     bounded, remaining = {}, MAX_EVIDENCE_CHARS
@@ -2523,6 +2558,12 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         else:
             confirmed_receipts.append(receipt)
     bits = receipt_lines(confirmed_receipts)
+    # A displayed invoice list is classified READ, not UI. Its typed cells
+    # still support a useful scoped summary when narration cannot be checked.
+    from chief_invoice_readout import invoice_view_answer
+    invoice_answer = invoice_view_answer(receipts)
+    if invoice_answer:
+        return invoice_answer, {'status': 'records', 'sources': ['result:0']}
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
     gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
@@ -2592,6 +2633,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         if not bits:
             if email_answer:
                 return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
+            if all(action_registry.effect(r.get('type') or '') == action_registry.READ for r in receipts):
+                return ("The lookup ran, but I couldn't verify an answer from its results."), {
+                    'status': 'withheld', 'sources': [], 'reason': reason}
             return ('I could not verify the explanation. '
                     'Please check the results shown.'), {'status': 'withheld', 'sources': [], 'reason': reason}
         # Only pages opened / views shown: the answer itself can still be
@@ -2665,6 +2709,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # It is safe even when the repair/review timed out or hallucinated.
         if ui_bits:
             return _above(ui_bits, _LEFT_OUT), {'status': 'receipts', 'sources': []}
+        if _weather_assertions(reply) and not receipts:
+            return WEATHER_UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [],
+                'reason': reason, 'recovery_attempted': True}
         return NO_ACTION_REPLY, {'status': 'withheld', 'sources': ['turn:execution'],
                                  'reason': reason, 'recovery_attempted': True}
     if ui_bits:

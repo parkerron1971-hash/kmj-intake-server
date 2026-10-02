@@ -219,6 +219,7 @@ from chief_link_pilot import handle_link_wallet_pilot
 from chief_lane_wallet import handle_lane_wallet
 from chief_agentcard import handle_agentcard_wallet
 from chief_site_view import handle_view_website
+from chief_weather import handle_get_weather
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -1330,6 +1331,12 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # Chief Layers arc — callers pick a lane (chat/voice/deep) via
     # chief_models.model_for; no explicit model keeps the chat default.
     model = model or CHIEF_MODEL
+    # Put weather routing in the uncached tail, including a short retry whose
+    # location lives in the preceding owner request. Keep proof review intact.
+    import chief_weather
+    if (isinstance(system, str) and any(t.get('name') == 'get_weather' for t in (read_tools or []))
+            and chief_weather.weather_turn(messages) and chief_weather.TURN_GUIDANCE not in system):
+        system += chief_weather.TURN_GUIDANCE
     # A stable tool list (2026-09-24). Tools render BEFORE the system prompt,
     # so adding or dropping web_search between turns ("which invoices…" off,
     # "help me price…" on) invalidated the whole cached prefix — the 45k-token
@@ -5531,6 +5538,8 @@ async def handle_show_view(client, biz, action) -> Dict:
         result = f"showing {len(rows)} {view}{filt_label}"
         if total is not None:
             result += f", ${total:,.2f} total"
+        if len(raw_rows) >= _SHOW_VIEW_LIMIT:
+            result += f"; this view is capped at {_SHOW_VIEW_LIMIT} rows"
 
     # The digest the second-pass reply reads — real values, capped so a
     # 25-row table doesn't flood the composer prompt.
@@ -5540,7 +5549,7 @@ async def handle_show_view(client, biz, action) -> Dict:
             over = ""
             try:
                 d = (now.date() - date.fromisoformat(r["due"])).days if r["due"] else 0
-                if d > 0 and r["status"] != "draft":
+                if d > 0 and r["status"] in ("sent", "viewed", "overdue"):
                     over = f", {d}d overdue"
             except (TypeError, ValueError):
                 pass
@@ -5570,6 +5579,7 @@ async def handle_show_view(client, biz, action) -> Dict:
         "columns": spec["columns"],
         "rows": rows,
         "summary": {"count": len(rows), **({"total": total} if total is not None else {})},
+        "limit_reached": len(raw_rows) >= _SHOW_VIEW_LIMIT,
         "speak": "; ".join(speak_lines),
         "nav": _nav(*spec["nav"]),
     }
@@ -11549,6 +11559,7 @@ ACTION_HANDLERS = {
     "lane_wallet":           handle_lane_wallet,
     "agentcard_wallet":      handle_agentcard_wallet,
     "view_website":          handle_view_website,
+    "get_weather":           handle_get_weather,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,
@@ -12649,6 +12660,9 @@ async def _execute_actions(client, biz, actions: List[Dict],
         # create_invoice → send_invoice in one turn without knowing the
         # freshly-minted UUID.
         resolved = _resolve_action_references(action, _reference_pool())
+        if prompted and owner_text:
+            from chief_invoice_readout import owner_invoice_scope
+            resolved = owner_invoice_scope(resolved, owner_text)
         if atype in ("learn_business", "correct_business_knowledge", "capture_business_knowledge"):
             # Never trust a model-supplied provenance field. Only an actual
             # current owner message can establish an owner fact.
@@ -14428,6 +14442,21 @@ async def chief_chat(
                 if recovered is not None:
                     logger.info("Chief recovered completed stream result")
                     return recovered
+
+            # Call feedback cannot authorize a new action or an unrelated
+            # correction from old history. The scoped context/replay checks above
+            # still apply; answer these exact messages without another model pass.
+            import chief_call_feedback
+            feedback = chief_call_feedback.for_request(req)
+            if feedback is not None:
+                result = {"response": feedback, "actions_taken": [],
+                          "grounding": {"status": "acknowledged", "sources": []}}
+                await _archive_turn(client, biz, req.message, feedback, [])
+                if _STREAM_SINK.get() is not None:
+                    chief_stream_replay.remember(req, user_session.user.id, result)
+                _t.log(lane=chief_models.lane_for_chat(req.mode or "", req.client_surface or ""),
+                       streamed=_STREAM_SINK.get() is not None)
+                return result
 
             is_greeting = _is_greeting(req.message)
             # Room orientation turns (first visit / the door / the walk)

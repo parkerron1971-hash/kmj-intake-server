@@ -115,3 +115,15 @@ def test_real_chat_wires_bounded_recovery(monkeypatch, surface):
     assert result['response'] == 'Which invoice should I text?'
     assert result['grounding']['recovered'] and not result['actions_taken']
     repairer.assert_awaited_once()
+
+
+def test_failed_current_weather_repair_does_not_offer_empty_retry_loop():
+    draft = "It is raining in Muskegon right now."
+    raw = json.dumps({"verdict": "unsupported", "claims": [
+        {"text": draft, "kind": "fact", "source_id": "", "quote": ""}]})
+    reply, meta = asyncio.run(truth.finalize_reply(None, draft, ctx={}, view_detail="",
+        taken=[], message="What is the current weather in Muskegon?", business_id="test",
+        reviewer=AsyncMock(return_value=raw), repairer=AsyncMock(return_value="")))
+    assert reply == truth.WEATHER_UNVERIFIED_REPLY
+    assert meta["recovery_attempted"] and meta["status"] == "withheld"
+    assert "No action ran" not in reply and "try again" not in reply
