@@ -16,7 +16,7 @@ The ratchet: a verb in ACTION_HANDLERS must be either
 
   (a) NAMED IN THE PROMPT REGION — the practitioner can invoke it in
       conversation, or
-  (b) ON THE TOOL-LOOP SURFACE (the MCP read set) — Chief reaches it
+  (b) ON THE TOOL-LOOP SURFACE (MCP or Chief-only native reads) — Chief reaches it
       mid-thought without needing a tag.
 
 No third bucket, no hand-kept exception list to rot. A future PR that
@@ -34,6 +34,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from __tests__._chief_source import chief_source  # noqa: E402
 import chief_of_staff as cos
 import mcp_server
+import chief_tool_loop
 
 
 def _prompt_region() -> str:
@@ -87,6 +88,8 @@ def _documented_verbs() -> set:
 def test_every_verb_has_words_or_a_tool_path():
     documented = _documented_verbs()
     tool_surface = set(mcp_server.exposed_tools())
+    # Chief-only native reads are callable without exposing them to MCP agents.
+    tool_surface.update(tool['name'] for tool in chief_tool_loop.read_tool_definitions())
     wordless = sorted(
         v for v in cos.ACTION_HANDLERS
         if v not in documented and v not in tool_surface

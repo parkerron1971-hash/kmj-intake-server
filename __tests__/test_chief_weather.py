@@ -10,6 +10,17 @@ import chief_weather as weather
 
 
 NOW = datetime.now(timezone.utc)
+@pytest.fixture(autouse=True)
+def fixed_weather_clock(monkeypatch):
+    # Collection can precede execution by minutes in the full suite.
+    # Keep future/stale fixtures relative to the same deterministic clock.
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+    monkeypatch.setattr(weather, 'datetime', FixedDateTime)
+
+
 STAMP = (NOW - timedelta(minutes=20)).isoformat()
 FORECAST = 'https://api.weather.gov/gridpoints/GRR/20,58/forecast'
 STATIONS = 'https://api.weather.gov/gridpoints/GRR/20,58/stations'
