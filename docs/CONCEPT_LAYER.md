@@ -85,8 +85,12 @@ When the approved blueprint says `INTENSITY: world` with `SCOPE: offer`:
 4. `public_site` serves it at its path, lists it in the sitemap and
    previews it at `/public/site/{slug}/offer`; the Studio names it for the
    offer; `site_check` looks at it.
-5. A later blueprint without an offer scope removes it. It costs one extra
-   builder run, only for owners who pick it.
+5. A later blueprint without an offer scope removes it.
+6. **Price:** it is part of the build that makes it: one build, one charge,
+   `pricing_config.offer_page_price()` (default 300 credits, dial
+   `OFFER_PAGE_PRICE`, 0 = free) larger, added only when the page was
+   actually built (`site_composer.build_charge`). Its model cost is about
+   one more builder run (around $2).
 
 ## Switches
 
