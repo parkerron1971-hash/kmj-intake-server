@@ -3,10 +3,10 @@ title: Chief retrieves timestamped weather directly
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Weather keeps searching old pages and asking to retry"
-status: in progress
+status: shipped
 prs: []
 migrations: []
-left_undone: ["Parent integration and deployment", "Production voice confirmation"]
+left_undone: ["Human production voice confirmation"]
 decisions: ["NWS public API, no paid geocoder", "Current observations and forecasts remain separate evidence", "No business writes in weather evaluation"]
 ---
 Added a Chief-only get_weather read through the existing registry/tool handler and
