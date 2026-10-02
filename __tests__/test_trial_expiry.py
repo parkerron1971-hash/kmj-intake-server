@@ -30,7 +30,7 @@ class _Resp:
 class FakeDB:
     def __init__(self, rows, read_status=200, patch_lands=True):
         self.rows, self.read_status, self.patch_lands = rows, read_status, patch_lands
-        self.gets, self.patches, self.posts = [], [], []
+        self.gets, self.patches, self.posts, self.runs = [], [], [], []
 
     async def __aenter__(self):
         return self
@@ -47,7 +47,7 @@ class FakeDB:
         return _Resp(200, [{"id": params["id"]}] if self.patch_lands else [])
 
     async def post(self, url, headers=None, json=None):
-        self.posts.append(json)
+        (self.runs if "platform_agent_runs" in url else self.posts).append(json)
         return _Resp(201, None)
 
 
@@ -70,6 +70,8 @@ def test_a_lapsed_app_trial_becomes_canceled_like_a_stripe_trial(monkeypatch):
     assert params["trial_ends_at"].startswith("lt.")
     [note] = db.posts
     assert note["title"] == "Trial ended: SM&M Infinite Affairs"
+    [r] = db.runs
+    assert r["agent"] == "trial_expiry" and r["ok"] is True and r["findings"] == 1
 
 
 def test_only_app_trials_without_comp_are_read(monkeypatch):
@@ -88,12 +90,17 @@ def test_a_trial_extended_at_the_same_moment_is_left_alone(monkeypatch):
     out = run(monkeypatch, db)
     assert out == {"ok": True, "expired": []}
     assert db.posts == []
+    # A quiet pass still leaves its run row, so the Agents card shows it ran.
+    [r] = db.runs
+    assert r["findings"] == 0 and r["summary"] == "no app trials past their end"
 
 
 def test_a_failed_read_changes_nothing(monkeypatch):
     db = FakeDB([], read_status=500)
     out = run(monkeypatch, db)
     assert out["ok"] is False and db.patches == []
+    [r] = db.runs
+    assert r["ok"] is False
 
 
 def test_kill_switch(monkeypatch):

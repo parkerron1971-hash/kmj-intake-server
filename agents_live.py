@@ -23,6 +23,7 @@ seconds so a page polling every 30 seconds costs a handful of API calls.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -166,7 +167,8 @@ def _be_event(row: Dict[str, Any], names: Dict[str, str]) -> Dict[str, Any]:
 
 
 def tally(feed: List[Dict[str, Any]], runs: List[Dict[str, Any]], now: datetime) -> Dict[str, int]:
-    """Pure: today's (UTC) counts."""
+    """Pure: today's (UTC) counts. `runs` must hold all of today's support_desk
+    runs that drafted something; the feed window alone loses them by evening."""
     day = now.strftime("%Y-%m-%d")
     today = [e for e in feed if (e.get("at") or "").startswith(day)]
     drafted = sum(int(((r.get("details") or {}).get("drafted")) or 0) for r in runs
@@ -178,6 +180,28 @@ def tally(feed: List[Dict[str, Any]], runs: List[Dict[str, Any]], now: datetime)
         "findings_raised": sum(1 for e in today if e["status"] == "found"),
         "failed_runs": sum(1 for e in today if e["status"] == "failed"),
     }
+
+
+async def _latest_run(c: httpx.AsyncClient, headers: Dict[str, str], agent: str) -> Optional[Dict[str, Any]]:
+    try:
+        r = await c.get(f"{SUPABASE_URL}/rest/v1/platform_agent_runs", headers=headers, params={
+            "select": "agent,started_at,finished_at,ok,findings,summary,details",
+            "agent": f"eq.{agent}", "order": "started_at.desc", "limit": "1"})
+        rows = r.json() if r.status_code < 400 else []
+    except Exception:
+        return None
+    return next((x for x in rows or [] if x.get("agent") == agent), None)
+
+
+async def _drafting_runs_today(c: httpx.AsyncClient, headers: Dict[str, str], now: datetime) -> List[Dict[str, Any]]:
+    try:
+        r = await c.get(f"{SUPABASE_URL}/rest/v1/platform_agent_runs", headers=headers, params={
+            "select": "agent,started_at,details", "agent": "eq.support_desk",
+            "findings": "gt.0", "started_at": f"gte.{now.strftime('%Y-%m-%dT00:00:00Z')}",
+            "limit": "1000"})
+        return r.json() if r.status_code < 400 else []
+    except Exception:
+        return []
 
 
 async def snapshot(now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -215,10 +239,20 @@ async def snapshot(now: Optional[datetime] = None) -> Dict[str, Any]:
                     ev = _gh_event(a, repo, run)
                     if ev["status"] != "skipped":
                         feed.append(ev)
+        # The window above is the newest 200 rows, and the support desk alone
+        # writes 288 a day, so by evening a once-a-day agent's run has
+        # fallen out of it and its card would read "not run yet". Fetch
+        # the latest run of any backend agent the window missed.
+        latest = {a["id"]: next((x for x in runs if x.get("agent") == a["id"]), None)
+                  for a in AGENTS if a["source"] == "backend"}
+        missing = [k for k, v in latest.items() if v is None]
+        found = await asyncio.gather(*(_latest_run(c, headers, k) for k in missing))
+        latest.update({k: v for k, v in zip(missing, found) if v})
+        drafted_today = await _drafting_runs_today(c, headers, now)
     for a in AGENTS:
         last: Optional[Dict[str, Any]] = None
         if a["source"] == "backend":
-            row = next((x for x in runs if x.get("agent") == a["id"]), None)
+            row = latest.get(a["id"])
             if row:
                 last = _be_event(row, names)
         if not last and gh_runs.get(a["id"]):
@@ -233,7 +267,7 @@ async def snapshot(now: Optional[datetime] = None) -> Dict[str, Any]:
     feed.sort(key=lambda e: e.get("at") or "", reverse=True)
     warnings = [_gh_problem["text"]] if _gh_problem["text"] else []
     return {"generated_at": now.isoformat(), "agents": cards, "feed": feed[:60],
-            "today": tally(feed, runs, now), "warnings": warnings}
+            "today": tally(feed, drafted_today, now), "warnings": warnings}
 
 
 async def run(agent_id: str) -> Dict[str, Any]:
