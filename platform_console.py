@@ -1206,6 +1206,18 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_agent_runs (every tick), platform_changelog (findings only)",
     },
     {
+        "id": "chief_quality",
+        "name": "Chief quality & cost",
+        "kind": "watcher",
+        "beat": "Every night: Chief's turns, cost per reply, time to first word, speed "
+                "target met, errors, escalations and cache hits against the week before; "
+                "where the money went; today's spend against the cap. Flags cost per reply "
+                "up 40%+, speed or cache slipping, 5%+ errors, spend at 70% of the cap. The "
+                "turn, factual and advice evals run weekly on GitHub.",
+        "schedule": "daily 07:00 UTC; evals Mondays",
+        "writes_to": "platform_agent_runs (every run), platform_changelog (flags only)",
+    },
+    {
         "id": "money_auditor",
         "name": "Money auditor",
         "kind": "watcher",
@@ -1284,6 +1296,13 @@ async def run_hermes_now(_owner=Depends(require_owner)):
     """Manual tick from the console — same pass the hourly schedule runs."""
     from hermes_agent import hermes_tick
     return await hermes_tick()
+
+
+@router.post("/agents/chief-quality/run")
+async def run_chief_quality_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the nightly schedule."""
+    from chief_quality import quality_tick
+    return await quality_tick()
 
 
 @router.post("/agents/money-auditor/run")
