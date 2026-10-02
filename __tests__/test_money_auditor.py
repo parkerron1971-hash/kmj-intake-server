@@ -15,7 +15,33 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import money_auditor as ma
 
-NOW = datetime(2026, 10, 1, 10, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 5, 10, 0, tzinfo=timezone.utc)
+
+# What Stripe says about each subscription in these tests (check 9).
+STRIPE = {"sub_1": "active", "sub_2": "past_due", "sub_t3": "trialing", "sub_t4": "trialing",
+          "sub_m": "active", "sub_c": "active"}
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def fake_stripe(monkeypatch):
+    monkeypatch.setattr(ma, "_stripe_key", lambda: "sk_test_x")
+
+    async def sub(sub_id):
+        return {"status": STRIPE[sub_id]} if sub_id in STRIPE else None
+
+    monkeypatch.setattr(ma, "_stripe_subscription", sub)
+
+    async def latest():
+        return LATEST.get("event")
+
+    monkeypatch.setattr(ma, "_stripe_latest_event", latest)
+    LATEST.clear()
+
+
+LATEST: dict = {}
 
 
 class _Resp:
@@ -49,6 +75,8 @@ class FakeDB:
             rows = [r for r in rows if not r.get("processed_error")]
         if p.get("processed_at") == "is.null":
             rows = [r for r in rows if not r.get("processed_at")]
+        if p.get("stripe_subscription_id") == "not.is.null":
+            rows = [r for r in rows if r.get("stripe_subscription_id")]
         return _Resp(200, rows)
 
     async def post(self, url, headers=None, json=None):
@@ -81,11 +109,38 @@ def test_quiet_when_the_rails_are_right(monkeypatch):
     assert result["details"]["unseen"] == []
 
 
-def test_subscriptions_without_any_recorded_webhook_is_flagged(monkeypatch):
-    """The 2026-10-01 discovery: 0 events ever, while businesses pay."""
+def test_stripe_sent_an_event_the_log_never_recorded(monkeypatch):
+    """The 2026-10-01 discovery: Stripe delivered, the log stayed empty."""
+    LATEST["event"] = {"type": "invoice.payment_failed",
+                       "created": int((NOW - timedelta(days=2)).timestamp())}
+    db = FakeDB(businesses=[], stripe_webhook_events=[], credit_ledger=[])
+    result = run(db, {"price_pro": "professional"}, monkeypatch)
+    [f] = [f for f in result["findings"] if f["code"] == "webhooks:not_recorded"]
+    assert "none, ever" in f["detail"]
+
+
+def test_events_from_before_the_log_could_record_are_not_an_alarm(monkeypatch):
+    """Sep 18's events were lost to the old table shape; they can't be recovered."""
+    LATEST["event"] = {"type": "invoice.payment_failed",
+                       "created": int(datetime(2026, 9, 18, 8, 0, tzinfo=timezone.utc).timestamp())}
+    db = FakeDB(businesses=[], stripe_webhook_events=[], credit_ledger=[])
+    assert "webhooks:not_recorded" not in codes(run(db, {"p": "starter"}, monkeypatch))
+
+
+def test_quiet_week_with_an_empty_log_is_not_an_alarm(monkeypatch):
+    """No Stripe events since the log started recording: nothing to flag."""
+    LATEST["event"] = {"type": "invoice.paid",
+                       "created": int((NOW - timedelta(days=2)).timestamp())}
+    db = FakeDB(businesses=[], credit_ledger=[], stripe_webhook_events=[
+        {"id": "evt_x", "received_at": (NOW - timedelta(days=2)).isoformat()}])
+    assert not {"webhooks:not_recorded", "webhooks:never_recorded"} & codes(
+        run(db, {"p": "starter"}, monkeypatch))
+
+
+def test_without_stripe_live_subscriptions_and_an_empty_log_are_flagged(monkeypatch):
+    monkeypatch.setattr(ma, "_stripe_key", lambda: "")
     db = FakeDB(businesses=[{"id": "b1", "name": "Acme", "subscription_status": "active",
-                             "subscription_plan": "price_pro",
-                             "stripe_subscription_id": "sub_1"}],
+                             "subscription_plan": "price_pro", "stripe_subscription_id": "sub_1"}],
                 stripe_webhook_events=[], credit_ledger=[])
     assert "webhooks:never_recorded" in codes(run(db, {"price_pro": "professional"}, monkeypatch))
 
@@ -116,25 +171,33 @@ def test_stuck_webhook(monkeypatch):
 def test_trial_that_ended_but_still_reads_trialing(monkeypatch):
     db = FakeDB(businesses=[
         {"id": "b3", "name": "Old trial", "subscription_status": "trialing",
-         "trial_ends_at": (NOW - timedelta(days=3)).isoformat(), "subscription_plan": "price_pro"},
+         "trial_ends_at": (NOW - timedelta(days=3)).isoformat(), "subscription_plan": "price_pro",
+         "stripe_subscription_id": "sub_t3"},
         {"id": "b4", "name": "Fresh trial", "subscription_status": "trialing",
-         "trial_ends_at": (NOW + timedelta(days=3)).isoformat(), "subscription_plan": "price_pro"},
+         "trial_ends_at": (NOW + timedelta(days=3)).isoformat(), "subscription_plan": "price_pro",
+         "stripe_subscription_id": "sub_t4"},
+        {"id": "b5", "name": "App trial", "subscription_status": "trialing",
+         "trial_ends_at": (NOW - timedelta(days=30)).isoformat()},
     ], stripe_webhook_events=[{"id": "evt"}], credit_ledger=[])
     result = run(db, {"price_pro": "professional"}, monkeypatch)
     [f] = [f for f in result["findings"] if f["code"] == "subs:trial_overrun"]
     assert "Old trial" in f["detail"] and "Fresh trial" not in f["detail"]
+    assert "App trial" not in f["detail"], "app trials are trial_expiry's job"
 
 
 def test_paying_on_an_unrecognised_price_but_not_comped(monkeypatch):
     db = FakeDB(businesses=[
         {"id": "b5", "name": "Mystery", "subscription_status": "active",
-         "subscription_plan": "price_old"},
+         "subscription_plan": "price_old", "stripe_subscription_id": "sub_m"},
         {"id": "b6", "name": "Comped", "subscription_status": "active",
-         "subscription_plan": "price_old", "comp_tier": "professional"},
+         "subscription_plan": "price_old", "comp_tier": "professional",
+         "stripe_subscription_id": "sub_c"},
+        {"id": "b10", "name": "Not paying", "subscription_status": "trialing"},
     ], stripe_webhook_events=[{"id": "evt"}], credit_ledger=[])
     result = run(db, {"price_pro": "professional"}, monkeypatch)
     [f] = [f for f in result["findings"] if f["code"] == "subs:plan_unrecognised"]
     assert "Mystery" in f["detail"] and "Comped" not in f["detail"]
+    assert "Not paying" not in f["detail"], "no Stripe subscription, so not paying"
 
 
 def test_negative_credit_balance(monkeypatch):
@@ -184,3 +247,42 @@ class _Ctx:
 
     async def __aexit__(self, *a):
         return False
+
+
+def test_database_disagreeing_with_stripe_is_flagged(monkeypatch):
+    """Creative Genius: cancelled in Stripe, past_due here."""
+    STRIPE["sub_cg"] = "canceled"
+    try:
+        db = FakeDB(businesses=[{"id": "b9", "name": "Creative Genius",
+                                 "subscription_status": "past_due",
+                                 "stripe_subscription_id": "sub_cg"}],
+                    stripe_webhook_events=[{"id": "evt"}], credit_ledger=[])
+        result = run(db, {"p": "starter"}, monkeypatch)
+        [f] = [f for f in result["findings"] if f["code"] == "subs:stripe_mismatch"]
+        assert "Creative Genius (here past_due, Stripe canceled)" in f["detail"]
+    finally:
+        STRIPE.pop("sub_cg")
+
+
+def test_incomplete_expired_counts_as_canceled(monkeypatch):
+    STRIPE["sub_ie"] = "incomplete_expired"
+    try:
+        db = FakeDB(businesses=[{"id": "b8", "name": "Never paid",
+                                 "subscription_status": "canceled",
+                                 "stripe_subscription_id": "sub_ie"}],
+                    stripe_webhook_events=[{"id": "evt"}], credit_ledger=[])
+        assert "subs:stripe_mismatch" not in codes(run(db, {"p": "starter"}, monkeypatch))
+    finally:
+        STRIPE.pop("sub_ie")
+
+
+def test_stripe_unreadable_or_no_key_is_unseen(monkeypatch):
+    db = FakeDB(businesses=[{"id": "b7", "name": "Ghost", "subscription_status": "active",
+                             "stripe_subscription_id": "sub_unknown"}],
+                stripe_webhook_events=[{"id": "evt"}], credit_ledger=[])
+    result = run(db, {"p": "starter"}, monkeypatch)
+    assert "subs:stripe_mismatch" not in codes(result)
+    assert any("unreadable" in u for u in result["details"]["unseen"])
+    monkeypatch.setattr(ma, "_stripe_key", lambda: "")
+    result = run(db, {"p": "starter"}, monkeypatch)
+    assert any("no STRIPE_SECRET_KEY" in u for u in result["details"]["unseen"])

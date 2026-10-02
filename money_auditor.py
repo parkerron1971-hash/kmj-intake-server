@@ -24,6 +24,8 @@ THE BEAT (each run):
      subscription whose Stripe price maps to no tier and has no comp
      override, so the business silently gets no plan features.
   8. Negative prepaid credit balances.
+  9. The database disagrees with Stripe about a subscription's status
+     (read-only GET per subscription; Stripe is the record of truth).
 
 NOT YET: gifts vs payouts (ministry giving reconciliation) needs a
 decision on which side is the record of truth; it stays a named gap.
@@ -80,6 +82,58 @@ async def _rows(c: httpx.AsyncClient, headers: Dict[str, str], table: str,
     return None
 
 
+STRIPE_COMPARE_LIMIT = 200
+
+# The webhook log could not record anything before this (the table had the
+# wrong shape until APPLY-2026-10-01-stripe-webhook-events-shape.sql, applied
+# 2026-10-01 ~10:45 UTC). Events Stripe sent earlier are lost for good, so
+# only later ones count as "sent but not recorded".
+WEBHOOK_LOG_SINCE = datetime(2026, 10, 1, 11, 0, tzinfo=timezone.utc)
+
+# Stripe statuses that mean the same thing as a status we store.
+_STRIPE_EQUIVALENT = {"incomplete_expired": "canceled"}
+
+
+def _stripe_key() -> str:
+    return (os.environ.get("STRIPE_SECRET_KEY") or "").strip()
+
+
+async def _stripe_subscription(sub_id: str) -> Optional[Dict[str, Any]]:
+    """A subscription as Stripe holds it now (read-only), or None."""
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as s:
+            r = await s.get(f"https://api.stripe.com/v1/subscriptions/{sub_id}",
+                            auth=(_stripe_key(), ""))
+        if r.status_code < 400:
+            return r.json()
+        logger.warning(f"Stripe subscription {sub_id} read {r.status_code}")
+    except Exception as e:
+        logger.warning(f"Stripe subscription {sub_id} read failed: {e}")
+    return None
+
+
+async def _stripe_latest_event() -> Optional[Dict[str, Any]]:
+    """Stripe's most recent event (read-only), or None."""
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as s:
+            r = await s.get("https://api.stripe.com/v1/events", params={"limit": 1},
+                            auth=(_stripe_key(), ""))
+        if r.status_code < 400:
+            data = (r.json() or {}).get("data") or []
+            return data[0] if data else None
+        logger.warning(f"Stripe events read {r.status_code}")
+    except Exception as e:
+        logger.warning(f"Stripe events read failed: {e}")
+    return None
+
+
+def _when(value: Any) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _names(rows: List[Dict[str, Any]], limit: int = 5) -> str:
     names = [(r.get("name") or r.get("id") or "?") for r in rows[:limit]]
     more = f" and {len(rows) - limit} more" if len(rows) > limit else ""
@@ -114,22 +168,44 @@ async def audit(c: httpx.AsyncClient, headers: Dict[str, str],
     details["subscriptions"] = dict(Counter(
         (b.get("subscription_status") or "?") for b in subs))
 
-    # 1. Is the webhook log recording at all?
-    ever = await _rows(c, headers, "stripe_webhook_events",
-                       {"select": "id", "limit": "1"})
-    if ever is None:
+    # 1. Is the webhook log recording what Stripe sends? Compared with
+    #    Stripe's own latest event when the key is available: an empty log
+    #    is fine on a quiet week, and only a sent-but-unrecorded event is
+    #    a problem. Without the key, fall back to "live subscriptions but
+    #    an empty log".
+    latest_log = await _rows(c, headers, "stripe_webhook_events",
+                             {"select": "id,received_at", "order": "received_at.desc",
+                              "limit": "1"})
+    if latest_log is None:
         unseen.append("webhook log")
     else:
-        details["webhook_events_recorded"] = bool(ever)
-        if not ever and any(b.get("stripe_subscription_id") for b in subs):
+        details["webhook_events_recorded"] = bool(latest_log)
+        logged_at = _when(latest_log[0].get("received_at")) if latest_log else None
+        latest = await _stripe_latest_event() if _stripe_key() else None
+        if latest is not None:
+            sent_at = datetime.fromtimestamp(int(latest.get("created") or 0), timezone.utc)
+            details["stripe_latest_event"] = sent_at.isoformat()
+            settled = (WEBHOOK_LOG_SINCE <= sent_at
+                       < now - timedelta(minutes=STUCK_MINUTES))
+            if settled and (logged_at is None or logged_at < sent_at - timedelta(minutes=5)):
+                find("webhooks:not_recorded",
+                     "Money: Stripe sent events that were never recorded",
+                     f"Stripe's latest event ({latest.get('type')}, {sent_at:%Y-%m-%d %H:%M} UTC) "
+                     f"is not in the webhook log (latest recorded: "
+                     f"{logged_at.strftime('%Y-%m-%d %H:%M') + ' UTC' if logged_at else 'none, ever'}). "
+                     "Without the log Stripe retries are not caught (a retried checkout "
+                     "can be processed twice). Check the Stripe dashboard's webhook "
+                     "deliveries for errors, and that "
+                     "APPLY-2026-10-01-stripe-webhook-events-shape.sql is applied.")
+        elif not latest_log and any(
+                b.get("stripe_subscription_id")
+                and b.get("subscription_status") in ("active", "trialing", "past_due")
+                for b in subs):
             find("webhooks:never_recorded",
-                 "Money: Stripe webhooks are not being recorded",
-                 "Businesses hold Stripe subscriptions, but the webhook log has "
-                 "no events at all. Without it Stripe retries are not caught "
-                 "(a retried checkout can be processed twice) and failed "
-                 "payments are invisible here. Check that "
-                 "APPLY-2026-10-01-stripe-webhook-events-shape.sql is applied, "
-                 "then the Stripe dashboard's webhook delivery log.")
+                 "Money: Stripe webhooks may not be recorded",
+                 "Live Stripe subscriptions exist but the webhook log is empty, and "
+                 "Stripe itself could not be checked. Check the Stripe dashboard's "
+                 "webhook deliveries.")
 
     since_24h = (now - timedelta(hours=24)).isoformat()
 
@@ -196,7 +272,10 @@ async def audit(c: httpx.AsyncClient, headers: Dict[str, str],
     grace = now - timedelta(hours=TRIAL_GRACE_HOURS)
     overrun = []
     for b in subs:
-        if b.get("subscription_status") != "trialing" or not b.get("trial_ends_at"):
+        # Stripe trials only: a trial given in the app has no subscription
+        # to update it and is ended by trial_expiry.py instead.
+        if (b.get("subscription_status") != "trialing" or not b.get("trial_ends_at")
+                or not b.get("stripe_subscription_id")):
             continue
         try:
             ends = datetime.fromisoformat(str(b["trial_ends_at"]).replace("Z", "+00:00"))
@@ -222,7 +301,8 @@ async def audit(c: httpx.AsyncClient, headers: Dict[str, str],
         unseen.append("plan prices (no STRIPE_PRICE_ID_* configured)")
     else:
         unknown = [b for b in subs
-                   if b.get("subscription_status") in ("active", "trialing")
+                   if b.get("stripe_subscription_id")
+                   and b.get("subscription_status") in ("active", "trialing")
                    and not (b.get("comp_tier") or "").strip()
                    and (b.get("subscription_plan") or "") not in known]
         details["plan_unrecognised"] = len(unknown)
@@ -232,6 +312,43 @@ async def audit(c: httpx.AsyncClient, headers: Dict[str, str],
                  f"{_names(unknown)}. Their Stripe price maps to no tier and there is "
                  "no comp override, so they get no plan features while paying. "
                  "Check the STRIPE_PRICE_ID_* settings against Stripe.")
+
+    # 9. The database agrees with Stripe. Creative Genius (2026-10-01):
+    #    cancelled in Stripe on Sep 17, still `past_due` here two weeks
+    #    later, because two same-second webhooks applied in the wrong
+    #    order. Stripe is the record of truth for a subscription.
+    linked = await _rows(c, headers, "businesses", {
+        "select": "id,name,subscription_status,stripe_subscription_id",
+        "stripe_subscription_id": "not.is.null", "limit": "500"})
+    if linked is None:
+        unseen.append("Stripe comparison (businesses)")
+    elif not linked:
+        details["stripe_mismatch"] = 0
+    elif not _stripe_key():
+        unseen.append("Stripe comparison (no STRIPE_SECRET_KEY)")
+    else:
+        mismatched, unreadable = [], 0
+        for b in linked[:STRIPE_COMPARE_LIMIT]:
+            sub = await _stripe_subscription(b["stripe_subscription_id"])
+            if sub is None:
+                unreadable += 1
+                continue
+            theirs = _STRIPE_EQUIVALENT.get(sub.get("status"), sub.get("status"))
+            ours = b.get("subscription_status")
+            if theirs != ours:
+                mismatched.append(f"{b.get('name') or b['id']} (here {ours or 'none'}, "
+                                  f"Stripe {sub.get('status')})")
+        details["stripe_mismatch"] = len(mismatched)
+        if unreadable:
+            unseen.append(f"Stripe comparison ({unreadable} unreadable)")
+        if mismatched:
+            find("subs:stripe_mismatch",
+                 f"Money: {_plural(len(mismatched), 'business')} disagree with Stripe",
+                 "; ".join(mismatched[:5])
+                 + (f"; and {len(mismatched) - 5} more" if len(mismatched) > 5 else "")
+                 + ". Stripe is the record of truth: access and seats here follow "
+                 "the database, so these businesses get the wrong access until "
+                 "corrected.")
 
     # 8. Negative prepaid credit balances.
     credits = await _rows(c, headers, "credit_ledger", {
