@@ -24,11 +24,10 @@ def eligible(req):
         return False
     if (getattr(req, 'mode', None) or '') not in ('', 'chief'):
         return False
-    if getattr(req, 'image_ids', None) or getattr(req, 'intent', None) == 'build':
+    if getattr(req, 'image_ids', None):
         return False
-    view = getattr(req, 'current_context', None)
-    if view is not None and any(getattr(view, name, None) for name in (
-            'viewing_contact_id', 'viewing_module_id', 'viewing_session_id')):
+    from chief_shortcut_scope import constrained
+    if constrained(req, 'plan'):
         return False
     # Whole-request grammar: constraints or extra asks are never silently lost.
     text = re.sub(r'\s+', ' ', str(getattr(req, 'message', '') or '')).strip()

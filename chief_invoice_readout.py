@@ -39,6 +39,9 @@ def request_action(req):
     """Only an explicit, self-contained display request can skip model planning."""
     if getattr(req, 'image_ids', None) or (getattr(req, 'mode', None) or '') not in ('', 'chief'):
         return None
+    from chief_shortcut_scope import constrained
+    if constrained(req, 'invoice'):
+        return None
     message = getattr(req, 'message', '') or ''
     if not invoice_display_request(message):
         return None

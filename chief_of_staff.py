@@ -14632,6 +14632,7 @@ async def chief_chat(
                 await preparation.clear()
                 prep_sources = []
                 prep_learned = None
+                warm = {}  # cached values may depend on the old type/settings
             if not prep_sources:
                 _start_preparation(biz)
             _t.warm = len(warm or {})
