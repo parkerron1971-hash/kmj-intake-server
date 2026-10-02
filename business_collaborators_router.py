@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import ledger_unlock
 import sb_clients
+import bank_money
 from auth_supabase import AuthedUser, require_user
 import billing_limits
 
@@ -95,7 +96,7 @@ def accountant_overview(biz: str, user: AuthedUser = Depends(require_user)) -> D
     uncategorized = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{biz}&pending=eq.false"
         f"&excluded_from_books=eq.false"
-        f"&or=(business_category.is.null,business_category.eq.other)"
+        f"&{bank_money.uncategorized_filter()}"
         f"&select=transaction_id&limit=500") or []
     recent_jes = sb_clients.sb_get_as_service(
         f"/journal_entries?business_id=eq.{biz}&status=eq.active"

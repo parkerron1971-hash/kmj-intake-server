@@ -33,6 +33,7 @@ import llm_call
 import sb_clients
 import chief_bookkeeping
 import plaid_categorization
+import bank_money
 
 logger = logging.getLogger("chief_llm")
 
@@ -361,7 +362,7 @@ def _hard_candidates(business_id: str, *, limit: int = _HARD_BATCH_LIMIT) -> Lis
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{business_id}&{acct}"
         f"&excluded_from_books=eq.false&pending=eq.false&amount=gt.0"
-        f"&or=(business_category.is.null,business_category.eq.other)"
+        f"&{bank_money.uncategorized_filter()}"
         f"&order=date.desc&limit=60"
         f"&select=transaction_id,amount,date,name,merchant_name,business_category,"
         f"plaid_category_primary,plaid_category_detail") or []
