@@ -37,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
@@ -52,7 +52,6 @@ router = APIRouter(prefix="/bookkeeping", tags=["bookkeeping"])
 TRANSFER_WINDOW_DAYS = 3
 SYNC_STALE_DAYS = 3
 QUEUE_STALE_MINUTES = 30
-_TX_LIMIT = 20000
 _MATCHED = ("auto_matched", "manual_matched")
 _OPEN_BILL = ("pending", "scheduled", "overdue")
 _NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven",
@@ -73,6 +72,27 @@ def _get(path: str) -> List[Dict[str, Any]]:
     if rows is None:
         raise SourceFailed(path.split("?")[0])
     return rows
+
+
+_PAGE = 1000
+_ROW_CAP = 60000
+
+
+def _get_all(path: str, cap: int = _ROW_CAP) -> List[Dict[str, Any]]:
+    """Every row, paged. PostgREST caps a response below any `limit` we ask
+    for, so a single big GET silently truncates. That turns posted rows into
+    "unposted" ones and quietly wrong counts. The offset advances by what
+    actually came back, and an empty page proves completeness
+    (growth_intelligence_router.all_rows' rule). Past the cap the source
+    FAILS: a partial list must never read as the whole."""
+    rows: List[Dict[str, Any]] = []
+    while True:
+        page = _get(f"{path}&limit={_PAGE}&offset={len(rows)}")
+        if not page:
+            return rows
+        rows.extend(page)
+        if len(rows) > cap:
+            raise SourceFailed(path.split("?")[0] + " (over the row cap)")
 
 
 # ─── Small pure helpers ──────────────────────────────────────────────
@@ -457,6 +477,9 @@ def compose_headline(bank: Dict[str, Any], path: Dict[str, Any],
         return {"lead": "Your books are close.",
                 "emphasis": f"{n} {'thing needs' if n == 1 else 'things need'} you.",
                 "detail": detail}
+    if ledger.get("state") == "unknown":
+        return {"lead": "Everything is", "emphasis": "categorized and matched.",
+                "detail": "The ledger didn’t load, so posting isn’t checked here."}
     return {"lead": "Your books are", "emphasis": "current.",
             "detail": "Everything is categorized and matched. Close last month to lock it."}
 
@@ -489,6 +512,14 @@ def year_so_far(biz: str, biz_row: Dict[str, Any]) -> Dict[str, Any]:
 
 # ─── The overview ────────────────────────────────────────────────────
 
+UNREAD_HEADLINE = {
+    "lead": "Your bank rows",
+    "emphasis": "didn’t load.",
+    "detail": "Nothing here is counted until they do, so this page isn’t guessing. "
+              "Try again in a moment. The other tabs still work.",
+}
+
+
 def build_overview(biz: str, biz_row: Dict[str, Any],
                    now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or datetime.now(timezone.utc)
@@ -516,11 +547,11 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
         f_accts = pool.submit(_get, f"/plaid_accounts?business_id=eq.{biz}&deleted_at=is.null"
                               f"&select=account_id,item_id,name,official_name,type,subtype,mask,"
                               f"included_in_bookkeeping,is_trust_account")
-        f_je = pool.submit(_get, f"/journal_entries?business_id=eq.{biz}&status=eq.active"
+        f_je = pool.submit(_get_all, f"/journal_entries?business_id=eq.{biz}&status=eq.active"
                            f"&select=entry_date,source_type,source_id,created_at"
-                           f"&order=entry_date.desc&limit=50000")
+                           f"&order=entry_date.desc,id.desc")
         f_queue = pool.submit(_get, f"/gl_sync_queue?business_id=eq.{biz}&processed_at=is.null"
-                              f"&select=enqueued_at&order=enqueued_at.asc&limit=5000")
+                              f"&select=enqueued_at&order=enqueued_at.asc&limit=1000")
         f_alarm = pool.submit(_get, f"/gl_divergence_alarms?business_id=eq.{biz}&status=eq.active"
                               f"&select=detected_at&order=detected_at.desc&limit=1")
         f_bills = pool.submit(_get, f"/bills?business_id=eq.{biz}"
@@ -536,11 +567,8 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
         accounts = safe("bank", f_accts.result, [])
         journal = safe("ledger", f_je.result, None)
         queue = safe("ledger", f_queue.result, [])
-        # The alarms table may predate a deploy's migration — absent is "none".
-        try:
-            alarms = f_alarm.result()
-        except Exception:
-            alarms = []
+        # A failed alarm read is not "no divergence": it fails the ledger.
+        alarms = safe("ledger", f_alarm.result, [])
         bills = safe("bills", f_bills.result, None)
         closed_rows = safe("months", f_periods.result, [])
         year = safe("year", f_year.result, None)
@@ -553,15 +581,20 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
     txs: List[Dict[str, Any]] = []
     if included:
         ids = ",".join(a["account_id"] for a in included)
-        txs = safe("transactions", lambda: _get(
+        txs = safe("transactions", lambda: _get_all(
             f"/plaid_transactions?business_id=eq.{biz}&account_id=in.({ids})"
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,name,merchant_name,"
             f"business_category,plaid_category_primary,plaid_category_detail,"
             f"reconciliation_status,reconciled_to_payout_id"
-            f"&order=date.desc&limit={_TX_LIMIT}"), [])
+            f"&order=date.desc,transaction_id.desc"), [])
     txs = [t for t in txs if _amt(t) != 0]
     books_txs = [t for t in txs if t.get("account_id") not in trust_ids]  # trust is client money
+
+    # Everything below the bank card is a claim about the bank rows. If they
+    # didn't load, an empty list would read as "nothing to do" ("unposted 0",
+    # "current"), so those claims are withheld, not guessed (None ≠ no rows).
+    rows_ok = "bank" not in failed and "transactions" not in failed
 
     # ── Bank ──
     stamps = [s for s in (_ts(i.get("last_sync_at")) for i in items) if s]
@@ -569,6 +602,7 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
     linked_twice = accounts_linked_twice(accounts)
     bank = {
         "linked": bool(items),
+        "read": "bank" not in failed,
         "institutions": sorted({i.get("institution_name") for i in items if i.get("institution_name")}),
         "last_sync_at": last_sync.isoformat() if last_sync else None,
         "sync_stale": bool(last_sync and (now - last_sync).days >= SYNC_STALE_DAYS),
@@ -581,11 +615,50 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
                             for a in included],
     }
 
-    # ── Ledger ──
-    ledger: Dict[str, Any] = {"active": False, "state": "unknown"}  # journal read failed
+    # ── Bills (independent of the bank rows) ──
+    bills_out = None
+    if bills is not None:
+        overdue, soon = [], []
+        horizon = today + timedelta(days=30)
+        for b in bills:
+            due = _d(b.get("due_date"))
+            row = {"id": b.get("id"), "vendor": b.get("vendor_name"),
+                   "amount": float(b.get("amount") or 0), "due_date": b.get("due_date"),
+                   "days_late": (today - due).days if due and due < today else 0}
+            if due and due < today:
+                overdue.append(row)
+            elif due and due <= horizon:
+                soon.append(row)
+        bills_out = {"overdue": overdue[:5], "overdue_count": len(overdue),
+                     "overdue_total": round(sum(b["amount"] for b in overdue), 2),
+                     "due_soon": soon[:5], "due_soon_count": len(soon),
+                     "due_soon_total": round(sum(b["amount"] for b in soon), 2),
+                     "open_count": len(bills)}
+
+    base = {
+        "ok": True,
+        "business_id": biz,
+        "as_of": now.isoformat(),
+        "fiscal_year_start": fy_start.isoformat(),
+        "bank": bank,
+        "year": year,
+        "bills": bills_out,
+    }
+
+    if not rows_ok:
+        sync = sync_notice(last_sync, now) if "bank" not in failed else None
+        return {**base,
+                "headline": UNREAD_HEADLINE,
+                "ledger": {"active": bool(journal), "state": "unknown"},
+                "path": None, "months": [], "recent": [], "counts": None,
+                "noticed": [sync] if sync else [],
+                "sources_failed": sorted(set(failed))}
+
+    # ── Ledger ── (any ledger read failing → "unknown", never a guessed "current")
+    ledger: Dict[str, Any] = {"active": bool(journal), "state": "unknown"}
     unposted_by_month: Dict[str, int] = {}
     posted_by_month: Dict[str, int] = {}
-    if journal is not None:
+    if journal is not None and "ledger" not in failed:
         posted_ids = {je.get("source_id") for je in journal
                       if je.get("source_type") == "plaid_transaction"}
         for je in journal:
@@ -641,26 +714,6 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
                   "next": next((m["month"] for m in months if m["status"] in ("open", "behind")), None)},
     }
 
-    # ── Bills ──
-    bills_out = None
-    if bills is not None:
-        overdue, soon = [], []
-        horizon = today + timedelta(days=30)
-        for b in bills:
-            due = _d(b.get("due_date"))
-            row = {"id": b.get("id"), "vendor": b.get("vendor_name"),
-                   "amount": float(b.get("amount") or 0), "due_date": b.get("due_date"),
-                   "days_late": (today - due).days if due and due < today else 0}
-            if due and due < today:
-                overdue.append(row)
-            elif due and due <= horizon:
-                soon.append(row)
-        bills_out = {"overdue": overdue[:5], "overdue_count": len(overdue),
-                     "overdue_total": round(sum(b["amount"] for b in overdue), 2),
-                     "due_soon": soon[:5], "due_soon_count": len(soon),
-                     "due_soon_total": round(sum(b["amount"] for b in soon), 2),
-                     "open_count": len(bills)}
-
     # ── What Kai noticed ──
     pairs = find_transfer_pairs(books_txs, acct_by_id)
     dups = find_duplicates(books_txs, acct_by_id)
@@ -689,17 +742,11 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
     } for t in books_txs[:8]]
 
     return {
-        "ok": True,
-        "business_id": biz,
-        "as_of": now.isoformat(),
-        "fiscal_year_start": fy_start.isoformat(),
+        **base,
         "headline": compose_headline(bank, path, months, ledger),
-        "bank": bank,
         "ledger": ledger,
         "path": path,
-        "year": year,
         "months": months,
-        "bills": bills_out,
         "noticed": noticed,
         "recent": recent,
         "counts": {
@@ -717,5 +764,10 @@ def overview(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, An
     from plaid_router import _require_reader
     _require_reader(biz, user)
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,type,settings,stripe_account_id&limit=1") or []
-    return build_overview(biz, rows[0] if rows else {"id": biz})
+        f"/businesses?id=eq.{biz}&select=id,name,type,settings,stripe_account_id&limit=1")
+    if not rows:
+        # _require_reader just read this row, so this is a failed read, not a
+        # missing business. Guessing would mean a January fiscal year and
+        # "no Stripe account connected", so it refuses instead.
+        raise HTTPException(503, "Couldn't read this business just now.")
+    return build_overview(biz, rows[0])

@@ -200,7 +200,12 @@ def _fake_reads(fail=()):
         table = path.split("?")[0]
         if table in fail:
             return None
-        return tables.get(table, [])
+        rows = tables.get(table, [])
+        q = dict(part.split("=", 1) for part in path.split("?", 1)[-1].split("&") if "=" in part)
+        if "offset" in q:  # honour paging the way PostgREST does
+            off, lim = int(q["offset"]), int(q.get("limit", 1000))
+            return rows[off:off + lim]
+        return rows
     return get
 
 
@@ -255,3 +260,69 @@ def test_a_failed_journal_read_is_unknown_not_empty(reads):
     assert o["ledger"] == {"active": False, "state": "unknown"}
     assert "ledger" in o["sources_failed"]
     assert not any(n["kind"] == "ledger" for n in o["noticed"])
+
+
+def test_failed_bank_rows_withhold_every_claim_about_them(reads):
+    for failing, name in (("/plaid_transactions", "transactions"), ("/plaid_accounts", "bank")):
+        reads(fail=(failing,))
+        o = bo.build_overview("biz", {"id": "biz", "settings": {}}, now=NOW)
+        assert name in o["sources_failed"]
+        assert o["headline"] == bo.UNREAD_HEADLINE        # never "current"
+        assert o["ledger"]["state"] == "unknown"
+        assert o["path"] is None and o["months"] == [] and o["counts"] is None
+        assert not any(n["kind"] in ("ledger", "transfer_pairs", "duplicates") for n in o["noticed"])
+        assert o["bills"]["overdue_count"] == 1           # bills don't depend on bank rows
+
+
+def test_a_failed_alarm_read_is_not_no_divergence(reads):
+    reads(fail=("/gl_divergence_alarms",))
+    o = bo.build_overview("biz", {"id": "biz", "settings": {}}, now=NOW)
+    assert "ledger" in o["sources_failed"]
+    assert o["ledger"]["state"] == "unknown"
+    assert o["headline"]["emphasis"] != "current."
+
+
+def test_paging_survives_a_server_that_caps_pages(monkeypatch):
+    rows = [{"n": i} for i in range(7)]
+
+    def capped(path):  # the server returns at most 3 rows whatever we ask for
+        off = int(path.split("offset=")[1].split("&")[0])
+        return rows[off:off + 3]
+    monkeypatch.setattr(bo.sb_clients, "sb_get_as_service", capped)
+    assert bo._get_all("/t?select=n&order=n.asc") == rows
+
+
+def test_paging_past_the_cap_fails_instead_of_returning_part(monkeypatch):
+    monkeypatch.setattr(bo.sb_clients, "sb_get_as_service", lambda path: [{"n": 1}] * 1000)
+    with pytest.raises(bo.SourceFailed):
+        bo._get_all("/t?select=n", cap=2500)
+
+
+def test_year_so_far_runs_through_the_reports_helpers(monkeypatch):
+    import gl_reports
+    import reports_engine
+    seen = {}
+
+    def pl(biz, period, comparison, from_, to):
+        seen.update(period=period, from_=from_, to=to)
+        return {"range": {"from": from_, "to": to}, "current": {
+            "revenue": {"gross_revenue": 100.0},
+            "expenses": {"total": 40.0, "by_bucket": [
+                {"bucket": "operating", "label": "Operating", "total": 40.0, "pct": 100.0}]},
+            "net_income": 60.0}}
+    monkeypatch.setattr(gl_reports, "gl_active", lambda biz: False)
+    monkeypatch.setattr(reports_engine, "profit_and_loss", pl)
+    y = bo.year_so_far("biz", {"id": "biz", "settings": {"financial": {"fiscal_year_start_month": 7}}})
+    assert y["source"] == "source_tables" and y["basis"] == "cash"
+    assert (y["money_in"], y["money_out"], y["net"]) == (100.0, 40.0, 60.0)
+    assert seen["period"] == "custom" and seen["from_"].endswith("-07-01")   # the fiscal year, not January
+
+
+def test_an_unreadable_business_row_refuses_rather_than_guesses(monkeypatch):
+    import plaid_router
+    from fastapi import HTTPException
+    monkeypatch.setattr(plaid_router, "_require_reader", lambda biz, user: {"id": biz})
+    monkeypatch.setattr(bo.sb_clients, "sb_get_as_service", lambda path: None)
+    with pytest.raises(HTTPException) as e:
+        bo.overview("biz", user=object())
+    assert e.value.status_code == 503
