@@ -3,8 +3,8 @@ title: The work log and the unfinished-work watcher
 date: 2026-10-02
 agent: Claude Code (Claude Opus 5.5)
 asked: 'do we have an agent that watches these, like unfinished work? / leave a summary from that project with the PRs ... to match and determine if we should build or not'
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1185, solutionist-studio (worklog + AGENTS.md PR)]
 migrations: []
 left_undone: ["Solution Space could report uncommitted work on Kevin's machine to the backend; not built"]
 decisions: ["the log lives in each repo as worklog/*.md, written in the session's own PR", "the watcher never merges; it only brings green PRs up to date", "Codex reads AGENTS.md, so both repos now have one"]
