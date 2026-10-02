@@ -208,7 +208,7 @@ def test_failed_receipt_storage_does_not_resend(state,monkeypatch):
     row=approved_row(state); api=FakeBuffer()
     async def broken(*args): raise HTTPException(503,'storage unavailable')
     monkeypatch.setattr(m,'db',broken)
-    with pytest.raises(HTTPException): run(m.dispatch(row,api))
+    assert run(m.dispatch(row,api))['status']=='dispatching'   # left for the sweep, never re-sent
     assert len(api.creates)==1
 
 
@@ -280,15 +280,32 @@ def test_the_seven_caption_generator_is_retired():
     assert '/platform/marketing/week' not in paths and not hasattr(m, 'draft_week')
 
 
-def test_a_failure_before_buffer_is_reached_fails_plainly(state, monkeypatch):
+def test_a_blip_before_buffer_is_reached_tries_again(state, monkeypatch):
     row = approved_row(state); api = FakeBuffer()
 
     async def broken():
         raise HTTPException(503, 'Marketing storage is unavailable. Please retry.')
     monkeypatch.setattr(m, 'config', broken)
     patch = run(m.dispatch(row, api))
-    assert api.creates == [] and patch['status'] == 'failed' and 'not sent' in patch['error']
-    assert state['writes'][-1][2]['status'] == 'failed'
+    assert api.creates == [] and patch['status'] == 'approved' and patch['claimed_at'] is None
+    assert state['writes'][-1][2]['status'] == 'approved'       # the next tick claims it again
+
+
+def test_a_payload_that_cannot_be_built_was_never_sent(state, monkeypatch):
+    row = approved_row(state); api = FakeBuffer()
+    monkeypatch.setattr(m, 'post_payload', lambda row: {}['missing'])
+    patch = run(m.dispatch(row, api))
+    assert api.creates == [] and patch['status'] == 'approved'
+
+
+def test_a_result_that_cannot_be_recorded_is_left_for_the_sweep(state, monkeypatch):
+    row = approved_row(state); api = FakeBuffer()
+
+    async def down(*a, **k):
+        raise HTTPException(503, 'down')
+    monkeypatch.setattr(m, 'db', down)
+    patch = run(m.dispatch(row, api))
+    assert len(api.creates) == 1 and patch['status'] == 'dispatching'   # never re-created; swept to unconfirmed
 
 
 def test_an_unknown_error_during_create_is_uncertain(state):
@@ -351,6 +368,34 @@ def test_every_channel_is_checked_before_any_is_saved(slot):
     with pytest.raises(HTTPException) as err:
         run(m.edit_slot(m.SlotEdit(items=slot['items'], text='x' * 270)))   # fine on Facebook, too long for X
     assert err.value.status_code == 422 and slot['writes'] == []
+
+
+def test_a_stale_channel_refuses_the_whole_idea_before_any_write(slot):
+    second = slot['items'][1]['id']
+    slot['rows'][second]['revision'] = 2                    # changed since the desk was loaded
+    with pytest.raises(HTTPException) as err:
+        run(m.edit_slot(m.SlotEdit(items=slot['items'], text='Reply to the client who waited longest.')))
+    assert err.value.status_code == 409 and 'Nothing was changed' in err.value.detail and slot['writes'] == []
+    with pytest.raises(HTTPException):
+        run(m.cancel_slot(m.SlotCancel(items=slot['items'])))
+    assert slot['writes'] == []
+
+
+def test_a_channel_that_changes_mid_write_is_named(slot, monkeypatch):
+    real = m.save_draft
+    calls = []
+
+    async def flaky(draft):
+        calls.append(draft.channel_id)
+        if len(calls) == 2:
+            raise HTTPException(409, 'Post changed or delivery has started. Refresh before editing.')
+        return await real(draft)
+    monkeypatch.setattr(m, 'save_draft', flaky)
+    with pytest.raises(HTTPException) as err:
+        run(m.edit_slot(m.SlotEdit(items=slot['items'], text='Reply to the client who waited longest.')))
+    assert err.value.status_code == 409
+    assert err.value.detail == ('Only part of this post was changed: Facebook changed, X did not. '
+                                'Refresh the desk and try again.')
 
 
 def test_an_edit_must_change_something(slot):

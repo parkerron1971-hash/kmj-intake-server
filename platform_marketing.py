@@ -496,25 +496,55 @@ class SlotCancel(BaseModel):
     items: list[SlotItem] = Field(min_length=1, max_length=30)
 
 
+EDITABLE = ('draft', 'approved', 'failed')
+SERVICE_NAMES = {'twitter': 'X', 'facebook': 'Facebook', 'instagram': 'Instagram', 'linkedin': 'LinkedIn'}
+
+
+async def _slot_rows(items, statuses):
+    """Every channel post of one idea, checked BEFORE anything is written: each
+    must still be at the revision the caller saw and in a state that allows the
+    change. A stale idea is refused whole instead of half-changed."""
+    rows = []
+    for item in items:
+        found = await db('GET', f'/platform_marketing_posts?id=eq.{item.id}&limit=1')
+        if not found:
+            raise HTTPException(409, 'A post in this idea no longer exists. Refresh the desk.')
+        row = found[0]
+        if row.get('revision') != item.revision or row.get('status') not in statuses or row.get('provider_id'):
+            raise HTTPException(409, 'This post changed since the desk was loaded, or it is already going out. '
+                                     'Nothing was changed. Refresh the desk and try again.')
+        rows.append(row)
+    return rows
+
+
+def _partial(done, rows, what):
+    """A write that failed after others in the same idea succeeded: say exactly
+    which channels changed, so the desk never shows a half-changed idea as either."""
+    def names(rs):
+        return ', '.join(SERVICE_NAMES.get(r['payload'].get('service'), r['payload'].get('service', 'a channel'))
+                         for r in rs) or 'none'
+    left = [r for r in rows if r['id'] not in {str(d['id']) for d in done}]
+    return HTTPException(409, f'Only part of this post was {what}: {names([r for r in rows if r not in left])} '
+                              f'changed, {names(left)} did not. Refresh the desk and try again.')
+
+
 async def edit_slot(req: SlotEdit, *, ai_assisted=None):
     """Rewrite and/or move every channel post of one idea. Each goes back to
-    draft for review, exactly like a single edit. Every post is rebuilt and
-    checked before any is saved, so a caption too long for X fails the whole
-    idea instead of leaving its channels saying different things."""
+    draft for review, exactly like a single edit. Every post's revision and
+    state is checked, and every rebuilt post validated (a caption too long for
+    X), before any is saved. A write that still fails part-way (a change in
+    the instant between the check and the save) says which channels changed."""
     if req.text is None and req.run_at is None:
         raise HTTPException(422, 'Change the caption or the time.')
+    rows = await _slot_rows(req.items, EDITABLE)
     drafts = []
-    for item in req.items:
-        rows = await db('GET', f'/platform_marketing_posts?id=eq.{item.id}&limit=1')
-        if not rows:
-            raise HTTPException(409, 'A post in this idea no longer exists. Refresh the desk.')
-        row = rows[0]
+    moved = req.run_at is not None
+    for item, row in zip(req.items, rows):
         p = row['payload']
-        moved = req.run_at is not None
         drafts.append(Draft(id=item.id, revision=item.revision, campaign=row['campaign'],
                             campaign_id=row.get('campaign_id'),
                             text=req.text if req.text is not None else p['text'],
-                            channel_id=p['channel_id'], landing_url=p['landing_url'],
+                            channel_id=p['channel_id'], landing_url=p.get('landing_url') or 'https://mysolutionist.app/',
                             asset_id=(p.get('asset') or {}).get('id'),
                             run_at=req.run_at if moved else row['run_at'],
                             # A new time gets a fresh delivery window; the old one would end before it.
@@ -522,7 +552,15 @@ async def edit_slot(req: SlotEdit, *, ai_assisted=None):
                             ai_assisted=p.get('ai_assisted', False) if ai_assisted is None else ai_assisted))
     for draft in drafts:
         await build_draft(draft)
-    return {'posts': [await save_draft(d) for d in drafts]}
+    saved = []
+    for draft in drafts:
+        try:
+            saved.append(await save_draft(draft))
+        except HTTPException:
+            if not saved:
+                raise
+            raise _partial(saved, rows, 'changed') from None
+    return {'posts': saved}
 
 
 @router.post('/slot/edit')
@@ -532,8 +570,17 @@ async def edit_slot_route(req: SlotEdit):
 
 @router.post('/slot/cancel')
 async def cancel_slot(req: SlotCancel):
-    """Skip one idea, or let missed drafts go: cancels each channel post."""
-    done = [await cancel(item.id, Revision(revision=item.revision)) for item in req.items]
+    """Skip one idea, or let missed drafts go: cancels each channel post, after
+    checking every one can be cancelled."""
+    rows = await _slot_rows(req.items, EDITABLE)
+    done = []
+    for item in req.items:
+        try:
+            done.append(await cancel(item.id, Revision(revision=item.revision)))
+        except HTTPException:
+            if not done:
+                raise
+            raise _partial(done, rows, 'skipped') from None
     return {'cancelled': len(done), 'posts': done}
 
 
@@ -581,12 +628,14 @@ async def reconcile(post_id: UUID, req: Reconcile):
 async def dispatch(row, api):
     """Hand one claimed post to Buffer and record what happened; returns the patch.
 
-    Only a failure AFTER the create call was attempted can mean "maybe sent".
-    Anything before it (storage blip, config read, channel check) means
-    nothing left this server, so the post fails plainly and can be edited and
-    approved again. Until 2026-10-02 such an error escaped, the row sat in
-    dispatching, the recovery sweep made it "uncertain", and an uncertain post
-    with no Buffer id had no way out."""
+    Only a failure once the create call is under way can mean "maybe sent".
+    A preflight refusal (paused, destination changed, content changed, window
+    closed) fails the post. Any other error before the create (a storage blip
+    reading the config, a channel lookup) means nothing left this server, so
+    the post goes back to approved and the next tick tries again, until its
+    delivery window closes. Until 2026-10-02 such an error escaped, the row
+    sat in dispatching, the recovery sweep made it "uncertain", and an
+    uncertain post with no Buffer id had no way out."""
     attempted = False
     try:
         cfg = await config()
@@ -603,8 +652,9 @@ async def dispatch(row, api):
             raise BufferError('Destination is disconnected, locked or paused in Buffer.')
         if aware(row['expires_at']) <= now():
             raise BufferError('The delivery window expired. Review a new schedule.')
+        payload = post_payload(row)
         attempted = True
-        post = await api.create(post_payload(row))
+        post = await api.create(payload)
         patch = {**delivery_result(post), 'provider_id':post['id'], 'checked_at':now().isoformat()}
     except BufferError as e:
         patch = {'status': 'uncertain' if e.uncertain else 'failed', 'error': str(e)}
@@ -613,11 +663,16 @@ async def dispatch(row, api):
                        exc_info=True)
         patch = ({'status': 'uncertain', 'error': 'Delivery was interrupted. Check Buffer, then mark it sent or not sent.'}
                  if attempted else
-                 {'status': 'failed', 'error': 'This post could not be checked before sending, so it was not sent. '
-                                               'Edit or approve it again to reschedule.'})
+                 {'status': 'approved', 'claimed_at': None,
+                  'error': 'A check before sending failed; it will try again shortly.'})
     # If persistence fails after create, leave dispatching; the stale-claim
     # recovery moves it to uncertain and will NEVER automatically create again.
-    await db('PATCH', f"/platform_marketing_posts?id=eq.{row['id']}&status=eq.dispatching", patch)
+    try:
+        await db('PATCH', f"/platform_marketing_posts?id=eq.{row['id']}&status=eq.dispatching", patch)
+    except Exception:
+        logger.error('Marketing delivery result for %s could not be recorded (%s); the recovery sweep will mark it '
+                     'unconfirmed.', row['id'], patch.get('status'), exc_info=True)
+        return {'status': 'dispatching', 'error': 'not recorded'}
     return patch
 
 

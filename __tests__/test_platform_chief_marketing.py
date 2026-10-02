@@ -274,3 +274,8 @@ def test_new_marketing_actions_are_gated():
     for kind in ('marketing_edit_slot', 'marketing_skip_slot', 'marketing_replan_week'):
         assert kind in actions.HANDLERS and f'"{kind}"' in m.MARKETING_PROMPT
     assert 'marketing_approve' not in actions.HANDLERS and 'never approve posts' in m.MARKETING_PROMPT
+
+
+def test_a_time_chief_cannot_read_is_refused_plainly(idea):
+    out = asyncio.run(m.edit_slot({'post_ids': idea['ids'], 'run_at': 'next tuesday-ish'}))
+    assert out['ok'] is False and 'could not be read' in out['label'] and idea['calls']['edit'] == []

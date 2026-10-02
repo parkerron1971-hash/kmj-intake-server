@@ -49,8 +49,15 @@ https://claude.ai/artifact/R4YcBsj9xwtAgyDFsj19pW, which Kevin approved.
     drafts go.
   - `POST /platform/marketing/posts/{id}/not-sent` is the way out for an
     unconfirmed delivery once the owner has checked Buffer.
-- `dispatch`: a failure before Buffer is reached is now a plain `failed`.
-  Before, it escaped, and the row went `dispatching` → `uncertain` with no exit.
+- `dispatch`: an error before Buffer is reached (a storage blip, a channel
+  lookup) puts the post back to `approved`, and the next tick tries again
+  until its window closes. A preflight refusal fails it. Only an error once the
+  create is under way is `uncertain`. Before, it escaped, and the row went
+  `dispatching` → `uncertain` with no exit. A result that cannot be recorded
+  is logged and left for the recovery sweep, never re-sent.
+- `/slot/edit` and `/slot/cancel` check every channel's revision and state
+  before writing anything. A change in the instant between check and write is
+  reported channel by channel.
 - The seven-caption generator (`POST /platform/marketing/week`) is retired.
   The weekly plan is the one way a week is drafted.
 - Today (`platform_today._marketing`) reads the weekly plan's posts. It used

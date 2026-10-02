@@ -10,7 +10,7 @@ from uuid import UUID, uuid4, uuid5
 
 from fastapi import HTTPException
 from PIL import Image
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 class ChiefImage(BaseModel):
@@ -407,8 +407,11 @@ async def edit_slot(action):
         if stray:
             return {'ok': False, 'label': f"Chief cannot add a number the post did not already carry "
                                           f"({', '.join(sorted(stray))}). If it is right, change it on the desk."}
-    req = marketing.SlotEdit(items=[{'id': r['id'], 'revision': r['revision']} for r in rows],
-                             text=text or None, run_at=action.get('run_at') or None)
+    try:
+        req = marketing.SlotEdit(items=[{'id': r['id'], 'revision': r['revision']} for r in rows],
+                                 text=text or None, run_at=action.get('run_at') or None)
+    except ValidationError:
+        return {'ok': False, 'label': 'That time could not be read. Give it as a date and time with its timezone.'}
     saved = (await marketing.edit_slot(req, ai_assisted=True))['posts']
     day, channels = _where(saved)
     did = 'rewritten and moved' if text and req.run_at else 'rewritten' if text else 'moved'
