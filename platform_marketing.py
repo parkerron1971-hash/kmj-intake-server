@@ -567,11 +567,22 @@ async def post_new_now(req: Idea, owner):
     if problem:
         raise HTTPException(409, problem)
     live = await live_destinations(cfg)
-    wanted = req.channel_ids if req.channel_ids is not None else [c['id'] for c in cfg['channels']]
-    if any(cid not in live for cid in wanted):
+    wanted = [c for c in cfg['channels'] if req.channel_ids is None or c['id'] in req.channel_ids]
+    if not req.asset_id and any(c['service'] != 'instagram' for c in wanted):
+        wanted = [c for c in wanted if c['service'] != 'instagram']   # create_idea leaves it out: never block on it
+    if any(c['id'] not in live for c in wanted):
         raise HTTPException(409, 'A channel is disconnected, locked or paused in Buffer. Nothing was sent.')
     out = await create_idea(req.model_copy(update={'run_at': now() + POST_NOW_LEAD, 'post_now': False}))
     if out.get('already_saved'):
+        # A retry: an earlier attempt saved the posts. Whatever it did not get
+        # to approve is approved now, unless its time has already passed;
+        # "on its way" is said only of posts that really are.
+        waiting = [r for r in out['posts'] if r['status'] == 'draft']
+        if any(aware(r['run_at']) <= now() for r in waiting):
+            raise HTTPException(409, 'An earlier try saved this post, but its time passed before it was approved. '
+                                     'It is on the desk: use Approve and post now there.')
+        if waiting:
+            await _approve_rows(waiting, owner)
         return {**out, 'posting': True}
     await _approve_rows(out['posts'], owner)
     return {**out, 'posting': True}

@@ -649,3 +649,25 @@ def test_post_now_routes_are_owner_only():
     client = TestClient(app)
     assert client.post('/platform/marketing/post-now', json={'items': []}).status_code == 403
     assert client.post('/platform/marketing/ideas', json={'text': 'x', 'post_now': True}).status_code == 403
+
+
+def test_a_retried_post_now_approves_what_the_first_try_left(now_world):
+    idea = m.Idea(text='Doors open today.', post_now=True)
+    saved = [{'id': str(m.uuid5(idea.id, c)), 'revision': 1, 'status': s, 'content_hash': 'c' * 64,
+              'run_at': (m.now() + timedelta(minutes=1)).isoformat(), 'payload': {}}
+             for c, s in (('x', 'approved'), ('fb', 'draft'))]
+    now_world['existing'] = saved
+    out = run(m.post_new_now(idea, OWNER))
+    ids, _ = now_world['approved'][0]
+    assert [str(i) for i in ids] == [saved[1]['id']] and out['posting']          # only the one still a draft
+    saved[1]['run_at'] = (m.now() - timedelta(minutes=1)).isoformat()
+    now_world['approved'].clear()
+    with pytest.raises(HTTPException) as err:
+        run(m.post_new_now(idea, OWNER))
+    assert err.value.status_code == 409 and 'time passed' in err.value.detail and now_world['approved'] == []
+
+
+def test_a_down_instagram_never_blocks_a_post_that_skips_it(now_world):
+    now_world['live'] = {'x', 'fb'}                                                # Instagram disconnected
+    run(m.post_new_now(m.Idea(text='Doors open today.', post_now=True), OWNER))   # no picture: no Instagram
+    assert sorted(r['payload']['service'] for r in now_world['inserts'][0]) == ['facebook', 'twitter']
