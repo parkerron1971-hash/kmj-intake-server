@@ -66,6 +66,18 @@ https://claude.ai/artifact/R4YcBsj9xwtAgyDFsj19pW, which Kevin approved.
   post at that time) unless `run_at` is given. Chief's `marketing_new_post`
   calls the same function, so Chief makes a post and says where and when,
   instead of asking first.
+- Posting right away, with the owner's yes (2026-10-02). Kevin: "allow for
+  permission to be given if they are looking to post right away."
+  - On the desk, "Post now" in the new-post editor asks first
+    (`POST /ideas` with `post_now`), and "Approve and post now" sends one
+    reviewed post (`POST /post-now`, bound to its content hashes). The time
+    moves to two minutes out and the owner's approval follows in the same
+    step. Before anything is saved or moved, both check that publishing is
+    on, that it is not paused, and that Buffer says each channel is live.
+  - Chief's `marketing_post_now` is in the `review` group, so it never
+    runs on its own. Its card freezes the exact caption and channels (or
+    the desk post's words and revisions) when it is proposed. The handler
+    runs only from a human-approved card and re-checks the frozen words.
 - The seven-caption generator (`POST /platform/marketing/week`) is retired.
   The weekly plan is the one way a week is drafted.
 - Today (`platform_today._marketing`) reads the weekly plan's posts. It used

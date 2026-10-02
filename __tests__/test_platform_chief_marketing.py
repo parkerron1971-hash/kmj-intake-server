@@ -340,3 +340,89 @@ def test_an_ordinary_refusal_comes_back_as_a_sentence(made, monkeypatch):
     out = asyncio.run(m.new_post({'text': 'x' * 300}))
     assert out == {'ok': False, 'label': 'Keep the X caption at 255 characters or fewer, leaving room for its link. '
                                          'Nothing was saved.'}
+
+
+# ── posting right away: Chief asks, the owner says yes on the card ─────
+
+@pytest.fixture
+def channels3(monkeypatch):
+    async def config():
+        return {'channels': [{'id': 'ig', 'service': 'instagram'}, {'id': 'x', 'service': 'twitter'},
+                             {'id': 'fb', 'service': 'facebook'}]}
+    monkeypatch.setattr(marketing, 'config', config)
+
+
+def test_the_card_freezes_the_exact_caption_and_channels(channels3):
+    frozen = asyncio.run(m.post_now_review({'type': 'marketing_post_now', 'text': '  Doors open today.  '}))
+    assert frozen['caption'] == 'Doors open today.' and frozen['channels'] == ['X', 'Facebook']
+    assert frozen['channel_ids'] == ['x', 'fb'] and frozen['left_out'].startswith('Instagram')
+    assert frozen['goes_out'] == 'Within a few minutes of your approval'
+    with pytest.raises(HTTPException):
+        asyncio.run(m.post_now_review({'type': 'marketing_post_now', 'text': 'Only here', 'channels': ['instagram']}))
+    with pytest.raises(HTTPException):
+        asyncio.run(m.post_now_review({'type': 'marketing_post_now', 'text': 'see www.example.com'}))
+
+
+def test_a_desk_post_is_frozen_with_its_words_and_revisions(channels3, monkeypatch):
+    a, b = str(uuid4()), str(uuid4())
+    rows = [{'id': a, 'revision': 3, 'status': 'draft', 'payload': {'text': 'Same words.', 'service': 'twitter'}},
+            {'id': b, 'revision': 4, 'status': 'draft', 'payload': {'text': 'Same words.', 'service': 'facebook'}}]
+
+    async def db(method, path, body=None):
+        return rows
+    monkeypatch.setattr(marketing, 'db', db)
+    frozen = asyncio.run(m.post_now_review({'type': 'marketing_post_now', 'post_ids': [a, b]}))
+    assert frozen['caption'] == 'Same words.' and frozen['revisions'] == [3, 4] and frozen['channels'] == ['Facebook', 'X']
+    rows[1]['payload']['text'] = 'Different.'
+    with pytest.raises(HTTPException):
+        asyncio.run(m.post_now_review({'type': 'marketing_post_now', 'post_ids': [a, b]}))
+
+
+def test_post_now_runs_only_from_an_approved_card(monkeypatch):
+    import platform_chief_authority as authority
+    sent = []
+
+    async def post_new_now(req, owner):
+        sent.append((req, owner))
+        return {'posts': [{'id': 'p1'}, {'id': 'p2'}], 'posting': True}
+    monkeypatch.setattr(marketing, 'post_new_now', post_new_now)
+    action = {'type': 'marketing_post_now', 'caption': 'Doors open today.', 'channels': ['X', 'Facebook'],
+              'channel_ids': ['x', 'fb'], 'goes_out': 'Within a few minutes of your approval'}
+    out = asyncio.run(m.post_now(action))
+    assert out['ok'] is False and sent == []                       # no card, no post
+    owner = SimpleNamespace(id=str(uuid4()))
+    token = authority.current_authorization.set((owner, {'id': str(uuid4()), 'automatic': True}))
+    try:
+        assert asyncio.run(m.post_now(action))['ok'] is False      # an automatic run is not the owner's yes
+    finally:
+        authority.current_authorization.reset(token)
+    token = authority.current_authorization.set((owner, {'id': str(uuid4()), 'automatic': False}))
+    try:
+        out = asyncio.run(m.post_now(action))
+    finally:
+        authority.current_authorization.reset(token)
+    req, who = sent[0]
+    assert who is owner and req.text == 'Doors open today.' and req.channel_ids == ['x', 'fb'] and req.ai_assisted
+    assert out['ok'] and out['label'].startswith('Approved by you and on its way to X and Facebook.')
+
+
+def test_a_refusal_on_the_card_comes_back_plainly(monkeypatch):
+    import platform_chief_authority as authority
+
+    async def refuse(req, owner):
+        raise HTTPException(409, 'Publishing is paused. Resume it on the desk, then post again.')
+    monkeypatch.setattr(marketing, 'post_new_now', refuse)
+    token = authority.current_authorization.set((SimpleNamespace(id='o'), {'id': str(uuid4()), 'automatic': False}))
+    try:
+        out = asyncio.run(m.post_now({'caption': 'x', 'channels': ['X'], 'channel_ids': ['x']}))
+    finally:
+        authority.current_authorization.reset(token)
+    assert out == {'ok': False, 'label': 'Publishing is paused. Resume it on the desk, then post again. Nothing was sent.'}
+
+
+def test_post_now_always_needs_the_owners_card():
+    import platform_chief_authority as authority
+    assert authority.GROUPS['marketing_post_now'] == 'review'
+    assert actions.HANDLERS['marketing_post_now'] is m.post_now
+    import inspect
+    assert '"marketing_post_now"' in m.MARKETING_PROMPT and 'Posting right away' in inspect.getsource(authority.get_permissions)

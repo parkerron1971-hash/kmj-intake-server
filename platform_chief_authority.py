@@ -32,6 +32,7 @@ GROUPS = {
     'marketing_pause': 'marketing_stop', 'marketing_cancel_post': 'marketing_stop',
     'marketing_skip_slot': 'marketing_stop', 'marketing_replan_week': 'marketing_stop',
     'send_practitioner_email': 'review', 'resend_invite': 'review',
+    'marketing_post_now': 'review',      # posting right away: always the owner's yes on its card
     'extend_trial': 'review', 'mark_lead_status': 'review',
     'queue_build': 'review', 'send_to_solution_space': 'review',
 }
@@ -140,6 +141,10 @@ async def propose(owner_id, request_id, index, action, *, automatic=False):
         payload.pop(forbidden, None)
     if payload.get('type') in ('send_practitioner_email', 'resend_invite'):
         payload['recipient'] = await recipient(payload)
+    if payload.get('type') == 'marketing_post_now':
+        # Freeze the exact caption and channels the card shows; the approval binds them.
+        import platform_chief_marketing
+        payload = await platform_chief_marketing.post_now_review(payload)
     if payload.get('type') in ('queue_build', 'send_to_solution_space'):
         repo = payload.get('repo', 'frontend')
         if repo not in ('frontend', 'backend'):
@@ -269,9 +274,9 @@ class Decision(BaseModel):
 @router.get('/permissions')
 async def get_permissions(owner=Depends(require_owner)):
     return {**await policy(owner.id), 'always_review': ['Messages and invitations',
-        'Trial and lead changes', 'Development handoffs proposed by Chief'],
+        'Trial and lead changes', 'Development handoffs proposed by Chief', 'Posting right away'],
         'unavailable_to_chief': ['Permission changes', 'Budget changes', 'Credential changes',
-                                 'Publishing approval', 'Deployment approval']}
+                                 'Publishing without your yes', 'Deployment approval']}
 
 
 @router.put('/permissions')

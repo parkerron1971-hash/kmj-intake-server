@@ -36,3 +36,9 @@ Later the same day Kevin found his approved post on Instagram, not Facebook:
 the editor had preselected one account. New posts (the desk's and Chief's)
 now go to every connected channel unless he chooses, at the next open slot
 unless he picks a time (`/ideas`, `marketing_new_post`).
+
+Then: "allow for permission to be given if they are looking to post right
+away." Chief's `marketing_post_now` always needs Kevin's yes on its card. The
+card shows the exact caption and channels, which are frozen when Chief
+proposes it. The desk gained "Post now" and "Approve and post now". Either
+way, the post goes out within a few minutes of approval.
