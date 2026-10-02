@@ -261,6 +261,7 @@ def test_a_parent_reads_their_teens_chats_but_cant_post(env):
     assert f"/my/messages/{t1}" in fam
     chat = _member(env, PARENT).get(f"/my/messages/{t1}").text
     assert "did you finish the reading?" in chat and "as their parent" in chat and 'id="mb-compose"' not in chat
+    assert "Tia &amp; Theo H." in chat                                      # whose chat, and with whom
     assert _send(env, PARENT, t1, "hi kids").status_code == 403
     assert _member(env, ANA).get(f"/my/messages/{t1}").status_code == 404          # not her teen
     assert _member(env, ANA).get(f"/my/messages/family/{TEEN}").status_code == 404

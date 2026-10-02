@@ -680,11 +680,17 @@ def _chat_page(request, biz, site, me, tid: str, *, as_parent_of: str = ""):
     if not parent:
         mark_read(biz["id"], tid, str(me["id"]))
     teen_name = ""
+    title = _title(biz["id"], t, acc, str(me["id"]))
     if parent:
         teen_name = next((p["name"] for i, p in acc["people"].items()
                           if rules.may_read_as_parent(str(me["id"]), p, acc["links"])), "your teen")
-    return render_chat(biz, site, request, me, t, acc, msgs, looks, title=_title(biz["id"], t, acc, str(me["id"])),
-                       viewing_as=teen_name), 200
+        if t["kind"] == "direct":
+            # "Maya & Ava C." — whose chat it is, then who it's with.
+            others = [p for i, p in acc["people"].items()
+                      if not rules.may_read_as_parent(str(me["id"]), p, acc["links"])]
+            if others:
+                title = f"{str(teen_name).split(' ')[0]} & {first_and_initial(others[0].get('name'))}"
+    return render_chat(biz, site, request, me, t, acc, msgs, looks, title=title, viewing_as=teen_name), 200
 
 
 def _family_page(request, biz, site, me, teen_id: str):
