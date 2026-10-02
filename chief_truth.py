@@ -479,8 +479,11 @@ def _unsourced(claim):
 # otherwise passes numeric-only provenance checks ("Muskegon is rainy now").
 _WEATHER_WORD = re.compile(r"\b(?:weather|rain(?:y|ing)?|snow(?:y|ing)?|sunny|cloudy|overcast|"
                            r"thunderstorms?|humidity|wind(?:y|chill)?)\b", re.I)
-_WEATHER_NOW = re.compile(r"\b(?:is|are|it['\u2019]s|current(?:ly)?|right now|today|tonight|"
-                          r"tomorrow|forecast|expect|will)\b", re.I)
+_WEATHER_NOW = re.compile(r"\b(?:current(?:ly)?|right now|now|today|tonight|tomorrow)\b", re.I)
+_WEATHER_CONDITION = re.compile(
+    r"\b(?:is|are|it['\u2019]s|will be)\s+(?:(?:currently|now|mostly|partly|not)\s+)*"
+    r"(?:rainy|raining|snowy|snowing|sunny|cloudy|overcast|windy|stormy|foggy)\b"
+    r"|\bwinds?\s+(?:is|are)\s+(?:from|at|gusting|blowing)\b", re.I)
 _WEATHER_UNCERTAIN = re.compile(
     r"^(?:if|when|whether|in case|you (?:said|reported)|i (?:said|told|claimed))\b"
     r"|\b(?:can(?:not|['\u2019]t)|could(?:not|n['\u2019]t)|haven['\u2019]t|have not|"
@@ -494,20 +497,20 @@ WEATHER_UNVERIFIED_REPLY = "I couldn't verify the current weather, so I don't ha
 def _weather_assertions(reply):
     assertions = []
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
-        # Do not let an uncertainty preface excuse a following factual clause.
-        for clause in re.split(r';\s*|,?\s+but\s+|\bhowever,?\s+', sentence, flags=re.I):
+        # Scope exemptions to their own clause: neither an attribution nor
+        # "I haven't checked" can verify an independent condition after it.
+        for clause in re.split(r'[;:]\s*|,?\s+(?:and|but|because)\s+|\bhowever,?\s+',
+                               sentence, flags=re.I):
             clause = clause.strip()
-            if _WEATHER_OFFER.search(clause):
-                # An offer is not a report of the conditions. A following
-                # declarative clause still needs retrieval evidence.
-                continuation = re.split(r',\s*|\s+and\s+|\s+because\s+', clause, maxsplit=1, flags=re.I)
-                if len(continuation) == 2:
-                    assertions.extend(_weather_assertions(continuation[1]))
-                continue
             if (not clause or clause.endswith('?') or _WEATHER_UNCERTAIN.search(clause)
-                    or not _WEATHER_WORD.search(clause) or not _WEATHER_NOW.search(clause)):
+                    or _WEATHER_OFFER.search(clause)):
                 continue
-            assertions.append(clause)
+            # Guard explicit current conditions, not generic weather nouns:
+            # "Rain is water" and "Rainy days are a reason to plan" are not
+            # reports that a location is experiencing rain right now.
+            if (_WEATHER_CONDITION.search(clause)
+                    or (_WEATHER_WORD.search(clause) and _WEATHER_NOW.search(clause))):
+                assertions.append(clause)
     return assertions
 
 

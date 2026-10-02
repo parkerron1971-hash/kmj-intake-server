@@ -141,3 +141,34 @@ def test_provider_review_without_citation_cannot_release_lowercase_weather(monke
 def test_offer_cannot_hide_independent_weather_assertion():
     draft = 'I can check the weather, and Muskegon is rainy right now.'
     assert truth._weather_provenance_missing(draft, [], {})
+
+
+@pytest.mark.parametrize('draft', [
+    "I haven't checked the weather, and it's rainy right now.",
+    'You said it is rainy, and it is sunny now.',
+    'I can check the weather: Muskegon is rainy right now.',
+])
+def test_independent_condition_after_exempt_clause_still_needs_proof(draft):
+    raw = json.dumps({'verdict': 'supported', 'claims': []})
+    assert truth.assess_review(raw, draft, {})[0] == 'unsupported'
+    assert not truth.streamable_sentence(truth.stream_prover({}), draft)
+
+
+@pytest.mark.parametrize('draft', [
+    'Rain is water falling from clouds.',
+    'Rainy days are a reason to plan an indoor backup.',
+    'Wind is air in motion.',
+])
+def test_general_weather_definitions_and_advice_are_not_current_reports(draft):
+    assert not truth._weather_assertions(draft)
+
+
+def test_separately_cited_weather_and_wind_clauses_are_both_supported():
+    draft = 'Muskegon is rainy right now, and the wind is from the west.'
+    sid = 'web:https://weather.example/current'
+    raw = json.dumps({'verdict': 'supported', 'claims': [
+        {'text': text, 'kind': 'fact', 'source_id': sid, 'quote': draft}
+        for text in ['Muskegon is rainy right now', 'the wind is from the west']]})
+    assert truth._weather_assertions(draft) == [
+        'Muskegon is rainy right now', 'the wind is from the west.']
+    assert truth.assess_review(raw, draft, {sid: {'kind': 'research', 'text': draft}})[0] == 'supported'
