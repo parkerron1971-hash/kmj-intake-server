@@ -1239,6 +1239,16 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_agent_runs (every run), platform_changelog (flags only)",
     },
     {
+        "id": "customer_health",
+        "name": "Customer health",
+        "kind": "agent",
+        "beat": "Every morning: businesses that signed up and never came back, are a week "
+                "in and not set up, or went quiet on a live plan. Each gets a short "
+                "suggested note from you in the operator log. Never sends.",
+        "schedule": "daily 14:00 UTC (at most 5 a day, none repeated within a month)",
+        "writes_to": "platform_changelog (one pending item per business), platform_agent_runs",
+    },
+    {
         "id": "money_auditor",
         "name": "Money auditor",
         "kind": "watcher",
@@ -1331,6 +1341,13 @@ async def run_chief_quality_now(_owner=Depends(require_owner)):
     """Manual pass from the console — same as the nightly schedule."""
     from chief_quality import quality_tick
     return await quality_tick()
+
+
+@router.post("/agents/customer-health/run")
+async def run_customer_health_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the morning schedule."""
+    from customer_health import health_tick
+    return await health_tick()
 
 
 @router.post("/agents/money-auditor/run")
