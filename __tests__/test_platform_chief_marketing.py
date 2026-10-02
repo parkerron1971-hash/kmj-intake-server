@@ -279,3 +279,55 @@ def test_new_marketing_actions_are_gated():
 def test_a_time_chief_cannot_read_is_refused_plainly(idea):
     out = asyncio.run(m.edit_slot({'post_ids': idea['ids'], 'run_at': 'next tuesday-ish'}))
     assert out['ok'] is False and 'could not be read' in out['label'] and idea['calls']['edit'] == []
+
+
+# ── Chief makes the post, then says where and when ─────────────────────
+
+@pytest.fixture
+def made(monkeypatch):
+    calls = []
+
+    async def config():
+        return {'channels': [{'id': 'ig', 'service': 'instagram'}, {'id': 'x', 'service': 'twitter'},
+                             {'id': 'fb', 'service': 'facebook'}]}
+
+    async def create(req):
+        calls.append(req)
+        chosen = ['ig', 'x', 'fb'] if req.channel_ids is None else req.channel_ids
+        skipped = [] if req.asset_id else [{'channel': 'Instagram', 'reason': 'Instagram needs a picture or video.'}]
+        names = {'ig': 'Instagram', 'x': 'X', 'fb': 'Facebook'}
+        kept = [c for c in chosen if req.asset_id or c != 'ig']
+        return {'posts': [{'id': str(uuid4()), 'payload': {'service': c}} for c in kept], 'skipped': skipped,
+                'run_at': '2026-10-05T15:00:00-04:00', 'already_saved': False, 'channels': [names[c] for c in kept]}
+    monkeypatch.setattr(marketing, 'config', config)
+    monkeypatch.setattr(marketing, 'create_idea', create)
+    return calls
+
+
+def test_chief_makes_a_post_for_every_channel_and_the_next_slot_without_asking(made):
+    out = asyncio.run(m.new_post({'type': 'marketing_new_post', 'text': 'Answer the oldest client first.'}))
+    req = made[0]
+    assert req.channel_ids is None and req.run_at is None and req.ai_assisted is True
+    assert out['ok'] and out['label'].startswith('Drafted for Monday 3:00 PM on X and Facebook.')
+    assert 'waiting for your OK' in out['label'] and 'Instagram was left out: instagram needs a picture' in out['label']
+
+
+def test_chief_honours_channels_the_owner_named(made):
+    asyncio.run(m.new_post({'text': 'Only Facebook and X.', 'channels': ['Facebook', 'x']}))
+    assert sorted(made[0].channel_ids) == ['fb', 'x']
+
+
+def test_chief_new_post_is_retry_safe_and_a_drafts_action():
+    import platform_chief_authority as authority
+    request = uuid4()
+    first = [{'type': 'marketing_new_post', 'text': 'A'}]
+    again = [{'type': 'marketing_new_post', 'text': 'A'}]
+    m.prepare_actions(first, request); m.prepare_actions(again, request)
+    assert first[0]['id'] == again[0]['id']
+    assert authority.GROUPS['marketing_new_post'] == 'drafts' and actions.HANDLERS['marketing_new_post'] is m.new_post
+    assert 'do not ask first where or when' in m.MARKETING_PROMPT
+
+
+def test_chief_keeps_links_out_of_a_new_post(made):
+    out = asyncio.run(m.new_post({'text': 'See mysolutionist.app today'}))
+    assert out['ok'] is False and made == []

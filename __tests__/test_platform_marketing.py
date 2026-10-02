@@ -467,3 +467,91 @@ def test_partial_status_batch_keeps_other_posts_readable(monkeypatch):
         async with httpx.AsyncClient(transport=transport) as c:
             return await BufferClient(c).posts(['missing','good'])
     assert run(go())['p1']['status']=='sent'
+
+
+# ── a new post goes everywhere unless the owner chooses (2026-10-02) ────
+
+@pytest.fixture
+def three(monkeypatch):
+    """Instagram, X and Facebook connected; an empty calendar unless a test fills it."""
+    chans = [channel(id='ig', name='solutionistsystem', service='instagram'),
+             channel(id='x', name='SolutionistSys', service='twitter'),
+             channel(id='fb', name='The Solutionist System', service='facebook')]
+    s = {'config': cfg(channels=chans), 'inserts': [], 'taken': [], 'existing': [], 'assets': []}
+
+    async def config():
+        return s['config']
+
+    async def db(method, path, body=None):
+        if method == 'GET' and path.startswith('/platform_marketing_posts?select=run_at'):
+            return [{'run_at': t} for t in s['taken']]
+        if method == 'GET' and path.startswith('/platform_marketing_posts?id=in.'):
+            return s['existing']
+        if method == 'GET' and path.startswith('/platform_marketing_assets'):
+            return s['assets']
+        if method == 'POST' and path == '/platform_marketing_posts':
+            s['inserts'].append(copy.deepcopy(body))
+            return body
+        raise AssertionError(f'unexpected {method} {path}')
+    monkeypatch.setattr(m, 'config', config)
+    monkeypatch.setattr(m, 'db', db)
+    return s
+
+
+FRIDAY_3PM = m.datetime(2026, 10, 2, 19, 10, tzinfo=m.timezone.utc)      # 3:10 PM Eastern
+
+
+def test_a_new_post_goes_to_every_channel_with_a_picture(three, monkeypatch):
+    three['assets'] = [{'id': str(uuid4()), 'kind': 'image', 'url': 'https://x/f.png', 'name': 'flyer'}]
+    out = run(m.create_idea(m.Idea(text='One useful move.', asset_id=three['assets'][0]['id'],
+                                   run_at=m.now() + timedelta(days=2))))
+    assert len(three['inserts']) == 1                                   # one insert: all channels or none
+    rows = three['inserts'][0]
+    assert sorted(r['payload']['service'] for r in rows) == ['facebook', 'instagram', 'twitter']
+    assert len({r['run_at'] for r in rows}) == 1 and len({r['payload']['text'] for r in rows}) == 1
+    assert out['skipped'] == [] and sorted(out['channels']) == ['Facebook', 'Instagram', 'X']
+
+
+def test_without_a_picture_instagram_is_left_out_and_said(three):
+    out = run(m.create_idea(m.Idea(text='One useful move.', run_at=m.now() + timedelta(days=2))))
+    assert sorted(r['payload']['service'] for r in three['inserts'][0]) == ['facebook', 'twitter']
+    assert out['skipped'] == [{'channel': 'Instagram', 'reason': 'Instagram needs a picture or video.'}]
+
+
+def test_the_owner_can_choose_channels(three):
+    run(m.create_idea(m.Idea(text='Only on Facebook.', channel_ids=['fb'], run_at=m.now() + timedelta(days=2))))
+    assert [r['payload']['service'] for r in three['inserts'][0]] == ['facebook']
+    with pytest.raises(HTTPException) as err:
+        run(m.create_idea(m.Idea(text='x', channel_ids=['not-connected'], run_at=m.now() + timedelta(days=2))))
+    assert err.value.status_code == 422
+
+
+def test_no_time_takes_the_next_open_slot(three, monkeypatch):
+    monkeypatch.setattr(m, 'now', lambda: FRIDAY_3PM)
+    # Monday 11:00 Eastern is the weekly plan's; Monday 3:00 PM is open.
+    three['taken'] = ['2026-10-05T15:00:00+00:00']
+    out = run(m.create_idea(m.Idea(text='One useful move.')))
+    assert out['run_at'] == '2026-10-05T15:00:00-04:00'
+    assert three['inserts'][0][0]['campaign'] == 'post-2026-10-05'          # no campaign needed for a one-off
+
+
+def test_the_next_open_slot_skips_weekends_and_the_next_hour(three, monkeypatch):
+    saturday = m.datetime(2026, 10, 3, 14, tzinfo=m.timezone.utc)
+    assert run(m.next_open_slot(saturday)).isoformat() == '2026-10-05T11:00:00-04:00'
+    monday_1030 = m.datetime(2026, 10, 5, 14, 30, tzinfo=m.timezone.utc)   # 10:30 AM: 11:00 is too close
+    assert run(m.next_open_slot(monday_1030)).isoformat() == '2026-10-05T15:00:00-04:00'
+
+
+def test_a_retried_new_post_is_not_a_second_post(three):
+    idea = m.Idea(text='One useful move.', run_at=m.now() + timedelta(days=2))
+    three['existing'] = [{'id': str(m.uuid5(idea.id, 'x')), 'run_at': idea.run_at.isoformat(), 'payload': {}}]
+    out = run(m.create_idea(idea))
+    assert out['already_saved'] and three['inserts'] == []
+
+
+def test_new_post_route_is_owner_only():
+    app = FastAPI(); app.include_router(m.router)
+    app.dependency_overrides[require_user] = lambda: SimpleNamespace(id=str(uuid4()), email='tenant@example.com')
+    client = TestClient(app)
+    assert client.post('/platform/marketing/ideas', json={'text': 'x'}).status_code == 403
+    assert client.get('/platform/marketing/ideas/next-slot').status_code == 403
