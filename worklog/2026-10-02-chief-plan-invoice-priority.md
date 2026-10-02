@@ -1,12 +1,12 @@
----
+﻿---
 title: Prioritize useful invoice reminders in short Chief plans
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Fix the short plan choosing two small same-client reminders instead of worthwhile overdue work"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1213]
 migrations: []
-left_undone: ["Parent-managed review and release", "Production priority verification"]
+left_undone: []
 decisions: ["Rank only the loaded scoped invoice sample", "At most one reminder per normalized client name", "No extra provider calls or new amount/date speech"]
 related: [2026-10-02-chief-conversation-gaps.md]
 ---
@@ -29,3 +29,6 @@ invoices, due today versus future, missing and malformed values, excluded status
 unsafe identities, client variety, and unchanged input records. Backend and frontend
 voice recovery worklogs were reviewed; this change has no frontend impact.
 Local commit is handed to the parent agent for review and release; no child PR/push.
+
+Integrated in PR #1213. Final combined validation: 406 focused tests passed; independent invoice review passed 256 related tests. Protected CI and production playback measurements are recorded in the PR. Unsupported or ambiguous constraints intentionally retain the full-context path.
+

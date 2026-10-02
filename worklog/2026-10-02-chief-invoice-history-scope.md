@@ -1,12 +1,12 @@
----
+﻿---
 title: Preserve invoice scope without long conversation preparation
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Fix the remaining conversation gaps after retesting"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1213]
 migrations: []
-left_undone: ["Integration and production retest", "Complex plan history remains on the general path"]
+left_undone: []
 decisions: ["Read-only exact invoice displays only", "Preserve explicit owner scope", "Hard constraints defer before paid work", "Owner and replay checks precede model work"]
 related: [2026-10-02-chief-conversation-gaps.md, 2026-10-02-chief-invoice-early-read.md]
 ---
@@ -19,3 +19,6 @@ Validation: 217 focused tests passed. Three fictional live configured-fast-model
 Follow-up review covered the complete descriptive email-visibility discussion and the exact read-only short-plan request between invoice displays. The guard recognizes only complete email permission clauses or the existing whole quick-plan grammar as separate operations; qualifiers in another clause still defer. The full fictional history resolved all/list in 1457 ms, and retained all/list after the read-only plan in 435 ms. Explicit current open resolved in 539 ms. Request-level regressions verify these sequences avoid broad context and the main model while preserving invoice scope.
 
 Independent review found scope questions that omit the word invoice and the imperative Open being mistaken for an open-status modifier. A pending invoice question now retains the full conversation path for any meaningful owner reply, including acknowledgments and intervening assistant debug output. Status is captured only from the modifier position in the display grammar. Fully recognized invoice history constructs the allowed display directly; unknown history still needs strict model agreement. The full descriptive email fixture, including its second email-visibility qualifier, passed live all/list (1450 ms) and after-plan all/list (499 ms). The provider still sometimes misreads the imperative Open in complex history; contradictory output is rejected rather than overriding inherited scope, so that case may retain full-path latency.
+
+Integrated in PR #1213. Final combined validation: 406 focused tests passed; independent invoice review passed 256 related tests. Protected CI and production playback measurements are recorded in the PR. Unsupported or ambiguous constraints intentionally retain the full-context path.
+

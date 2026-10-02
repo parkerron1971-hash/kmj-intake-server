@@ -1,12 +1,12 @@
----
+﻿---
 title: Resolve unrelated history before short Chief plans
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Reduce the remaining legacy short-plan gap without ignoring conversation constraints"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1213]
 migrations: []
-left_undone: ["Parent-managed integration and release", "Production legacy-plan timing retest"]
+left_undone: []
 decisions: ["No broader current-request grammar", "Scope approval does not authorize actions", "Uncertain scope keeps the full path", "No assistant claims sent to scope model"]
 related: [2026-10-02-chief-conversation-gaps.md, 2026-10-02-chief-plan-invoice-priority.md]
 ---
@@ -46,3 +46,6 @@ invoice/short-plan requests, known control markers, and acknowledgments. Unknown
 history such as a truncated named qualifier must resolve or defer, even if an old
 keyword guard did not recognize its topic. The live fictional "Please only Ada"
 case deferred, while the representative unrelated-history case still cleared.
+
+Integrated in PR #1213. Final combined validation: 406 focused tests passed; independent invoice review passed 256 related tests. Protected CI and production playback measurements are recorded in the PR. Unsupported or ambiguous constraints intentionally retain the full-context path.
+
