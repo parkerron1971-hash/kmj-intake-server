@@ -98,8 +98,19 @@ def client_email_today_reply(message: str, ctx: Dict[str, Any]) -> str | None:
     if not clock['date']:
         return "I can't determine today's date for this email snapshot. " + scope
     quality = ctx.get('email_context_quality') or {}
-    available = all(quality.get(key) == 'available' for key in ('platform_replies', 'connected_mailbox'))
-    known = known_sender_emails(ctx.get('contacts_lookup') or [])
+    # Without the contact list nobody can be told apart as a client, so a
+    # failed contacts read is an unavailable source, not "no client email".
+    available = (all(quality.get(key) == 'available' for key in ('platform_replies', 'connected_mailbox'))
+                 and quality.get('contact_filter', 'available') == 'available')
+    # The addresses the gate used (split_for_prompt). contacts_lookup has no
+    # email field — it is kept out of the prompt on purpose — so reading the
+    # addresses from it found nobody, and every "did any client email me
+    # today?" this fallback answered was "no" (2026-09-26). contacts_lookup
+    # stays the fallback for a context built without the split.
+    if 'email_known_senders' in ctx:
+        known = set(ctx.get('email_known_senders') or ())
+    else:
+        known = known_sender_emails(ctx.get('contacts_lookup') or [])
     # Recheck the current sender policy even though the context is already
     # filtered. A platform reply is not necessarily from a saved contact.
     messages = [row for row in (ctx.get('email_replies') or [])
@@ -177,6 +188,10 @@ def split_for_prompt(
     eligible list: if forty messages arrived and none were from a
     contact, Chief must be able to say "nothing from anyone you know"
     instead of "nothing arrived" — the second is false.
+
+    email_known_senders is the allowlist the split used, for the one
+    reader that must re-check a sender (client_email_today_reply). It is
+    never rendered into the prompt or the answer check's evidence.
     """
     known = known_sender_emails(contacts)
     eligible: List[Dict[str, Any]] = []
@@ -191,4 +206,5 @@ def split_for_prompt(
     return {
         "email_replies": eligible[:PROMPT_REPLY_CAP],
         "email_replies_withheld": withheld,
+        "email_known_senders": sorted(known),
     }

@@ -106,6 +106,11 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "business_card_connections": "encrypted third-party OAuth credentials and card preferences; never portable, cascade on business deletion",
     "business_secrets": "encrypted browser credentials; never exported, cascade on business deletion",
     "checkin_stations": "check-in station device tokens and PIN hashes; credentials, never portable — a restored church pairs its tablets again; cascade on business deletion",
+    # The practitioner's other calendar. The feed link is a credential
+    # (it reads their whole calendar), and the busy blocks are re-derived
+    # from it on every sync; both cascade with the business.
+    "calendar_feeds": "private calendar links (each one reads a whole calendar); never exported, cascade on business deletion",
+    "calendar_busy_blocks": "busy times re-derived from a private calendar link on every sync; cascade on feed/business deletion",
     # Platform books and metering — the platform must keep these for its
     # own accounts, whatever a business does with theirs.
     "usage_grants":            "platform credit grants; platform billing record",
