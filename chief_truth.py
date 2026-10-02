@@ -939,6 +939,39 @@ def _no_trim(why, reason):
     return None
 
 
+# "reference" also includes pricing ballparks and ordinary planning advice.
+# Only actual public rules call for an official-source warning; attaching it
+# to every reference made marketing outcomes sound like regulated instructions.
+_OFFICIAL_RULE = re.compile(
+    r"\b(?:laws?|legal|statutory|regulations?|regulatory|tax(?:es|ation)?|IRS|FTC|FDA|"
+    r"licen[sc](?:e|es|ing)|permits?|copyright|trademark|minimum wage|"
+    r"filing (?:deadline|threshold|requirement)|government (?:rule|requirement)|"
+    r"HIPAA|OSHA|GDPR|COPPA|ADA)\b"
+    r"|\b(?:990(?:-N|-EZ)?|1099|W-2|501\s*\(c\))\b", re.I)
+_BINDING_RULE = re.compile(
+    r"\b(?:prohibits?|forbids?|mandatory|prohibited|illegal)\b"
+    r"|\b(?:must|shall|required to|requires? (?:[\w-]+ ){0,4}to) "
+    r"(?:retain|file|disclose|register|report|obtain|comply)\b", re.I)
+_MEDICAL_INSTRUCTION = re.compile(
+    r"\b(?:take|give|administer|dose|dosage)\b[^.!?]{0,80}\b(?:mg|mcg|milligrams?|tablets?|capsules?)\b"
+    r"|\b(?:medication|prescription|drug|vaccine|medical treatment)\b", re.I)
+_NAMED_SOURCE_CLAIM = re.compile(
+    r"\b(?:according to|published (?:research|study|report)|"
+    r"(?:a|the) study (?:found|shows|says)|official (?:guidance|source))\b", re.I)
+
+
+def _reference_notice(references, draft):
+    """Delivery only: keep all existing verification and estimate qualifications."""
+    sentences = [_sentence_containing(draft, reference) for reference in references]
+    if any(_OFFICIAL_RULE.search(sentence) or _BINDING_RULE.search(sentence) for sentence in sentences):
+        return "This is general guidance; confirm the applicable rule with the official source before acting."
+    if any(_MEDICAL_INSTRUCTION.search(sentence) for sentence in sentences):
+        return "Confirm that health guidance with a qualified clinician or an official medical source before acting."
+    if any(_NAMED_SOURCE_CLAIM.search(sentence) for sentence in sentences):
+        return "I haven't verified the cited source for that claim."
+    return ""
+
+
 def _clean_review_gaps(raw, reply, sources, gaps, references):
     """Remove unsupported claims, not just their warning label. No extra model call.
     Keep the review details in metadata; re-check remaining claims against
@@ -980,8 +1013,9 @@ def _clean_review_gaps(raw, reply, sources, gaps, references):
     if has_completion_claim(draft) and not (verdict == 'supported' and wrote_anything(sources)):
         return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps}
     draft = re.sub(r'\n{3,}', '\n\n', draft).strip()
-    if refs:
-        draft += "\n\nThis is general guidance; confirm the applicable rule with the official source before acting."
+    notice = _reference_notice(refs, draft)
+    if notice:
+        draft += "\n\n" + notice
     return draft, {'status': 'caveated' if refs else 'trimmed', 'sources': cited,
                    'gaps': gaps, 'references': refs, 'cuts': cuts}
 
