@@ -150,3 +150,20 @@ def test_generic_read_fallback_does_not_claim_nothing_ran_or_results_are_visible
         json.dumps({'verdict': 'unsupported', 'claims': []}))
     assert 'lookup ran' in answer and 'No action ran' not in answer and 'results shown' not in answer
     assert meta['status'] == 'withheld'
+
+
+@pytest.mark.parametrize("qualifier", ["that are sent", "with an outstanding balance", "from last month", "for Jordan", "that are viewed"])
+def test_qualified_all_request_preserves_selected_scope(qualifier):
+    action = {"type": "show_view", "view": "invoices", "filter": "open"}
+    assert owner_invoice_scope(action, "Show all invoices " + qualifier) == action
+
+def test_conversational_all_visual_request():
+    action = {"type": "show_view", "view": "invoices", "filter": "open"}
+    text = "Can you do me a favor? I want you to pull up all the invoices to show me a visual of the invoices, so that way I can get an idea exactly where things are standing."
+    assert owner_invoice_scope(action, text)["filter"] == "all"
+
+
+@pytest.mark.parametrize("prefix", ["For Jordan, ", "For last month, ", "For sent status, ", "Without the settled ones, "])
+def test_qualified_prefix_preserves_invoice_scope(prefix):
+    action = {"type": "show_view", "view": "invoices", "filter": "open"}
+    assert owner_invoice_scope(action, prefix + "show all invoices.") == action

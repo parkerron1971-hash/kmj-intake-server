@@ -2695,6 +2695,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         # It is safe even when the repair/review timed out or hallucinated.
         if ui_bits:
             return _above(ui_bits, _LEFT_OUT), {'status': 'receipts', 'sources': []}
+        if _weather_assertions(reply) and not receipts:
+            return WEATHER_UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [],
+                'reason': reason, 'recovery_attempted': True}
         return NO_ACTION_REPLY, {'status': 'withheld', 'sources': ['turn:execution'],
                                  'reason': reason, 'recovery_attempted': True}
     if ui_bits:

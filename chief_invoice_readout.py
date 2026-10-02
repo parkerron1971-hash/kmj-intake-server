@@ -7,6 +7,17 @@ import re
 
 
 _ALL_INVOICES = re.compile(r"\b(?:all|every)\s+(?:(?:of\s+)?(?:my|the|our)\s+)?invoices?\b", re.I)
+_BROAD_PREFIX = re.compile(
+    r"^\s*(?:can you do me a favor[?.!,]\s*)?"
+    r"(?:I (?:want|would like) you to\s+)?(?:(?:can|could|would) you\s+)?"
+    r"(?:please\s+)?(?:(?:show(?: me)?|list|pull up|display|open|let me see)\s+)?$", re.I)
+_BROAD_TAIL = re.compile(
+    r"^\s*(?:that I have\s*,?\s*)?"
+    r"(?:(?:as|in) a (?:visual|chart|list|timeline)|"
+    r"to show me a visual of (?:the|my|our) invoices)?"
+    r"(?:\s*,?\s*so (?:that way )?I can (?:get an idea exactly |see )where things (?:are standing|stand))?"
+    r"[.!?\s]*$", re.I)
+
 _NARROWED = re.compile(r"\b(?:not|don't|do not|only|except|open|unpaid|paid|overdue|draft|cancelled|canceled|void)\b", re.I)
 
 
@@ -16,8 +27,11 @@ def owner_invoice_scope(action, owner_text):
     Ambiguous, negated, and status-qualified requests keep model-selected scope.
     This only changes a display read, never a billing or sending action.
     """
+    match = _ALL_INVOICES.search(owner_text or '')
+    prefix = (owner_text or '')[:match.start()] if match else ''
+    tail = (owner_text or '')[match.end():] if match else ''
     if (action.get('type') == 'show_view' and action.get('view') == 'invoices'
-            and _ALL_INVOICES.search(owner_text or '') and not _NARROWED.search(owner_text or '')):
+            and match and _BROAD_PREFIX.fullmatch(prefix) and _BROAD_TAIL.fullmatch(tail) and not _NARROWED.search(owner_text or '')):
         return {**action, 'filter': 'all'}
     return action
 
