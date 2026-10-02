@@ -1206,6 +1206,17 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_agent_runs (every tick), platform_changelog (findings only)",
     },
     {
+        "id": "support_desk",
+        "name": "Support desk",
+        "kind": "agent",
+        "beat": "Reads every support ticket waiting on an answer (the conversation and "
+                "the business's setup) and leaves a draft reply, a one-line summary and "
+                "a suggested category and severity for a person to edit and send. Never "
+                "sends; drafts pass the practitioner wording guard.",
+        "schedule": "every 5 minutes (at most 5 drafts a pass)",
+        "writes_to": "support_triage (draft fields), platform_agent_runs",
+    },
+    {
         "id": "chief_quality",
         "name": "Chief quality & cost",
         "kind": "watcher",
@@ -1306,6 +1317,13 @@ async def run_hermes_now(_owner=Depends(require_owner)):
     """Manual tick from the console — same pass the hourly schedule runs."""
     from hermes_agent import hermes_tick
     return await hermes_tick()
+
+
+@router.post("/agents/support-desk/run")
+async def run_support_desk_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the five-minute schedule."""
+    from support_drafts import drafts_tick
+    return await drafts_tick()
 
 
 @router.post("/agents/chief-quality/run")
