@@ -422,6 +422,7 @@ def price_list() -> Dict[str, Any]:
         "site_build_base": pricing_config.build_base(),
         "site_build_per_section": pricing_config.build_per_section(),
         "site_revamp": pricing_config.revamp_price(),
+        "site_build_offer_page": pricing_config.offer_page_price(),
         "section_rewrite": pricing_config.section_rewrite(),
         "small_edit": pricing_config.small_edit(),
         "document": pricing_config.doc_gen(),
