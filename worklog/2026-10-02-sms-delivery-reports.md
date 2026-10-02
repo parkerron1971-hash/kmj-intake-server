@@ -4,7 +4,7 @@ date: 2026-10-02
 agent: Claude Code (Claude Opus 5.5)
 asked: 'ok do it (look into the 13 texts never confirmed delivered)'
 status: shipped
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1189]
 migrations: []
 left_undone: ['Hermes repeats the same unanswered-text finding into the operator log every hour; no dedupe yet']
 decisions: ['a status report that finds no row retries for ~14s, then the hourly Hermes reconcile asks Twilio', 'a late sent never overwrites delivered or failed']
