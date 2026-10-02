@@ -189,6 +189,7 @@ links, completion claims and factual premises embedded in recommendations.
 An owner question/presupposition is not evidence of an answer. Label owner-reported
 facts as reported, not independently verified. Inferred memories and working summaries
 are assumptions, never established facts. Old facts cannot establish current status.
+Current weather needs this-turn retrieved weather evidence, never a location question or prior assistant claim.
 Incomplete lists cannot prove totals or absence. Missing/failed reads mean unavailable,
 not zero or none. A record that says no_matches supports only 'no matching records found'.
 Research must come from supplied research sources. Never verify from your own knowledge.
@@ -473,6 +474,85 @@ def _unsourced(claim):
                 or not (isinstance(quote, str) and quote.strip()))
 
 
+# Current weather is external state, not a fact established by a location in
+# the owner's question or an earlier assistant answer. A nonnumeric condition
+# otherwise passes numeric-only provenance checks ("Muskegon is rainy now").
+_WEATHER_WORD = re.compile(r"\b(?:weather|rain(?:y|ing)?|snow(?:y|ing)?|sunny|cloudy|overcast|"
+                           r"thunderstorms?|humidity|wind(?:y|chill)?)\b", re.I)
+_WEATHER_NOW = re.compile(r"\b(?:current(?:ly)?|right now|now|today|tonight|tomorrow)\b", re.I)
+_WEATHER_CONDITION = re.compile(
+    r"\b(?:is|are|it['\u2019]s|will be)\s+(?:(?:currently|now|mostly|partly|not)\s+)*"
+    r"(?:rainy|raining|snowy|snowing|sunny|cloudy|overcast|windy|stormy|foggy)\b"
+    r"|\bwinds?\s+(?:is|are)\s+(?:from|at|gusting|blowing)\b", re.I)
+_WEATHER_UNCERTAIN = re.compile(
+    r"^(?:if|when|whether|in case|you (?:said|reported)|i (?:said|told|claimed))\b"
+    r"|\b(?:can(?:not|['\u2019]t)|could(?:not|n['\u2019]t)|haven['\u2019]t|have not|"
+    r"didn['\u2019]t|did not|never|not yet|don['\u2019]t|do not)\b.{0,60}"
+    r"\b(?:check|checked|verify|verified|know|pull|pulled|retrieve|retrieved|confirm|confirmed)\b", re.I)
+_WEATHER_OFFER = re.compile(r"^(?:i (?:can|could|will)|i['\u2019]ll|let me)\s+"
+                            r"(?:check|look up|fetch|retrieve|verify)\b", re.I)
+WEATHER_UNVERIFIED_REPLY = "I couldn't verify the current weather, so I don't have a reliable forecast to give you."
+
+
+def _weather_assertions(reply):
+    assertions = []
+    for sentence in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
+        # A conditional keeps its coordinated predicates: "If it is rainy
+        # and windy, move indoors" describes a contingency, not conditions.
+        # A separate "but/however" clause can still assert current weather.
+        for scope in re.split(r'[;:]\s*|,?\s+but\s+|\bhowever,?\s+', sentence, flags=re.I):
+            scope = scope.strip()
+            if re.match(r'^(?:if|when|whether|in case)\b', scope, re.I):
+                continue
+            # Attribution, uncertainty, and offers apply only to their own
+            # clause. A comma splice cannot turn the following fact into a
+            # quotation or an uncertainty statement.
+            for clause in re.split(r',\s*(?:(?:and|because)\s+)?|\s+(?:and|because)\s+', scope, flags=re.I):
+                clause = clause.strip()
+                if (not clause or clause.endswith('?') or _WEATHER_UNCERTAIN.search(clause)
+                        or _WEATHER_OFFER.search(clause)):
+                    continue
+                timed = bool(_WEATHER_NOW.search(clause))
+                if not timed and re.match(
+                        r'^(?:winters|summers|springs|autumns|falls|rainy days|snowy days)\s+'
+                        r'(?:are|can be|tend to be)\b', clause, re.I):
+                    continue
+                # Guard explicit current conditions, not generic weather nouns:
+                # "Rain is water" and "Rainy days are a reason to plan" are not
+                # reports that a location is experiencing rain right now.
+                if _WEATHER_CONDITION.search(clause) or (_WEATHER_WORD.search(clause) and timed):
+                    assertions.append(clause)
+    return assertions
+
+
+def _weather_source(sid, source):
+    if not isinstance(source, dict) or source.get('failed'):
+        return False
+    # Provider-delivered citations are recorded during this turn, never copied
+    # from conversational history. Structured weather tools can supply records.
+    if source.get('kind') == 'research' and sid.startswith(('web:https://', 'web:http://')):
+        return True
+    return (source.get('kind') == 'record'
+            and bool(re.match(r'^(?:tool|lookup|read):.*weather', sid, re.I)))
+
+
+def _weather_provenance_missing(reply, claims, sources):
+    for assertion in _weather_assertions(reply):
+        covered = False
+        for claim in claims:
+            if not isinstance(claim, dict) or not isinstance(claim.get('text'), str):
+                continue
+            sid = claim.get('source_id')
+            if (isinstance(sid, str) and _weather_source(sid, sources.get(sid))
+                    and not _unsourced(claim)
+                    and _squash(assertion).rstrip('.!?') in _squash(claim['text']).rstrip('.!?')):
+                covered = True
+                break
+        if not covered:
+            return True
+    return False
+
+
 def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], str]:
     """Return (verdict, cited_source_ids, reason).
 
@@ -501,6 +581,8 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
     claims = review.get('claims')
     if not isinstance(claims, list) or len(claims) > 80:
         return 'invalid', [], 'claims is not a bounded list'
+    if _weather_provenance_missing(reply, claims, sources):
+        return 'unsupported', [], 'current weather lacks retrieved evidence'
     # The model's verdict is advisory. What decides is the claims it lists:
     # a claim it could not support carries a gap and withholds the draft
     # with a reason we can read; a verdict of unsupported over claims that
@@ -1964,6 +2046,8 @@ class _SentenceProver:
             return False, None
         if has_completion_claim(sentence) or _DONE_CLAIM.search(_asserted_text(sentence)):
             return False, None
+        if _weather_assertions(sentence):
+            return False, None  # external current state needs the citation reviewer
         # A count said in words is a figure like any other: "Five invoices"
         # must match a record's 5, and "Six invoices" must not.
         figures = _numbers(_counts_as_digits(sentence))
@@ -2158,7 +2242,7 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
         return False
     if not sid:
         # A vacuous review must not release an uncited business assertion.
-        return not quote and not (_ABOUT_THE_BUSINESS.search(sentence)
+        return not quote and not (_weather_assertions(sentence) or _ABOUT_THE_BUSINESS.search(sentence)
             or _STATE_CLAIM.search(sentence) or _STANDING_CLAIM.search(sentence)
             or _RECORD_NOUN.search(sentence)
             or _fast_lane_names(sentence) or _numbers(sentence))
@@ -2329,6 +2413,9 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
         if email_answer:
             logger.info('reply review unchecked (%s); records answer shown', reason)
             return email_answer, {'status': 'records', 'sources': ['context:email_replies']}
+        if _weather_assertions(reply):
+            return WEATHER_UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [],
+                                              'reason': 'current weather review unavailable'}
         if not has_completion_claim(reply):
             logger.info('reply review unchecked (%s); draft delivered', reason)
             return reply, {'status': 'unchecked', 'sources': [], 'reason': reason}
