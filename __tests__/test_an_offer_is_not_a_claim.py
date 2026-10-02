@@ -120,13 +120,20 @@ def _stream(pieces):
     "Give me a name and a phone or email and I'll add them. ",
     "I'll pull that up. ",
     "I'll open it. ",
-    "Once you confirm, I'll create the invoice. ",
 ])
 def test_a_promise_the_retry_would_catch_never_streams_early(sentence):
     # The retry reads the draft as written and still sends these back
     # for their action; said early, they could not be taken back.
     assert chief._looks_like_completed_action(sentence)
     assert _stream([sentence, "Okay. "]) == []
+
+
+def test_a_conditional_offer_the_retry_now_leaves_alone_streams():
+    # Main's missing-action trigger stopped reading "Once you confirm,
+    # I'll create the invoice." as work owed, so nothing replaces it later
+    # and the stream may say it.
+    assert not chief._looks_like_completed_action(
+        "Once you confirm, I'll create the invoice. ")
 
 
 def test_an_offer_the_retry_leaves_alone_still_streams():

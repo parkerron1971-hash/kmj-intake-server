@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Tuple, Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("design_languages")
 
@@ -641,6 +641,35 @@ def css_for(key: Optional[str]) -> str:
 
 def brief_for(key: Optional[str]) -> str:
     return LANGUAGES.get(key or "", {}).get("brief", "")
+
+
+# THE OBJECTS IN EACH LANGUAGE (2026-10-01, the concept-layer plan): the
+# object library has four finishes; each language has one it wears by
+# default and a line on how its objects should feel. The Director reads
+# it in THE DESIGN LANGUAGE block, so a seal is engraved in Ledger and lit
+# in Neon without anyone having to guess.
+OBJECT_FINISH: Dict[str, Tuple[str, str]] = {
+    "mural": ("paper", "objects look hand-made: paper, tape and marker on saturated colour blocks, a little tilt"),
+    "monograph": ("metal", "objects are quiet and engraved: metal seals, gilt or plain frames, grayscale paper"),
+    "broadsheet": ("paper", "objects read as print: paper tickets, receipts and certificates in ink and one printer's red"),
+    "signal": ("inverse", "objects are flat solid panels in the one colour, never textured or tilted; numbers are the ornament"),
+    "atelier": ("paper", "objects are still and matted: paper and plain frames, no glow, no tilt"),
+    "neon": ("glow", "objects sit on the night ground and glow in the accent; keep them few"),
+    "hearth": ("paper", "objects are soft warm paper with round corners; people show up on ID cards"),
+    "glass": ("glow", "objects are few: the product sits in a glowing frame; panels stay dark"),
+    "runway": ("paper", "objects are black and white only: light paper objects on the black ground, no accent tint"),
+    "arena": ("paper", "objects are light panels on the near-black ground under wide caps; tickets and session cards are the calendar"),
+    "ledger": ("metal", "objects carry the metallic accent: engraved seals, receipts in tabular figures"),
+}
+
+
+def objects_line(key: Optional[str]) -> str:
+    """The Director's one line on objects in this language, or ''."""
+    f = OBJECT_FINISH.get(key or "")
+    if not f:
+        return ""
+    return (f"OBJECTS IN THIS LANGUAGE: library objects wear the {f[0]} finish "
+            f"(data-finish=\"{f[0]}\") unless the concept argues otherwise; {f[1]}.")
 
 
 def label_for(key: Optional[str]) -> str:
