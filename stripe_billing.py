@@ -190,14 +190,17 @@ async def _load_business(business_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
-async def _patch_business(business_id: str, body: Dict[str, Any]) -> None:
-    """PATCH a businesses row via the service role. Fire and check."""
+async def _patch_business(business_id: str, body: Dict[str, Any],
+                          match: Optional[Dict[str, str]] = None) -> None:
+    """PATCH a businesses row via the service role. Fire and check.
+    `match` adds PostgREST filters, so a patch can apply only when the
+    row is still in an expected state."""
     headers = _service_headers()
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         r = await c.patch(
             f"{SUPABASE_URL}/rest/v1/businesses",
             headers=headers,
-            params={"id": f"eq.{business_id}"},
+            params={"id": f"eq.{business_id}", **(match or {})},
             json=body,
         )
     if r.status_code >= 400:
@@ -1142,14 +1145,66 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
             logger.warning(f"[first-run] arc begin failed (non-fatal): {e}")
 
 
-async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optional[str]) -> None:
-    """Bump status to past_due. Stripe will also fire
-    customer.subscription.updated which would do the same thing, but
-    we set it here too to be defensive."""
+# ─── Event order is not state ─────────────────────────────────────────
+# Stripe does not deliver events in order. Creative Genius's last payment
+# failed and Stripe cancelled the subscription in the same second
+# (2026-09-18): `customer.subscription.deleted` set the row to canceled,
+# then `invoice.payment_failed` blindly set it back to past_due, and the
+# business kept a seat for two weeks after Stripe ended it.
+# `invoice.paid` had the mirror bug (a late payment re-activated a
+# cancelled row). So billing events now apply the subscription as Stripe
+# holds it NOW, fetched by id, and only fall back to the event's own
+# payload, guarded so it never undoes a cancellation, when Stripe cannot
+# be read.
+
+_NOT_CANCELED = {"or": "(subscription_status.is.null,subscription_status.neq.canceled)"}
+
+
+async def _current_subscription(sub_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The subscription as Stripe holds it now, or None if unreadable."""
+    if not sub_id:
+        return None
+    try:
+        return await _stripe_get(f"/subscriptions/{sub_id}", [])
+    except Exception as e:
+        logger.warning(f"subscription {sub_id} unreadable, using the event payload: {e}")
+        return None
+
+
+def _invoice_subscription_id(inv: Dict[str, Any]) -> Optional[str]:
+    """The subscription an invoice belongs to (older and newer API shapes)."""
+    sub = inv.get("subscription")
+    if isinstance(sub, dict):
+        sub = sub.get("id")
+    if not sub:
+        sub = ((inv.get("parent") or {}).get("subscription_details") or {}).get("subscription")
+    return sub or None
+
+
+async def _apply_invoice_outcome(inv: Dict[str, Any], business_id: Optional[str],
+                                 fallback_status: str) -> None:
+    """An invoice event changes a business only through its subscription:
+    apply that subscription's current state, or, if Stripe can't be read,
+    the fallback status without ever overwriting a cancellation. A
+    one-off invoice (no subscription) changes nothing here."""
     if not business_id:
         return
-    await _patch_business(business_id, {"subscription_status": "past_due"})
-    logger.info(f"invoice.payment_failed: business {business_id} → past_due")
+    sub_id = _invoice_subscription_id(inv)
+    if not sub_id:
+        return
+    current = await _current_subscription(sub_id)
+    if current:
+        await _apply_subscription_state("customer.subscription.updated", current, business_id)
+        return
+    await _patch_business(business_id, {"subscription_status": fallback_status},
+                          match=_NOT_CANCELED)
+    logger.info(f"invoice event: business {business_id} → {fallback_status} (unless canceled)")
+
+
+async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optional[str]) -> None:
+    """A failed payment: apply the subscription's current state (usually
+    past_due; canceled when this was the last retry)."""
+    await _apply_invoice_outcome(inv, business_id, "past_due")
 
 
 # ─── Phase E v1.1 — numeric-limit surfaces (gate-ready, dormant) ─────
@@ -1347,7 +1402,14 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
         if event_type in ("customer.subscription.created",
                           "customer.subscription.updated",
                           "customer.subscription.deleted"):
-            await _apply_subscription_state(event_type, obj, business_id)
+            # The subscription as it is now, not as this (possibly late)
+            # event saw it. Falls back to the payload when unreadable.
+            current = await _current_subscription(obj.get("id"))
+            if current:
+                await _apply_subscription_state("customer.subscription.updated",
+                                                current, business_id)
+            else:
+                await _apply_subscription_state(event_type, obj, business_id)
             if business_id:
                 import event_spine
                 event_spine.emit("subscription_updated", business_id,
@@ -1363,10 +1425,10 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                                   "status": "past_due"},
                                  source="stripe_webhook")
         elif event_type in ("invoice.payment_succeeded", "invoice.paid"):
-            # Recovery: a successful payment clears past_due. (The
-            # subscription.updated event also lands; this is defensive.)
-            if business_id:
-                await _patch_business(business_id, {"subscription_status": "active"})
+            # Recovery: a successful payment clears past_due, through the
+            # subscription's current state, never re-activating a
+            # cancelled one.
+            await _apply_invoice_outcome(obj, business_id, "active")
         elif event_type == "checkout.session.completed":
             meta = obj.get("metadata") or {}
             if meta.get("kind") == "credit_pack":
