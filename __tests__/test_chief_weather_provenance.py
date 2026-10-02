@@ -118,6 +118,9 @@ def test_deterministic_early_speech_never_guesses_weather(draft):
     'You said it was rainy.',
     'If it rains, move indoors.',
     'I cannot verify current weather.',
+    'I can check the current weather for you.',
+    'I will check the weather.',
+    "I'll look up whether it is rainy.",
 ])
 def test_questions_uncertainty_reported_weather_and_unrelated_topics_stay_out_of_guard(sentence):
     assert not truth._weather_assertions(sentence)
@@ -133,3 +136,8 @@ def test_provider_review_without_citation_cannot_release_lowercase_weather(monke
         {'supported': True, 'source_id': '', 'quote': ''})))
     assert not asyncio.run(truth.review_stream_prefix(None, "It's rainy.", sources={},
         message=QUESTION, business_id='fixture'))
+
+
+def test_offer_cannot_hide_independent_weather_assertion():
+    draft = 'I can check the weather, and Muskegon is rainy right now.'
+    assert truth._weather_provenance_missing(draft, [], {})

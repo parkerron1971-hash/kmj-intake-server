@@ -486,6 +486,8 @@ _WEATHER_UNCERTAIN = re.compile(
     r"|\b(?:can(?:not|['\u2019]t)|could(?:not|n['\u2019]t)|haven['\u2019]t|have not|"
     r"didn['\u2019]t|did not|never|not yet|don['\u2019]t|do not)\b.{0,60}"
     r"\b(?:check|checked|verify|verified|know|pull|pulled|retrieve|retrieved|confirm|confirmed)\b", re.I)
+_WEATHER_OFFER = re.compile(r"^(?:i (?:can|could|will)|i['\u2019]ll|let me)\s+"
+                            r"(?:check|look up|fetch|retrieve|verify)\b", re.I)
 WEATHER_UNVERIFIED_REPLY = "I couldn't verify the current weather, so I don't have a reliable forecast to give you."
 
 
@@ -495,6 +497,13 @@ def _weather_assertions(reply):
         # Do not let an uncertainty preface excuse a following factual clause.
         for clause in re.split(r';\s*|,?\s+but\s+|\bhowever,?\s+', sentence, flags=re.I):
             clause = clause.strip()
+            if _WEATHER_OFFER.search(clause):
+                # An offer is not a report of the conditions. A following
+                # declarative clause still needs retrieval evidence.
+                continuation = re.split(r',\s*|\s+and\s+|\s+because\s+', clause, maxsplit=1, flags=re.I)
+                if len(continuation) == 2:
+                    assertions.extend(_weather_assertions(continuation[1]))
+                continue
             if (not clause or clause.endswith('?') or _WEATHER_UNCERTAIN.search(clause)
                     or not _WEATHER_WORD.search(clause) or not _WEATHER_NOW.search(clause)):
                 continue
