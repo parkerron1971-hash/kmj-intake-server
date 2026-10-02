@@ -113,3 +113,14 @@ def test_fragment_ack_is_voice_only_and_contains_no_business_claim(message, expe
 ])
 def test_short_answers_names_languages_and_mixed_requests_are_not_fragment_acks(message):
     assert feedback.for_request(SimpleNamespace(message=message, client_surface='voice')) is None
+
+
+@pytest.mark.parametrize('message', ['Um...', 'This is', 'I heard it twice'])
+def test_feedback_never_emits_waiting_local_lead(message):
+    req = chief.ChatRequest(business_id='business', message=message, client_surface='voice')
+    rec = route_ledger.RouteRecord(arrived=time.perf_counter(), business_id='business', user_id='owner')
+    track = fast.TwoTrack(req, 'owner', rec, model_router.score(message),
+        model_router.Route(model_router.LANE_FULL, 'fixture'))
+    async def expired_lead():
+        return [event async for event in track._lead_while(None, time.perf_counter() - 1)]
+    assert asyncio.run(expired_lead()) == []
