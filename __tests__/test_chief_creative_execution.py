@@ -195,3 +195,42 @@ def test_new_creation_does_not_reuse_old_receipt(setup,monkeypatch):
     result=asyncio.run(execution.status_result(request,OWNER))
     assert 'no confirmed image-job ID' in result['result']
     artwork.assert_not_called()
+
+
+def _text_reply(text='Here is where things stand.', stop='end_turn'):
+    return httpx.Response(200, json={'stop_reason': stop, 'content': [{'type': 'text', 'text': text}] if text else []})
+
+
+def test_platform_chief_talks_on_sonnet_5_5_without_rejected_fields(setup, store, monkeypatch):
+    call = AsyncMock(return_value=_text_reply())
+    monkeypatch.setattr(console.llm_call, 'apost', call)
+    monkeypatch.setattr('chief_flyer_direction.attach_review', AsyncMock())
+    response = client_for(monkeypatch).post('/platform/chief/message', json={'message': 'How are the agents doing?'})
+    assert response.status_code == 200, response.text
+    sent = call.call_args.args[1]
+    assert sent['model'] == 'claude-sonnet-5-5'
+    assert 'temperature' not in sent, 'Sonnet 5.5 rejects temperature'
+    assert sent['thinking'] == {'type': 'between_tools'}, 'thinking must not eat the reply budget'
+    assert sent['tool_choice']['type'] == 'auto'
+
+
+def test_a_creation_turn_that_must_call_the_tool_uses_the_previous_sonnet(setup, store, monkeypatch):
+    call = AsyncMock(return_value=httpx.Response(200, json={'stop_reason': 'tool_use', 'content': [
+        {'type': 'tool_use', 'name': 'generate_image', 'input': {'prompt': 'Approved abstract founder flyer'}}]}))
+    monkeypatch.setattr(console.llm_call, 'apost', call)
+    monkeypatch.setattr(creative.images, 'handle_generate_image', AsyncMock())
+    monkeypatch.setattr('chief_flyer_direction.attach_review', AsyncMock())
+    client_for(monkeypatch).post('/platform/chief/message', json={'message': 'Create the flyer'})
+    sent = call.call_args.args[1]
+    assert sent['model'] == console.PLATFORM_CHIEF_FALLBACK_MODEL and sent['tool_choice']['type'] == 'any'
+    assert sent['temperature'] == 0.6 and 'thinking' not in sent, 'Sonnet 4.5 is asked exactly as before'
+
+
+def test_a_declined_turn_is_asked_once_more_on_the_previous_sonnet(setup, store, monkeypatch):
+    call = AsyncMock(side_effect=[_text_reply('', stop='refusal'), _text_reply('Answered.')])
+    monkeypatch.setattr(console.llm_call, 'apost', call)
+    monkeypatch.setattr('chief_flyer_direction.attach_review', AsyncMock())
+    response = client_for(monkeypatch).post('/platform/chief/message', json={'message': 'Summarize the week'})
+    assert response.status_code == 200, response.text
+    assert [c.args[1]['model'] for c in call.call_args_list] == ['claude-sonnet-5-5', console.PLATFORM_CHIEF_FALLBACK_MODEL]
+    assert 'Answered.' in response.json()['reply']
