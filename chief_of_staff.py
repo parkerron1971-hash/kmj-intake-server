@@ -8447,6 +8447,36 @@ def _context_sources(client, biz: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
     }
 
 
+class _PreparationTasks:
+    """Request-owned reads; drain before the shared HTTP client is closed.
+
+    Cancelling an asyncio.to_thread await cannot stop its underlying thread.
+    Those existing synchronous reads keep copied JWT/billing context and do
+    not use this request's async HTTP client or mutate business records.
+    """
+    def __init__(self):
+        self.tasks = []
+
+    async def __aenter__(self):
+        return self
+
+    def start(self, coro):
+        task = asyncio.create_task(coro)
+        self.tasks.append(task)
+        return task
+
+    async def clear(self):
+        tasks, self.tasks = self.tasks, []
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def __aexit__(self, *exc):
+        await self.clear()
+
+
 OPTIONAL_CONTEXT_BUDGET_S = 0.75
 _OPTIONAL_CONTEXT_SOURCES = {"mentor_active", "habit_block", "relationship_insights"}
 
@@ -14379,7 +14409,12 @@ async def chief_chat(
         # Durations and counts only; nothing here is content.
         _t.mark("billing_gates")
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient() as client, _PreparationTasks() as preparation:
+            prep_biz = None
+            warm = None
+            prep_names = []
+            prep_sources = []
+            prep_learned = None
             # Recurrence "cron" — generate any due invoice instances
             # before we load context so they show up this turn. Cheap
             # in steady-state (zero rows the vast majority of the time).
@@ -14392,12 +14427,14 @@ async def chief_chat(
             _t.mark("recurrence")
 
             # Autopilot + escalations — needs the business row first so
-            # we can read settings.autopilot. Fetch a minimal copy.
+            # we can read settings.autopilot. Fetch a fresh scoped full row;
+            # preparation also needs created_at and other existing source inputs.
             biz_lite = None
             try:
-                biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=id,name,type,settings,owner_id")
+                biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=*&limit=1")
                 biz_lite = (biz_rows or [None])[0]
                 if biz_lite:
+                    prep_biz = dict(biz_lite)
                     # Whose bill this turn lands on. req.business_id is
                     # caller-supplied, so it is not attributed on trust:
                     # this read ran under the practitioner's OWN JWT, so
@@ -14441,10 +14478,52 @@ async def chief_chat(
                        streamed=_STREAM_SINK.get() is not None)
                 return invoice_result
 
+            async def _enrich(label: str, coro, fallback):
+                try:
+                    return await coro
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"{label} failed: {e}")
+                    return fallback
+
+            async def _learned(business):
+                # Feed 2 (LAYER_TWO_ARCHITECTURE §6) — what OTHER
+                # businesses in this vertical have taught the system,
+                # retrieved for what the practitioner just said. Lands in
+                # the DYNAMIC tail, not the cached region: it changes with
+                # every message, so caching it would break the 3-segment
+                # prompt cache.
+                import vertical_context as _vctx
+                return await asyncio.to_thread(
+                    _vctx.build_vertical_learned_block, business, req.message or "")
+
+            def _start_preparation(business):
+                nonlocal warm, prep_names, prep_sources, prep_learned
+                if warm is None:
+                    warm = chief_prewarm.take(user_session.user.id, req.business_id)
+                sources = _context_sources(client, business)
+                prep_names = list(sources)
+                prep_sources = [preparation.start(_resolve_source(warm, n, *sources[n]))
+                                for n in prep_names]
+                prep_learned = preparation.start(
+                    _enrich("vertical learned context", _learned(business), ""))
+
+            # Only an actual streamed request overlaps these reads. POST keeps
+            # its existing scoped replay check before any extra embedding work.
+            # Known feedback does not need enrichment at all. No provider reply
+            # is guessed; learned retrieval uses this turn's complete message.
+            import chief_call_feedback
+            import chief_quick_plan
+            if (prep_biz and str(prep_biz.get('id')) == str(req.business_id)
+                    and str(prep_biz.get('owner_id')) == str(user_session.user.id)
+                    and _STREAM_SINK.get() is not None
+                    and chief_call_feedback.for_request(req) is None
+                    and not chief_quick_plan.eligible(req)):
+                _start_preparation(prep_biz)
+
             # Gather global context + view-specific detail in parallel
             _turn_status("reading your business")
-            ctx_task = _gather_context(client, req.business_id, query_text=req.message)
-            view_task = _fetch_view_detail(client, req.business_id, req.current_context)
+            ctx_task = preparation.start(_gather_context(client, req.business_id, query_text=req.message))
+            view_task = preparation.start(_fetch_view_detail(client, req.business_id, req.current_context))
             ctx, view_detail = await asyncio.gather(ctx_task, view_task)
             _t.mark("context")
 
@@ -14537,24 +14616,6 @@ async def chief_chat(
             # return_exceptions keeps the failure isolation the old
             # per-call try/except blocks gave: a slow or broken source
             # degrades its own block to ""/None/[] and never the turn.
-            async def _enrich(label: str, coro, fallback):
-                try:
-                    return await coro
-                except Exception as e:  # pragma: no cover
-                    logger.warning(f"{label} failed: {e}")
-                    return fallback
-
-            async def _learned():
-                # Feed 2 (LAYER_TWO_ARCHITECTURE §6) — what OTHER
-                # businesses in this vertical have taught the system,
-                # retrieved for what the practitioner just said. Lands in
-                # the DYNAMIC tail, not the cached region: it changes with
-                # every message, so caching it would break the 3-segment
-                # prompt cache.
-                import vertical_context as _vctx
-                return await asyncio.to_thread(
-                    _vctx.build_vertical_learned_block, biz, req.message or "")
-
             # Suggestions do not feed the snapshot already read above. Keep
             # their existing per-turn trigger, without waiting for their writes.
             _spawn_proactive_suggestions(biz)
@@ -14565,11 +14626,15 @@ async def chief_chat(
             # cost this turn nothing. A miss returns {} and every source
             # is fetched exactly as before — the hit is an optimisation,
             # never a correctness dependency.
-            warm = chief_prewarm.take(
-                getattr(getattr(user_session, "user", None), "id", None),
-                req.business_id,
-            )
-            _t.warm = len(warm)
+            # The fresh authoritative snapshot wins if settings/type changed
+            # while it loaded. Discard earlier results and rebuild against it.
+            if prep_sources and prep_biz != biz:
+                await preparation.clear()
+                prep_sources = []
+                prep_learned = None
+            if not prep_sources:
+                _start_preparation(biz)
+            _t.warm = len(warm or {})
 
             # First-run concierge — the live plug-in snapshot. Probes are
             # a dozen sync PostgREST reads, so they ride the same gather
@@ -14607,11 +14672,10 @@ async def chief_chat(
                 import business_knowledge
                 return await asyncio.to_thread(business_knowledge.knowledge_for, biz)
 
-            sources = _context_sources(client, biz)
-            _names = list(sources.keys())
+            _names = prep_names
             _results = await asyncio.gather(
-                *[_resolve_source(warm, n, *sources[n]) for n in _names],
-                _enrich("vertical learned context", _learned(), ""),
+                *prep_sources,
+                prep_learned,
                 _enrich("setup snapshot", _setup_probe(), None),
                 _enrich("business knowledge", _knowledge_probe(), None),
                 _enrich("first-run arc", _arc_probe(), None),
