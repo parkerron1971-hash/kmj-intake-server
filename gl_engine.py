@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import sb_clients
 import plaid_categorization
+import bank_money
 
 logger = logging.getLogger("gl_engine")
 
@@ -37,6 +38,9 @@ COA_SEED: List[Tuple[str, str, str, str, Optional[str], bool]] = [
     ("1000", "Cash - Operating",      "asset",     "debit",  None, False),
     ("1100", "Accounts Receivable",   "asset",     "debit",  None, False),
     ("1150", "Stripe Clearing",       "asset",     "debit",  None, False),
+    # A move between the business's own accounts posts both legs through
+    # here (bank_money: money_kind='transfer'); a matched pair nets to zero.
+    ("1050", "Transfers in Transit",  "asset",     "debit",  None, False),
     ("2000", "Accounts Payable",      "liability", "credit", None, False),
     ("2100", "Sales Tax Payable",     "liability", "credit", None, False),
     ("3000", "Opening Balance Equity","equity",    "credit", None, False),
@@ -171,7 +175,8 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
             f"/plaid_transactions?business_id=eq.{biz}&{acct}"
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,business_category,business_subcategory,"
-            f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id&limit=20000") or []
+            f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
+            f"{bank_money.ledger_cols()}&limit=20000") or []
     # I.7 — trust accounts are a separate ledger: their balances back the
     # 1200/2200 pair, never the operating-cash (1000) opening plug.
     cash_accts = sb_clients.sb_get_as_service(
@@ -319,13 +324,22 @@ def desired_for_plaid(t: Dict[str, Any],
             return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Client trust disbursement",
                            [_line("2200", debit=amt), _line("1200", credit=amt)])]
         return []
+    # bank_money.kind: the practitioner's answer when the bank label is wrong
+    # (income / owner / transfer); None keeps the automatic rules below.
+    mk = bank_money.kind(t)
     if amt < 0:
         inflow = -amt
         if t.get("reconciled_to_payout_id"):
             return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Payout deposit",
                            [_line("1000", debit=inflow), _line("1150", credit=inflow)])]
-        if plaid_categorization.is_income_category(
-                t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+        if mk == "transfer":
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid,
+                           "Transfer in from your own account",
+                           [_line("1000", debit=inflow), _line("1050", credit=inflow)])]
+        if mk == "owner":
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Money in from the owner",
+                           [_line("1000", debit=inflow), _line("3100", credit=inflow)])]
+        if bank_money.is_income(t):
             return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Other income",
                            [_line("1000", debit=inflow), _line("4900", credit=inflow)])]
         # Transfer-in / uncategorized deposit: NOT income (P&L excludes it,
@@ -335,8 +349,14 @@ def desired_for_plaid(t: Dict[str, Any],
                        "Transfer in / uncategorized deposit",
                        [_line("1000", debit=inflow), _line("3100", credit=inflow)])]
     if amt > 0:
-        if plaid_categorization.is_income_category(
-                t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+        if mk == "transfer":
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid,
+                           "Transfer out to your own account",
+                           [_line("1050", debit=amt), _line("1000", credit=amt)])]
+        if mk == "owner":
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Owner draw",
+                           [_line("3200", debit=amt), _line("1000", credit=amt)])]
+        if not bank_money.is_expense(t):
             # Income-categorized OUTFLOW (refund/transfer out): not an expense
             # (P&L parity with H.3a) but real cash out — Owner's Draw (I.4).
             return [_entry(_d(t.get("date")), "plaid_transaction", sid,
@@ -719,7 +739,10 @@ def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str]
     types = _TABLE_SOURCE_TYPES.get(table)
     if not types:
         return
-    rows = sb_clients.sb_get_as_service(_SOURCE_FETCH[table].format(id=source_id)) or []
+    path = _SOURCE_FETCH[table].format(id=source_id)
+    if table == "plaid_transactions":   # money_kind once its column exists
+        path = path.replace("&limit=1", f"{bank_money.ledger_cols()}&limit=1")
+    rows = sb_clients.sb_get_as_service(path) or []
     row = rows[0] if rows else None
     desired: List[Dict[str, Any]] = []
     if row is not None:

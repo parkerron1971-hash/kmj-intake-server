@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import sb_clients
 import plaid_categorization
+import bank_money
 
 logger = logging.getLogger("reports_engine")
 
@@ -145,7 +146,8 @@ def _plaid_tx_in_period(biz: str, start: _date, end: _date) -> List[Dict[str, An
         f"&excluded_from_books=eq.false&pending=eq.false"
         f"&date=gte.{_iso(start)}&date=lte.{_iso(end)}"
         f"&select=amount,business_category,business_subcategory,"
-        f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id&limit=5000"
+        f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
+        f"{bank_money.cols()}&limit=5000"
     ) or []
 
 
@@ -216,8 +218,7 @@ def _pl_for_window(biz: str, start: _date, end: _date) -> Dict[str, Any]:
     plaid_income = 0.0
     for t in txs:
         a = float(t.get("amount") or 0)
-        if a < 0 and not t.get("reconciled_to_payout_id") and plaid_categorization.is_income_category(
-                t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+        if bank_money.is_income(t):
             plaid_income += -a
     plaid_income = round(plaid_income, 2)
     gross_revenue = round(invoiced - refunds + plaid_income, 2)
@@ -236,8 +237,7 @@ def _pl_for_window(biz: str, start: _date, end: _date) -> Dict[str, Any]:
     # Plaid outflows = expenses.
     for t in txs:
         a = float(t.get("amount") or 0)
-        if a > 0 and not plaid_categorization.is_income_category(
-                t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+        if bank_money.is_expense(t):
             bucket = t.get("business_category") or plaid_categorization.map_plaid_to_bucket(
                 t.get("plaid_category_primary"), t.get("plaid_category_detail"))
             _add(bucket, t.get("business_subcategory"), a)

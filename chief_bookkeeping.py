@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import sb_clients
 import plaid_categorization
+import bank_money
 import plaid_reconciliation
 
 logger = logging.getLogger("chief_bookkeeping")
@@ -92,7 +93,7 @@ def bookkeeping_counts(business_id: str) -> Dict[str, Any]:
     uncat = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{business_id}&{acct}"
         f"&excluded_from_books=eq.false&pending=eq.false"
-        f"&or=(business_category.is.null,business_category.eq.other)&select=transaction_id&limit=2000"
+        f"&{bank_money.uncategorized_filter()}&select=transaction_id&limit=2000"
     ) or []
     return {
         "linked": True,
@@ -134,14 +135,15 @@ def gather_and_format(business_id: str, business_type: Optional[str] = None) -> 
             txs = sb_clients.sb_get_as_service(
                 f"/plaid_transactions?business_id=eq.{business_id}&{acct}"
                 f"&excluded_from_books=eq.false&pending=eq.false&date=gte.{since}"
-                f"&select=amount,plaid_category_primary,plaid_category_detail&limit=3000"
+                f"&select=amount,plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
+                f"{bank_money.cols()}&limit=3000"
             ) or []
             for t in txs:
                 a = float(t.get("amount") or 0)
                 if a < 0:
-                    income += -a
-                elif not plaid_categorization.is_income_category(
-                    t.get("plaid_category_primary"), t.get("plaid_category_detail")):
+                    if bank_money.is_income(t):   # not transfers, owner money or payouts
+                        income += -a
+                elif bank_money.is_expense(t):
                     expense += a
 
         signals = recent_learning_signals(business_id, days=30)
@@ -391,7 +393,7 @@ def analyze_uncategorized(business_id: str, *, limit: int = 25) -> List[Dict[str
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{business_id}&{acct}"
         f"&excluded_from_books=eq.false&pending=eq.false"
-        f"&or=(business_category.is.null,business_category.eq.other)"
+        f"&{bank_money.uncategorized_filter()}"
         f"&order=date.desc&limit={int(limit)}"
         f"&select=transaction_id,amount,date,name,merchant_name,business_category,"
         f"plaid_category_primary,plaid_category_detail"

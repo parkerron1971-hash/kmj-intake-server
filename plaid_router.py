@@ -35,6 +35,7 @@ import sb_clients
 from auth_supabase import AuthedUser, require_user
 import plaid_helpers
 import plaid_categorization
+import bank_money
 import plaid_reconciliation
 
 logger = logging.getLogger("plaid_router")
@@ -547,7 +548,7 @@ def remove_account(
     return {"ok": True, "removed": account_id}
 
 
-_TX_SELECT = (
+_TX_SELECT_BASE = (
     "select=transaction_id,account_id,amount,iso_currency_code,date,"
     "authorized_date,datetime,name,merchant_name,"
     "plaid_category_primary,plaid_category_detail,"
@@ -555,6 +556,11 @@ _TX_SELECT = (
     "reconciled_to_payout_id,reconciled_to_charge_id,reconciled_to_transfer_id,"
     "reconciliation_status,practitioner_notes,notes"
 )
+
+def _tx_select() -> str:
+    """The list/detail select, with money_kind once its column exists."""
+    return _TX_SELECT_BASE + bank_money.cols()
+
 
 _SORT_COLUMNS = {
     "date": "date",
@@ -585,8 +591,9 @@ def _bucket_clause(buckets: List[str]) -> Optional[str]:
     wants_uncat = "uncategorized" in buckets
     named = [b for b in buckets if b in plaid_categorization.ALL_BUCKETS]
     if wants_uncat:
-        with_other = named + ([] if "other" in named else ["other"])
-        return f"or=(business_category.is.null,business_category.in.({','.join(with_other)}))"
+        # bank_money owns the rule (and, after its migration, drops rows the
+        # practitioner has already answered with a money_kind).
+        return bank_money.uncategorized_or([b for b in named if b != "other"])
     if named:
         return f"business_category=in.({','.join(named)})"
     return None
@@ -662,7 +669,7 @@ def list_transactions(
     order = f"{col}.{dir_}" if col == "date" else f"{col}.{dir_},date.desc"
 
     capped = max(1, min(int(limit), 200))
-    parts.append(_TX_SELECT)
+    parts.append(_tx_select())
     # Fetch one extra row to cheaply decide has_more without a count query.
     parts.append(f"order={order}&limit={capped + 1}&offset={int(offset)}")
 
@@ -680,7 +687,7 @@ def get_transaction(
     name/mask/subtype joined in."""
     _require_reader_for_tx(transaction_id, user)
     rows = sb_clients.sb_get_as_service(
-        f"/plaid_transactions?transaction_id=eq.{transaction_id}&{_TX_SELECT}&limit=1"
+        f"/plaid_transactions?transaction_id=eq.{transaction_id}&{_tx_select()}&limit=1"
     ) or []
     if not rows:
         raise HTTPException(404, "transaction not found")
@@ -700,6 +707,7 @@ class TxPatchBody(BaseModel):
     notes: Optional[str] = None
     trust_contact_id: Optional[str] = None    # I.10 — per-client trust tagging ("" clears)
     override_reason: Optional[str] = None     # required to edit a closed-period txn
+    money_kind: Optional[str] = None          # income | owner | transfer; "" = automatic again
 
 
 @router.patch("/transactions/{transaction_id}")
@@ -732,9 +740,17 @@ def update_transaction(
         patch["notes"] = body.notes or None
     if body.trust_contact_id is not None:
         patch["trust_contact_id"] = body.trust_contact_id or None
-    sb_clients.sb_patch_as_service(
+    if body.money_kind is not None:
+        if body.money_kind and body.money_kind not in bank_money.KINDS:
+            raise HTTPException(400, f"money_kind must be one of {bank_money.KINDS}")
+        if not bank_money.supported():
+            raise HTTPException(409, "Marking what a bank row is needs the 2026-10-02 bank money migration.")
+        patch["money_kind"] = body.money_kind or None
+    res = sb_clients.sb_patch_as_service(
         f"/plaid_transactions?transaction_id=eq.{transaction_id}", patch,
     )
+    if res is None:
+        raise HTTPException(502, "That change didn't save. Try again.")
     return {"ok": True}
 
 
@@ -838,7 +854,8 @@ def cash_flow_summary(biz: str, user: AuthedUser = Depends(require_user)) -> Dic
         return sb_clients.sb_get_as_service(
             f"/plaid_transactions?business_id=eq.{biz}"
             f"&date=gte.{date_gte}&pending=eq.false&excluded_from_books=eq.false&{acct_clause}"
-            f"&select=amount,business_category,plaid_category_primary,plaid_category_detail&limit=2000"
+            f"&select=amount,business_category,plaid_category_primary,plaid_category_detail"
+            f"{bank_money.cols()}&limit=2000"
         ) or []
 
     def _summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -848,10 +865,8 @@ def cash_flow_summary(biz: str, user: AuthedUser = Depends(require_user)) -> Dic
             a = float(r.get("amount") or 0)
             if a <= 0:
                 continue  # income side — excluded from expenses math
-            if plaid_categorization.is_income_category(
-                r.get("plaid_category_primary"), r.get("plaid_category_detail"),
-            ):
-                continue
+            if not bank_money.is_expense(r):
+                continue  # owner money, a transfer, or an income-coded debit
             outflow += a
             bucket = r.get("business_category") or plaid_categorization.map_plaid_to_bucket(
                 r.get("plaid_category_primary"), r.get("plaid_category_detail"),

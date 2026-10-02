@@ -320,20 +320,28 @@ def test_reconcile_skips_when_no_included_accounts(monkeypatch):
     assert plaid_reconciliation.reconcile_business("biz1") == (0, 0)
 
 
-def test_bucket_clause_handles_uncategorized():
+def test_bucket_clause_handles_uncategorized(monkeypatch):
     """5-bucket multi-select with the synthetic 'uncategorized' must build a
-    PostgREST predicate spanning NULL + named buckets. 'uncategorized' is
-    NULL or the 'other' catch-all: the same rule as every count of it, so
-    "66 need a category, tap to see just those" shows those 66."""
+    PostgREST predicate spanning "needs a category" + named buckets. The
+    rule is bank_money's, the same as every count of it, so "66 need a
+    category, tap to see just those" shows those 66. Before the money_kind
+    migration: NULL or the 'other' catch-all. After it: the same, minus rows
+    the practitioner answered with a money_kind."""
+    import bank_money
     from plaid_router import _bucket_clause
 
+    monkeypatch.setattr(bank_money, "supported", lambda: False)
     assert _bucket_clause(["operating", "tax"]) == "business_category=in.(operating,tax)"
     assert _bucket_clause(["uncategorized"]) == \
-        "or=(business_category.is.null,business_category.in.(other))"
+        "and=(or(business_category.is.null,business_category.eq.other))"
     assert _bucket_clause(["uncategorized", "tax"]) == \
-        "or=(business_category.is.null,business_category.in.(tax,other))"
+        "and=(or(or(business_category.is.null,business_category.eq.other),business_category.in.(tax)))"
     assert _bucket_clause(["uncategorized", "other"]) == \
-        "or=(business_category.is.null,business_category.in.(other))"
+        "and=(or(business_category.is.null,business_category.eq.other))"
+
+    monkeypatch.setattr(bank_money, "supported", lambda: True)
+    assert _bucket_clause(["uncategorized"]) == \
+        "and=(and(money_kind.is.null,or(business_category.is.null,business_category.eq.other)))"
     # Unknown bucket names are dropped.
     assert _bucket_clause(["bogus"]) is None
 
