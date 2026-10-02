@@ -1305,6 +1305,10 @@ async def startup():
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
+            # App-granted trials end on their own, like Stripe trials do.
+            import trial_expiry as _trial_expiry
+            scheduler.add_job(g("trial_expiry", _trial_expiry.expire_tick), "interval",
+                              hours=1, id="trial_expiry")
             # Email domain drift (setup room, Phase 1) — hourly re-check of
             # every VERIFIED sending domain. Without it a DNS record that
             # vanishes flips sends back to the platform address in
