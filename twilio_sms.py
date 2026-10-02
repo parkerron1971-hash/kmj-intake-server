@@ -44,12 +44,15 @@ Twilio Messaging Service → Integration → "Send a webhook":
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Request, Response
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -339,8 +342,49 @@ _STATUS_MAP = {
 }
 
 
+# A text is usually delivered within a second of Twilio taking it, and
+# the report can reach us before the send path has saved the row
+# (measured 2026-10-02: 12 of 14 outbound texts read `sent` forever while
+# Twilio had delivered them). A report that finds no row is retried for a
+# few seconds instead of dropped, and Hermes' hourly pass asks Twilio for
+# anything still `sent` (reconcile_sent).
+_RETRY_DELAYS = (2.0, 4.0, 8.0)
+
+
+async def _apply_status(sid: str, status: str) -> bool:
+    """Write a delivery status onto the row with this provider id. A late
+    `sent` never overwrites `delivered` or `failed`. True when the row
+    exists (whether or not it needed the change)."""
+    from sms_service import _sb_headers, _sb_url
+    params = {"telnyx_id": f"eq.{sid}"}
+    if status == "sent":
+        params["status"] = "not.in.(delivered,failed)"
+    async with httpx.AsyncClient(timeout=15.0) as c:
+        r = await c.patch(f"{_sb_url()}/rest/v1/sms_messages", headers=_sb_headers(),
+                          params=params, json={"status": status})
+        if r.status_code < 400 and r.json():
+            return True
+        if r.status_code >= 400:
+            logger.warning(f"status write {r.status_code}: {r.text[:200]}")
+        g = await c.get(f"{_sb_url()}/rest/v1/sms_messages", headers=_sb_headers(),
+                        params={"select": "id", "telnyx_id": f"eq.{sid}", "limit": "1"})
+        return g.status_code < 400 and bool(g.json())
+
+
+async def _apply_status_later(sid: str, status: str) -> None:
+    for delay in _RETRY_DELAYS:
+        await asyncio.sleep(delay)
+        try:
+            if await _apply_status(sid, status):
+                return
+        except Exception as e:
+            logger.warning(f"status retry failed: {e}")
+    logger.warning(f"delivery report for {sid} ({status}) found no message row; "
+                   "Hermes' reconcile pass will pick it up")
+
+
 @router.post("/webhooks/twilio/status")
-async def twilio_status_callback(request: Request):
+async def twilio_status_callback(request: Request, background: BackgroundTasks):
     form = await request.form()
     params = {k: str(v) for k, v in form.items()}
 
@@ -355,14 +399,54 @@ async def twilio_status_callback(request: Request):
     sid = params.get("MessageSid", "")
     status = _STATUS_MAP.get((params.get("MessageStatus") or "").lower())
     if sid and status:
+        if status == "failed":
+            logger.warning(f"delivery FAILED sid={sid} code={params.get('ErrorCode', '')}")
         try:
-            import httpx
-            from sms_service import _sb_patch
-            async with httpx.AsyncClient() as client:
-                await _sb_patch(client, f"/sms_messages?telnyx_id=eq.{sid}", {"status": status})
-            if status == "failed":
-                logger.warning(f"delivery FAILED sid={sid} code={params.get('ErrorCode', '')}")
+            landed = await _apply_status(sid, status)
         except Exception as e:
             logger.warning(f"status update failed: {e}")
+            landed = False
+        if not landed:
+            background.add_task(_apply_status_later, sid, status)
 
     return Response(status_code=204)
+
+
+async def reconcile_sent(max_age_days: int = 120, limit: int = 50,
+                         now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Ask Twilio for the real outcome of outbound texts still marked
+    `sent` (older than 5 minutes, so live reports have had their chance)
+    and write it. Read-only toward Twilio. Never raises."""
+    acct = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
+    key = (os.environ.get("TWILIO_API_KEY_SID") or "").strip()
+    secret = (os.environ.get("TWILIO_API_KEY_SECRET") or "").strip()
+    if not (acct and key and secret):
+        return {"skipped": "twilio not configured"}
+    from sms_service import _sb_headers, _sb_url
+    now = now or datetime.now(timezone.utc)
+    z = "%Y-%m-%dT%H:%M:%SZ"
+    out: Dict[str, Any] = {"checked": 0, "delivered": 0, "failed": 0}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as c:
+            r = await c.get(f"{_sb_url()}/rest/v1/sms_messages", headers=_sb_headers(), params={
+                "select": "telnyx_id", "direction": "eq.outbound", "status": "eq.sent",
+                "and": f"(created_at.gte.{(now - timedelta(days=max_age_days)).strftime(z)},"
+                       f"created_at.lt.{(now - timedelta(minutes=5)).strftime(z)})",
+                "order": "created_at.desc", "limit": str(limit)})
+            rows = r.json() if r.status_code < 400 else []
+            for row in rows or []:
+                sid = row.get("telnyx_id") or ""
+                if not sid.startswith("SM"):
+                    continue
+                out["checked"] += 1
+                t = await c.get(f"https://api.twilio.com/2010-04-01/Accounts/{acct}/Messages/{sid}.json",
+                                auth=(key, secret))
+                if t.status_code >= 400:
+                    continue
+                status = _STATUS_MAP.get((t.json().get("status") or "").lower())
+                if status in ("delivered", "failed") and await _apply_status(sid, status):
+                    out[status] += 1
+    except Exception as e:
+        logger.warning(f"reconcile failed: {e}")
+        out["error"] = str(e)[:200]
+    return out
