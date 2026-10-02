@@ -5531,6 +5531,8 @@ async def handle_show_view(client, biz, action) -> Dict:
         result = f"showing {len(rows)} {view}{filt_label}"
         if total is not None:
             result += f", ${total:,.2f} total"
+        if len(raw_rows) >= _SHOW_VIEW_LIMIT:
+            result += f"; this view is capped at {_SHOW_VIEW_LIMIT} rows"
 
     # The digest the second-pass reply reads — real values, capped so a
     # 25-row table doesn't flood the composer prompt.
@@ -5540,7 +5542,7 @@ async def handle_show_view(client, biz, action) -> Dict:
             over = ""
             try:
                 d = (now.date() - date.fromisoformat(r["due"])).days if r["due"] else 0
-                if d > 0 and r["status"] != "draft":
+                if d > 0 and r["status"] in ("sent", "viewed", "overdue"):
                     over = f", {d}d overdue"
             except (TypeError, ValueError):
                 pass
@@ -5570,6 +5572,7 @@ async def handle_show_view(client, biz, action) -> Dict:
         "columns": spec["columns"],
         "rows": rows,
         "summary": {"count": len(rows), **({"total": total} if total is not None else {})},
+        "limit_reached": len(raw_rows) >= _SHOW_VIEW_LIMIT,
         "speak": "; ".join(speak_lines),
         "nav": _nav(*spec["nav"]),
     }
@@ -12649,6 +12652,9 @@ async def _execute_actions(client, biz, actions: List[Dict],
         # create_invoice → send_invoice in one turn without knowing the
         # freshly-minted UUID.
         resolved = _resolve_action_references(action, _reference_pool())
+        if prompted and owner_text:
+            from chief_invoice_readout import owner_invoice_scope
+            resolved = owner_invoice_scope(resolved, owner_text)
         if atype in ("learn_business", "correct_business_knowledge", "capture_business_knowledge"):
             # Never trust a model-supplied provenance field. Only an actual
             # current owner message can establish an owner fact.
