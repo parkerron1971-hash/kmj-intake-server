@@ -263,6 +263,71 @@ def accounts_linked_twice(accounts: List[Dict[str, Any]]) -> int:
     return sum(n - 1 for n in seen.values() if n > 1)
 
 
+def _twin_sig(t: Dict[str, Any]) -> Tuple[Any, ...]:
+    return (t.get("date"), int(round(_amt(t) * 100)), _norm(tx_name(t)))
+
+
+def _answered(t: Dict[str, Any]) -> bool:
+    return not needs_category(t)
+
+
+def linked_twice_plans(accounts: List[Dict[str, Any]], items: List[Dict[str, Any]],
+                       txs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """For each real account linked more than once (and in the books more
+    than once): which copy to keep, which is the extra, and whether setting
+    the extra aside is safe. Safe means every row on it has a twin (same
+    date, amount, name) on the copy being kept. The kept copy is the one on
+    a live connection with the newest activity; a relink leaves the old
+    connection revoked and its copies stale."""
+    live_item = {i.get("item_id"): i.get("status") != "revoked" for i in items}
+    rows_by_acct: Dict[str, List[Dict[str, Any]]] = {}
+    for t in txs:
+        rows_by_acct.setdefault(t.get("account_id"), []).append(t)
+    groups: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+    for a in accounts:
+        k = real_account_key(a)
+        if k is not None and a.get("included_in_bookkeeping") and not a.get("is_trust_account"):
+            groups.setdefault(k, []).append(a)
+    plans = []
+    for copies in groups.values():
+        if len(copies) < 2:
+            continue
+
+        def rank(a: Dict[str, Any]) -> Tuple[bool, str]:
+            newest = max((str(t.get("date")) for t in rows_by_acct.get(a["account_id"], [])), default="")
+            return (bool(live_item.get(a.get("item_id"), True)), newest)
+        keep = max(copies, key=rank)
+        kept_rows: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+        for t in rows_by_acct.get(keep["account_id"], []):
+            kept_rows.setdefault(_twin_sig(t), []).append(t)
+        for old in copies:
+            if old is keep:
+                continue
+            pool = {k: list(v) for k, v in kept_rows.items()}
+            no_twin, carry = 0, []
+            o_rows = rows_by_acct.get(old["account_id"], [])
+            for t in o_rows:
+                twins = pool.get(_twin_sig(t)) or []
+                if not twins:
+                    no_twin += 1
+                    continue
+                twin = twins.pop(0)
+                if _answered(t) and not _answered(twin):
+                    carry.append((t, twin))
+            plans.append({
+                "old_account_id": old["account_id"], "keep_account_id": keep["account_id"],
+                "label": account_label(old),
+                "old_connection": "active" if live_item.get(old.get("item_id"), True) else "revoked",
+                "rows": len(o_rows), "rows_without_twin": no_twin,
+                "answers_to_carry": len(carry), "_carry": carry, "_rows": o_rows,
+            })
+    return plans
+
+
+def _public_plan(p_: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in p_.items() if not k.startswith("_")}
+
+
 def fiscal_year_start(today: date, start_month: int) -> date:
     m = start_month if 1 <= start_month <= 12 else 1
     year = today.year if today.month >= m else today.year - 1
@@ -371,7 +436,8 @@ def duplicate_notice(dups: List[Dict[str, Any]], linked_twice: int,
             "accounts_linked_twice": linked_twice,
             "examples": [{"date": g["date"], "name": g["name"], "amount": abs(g["amount"]),
                           "count": g["count"]} for g in dups[:5]],
-            "action": {"label": "Review duplicates", "target": "transactions:duplicates"}}
+            "action": {"label": "Fix in Settings" if linked_twice else "Review duplicates",
+                       "target": "settings:connections" if linked_twice else "transactions:duplicates"}}
 
 
 def ledger_notice(ledger: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -602,6 +668,7 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
                    for i in items if i.get("last_error")],
         "accounts_linked": len(accounts),
         "accounts_linked_twice": linked_twice,
+        "linked_twice": [_public_plan(p_) for p_ in linked_twice_plans(accounts, items, books_txs)],
         "accounts_in_use": [{"account_id": a["account_id"], "label": account_label(a),
                              "type": a.get("type"), "trust": bool(a.get("is_trust_account"))}
                             for a in included],
@@ -929,3 +996,74 @@ def confirm_transfer_pairs(body: ConfirmPairsBody,
         if res is None:
             raise HTTPException(502, "Those transfers didn't save. Try again.")
     return {"ok": True, "confirmed_pairs": len(confirmed) // 2, "skipped": skipped}
+
+
+# ─── Setting aside a copy of an account linked twice ─────────────────
+
+class ResolveTwiceBody(BaseModel):
+    business_id: str
+    account_ids: List[str]   # the extra copies to take out of the books
+
+
+@router.post("/linked-twice/resolve")
+def resolve_linked_twice(body: ResolveTwiceBody,
+                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Take the extra copy of a bank account linked twice out of the books.
+    It's the same switch as Integrations' per-account toggle
+    (included_in_bookkeeping=false, every row re-queued so the ledger
+    reverses it), with two guarantees the toggle can't give. It refuses
+    unless every row on the extra copy has a twin on the copy being kept,
+    and it first carries over any answer (a category or a money_kind) that
+    only the extra copy had. Reversible: switch the account back on in
+    Integrations."""
+    from plaid_router import _require_owner
+    _require_owner(body.business_id, user)
+    biz = body.business_id
+    if not body.account_ids or len(body.account_ids) > 20:
+        raise HTTPException(400, "Send between 1 and 20 accounts.")
+    try:
+        items = _get(f"/plaid_items?business_id=eq.{biz}&select=item_id,status")
+        accounts = _get(f"/plaid_accounts?business_id=eq.{biz}&deleted_at=is.null"
+                        f"&select=account_id,item_id,name,official_name,type,mask,"
+                        f"included_in_bookkeeping,is_trust_account")
+        ids = ",".join(a["account_id"] for a in accounts
+                       if a.get("included_in_bookkeeping") and not a.get("is_trust_account"))
+        txs = _get_all(
+            f"/plaid_transactions?business_id=eq.{biz}&account_id=in.({ids})"
+            f"&pending=eq.false&excluded_from_books=eq.false"
+            f"&select=transaction_id,account_id,amount,date,name,merchant_name,business_category,"
+            f"business_subcategory{bank_money.cols()}&order=date.desc,transaction_id.desc") if ids else []
+    except SourceFailed as e:
+        raise HTTPException(503, f"Couldn't read the accounts just now ({e}).")
+    plans = {p_["old_account_id"]: p_ for p_ in linked_twice_plans(accounts, items, txs)}
+    resolved, refused = [], []
+    stamp = datetime.now(timezone.utc).isoformat()
+    for acct in body.account_ids:
+        plan = plans.get(acct)
+        if not plan:
+            refused.append({"account_id": acct, "why": "not a linked-twice copy in the books"})
+            continue
+        if plan["rows_without_twin"]:
+            refused.append({"account_id": acct,
+                            "why": f"{plan['rows_without_twin']} rows on it have no twin, so they'd leave the books"})
+            continue
+        for old_row, twin in plan["_carry"]:
+            fields = {"business_category": old_row.get("business_category") or "other",
+                      "business_subcategory": old_row.get("business_subcategory")}
+            if bank_money.kind(old_row):
+                fields["money_kind"] = bank_money.kind(old_row)
+            if sb_clients.sb_patch_as_service(
+                    f"/plaid_transactions?transaction_id=eq.{twin['transaction_id']}", fields) is None:
+                raise HTTPException(502, "An answer didn't carry over. Nothing was switched off; try again.")
+        if sb_clients.sb_patch_as_service(
+                f"/plaid_accounts?account_id=eq.{acct}&business_id=eq.{biz}",
+                {"included_in_bookkeeping": False, "updated_at": stamp}) is None:
+            raise HTTPException(502, "That account didn't switch off. Try again.")
+        settled = [t["transaction_id"] for t in plan["_rows"]]
+        for chunk in _chunks(settled, 200):
+            sb_clients.sb_post_as_service("/gl_sync_queue", [
+                {"business_id": biz, "source_table": "plaid_transactions", "source_id": tid}
+                for tid in chunk], prefer=None)
+        resolved.append({"account_id": acct, "label": plan["label"], "rows": plan["rows"],
+                         "answers_carried": plan["answers_to_carry"]})
+    return {"ok": True, "resolved": resolved, "refused": refused}
