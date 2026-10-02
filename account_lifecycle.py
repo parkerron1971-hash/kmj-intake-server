@@ -168,6 +168,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Live: chat, pauses and presence before their session; all before
     # contacts and module_entries.
     "live_chat", "live_mutes", "live_presence", "live_sessions",
+    # Messaging: reports, staff looks, messages, people and blocks before
+    # their chats; links and switches before contacts.
+    "msg_reports", "msg_staff_views", "msg_messages", "msg_participants", "msg_blocks", "msg_threads",
+    "msg_guardians", "msg_members", "msg_safety_officers",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -630,6 +634,10 @@ _IMPORT_SKIP = {
     # Live sessions, chat and presence cite contacts and occasions by id;
     # same reason.
     "live_sessions", "live_chat", "live_mutes", "live_presence",
+    # Messaging cites people, groups and messages by id; same reason. Safety
+    # officers are team logins, not records.
+    "msg_threads", "msg_participants", "msg_messages", "msg_blocks", "msg_reports", "msg_staff_views",
+    "msg_guardians", "msg_members", "msg_safety_officers",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The

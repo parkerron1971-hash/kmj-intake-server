@@ -56,6 +56,16 @@ DONE = {
     "left": "You've left that group.",
     "here": "Thanks for joining us. You're counted as here today.",
     "meeting_ended": "The meeting has ended for everyone.",
+    "sent": "Sent.",
+    "held": "Your message was held for review by the church's safety officers. Only you can see it for now.",
+    "care": "You're not alone. If you're thinking about hurting yourself, call or text 988 (the Suicide & Crisis "
+            "Lifeline) any time, day or night. If you're in danger right now, call 911. Someone from the church "
+            "will reach out to you.",
+    "accepted": "You can message each other now.",
+    "ignored": "Request ignored. They aren't told.",
+    "blocked": "Blocked. They can't message you, and they aren't told.",
+    "reported": "Thanks. The church's safety officers will look at it. The sender isn't told who reported it.",
+    "welcome_msgs": "Welcome to messaging.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -81,6 +91,16 @@ ERRORS = {
     "signed_out": "Your sign-in ended. Open the page again to sign back in.",
     "video_off": "Live meetings aren't available right now. Please try again later.",
     "not_host": "Only leaders the church has approved can host a group meeting.",
+    "msg_off": "Messaging isn't turned on at this church yet.",
+    "screen_off": "Messages can't be checked right now, so nothing was sent. Please try again in a moment.",
+    "gone_chat": "That chat isn't available.",
+    "cant_send": "You can't post in this chat right now.",
+    "teen_adult": "Private messages between a teen and an adult who isn't their parent aren't allowed.",
+    "recipient_off": "You can't message this person right now.",
+    "two_adults": "This group's chat opens once two adult leaders can message.",
+    "not_enabled": "Ask the church office to turn on messaging for you.",
+    "no_birthdate": "Messaging needs your birthdate on your record.",
+    "declined": "You ignored this request.",
 }
 
 
@@ -447,6 +467,8 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str]) -> str:
                     f'<button class="mp-go mb-soft" type="submit" aria-describedby="{title_id}">Start live meeting</button></form>'
                     + ('<p class="mp-muted" style="margin:0;font-size:12px">A youth group meeting opens once a second '
                        'approved adult leader joins.</p>' if g.get("youth") else ''))
+        if g.get("chat_on"):
+            meet += f'<a class="mp-go mp-go-2" href="/my/messages/group/{gid}" aria-describedby="{title_id}">Open chat</a>'
     if action == "leave" and g.get("role") != "leader":
         button = (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
                   f'<input type="hidden" name="action" value="leave">'
@@ -461,8 +483,13 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str]) -> str:
 
 def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dict[str, Any]]]],
                   who: Optional[Dict[str, Any]] = None) -> str:
+    import member_portal_messaging as mpm
     from member_portal import _shell, palette_for
     pal = palette_for(biz, site)
+    if data is not None:
+        on = mpm.turned_on(biz)
+        for g in data["mine"]:
+            g["chat_on"] = on
     if data is None:
         body = '<p class="mp-err" role="alert">Groups couldn\'t load just now. Please try again in a moment.</p>'
     else:
@@ -735,7 +762,8 @@ async def _signed_in(request: Request):
 
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if target not in ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live")             and not re.fullmatch(r"/my/groups/live/[0-9a-f-]{36}", target):
+    allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live", "/my/messages")
+    if target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
