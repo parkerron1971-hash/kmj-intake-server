@@ -5212,11 +5212,13 @@ async def handle_show_readout(client, biz, action) -> Dict:
     drawn = sum(1 for b in blocks if b.get("kind") != "failed")
     result = f"readout '{title}' on screen — {drawn} block" + ("s" if drawn != 1 else "")
     if failed_any:
-        result += (" · ONE OR MORE BLOCKS COULD NOT LOAD — say which part is "
-                   "missing rather than describing the readout as complete")
+        missing = ", ".join(b["view"] for b in blocks if b.get("kind") == "failed")
+        result += f"; couldn't load: {missing}"
     return {
         "type": "show_readout",
         "result": result,
+        **({"note_for_chief": "Explain which blocks could not load; do not describe the readout as complete."}
+           if failed_any else {}),
         "label": f"📊 {title} — {drawn} block" + ("s" if drawn != 1 else ""),
         "title": title,
         "blocks": blocks,
@@ -11845,11 +11847,16 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
     """Build a human-readable summary of what just happened, for the
     second-pass LLM to reason about. NOT a raw JSON dump — we want the
     LLM to focus on the WHAT and WHY, not the wire format."""
-    succeeded, failed = [], []
+    succeeded, failed, held = [], [], []
     for t in taken or []:
         atype = t.get("type") or "unknown_action"
         result = t.get("result") or ""
         label = t.get("label") or ""
+        if t.get("needs_confirmation"):
+            # Composition cannot execute a hold. It needs the owner's read-back,
+            # not the tool-facing instructions to emit or retry an action.
+            held.append((atype, label or "Waiting for your confirmation; nothing ran."))
+            continue
         if _action_failed(t):
             # Extract the reason after "Failed: "
             reason = result.strip()
@@ -11860,6 +11867,10 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
             succeeded.append((atype, label, result, t))
 
     parts: List[str] = []
+    if held:
+        parts.append("AWAITING OWNER CONFIRMATION (these actions did not run):")
+        for atype, label in held:
+            parts.append(f"  {atype}: {label}")
     if failed:
         parts.append("✗ FAILED ACTIONS (you must NOT claim these succeeded):")
         for atype, label, reason, _ in failed:
@@ -11882,7 +11893,7 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
                 parts.append(f"      data now shown to the practitioner: {speak.strip()}")
             note = t.get("note_for_chief")
             if isinstance(note, str) and note.strip():
-                parts.append(f"      note: {note.strip()}")
+                parts.append(f"      internal composition guidance (apply silently, do not quote): {note.strip()}")
     return "\n".join(parts) if parts else "(no actions ran)"
 
 
@@ -11892,7 +11903,9 @@ in your previous turn have already run. Some may have succeeded; some may \
 have failed. Your job in this single message is to give the practitioner \
 an HONEST answer to their request, including what actually happened. Preserve the \
 useful explanation, calculations, or advice from the draft; receipts supplement \
-the requested answer, not replace it. Correct unsupported premises and arithmetic.
+the requested answer, not replace it. Correct unsupported premises and arithmetic. \
+Apply internal composition guidance silently; it is not text for the practitioner. \
+Explain relevant business policies or required confirmations in ordinary language.
 
 RULES (load-bearing — failing these breaks practitioner trust):
 1. REWRITE — do not append to or amend the draft. If any action failed, \
@@ -13865,16 +13878,18 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
         "Do not invent an image ID. Do not claim rendering or approval-queue placement "
         "without an action. If the request needs no operation (a question, advice, a "
         "conversation), answer it in full and claim nothing was done. "
-        "Never mention this internal correction. User request:\n\n"
-        + effective_message
+        "Never mention this internal correction. The user message is the original request."
     )
     # The former empty-history retry discarded the artwork IDs needed for edits.
     history = list(api_messages[-7:-1])
     while history and history[0].get('role') != 'user':
         history.pop(0)
-    messages = history + [{"role": "user", "content": correction}]
+    # App-authored repair guidance is a system instruction, not something
+    # the owner said. Keep their original question and recent context intact.
+    messages = history + [{"role": "user", "content": effective_message}]
+    retry_system = system + "\n\n" + correction
     before = len(chief_tool_loop.writes_this_turn())
-    retry_raw = await _call_claude(client, system, messages, max_tokens=turn_tokens, model=model,
+    retry_raw = await _call_claude(client, retry_system, messages, max_tokens=turn_tokens, model=model,
                                  read_tools=read_tools, tool_biz=tool_biz, effort=effort,
                                  enable_web_search=enable_web_search, stable_tools=stable_tools)
     if not retry_raw:

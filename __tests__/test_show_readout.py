@@ -96,7 +96,7 @@ def test_a_failed_block_stays_in_the_payload_marked(monkeypatch):
     assert "failed" in kinds, kinds
     assert len(r["blocks"]) == 2, "the failed block is kept, not dropped"
     assert "COULD NOT LOAD" in r["speak"]
-    assert "missing" in r["result"].lower()
+    assert "couldn't load: contacts" in r["result"].lower()
 
 
 def test_the_block_cap_holds(db):
