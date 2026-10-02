@@ -491,7 +491,7 @@ def three(monkeypatch):
             return s['assets']
         if method == 'POST' and path == '/platform_marketing_posts':
             s['inserts'].append(copy.deepcopy(body))
-            return body
+            return [{'revision': 1, 'status': 'draft', **r} for r in body]     # the table's defaults, as PostgREST returns them
         raise AssertionError(f'unexpected {method} {path}')
     monkeypatch.setattr(m, 'config', config)
     monkeypatch.setattr(m, 'db', db)
@@ -563,3 +563,111 @@ def test_a_full_calendar_refuses_rather_than_guessing(three):
     with pytest.raises(HTTPException) as err:
         run(m.next_open_slot(friday))
     assert err.value.status_code == 503 and 'Choose a time' in err.value.detail
+
+
+# ── posting right away, with the owner's yes (2026-10-02) ──────────────
+
+@pytest.fixture
+def now_world(three, monkeypatch):
+    monkeypatch.setenv('BUFFER_PUBLISHING', 'on')
+    monkeypatch.setenv('BUFFER_API_KEY', 'key')
+    three['live'] = {'ig', 'x', 'fb'}
+    three['approved'] = []
+
+    async def live(cfg):
+        return set(three['live'])
+
+    async def approve(req, owner):
+        three['approved'].append(([i.id for i in req.items], owner.id))
+        return {'approved': len(req.items)}
+    monkeypatch.setattr(m, 'live_destinations', live)
+    monkeypatch.setattr(m, 'approve', approve)
+    return three
+
+
+OWNER = SimpleNamespace(id='00000000-0000-0000-0000-0000000000aa')
+
+
+def test_post_now_saves_two_minutes_out_and_approves_as_the_owner(now_world):
+    before = m.now()
+    out = run(m.post_new_now(m.Idea(text='Doors open today.', post_now=True), OWNER))
+    rows = now_world['inserts'][0]
+    assert sorted(r['payload']['service'] for r in rows) == ['facebook', 'twitter']    # no picture: not Instagram
+    sent_at = m.aware(rows[0]['run_at'])
+    assert timedelta(minutes=1) < sent_at - before <= timedelta(minutes=2, seconds=5)
+    ids, actor = now_world['approved'][0]
+    assert sorted(str(i) for i in ids) == sorted(r['id'] for r in rows) and actor == OWNER.id
+    assert out['posting'] is True
+
+
+@pytest.mark.parametrize('what,detail', [
+    ('switch', 'switched off on the server'),
+    ('paused', 'Publishing is paused'),
+    ('channel', 'disconnected, locked or paused in Buffer'),
+])
+def test_post_now_refuses_before_anything_is_saved(now_world, monkeypatch, what, detail):
+    if what == 'switch':
+        monkeypatch.setenv('BUFFER_PUBLISHING', 'off')
+    if what == 'paused':
+        now_world['config']['paused'] = True
+    if what == 'channel':
+        now_world['live'] = {'ig', 'x'}                      # Facebook is disconnected
+    with pytest.raises(HTTPException) as err:
+        run(m.post_new_now(m.Idea(text='Doors open today.', post_now=True), OWNER))
+    assert err.value.status_code == 409 and detail in err.value.detail
+    assert now_world['inserts'] == [] and now_world['approved'] == []
+
+
+def test_a_waiting_post_goes_now_only_with_the_words_that_were_reviewed(slot, monkeypatch):
+    monkeypatch.setenv('BUFFER_PUBLISHING', 'on')
+    monkeypatch.setenv('BUFFER_API_KEY', 'key')
+    approved = []
+
+    async def live(cfg):
+        return {'channel-1', 'channel-2'}
+
+    async def approve(req, owner):
+        approved.append(req)
+        return {'approved': len(req.items)}
+    monkeypatch.setattr(m, 'live_destinations', live)
+    monkeypatch.setattr(m, 'approve', approve)
+    for row in slot['rows'].values():
+        row['status'] = 'draft'
+    stale = [m.ReviewItem(id=k, revision=1, content_hash='0' * 64) for k in slot['rows']]
+    with pytest.raises(HTTPException) as err:
+        run(m.post_existing_now(stale, OWNER))
+    assert err.value.status_code == 409 and slot['writes'] == [] and approved == []
+    exact = [m.ReviewItem(id=k, revision=1, content_hash=r['content_hash']) for k, r in slot['rows'].items()]
+    out = run(m.post_existing_now(exact, OWNER))
+    assert all(m.aware(p['run_at']) - m.now() <= timedelta(minutes=2, seconds=5) for p in out['posts'])
+    assert [i.revision for i in approved[0].items] == [2, 2]       # approved at the moved revision, as the owner
+
+
+def test_post_now_routes_are_owner_only():
+    app = FastAPI(); app.include_router(m.router)
+    app.dependency_overrides[require_user] = lambda: SimpleNamespace(id=str(uuid4()), email='tenant@example.com')
+    client = TestClient(app)
+    assert client.post('/platform/marketing/post-now', json={'items': []}).status_code == 403
+    assert client.post('/platform/marketing/ideas', json={'text': 'x', 'post_now': True}).status_code == 403
+
+
+def test_a_retried_post_now_approves_what_the_first_try_left(now_world):
+    idea = m.Idea(text='Doors open today.', post_now=True)
+    saved = [{'id': str(m.uuid5(idea.id, c)), 'revision': 1, 'status': s, 'content_hash': 'c' * 64,
+              'run_at': (m.now() + timedelta(minutes=1)).isoformat(), 'payload': {}}
+             for c, s in (('x', 'approved'), ('fb', 'draft'))]
+    now_world['existing'] = saved
+    out = run(m.post_new_now(idea, OWNER))
+    ids, _ = now_world['approved'][0]
+    assert [str(i) for i in ids] == [saved[1]['id']] and out['posting']          # only the one still a draft
+    saved[1]['run_at'] = (m.now() - timedelta(minutes=1)).isoformat()
+    now_world['approved'].clear()
+    with pytest.raises(HTTPException) as err:
+        run(m.post_new_now(idea, OWNER))
+    assert err.value.status_code == 409 and 'time passed' in err.value.detail and now_world['approved'] == []
+
+
+def test_a_down_instagram_never_blocks_a_post_that_skips_it(now_world):
+    now_world['live'] = {'x', 'fb'}                                                # Instagram disconnected
+    run(m.post_new_now(m.Idea(text='Doors open today.', post_now=True), OWNER))   # no picture: no Instagram
+    assert sorted(r['payload']['service'] for r in now_world['inserts'][0]) == ['facebook', 'twitter']
