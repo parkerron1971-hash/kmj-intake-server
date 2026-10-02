@@ -107,12 +107,14 @@ def video_ready() -> bool:
     return url.startswith("wss://") and bool(key) and bool(secret)
 
 
-def mint(room: str, contact_id: str, name: str, publish: bool, host: bool) -> Dict[str, Any]:
+def mint(room: str, identity: str, name: str, publish: bool, host: bool) -> Dict[str, Any]:
+    """A 60-second join token. `identity` is "c_<contact id>" for a member,
+    "staff_<user id>" for the church team (group_live_router)."""
     import academy_live_router as alr
     from livekit import api
     url, key, secret = alr.settings()
     sources = ["camera", "microphone"] + (["screen_share", "screen_share_audio"] if host else []) if publish else []
-    token = (api.AccessToken(key, secret).with_identity(f"c_{contact_id}").with_name(name)
+    token = (api.AccessToken(key, secret).with_identity(identity).with_name(name)
              .with_ttl(timedelta(seconds=TOKEN_TTL)).with_metadata(json.dumps({"host": host}))
              .with_grants(api.VideoGrants(room_join=True, room=room, can_publish=publish, can_subscribe=True,
                                           can_publish_data=False, can_publish_sources=sources,
@@ -360,7 +362,7 @@ async def join_token(sid: str, request: Request):
     publish = host or s["mode"] == "meeting"
     await asyncio.to_thread(count_attendance, biz, s["group_id"], str(me["id"]))
     return _json(True, publish=publish, host=host,
-                 **mint(s["room_name"], str(me["id"]), lr.author_for(me.get("name")), publish, host))
+                 **mint(s["room_name"], f"c_{me['id']}", lr.author_for(me.get("name")), publish, host))
 
 
 @router.post("/my/groups/live/{sid}/end", include_in_schema=False)

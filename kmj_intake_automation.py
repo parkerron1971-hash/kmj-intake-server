@@ -355,6 +355,9 @@ app.include_router(member_portal_live_router)
 # member app. Kevin, 2026-09-29.
 from member_portal_group_live import router as member_portal_group_live_router
 app.include_router(member_portal_group_live_router)
+# Staff drop-in to a group's live meeting (team side).
+from group_live_router import router as group_live_router
+app.include_router(group_live_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.

@@ -285,3 +285,56 @@ def test_the_groups_page_offers_start_to_hosts_and_join_to_everyone(env):
 def _pal():
     import member_app_ui as ui
     return ui.palette({"id": BIZ, "settings": {}}, {"accent": "#334155"})
+
+
+# ─── staff drop-in (group_live_router.py) ────────────────────────────
+
+OWNER_USER = "88888888-8888-8888-8888-888888888888"
+
+
+class _User:
+    def __init__(self, uid):
+        self.id, self.email = uid, "pastor@example.com"
+
+
+def _team(env, uid=OWNER_USER):
+    import group_live_router as glr
+    from auth_supabase import require_user
+    env.t["businesses"] = [{"id": BIZ, "owner_id": OWNER_USER}]
+    env.t["business_users"] = []
+    app = FastAPI()
+    app.include_router(glr.router)
+    app.dependency_overrides[require_user] = lambda: _User(uid)
+    return TestClient(app)
+
+
+def test_staff_drop_in_as_church_staff_without_opening_a_youth_meeting(env):
+    env.t["groups"][0]["youth"] = True
+    _start(env, LEAD)
+    sid = _sid(env)
+    t = _team(env)
+    assert [m["id"] for m in t.get("/group-live", params={"business_id": BIZ}).json()["meetings"]] == [sid]
+    r = t.post(f"/group-live/{sid}/drop-in", json={"business_id": BIZ})
+    assert r.status_code == 200
+    payload = r.json()["token"].split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    assert claims["sub"] == f"staff_{OWNER_USER}" and claims["name"] == "Church staff"
+    assert "pastor@example.com" not in json.dumps(claims)
+    assert env.t["group_live_sessions"][0]["status"] == "waiting"       # only the group's approved leaders open it
+    assert env.t["group_meeting_attendance"] == []                      # staff aren't group attendance
+
+
+def test_only_managers_drop_in_or_end(env):
+    _start(env, LEAD)
+    sid = _sid(env)
+    stranger = _team(env, uid="99999999-9999-9999-9999-999999999999")
+    assert stranger.post(f"/group-live/{sid}/drop-in", json={"business_id": BIZ}).status_code == 403
+    assert stranger.post(f"/group-live/{sid}/end", json={"business_id": BIZ}).status_code == 403
+    assert env.t["group_live_sessions"][0]["status"] == "live"
+
+
+def test_staff_can_end_a_meeting_for_everyone(env):
+    _start(env, LEAD)
+    sid = _sid(env)
+    assert _team(env).post(f"/group-live/{sid}/end", json={"business_id": BIZ}).status_code == 200
+    assert env.t["group_live_sessions"][0]["status"] == "ended" and env.closed == [f"grp-{sid}"]
