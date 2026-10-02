@@ -364,6 +364,17 @@ def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
 _SITE_PAGE_PATHS = {"/about": "about", "/services": "services", "/contact": "contact"}
 
 
+def _preview_page_id(cfg: Dict[str, Any], page_path: str) -> str:
+    """The Studio previews a page by its id (/public/site/{slug}/offer)
+    and a visitor's link by its path (/six-week-wheel-course); both reach
+    the offer page."""
+    import studio_page_types
+    p = (page_path or "").strip("/")
+    if p == "offer" or _site_page_id(cfg, "/" + p) == "offer":
+        return "offer"
+    return studio_page_types.slug_to_page_id(page_path)
+
+
 def _site_page_id(cfg: Dict[str, Any], path: str) -> Optional[str]:
     """The generated page a clean path serves: a secondary page, or the
     World concept's offer page at the path site_config.offer_page names
@@ -1817,9 +1828,7 @@ async def get_site_page_html(slug: str, page_path: str):
             raise HTTPException(404, "Site not found")
         cfg = sites[0].get("site_config") or {}
         pages = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
-        page_id = studio_page_types.slug_to_page_id(page_path)
-        if _site_page_id(cfg, "/" + page_path.strip("/")) == "offer":
-            page_id = "offer"
+        page_id = _preview_page_id(cfg, page_path)
         html = (pages or {}).get(page_id) or ""
         if not html:
             # Home, unknown page, or a single-page site → serve the main page.

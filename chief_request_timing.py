@@ -74,7 +74,9 @@ class Call:
         self.data = {"call": trace.call_count, "role": role, "model": model,
                      "transport": transport, "start_ms": trace.now(), "headers_ms": None,
                      "first_text_ms": None, "first_text_wait_ms": None,
-                     "end_ms": None, "outcome": None, "status": None}
+                     "end_ms": None, "outcome": None, "status": None,
+                     "stop_reason": None, "output_tokens": None, "text_chars": 0,
+                     "text_blocks": 0, "tool_blocks": 0, "thinking_blocks": 0}
         self.complete = False
         self.provider_error = False
 
@@ -99,8 +101,25 @@ class Call:
             self.provider_error = True
         delta = event.get("delta") or {}
         block = event.get("content_block") or {}
+        if kind == "message_delta" and isinstance(delta, dict):
+            reason = delta.get("stop_reason")
+            if reason in {"end_turn", "max_tokens", "stop_sequence", "tool_use",
+                          "pause_turn", "refusal", "model_context_window_exceeded"}:
+                self.data["stop_reason"] = reason
+            usage = event.get("usage") or {}
+            count = usage.get("output_tokens") if isinstance(usage, dict) else None
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                self.data["output_tokens"] = count
+        if kind == "content_block_start" and isinstance(block, dict):
+            field = {"text": "text_blocks", "thinking": "thinking_blocks",
+                     "redacted_thinking": "thinking_blocks", "tool_use": "tool_blocks",
+                     "server_tool_use": "tool_blocks"}.get(block.get("type"))
+            if field:
+                self.data[field] += 1
         text = (delta.get("text") if isinstance(delta, dict) and delta.get("type") == "text_delta"
                 else block.get("text") if isinstance(block, dict) and block.get("type") == "text" else None)
+        if isinstance(text, str):
+            self.data["text_chars"] += len(text)
         if isinstance(text, str) and text.strip() and self.data["first_text_ms"] is None:
             self.data["first_text_ms"] = self.trace.now()
             self.data["first_text_wait_ms"] = self.data["first_text_ms"] - self.data["start_ms"]
