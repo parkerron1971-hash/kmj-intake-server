@@ -865,6 +865,15 @@ def review(biz: str, limit: int = 200, user: AuthedUser = Depends(require_user))
         raise HTTPException(503, f"Couldn't read your bank rows just now ({e}).")
 
 
+MAX_CONFIRM_PAIRS = 100
+_TX_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
+
+
+def _chunks(items: List[str], n: int):
+    for i in range(0, len(items), n):
+        yield items[i:i + n]
+
+
 class ConfirmPairsBody(BaseModel):
     business_id: str
     pairs: List[List[str]]   # [[out_transaction_id, in_transaction_id], ...]
@@ -881,13 +890,21 @@ def confirm_transfer_pairs(body: ConfirmPairsBody,
     _require_owner(body.business_id, user)
     if not bank_money.supported():
         raise HTTPException(409, "Marking transfers needs the 2026-10-02 bank money migration.")
-    if not body.pairs or len(body.pairs) > 500:
-        raise HTTPException(400, "Send between 1 and 500 pairs.")
+    if not body.pairs or len(body.pairs) > MAX_CONFIRM_PAIRS:
+        raise HTTPException(400, f"Send between 1 and {MAX_CONFIRM_PAIRS} pairs.")
     ids = sorted({tid for p_ in body.pairs for tid in p_ if isinstance(tid, str)})
-    rows = _get(f"/plaid_transactions?business_id=eq.{body.business_id}"
-                f"&transaction_id=in.({','.join(ids)})"
-                f"&select=transaction_id,account_id,amount,date,money_kind")
-    by_id = {r["transaction_id"]: r for r in rows}
+    if not all(_TX_ID.fullmatch(tid) for tid in ids):
+        raise HTTPException(400, "Those don't look like transaction ids.")
+    # The same scope as the review queue: included, non-trust accounts only.
+    accts = _get(f"/plaid_accounts?business_id=eq.{body.business_id}&deleted_at=is.null"
+                 f"&included_in_bookkeeping=eq.true&select=account_id,is_trust_account")
+    in_books = {a["account_id"] for a in accts if not a.get("is_trust_account")}
+    rows: List[Dict[str, Any]] = []
+    for chunk in _chunks(ids, 40):   # keep each URL well under proxy limits
+        rows += _get(f"/plaid_transactions?business_id=eq.{body.business_id}"
+                     f"&transaction_id=in.({','.join(chunk)})"
+                     f"&select=transaction_id,account_id,amount,date,money_kind")
+    by_id = {r["transaction_id"]: r for r in rows if r.get("account_id") in in_books}
     confirmed, skipped = [], []
     for p_ in body.pairs:
         if len(p_) != 2 or p_[0] not in by_id or p_[1] not in by_id:
@@ -903,11 +920,12 @@ def confirm_transfer_pairs(body: ConfirmPairsBody,
             skipped.append(p_)
             continue
         confirmed.extend([o["transaction_id"], i["transaction_id"]])
-    if confirmed:
+    stamp = datetime.now(timezone.utc).isoformat()
+    for chunk in _chunks(confirmed, 40):
         res = sb_clients.sb_patch_as_service(
             f"/plaid_transactions?business_id=eq.{body.business_id}"
-            f"&transaction_id=in.({','.join(confirmed)})",
-            {"money_kind": "transfer", "updated_at": datetime.now(timezone.utc).isoformat()})
+            f"&transaction_id=in.({','.join(chunk)})",
+            {"money_kind": "transfer", "updated_at": stamp})
         if res is None:
             raise HTTPException(502, "Those transfers didn't save. Try again.")
     return {"ok": True, "confirmed_pairs": len(confirmed) // 2, "skipped": skipped}

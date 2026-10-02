@@ -176,7 +176,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,business_category,business_subcategory,"
             f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
-            f"{bank_money.cols()}&limit=20000") or []
+            f"{bank_money.ledger_cols()}&limit=20000") or []
     # I.7 — trust accounts are a separate ledger: their balances back the
     # 1200/2200 pair, never the operating-cash (1000) opening plug.
     cash_accts = sb_clients.sb_get_as_service(
@@ -741,7 +741,7 @@ def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str]
         return
     path = _SOURCE_FETCH[table].format(id=source_id)
     if table == "plaid_transactions":   # money_kind once its column exists
-        path = path.replace("&limit=1", f"{bank_money.cols()}&limit=1")
+        path = path.replace("&limit=1", f"{bank_money.ledger_cols()}&limit=1")
     rows = sb_clients.sb_get_as_service(path) or []
     row = rows[0] if rows else None
     desired: List[Dict[str, Any]] = []

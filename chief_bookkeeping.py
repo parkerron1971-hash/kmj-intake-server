@@ -141,7 +141,8 @@ def gather_and_format(business_id: str, business_type: Optional[str] = None) -> 
             for t in txs:
                 a = float(t.get("amount") or 0)
                 if a < 0:
-                    income += -a   # money in, all of it: what landed in the bank
+                    if bank_money.is_income(t):   # not transfers, owner money or payouts
+                        income += -a
                 elif bank_money.is_expense(t):
                     expense += a
 

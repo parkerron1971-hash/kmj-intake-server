@@ -52,7 +52,10 @@ def _fresh_chief_turn():
 @pytest.fixture(autouse=True)
 def _fresh_money_kind_probe():
     try:
+        import time as _time
         import bank_money as _bm
-        _bm._probe.update(at=0.0, ok=False)
+        # A definite "not yet", cached, so no test probes the network. Tests
+        # of the after-migration behaviour monkeypatch bank_money.supported.
+        _bm._probe.update(at=_time.monotonic(), ok=False)
     except Exception:  # pragma: no cover
         pass

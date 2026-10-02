@@ -160,3 +160,50 @@ def test_confirming_before_the_migration_says_so(db, monkeypatch):
     with pytest.raises(HTTPException) as e:
         bo.confirm_transfer_pairs(bo.ConfirmPairsBody(business_id="biz", pairs=[["a", "b"]]), user=object())
     assert e.value.status_code == 409
+
+
+# ─── The probe never mistakes a blip for "missing" ───────────────────
+
+def test_only_a_definite_answer_is_cached(monkeypatch):
+    answers = iter([None, False])
+    monkeypatch.setattr(bank_money, "_probe_now", lambda: next(answers))
+    bank_money._probe.update(at=0.0, ok=False)
+    assert bank_money.state() is None              # a blip: unknown, not cached
+    assert bank_money.state() is False             # asked again: definite, cached
+    assert bank_money.state() is False
+
+
+def test_the_ledger_will_not_post_on_unknown(monkeypatch):
+    monkeypatch.setattr(bank_money, "_probe_now", lambda: None)
+    bank_money._probe.update(at=0.0, ok=False)
+    with pytest.raises(RuntimeError):
+        bank_money.ledger_cols()
+    assert bank_money.cols() == ""                 # reads fall back quietly
+
+
+def test_confirm_is_scoped_to_accounts_in_the_books(db, monkeypatch):
+    tables, patched = db
+    tables["/plaid_accounts"] = ACCTS + [{"account_id": "trust", "name": "IOLTA", "mask": "1",
+                                          "type": "depository", "included_in_bookkeeping": True,
+                                          "is_trust_account": True}]
+    tables["/plaid_transactions"] = [tx(10.0, tid="o", acct="trust"), tx(-10.0, tid="i", acct="pri")]
+    import plaid_router
+    monkeypatch.setattr(plaid_router, "_require_owner", lambda biz, user: {"id": biz})
+    res = bo.confirm_transfer_pairs(bo.ConfirmPairsBody(business_id="biz", pairs=[["o", "i"]]), user=object())
+    assert res["confirmed_pairs"] == 0 and patched == []
+
+
+def test_confirm_rejects_ids_that_are_not_ids(db, monkeypatch):
+    import plaid_router
+    from fastapi import HTTPException
+    monkeypatch.setattr(plaid_router, "_require_owner", lambda biz, user: {"id": biz})
+    with pytest.raises(HTTPException) as e:
+        bo.confirm_transfer_pairs(bo.ConfirmPairsBody(business_id="biz", pairs=[["a),b", "c"]]), user=object())
+    assert e.value.status_code == 400
+
+
+def test_chief_counts_only_the_books_income():
+    import chief_bookkeeping  # noqa: F401  (the prompt totals read bank_money)
+    assert bank_money.is_income(tx(-10.0, primary="INCOME"))
+    assert not bank_money.is_income(tx(-10.0, kind="transfer", primary="TRANSFER_IN"))
+    assert not bank_money.is_income(tx(-10.0, primary="INCOME", payout="po"))

@@ -35,13 +35,15 @@ comment on column public.plaid_transactions.money_kind is
   'What the row is when the bank label is wrong: income | owner | transfer. NULL = automatic (Plaid category).';
 
 -- The ledger re-posts a bank row when anything it books from changes.
--- money_kind now changes the entry, so it joins the watched columns
--- (same trigger as 2026_06_09_phasei2_gl_triggers.sql, one more line).
+-- money_kind now changes the entry, so it joins the watched columns.
+-- Same trigger as the LIVE one (2026_06_09_phasei4_gl_reports.sql, which
+-- added business_subcategory), plus one line.
 drop trigger if exists gl_enq_plaid_upd on public.plaid_transactions;
 create trigger gl_enq_plaid_upd after update on public.plaid_transactions
   for each row when (
     old.reconciliation_status is distinct from new.reconciliation_status
     or old.business_category is distinct from new.business_category
+    or old.business_subcategory is distinct from new.business_subcategory
     or old.excluded_from_books is distinct from new.excluded_from_books
     or old.amount is distinct from new.amount
     or old.money_kind is distinct from new.money_kind

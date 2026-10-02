@@ -16,10 +16,17 @@ the practitioner's answer when the bank's label is wrong:
     NULL      automatic: Plaid's category decides, exactly as before
 
 The column arrives by hand-applied migration. Until it exists, selecting
-it makes PostgREST reject the whole read, so `supported()` probes once
-(cached for five minutes) and every caller asks `cols()` / the filters
-for the right shape. Before the migration the app behaves exactly as it
-did; within five minutes after, it honours money_kind.
+it makes PostgREST reject the whole read, so `supported()` probes and
+every caller asks `cols()` / the filters for the right shape. Before the
+migration the app behaves exactly as it did; within five minutes after, it
+honours money_kind.
+
+Only a DEFINITE answer is cached: a 2xx (the column is there) or a 400
+42703 (it isn't). A blip (timeout, 5xx) is "unknown" and is asked again
+next time. Reads treat unknown as "not yet". The ledger does not: an
+answered row posted by the old rules would quietly undo the answer, so
+`ledger_cols()` raises on unknown and process_queue leaves the row queued
+for the next drain.
 """
 from __future__ import annotations
 
@@ -35,21 +42,48 @@ _PROBE_TTL = 300.0
 _probe: Dict[str, Any] = {"at": 0.0, "ok": False}
 
 
-def supported() -> bool:
-    """Does plaid_transactions.money_kind exist? Cached for five minutes. A
-    failed probe reads as "not yet", which falls back to the old behaviour,
-    the safe direction."""
+def _probe_now() -> Optional[bool]:
+    """True: the column answers. False: PostgREST says it doesn't exist
+    (42703). None: couldn't tell (transport error, 5xx, anything else)."""
+    import httpx
+    try:
+        resp = httpx.get(f"{sb_clients.sb_url()}/rest/v1/plaid_transactions?select=money_kind&limit=1",
+                         headers=sb_clients.sb_headers_service(), timeout=10.0)
+    except Exception:
+        return None
+    if resp.status_code < 300:
+        return True
+    if resp.status_code == 400 and "42703" in resp.text:
+        return False
+    return None
+
+
+def state() -> Optional[bool]:
     now = time.monotonic()
     if _probe["at"] and now - _probe["at"] < _PROBE_TTL:
         return _probe["ok"]
-    rows = sb_clients.sb_get_as_service("/plaid_transactions?select=money_kind&limit=1")
-    _probe.update(at=now, ok=rows is not None)
-    return _probe["ok"]
+    found = _probe_now()
+    if found is not None:          # cache definite answers only
+        _probe.update(at=now, ok=found)
+    return found
+
+
+def supported() -> bool:
+    """Does plaid_transactions.money_kind exist? Unknown reads as not yet."""
+    return state() is True
 
 
 def cols() -> str:
-    """Append to a plaid_transactions select: ',money_kind' once it exists."""
+    """Append to a plaid_transactions select (reads): ',money_kind' once it exists."""
     return ",money_kind" if supported() else ""
+
+
+def ledger_cols() -> str:
+    """cols() for the ledger, which must not guess: raises when unknown."""
+    found = state()
+    if found is None:
+        raise RuntimeError("can't tell whether plaid_transactions.money_kind exists; leaving it queued")
+    return ",money_kind" if found else ""
 
 
 def kind(t: Dict[str, Any]) -> Optional[str]:

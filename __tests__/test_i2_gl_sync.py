@@ -24,6 +24,10 @@ def _num(x):
 def _passes(row, col, op, target):
     if op == "__or__":
         return any(_passes(row, c2, o2, t2) for c2, o2, t2 in target)
+    if op == "__tree__":
+        kind, kids = target
+        hits = (_passes(row, c2, o2, t2) for c2, o2, t2 in kids)
+        return any(hits) if kind == "or" else all(hits)
     if op in ("is", "not.is"):
         # PostgREST `is` takes null/true/false. `not.is.true` matches false
         # AND null (the I.7 is_trust_account pattern relies on this).
@@ -48,6 +52,50 @@ def _passes(row, col, op, target):
     return {"eq": sv == st, "neq": sv != st, "gte": sv >= st, "lte": sv <= st, "lt": sv < st, "gt": sv > st}.get(op, True)
 
 
+def _split_top(s):
+    """Split on commas that aren't inside parentheses: `a.in.(x,y),b.is.null`."""
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _leaf(piece):
+    c2, r2 = piece.split(".", 1)
+    if r2.startswith("not.is."):
+        return (c2, "not.is", r2[7:])
+    if r2.startswith("is."):
+        return (c2, "is", r2[3:])
+    if r2.startswith("not.in."):
+        return (c2, "not.in", r2[7:])
+    if r2.startswith("in."):
+        return (c2, "in", r2[3:])
+    o2, t2 = r2.split(".", 1)
+    return (c2, o2, t2)
+
+
+def _tree(kind, body):
+    """PostgREST logic tree: or=(…) / and=(…), nesting or(…) / and(…)."""
+    kids = []
+    for piece in _split_top(body[1:-1]):
+        if piece.startswith(("or(", "and(")):
+            k = "or" if piece.startswith("or(") else "and"
+            kids.append(("__tree__", "__tree__", _tree(k, piece[len(k):])))
+        elif "." in piece:
+            kids.append(_leaf(piece))
+    return (kind, kids)
+
+
 def _parse(path):
     table = path.split("?", 1)[0].lstrip("/")
     q = path.split("?", 1)[1] if "?" in path else ""
@@ -58,24 +106,9 @@ def _parse(path):
         col, rest = part.split("=", 1)
         if col in ("select", "limit", "order", "on_conflict"):
             continue
-        if col == "or":
-            # or=(a.is.null,b.eq.x) — one top-level OR of simple conditions.
-            inner = rest.strip("()")
-            sub = []
-            for piece in inner.split(","):
-                if "." not in piece:
-                    continue
-                c2, r2 = piece.split(".", 1)
-                if r2.startswith("not.is."):
-                    sub.append((c2, "not.is", r2[7:]))
-                elif r2.startswith("is."):
-                    sub.append((c2, "is", r2[3:]))
-                elif r2.startswith("in."):
-                    sub.append((c2, "in", r2[3:]))
-                elif "." in r2:
-                    o2, t2 = r2.split(".", 1)
-                    sub.append((c2, o2, t2))
-            cons.append(("__or__", "__or__", sub))
+        if col in ("or", "and"):
+            # or=(…) / and=(…), with nested or(…)/and(…) groups.
+            cons.append(("__tree__", "__tree__", _tree(col, rest)))
             continue
         if rest.startswith("not.is."):
             cons.append((col, "not.is", rest[7:]))
