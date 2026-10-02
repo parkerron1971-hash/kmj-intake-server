@@ -108,14 +108,28 @@ def _sb_url() -> str:
     return os.environ.get("SUPABASE_URL", "").rstrip("/")
 
 
-def _sb_anon() -> str:
-    return os.environ.get("SUPABASE_ANON", "")
+def _sb_key() -> str:
+    """SERVICE ROLE. Renamed from `_sb_anon` on 2026-09-01, and the rename
+    is the point rather than tidiness.
+
+    This module wrote practitioner_profiles with the anon key — a server
+    path on a tenant table, which docs/RLS_MODEL.md Rule 1 forbids.
+
+    The obvious fix was to leave the name and change the body, which is
+    what business_profile_agent did during its own migration. That left a
+    function called `_sb_anon` returning the service-role key, and a
+    reviewer later grepped the name, believed this module was unmigrated,
+    and filed a correction that had to be corrected (#768). One
+    misleading name cost two commits and a false claim about production.
+
+    So the name goes with the key it returns."""
+    return os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
 def _sb_headers() -> Dict[str, str]:
     return {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
+        "apikey": _sb_key(),
+        "Authorization": f"Bearer {_sb_key()}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -180,11 +194,22 @@ def get_phrasing(field_path: str, brand_voice: Optional[str]) -> str:
 
 # ─── Profile CRUD ──────────────────────────────────────────────
 
-def get_profile(owner_id: str) -> Optional[Dict[str, Any]]:
+def get_profile(owner_id: str, *, empty_if_missing: bool = False) -> Optional[Dict[str, Any]]:
+    """The practitioner_profiles row, or None.
+
+    By default None means either "no row yet" or "the read failed". A
+    caller that must tell them apart passes empty_if_missing=True: {} is a
+    read that worked and found no row, None is a read that failed. Chief's
+    context needs the difference. A practitioner who signed up today has
+    no row, and reading that as a failure put "a secondary context source
+    is unavailable" in every prompt from their first turn (2026-09-26)."""
+    missing: Optional[Dict[str, Any]] = {} if empty_if_missing else None
     if not owner_id:
+        return missing
+    rows = _sb_get(f"/practitioner_profiles?owner_id=eq.{owner_id}")
+    if not isinstance(rows, list):
         return None
-    rows = _sb_get(f"/practitioner_profiles?owner_id=eq.{owner_id}") or []
-    return rows[0] if rows else None
+    return rows[0] if rows else missing
 
 
 def _calculate_completeness(profile: Dict[str, Any]) -> float:
