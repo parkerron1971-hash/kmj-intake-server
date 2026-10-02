@@ -146,6 +146,29 @@ class TestTheTurnSplit:
         seg = lambda s: s.partition("[[CHIEF_CACHE_SPLIT]]")[2].partition("[[CHIEF_TURN_SPLIT]]")[0]
         assert seg(a) == seg(b), "the state segment is not deterministic"
 
+    def test_what_changes_with_the_message_stays_out_of_the_state_segment(self):
+        """2026-09-23: every turn wrote ~12k tokens of cache
+        (api_usage.cache_creation_tokens 11,871 on turn after turn). The
+        vertical learned block (retrieved FOR the message) and the growth
+        doctrine (loaded only on growth turns) sat above the turn split,
+        so the "steady" snapshot changed with every message. Both docstrings
+        already said they belong in the turn tail."""
+        seg = lambda s: s.partition("[[CHIEF_CACHE_SPLIT]]")[2].partition("[[CHIEF_TURN_SPLIT]]")
+        a = cos._build_system_prompt(self._ctx(), False, session_context="X",
+                                     learned_block="LEARNED_FOR_MESSAGE_A",
+                                     growth_turn_block="")
+        b = cos._build_system_prompt(self._ctx(), False, session_context="X",
+                                     learned_block="LEARNED_FOR_MESSAGE_B",
+                                     growth_turn_block="GROWTH_DOCTRINE_ON")
+        assert seg(a)[0] == seg(b)[0], "a per-message block leaked into the cached state segment"
+        assert "LEARNED_FOR_MESSAGE_B" in seg(b)[2]
+        assert "GROWTH_DOCTRINE_ON" in seg(b)[2]
+
+    def test_the_real_turn_passes_the_doctrine_to_the_turn_tail(self):
+        chat_src = inspect.getsource(cos.chief_chat)
+        assert "growth_turn_block=growth_turn_block" in chat_src
+        assert "growth_block += \"\\n\" + _growth.context_block" not in chat_src
+
     def test_the_builder_emits_four_blocks_with_the_right_ttls(self):
         """Source-level, like the rest of this file: the 4seg branch
         exists, and the state segment cache-controls on the PLAIN

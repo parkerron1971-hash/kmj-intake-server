@@ -107,6 +107,22 @@ def _load_draft(business_id: str, queue_id: str) -> Dict[str, Any]:
     return item
 
 
+def _standing_offer(biz: Dict[str, Any], item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Only an action proposal (channel "action") can earn a standing
+    permission; an ordinary email draft never asks. Best-effort."""
+    if item.get("channel") != "action":
+        return None
+    try:
+        import action_proposals
+        import standing_permissions
+        spec = action_proposals.spec_from_body(item.get("body") or "")
+        verb = str(((spec or {}).get("action") or {}).get("type") or "")
+        return standing_permissions.offer_after_approval(biz, verb)
+    except Exception as e:
+        logger.warning(f"[approvals] standing offer failed: {e}")
+        return None
+
+
 def _source(value: Optional[str]) -> str:
     return value if value in ("desktop", "mobile", "voice") else "desktop"
 
@@ -132,7 +148,9 @@ async def approve_draft_endpoint(
     if payload.body is not None:
         edits["body"] = payload.body
     if edits:
-        sb_clients.sb_patch_as_service(f"/agent_queue?id=eq.{queue_id}", edits)
+        # Connected drafts persist edits atomically with the one-send claim.
+        if not item.get("connected_ai_job_id"):
+            sb_clients.sb_patch_as_service(f"/agent_queue?id=eq.{queue_id}", edits)
         item = {**item, **edits}
 
     # The shared core — the SAME machinery the approve_draft verb uses.
@@ -144,7 +162,9 @@ async def approve_draft_endpoint(
         async with httpx.AsyncClient() as client:
             delivery = await chief_of_staff._do_approve_one(
                 client, biz, item,
-                override_blockers=bool(payload.override_blockers))
+                override_blockers=bool(payload.override_blockers),
+                **({"human_actor_id": str(user.id)} if item.get("connected_ai_job_id")
+                   or item.get('channel')=='hand' or item.get('action_type')=='browser_hand' else {}))
     except Exception as e:  # the "failed": True seam — audited, then surfaced
         error = str(e)[:300]
         logger.exception(f"[approvals] approve {queue_id} failed")
@@ -183,6 +203,9 @@ async def approve_draft_endpoint(
     return {
         "ok": True,
         "status": "sent" if delivery.get("sent") else "approved",
+        # The third yes in a row for one kind brings one question
+        # (standing_permissions). None when there is nothing to ask.
+        "offer": _standing_offer(biz, item),
         "sent": bool(delivery.get("sent")),
         "reason": delivery.get("reason"),
         "to_email": delivery.get("to_email"),

@@ -144,6 +144,56 @@ def supports_sampling(model: str) -> bool:
     return not any(k in m for k in _NO_SAMPLING_MARKERS)
 
 
+# Families that REJECT a forced tool_choice (`any` / `tool` → 400). Only
+# `auto` and `none` are accepted there.
+_NO_FORCED_TOOL_MARKERS = ("opus-5-5", "fable-5-1", "mythos-5-1", "sonnet-5-5")
+
+
+def supports_forced_tool_choice(model: str) -> bool:
+    m = (model or "").lower()
+    return not any(k in m for k in _NO_FORCED_TOOL_MARKERS)
+
+
+# Families that accept `output_config.effort` (Opus 4.5 takes low/medium/high
+# only; everything newer takes the full range). Haiku 4.5 and Sonnet 4.5
+# return a 400 for it.
+_EFFORT_MARKERS = ("opus-4-5", "opus-4-6", "opus-4-7", "opus-4-8", "opus-5",
+                   "sonnet-4-6", "sonnet-5", "fable", "mythos")
+
+
+def supports_effort(model: str) -> bool:
+    m = (model or "").lower()
+    return any(k in m for k in _EFFORT_MARKERS)
+
+
+def effort_kwargs(model: str, effort: Optional[str]) -> dict:
+    """`{"output_config": {"effort": e}}` where the model accepts it, `{}`
+    where it would 400. Effort bounds adaptive thinking, which otherwise
+    counts against max_tokens: a mechanical JSON task at default effort
+    can spend its whole output budget thinking and return no text."""
+    if not effort or not supports_effort(model):
+        return {}
+    return {"output_config": {"effort": effort}}
+
+
+def thinking_off_kwargs(model: str) -> dict:
+    """The lowest thinking setting a model accepts, as request fields, or
+    `{}` where thinking cannot be turned off (the caller then bounds it
+    with a low effort instead).
+
+    Sonnet 5 and older Sonnets take `{"type": "disabled"}`. Sonnet 5.5
+    rejects that with a 400 and takes `{"type": "between_tools"}` instead
+    (no extended thinking; notes between tool calls come back as thinking
+    blocks), which no other model accepts. Opus 5.5 / Fable / Mythos cannot
+    turn thinking off at all."""
+    m = (model or "").lower()
+    if "sonnet-5-5" in m:
+        return {"thinking": {"type": "between_tools"}}
+    if "sonnet" in m:
+        return {"thinking": {"type": "disabled"}}
+    return {}
+
+
 def sampling_kwargs(model: str, temperature: Optional[float]) -> dict:
     """`{"temperature": t}` where the model accepts it, `{}` where it
     would 400. This is the fix for the live Arc 11 failure mode: the

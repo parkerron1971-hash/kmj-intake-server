@@ -118,7 +118,12 @@ VIEW_KINDS: tuple[str, ...] = get_args(ViewKind)
 # exists here but has no branch there is a silent no-op, so the test
 # suite asserts the dispatch covers every member.
 
-TriggerKind = Literal["new_entry", "overdue", "field_change"]
+# target_reached is the progress_tracker archetype's trigger: it fires
+# when a subject's latest reading crosses the module's target. It takes
+# no field — the archetype params say which field is the value and which
+# is the subject — so the inspector has nothing to check on it beyond the
+# archetype being progress_tracker, which it does.
+TriggerKind = Literal["new_entry", "overdue", "field_change", "target_reached"]
 TRIGGER_KINDS: tuple[str, ...] = get_args(TriggerKind)
 
 # ─── Offering categories ──────────────────────────────────────────────

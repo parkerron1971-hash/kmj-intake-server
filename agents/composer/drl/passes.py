@@ -1201,6 +1201,28 @@ def persist_dro(business_id: str, dro: Dict[str, Any]) -> Optional[str]:
 
 
 # ─── Orchestrator ────────────────────────────────────────────────────────
+def parallel_directions_enabled() -> bool:
+    """DRO_DIRECTIONS_PARALLEL=on authors the two candidates at once
+    (see _author_directions). Off by default, like the switches around
+    it — flip it in Railway; unset restores the serial road."""
+    return (os.environ.get("DRO_DIRECTIONS_PARALLEL") or "off").strip().lower() \
+        in ("on", "1", "true", "yes")
+
+
+def _pair_collides(a: Dict[str, Any], b: Dict[str, Any],
+                   owner_direction: Optional[Dict[str, Any]],
+                   reference_analysis: Optional[List[Dict[str, Any]]]) -> bool:
+    """The same collision test author_dro applies against a cohort —
+    same threshold, same owner-explicit exemptions — applied to the two
+    candidates after they authored side by side."""
+    od = owner_direction if isinstance(owner_direction, dict) else {}
+    exempt = owner_exempt_axes(
+        site_prefs=od.get("site_prefs"),
+        reference_analysis=reference_analysis,
+        fonts_pinned=bool(od.get("fonts_pinned")))
+    return _collides(b, [a], exempt=exempt)
+
+
 def _author_directions(business_id: str, signals: List[Dict[str, Any]],
                        recent: List[Dict[str, Any]], *,
                        reference_analysis: Optional[List[Dict[str, Any]]],
@@ -1224,20 +1246,60 @@ def _author_directions(business_id: str, signals: List[Dict[str, Any]],
                           owner_direction=owner_direction)
     a_key, b_key = dj.pick_pair(signals, owner_direction)
     st = dj.stances()
-    a = author_dro(business_id, signals, recent,
-                   reference_analysis=reference_analysis, creative=creative,
-                   failure_out=failure_out, owner_direction=owner_direction,
-                   stance=st.get(a_key))
-    if a is None:
-        return None
-    try:
-        b = author_dro(business_id, signals, [a] + list(recent),
-                       reference_analysis=reference_analysis, creative=creative,
-                       failure_out={}, owner_direction=owner_direction,
-                       stance=st.get(b_key))
-    except Exception as e:                       # pragma: no cover — belt
-        logger.warning(f"[directions] candidate B raised for {business_id[:8]}: {e}")
-        b = None
+    common = dict(reference_analysis=reference_analysis, creative=creative,
+                  owner_direction=owner_direction)
+
+    def _author_b(cohort: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        try:
+            return author_dro(business_id, signals, cohort, failure_out={},
+                              stance=st.get(b_key), **common)
+        except Exception as e:                   # pragma: no cover — belt
+            logger.warning(f"[directions] candidate B raised for {business_id[:8]}: {e}")
+            return None
+
+    if parallel_directions_enabled():
+        # TWO AT ONCE (2026-09-01). Each candidate is one ~160s call on
+        # the DRL model; authored one after the other they cost every
+        # build ~2.7 minutes of wall-clock for nothing — B never READ A,
+        # it was only handed A as cohort so the collision check kept the
+        # pair apart. Now both author concurrently and the pair is
+        # checked AFTER they land: if B shares the collision threshold
+        # of axes with A (owner-explicit axes exempt, as everywhere), B
+        # is re-authored once with A in its cohort — exactly the serial
+        # road, paid only when it is needed. And because B's call is
+        # already paid for by the time A's answer is known, an A that
+        # fails no longer throws B away: B ships as the direction.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2,
+                                thread_name_prefix="dro-direction") as pool:
+            fa = pool.submit(author_dro, business_id, signals, recent,
+                             failure_out=failure_out, stance=st.get(a_key),
+                             **common)
+            fb = pool.submit(_author_b, list(recent))
+            a = fa.result()
+            b = fb.result()
+        if a is None:
+            if b is None:
+                return None
+            logger.info(f"[directions] first candidate ({a_key}) did not "
+                        f"author for {business_id[:8]} — keeping {b_key}")
+            b.setdefault("meta", {})["directions"] = {
+                "candidates": [{"stance": b_key}],
+                "judge": {"winner": b_key, "by": "default",
+                          "because": f"first candidate ({a_key}) did not author"}}
+            return b
+        if b is not None and _pair_collides(a, b, owner_direction,
+                                             reference_analysis):
+            logger.info(f"[directions] {a_key} and {b_key} converged for "
+                        f"{business_id[:8]} — re-authoring {b_key} with "
+                        f"{a_key} in its cohort")
+            b = _author_b([a] + list(recent))
+    else:
+        a = author_dro(business_id, signals, recent, failure_out=failure_out,
+                       stance=st.get(a_key), **common)
+        if a is None:
+            return None
+        b = _author_b([a] + list(recent))
     if b is None:
         logger.info(f"[directions] second candidate ({b_key}) failed for "
                     f"{business_id[:8]} — keeping {a_key}")

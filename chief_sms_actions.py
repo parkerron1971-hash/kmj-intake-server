@@ -24,6 +24,14 @@ not do any of the things that make texting work in the first place.
   who says "stop texting my clients reminders" was owed an answer and had
   none.
 
+  THE NUMBER (2026-09-02, dedicated numbers phase F). A practitioner
+  can have a texting number of their own — clients text it and reach
+  them with no keyword, and every text they send goes out from it. The
+  endpoints exist (sms_numbers_router); these verbs let it happen from a
+  sentence. Provisioning costs money on the platform bill, so it is
+  class C: Chief confirms before acting, never does it unprompted. The
+  practitioner hears "your number", never Twilio.
+
 WHY THERE IS NO `broadcast_sms`
   `/sms/broadcast` exists and texts up to 500 contacts. It is deliberately
   NOT wrapped as a verb. It gates on opt-out only — it never calls
@@ -347,16 +355,31 @@ async def handle_sms_status(client, biz, action) -> Dict[str, Any]:
     effective = {k: (v and alerts_on) for k, v in per_business.items()}
 
     opted_out = await asyncio.to_thread(_opted_out_count, business_id)
+    number = await asyncio.to_thread(_live_number, business_id)
+    own_active = bool(number and number.get("status") == "active")
 
     # The report leads with what is BROKEN, because that is the question
     # being asked. A missing keyword is the one that silently loses
-    # inbound texts, so it goes first.
+    # inbound texts — unless they have a number of their own, in which
+    # case the keyword is optional and the number goes first.
     lines: List[str] = []
     if not configured:
         lines.append("texting isn't switched on for this account yet")
+    if number:
+        pretty = _pretty_number(number.get("phone_number"))
+        if number.get("status") == "active":
+            lines.append(f"your own number {pretty} — clients text it directly")
+        elif number.get("status") == "releasing":
+            lines.append(f"your number {pretty} is being released "
+                         f"(gone after {_short_date(number.get('release_after'))})")
+        else:
+            lines.append(f"your number {pretty} is {number.get('status')}")
     if not keyword:
-        lines.append("no keyword yet — clients texting your number reach "
-                     "nobody until you claim one")
+        if own_active:
+            lines.append("no keyword (optional — you have your own number)")
+        else:
+            lines.append("no keyword yet — clients texting your number reach "
+                         "nobody until you claim one")
     else:
         lines.append(f"keyword {keyword}")
     lines.append("booking confirmations "
@@ -367,12 +390,14 @@ async def handle_sms_status(client, biz, action) -> Dict[str, Any]:
         lines.append(f"{opted_out} contact"
                      f"{'s' if opted_out != 1 else ''} opted out")
 
-    ready = bool(configured and keyword)
+    ready = bool(configured and (keyword or own_active))
     return {
         "type": "sms_status",
         "result": "; ".join(lines) + ".",
         "label": "Texting — ready" if ready else "Texting — needs setup",
         "keyword": keyword,
+        "own_number": (number or {}).get("phone_number"),
+        "own_number_status": (number or {}).get("status"),
         "provider_configured": configured,
         "alerts": effective,
         "alerts_platform_enabled": alerts_on,
@@ -380,8 +405,205 @@ async def handle_sms_status(client, biz, action) -> Dict[str, Any]:
         # `signal` is what the agent surface's handoff predicates read.
         # Prose gets reworded; a flag does not (mcp_server.HANDOFFS).
         "signal": {"has_keyword": 1 if keyword else 0,
+                   "has_number": 1 if own_active else 0,
                    "configured": 1 if configured else 0,
                    "ready": 1 if ready else 0,
                    "opted_out": opted_out or 0},
+        "nav": _nav_sms(),
+    }
+
+
+# ─── a number of their own ────────────────────────────────────────────
+
+_LIVE = "provisioning,active,suspended,releasing"
+
+
+def _live_number(business_id: str) -> Optional[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/sms_numbers?business_id=eq.{business_id}&status=in.({_LIVE})"
+        f"&select=id,phone_number,status,release_after&limit=1") or []
+    return rows[0] if rows else None
+
+
+def _pretty_number(e164: Optional[str]) -> str:
+    """+14155550199 → (415) 555-0199. Anything else comes back as-is."""
+    s = str(e164 or "")
+    if s.startswith("+1") and len(s) == 12 and s[1:].isdigit():
+        return f"({s[2:5]}) {s[5:8]}-{s[8:]}"
+    return s
+
+
+def _short_date(iso: Optional[str]) -> str:
+    """'2026-09-16T12:00:00+00:00' → 'September 16'. Portable (no %-d)."""
+    from datetime import datetime
+    try:
+        d = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return f"{d.strftime('%B')} {d.day}"
+    except Exception:
+        return "two weeks from now"
+
+
+def _detail(exc) -> Dict[str, Any]:
+    d = getattr(exc, "detail", None)
+    return d if isinstance(d, dict) else {"message": str(d or "")}
+
+
+async def handle_provision_sms_number(client, biz, action) -> Dict[str, Any]:
+    """Get this business a number of its own. Class C — the prompt
+    tells Chief to confirm first; this handler does the work once the
+    practitioner has said yes. The core carries the plan gate, so a
+    verb cannot route around it."""
+    import httpx
+    from fastapi import HTTPException
+    import sms_numbers_router as numbers
+
+    business_id = str(biz.get("id") or "")
+    if not business_id:
+        return _fail("provision_sms_number", "no business on record")
+
+    area_code = str(action.get("area_code") or "").strip() or None
+    phone = str(action.get("phone_number") or action.get("number") or "").strip() or None
+
+    try:
+        async with httpx.AsyncClient() as http:
+            row = await numbers.provision_core(
+                http, business_id, phone_number=phone, area_code=area_code)
+    except HTTPException as e:
+        d = _detail(e)
+        err = d.get("error")
+        if err == "already_has_number":
+            have = (d.get("number") or {}).get("phone_number")
+            return {
+                "type": "provision_sms_number",
+                "result": f"You already have your own number — {_pretty_number(have)}. "
+                          f"Nothing to add.",
+                "label": f"Your number: {_pretty_number(have)}",
+                "number": have,
+                "nav": _nav_sms(),
+            }
+        if err == "feature_locked":
+            plan = str(d.get("required_plan") or "Practice").title()
+            return _fail("provision_sms_number",
+                         f"A private texting number comes with the {plan} plan. "
+                         f"Upgrade and I'll set it up in a moment.")
+        if err == "area_code_required":
+            return _fail("provision_sms_number",
+                         "Which area code would you like the number in?")
+        if err == "no_numbers":
+            return _fail("provision_sms_number",
+                         f"{d.get('message')} Tell me another area code and I'll try that.")
+        return _fail("provision_sms_number",
+                     d.get("message") or "I couldn't get a number just now — try again in a moment.")
+    except Exception as e:
+        logger.exception(f"provision_sms_number failed: {e}")
+        return _fail("provision_sms_number",
+                     "I couldn't get a number just now — try again in a moment.")
+
+    pretty = _pretty_number(row.get("phone_number"))
+    return {
+        "type": "provision_sms_number",
+        "result": (f"Your number is {pretty}. Clients can text it and land straight "
+                   f"in your Inbox — no keyword needed — and every text you send goes "
+                   f"out from it. Put it on your cards, your site, your invoices."),
+        "label": f"Your number: {pretty}",
+        "number": row.get("phone_number"),
+        "area_code": row.get("area_code"),
+        "nav": _nav_sms(),
+    }
+
+
+async def handle_release_sms_number(client, biz, action) -> Dict[str, Any]:
+    """Give the number back. Texts to it stop reaching them at once;
+    the line is held for the grace window, then gone for good. Class C
+    — confirmed first by the prompt, and the result says both halves."""
+    import httpx
+    from fastapi import HTTPException
+    import sms_numbers_router as numbers
+
+    business_id = str(biz.get("id") or "")
+    if not business_id:
+        return _fail("release_sms_number", "no business on record")
+
+    try:
+        async with httpx.AsyncClient() as http:
+            res = await numbers.release_core(http, business_id)
+    except HTTPException as e:
+        d = _detail(e)
+        if d.get("error") == "not_found":
+            return _fail("release_sms_number",
+                         "You don't have a private number to give up.")
+        if d.get("error") == "not_releasable" and d.get("status") == "releasing":
+            num = d.get("number") or {}
+            return {
+                "type": "release_sms_number",
+                "result": (f"{_pretty_number(num.get('phone_number'))} is already being "
+                           f"released — it's gone after {_short_date(num.get('release_after'))}. "
+                           f"Say the word before then and I'll bring it back."),
+                "label": f"Releasing {_pretty_number(num.get('phone_number'))}",
+                "number": num.get("phone_number"),
+                "nav": _nav_sms(),
+            }
+        return _fail("release_sms_number",
+                     d.get("message") or "I couldn't release the number just now — try again in a moment.")
+    except Exception as e:
+        logger.exception(f"release_sms_number failed: {e}")
+        return _fail("release_sms_number",
+                     "I couldn't release the number just now — try again in a moment.")
+
+    num = res.get("number") or {}
+    pretty = _pretty_number(num.get("phone_number"))
+    when = _short_date(res.get("release_after"))
+    return {
+        "type": "release_sms_number",
+        # SAY WHAT BREAKS, AND THE WAY BACK. Texts to the line stop now;
+        # the number itself is held for the window.
+        "result": (f"{pretty} is being released. Texts to it stop reaching you now, "
+                   f"and it's gone for good after {when}. Until then, say the word "
+                   f"and I'll bring it back."),
+        "label": f"Releasing {pretty}",
+        "number": num.get("phone_number"),
+        "release_after": res.get("release_after"),
+        "nav": _nav_sms(),
+    }
+
+
+async def handle_restore_sms_number(client, biz, action) -> Dict[str, Any]:
+    """The undo for release_sms_number, inside the window."""
+    import httpx
+    from fastapi import HTTPException
+    import sms_numbers_router as numbers
+
+    business_id = str(biz.get("id") or "")
+    if not business_id:
+        return _fail("restore_sms_number", "no business on record")
+
+    try:
+        async with httpx.AsyncClient() as http:
+            res = await numbers.restore_core(http, business_id)
+    except HTTPException as e:
+        d = _detail(e)
+        if d.get("error") == "not_found":
+            return _fail("restore_sms_number", "There's no number to bring back.")
+        if d.get("error") == "not_restorable":
+            if d.get("status") == "active":
+                return _fail("restore_sms_number",
+                             "Your number is already active — nothing to bring back.")
+            return _fail("restore_sms_number",
+                         "That number is no longer held — it's been released. "
+                         "I can get you a new one.")
+        return _fail("restore_sms_number",
+                     d.get("message") or "I couldn't bring the number back just now — try again in a moment.")
+    except Exception as e:
+        logger.exception(f"restore_sms_number failed: {e}")
+        return _fail("restore_sms_number",
+                     "I couldn't bring the number back just now — try again in a moment.")
+
+    num = res.get("number") or {}
+    pretty = _pretty_number(num.get("phone_number"))
+    return {
+        "type": "restore_sms_number",
+        "result": f"{pretty} is yours again — texts to it reach you, and yours go out from it.",
+        "label": f"Your number: {pretty}",
+        "number": num.get("phone_number"),
         "nav": _nav_sms(),
     }

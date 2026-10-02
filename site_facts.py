@@ -74,6 +74,36 @@ def _founded_year(settings: Dict[str, Any], profile: Dict[str, Any],
     return None
 
 
+_STATED_YEARS_RE = re.compile(r"\b(\d{1,2})\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
+
+
+def stated_years(ctx: Dict[str, Any], dossier: Dict[str, Any]) -> List[int]:
+    """THE OWNER'S OWN TENURE (2026-09-04, the barbershop bench). The
+    tenure law only knew the founding year, so an owner who typed "I've
+    been cutting 14 years" about a shop founded in 2021 watched the
+    repair round strip the truest sentence on the page. A number of
+    years the practitioner stated themselves — in their prompt, or in
+    the discovery dossier's own-words sections — is a fact on file,
+    exactly like a proven stat. Founding-year tenure stays a computed
+    fact; this is the other kind."""
+    texts: List[str] = [str((ctx or {}).get("owner_brief") or "")]
+    for key in ("identity", "story", "world", "signature", "confirmed_brief"):
+        v = (dossier or {}).get(key)
+        if v:
+            try:
+                import json as _json
+                texts.append(_json.dumps(v, ensure_ascii=False))
+            except Exception:
+                texts.append(str(v))
+    out: List[int] = []
+    for t in texts:
+        for m in _STATED_YEARS_RE.finditer(t):
+            n = int(m.group(1))
+            if 1 <= n <= 80 and n not in out:
+                out.append(n)
+    return out
+
+
 def build_facts(ctx: Dict[str, Any], business_id: str,
                 profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     ctx = ctx if isinstance(ctx, dict) else {}
@@ -100,6 +130,7 @@ def build_facts(ctx: Dict[str, Any], business_id: str,
         "photos": len(ctx.get("gallery") or []) if isinstance(ctx.get("gallery"), list) else 0,
         "testimonials": len(ctx.get("testimonials") or []) if isinstance(ctx.get("testimonials"), list) else 0,
         "proven_stats": [],
+        "stated_years": stated_years(ctx, dossier),
         "doors": [],
     }
     for stat in ((dossier.get("truth") or {}).get("proven_stats") or [])[:8]:
@@ -141,6 +172,10 @@ def facts_block(facts: Dict[str, Any]) -> str:
         lines.append(f"- Hours: {f['hours']}")
     lines.append(f"- On file: {f.get('offerings', 0)} offerings, {f.get('photos', 0)} photos, "
                  f"{f.get('testimonials', 0)} testimonials — these are the only counts you may cite")
+    if f.get("stated_years"):
+        lines.append("- Years the owner stated in their own words (usable verbatim, "
+                     "as the owner's tenure, never as the business's age): "
+                     + ", ".join(f"{n} years" for n in f["stated_years"]))
     if f.get("proven_stats"):
         lines.append("- Proven stats (the owner's own, usable verbatim): "
                      + "; ".join(f["proven_stats"]))
@@ -159,9 +194,12 @@ def tenure_claims(html_text: str, facts: Dict[str, Any]) -> List[str]:
     on file. With no founding year on file, any such claim is invented."""
     problems: List[str] = []
     yrs = (facts or {}).get("years_in_business")
+    stated = {int(x) for x in ((facts or {}).get("stated_years") or []) if str(x).isdigit()}
     for m in _TENURE_RE.finditer(html_text or ""):
         n = int(m.group(1))
         if isinstance(yrs, int) and n == yrs:
+            continue
+        if n in stated:
             continue
         problems.append(
             f"TENURE CLAIM: '{m.group(0).strip()}' on the page — "

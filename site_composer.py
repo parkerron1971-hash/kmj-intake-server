@@ -389,6 +389,16 @@ def _persist_site_prefs(business_id: str, prefs: Dict[str, Any]) -> None:
 
 # ─── Context gathering ────────────────────────────────────────────────
 
+def _owner_brief_cap() -> int:
+    """One cap for the owner's words (canvas_brief.OWNER_BRIEF_MAX_CHARS);
+    600 here used to cut a practitioner's prompt mid-sentence."""
+    try:
+        import canvas_brief
+        return int(canvas_brief.OWNER_BRIEF_MAX_CHARS)
+    except Exception:
+        return 2400
+
+
 def _slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (name or "site").lower()).strip("-")
     return s[:48] or "site"
@@ -518,6 +528,18 @@ def gather_context(business_id: str) -> Dict[str, Any]:
             giving = {"enabled": True, "url": give_url_for_site(site)}
     except Exception as e:
         logger.info(f"[composer] giving connection skipped: {e}")
+
+    # Public events (RSVP) — same connection pattern: on only when the
+    # /events page is actually live (operator toggle + an Events module),
+    # so a composed "Upcoming events" door can never dead-end.
+    events_door = {"enabled": False, "url": ""}
+    try:
+        from events_rsvp_router import (events_public_is_active, events_url_for_site,
+                                        roster_modules_for)
+        if site and slug and events_public_is_active(biz, roster_modules_for(business_id)):
+            events_door = {"enabled": True, "url": events_url_for_site(site)}
+    except Exception as e:
+        logger.info(f"[composer] events connection skipped: {e}")
 
     # Only real dict rows the owner left visible reach composed sites —
     # hidden quotes (show_on_website=False) must not render, inflate the
@@ -814,6 +836,7 @@ def gather_context(business_id: str) -> Dict[str, Any]:
         "business_picture": business_picture,
         "booking": booking,
         "giving": giving,
+        "events_door": events_door,
         "public_modules": _fetch_public_modules(business_id),
         "contact": contact,
         "footer": bundle.get("footer") or {},
@@ -3287,6 +3310,36 @@ def _owner_direction_evidence(ctx: Dict[str, Any]) -> Dict[str, Any]:
             and bool(design.get("fonts_locked"))}
 
 
+def _study_inspiration_sites(business_id: str, ctx: Dict[str, Any]) -> None:
+    """The sites pasted into the quick brief get the same study the Design
+    Session gives a pasted link: screenshots at phone and desktop width
+    read by a vision model, saved to the site's design notes (discovery
+    dossier). Until 2026-09-22 they only got the HTML/CSS palette scrape
+    below, which feeds this compose and never reached the Blueprint or
+    the builder. Fail-soft; a URL already studied cleanly is not studied
+    again."""
+    try:
+        import discovery
+        prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+        urls = [u.strip() for u in (prefs.get("inspiration_urls") or [])
+                if isinstance(u, str) and u.strip()][:3]
+        if not urls:
+            return
+        dossier = discovery.get_dossier(business_id) or {}
+        done = {r.get("url") for r in ((dossier.get("artifacts") or {}).get("references") or [])
+                if isinstance(r, dict) and not r.get("error")}
+        why = str(prefs.get("inspiration_notes") or "").strip()[:200]
+        for url in urls:
+            if url in done:
+                continue
+            entry = discovery.study_reference(business_id, url, "love", why)
+            if entry.get("error"):
+                logger.info(f"[composer] {business_id[:8]} inspiration study failed "
+                            f"for {url[:80]}: {str(entry['error'])[:80]}")
+    except Exception as e:
+        logger.warning(f"[composer] inspiration study skipped: {type(e).__name__}: {e}")
+
+
 def _maybe_analyze_references(business_id: str,
                               ctx: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Run reference_analyzer over site_prefs.inspiration_urls when the
@@ -3801,7 +3854,7 @@ def compose_site(business_id: str, brief_notes: str = "",
     # canvas brief can lead with them verbatim. brief_notes already
     # steered the section plan; now the author hears them too.
     if (brief_notes or "").strip():
-        ctx["owner_brief"] = brief_notes.strip()[:600]
+        ctx["owner_brief"] = brief_notes.strip()[:_owner_brief_cap()]
     # Arc 3 — an APPROVED design spec is the law of the page: it leads
     # the canvas brief. Authoring/revision happen via /composer/spec/*
     # for pennies, so only decided designs pay for builds.
@@ -3824,6 +3877,10 @@ def compose_site(business_id: str, brief_notes: str = "",
     # both the DRL signal pass and the DRO author see the evidence.
     _report_progress(progress_cb, 15, "Listening to your style words")
     ref_analysis = _maybe_analyze_references(business_id, ctx)
+    if progress_cb is not None:
+        # A build job only: each study is two page loads and a vision call.
+        _report_progress(progress_cb, 17, "Looking at the sites you love")
+        _study_inspiration_sites(business_id, ctx)
 
     # Arc 6 — the owner's creative brief flows into DRO authoring on the
     # SINGLE compose path too (directions are opt-in, not a prerequisite).
@@ -4050,6 +4107,19 @@ def compose_site(business_id: str, brief_notes: str = "",
     # joins at the same seam the canvas uses; on any failure the ladder
     # continues below (canvas → modules), wearing the spec's tokens via
     # the bridge either way.
+    # THE OFFER PAGE (2026-10-01, Kevin: World lives on one offer page by
+    # default). Named before the home is built, so the home links to it.
+    if use_llm and _has_spec:
+        try:
+            import site_concept as _sconcept
+            import site_pages as _spages
+            _sheet = _sconcept.parse_sheet(ctx.get("design_spec_text") or "")
+            if _sheet.get("intensity") == "world" and _sheet.get("scope") == "offer" \
+                    and _offer_pages_enabled():
+                ctx["offer_page"] = {"path": _spages.offer_path(_sheet),
+                                     "name": _spages.offer_name(_sheet)}
+        except Exception as _oe:
+            logger.info(f"[composer] offer page not planned: {_oe}")
     if use_llm and _has_spec and canvas_html is None:
         try:
             import builder_v2 as _bv2
@@ -4262,6 +4332,17 @@ def compose_site(business_id: str, brief_notes: str = "",
     # persist generated_pages. Best-effort — a failure never blocks the home.
     if _mp_slug:
         rebuild_secondary_pages(business_id, ctx, _mp_slug)
+
+    # THE PHOTO LIST (2026-10-01): what the page still wants photographed
+    # becomes one practitioner task, refreshed in place. Free; best-effort.
+    if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
+        file_photo_list(business_id, ctx)
+
+    # THE OFFER PAGE: built after the home is live (it never delays it),
+    # wearing the home's house style. A spec with no offer scope clears a
+    # page an earlier build made. Best-effort.
+    if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
+        build_offer_page(business_id, ctx, canvas_html, progress_cb=progress_cb)
 
     # Arc 19 weight-hole fix (2026-07-30): THE one billable row for this
     # build — the per-call authoring rows above it are priced 0, so one
@@ -5116,7 +5197,7 @@ def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
 
     ctx, dro, plan = _spec_inputs(business_id)
     if (notes or "").strip() and not revise:
-        ctx["owner_brief"] = notes.strip()[:600]
+        ctx["owner_brief"] = notes.strip()[:_owner_brief_cap()]
 
     _report_progress(progress_cb, 25,
                      "Revising the blueprint" if revise else "Drafting the blueprint")
@@ -6013,6 +6094,152 @@ def choose_direction(body: ChooseDirectionBody,
 
 # ─── Arc 28b — live refresh on catalog change ─────────────────────────
 
+def _offer_pages_enabled() -> bool:
+    return (os.environ.get("SITE_OFFER_PAGE") or "on").strip().lower() not in (
+        "off", "0", "false", "no")
+
+
+def file_photo_list(business_id: str, ctx: Dict[str, Any]) -> Optional[str]:
+    """Read the served home (slots filled since are marked sx-filled) and
+    hand the owner what is still missing, with the concept's own photo
+    list. Never raises."""
+    try:
+        import site_concept
+        import site_photo_list
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=html_content&order=updated_at.desc&limit=1") or []
+        html = str((rows[0].get("html_content") if rows else "") or "")
+        sheet = site_concept.parse_sheet(ctx.get("design_spec_text") or "")
+        return site_photo_list.file_task(business_id, html, sheet)
+    except Exception as e:
+        logger.info(f"[composer] photo list skipped: {e}")
+        return None
+
+
+OFFER_KEY_PREFIX = "v2o/"
+
+
+def namespace_offer_page(html: str) -> str:
+    """Move a builder page's edit keys from v2/ to the offer page's own v2o/."""
+    return (html or "").replace('data-override-target="v2/', f'data-override-target="{OFFER_KEY_PREFIX}') \
+        .replace("data-override-target='v2/", f"data-override-target='{OFFER_KEY_PREFIX}")
+
+
+def _apply_page_overrides(html: str, business_id: str) -> str:
+    """The practitioner's text and colour edits, applied the way the home
+    page gets them. Keys are page-specific, so only this page's edits land."""
+    try:
+        from agents.override_system.override_resolver import resolve_html_overrides
+        html = resolve_html_overrides(html, business_id)
+    except Exception as e:
+        logger.info(f"[composer] offer text overrides skipped: {e}")
+    try:
+        html = _inject_color_overrides(html, business_id)
+    except Exception as e:
+        logger.info(f"[composer] offer color overrides skipped: {e}")
+    return html
+
+
+def _retire_offer_overrides(business_id: str) -> int:
+    """A rebuilt offer page is a new design: edits made against the old one
+    go stale (never deleted), the policy a full recompose applies to the
+    home page's colour tweaks."""
+    try:
+        from agents.override_system.override_storage import list_overrides, mark_overrides_status
+        ids = []
+        for kind in ("text", "color_role"):
+            for r in list_overrides(business_id, kind) or []:
+                if str(r.get("target_path") or "").startswith(OFFER_KEY_PREFIX) and r.get("id") \
+                        and str(r.get("status") or "active") != "stale":
+                    ids.append(r["id"])
+        if ids:
+            mark_overrides_status(ids, "stale")
+        return len(ids)
+    except Exception as e:
+        logger.info(f"[composer] offer override retire skipped: {e}")
+        return 0
+
+
+def refresh_offer_page(business_id: str) -> bool:
+    """Re-apply the practitioner's edits to the offer page from its base,
+    so an Edit Mode change (or a revert) shows without a rebuild. Free."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=site_config&order=updated_at.desc&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else {}) or {}
+        offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
+        base = str(offer.get("html_base") or "")
+        if not base:
+            return False
+        pages = dict(cfg.get("generated_pages") or {})
+        fresh = _apply_page_overrides(base, business_id)
+        if pages.get("offer") == fresh:
+            return False
+        pages["offer"] = fresh
+        cfg["generated_pages"] = pages
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{business_id}", {"site_config": cfg})
+        return True
+    except Exception as e:
+        logger.info(f"[composer] offer page refresh skipped: {e}")
+        return False
+
+
+def build_offer_page(business_id: str, ctx: Dict[str, Any], home_html: str,
+                     progress_cb=None) -> bool:
+    """One more builder_v2 run for the World concept's offer page, saved as
+    generated_pages["offer"] with site_config.offer_page {path, name}.
+    No offer planned: an offer page an earlier build left is removed, so a
+    practitioner who moves off World never keeps a stale page. Never
+    raises; returns True when a page was saved."""
+    from datetime import datetime, timezone
+    offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{business_id}"
+            f"&select=site_config&order=updated_at.desc&limit=1") or []
+        cfg = (rows[0].get("site_config") if rows else {}) or {}
+        pages = dict(cfg.get("generated_pages") or {})
+        if not offer.get("path"):
+            if pages.pop("offer", None) is not None or cfg.get("offer_page"):
+                cfg["generated_pages"] = pages
+                cfg.pop("offer_page", None)
+                sb_clients.sb_patch_as_service(
+                    f"/business_sites?business_id=eq.{business_id}",
+                    {"site_config": cfg})
+            return False
+        import builder_v2 as _bv2
+        _report_progress(progress_cb, 92, "Building your offer page")
+        out = _bv2.run_builder_v2(ctx.get("design_spec_text") or "", ctx, business_id,
+                                  page="offer", house=_bv2.house_style(home_html))
+        html = (out or {}).get("html")
+        if not html:
+            logger.warning(f"[composer] offer page fell back for {business_id[:8]}: "
+                           f"{((out or {}).get('report') or {}).get('fallbacks')}")
+            return False
+        # ITS OWN EDIT KEYS (2026-10-01): builder pages number their editable
+        # elements by position (v2/f1, v2/f2 ...), so an offer page's v2/f4
+        # and the home page's v2/f4 are different words under one key. An
+        # Edit Mode change on the offer page would have rewritten the home
+        # page on the next refresh. The offer page answers to v2o/ keys.
+        base = namespace_offer_page(html)
+        _retire_offer_overrides(business_id)          # a new page, new words
+        pages["offer"] = _apply_page_overrides(base, business_id)
+        cfg["generated_pages"] = pages
+        cfg["offer_page"] = {"path": offer["path"], "name": offer.get("name") or "",
+                             "built_at": datetime.now(timezone.utc).isoformat(),
+                             "html_base": base}
+        sb_clients.sb_patch_as_service(
+            f"/business_sites?business_id=eq.{business_id}", {"site_config": cfg})
+        logger.info(f"[composer] offer page saved at {offer['path']} for {business_id[:8]}")
+        return True
+    except Exception as e:
+        logger.warning(f"[composer] offer page skipped (non-fatal): {e}")
+        return False
+
+
 def rebuild_secondary_pages(business_id: str, ctx: Dict[str, Any],
                             slug: str) -> int:
     """Render About / Services / Contact and persist generated_pages.
@@ -6035,13 +6262,28 @@ def rebuild_secondary_pages(business_id: str, ctx: Dict[str, Any],
     try:
         import site_multipage
         title = (ctx.get("business") or {}).get("name") or "Welcome"
-        pages = site_multipage.build_secondary_pages(ctx, slug, title)
-        if not pages:
-            return 0
         rows = sb_clients.sb_get_as_service(
             f"/business_sites?business_id=eq.{business_id}"
-            f"&select=site_config&order=updated_at.desc&limit=1") or []
+            f"&select=site_config,html_content&order=updated_at.desc&limit=1") or []
         cfg = (rows[0].get("site_config") if rows else {}) or {}
+        home = str((rows[0].get("html_content") if rows else "") or "")
+        # PAGES THAT MATCH (2026-10-01): a builder home page gives up its own
+        # sections to About / Services / Contact, so the pages share its
+        # design and words instead of module templates with fixed copy.
+        pages: Dict[str, str] = {}
+        try:
+            import site_pages
+            if site_pages.is_builder_page(home):
+                pages = site_pages.slice_pages(home, title)
+        except Exception as _se:
+            logger.info(f"[composer] page cut skipped: {_se}")
+        if not pages:
+            pages = site_multipage.build_secondary_pages(ctx, slug, title)
+        if not pages:
+            return 0
+        _old = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
+        if _old.get("offer"):
+            pages["offer"] = _old["offer"]          # the offer page is its own build
         cfg["generated_pages"] = pages
         cfg["site_pages"] = ["home"] + list(site_multipage.SECONDARY_PAGES)
         sb_clients.sb_patch_as_service(
@@ -6110,6 +6352,8 @@ def refresh_if_composed(business_id: str) -> bool:
         # pages, and they go just as stale.
         if _mp:
             rebuild_secondary_pages(business_id, ctx, _mp)
+        # the World offer page keeps its own edits current too
+        refresh_offer_page(business_id)
         return True
     return False
 

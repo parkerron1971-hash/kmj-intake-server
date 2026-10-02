@@ -1,5 +1,11 @@
 fastapi==0.115.0
+livekit-api==1.1.0
 uvicorn==0.30.6
+# WebSockets both ways (voice latency arc 9/08): uvicorn serves
+# /ai/voice/stream with it, and voice_stream.py dials OpenAI with it.
+# Plain uvicorn ships neither — without this line the route is refused
+# and the module fails to import.
+websockets>=13,<17
 anthropic==0.34.2
 python-dotenv==1.0.1
 apscheduler==3.10.4
@@ -35,6 +41,8 @@ pywebpush==2.0.0
 sentry-sdk[fastapi]>=2.0.0
 # Arc 29 — CI test runner (also used locally).
 pytest>=8.0.0
+# Parse and verify builder workflow permission boundaries in CI.
+PyYAML==6.0.3
 # Twilio SMS rail (twilio_sms.py) — outbound via Messaging Service +
 # inbound webhook signature validation (RequestValidator).
 twilio>=9.0.0
@@ -54,3 +62,10 @@ opentimestamps>=0.4.5
 # LEDGER_ANCHOR_PROVIDER=hedera, and it refuses with a named-missing-var
 # error rather than anchoring nowhere.
 hiero-sdk-python>=0.1.0
+
+# Email setup room — email_domain_dns resolves the operator's SPF/DKIM/
+# MX/DMARC records itself so the UI can show expected vs FOUND instead
+# of Resend's bare "pending". Pure Python.
+dnspython>=2.6.0
+# craft_laws: likely typos in page copy (concept-layer plan, 2026-10-01)
+pyspellchecker==0.9.0

@@ -97,8 +97,13 @@ def _enabled() -> bool:
 
 
 def _utc_day_start_iso() -> str:
+    # The Z form, never isoformat()'s "+00:00": inside a query string the
+    # plus decodes to a space and PostgREST answers 400 ("invalid input
+    # syntax for type timestamp"), which _refresh swallowed as "no rows",
+    # so the daily circuit breaker read zero spend all day (seen in a
+    # railway-run probe, 2026-09-14).
     n = datetime.now(timezone.utc)
-    return n.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return n.replace(hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _refresh(force: bool = False) -> Tuple[float, Dict[str, float]]:

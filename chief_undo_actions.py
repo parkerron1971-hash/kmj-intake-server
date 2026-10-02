@@ -24,6 +24,16 @@ import action_inverse
 
 logger = logging.getLogger("chief_undo_actions")
 
+# An empty undo log is not evidence that nothing happened. Said plainly,
+# because the model read "nothing to undo" as "that task was never
+# created" and told the practitioner so while the task sat on his list
+# (2026-09-14).
+NOTHING_TO_UNDO = (
+    f"nothing in the undo log from the last {action_inverse.UNDO_WINDOW_HOURS} hours. "
+    "That is not the same as nothing having happened: earlier actions may have run and "
+    "simply not be reversible (a note, a goal, time logged). Do not tell the practitioner "
+    "an action did not happen; point them at the receipts above or the room it lives in.")
+
 
 def _fail(action_type: str, msg: str) -> Dict[str, Any]:
     # Capital "Failed:" — chief_of_staff._action_failed and the frontend's
@@ -54,8 +64,7 @@ async def handle_what_undo(client, biz, action) -> Dict[str, Any]:
     row = await _most_recent(client, biz)
     if not row:
         return {"type": "what_undo",
-                "result": (f"nothing to undo from the last "
-                           f"{action_inverse.UNDO_WINDOW_HOURS} hours"),
+                "result": NOTHING_TO_UNDO,
                 "label": "Nothing to undo", "nav": None}
 
     verb = row.get("action_type") or ""
@@ -70,14 +79,33 @@ async def handle_what_undo(client, biz, action) -> Dict[str, Any]:
 
 async def handle_undo_last(client, biz, action) -> Dict[str, Any]:
     """Reverse the most recent reversible action."""
-    from chief_of_staff import ACTION_HANDLERS, _sb, _action_failed
-
     row = await _most_recent(client, biz)
     if not row:
         return {"type": "undo_last",
-                "result": (f"nothing to undo from the last "
-                           f"{action_inverse.UNDO_WINDOW_HOURS} hours"),
+                "result": NOTHING_TO_UNDO,
                 "label": "Nothing to undo", "nav": None}
+    return await undo_row(client, biz, row)
+
+
+def within_window(row: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Still inside UNDO_WINDOW_HOURS of when it was recorded."""
+    raw = str(row.get("created_at") or "")
+    try:
+        made = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if made.tzinfo is None:
+        made = made.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return now - made <= timedelta(hours=action_inverse.UNDO_WINDOW_HOURS)
+
+
+async def undo_row(client, biz, row: Dict[str, Any]) -> Dict[str, Any]:
+    """Reverse ONE recorded action — the newest (undo_last) or a specific
+    row picked from the while-you-were-away feed (2026-09-13). The row
+    stays undoable when the inverse fails; it is marked undone only after
+    the handler said the reversal happened."""
+    from chief_of_staff import ACTION_HANDLERS, _sb_service, _action_failed
 
     verb = row.get("action_type") or ""
     inverse = action_inverse.build_inverse(
@@ -108,7 +136,8 @@ async def handle_undo_last(client, biz, action) -> Dict[str, Any]:
                 "label": f"Undo failed: {verb}",
                 "nav": res.get("nav"), "failed": True}
 
-    await _sb(client, "PATCH", f"/chief_undo_log?id=eq.{row['id']}", {
+    # Service role: the row is the server's own record (see _sb_service).
+    await _sb_service(client, "PATCH", f"/chief_undo_log?id=eq.{row['id']}", {
         "status": "undone",
         "undone_at": datetime.now(timezone.utc).isoformat(),
         "undo_result": str(res.get("result"))[:240],

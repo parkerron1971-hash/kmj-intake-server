@@ -166,3 +166,46 @@ def test_one_broken_block_never_takes_the_gather_down(gather, monkeypatch,
     assert ctx.get("business"), (
         f"{attr} raising must degrade its own block, not the gather"
     )
+
+
+# ─── Timestamps survive the query string (2026-09-03) ─────────────────
+
+def test_ts_ends_in_z_not_plus_offset():
+    from datetime import datetime, timezone, timedelta
+    import chief_of_staff as cos
+    d = datetime(2026, 9, 3, 12, 11, 50, tzinfo=timezone.utc)
+    assert cos._ts(d) == "2026-09-03T12:11:50Z"
+    # A non-UTC input is converted, not just relabelled.
+    est = d.astimezone(timezone(timedelta(hours=-5)))
+    assert cos._ts(est) == "2026-09-03T12:11:50Z"
+    assert "+" not in cos._ts(d)
+
+
+def test_context_time_filters_use_ts():
+    """isoformat() ends in '+00:00'; '+' in a URL decodes to a space and
+    Postgres 400s (22007). Found live: unread insights and upcoming
+    sessions had been failing on every turn."""
+    import inspect
+    import chief_of_staff as cos
+    src = inspect.getsource(cos._gather_context)
+    assert "in_7d = _ts(" in src and "insights_since = _ts(" in src
+    assert ".isoformat()}" not in src.replace("replace('+00:00', 'Z')", "").replace('replace("+00:00", "Z")', ""), (
+        "a raw isoformat() is being interpolated into a query filter")
+
+
+def test_conversation_recall_sends_a_timestamp_the_query_string_keeps(monkeypatch):
+    """Seen 2026-09-26: recall_conversation still interpolated a raw
+    isoformat(), so every recall read 400'd and "what did we talk about
+    last week?" answered from nothing."""
+    import asyncio
+    import chief_of_staff as cos
+    paths = []
+
+    async def sb(client, method, path, body=None):
+        paths.append(path)
+        return []
+    monkeypatch.setattr(cos, "_sb", sb)
+    asyncio.run(cos.handle_recall_conversation(None, {"id": "b-1"}, {"query": "workshop", "time_range": "last week"}))
+    recall = [p for p in paths if p.startswith("/chief_conversations?")]
+    assert recall and "+" not in recall[0] and "ended_at=gte." in recall[0]
+    assert recall[0].split("ended_at=gte.")[1].split("&")[0].endswith("Z")

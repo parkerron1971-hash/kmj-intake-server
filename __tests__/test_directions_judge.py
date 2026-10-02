@@ -204,3 +204,108 @@ def test_switch_is_off_by_default(monkeypatch):
     assert dj.enabled() is False
     monkeypatch.setenv("DRO_DIRECTIONS", "on")
     assert dj.enabled() is True
+
+
+# ─── TWO AT ONCE (2026-09-01) — DRO_DIRECTIONS_PARALLEL ─────────────────
+import threading
+
+
+def _wire_parallel(monkeypatch, *, a, b, b_after_cohort=None, a_none=False,
+                   judge=None, barrier=True):
+    """author_dro fake for the concurrent road: A and B must BOTH be in
+    flight before either returns (a 2-party barrier with a short timeout
+    fails the test if they run one after the other). `b_after_cohort` is
+    what B returns when A is in its cohort (the re-author)."""
+    calls = {"author": [], "judge": []}
+    gate = threading.Barrier(2, timeout=5) if barrier else None
+    lock = threading.Lock()
+
+    def fake_author(business_id, signals, recent, **kw):
+        stance = kw.get("stance") or ""
+        is_a = "CONCEPT-LITERAL" in stance.upper()
+        cohort_ids = [r.get("exemplar_id") for r in recent]
+        with lock:
+            calls["author"].append({"a": is_a, "cohort": cohort_ids})
+        if gate is not None and (is_a or (not is_a and a.get("exemplar_id") not in cohort_ids)):
+            gate.wait()
+        if is_a:
+            return None if a_none else a
+        if a.get("exemplar_id") in cohort_ids:
+            return b_after_cohort
+        return b
+
+    monkeypatch.setattr(drl_passes, "author_dro", fake_author)
+    monkeypatch.setattr(drl_passes, "detect_signals", lambda *a_, **k: [])
+    monkeypatch.setattr(drl_passes, "fetch_recent_dros", lambda *a_, **k: [])
+    monkeypatch.setattr(drl_passes, "fetch_own_last_dro", lambda *a_, **k: None)
+    monkeypatch.setattr(drl_passes, "persist_dro", lambda *a_, **k: "rid-1")
+    monkeypatch.setattr(drl_passes.model_ladder, "probe_models_once", lambda *a_, **k: None)
+
+    def fake_judge(business_id, signals, candidates, **kw):
+        calls["judge"].append([k for k, _ in candidates])
+        return judge or {"winner": 0, "by": "judge", "because": "A", "loser_weakness": ""}
+    monkeypatch.setattr(dj, "judge", fake_judge)
+    return calls
+
+
+def test_parallel_is_off_unless_switched_on(monkeypatch):
+    monkeypatch.delenv("DRO_DIRECTIONS_PARALLEL", raising=False)
+    assert drl_passes.parallel_directions_enabled() is False
+    monkeypatch.setenv("DRO_DIRECTIONS_PARALLEL", "on")
+    assert drl_passes.parallel_directions_enabled() is True
+
+
+def test_parallel_authors_both_candidates_at_once_and_b_never_waits_for_a(monkeypatch):
+    monkeypatch.setenv("DRO_DIRECTIONS", "on")
+    monkeypatch.setenv("DRO_DIRECTIONS_PARALLEL", "on")
+    a, b = _exemplar("e13_glass"), _exemplar("e10_atelier")
+    calls = _wire_parallel(monkeypatch, a=a, b=b,
+                           judge={"winner": 1, "by": "judge", "because": "B", "loser_weakness": ""})
+    dro, fail = drl_passes.produce_dro("biz", "intake")
+    # the barrier inside the fake proves both were in flight together
+    assert fail is None and dro["exemplar_id"] == "e10_atelier"
+    assert len(calls["author"]) == 2
+    b_call = next(c for c in calls["author"] if not c["a"])
+    assert b_call["cohort"] == []                         # B authored blind
+    assert calls["judge"] == [["concept-literal", "tension-led"]]
+    assert dro["meta"]["directions"]["judge"]["winner"] == "tension-led"
+
+
+def test_parallel_converged_pair_reauthors_b_with_a_in_its_cohort(monkeypatch):
+    monkeypatch.setenv("DRO_DIRECTIONS", "on")
+    monkeypatch.setenv("DRO_DIRECTIONS_PARALLEL", "on")
+    a = _exemplar("e13_glass")
+    twin = json.loads(json.dumps(a)); twin["exemplar_id"] = "twin"   # same 8 axes
+    b2 = _exemplar("e10_atelier")
+    calls = _wire_parallel(monkeypatch, a=a, b=twin, b_after_cohort=b2)
+    dro, fail = drl_passes.produce_dro("biz", "intake")
+    assert fail is None
+    # three authorings: A, blind B (collided), B again with A in cohort
+    assert len(calls["author"]) == 3
+    assert calls["author"][-1]["a"] is False
+    assert calls["author"][-1]["cohort"] == ["e13_glass"]
+    # the judge saw the re-authored B, not the twin
+    assert calls["judge"] == [["concept-literal", "tension-led"]]
+    assert {c["stance"] for c in dro["meta"]["directions"]["candidates"]} == {"concept-literal", "tension-led"}
+
+
+def test_parallel_a_failing_ships_the_b_that_was_already_paid_for(monkeypatch):
+    monkeypatch.setenv("DRO_DIRECTIONS", "on")
+    monkeypatch.setenv("DRO_DIRECTIONS_PARALLEL", "on")
+    b = _exemplar("e10_atelier")
+    calls = _wire_parallel(monkeypatch, a=_exemplar("e13_glass"), b=b, a_none=True)
+    dro, fail = drl_passes.produce_dro("biz", "intake")
+    assert fail is None and dro["exemplar_id"] == "e10_atelier"
+    assert calls["judge"] == []
+    d = dro["meta"]["directions"]
+    assert d["judge"]["winner"] == "tension-led" and d["judge"]["by"] == "default"
+    assert len(calls["author"]) == 2
+
+
+def test_parallel_both_failing_is_still_a_failure(monkeypatch):
+    monkeypatch.setenv("DRO_DIRECTIONS", "on")
+    monkeypatch.setenv("DRO_DIRECTIONS_PARALLEL", "on")
+    calls = _wire_parallel(monkeypatch, a=_exemplar("e13_glass"), b=None, a_none=True)
+    dro, fail = drl_passes.produce_dro("biz", "intake")
+    assert dro is None and fail["stage"] == "authoring"
+    assert calls["judge"] == []

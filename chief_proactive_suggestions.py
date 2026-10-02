@@ -13,9 +13,20 @@ Discipline anchors:
           business_type_module_blueprint to know what core modules a
           vertical typically has; the LLM uses its broader knowledge
           when the practitioner later RUNS the proposal (NT8f).
-  NT8b  — triggers on meaningful state change, not every turn. We
-          implement two baseline signals: low_module_count + fresh_signup.
-          Additional signals (foundation_complete, etc.) come later.
+  NT8b  — triggers on meaningful state change, not every turn. Two
+          signals exist: low_module_count + fresh_signup. Both are
+          ONBOARDING signals, and this module is an onboarding-module
+          recommender — every row it writes is kind='module' with an
+          intake_seed the Accept button hands to propose_module_from_
+          intake. It is NOT where operational nudges live and should
+          not be read as if it were: "a lead has waited four hours",
+          "unbilled time is piling up", "stock is low" are
+          notification_engine's (urgent_check, unanswered_leads, the
+          morning brief) and Chief's own reads (catch_up, unbilled_time,
+          check_inventory). An earlier version of this docstring
+          promised more signals "later" without saying which; a new
+          signal here must be one that recommends a MODULE, or it
+          belongs in the engine that already speaks to the practitioner.
   NT8e  — only `chief_can_suggest=true` archetypes from ArchetypeEnum
           are ever stored. fallback_generic is never suggested.
   NT8g  — when the blueprint mentions a module slug whose archetype is

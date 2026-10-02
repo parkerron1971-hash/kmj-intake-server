@@ -283,8 +283,11 @@ def test_connect_happy_path(fake, monkeypatch):
     assert calls[0] == ("POST", "", {"name": "studiok.com"})
     assert out["status"] == "pending"
     assert out["preview"]["rendered"] == "Sarah from Studio K <hello@studiok.com>"
-    assert len(out["records"]) == 2
+    # Resend's two records plus OUR recommended DMARC row (optional).
+    assert [r["record"] for r in out["records"]] == ["SPF", "DKIM", "DMARC"]
+    assert out["records"][-1]["optional"] is True
     cfg = _biz_settings(fake)["email_domain"]
+    assert len(cfg["records"]) == 2          # the stored blob stays Resend-only
     assert cfg["resend_domain_id"] == "dom_1"
     assert cfg["status"] == "pending"
     assert cfg["domain"] == "studiok.com"

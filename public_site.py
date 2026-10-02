@@ -327,6 +327,29 @@ def _inject_canonical(html: str, slug: str, custom_domain: Optional[str] = None,
     return html
 
 
+def _agent_artifact(path: str, biz_id: Optional[str]):
+    """/.well-known/agent.json or /llms.txt for a served site, or None
+    when the business cannot be resolved — in which case the caller
+    falls through to its normal handling (a soft 404 is still better
+    than a manifest that names nobody). Same edge-cache headers as
+    robots.txt: these change when the catalogue does, and the bundle
+    behind them is cached 60s server-side anyway."""
+    try:
+        import agent_site
+        if path == "/llms.txt":
+            text = agent_site.llms_for(biz_id)
+            if text is None:
+                return None
+            return PlainTextResponse(text, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+        doc = agent_site.manifest_for(biz_id)
+        if doc is None:
+            return None
+        return JSONResponse(content=doc, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+    except Exception as e:
+        logger.info(f"[agent_site] artifact {path} skipped: {e}")
+        return None
+
+
 def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
     """The address the public actually uses for this site. A connected
     custom domain IS the site's home — the platform subdomain is the
@@ -341,7 +364,32 @@ def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
 _SITE_PAGE_PATHS = {"/about": "about", "/services": "services", "/contact": "contact"}
 
 
-def _rewrite_nav_for_preview(html: str, slug: str) -> str:
+def _preview_page_id(cfg: Dict[str, Any], page_path: str) -> str:
+    """The Studio previews a page by its id (/public/site/{slug}/offer)
+    and a visitor's link by its path (/six-week-wheel-course); both reach
+    the offer page."""
+    import studio_page_types
+    p = (page_path or "").strip("/")
+    if p == "offer" or _site_page_id(cfg, "/" + p) == "offer":
+        return "offer"
+    return studio_page_types.slug_to_page_id(page_path)
+
+
+def _site_page_id(cfg: Dict[str, Any], path: str) -> Optional[str]:
+    """The generated page a clean path serves: a secondary page, or the
+    World concept's offer page at the path site_config.offer_page names
+    (2026-10-01, the concept-layer plan)."""
+    pid = _SITE_PAGE_PATHS.get(path)
+    if pid:
+        return pid
+    offer = (cfg or {}).get("offer_page") if isinstance((cfg or {}).get("offer_page"), dict) else {}
+    if offer.get("path") and path == offer["path"]:
+        return "offer"
+    return None
+
+
+def _rewrite_nav_for_preview(html: str, slug: str,
+                             cfg: Optional[Dict[str, Any]] = None) -> str:
     """Point the page nav at the preview base, for the preview base only.
 
     2026-08-13 site-builder audit: site_multipage.build_page_nav now
@@ -374,6 +422,15 @@ def _rewrite_nav_for_preview(html: str, slug: str) -> str:
     origin = f"https://{slug}.mysolutionist.app"
     for sub in _ALWAYS_WINS_PATHS:
         out = out.replace(f'href="{sub}"', f'href="{origin}{sub}"')
+    # Sliced pages (2026-10-01) link /about#x style, and a home with an
+    # offer page links its path; both stay inside the preview.
+    base = f"/public/site/{slug}"
+    for path, pid in _SITE_PAGE_PATHS.items():
+        out = out.replace(f'href="{path}#', f'href="{base}/{pid}#')
+    out = out.replace('href="/#', f'href="{base}#')
+    _offer = (cfg or {}).get("offer_page") if isinstance((cfg or {}).get("offer_page"), dict) else {}
+    if _offer.get("path"):
+        out = out.replace(f'href="{_offer["path"]}"', f'href="{base}{_offer["path"]}"')
     return out
 # Sub-paths served by their own handlers — never 404, never in the
 # "unknown path" branch.
@@ -409,6 +466,9 @@ def _site_sitemap_xml(slug: str, cfg: Dict[str, Any],
         for path, page_id in _SITE_PAGE_PATHS.items():
             if (pages.get(page_id) or "").strip():
                 urls.append(origin + path)
+        _offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
+        if _offer.get("path") and (pages.get("offer") or "").strip():
+            urls.append(origin + _offer["path"])
 
     # News, listed only once something has been written — an archive
     # page reading "nothing posted yet" is a real URL but not one worth
@@ -739,7 +799,76 @@ def _use_smart_sites(site_row: Dict[str, Any]) -> bool:
     cfg = (site_row or {}).get("site_config") or {}
     if cfg.get("html_source") == "module-composer":
         return False
+    if cfg.get("html_source") == "manual":
+        return False
     return bool(cfg.get("use_smart_sites"))
+
+
+# ─── Hand-built sites (site_config.html_source == "manual") ───────────
+# 2026-09-03: KMJ's redesign is authored by hand in
+# sites/kmj-creative-solutions/ and installed by SQL. Neither builder
+# engine touches such a row — refresh_if_composed no-ops on an html_source
+# it doesn't own and _use_smart_sites is False — so the stored page is
+# served as-is with two serve-time fills: the override system's text edits
+# (Studio Edit Mode / POST /chief/override, keyed on data-override-target)
+# and the business's verified sending address in place of
+# {{BUSINESS_EMAIL}}. No verified sender → the whole mailto element goes,
+# never a platform address on a practitioner's site.
+_MANUAL_EMAIL_TOKEN = "{{BUSINESS_EMAIL}}"
+# Any element marked data-needs-email is removed whole (a mailto link, or a
+# block holding label + address + note) — matched to its own closing tag,
+# so the marked element must not nest another of the same tag.
+_MANUAL_EMAIL_BLOCK_RE = re.compile(
+    r"<([a-z][a-z0-9]*)\b[^>]*\bdata-needs-email\b[^>]*>.*?</\1>", re.S | re.I)
+
+
+def _is_manual_source(site_config: Any) -> bool:
+    return isinstance(site_config, dict) and site_config.get("html_source") == "manual"
+
+
+def _business_public_email(biz_settings: Optional[Dict[str, Any]]) -> str:
+    """The business's verified custom sender (settings.email_domain), else
+    "". Deliberately never the platform default."""
+    try:
+        from email_sender import resolve_from_address
+        sentinel = "__unresolved__"
+        addr, _name = resolve_from_address(
+            {"settings": biz_settings or {}}, default_email=sentinel)
+        return "" if (addr or sentinel) == sentinel else str(addr)
+    except Exception as e:
+        logger.info(f"[manual-site] email resolution skipped: {e}")
+        return ""
+
+
+def _apply_manual_source(html: str, business_id: Optional[str],
+                         biz_settings: Optional[Dict[str, Any]]) -> str:
+    """Serve-time fills for a hand-built page. Soft-fails to the stored
+    HTML at every step — a fill bug must never blank the site."""
+    if not html:
+        return html
+    if business_id:
+        try:
+            from agents.override_system.override_resolver import resolve_html_overrides
+            html = resolve_html_overrides(html, business_id)
+        except Exception as e:
+            logger.info(f"[manual-site] overrides skipped: {e}")
+        # Studio Edit Mode (2026-09-05): the page carries data-override-
+        # target attributes, so it can answer the Studio's click-to-edit
+        # bridge exactly like a composed page — but only the composer path
+        # injected the listener, so Edit on a hand-built site stayed dark.
+        # Idempotent, inert outside the Studio frame, soft-fails.
+        try:
+            from agents.edit_mode.injector import inject_edit_mode_script
+            html = inject_edit_mode_script(html)
+        except Exception as e:
+            logger.info(f"[manual-site] edit-mode script skipped: {e}")
+    if _MANUAL_EMAIL_TOKEN in html:
+        email = _business_public_email(biz_settings)
+        if email:
+            html = html.replace(_MANUAL_EMAIL_TOKEN, _html.escape(email))
+        else:
+            html = _MANUAL_EMAIL_BLOCK_RE.sub("", html).replace(_MANUAL_EMAIL_TOKEN, "")
+    return html
 
 
 def _esc(text: Any) -> str:
@@ -1228,10 +1357,29 @@ async def _sb_service_patch(client: httpx.AsyncClient, path: str, body: dict):
 
 
 async def _sb_post(client: httpx.AsyncClient, path: str, body: dict):
+    """Server-side INSERT for the public site's own writes (/events,
+    /sessions).
+
+    SERVICE ROLE, not anon, since 2026-09-01. This used the anon key for
+    both headers, which is docs/RLS_MODEL.md Rule 1: "server code uses
+    service-role, never anon". The visitor is anonymous; the SERVER
+    writing on their behalf is not, and conflating the two is what makes
+    a table's protection depend on it having a permissive policy.
+
+    Switching the key can only make a write succeed that previously
+    failed — service_role does everything anon does and bypasses RLS —
+    so this cannot break a working path. What it does do is remove the
+    reason `events` and `sessions` would need an anon-writable policy at
+    all, which is the same knot that kept RLS off `leads`.
+
+    Same bounded-use rule as _sb_service_patch above: this is for the
+    server's own writes on a visitor's behalf, never a pass-through for
+    caller-supplied paths."""
+    key = _supabase_service()
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -1244,11 +1392,16 @@ async def _sb_post(client: httpx.AsyncClient, path: str, body: dict):
 
 
 async def _sb_patch(client: httpx.AsyncClient, path: str, body: dict):
-    """Pass 3: PATCH helper for the new Smart Sites endpoints."""
+    """Pass 3: PATCH helper for the new Smart Sites endpoints.
+
+    SERVICE ROLE since 2026-09-01 — see _sb_post for the full reasoning.
+    Same Rule 1 violation, same one-word fix, and the same reason it
+    cannot break anything: service_role can do everything anon could."""
+    key = _supabase_service()
     url = f"{_supabase_url()}/rest/v1{path}"
     headers = {
-        "apikey": _supabase_anon(),
-        "Authorization": f"Bearer {_supabase_anon()}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -1468,6 +1621,9 @@ async def get_site_html(slug: str):
                 if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                     brand_color = bc
 
+        manual = _is_manual_source(site.get("site_config"))
+        if manual:
+            html = _apply_manual_source(html, biz_id, biz_settings)
         html = _inject_canonical(html, slug, (site.get("site_config") or {}).get("custom_domain"))
         # Pass 3: activate the dormant Pass 2.5a meta-tag helper.
         html = _inject_brand_meta(html, biz_id)
@@ -1484,7 +1640,7 @@ async def get_site_html(slug: str):
             content=html,
             status_code=200,
             media_type="text/html",
-            headers={"X-Solutionist-Source": "public-site"},
+            headers={"X-Solutionist-Source": "manual-site" if manual else "public-site"},
         )
 
 
@@ -1672,11 +1828,19 @@ async def get_site_page_html(slug: str, page_path: str):
             raise HTTPException(404, "Site not found")
         cfg = sites[0].get("site_config") or {}
         pages = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
-        page_id = studio_page_types.slug_to_page_id(page_path)
+        page_id = _preview_page_id(cfg, page_path)
         html = (pages or {}).get(page_id) or ""
         if not html:
             # Home, unknown page, or a single-page site → serve the main page.
             return await get_site_html(slug)
+        manual = _is_manual_source(cfg)
+        if manual:
+            biz_id = sites[0].get("business_id")
+            biz_rows = (await _sb(
+                client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1")
+                if biz_id else []) or []
+            html = _apply_manual_source(
+                html, biz_id, (biz_rows[0].get("settings") if biz_rows else {}) or {})
         # page_path makes this page canonical to ITSELF. Without it every
         # secondary page claimed to be the home page, telling Google the
         # site has one page and three duplicates. The clean-path handlers
@@ -1685,9 +1849,10 @@ async def get_site_page_html(slug: str, page_path: str):
         html = _inject_canonical(html, slug, cfg.get("custom_domain"),
                                  f"/{page_id}" if page_id != "home" else "")
         html = _inject_brand_meta(html, sites[0].get("business_id"))
-        html = _rewrite_nav_for_preview(html, slug)
+        html = _rewrite_nav_for_preview(html, slug, cfg)
         return HTMLResponse(content=html, status_code=200, media_type="text/html",
-                            headers={"X-Solutionist-Source": "module-composer-multipage"})
+                            headers={"X-Solutionist-Source": "manual-site" if manual
+                                     else "module-composer-multipage"})
 
 
 @router.get("/public/{slug}/thank-you")
@@ -1807,10 +1972,13 @@ async def invalidate_site_cache(business_id: str, user: AuthedUser = Depends(req
         if not sites:
             return {"status": "no_site"}
         site_id = sites[0]["id"]
+        # SERVICE ROLE since 2026-09-01 (RLS_MODEL.md Rule 1) — this
+        # touched business_sites, a tenant table, with the public key.
+        _key = _supabase_service()
         url = f"{_supabase_url()}/rest/v1/business_sites?id=eq.{site_id}"
         headers = {
-            "apikey": _supabase_anon(),
-            "Authorization": f"Bearer {_supabase_anon()}",
+            "apikey": _key,
+            "Authorization": f"Bearer {_key}",
             "Content-Type": "application/json",
         }
         try:
@@ -5388,7 +5556,8 @@ MARKETING_HTML = """<!DOCTYPE html>
 
 async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str,
                         custom_domain: Optional[str] = None,
-                        page_path: str = "") -> str:
+                        page_path: str = "",
+                        manual: bool = False) -> str:
     """Inject canonical + live products + gallery into served HTML.
 
     `custom_domain` (2026-08-02): this function used to call
@@ -5396,6 +5565,14 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     already accepted. Every custom-domain page therefore declared the
     platform subdomain as its canonical, handing the ranking value of
     the domain the practitioner PAID FOR to a subdomain they don't own.
+
+    `manual` (2026-09-04): a hand-built site's serve-time fills (text
+    overrides + the verified sending address). #805 wired them into the
+    /public/site/{slug} preview handlers only; the subdomain and
+    custom-domain paths — the addresses visitors actually use — come
+    through here, and kmjcreate.com went live printing {{BUSINESS_EMAIL}}
+    in its footer. Every path that serves a stored page runs through
+    this function, so this is where the fill belongs.
     """
     products: List[Dict[str, Any]] = []
     gallery: List[Dict[str, Any]] = []
@@ -5417,11 +5594,24 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
             bc = (bk.get("primary_color") or "").strip() if isinstance(bk, dict) else ""
             if bc.startswith("#") and (len(bc) == 7 or len(bc) == 4):
                 brand_color = bc
+    if manual:
+        html = _apply_manual_source(html, biz_id, biz_settings)
     html = _inject_canonical(html, slug, custom_domain, page_path)
     # Pass 3: activate the Pass 2.5a `_brand_head_meta_tags` helper for
     # legacy sites too — favicons + OG + Twitter Cards now render for
     # everyone, not just Smart Sites users.
     html = _inject_brand_meta(html, biz_id)
+    # Agent-readable (2026-09-04): schema.org for the business, its
+    # offerings and the hours the booking engine actually enforces,
+    # stamped at SERVE time so it carries the live catalogue. Replaces
+    # the builder's stale LocalBusiness block. Composed, manual, custom-
+    # domain and secondary pages all come through here, which is why
+    # this is the one place it lives. Never raises.
+    try:
+        import agent_site
+        html = agent_site.inject_into_page(html, biz_id)
+    except Exception as _ag_e:
+        logger.info(f"[agent_site] head injection skipped: {_ag_e}")
     html = _inject_dynamic_sections(
         html,
         _render_products_section(products, slug, brand_color, biz_settings),
@@ -5563,6 +5753,46 @@ async def _serve_give_page(client, biz_id: Optional[str], slug: str) -> HTMLResp
     )
 
 
+_FORM_PAGE_PREFIX = "/public/widget/form/"
+
+
+async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: str) -> HTMLResponse:
+    """One client form's public page on the site's own address —
+    https://<slug>.mysolutionist.app/public/widget/form/<id> (and the
+    same path on a custom domain). This address had been handed out by
+    Chief, the form list and the composed site since client forms
+    shipped, with no handler behind it on any host (2026-09-18).
+
+    The form must belong to this site's business and be active; anything
+    else is the site's own 404. Rendering lives in form_page_renderer
+    (pure); the post goes to the intake endpoint on the API host."""
+    fid = (form_id or "").strip().strip("/")
+    if not biz_id or not fid or "/" in fid or len(fid) > 64:
+        raise HTTPException(404, "form not found")
+    rows = await _sb_service(
+        client,
+        f"/intake_forms?id=eq.{fid}&business_id=eq.{biz_id}&is_active=eq.true"
+        "&select=id,business_id,name,fields,settings,form_type&limit=1",
+    )
+    if not rows:
+        raise HTTPException(404, "form not found")
+    biz_rows = await _sb_service(
+        client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
+    if not biz_rows:
+        raise HTTPException(404, "business not found")
+    from form_page_renderer import render_form_page
+    from public_form_theme import SITE_SELECT
+    site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
+    from chief_host import FALLBACK_BASE
+    html = render_form_page(
+        biz_rows[0], rows[0],
+        submit_url=f"{FALLBACK_BASE.rstrip('/')}/intake/submit",
+        canonical_url=f"https://{slug}.mysolutionist.app{_FORM_PAGE_PREFIX}{fid}",
+        site=site_rows[0] if site_rows else None)
+    return HTMLResponse(content=html, media_type="text/html",
+                        headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+
+
 async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLResponse:
     """Public event RSVP — render the events page at
     https://<slug>.mysolutionist.app/events (mirrors _serve_give_page).
@@ -5616,12 +5846,51 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLRe
         entries_by_module[str(mod["id"])] = rows
 
     occasions = build_occasions(modules, entries_by_module)
+    from public_form_theme import SITE_SELECT
+    site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
     html = render_events_page(business, occasions, canonical, slug,
-                              api_origin=_EMBED_ORIGIN)
+                              api_origin=_EMBED_ORIGIN, site=site_rows[0] if site_rows else None)
     return HTMLResponse(
         content=html, media_type="text/html",
         headers={**_PUBLIC_SITE_NO_STORE_HEADERS},
     )
+
+
+async def _serve_sermons_page(client, biz_id: Optional[str], slug: str, path: str) -> HTMLResponse:
+    """The church's sermon library — /sermons and /sermons/<id> on its own
+    host (subdomain or custom domain), like /events. Published sermons
+    only; nothing published is a branded 404. Rendering is pure, in
+    sermons_public.py."""
+    if not biz_id:
+        raise HTTPException(404, "business not found")
+    biz_rows = await _sb_service(client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
+    if not biz_rows:
+        raise HTTPException(404, "business not found")
+    business = biz_rows[0]
+    import sermons_public as sp
+    from public_form_theme import SITE_SELECT
+    site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
+    site = site_rows[0] if site_rows else None
+    sermons = await _sb_service(
+        client,
+        f"/sermons?business_id=eq.{biz_id}&published=eq.true"
+        f"&select=id,series_id,title,preached_on,speaker,scripture,summary,questions,video_url,audio_url,published"
+        f"&order=preached_on.desc,created_at.desc&limit=500") or []
+    series = await _sb_service(client, f"/sermon_series?business_id=eq.{biz_id}&select=id,title,description&limit=200") or []
+    rest = path[len("/sermons"):].strip("/")
+    canonical = f"https://{slug}.mysolutionist.app/sermons" + (f"/{rest}" if rest else "")
+    if rest:
+        match = next((x for x in sermons if str(x["id"]) == rest), None) if sp.UUID_RE.match(rest) else None
+        if not match:
+            return HTMLResponse(content=sp.render_unavailable(business, canonical, site), status_code=404,
+                                media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+        return HTMLResponse(content=sp.render_sermon(business, match, sermons, series, canonical, site),
+                            media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+    if not sp.sermons_are_public(sermons):
+        return HTMLResponse(content=sp.render_unavailable(business, canonical, site), status_code=404,
+                            media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+    return HTMLResponse(content=sp.render_library(business, sermons, series, canonical, site),
+                        media_type="text/html", headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
 async def _render_offline_page(client: httpx.AsyncClient,
@@ -6176,6 +6445,11 @@ async def _serve_learner(path: str) -> HTMLResponse:
     parts = [p for p in path.split("/") if p]  # ['learn', token, lesson?]
     token = parts[1] if len(parts) >= 2 else ""
     lesson_id = parts[2] if len(parts) >= 3 else ""
+    if os.environ.get("ACADEMY_CLASSROOM_V2", "off").lower() == "on":
+        if not _academy_valid_id(token):
+            raise HTTPException(404, "Link not active")
+        return RedirectResponse(url=f"https://system.mysolutionist.app/classroom/{token}", status_code=303,
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
     async with httpx.AsyncClient() as client:
         loaded = await _learn_load(client, token)
         if not loaded:
@@ -6356,6 +6630,13 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # (same always-wins sub-path contract as /book and /give).
         if normalized_path == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # The sermon library — /sermons and /sermons/<id> (same always-wins
+        # sub-path contract).
+        if normalized_path == "/sermons" or normalized_path.startswith("/sermons/"):
+            return await _serve_sermons_page(client, biz_id, slug, normalized_path)
+        # A client form's own page — the link Chief hands out.
+        if normalized_path.startswith(_FORM_PAGE_PREFIX):
+            return await _serve_form_page(client, biz_id, slug, normalized_path[len(_FORM_PAGE_PREFIX):])
         # The shop, on the site's own domain rather than a railway.app
         # URL the visitor has never seen (2026-08-13 gap list).
         if normalized_path == "/store":
@@ -6374,6 +6655,12 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         if normalized_path == "/robots.txt":
             return PlainTextResponse(_site_robots_txt(slug, _cd),
                                      headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+        # Agent-readable (2026-09-04): the discovery point for a
+        # customer's agent, on the site's own origin like robots.txt.
+        if normalized_path in ("/.well-known/agent.json", "/llms.txt"):
+            _agent = _agent_artifact(normalized_path, biz_id)
+            if _agent is not None:
+                return _agent
         if normalized_path == "/sitemap.xml":
             _news_posts, _, _ = await _news_identity(client, biz_id)
             return Response(
@@ -6424,17 +6711,19 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # /public/site/{slug}/about — so slug.mysolutionist.app/about
         # served the home page instead (soft-404), and the site's own
         # nav pointed visitors at the /public/... preview URL.
+        _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
-        _page_id = _SITE_PAGE_PATHS.get(normalized_path)
+        _page_id = _site_page_id(_cfg, normalized_path)
         if _page_id and isinstance(_pages, dict):
             _page_html = (_pages.get(_page_id) or "").strip()
             if _page_html:
                 _page_html = await _augment_html(
                     client, biz_id, slug, _page_html,
-                    custom_domain=_cd, page_path=normalized_path)
+                    custom_domain=_cd, page_path=normalized_path, manual=_manual)
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
-                    headers={"X-Solutionist-Source": "module-composer-multipage",
+                    headers={"X-Solutionist-Source": "manual-site" if _manual
+                             else "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         # ─── Real 404 for anything else ────────────────────────────
@@ -6443,10 +6732,11 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             return await _render_not_found(client, slug, biz_id, _cd)
 
         html = await _augment_html(client, biz_id, slug, site["html_content"],
-                                   custom_domain=_cd, page_path="")
+                                   custom_domain=_cd, page_path="", manual=_manual)
         return HTMLResponse(
             content=html, media_type="text/html",
-            headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS},
+            headers={**({"X-Solutionist-Source": "manual-site"} if _manual else {}),
+                     **_PUBLIC_SITE_EDGE_CACHE_HEADERS},
         )
 
 
@@ -6502,6 +6792,12 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # reasoning as /give.
         if _norm == "/events":
             return await _serve_events_page(client, biz_id, slug)
+        # The sermon library works on custom domains too.
+        if _norm == "/sermons" or _norm.startswith("/sermons/"):
+            return await _serve_sermons_page(client, biz_id, slug, _norm)
+        # A client form's page works on custom domains too.
+        if _norm.startswith(_FORM_PAGE_PREFIX):
+            return await _serve_form_page(client, biz_id, slug, _norm[len(_FORM_PAGE_PREFIX):])
         # Booking (2026-08-02): this was MISSING here while present on
         # the subdomain path, so /book on a practitioner's own domain
         # silently served the home page — a dead Book button on the
@@ -6517,6 +6813,10 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         if _norm == "/robots.txt":
             return PlainTextResponse(_site_robots_txt(slug, domain),
                                      headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+        if _norm in ("/.well-known/agent.json", "/llms.txt"):
+            _agent = _agent_artifact(_norm, biz_id)
+            if _agent is not None:
+                return _agent
         if _norm == "/sitemap.xml":
             return Response(
                 content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, domain),
@@ -6543,17 +6843,19 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
             return None  # type: ignore
 
         # Secondary pages at clean paths, on the practitioner's own domain.
+        _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
-        _page_id = _SITE_PAGE_PATHS.get(_norm)
+        _page_id = _site_page_id(_cfg, _norm)
         if _page_id and isinstance(_pages, dict):
             _page_html = (_pages.get(_page_id) or "").strip()
             if _page_html:
                 _page_html = await _augment_html(
                     client, biz_id, slug, _page_html,
-                    custom_domain=domain, page_path=_norm)
+                    custom_domain=domain, page_path=_norm, manual=_manual)
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
-                    headers={"X-Solutionist-Source": "module-composer-multipage",
+                    headers={"X-Solutionist-Source": "manual-site" if _manual
+                             else "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _norm != "/":
@@ -6562,10 +6864,11 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # custom_domain=domain is THE fix for the canonical bug: without
         # it every page here declared the platform subdomain canonical.
         html = await _augment_html(client, biz_id, slug, site["html_content"],
-                                   custom_domain=domain, page_path="")
+                                   custom_domain=domain, page_path="", manual=_manual)
         return HTMLResponse(
             content=html, media_type="text/html",
-            headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS},
+            headers={**({"X-Solutionist-Source": "manual-site"} if _manual else {}),
+                     **_PUBLIC_SITE_EDGE_CACHE_HEADERS},
         )
 
 
@@ -6634,6 +6937,42 @@ def _brand_file(name: str, media_type: str):
     fp = _STATIC_BRAND / name
     if not fp.exists():
         raise HTTPException(404, f"asset not found: {name}")
+    return _FileResponse(str(fp), media_type=media_type, headers=_BRAND_CACHE_HEADERS)
+
+
+# ─── Hand-built site assets ───────────────────────────────────────────
+# 2026-09-03: a manual site (html_source == "manual") keeps its images in
+# the repo under sites/{slug}/assets/ and references them by URL, so a
+# logo used on every page ships once and caches, instead of riding along
+# as base64 in each stored page. Slug and filename are pattern-checked
+# before touching the filesystem — no dots in the slug, one extension on
+# the name — so the path can never leave the assets folder.
+_SITES_DIR = _pathlib.Path(__file__).resolve().parent / "sites"
+_SITE_ASSET_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+_SITE_ASSET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}\.(webp|png|jpg|jpeg|svg|ico)$")
+_SITE_ASSET_TYPES = {"webp": "image/webp", "png": "image/png", "jpg": "image/jpeg",
+                     "jpeg": "image/jpeg", "svg": "image/svg+xml", "ico": "image/x-icon"}
+
+
+def _site_asset_path(slug: str, name: str) -> Optional[_pathlib.Path]:
+    """The on-disk file for a site asset request, or None when the request
+    is malformed or the file isn't there. Pure; the route wraps it."""
+    if not _SITE_ASSET_SLUG_RE.match(slug or "") or not _SITE_ASSET_NAME_RE.match(name or ""):
+        return None
+    fp = (_SITES_DIR / slug / "assets" / name)
+    try:
+        fp.resolve().relative_to(_SITES_DIR.resolve())
+    except ValueError:
+        return None
+    return fp if fp.is_file() else None
+
+
+@router.get("/public/site-assets/{slug}/{name}", include_in_schema=False)
+def site_asset(slug: str, name: str):
+    fp = _site_asset_path(slug, name)
+    if fp is None:
+        raise HTTPException(404, "asset not found")
+    media_type = _SITE_ASSET_TYPES[fp.suffix.lstrip(".").lower()]
     return _FileResponse(str(fp), media_type=media_type, headers=_BRAND_CACHE_HEADERS)
 
 
@@ -6759,10 +7098,10 @@ async def asset_mark_webp():
 async def asset_mark_png():
     return _brand_file("solutionist-mark.png", "image/png")
 
-# The real demo video (Remotion-rendered, ~7MB) + its poster frame —
-# replaces the animated HTML loop on the marketing home.
-# The film the site plays. Range-aware, because a phone will not play a
-# <video> whose server ignores Range.
+# The film the site plays: "The System" (2026-09-02), 58 seconds, the
+# product itself in its default theme doing the work, voiced. Web encode
+# (~6.8MB) of the Remotion render in my-video/src/System. Range-aware,
+# because a phone will not play a <video> whose server ignores Range.
 @router.get("/assets/film.mp4", include_in_schema=False)
 async def asset_film(request: Request):
     return _brand_file_ranged(request, "solutionist-film.mp4", "video/mp4")
@@ -6770,6 +7109,18 @@ async def asset_film(request: Request):
 @router.get("/assets/film-poster.jpg", include_in_schema=False)
 async def asset_film_poster(request: Request):
     return _brand_file_ranged(request, "solutionist-film-poster.jpg", "image/jpeg")
+
+# "Takes Shape", the 45-second white-field cut that played here from
+# 2026-08-22 to 2026-09-02. Kept reachable, not linked, same as the demo
+# below: it is the one cut that shows the system re-lettering itself for
+# three different businesses, and it may come back for a campaign.
+@router.get("/assets/film-takes-shape.mp4", include_in_schema=False)
+async def asset_film_takes_shape(request: Request):
+    return _brand_file_ranged(request, "solutionist-film-takes-shape.mp4", "video/mp4")
+
+@router.get("/assets/film-takes-shape-poster.jpg", include_in_schema=False)
+async def asset_film_takes_shape_poster(request: Request):
+    return _brand_file_ranged(request, "solutionist-film-takes-shape-poster.jpg", "image/jpeg")
 
 # The 55-second walkthrough that ran until 2026-08-22. Deliberately kept
 # reachable rather than deleted: it is the only recording of the product
@@ -6951,6 +7302,41 @@ async def public_news_post(request: Request, post_slug: str):
         request, lambda: _render_platform_news_post(post_slug))
 
 
+# ─── The platform's short marketing links ─────────────────────────────
+# mysolutionist.app/go/<code> is the link a Solutionist post carries. The
+# caption stays clean; the redirect adds the campaign tags, and the
+# landing page's attribution stash picks them up from there. An unknown
+# code lands on the home page rather than a 404 — a link someone copied
+# wrong is still a person who wanted to see the product.
+#
+# A click counts only from a person: link-preview fetchers (Facebook,
+# LinkedIn and X all fetch every link in a post) and Do Not Track are
+# redirected without being counted.
+
+# The analytics bot pattern misses the unfurlers that carry no "bot" in
+# their name; Facebook's is the one every Page post triggers.
+_LINK_PREVIEW = re.compile(
+    r"facebookexternalhit|facebookcatalog|whatsapp|telegram|discord|skypeuripreview"
+    r"|embedly|vkshare|redditbot|iframely|outbrain|quora link preview", re.I)
+
+
+@router.get("/go/{code}", include_in_schema=False)
+async def public_marketing_link(request: Request, code: str):
+    from fastapi.responses import RedirectResponse
+    site = await _site_response_or_none(request)
+    if site is not None:
+        return site
+    import platform_marketing
+    import site_analytics
+    agent = request.headers.get("user-agent") or ""
+    person = (bool(agent) and not site_analytics._BOT.search(agent)
+              and not _LINK_PREVIEW.search(agent)
+              and (request.headers.get("dnt") or "").strip() != "1")
+    url = await platform_marketing.follow(code.strip().lower(), count_click=person)
+    return RedirectResponse(url=url or "https://mysolutionist.app/", status_code=302,
+                            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+
+
 # ─── robots.txt + sitemap.xml, for the apex ───────────────────────────
 # Practitioner sites have had both since the findability bundle; the
 # platform's own domain had neither — /robots.txt and /sitemap.xml both
@@ -6975,6 +7361,27 @@ async def public_robots(request: Request):
             "Sitemap: https://mysolutionist.app/sitemap.xml\n")
     return PlainTextResponse(body)
 
+
+# ─── Google Search Console ownership, for the apex ────────────────────
+# Google's OAuth verification (the Gmail connect) only accepts an
+# authorized domain the project owner has verified in Search Console.
+# Search Console proves ownership by fetching a file it names at the
+# site root. The apex is served by this router, so the file is a route,
+# not an upload — and it must stay: Google re-checks it periodically and
+# un-verifies the domain when it disappears.
+
+GOOGLE_SITE_VERIFICATION_TOKENS = ("google356ece60ef1330cd",)
+
+
+@router.get("/google{token}.html", include_in_schema=False)
+async def public_google_site_verification(token: str, request: Request):
+    site = await _site_response_or_none(request)
+    if site is not None:
+        return site
+    name = f"google{token}"
+    if name not in GOOGLE_SITE_VERIFICATION_TOKENS:
+        raise HTTPException(status_code=404)
+    return PlainTextResponse(f"google-site-verification: {name}.html\n")
 
 @router.get("/sitemap.xml", include_in_schema=False)
 async def public_sitemap(request: Request):
@@ -7051,9 +7458,16 @@ async def public_start(request: Request):
     # `plan` lets a price card say which tier was clicked. Whitelisted to
     # the real tier keys so the URL can't be used to smuggle anything.
     plan = (request.query_params.get("plan") or "").strip().lower()
-    if plan in ("starter", "professional", "practice"):
+    # founder (2026-09-04): the founding-seat strip on the home page links
+    # here; checkout already knows the key (stripe_billing: plan_key
+    # startswith "founder") and enforces the seat cap.
+    if plan in ("starter", "professional", "practice", "founder"):
         carried["plan"] = plan
-    url = MARKETING_APP_URL + (f"/?{urlencode(carried)}" if carried else "/")
+    # Everyone who reaches /start pressed a "start" button, so the app opens on
+    # Create account. Without this it opened on "Welcome back / Sign in" and the
+    # 21 people who clicked Start in September all stopped there (2026-10-01).
+    carried["signup"] = "1"
+    url = MARKETING_APP_URL + f"/?{urlencode(carried)}"
     return RedirectResponse(url=url, status_code=302)
 
 
@@ -7160,6 +7574,13 @@ async def subdomain_catch_all(request: Request, path: str):
     if request_path.startswith("/learn/"):
         return await _serve_learner(request_path)
 
+    # A member's own page (member_portal.py). It needs the request itself
+    # (its session cookie), so it is routed here rather than through the
+    # site renderers, and it resolves the church from the host on its own.
+    if request_path == "/my" or request_path.startswith("/my/"):
+        import member_portal
+        return await member_portal.serve(request, request_path)
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
@@ -7183,6 +7604,12 @@ async def learner_mark(token: str, request: Request):
     done from their portal. The portal token IS the authorization; the
     write feeds the same enrollments.progress/homework the teaching
     view reads. Drip locks are enforced server-side."""
+    # Retire the legacy completion shortcut when the graded classroom goes live.
+    if os.environ.get("ACADEMY_CLASSROOM_V2", "off").lower() == "on":
+        if not _academy_valid_id(token):
+            raise HTTPException(404, "Link not active")
+        return RedirectResponse(url=f"https://system.mysolutionist.app/classroom/{token}", status_code=303,
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
     form = await request.form()
     lesson_id = str(form.get("lesson_id") or "")
     kind = str(form.get("kind") or "lesson")

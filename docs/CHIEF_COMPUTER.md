@@ -1,0 +1,383 @@
+# Chief's computer — backend arc
+
+PR1 implements the database foundation and server-side encryption primitives.
+PR2 adds the browser controller, independently testable before any route or job
+can start an errand. PR6 folds the browser hand into the same errand/controller path.
+Sections 7 and 9 of `CHIEF_COMPUTER_ARC_SPEC.md` in the frontend repo remain the
+integration contract and delivery order.
+
+## PR1 implementation
+
+- `chief_errands`: planned errands, approval records, holds, receipts and budgets.
+- `chief_errand_events`: ordered per-errand history. An internal `business_id`
+  supports export/erasure and a composite foreign key prevents attaching an event
+  to another business's errand. The external section 7 Event shape is unchanged.
+- `business_secrets`: service-role-only encrypted logins. RLS has zero policies;
+  anonymous/authenticated/PUBLIC table privileges are revoked.
+- Owners and active business seats can SELECT their errand history through the
+  existing definer helpers. All browser writes are denied. HTTP authorization,
+  manager roles and state transitions arrive in PR3.
+- Vault ciphertext is excluded from account exports and cascades on business
+  deletion. Errand/event history is exported, but not imported: an uploaded
+  archive must never resurrect execution authority or private frame paths.
+
+`secret_vault.encrypt(fields, business_id=..., secret_id=..., host=..., kind='login')`
+returns randomized Fernet ciphertext. Allocate the secret UUID before encryption.
+The encrypted envelope authenticates version, business, row ID, exact normalized
+host and kind. Decrypt requires the same context; tampering, key replacement or
+cross-tenant/host/row substitution fails with a generic 500 and no value in errors.
+Passwords retain whitespace and Unicode. Fields and byte size are bounded.
+
+`METADATA_COLUMNS`, `FILL_COLUMNS`, and `secret_metadata()` define separate read
+surfaces. Never select `*` from the vault. The future secret endpoint may return
+only `{ok: true}`; `decrypt()` is an internal controller primitive, not an API.
+No production decrypt caller exists yet. The future fill path must independently
+validate actor, active row, exact live hold/host, step-up and revocation immediately
+before decrypting. Encryption does not establish any of those permissions.
+Keep decrypted values scoped to the fill operation; Python strings do not provide
+a guarantee of physical memory zeroization.
+
+## Card decision and required correction
+
+PR1 allows only login persistence, enforced both in Python and the database.
+Cards, arbitrary custom values, session snapshots, OTPs and extra login fields
+are rejected. These other storage kinds need a reviewed follow-up validator and
+migration. Secure Entry for transient values belongs to PR3/PR4.
+
+The spec's example includes `cvc` in the encrypted saved-card fields. Do not
+implement reusable CVC storage: PCI SSC prohibits retaining it after authorization,
+including encrypted retention. See [PCI SSC FAQ 1319](https://www.pcisecuritystandards.org/faqs/1319/).
+Likewise, OTPs must remain transient. Saved-card support remains disabled pending
+the owner's section 11 decision. PR3 must use `save_cards: false` as the default;
+an unavailable save operation must fail explicitly, not silently claim to save.
+The existing `SecretMeta`/Secure Entry field names are not changed by PR1.
+
+## Configuration and migration
+
+1. Review and merge PR1.
+2. Apply `supabase/APPLY-2026-09-12-chief-computer.sql` after merge. Prerequisites
+   are `businesses`, `auth.uid()`, `is_business_owner(uuid)` and
+   `is_business_member(uuid)`, plus the usual Supabase roles. The migration is
+   additive and repeatable. It does not modify business settings or create data.
+3. Generate an independent Fernet key in a trusted server-secret workflow and
+   configure `VAULT_ENCRYPTION_KEY` only in Railway secret storage before the
+   future Secure Entry code is enabled. Never commit or log it. No fallback to
+   another credential/key is permitted. Missing/invalid key returns 500 when
+   encryption/decryption is called; unrelated service startup remains unaffected.
+4. Preserve the key in approved secret backup storage. Replacing it without a
+   separately reviewed re-encryption process makes existing logins unreadable.
+5. Run the live rollback probe in `supabase/VERIFY-chief-computer-access.sql` and
+   record its result in the migration ledger. A local test does not prove a
+   production migration was applied.
+
+PR1 merged as #935 and deployed successfully on 2026-09-12 (UTC), commit
+`e13dd6c9c4a8f84dec2e67775abd0fa68a730e33`. The production migration is applied;
+the transactional role probe passed, denying both authenticated and anonymous
+vault SELECT. All three tables respond through the service API and health is 200.
+The independent vault key is configured in Railway and preserved across releases.
+Do not deploy while `chief_jobs` contains queued/running paid work.
+
+## PR2 controller
+
+`browser_controller.py` implements the 27 default members of
+`browser_toolset_20260801`, with the four optional members disabled and refused.
+Its callbacks are mandatory: the driver checks current authority before every
+member, creates a Secure Entry hold, and records sanitized private frames.
+No HTTP endpoint or model can invoke `fill_secret` directly. It is a same-thread
+primitive for an authenticated mailbox command, with an expiring, exact-host,
+live-element-bound hold. Missing or ambiguous field mappings fail closed.
+
+The Chromium backend pins each approved host to public DNS addresses at launch,
+blocks other network requests, denies Amazon and all non-HTTPS navigation, closes
+popups, refuses uploads/downloads, blocks service workers and WebSockets, and
+does not pass server keys into the child process. Approved hosts are exact DNS
+names, including `www` or payment/CDN origins when needed. There is no automatic
+expansion of an allowlist based on a page's requests. A site needing additional
+origins requires a revised plan. Browser shortcuts that access clipboard,
+developer tools, address bars or native dialogs are refused.
+
+References are server-side handles, scoped to a tab and invalidated on navigation,
+new reads and material changes to the target. Page reads return rendered text,
+not HTML source or field values. Known filled values (including card last four)
+are scrubbed from text, tab titles and URL paths; query strings and fragments are
+always omitted. Screenshot output is 1280x800 PNG; private recorded frames are
+JPEG quality 55 under `{business}/errand/{id}/{n:03d}.jpg` in `proposals`.
+
+**Privacy limitation and deliberate v1 behavior:** before filling, all editable
+fields are masked navy. After any Secure Entry fill, screenshots for that run
+use a full navy privacy curtain. A site can render a secret in canvas, CSS or
+an image, so field rectangles alone cannot guarantee screenshot privacy. Chief
+continues from scrubbed DOM text. This means the user cannot watch checkout
+pixels after a secret is entered. Do not describe it as unrestricted live viewing
+or claim arbitrary transformed/encoded secret echoes are covered by text matching.
+Never use raw `page.pdf()` or raw screenshots for receipts.
+
+Rehearsal candidate: Office Depot guest checkout, one box of paper clips (item
+222056). Its official checkout guide supports guest orders. This is a proposal,
+not an approved purchase or account; final item, shipping/tax total, and owner
+presence remain prerequisites. A guest purchase does not exercise saved-login
+reuse, which needs a separate account rehearsal.
+
+## Verification
+
+PR3 adds the section 7 HTTP routes and `chief_jobs` errand kind. Apply
+`supabase/APPLY-2026-09-12-chief-computer-runtime.sql` after merge. Browser execution
+stays off behind `ERRANDS_ENABLED=off` until all six PRs are integrated. Planning and metadata can be
+used independently. POST planning includes `business_id`; an email-only supplier
+returns the existing purchase-order action with `errand:null, door:"email"`.
+
+Approvals are one service-only database transaction with job creation. Other
+enqueue paths cannot start an errand. Plans also serialize per business to refuse
+overlapping same-day item orders. Event numbers and state changes share row locks;
+old statuses or hold IDs cannot release newer holds. Pause preserves pending
+Secure Entry/checkout approval. Stop and saved-login revoke require the appropriate
+role, with no step-up. Settings writes require owner danger step-up and preserve
+unrelated settings. Metadata reads use named columns; only the future worker can
+read a saved cipher for an authenticated fill. Secure Entry has bounded raw JSON
+parsing, six attempts/minute per user/errand/process, no body-bearing validation
+errors, and whole-event log/Sentry suppression. Worker mailboxes are process-local;
+a missing worker never silently launches a replacement.
+
+The production deployment currently uses one replica. A future multi-replica
+upgrade needs owner-worker routing for mailboxes and a shared Secure Entry rate
+limiter. Restart reconciliation marks errands interrupted without retrying or
+claiming the supplier did not receive an order.
+
+Existing auth limitation: `/auth/step-up` currently issues danger tokens only to
+business owners. Managers may plan, stop, fill transient values and approve priced
+errands within their limit; an owner must handle cases requiring a new danger
+token (over-limit/unpriced approval and saving/reusing logins). This arc does not
+broaden the existing danger-token gate used by other destructive operations.
+
+```text
+python -m pytest __tests__/test_secret_vault.py __tests__/test_export_import.py -q
+python -m pytest __tests__/test_browser_controller.py -q
+python scripts/chief_computer_sabotage.py
+node scripts/chief-computer-db-check.mjs
+node scripts/chief-computer-runtime-db-check.mjs
+```
+
+The SQL check uses PGlite (`PGLITE_MODULE` can identify its module; CI installs
+the pinned dependency used by the existing database checks). It executes the
+real migration repeatedly and rolls back fixture rows. It tests owner/active-seat
+reads, revoked-seat and foreign-tenant isolation, vault SELECT denial, the RLS
+backstop even after an accidental SELECT grant, browser write denial, duplicate
+plans/events, event tenant mismatch, invalid budgets/statuses, card persistence
+rejection and deletion cascades. The Python suite checks key failure, encryption
+round-trip, envelope tampering/substitution, shape and size limits, metadata
+redaction, and export/import rules. CI runs both suites.
+
+## Next PRs and integration notes
+
+2. Controller implemented; 116 focused controller/vault/legacy-hand tests passed
+   locally. All three independent sabotage mutations were detected. CI installs
+   Chromium and runs the fixture suite plus sabotage checks with no service keys.
+3. Errands, endpoints, holds, settings and job interruption handling implemented.
+   This is the frontend integration milestone; announce when PR3 merges.
+4. Driver and sanitized receipts implemented; execution remains disabled until the Chief integration is complete.
+5. Wire Chief's actions, prompt, policy, ledger, inventory and planned cancellation.
+6. Fold the old browser hand into the errand path.
+
+Resolve these spec inconsistencies in their owning PRs and record any wire change
+in the source spec's Contract changes section:
+
+- Section 7 is authoritative for unpriced step-up; section 5.2 omits that guard.
+- A browser crash cannot prove an order was not placed. No automatic purchase
+  retry; interrupted receipts must state uncertainty and require reconciliation.
+  The schema follows the specified partial idempotency index; removing that index
+  block alone must never authorize rerunning a purchase.
+- A raw page PDF bypasses screenshot masking. The receipt writer must sanitize
+  the PDF itself or build it from already-masked pixels before storage.
+- Hold timeout and total errand budget need one explicit clock policy; approval
+  cannot silently extend an expired job or reuse an obsolete field reference.
+
+## PR4 driver and receipts
+
+The production runtime migration and rollback verification passed on September 12,
+2026, after PR #937 merged (`ea4d9e401d2ddd57bdd1db4cf9b07c70d60631f0`). Railway
+deployed that commit; health returned 200 and protected computer routes returned 401.
+
+`errand_driver.py` runs the browser toolset sequentially on the job thread. It checks
+current role, status, host settings and elapsed budget before actions, pauses without
+model calls for Secure Entry or changed totals, and refuses another purchase attempt
+after persisting the first submission marker. Holds do not extend the eight-minute
+budget. Sixty model tool calls are allowed. An SDK wire-contract test checks newer
+browser fields against the pinned SDK. Scripted clients exercise real local Chromium,
+including quantity injection, off-host navigation, changed checkout, privacy, stop,
+timeout, interrupted work, invented confirmations and duplicate submission.
+
+Supported checkouts need identifiable final purchase controls, visible item rows
+with one quantity field each and an unambiguous final dollar total. `review_checkout`
+checks current DOM evidence, quantities and all cart quantity fields. The reviewed
+button, items and total are checked again before submission. Unsupported layouts
+require manual completion. This generic DOM guard is not a guarantee about arbitrary
+website JavaScript or misleading supplier controls; supplier compatibility must be
+rehearsed before enabling that site for real orders.
+
+Confirmed orders retain their receipt and idempotency protection even if document
+storage fails. Receipts are PDFs built from scrubbed confirmation text, never raw
+page PDFs. The canonical private path is `{business}/receipts/{errand}.pdf`; a second
+copy at `{business}/general/Receipt-{errand}.pdf` makes it visible in Documents.
+`document_id` is the storage object ID. Delivery dates and cancellation windows stay
+null unless independently verified. PR5 owns inventory, ledger and undo integration.
+
+Blocked off-host subresources are aborted without terminating a page; blocked
+navigations still stop the run. Origins are never automatically approved.
+
+## PR5 Chief integration
+
+Chief exposes `plan_errand`, `approve_errand`, `stop_errand`, and `errand_status`.
+Planning is class A; approval is class C. Approval requires the authenticated actor
+and the current turn's explicit "approve this errand" wording. Model-supplied flags
+and earlier turns grant no authority. A plan created during that turn cannot be
+approved during the same turn. Scheduler, workflow, autopilot and external-agent
+paths cannot approve errands, even if they mislabel themselves as prompted.
+
+Lifecycle events enter the existing append-only audit writer using fixed messages,
+errand identifiers, permission scope and (on completion) amount, host and last four
+only. This retains the existing audit writer's best-effort delivery policy. Raw page
+text, form fields and arbitrary exceptions are excluded. A Secure Entry boundary
+also turns unexpected exceptions into a fixed response before uvicorn can log them.
+The real localhost uvicorn test and Sentry memory-transport test cover this boundary.
+
+`chief_errand_complete` locks a confirmed errand and stamps its inventory, supplier
+order note, expense and undo entry. It never launches a browser. The ordinary expense
+insert feeds the existing GL triggers; no duplicate accounting entries are posted.
+A closed accounting period preserves inventory/undo and leaves an explicit expense
+review warning. Repairs after reopening use the original order date. Repeated
+completion produces one expense, one undo entry, and one appended supplier note.
+
+Undo creates only a new cancellation plan. Unknown or expired supplier windows
+produce an unsent cancellation request to copy; neither path silently contacts the
+supplier. The next chat injects unshown terminal errand cards independently of model
+output and retries unfinished receipt/bookkeeping repair without reordering.
+
+Validation: **208** focused action/API/policy/undo/registry/Sentry/MCP tests passed.
+Chief replay: **102/102**. Live website-only planning **4/4** and stop **3/3** passed
+after correcting the old prompt's instruction to always draft an email reorder.
+The `eval-run/eval.bat` wrapper invokes `scripts/module_build_eval.py` from its old
+copied checkout. The equivalent script was run from this worktree against the live
+model: **71/72**, with one generated expense-dashboard width validation failure.
+The isolated expenses retest repeated that pre-existing generator validation failure.
+No module generator source changed in this arc. Reports remain local with synthetic
+fixture content. The completion migration was applied after PR #939 merged on
+September 12, 2026; its live function-permission probe passed. Execution remains
+disabled during rollout.
+
+## PR6: one computer for portals and orders
+
+`use_browser_hand` now calls `plan_errand(kind='portal')`. A portal plan still files
+an Approval Queue proposal on channel `hand`, bound to the errand ID and canonical
+task specification. Queue approval requires an authenticated human actor; autopilot
+calls cannot reuse the business owner ID to claim human approval. Changed or foreign
+queue bindings fail closed. Old proposals convert on a fresh human approval. The
+transactional errand approval remains the only job-creation path. Legacy queue
+proposals retain their smaller step/time budgets (usually 12 steps/180 seconds).
+
+The old model loop and browser adapter were removed from `browser_hand.py`.
+Historical job kinds/frame links remain readable, but new legacy enqueues fail and
+an old queued runner returns a fixed retirement response without opening Chromium.
+
+Portal tasks can use login/OTP Secure Entry, but cannot enter cards, review checkout,
+or click a recognized purchase control. A successful portal report contains an
+exact piece of visible, scrubbed page evidence in `plan.report`, with `receipt:null`;
+it never fabricates an order receipt. Cancellation errands require the original
+order, a still-valid independently recorded cancellation window and reviewed
+order/button DOM evidence. They cannot purchase and never infer a refund. The
+generic driver does not invent cancellation windows, so suppliers without a verified
+window still fall back to an unsent cancellation request.
+
+Rehearsal: 74 focused portal/driver/queue/history tests passed. The production-model
+API contract probe returned `list_tabs` with `toolset_name: browser`, confirming
+the configured model accepts the actual toolset. It used synthetic input and opened
+no browser. The owner explicitly approved public-source publication on September 12.
+PRs #938 and #939 are merged and deployed successfully; the final hand migration is
+PR #940. Frontend #907 aligns receipt/portal rendering, interruption warnings and
+Secure Entry with this contract. Do not enable execution before the final merge,
+frontend deployment and production checks.
+
+Final review also checks spending limits again when a queued Continue command reaches
+the worker. A newly lowered limit cannot reuse an approval without danger step-up.
+Replacement plans inspect recent interrupted/failed/stopped submissions for matching
+items, warn to check the supplier, and require card step-up if an earlier submission
+is uncertain. This warning does not prove the supplier did or did not accept it.
+
+Final local verification: 230 focused tests and 85 agent tests passed. The broad
+backend run passed 7,805 tests with 16 skipped and found one usage-meter registry
+mismatch; the registry correction and related regressions then passed 67 tests.
+The corrected PR4 registers the self-metering errand driver; PR6 removes the retired
+hand entry. All three PostgreSQL harnesses and all three sabotage checks passed.
+The unchanged module generator's expenses eval still fails its dashboard width
+validation; that separate generator issue was reproduced in an isolated retest.
+
+Office Depot remains a low-cost guest-checkout candidate, not a certified supplier.
+The Windows guarded-browser probe received `ERR_HTTP2_PROTOCOL_ERROR`, but the
+September 12 production Railway probe successfully opened item 222056 and saw the
+paper clips and $3.49 price with no challenge page. It used the real controller,
+exact Office Depot host restrictions and the app's runtime environment. Other
+resource hosts remained blocked. This verifies product-page access, not checkout.
+No guard was weakened, account opened, cart changed or purchase made. The first
+purchase still requires the owner's presence, delivery details, Secure Entry and
+approval of the final total.
+
+## Pilot switch, handed-over forms and seeing pages (2026-09-25)
+
+Kevin asked for sign-ins and sign-ups handed to him in the chat (fields shown
+there, filled by him, handed back without Chief seeing them, "for anything"),
+for something in the chat to look in on when Chief searches, and for Chief to
+be able to see any site it is sent to.
+
+- **Pilot switch.** `ERRANDS_BUSINESS_IDS` (comma-separated UUIDs) keeps
+  `ERRANDS_ENABLED=on` to named businesses; unset means every business.
+  `GET /computer/settings` returns `execution_enabled` for the caller's business.
+- **Handed-over forms.** Only the classic one-username, one-password form keeps
+  the login card (and the vault). Any other form that trips a sensitive field
+  (a sign-up, a two-step login, a password-only page) becomes a `field_kind:
+  "form"` hold: the controller reads the form's visible fields (labels, types,
+  required, select and radio choices; never values, hidden fields or the
+  model's guess), keeps live element handles and signatures, and the owner's
+  Secure Entry answers are keyed by field id. `fill_form` re-checks the hold,
+  host, every element's signature and each answer's type, fills the page, adds
+  typed text to the scrubber and keeps the screenshot curtain, exactly like a
+  login. Forms are never saved. A form with payment fields is refused (cards keep
+  their own Secure Entry). At most 25 fields, 300 options per select.
+- **Deliberate hand-off.** The worker has `hand_form_to_owner(ref, reason)` for a
+  form that needs the owner's own details or anything the plan does not give
+  it. The owner sees the reason on the card.
+- **Terms are the owner's.** `_guard` refuses any click, keypress or
+  form_input on a checkbox or radio whose label reads as terms, consent,
+  privacy or conditions (`BrowserController.consent_control`); the worker must
+  hand the form over, and the owner ticks it there.
+- **Seeing a page.** `view_website` (chief_site_view.py) is a Chief-only read:
+  the guarded public-only capture context from website_image_references, a
+  sign-in page refused, one screen per call (desktop or phone, screens 1-4),
+  three per turn. The model gets the screenshot as an image block (the one
+  read tool whose result is not text, handled in `run_tool_round`) and the
+  page's visible text through `untrusted_text.defuse`, so an instruction-shaped
+  page taints the turn. The owner gets the same picture as a work-log step
+  (`view`), stored privately under `proposals/{business}/chief-view/` with a
+  week-long signed link. The `[ACTION:]` tag path returns text only.
+- **Looking in on searches.** Chief's streamed web searches become work-log
+  steps (`search`: the query while it runs, the pages found when it lands),
+  from `chief_search_steps.py` in the stream loop. Titles and links are
+  shown to the owner only; nothing is added to what the model reads.
+
+Known limits: the screenshot curtain after any secure fill also covers the
+owner's live view for the rest of that run (a deliberate privacy trade, not
+changed here); on a voice or taint-held turn the class-C gate holds first, so
+a hand-off can take one more go-ahead; view screenshots are not yet pruned.
+
+### 2026-09-26: never trades, and sign-in errands on request
+
+- `checkout_guard.MONEY_MOVE` (sell, short, flatten, close/exit position, reverse,
+  liquidate, place trade, transfer, withdraw, deposit, wire, send money): the
+  driver refuses a click on such a control, or Enter/Space into a form that
+  holds one, on every errand kind. Buy and pay were already `PURCHASE`. Chief
+  had offered to place orders on the owner's brokerage.
+- Chief's prompt: "log me in / sign me up" plans a portal errand at once (start
+  on the sign-in page; report what the signed-in page shows). It never says it
+  cannot log in and never offers trades or money moves.
+- The answer check gets `system:chief_computer` (`chief_truth.computer_capability`),
+  which says whether the computer is switched on for the business, so true
+  statements about it are no longer marked unverified.
+

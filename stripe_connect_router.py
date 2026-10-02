@@ -156,6 +156,9 @@ def stripe_connect_start(
         raise HTTPException(400, "business_id required")
     biz = _require_owner(str(business_id), user)
 
+    from financial_policy import require_operational_write
+    require_operational_write(str(business_id))
+
     if biz.get("stripe_account_id"):
         # Already connected. Frontend should send to status, not start.
         raise HTTPException(409, "stripe account already connected")
@@ -213,6 +216,8 @@ async def stripe_connect_callback(request: Request) -> RedirectResponse:
         )
 
     try:
+        from financial_policy import require_operational_write
+        require_operational_write(business_id)
         oauth_resp = await exchange_oauth_code(code)
     except Exception as e:
         logger.warning(f"oauth exchange failed for biz={business_id}: {e}")
@@ -398,9 +403,15 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             _handle_account_updated(obj)
         elif evt_type == "account.application.deauthorized":
             _handle_account_deauthorized(obj, account_id)
-        elif evt_type == "checkout.session.completed":
+        elif evt_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+            if (obj.get("metadata") or {}).get("discount_checkout_v1") == "true":
+                from discount_settlement import verify_checkout_account
+                verify_checkout_account(obj, account_id)
             _handle_checkout_session_completed(obj)
         elif evt_type == "payment_intent.succeeded":
+            if (obj.get("metadata") or {}).get("discount_checkout_v1") == "true":
+                from discount_settlement import verify_checkout_account
+                verify_checkout_account(obj, account_id)
             _handle_payment_intent_succeeded(obj)
         elif evt_type == "payment_intent.payment_failed":
             _handle_payment_intent_failed(obj)
@@ -438,7 +449,8 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         except Exception as e:
             logger.warning(f"webhook outcome patch failed for {evt_id}: {e}")
 
-    return JSONResponse({"ok": True, "received": evt_type})
+    return JSONResponse({"ok": processed_ok, "received": evt_type},
+                        status_code=200 if processed_ok else 500)
 
 
 def _handle_account_updated(account: Dict[str, Any]) -> None:
@@ -500,7 +512,10 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
     """A checkout session paid. Look up the source and mark it paid.
     For source_type='booking' → set module_entries.paid_at + ids.
     For source_type='invoice' → mark the existing-system invoices row paid."""
-    if session.get("payment_status") != "paid":
+    free_checkout = (session.get("payment_status") == "no_payment_required"
+                     and session.get("amount_total") == 0
+                     and (session.get("metadata") or {}).get("discount_checkout_v1") == "true")
+    if session.get("payment_status") != "paid" and not free_checkout:
         return
     source_type, source_id = _metadata_source(session)
     if not source_id:
@@ -513,7 +528,10 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
         # no-show charge path needs it recorded on the booking.
         _mark_booking_paid(
             source_id, payment_intent_id=pi_id, charge_id=None,
-            metadata=session.get("metadata") or {},
+            metadata={**(session.get("metadata") or {}),
+                      **({"discount_cents": (session.get("total_details") or {}).get("amount_discount", 0),
+                          "amount_paid_cents": session.get("amount_total")}
+                         if (session.get("metadata") or {}).get("discount_checkout_v1") == "true" else {})},
             stripe_customer_id=session.get("customer"),
         )
     elif source_type == "invoice":
@@ -596,6 +614,18 @@ def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
     if not source_id or source_type not in ("booking", "order"):
         return
     md = pi.get("metadata") or {}
+    if md.get("discount_checkout_v1") == "true":
+        # Only the Checkout Session knows the final tax/discount totals.
+        # Wait for it, even when Stripe delivers the PI event first.
+        # Still retain the saved card for the disclosed no-show policy.
+        if source_type == "booking" and pi.get("payment_method"):
+            rows = sb_clients.sb_get_as_service(
+                f"/module_entries?id=eq.{source_id}&select=data&limit=1") or []
+            if rows:
+                data = dict(rows[0].get("data") or {})
+                data["stripe_payment_method_id"] = pi["payment_method"]
+                sb_clients.sb_patch_as_service(f"/module_entries?id=eq.{source_id}", {"data": data})
+        return
     if md.get("payment_kind") == "no_show_fee":
         # Barber-money: the no-show fee PI carries source_type='booking'
         # for the Charges tab, but it is NOT the service payment — it
@@ -916,6 +946,22 @@ def _mark_booking_paid(
     # ── Data-side facts (denormalized, like price_at_booking) ──
     data = dict(row.get("data") or {})
     updates: Dict[str, Any] = {}
+    if md.get("discount_checkout_v1") == "true":
+        if already_paid:
+            return
+        paid = _int_or_none(md.get("amount_paid_cents"))
+        discount = _int_or_none(md.get("discount_cents"))
+        if paid is None or paid < 0 or discount is None or discount < 0:
+            raise ValueError("Discount checkout is missing verified settlement amounts")
+        service = _int_or_none(md.get("service_cents"))
+        if service is None or paid + discount != service:
+            raise ValueError("Discount checkout does not match the booked service amount")
+        updates.update(amount_paid_cents=paid, discount_cents=discount)
+        # Revenue readers use the frozen booking price. Preserve the list
+        # price alongside it and post the actual discounted service amount.
+        updates["price_before_discount"] = data.get("price_before_discount", data.get("price_at_booking", data.get("price")))
+        updates["price_at_booking"] = paid / 100
+        updates["price"] = paid / 100
     if stripe_customer_id and data.get("stripe_customer_id") != stripe_customer_id:
         updates["stripe_customer_id"] = stripe_customer_id
     if payment_method_id and data.get("stripe_payment_method_id") != payment_method_id:

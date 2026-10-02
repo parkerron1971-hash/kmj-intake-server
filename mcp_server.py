@@ -1,15 +1,54 @@
 """
-mcp_server.py — the agent-facing surface. Stage 1: read-only, owner-only.
+mcp_server.py — the agent-facing surface. Stage 4: every practitioner's
+business is reachable by the agent they already use, and a granted scope
+lets that agent act.
 
-An MCP (Model Context Protocol) endpoint exposing a narrow READ-ONLY slice
-of Chief's verbs, so an external client (Claude Desktop, a self-hosted ops
-agent) can read Mission Control state. Blast radius is one account — the
-platform owner's — by design.
+An MCP (Model Context Protocol) endpoint exposing a slice of Chief's verbs
+to an external client — Claude.ai, ChatGPT, Claude Desktop, a self-hosted
+agent. Reads are the default posture. Reversible writes (the registry's
+class A) are reachable only by a token minted with the `write` scope; class
+C is unreachable at any scope, which is the whole point of having a
+registry rather than a list.
+
+Stage 1 (2026-07-28) was read-only and owner-only: one tenant, us, as free
+tuition. Stage 4 (2026-09-03) opens the door the July strategy reserved —
+docs/future_architecture.md §3, "when the assistant wars settle, Solutionist
+wins regardless of which assistant won, because they all operate the
+practitioner's business through us". The day a general computer-using
+agent shipped to every paid ChatGPT tier was the review trigger that doc
+named for itself. This is the response.
 
 Strategy: solutionist-studio/docs/PERSONAL_AGENT_ARCHITECTURE.md §4 (open on
-read, closed on write), §7 (trust/egress), §10 Stage 1. Gateway shape:
+read, closed on write), §7 (trust/egress), §10 Stage 4. Gateway shape:
 docs/extensibility_and_autonomy.md §2.3. Permission model:
 docs/future_architecture.md §3 — the Trust Track, not a parallel invention.
+
+═══════════════════════════════════════════════════════════════════════
+WHAT A WRITE SCOPE CAN AND CANNOT REACH
+═══════════════════════════════════════════════════════════════════════
+Two gates, both required, neither hand-maintained as a list of verbs:
+
+  action_registry.may_expose_to_agent(verb, allow_writes=True)
+      the CEILING. Class A only, never sensitive, never unclassified.
+      Bulk verbs are refused here too — forty rows is not one undo.
+  WRITE_TOOL_SCHEMAS
+      the FLOOR. A class A verb is offered only once somebody has read
+      its handler and written the schema an outside model will fill in.
+      A verb missing from here is not a tool, whatever the registry says.
+
+The registry can only ever narrow what this dict offers; the dict can only
+ever narrow what the registry allows. Drift in the dangerous direction —
+something exposed that should not be — needs both to be wrong at once.
+
+policy_engine.evaluate() runs on every call with prompted=False, because
+nobody is sitting in front of an MCP call: a token is. So a practitioner
+who paused their automations pauses their agent too, and a regulated
+practice's client-facing switch is honoured — the same rules the scheduler
+and the autopilot sweep answer to.
+
+Every successful write is recorded in chief_undo_log exactly as a chat
+action is, so `undo_last` (itself on this surface) can take it back, and
+the practitioner's own "what would undo do?" sees the agent's work.
 
 ═══════════════════════════════════════════════════════════════════════
 WHY THE TRANSPORT IS HAND-WRITTEN
@@ -41,9 +80,8 @@ This module ASKS it and never second-guesses it. There is deliberately no
 hand-maintained tool list: a second list would drift from the registry,
 and that drift is a security bug rather than a tidiness one.
 
-Today that yields exactly 19 read verbs. The 5 `ui` verbs are excluded
-(an off-app caller has no UI to drive) and the 22 class-C verbs can never
-appear at any scope.
+The `ui` verbs are excluded (an off-app caller has no UI to drive) and the
+class-C verbs can never appear at any scope.
 
 ═══════════════════════════════════════════════════════════════════════
 WHAT THIS DELIBERATELY DOES NOT DO
@@ -60,6 +98,7 @@ simply not on the path.
 Kill switch: MCP_ENABLED=off (default on).
 """
 from __future__ import annotations
+import asyncio
 
 import json
 import logging
@@ -75,7 +114,7 @@ from pydantic import BaseModel
 
 import action_registry
 import rate_limit
-from mcp_tokens import SCOPE_READ
+from mcp_tokens import SCOPE_READ, SCOPE_WRITE
 from auth_supabase import AuthedUser, optional_user, require_user
 
 logger = logging.getLogger("mcp_server")
@@ -90,8 +129,10 @@ router = APIRouter(prefix="/mcp", tags=["mcp"])
 # The spec revision this server implements. Clients send their own in
 # `initialize`; we echo ours back and let them decide about compatibility.
 PROTOCOL_VERSION = "2025-06-18"
-SERVER_NAME = "solutionist-admin"
-SERVER_VERSION = "0.1.0"
+# Was "solutionist-admin" while the surface was one tenant's. It is every
+# practitioner's now, and the name a connector shows is the name they see.
+SERVER_NAME = "solutionist"
+SERVER_VERSION = "0.2.0"
 
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=45.0, write=15.0, pool=10.0)
 
@@ -124,6 +165,14 @@ class Caller:
         self.business_id = business_id    # set ONLY by a signed claim
         self.scopes = scopes or []
         self.jti = jti
+
+    @property
+    def may_write(self) -> bool:
+        """Only a scoped token can carry `write`. A browser session is a
+        person, and a person acts through Chief, where the action gets
+        the prompted path and the practitioner's own confirmation UX —
+        not through a JSON-RPC endpoint built for their agent."""
+        return self.kind == "token" and SCOPE_WRITE in self.scopes
 
 
 # ─── JSON-RPC 2.0 ────────────────────────────────────────────────────
@@ -172,7 +221,16 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
     return schema
 
 
+from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA
+from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
+
 TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "inspect_course": ACADEMY_READ_SCHEMA,
+    "recall_business_knowledge": (
+        "Read this business's private operating profile, its revision, owner corrections, "
+        "assumptions, open questions and dated source evidence. The business comes from "
+        "the authenticated session, never a caller-supplied id.", _obj({})),
+    "growth_report": GROWTH_READ_SCHEMA,
     "catch_up": (
         "What has happened in this business recently — new activity, drafts "
         "waiting, anything that moved since last time. Start here when you "
@@ -212,8 +270,10 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
                              "description": "Optional. Narrow to one "
                                             "contact's unbilled time."}})),
     "contact_deep_dive": (
-        "Everything on file for ONE person: history, sessions, invoices, "
-        "notes. Requires the contact's id.",
+        "Everything on file for ONE person as one dated timeline: bookings, "
+        "forms, invoices and payments, contracts, email and SMS, notes, "
+        "time, balances, records — plus a summary (last touch, next "
+        "booking, open invoices, unbilled time). Requires the contact's id.",
         _obj({"contact_id": {"type": "string",
                              "description": "The contact's uuid."}},
              ["contact_id"])),
@@ -269,6 +329,14 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "reminders are on, and how many contacts have replied STOP. No "
         "message contents.",
         _NO_ARGS),
+    "email_setup_status": (
+        "Whether email is actually set up for this business: what address it "
+        "sends from (its own verified domain or the platform address), whether "
+        "the domain is waiting on DNS or has stopped verifying, whether a Gmail "
+        "or Google Workspace inbox is connected and still syncing, whether a "
+        "test email has landed, and the next setup step. Configuration and "
+        "counts only - never a message body.",
+        _NO_ARGS),
     "list_offerings": (
         "The services or packages this business sells, with prices.",
         _NO_ARGS),
@@ -281,6 +349,12 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     "list_scheduled": (
         "Actions Chief has queued to run later, with their run times.",
         _NO_ARGS),
+    "list_tasks": (
+        "The owner's open tasks by when they are due (the business's own "
+        "days): overdue, today, the next seven days (overdue included), or "
+        "all open. Each with its due date, priority and the person it is for.",
+        _obj({"due": {"type": "string", "enum": ["overdue", "today", "week", "all"],
+                      "description": "Which tasks: overdue, today, week (default) or all."}})),
     "offering_readiness": (
         "Per-offering readiness report: which offerings are actually "
         "sellable and what is blocking the ones that are not.",
@@ -310,6 +384,15 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "Chief's open multi-step missions and their per-step progress. "
         "Read-only; a mission waiting on approval can only be advanced by "
         "the practitioner in the app.",
+        _NO_ARGS),
+    # Deliberately exposed (tripwire bump 30 -> 31, 9/4). assignment_status
+    # is the same class: operational state of the outcomes the standing
+    # agent is working, with progress and the moves log. Creating and
+    # stopping one are writes and stay OFF this surface.
+    "assignment_status": (
+        "The outcomes Chief is working on its own between conversations "
+        "(assignments): target, progress, deadline and the moves made so "
+        "far. Read-only; the practitioner gives and stops them in chat.",
         _NO_ARGS),
     "show_view": (
         "A bounded list (max 25 rows) of one view of this business's "
@@ -393,21 +476,617 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
 }
 
 
-def exposed_tools() -> List[str]:
+# ─── Write tools ─────────────────────────────────────────────────────
+#
+# The verbs a `write`-scoped token may call, each with the schema an
+# outside model fills in. Every entry was written against its handler's
+# source on 2026-09-03 — the argument names below are the ones the handler
+# reads, the enums are the ones it validates, and a description says what
+# the practitioner will find changed.
+#
+# WHAT IS DELIBERATELY NOT HERE, and why, so the next reader does not add
+# it by accident:
+#
+#   Anything that spends model tokens on the practitioner's account from
+#   an outside caller — draft_nurture, rewrite_draft, run_agent,
+#   analyze_trends, run_market_research, propose_module_from_intake,
+#   plan_campaign, generate_document. An agent that can burn the metered
+#   allotment in a loop is a billing incident. draft_email is here ONLY
+#   because the body is required (the handler drafts with the model when
+#   the body is short, and the schema forbids a short one).
+#
+#   cancel_booking and reschedule_booking. Class A, and the registry
+#   itself flags that a silently-cancelled client appointment is a
+#   product question. That question is answered in the app, not here.
+#
+#   edit_draft. Its registry entry was corrected to say it APPROVES AND
+#   SENDS. save_draft, which does not, is the one a future entry gets.
+#
+#   Site, voice, brand, workspace and strategy-track writes. Reversible,
+#   but they shape what the public and Chief itself say; a practitioner
+#   changes those looking at the result, in the app.
+#
+# Descriptions are written for a MODEL choosing between tools. Each names
+# what changes and what does NOT happen (no email, nothing sent), because
+# the model's user will ask exactly that.
+
+_CONTACT_ID = {"type": "string", "description": "The contact's uuid."}
+_DATE = {"type": "string",
+         "description": "YYYY-MM-DD.", "pattern": r"^\d{4}-\d{2}-\d{2}$"}
+_WHEN = {"type": "string",
+         "description": "ISO 8601 date-time, UTC (e.g. 2026-09-10T14:00:00Z). "
+                        "A bare YYYY-MM-DD means 09:00 UTC that day."}
+_HOURS = {"type": "array",
+          "description": "Open intervals for that date. An EMPTY list means "
+                         "closed all day.",
+          "items": {"type": "object", "additionalProperties": False,
+                    "required": ["start", "end"],
+                    "properties": {"start": {"type": "string",
+                                             "description": "HH:MM, 24-hour"},
+                                   "end": {"type": "string",
+                                           "description": "HH:MM, 24-hour"}}}}
+
+WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "capture_website_references": (
+        "Capture a public website screenshot and its original logo as private gallery images. Use for image design references when the user provides a website; no login, publishing, or image-generation charge. Returns image IDs and roles. You can then use the IDs in generate_image. Do not ask the user to upload assets that this public website can supply.",
+        _obj({"url": {"type": "string", "description": "Public website/page URL supplied by the user or their verified business site. A path or fragment can target the relevant page/section."},
+              "include_logo": {"type": "boolean", "description": "Defaults true. False for screenshot-only captures."}}, ["url"])),
+    "save_course_content": ACADEMY_WRITE_SCHEMA,
+    "save_growth_record": GROWTH_WRITE_SCHEMA,
+    # ── people ───────────────────────────────────────────────────────
+    "create_contact": (
+        "Add a person to this business's contacts. Nothing is sent to "
+        "them. Returns the new contact_id.",
+        _obj({"name": {"type": "string"},
+              "email": {"type": "string"},
+              "phone": {"type": "string"},
+              "role": {"type": "string",
+                       "description": "Their role or relationship, free text."},
+              "status": {"type": "string",
+                         "enum": ["lead", "active", "vip", "inactive", "churned"],
+                         "description": "Default lead."},
+              "tags": {"type": "array", "items": {"type": "string"}}},
+             ["name"])),
+    "update_contact": (
+        "Change fields on ONE existing contact. Pass contact_id when you "
+        "have it; otherwise contact_name finds a unique match and fails if "
+        "several match. Only the fields you pass change.",
+        _obj({"contact_id": _CONTACT_ID,
+              "contact_name": {"type": "string",
+                               "description": "Lookup by name when no id."},
+              "name": {"type": "string", "description": "A NEW name for them."},
+              "email": {"type": "string"},
+              "phone": {"type": "string"},
+              "role": {"type": "string"},
+              "notes": {"type": "string"},
+              "status": {"type": "string",
+                         "enum": ["lead", "active", "vip", "inactive", "churned"]},
+              "tags": {"type": "array", "items": {"type": "string"}}})),
+    "update_contact_status": (
+        "Move one contact to a new status. Records the change on their "
+        "timeline.",
+        _obj({"contact_id": _CONTACT_ID,
+              "new_status": {"type": "string",
+                             "enum": ["lead", "active", "vip", "inactive", "churned"]}},
+             ["contact_id", "new_status"])),
+    "create_note": (
+        "Attach a note to one contact's record. Private to the "
+        "practitioner; the contact never sees it.",
+        _obj({"contact_id": _CONTACT_ID,
+              "note": {"type": "string"}},
+             ["contact_id", "note"])),
+    "log_activity": (
+        "Record that an interaction with a contact happened — a call, a "
+        "text, a meeting. Updates their last-contact date. Sends nothing.",
+        _obj({"contact_id": _CONTACT_ID,
+              "activity_type": {"type": "string",
+                                "enum": ["call", "text", "meeting", "email", "other"]},
+              "notes": {"type": "string", "description": "What happened."},
+              "occurred_at": {**_DATE, "description": "YYYY-MM-DD. Default today."}},
+             ["contact_id", "activity_type"])),
+
+    # ── work ─────────────────────────────────────────────────────────
+    "create_task": (
+        "Add a to-do for the practitioner. Returns task_id.",
+        _obj({"title": {"type": "string"},
+              "description": {"type": "string"},
+              "due_date": _DATE,
+              "priority": {"type": "string",
+                           "enum": ["urgent", "high", "medium", "low"],
+                           "description": "Default medium."},
+              "contact_id": {**_CONTACT_ID,
+                             "description": "Optional. Link the task to a contact."}},
+             ["title"])),
+    "complete_task": (
+        "Mark a task done. Pass task_id, or a title fragment that matches "
+        "one open task.",
+        _obj({"task_id": {"type": "string"},
+              "title": {"type": "string",
+                        "description": "Fragment of the task's title, when no id."}})),
+    "create_project": (
+        "Open a project, optionally for a client. Returns project_id.",
+        _obj({"title": {"type": "string"},
+              "description": {"type": "string"},
+              "contact_name": {"type": "string",
+                               "description": "The client, by name. Optional."},
+              "status": {"type": "string",
+                         "enum": ["planning", "active", "on_hold", "completed", "cancelled"],
+                         "description": "Default planning."},
+              "value": {"type": "number", "description": "Expected value, in the "
+                                                          "business's currency."},
+              "start_date": _DATE,
+              "target_date": _DATE},
+             ["title"])),
+    "log_time": (
+        "Record work done for a client — hours worked, not yet billed. "
+        "Charges nobody; the practitioner invoices it later in the app.",
+        _obj({"contact_id": _CONTACT_ID,
+              "hours": {"type": "number", "description": "e.g. 1.5"},
+              "description": {"type": "string",
+                              "description": "What the work was. Required — "
+                                             "a bill line needs a narrative."},
+              "matter": {"type": "string",
+                         "description": "Optional matter or engagement name."},
+              "billable": {"type": "boolean", "description": "Default true."},
+              "rate": {"type": "number",
+                       "description": "Optional hourly rate; otherwise the "
+                                      "client's or offering's rate applies."},
+              "date": {**_DATE, "description": "YYYY-MM-DD. Default today."}},
+             ["contact_id", "hours", "description"])),
+    "log_expense": (
+        "Record a business expense already paid — bookkeeping about money, "
+        "not movement of it. Flows to the P&L. Refuses dates in a closed "
+        "accounting period.",
+        _obj({"amount": {"type": "number", "exclusiveMinimum": 0},
+              "category": {"type": "string",
+                           "enum": ["operating", "tax", "owner_pay", "savings", "other"],
+                           "description": "Default operating (day-to-day costs)."},
+              "vendor": {"type": "string"},
+              "note": {"type": "string", "description": "What it was for."},
+              "date": {**_DATE, "description": "YYYY-MM-DD. Default today."}},
+             ["amount"])),
+
+    # ── calendar ─────────────────────────────────────────────────────
+    "create_session": (
+        "Put a session or appointment on the practitioner's calendar. "
+        "Sends NO confirmation to the client — this is the practitioner's "
+        "own record. Returns session_id.",
+        _obj({"title": {"type": "string"},
+              "scheduled_for": _WHEN,
+              "duration_minutes": {"type": "integer", "minimum": 5,
+                                   "description": "Default 60."},
+              "contact_id": {**_CONTACT_ID, "description": "Optional. Who it is with."},
+              "contact_name": {"type": "string",
+                               "description": "Lookup by name when no id."},
+              "session_type": {"type": "string",
+                               "description": "e.g. consultation, coaching_session, "
+                                              "discovery_call, follow_up, meeting."},
+              "notes": {"type": "string"}},
+             ["scheduled_for"])),
+    "update_session": (
+        "Change one session: move it, mark it completed or a no-show, add "
+        "notes. Pass session_id, or contact_name to mean that person's "
+        "most recent session. Sends nothing to the client.",
+        _obj({"session_id": {"type": "string"},
+              "contact_name": {"type": "string"},
+              "scheduled_for": _WHEN,
+              "status": {"type": "string",
+                         "enum": ["scheduled", "in_progress", "completed",
+                                  "no_show", "cancelled"]},
+              "duration_minutes": {"type": "integer", "minimum": 5},
+              "title": {"type": "string"},
+              "notes": {"type": "string"}})),
+    "set_availability_override": (
+        "Make ONE date an exception to the weekly booking hours — closed, "
+        "or open only at these times. Replaces any existing override for "
+        "that date.",
+        _obj({"date": _DATE, "hours": _HOURS}, ["date"])),
+    "add_block_range": (
+        "Block a run of dates from online booking (vacation, a holiday "
+        "week). Inclusive of both ends. remove_block_range undoes it.",
+        _obj({"start": _DATE,
+              "end": {**_DATE, "description": "YYYY-MM-DD. Default same as start."},
+              "reason": {"type": "string"}},
+             ["start"])),
+    "remove_block_range": (
+        "Remove a booking block, identified by its start date.",
+        _obj({"start": _DATE}, ["start"])),
+
+    # ── records the practitioner defined ─────────────────────────────
+    "create_module_entry": (
+        "Add a row to one of the practitioner's own custom modules. Read "
+        "the module first (list_module_entries) to learn its fields. "
+        "Refused for access-restricted modules.",
+        _obj({"module_id": {"type": "string", "description": "The module's uuid."},
+              "data": {"type": "object",
+                       "description": "Field values, keyed by the module's "
+                                      "field names.",
+                       "additionalProperties": True}},
+             ["module_id", "data"])),
+    "update_module_entry": (
+        "Patch fields on one custom-module row. Fields you do not pass are "
+        "kept.",
+        _obj({"entry_id": {"type": "string"},
+              "data": {"type": "object", "additionalProperties": True,
+                       "description": "Only the fields to change."}},
+             ["entry_id", "data"])),
+    "delete_module_entry": (
+        "Remove one custom-module row. A soft delete — the row is hidden, "
+        "not destroyed.",
+        _obj({"entry_id": {"type": "string"}}, ["entry_id"])),
+
+    # ── offerings ────────────────────────────────────────────────────
+    "create_offering": (
+        "Add a service, session type, package, course or product the "
+        "business sells. Products and packages with a price appear in the "
+        "hosted store. Refuses a duplicate name.",
+        _obj({"name": {"type": "string"},
+              "category": {"type": "string",
+                           "enum": ["service", "session", "event", "package",
+                                    "course", "product"],
+                           "description": "Default service."},
+              "current_price": {"type": "number"},
+              "duration_min": {"type": "integer", "minimum": 1,
+                               "description": "For bookable services."},
+              "description": {"type": "string"},
+              "show_price_to_customer": {"type": "boolean"}},
+             ["name"])),
+    "update_offering": (
+        "Change price, duration, description or visibility of one "
+        "offering, by offering_id or by its exact name.",
+        _obj({"offering_id": {"type": "string"},
+              "name": {"type": "string",
+                       "description": "The offering's current name, when no id."},
+              "current_price": {"type": "number"},
+              "duration_min": {"type": "integer", "minimum": 1},
+              "description": {"type": "string"},
+              "show_price_to_customer": {"type": "boolean"}})),
+
+    # ── drafts, memory, notes, content ───────────────────────────────
+    "draft_email": (
+        "Queue an email DRAFT for the practitioner to approve. Nothing is "
+        "sent by this tool — they review it in the app and send or dismiss "
+        "it. Write the full body yourself.",
+        _obj({"contact_id": {**_CONTACT_ID, "description": "The recipient."},
+              "subject": {"type": "string"},
+              "body": {"type": "string", "minLength": 21,
+                       "description": "The complete email text, in the "
+                                      "practitioner's voice."},
+              "reason": {"type": "string",
+                         "description": "One line on why — shown next to "
+                                        "the draft."}},
+             ["contact_id", "subject", "body"])),
+    "remember": (
+        "Store a durable fact about this business or practitioner that "
+        "Chief should carry into future conversations. Not for to-dos "
+        "(create_task) or notes-to-self (save_note).",
+        _obj({"content": {"type": "string"},
+              "category": {"type": "string",
+                           "enum": ["preference", "pattern", "context", "decision",
+                                    "boundary", "goal", "standing_instruction", "other"]},
+              "importance": {"type": "integer", "minimum": 1, "maximum": 10,
+                             "description": "Default 5."}},
+             ["content"])),
+    "forget": (
+        "Deactivate a stored memory whose content matches this phrase.",
+        _obj({"memory_content": {"type": "string",
+                                 "description": "A distinctive phrase from the memory."}},
+             ["memory_content"])),
+    "save_note": (
+        "File something on the practitioner's Notes pad for later — an "
+        "idea, a question, a quote. Verbatim.",
+        _obj({"content": {"type": "string"},
+              "kind": {"type": "string",
+                       "enum": ["idea", "task", "question", "quote", "note"]}},
+             ["content"])),
+    "capture_idea": (
+        "Drop a content idea into the Idea Inbox. No date, no platform — "
+        "just the idea.",
+        _obj({"title": {"type": "string"},
+              "notes": {"type": "string"},
+              "pillar_name": {"type": "string",
+                              "description": "Optional content pillar, by name."}},
+             ["title"])),
+    "plan_content": (
+        "Put a post on the content calendar for a date. Publishes "
+        "nothing — the practitioner posts it. Same title, platform and "
+        "date updates the existing plan instead of duplicating it.",
+        _obj({"title": {"type": "string"},
+              "platform": {"type": "string",
+                           "enum": ["instagram", "linkedin", "twitter", "facebook",
+                                    "tiktok", "youtube", "blog", "other"]},
+              "scheduled_date": _DATE,
+              "body": {"type": "string", "description": "The drafted post, if written."},
+              "pillar_name": {"type": "string"}},
+             ["title", "platform", "scheduled_date"])),
+    "add_faq": (
+        "Add or replace one question-and-answer on the business's public "
+        "FAQ. Live on the website at once, and Chief uses it when clients "
+        "ask.",
+        _obj({"question": {"type": "string"},
+              "answer": {"type": "string"}},
+             ["question", "answer"])),
+
+    # ── the safety net ───────────────────────────────────────────────
+    "undo_last": (
+        "Reverse the most recent reversible action on this business — "
+        "including one this agent just took. Call what_undo first to see "
+        "what it would reverse.",
+        _NO_ARGS),
+
+    # ── batch 2 (2026-09-04): goals, projects, hours, drafts, balances ─
+    # Same rules as the first 28: every argument name below is one the
+    # handler reads, every enum is one it validates, and nothing here
+    # sends, spends model tokens from outside, reaches a client, or
+    # deletes for good. Site copy, voice, brand, workspace and the
+    # strategy-track deliverables stay tags on purpose (see the header).
+    "create_goal": (
+        "Set a goal the practitioner will track — a number to reach by a "
+        "date. Auto-tracked from live data for the built-in metrics.",
+        _obj({"title": {"type": "string"},
+              "category": {"type": "string",
+                           "enum": ["contacts", "revenue", "sessions", "engagement",
+                                    "marketing", "growth", "learning", "wellness", "custom"],
+                           "description": "Default custom."},
+              "target": {"type": "number", "exclusiveMinimum": 0},
+              "metric": {"type": "string",
+                         "enum": ["total_contacts", "new_contacts", "revenue_collected",
+                                  "revenue_invoiced", "sessions_completed",
+                                  "sessions_scheduled", "engagement_rate", "custom"],
+                         "description": "Defaults to the category's usual metric."},
+              "period": {"type": "string",
+                         "enum": ["weekly", "monthly", "quarterly", "yearly"],
+                         "description": "Default quarterly."},
+              "start": _DATE, "end": _DATE,
+              "description": {"type": "string"}},
+             ["title", "target"])),
+    "add_reminder": (
+        "Attach a dated reminder to an existing goal. Pass goal_id, or "
+        "goal_title to match one.",
+        _obj({"goal_id": {"type": "string"},
+              "goal_title": {"type": "string"},
+              "date": _DATE,
+              "message": {"type": "string"}},
+             ["date"])),
+    "update_project": (
+        "Change one project's status, dates, description, value or client. "
+        "Pass project_id, or title_query to match one project by name.",
+        _obj({"project_id": {"type": "string"},
+              "title_query": {"type": "string",
+                              "description": "Part of the title, when no id."},
+              "status": {"type": "string",
+                         "enum": ["planning", "active", "on_hold", "completed", "cancelled"]},
+              "start_date": _DATE, "target_date": _DATE,
+              "description": {"type": "string"},
+              "notes": {"type": "string"},
+              "value": {"type": "number"},
+              "contact_id": _CONTACT_ID,
+              "contact_name": {"type": "string"}})),
+    "set_availability_day": (
+        "Set the weekly booking hours for ONE weekday. An empty hours list "
+        "closes that day every week.",
+        _obj({"day": {"type": "string",
+                      "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]},
+              "hours": _HOURS},
+             ["day", "hours"])),
+    "set_lead_time": (
+        "How far ahead a client must book — nothing inside this many "
+        "minutes of now is offered.",
+        _obj({"minutes": {"type": "integer", "minimum": 0}}, ["minutes"])),
+    "set_slot_granularity": (
+        "The booking grid: slots start every N minutes.",
+        _obj({"minutes": {"type": "integer", "minimum": 5, "maximum": 240}}, ["minutes"])),
+    "set_business_timezone": (
+        "The business's timezone, used for hours, slots and reminders.",
+        _obj({"timezone": {"type": "string",
+                           "description": "IANA name, e.g. America/New_York."}},
+             ["timezone"])),
+    "add_testimonial": (
+        "Add a client's testimonial, stored exactly as given. Shows on "
+        "the website unless show_on_website is false.",
+        _obj({"quote": {"type": "string"},
+              "name": {"type": "string"},
+              "role": {"type": "string"},
+              "show_on_website": {"type": "boolean", "description": "Default true."}},
+             ["quote", "name"])),
+    "remove_testimonial": (
+        "Remove one testimonial, by id, by the person's name, or by a "
+        "fragment of the quote.",
+        _obj({"testimonial_id": {"type": "string"},
+              "name": {"type": "string"},
+              "quote": {"type": "string", "description": "A fragment of the quote."}})),
+    "set_business_policy": (
+        "Record one policy in the practitioner's words: cancellation, "
+        "deposit, lateness, refunds or no-show. Goes on the website FAQ "
+        "and Chief answers clients with it.",
+        _obj({"policy": {"type": "string",
+                         "enum": ["cancellation", "deposit", "lateness", "refunds", "no_show"]},
+              "text": {"type": "string"}},
+             ["policy", "text"])),
+    "save_email_template": (
+        "Save or update a reusable email template by name. {name}, "
+        "{service}, {date} style placeholders are kept as variables. "
+        "Sends nothing.",
+        _obj({"name": {"type": "string"},
+              "subject": {"type": "string"},
+              "body": {"type": "string"},
+              "category": {"type": "string",
+                           "enum": ["welcome", "follow_up", "reminder", "nurture", "custom"]}},
+             ["name"])),
+    "mark_reply_read": (
+        "Mark an email reply as read — one by reply_id, or every unread "
+        "reply from one contact.",
+        _obj({"reply_id": {"type": "string"},
+              "contact_id": _CONTACT_ID,
+              "contact_name": {"type": "string"}})),
+    "mark_sms_read": (
+        "Mark texts as read — one by sms_id, every unread text from one "
+        "contact, or, with no arguments, all unread texts.",
+        _obj({"sms_id": {"type": "string"},
+              "contact_id": _CONTACT_ID,
+              "contact_name": {"type": "string"}})),
+    "cancel_scheduled": (
+        "Cancel something Chief has queued to run later, by schedule_id "
+        "or by matching its label. See list_scheduled.",
+        _obj({"schedule_id": {"type": "string"},
+              "label": {"type": "string", "description": "Part of the label."}})),
+    "dismiss_draft": (
+        "Dismiss a queued draft without sending it. The row survives.",
+        _obj({"queue_id": {"type": "string"}}, ["queue_id"])),
+    "save_draft": (
+        "Replace a queued draft's body and LEAVE it a draft — nothing is "
+        "approved or sent.",
+        _obj({"queue_id": {"type": "string"},
+              "new_body": {"type": "string", "minLength": 1}},
+             ["queue_id", "new_body"])),
+    "archive_offering": (
+        "Retire an offering. Soft: past bookings and invoices keep its "
+        "name and price. By offering_id or exact name.",
+        _obj({"offering_id": {"type": "string"},
+              "name": {"type": "string"}})),
+    "update_contact_health": (
+        "Set a contact's health score, 0 to 100.",
+        _obj({"contact_id": _CONTACT_ID,
+              "health_score": {"type": "integer", "minimum": 0, "maximum": 100}},
+             ["contact_id", "health_score"])),
+    "notify_practitioner": (
+        "Leave the practitioner an in-app notification (and a push). "
+        "Reaches the OWNER only — never a client.",
+        _obj({"title": {"type": "string"},
+              "body": {"type": "string"}},
+             ["title"])),
+    "write_off_time": (
+        "Mark a logged time entry as never-to-be-billed. The row survives.",
+        _obj({"entry_id": {"type": "string"}}, ["entry_id"])),
+    "grant_balance": (
+        "Record that a client prepaid for something not yet delivered — "
+        "package sessions, retainer hours, a deposit. Bookkeeping about "
+        "money already received; charges nobody.",
+        _obj({"contact_id": _CONTACT_ID,
+              "amount": {"type": "number", "exclusiveMinimum": 0},
+              "kind": {"type": "string",
+                       "description": "What was bought (e.g. package, retainer, "
+                                      "deposit). Defaults to the business's usual."},
+              "unit": {"type": "string",
+                       "description": "sessions, hours or money. Defaults to the "
+                                      "business's usual."},
+              "reason": {"type": "string"},
+              "offering_id": {"type": "string"},
+              "expires_at": {**_DATE, "description": "Optional expiry, YYYY-MM-DD."}},
+             ["contact_id", "amount"])),
+    "consume_balance": (
+        "Draw a prepaid balance down — a session delivered, an hour used. "
+        "Refuses to overdraw unless allow_overdraw is true.",
+        _obj({"contact_id": _CONTACT_ID,
+              "amount": {"type": "number", "exclusiveMinimum": 0,
+                         "description": "Default 1."},
+              "reason": {"type": "string"},
+              "session_id": {"type": "string"},
+              "allow_overdraw": {"type": "boolean"}},
+             ["contact_id"])),
+    "bill_time_to_retainer": (
+        "Bill one logged time entry against the client's prepaid retainer "
+        "hours. Moves prepaid balance; reaches no card and posts no GL "
+        "entry.",
+        _obj({"contact_id": _CONTACT_ID,
+              "entry_id": {"type": "string"}},
+             ["contact_id", "entry_id"])),
+    "set_sms_alerts": (
+        "Turn the automated booking confirmation texts and the 24-hour "
+        "reminder texts on or off.",
+        _obj({"kinds": {"type": "array",
+                        "items": {"type": "string", "enum": ["confirmations", "reminders"]},
+                        "description": "Which switches. Default both."},
+              "on": {"type": "boolean"}},
+             ["on"])),
+    "set_sms_keyword": (
+        "Claim or change the word a client texts to reach this business.",
+        _obj({"keyword": {"type": "string", "minLength": 2}}, ["keyword"])),
+    "adjust_template": (
+        "Add, remove or reword ONE clause of an agreement template the "
+        "business owns. No document is created; existing documents are "
+        "untouched.",
+        _obj({"template_id": {"type": "string"},
+              "operation": {"type": "string", "enum": ["add", "remove", "replace"]},
+              "heading": {"type": "string", "description": "The clause heading."},
+              "text": {"type": "string", "description": "The clause text, for add/replace."}},
+             ["template_id", "operation", "heading"])),
+    "reject_bookkeeping_proposal": (
+        "Decline one bookkeeping proposal Chief made. Inert — nothing is "
+        "posted; the proposal is marked rejected and Chief learns from it.",
+        _obj({"proposal_id": {"type": "string"},
+              "reason": {"type": "string"}},
+             ["proposal_id"])),
+    # ── plans ──────────────────────────────────────────────────────
+    # A mission is a plan row, not an execution: propose_mission drafts
+    # it (class A), start_mission — class C, never a tool — is the
+    # practitioner's yes. Offered so the standing agent can turn an
+    # outcome that takes several moves ("get this overdue invoice
+    # collected") into a plan the practitioner reads and starts.
+    "propose_mission": (
+        "Draft a multi-step PLAN for the practitioner to read and start. "
+        "Executes nothing: the plan sits as a draft until they start it "
+        "in the app, and its irreversible steps pause for their OK even "
+        "then. Use for an outcome that takes several moves. Each step is "
+        "one normal action; a later step may reference an earlier one's "
+        "result as '@<action_type>.<field>'.",
+        _obj({"title": {"type": "string", "description": "Short, the outcome."},
+              "goal": {"type": "string", "description": "The ask, in one or two sentences."},
+              "steps": {"type": "array", "minItems": 1, "maxItems": 12,
+                        "items": {"type": "object",
+                                  "properties": {
+                                      "title": {"type": "string"},
+                                      "action": {"type": "object",
+                                                 "description": "The action this step runs: {type: <verb>, ...its arguments}.",
+                                                 "properties": {"type": {"type": "string"}},
+                                                 "required": ["type"]},
+                                      "for_each": {"type": "string",
+                                                   "description": "Optional: repeat over an earlier step's list, e.g. '@show_view.rows'."},
+                                      "approval": {"type": "boolean",
+                                                   "description": "Optional: pause for the practitioner before this step even if it is reversible."}},
+                                  "required": ["title", "action"]}}},
+             ["title", "steps"])),
+}
+
+
+def exposed_tools(allow_writes: bool = False) -> List[str]:
     """The verb list, DERIVED. `may_expose_to_agent` is the authorization
-    decision; this module only asks it."""
-    return sorted(v for v in action_registry.REGISTRY
-                  if action_registry.may_expose_to_agent(v))
+    decision; this module only asks it.
+
+    With `allow_writes`, the registry's class A verbs join the list — but
+    only those with a reviewed schema (see WRITE_TOOL_SCHEMAS), and never
+    a bulk verb. The registry is the ceiling; the schema table is the
+    floor; both must agree before a write is offered.
+    """
+    reads = [v for v in action_registry.REGISTRY
+             if action_registry.may_expose_to_agent(v)]
+    if not allow_writes:
+        return sorted(reads)
+    writes = [v for v in WRITE_TOOL_SCHEMAS
+              if action_registry.may_expose_to_agent(v, allow_writes=True)
+              and not action_registry.is_bulk(v)]
+    return sorted(set(reads) | set(writes))
 
 
-def tool_definitions() -> List[Dict[str, Any]]:
-    """MCP tool descriptors. A verb the registry exposes but that has no
-    schema here is OMITTED rather than guessed at — better a missing tool
-    than one whose arguments we invented. The test suite makes that state
-    loud so it cannot persist unnoticed."""
+def is_write_tool(verb: str) -> bool:
+    return action_registry.effect(verb) == action_registry.WRITE
+
+
+def tool_definitions(caller: Optional["Caller"] = None) -> List[Dict[str, Any]]:
+    """MCP tool descriptors for THIS caller. A verb the registry exposes
+    but that has no schema here is OMITTED rather than guessed at — better
+    a missing tool than one whose arguments we invented. The test suite
+    makes that state loud so it cannot persist unnoticed.
+
+    Write tools appear only for a caller whose token carries the `write`
+    scope. A read-only client is not shown tools it will be refused —
+    a list that advertises what it then denies teaches the model to
+    stop trusting the list.
+    """
+    allow_writes = bool(caller and caller.may_write)
     out: List[Dict[str, Any]] = []
-    for verb in exposed_tools():
-        entry = TOOL_SCHEMAS.get(verb)
+    for verb in exposed_tools(allow_writes=allow_writes):
+        entry = TOOL_SCHEMAS.get(verb) or WRITE_TOOL_SCHEMAS.get(verb)
         if not entry:
             logger.error(
                 "verb %r is agent-exposable but has no inputSchema — omitted "
@@ -416,6 +1095,22 @@ def tool_definitions() -> List[Dict[str, Any]]:
         description, schema = entry
         out.append({"name": verb, "description": description,
                     "inputSchema": schema})
+    if allow_writes:
+        # PROPOSALS (2026-09-04): the reviewed class C verbs, as
+        # propose_* tools that file for the practitioner's approval and
+        # run nothing. exposed_tools() is untouched — no class C verb
+        # is ever a tool — and these appear only where a write key is.
+        import action_proposals
+        out += action_proposals.tool_definitions()
+    if caller and "coordinate" in caller.scopes:
+        import agent_coordination
+        try:
+            profile = agent_coordination.caller_profile(caller)
+            out = [t for t in out if t["name"] in profile.get("allowed_tools", [])]
+            out += [{"name": n, "description": d, "inputSchema": s}
+                    for n, (d, s) in agent_coordination.MAILBOX_TOOLS.items()]
+        except (HTTPException, ValueError):
+            return []
     return out
 
 
@@ -542,6 +1237,16 @@ def _contact_name(payload: Dict[str, Any]) -> str:
 # A handoff to a verb that does not exist is a promise the app then
 # breaks — the dead-weight rule, at the wire.
 HANDOFFS: Dict[str, _Handoff] = {
+    "inspect_course": _Handoff(
+        verb="save_course_content",
+        text="Chief can prepare the next lesson, workbook and quiz in Course Studio.",
+        where="Build > Course Studio",
+        when=lambda p: not p.get("failed")),
+    "growth_report": _Handoff(
+        verb="save_growth_record",
+        text="Chief can turn this reading into a tracked growth action, or update its costs and capacity assumptions.",
+        where="Grow › Dashboard › Growth intelligence",
+        when=lambda p: not p.get("failed")),
     "unbilled_time": _Handoff(
         verb="create_invoice",
         text="Chief can turn these hours into an invoice.",
@@ -799,7 +1504,8 @@ async def _resolve_business(client: httpx.AsyncClient,
 
 # ─── Entitlement ─────────────────────────────────────────────────────
 
-AGENT_CONNECTOR_FEATURE = "agent_connector"
+AGENT_CONNECTOR_FEATURE = "agent_connector"            # read: every plan (2026-09-04)
+AGENT_CONNECTOR_WRITE_FEATURE = "agent_connector_write"  # write key: Professional
 
 
 def _tier_allows(biz: Optional[Dict[str, Any]]) -> bool:
@@ -830,7 +1536,77 @@ def _tier_allows(biz: Optional[Dict[str, Any]]) -> bool:
         return True
 
 
+def _tier_allows_write(biz: Optional[Dict[str, Any]]) -> bool:
+    """May an outside agent CHANGE records here? Read is on every plan
+    (2026-09-04); the write key rides Professional. Same fail-open
+    posture as _tier_allows, for the same reason."""
+    try:
+        import feature_gates
+        return bool(feature_gates.has_feature(biz, AGENT_CONNECTOR_WRITE_FEATURE))
+    except Exception as e:
+        logger.warning("[mcp] write tier check unavailable, allowing: %s", e)
+        return True
+
+
+_WRITE_TIER_MESSAGE = ("Changing records from an outside agent needs the "
+                       "Professional plan. Reading stays available on every "
+                       "plan, and everything here stays available inside "
+                       "Solutionist.")
+
+
 # ─── Dispatch ────────────────────────────────────────────────────────
+
+async def _file_proposal(name: str, arguments: Dict[str, Any],
+                         caller: Caller) -> Tuple[bool, bool, Any, Optional[str]]:
+    import asyncio
+    import action_proposals
+    if not caller.may_write:
+        return (False, False,
+                f"tool {name!r} files a proposal for the practitioner and needs a "
+                "key with the 'write' scope. Ask the practitioner to grant one in "
+                "Agent Access.", None)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        biz = await _resolve_business(client, caller)
+    if not biz:
+        return True, False, "no business resolved for this account", None
+    business_id = str(biz.get("id") or "") or None
+    if not _tier_allows(biz):
+        _ledger(business_id, name, caller, allowed=False, ok=False,
+                reason="plan:agent_connector")
+        return (False, False,
+                "Connecting an outside agent to this business needs an "
+                "active plan. Everything here stays available inside "
+                "Solutionist.", business_id)
+    if not _tier_allows_write(biz):
+        _ledger(business_id, name, caller, allowed=False, ok=False,
+                reason="plan:agent_connector_write")
+        return (False, False, _WRITE_TIER_MESSAGE, business_id)
+    try:
+        action = action_proposals.action_for(name, arguments)
+    except ValueError as e:
+        _ledger(business_id, name, caller, allowed=True, ok=False,
+                reason="proposal", error=str(e)[:200])
+        return True, False, str(e), business_id
+    try:
+        qid = await asyncio.to_thread(
+            action_proposals.file, business_id or "", action,
+            actor=f"agent:{caller.actor}", surface="agent")
+    except Exception as e:
+        _ledger(business_id, name, caller, allowed=True, ok=False,
+                reason="proposal", error=f"{type(e).__name__}")
+        return True, False, "the proposal could not be filed", business_id
+    if not qid:
+        _ledger(business_id, name, caller, allowed=True, ok=False,
+                reason="proposal", error="insert failed")
+        return True, False, "the proposal could not be filed", business_id
+    _ledger(business_id, name, caller, allowed=True, ok=True, reason="proposal:filed")
+    return True, True, {
+        "proposed": True, "queue_id": qid,
+        "label": action_proposals.describe(action),
+        "note": ("Filed for the practitioner's approval in their queue. Nothing "
+                 "has been sent, charged or published; it runs only if they approve."),
+    }, business_id
+
 
 async def _call_tool(name: str, arguments: Dict[str, Any],
                      caller: Caller) -> Tuple[bool, bool, Any, Optional[str]]:
@@ -841,19 +1617,73 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
     are different events, and conflating them in the audit trail loses
     exactly the distinction a reader cares about.
     """
-    # Scope check first. Today every exposed verb is a read and every
-    # token carries 'read', so this is not yet load-bearing — but a scope
-    # system that is only wired up when it starts mattering is one that
-    # gets wired up wrong.
+    # Scope check first, and before the registry: a scoped-out token is
+    # refused even for a verb that is otherwise perfectly exposable.
     if caller.kind == "token" and SCOPE_READ not in caller.scopes:
         return False, False, "token lacks the 'read' scope", None
 
+    # A PROPOSAL is not a call to the verb it names. It files an
+    # Approval Queue row and runs nothing; the practitioner's Approve is
+    # what runs it, prompted, through the same door as a chat action.
+    # Write scope, the tier gate and the ledger apply exactly as for a
+    # write; the policy engine is asked when the person approves.
+    import agent_coordination
+    if name in agent_coordination.MAILBOX_TOOLS:
+        try:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+                biz = await _resolve_business(client, caller)
+            if not biz:
+                return False, False, "No business resolved for this key", None
+            payload = await asyncio.to_thread(agent_coordination.mailbox, caller, biz, name, arguments)
+            _ledger(str(biz["id"]), name, caller, allowed=True, ok=True, reason="agent:coordination")
+            return True, True, payload, str(biz["id"])
+        except (HTTPException, ValueError) as exc:
+            message = str(getattr(exc, "detail", exc))
+            _ledger(caller.business_id, name, caller, allowed=False, ok=False, reason="agent:coordination", error=message[:200])
+            return False, False, message, caller.business_id
+    if "coordinate" in caller.scopes:
+        try:
+            if not await asyncio.to_thread(agent_coordination.permits_tool, caller, name):
+                return False, False, "This tool is not approved for this agent.", caller.business_id
+        except (HTTPException, ValueError) as exc:
+            return False, False, str(getattr(exc, "detail", exc)), caller.business_id
+    import action_proposals
+    if name in action_proposals.PROPOSALS:
+        return await _file_proposal(name, arguments, caller)
+
     # Authorization, from the registry. Not a list kept here.
-    if not action_registry.may_expose_to_agent(name):
-        # Covers unknown verbs, ui verbs, every write, and anything
-        # unclassified — all of which the registry answers False for.
+    #
+    # Two questions, in this order. "Could ANY scope reach this?" comes
+    # first, so that a class-C verb, a ui verb, an unknown verb and an
+    # unreviewed class-A verb all get the same flat refusal — a refusal
+    # that said "needs the write scope" about send_sms would be a lie and
+    # an invitation. Only a verb that a write key COULD reach gets told
+    # that this key cannot.
+    writing = is_write_tool(name)
+    reachable = action_registry.may_expose_to_agent(name, allow_writes=True)
+    if writing and (name not in WRITE_TOOL_SCHEMAS or action_registry.is_bulk(name)):
+        # The registry allows it; nobody has reviewed it for this surface,
+        # or it acts on a whole set at once. Same words as the refusal
+        # below, deliberately — an unreviewed verb is not a hint.
+        reachable = False
+    if not reachable:
         # Note the deliberate absence of a remapper: an unknown tool is an
         # error, never a reinterpretation.
+        return False, False, f"tool {name!r} is not available on this surface", None
+
+    if writing and not caller.may_write:
+        # Named as a scope problem, not as "unavailable": the tool exists
+        # and the practitioner can grant it. A browser session gets the
+        # same answer — see Caller.may_write for why.
+        return (False, False,
+                f"tool {name!r} changes records and needs a key with the "
+                "'write' scope. Ask the practitioner to grant one in "
+                "Agent Access.", None)
+
+    # Belt and braces: the decision above, re-asked with THIS caller's
+    # actual scope. Cannot disagree with it today; exists so that a future
+    # edit to the block above cannot widen the surface on its own.
+    if not action_registry.may_expose_to_agent(name, allow_writes=caller.may_write):
         return False, False, f"tool {name!r} is not available on this surface", None
 
     handler = None
@@ -891,9 +1721,17 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
             _ledger(business_id, name, caller, allowed=False, ok=False,
                     reason="plan:agent_connector")
             return (False, False,
-                    "Connecting an outside agent to this business needs the "
-                    "Professional plan. Everything here stays available "
-                    "inside Solutionist.", business_id)
+                    "Connecting an outside agent to this business needs an "
+                    "active plan. Everything here stays available inside "
+                    "Solutionist.", business_id)
+        # THE WRITE KEY RIDES PROFESSIONAL (2026-09-04). A read costs the
+        # platform nothing — their model thinks — so it is on every plan
+        # and is how a Starter customer feels the connector before paying
+        # for it. A write is records kept by an outside agent.
+        if writing and not _tier_allows_write(biz):
+            _ledger(business_id, name, caller, allowed=False, ok=False,
+                    reason="plan:agent_connector_write")
+            return (False, False, _WRITE_TIER_MESSAGE, business_id)
 
         # THE POLICY ENGINE, on this surface too.
         #
@@ -928,7 +1766,15 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
         if not verdict.allowed:
             _ledger(business_id, name, caller, allowed=False, ok=False,
                     reason=getattr(verdict, "reason", "policy:denied"))
-            return False, False, getattr(verdict, "message", "not permitted"), business_id
+            # Verdict carries its sentence as `reason` (and its greppable
+            # rule as `rule`). This read `message` — a field that does not
+            # exist — so every policy refusal reached the agent as a bare
+            # "not permitted". Harmless while nothing was ever refused;
+            # wrong the day a practitioner pauses automations and their
+            # agent cannot say why it stopped.
+            return (False, False,
+                    getattr(verdict, "reason", None) or "not permitted",
+                    business_id)
 
         action = dict(arguments or {})
         action["type"] = name
@@ -939,6 +1785,31 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
                     reason=getattr(verdict, "reason", None),
                     error=f"{type(e).__name__}")
             raise
+
+        if writing:
+            # A handler that declined ("Contact not found", "no fields to
+            # update", a closed period) returns a shaped refusal rather
+            # than raising. On the chat path Chief reads that and tells
+            # the practitioner. Here the caller is a model: `ok=False`
+            # plus the handler's own sentence is what it needs, and it is
+            # also what the audit row needs — "tried and could not" is a
+            # different event from "changed something".
+            if _write_declined(result):
+                _ledger(business_id, name, caller, allowed=True, ok=False,
+                        reason=getattr(verdict, "reason", None),
+                        error="handler declined")
+                return True, False, _declined_message(result), business_id
+
+            # Recorded for undo, exactly as a chat action is. Best-effort:
+            # a failed log must never unwind an action that succeeded —
+            # but it is logged, because an agent write the practitioner
+            # cannot take back is the one they will ask about.
+            try:
+                import chief_of_staff
+                await chief_of_staff._record_undoable(client, biz, name, action, result)
+            except Exception as e:
+                logger.warning("[mcp] undo record failed for %s: %s", name, e)
+
         _ledger(business_id, name, caller, allowed=True, ok=True,
                 reason=getattr(verdict, "reason", None))
 
@@ -951,7 +1822,55 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
     return True, True, result, business_id
 
 
+def _write_declined(result: Any) -> bool:
+    """Did the handler refuse or fail without raising? Chief's own
+    predicate, so this surface and the chat path agree on what a failed
+    action looks like."""
+    if not isinstance(result, dict):
+        return False
+    try:
+        import chief_of_staff
+        return bool(chief_of_staff._action_failed(result))
+    except Exception:
+        return bool(result.get("failed"))
+
+
+def _declined_message(result: Dict[str, Any]) -> str:
+    """The handler's own sentence. `_fail` has already genericised
+    anything technical, so this is safe to hand to an untrusted caller;
+    the raw exception path above is the one that must not leak."""
+    text = str(result.get("result") or "the action was not taken")
+    return text[:300]
+
+
 # ─── JSON-RPC methods ────────────────────────────────────────────────
+
+_INSTRUCTIONS_READ = (
+    "Read-only view of one Solutionist business. Every tool here reads; "
+    "nothing writes, sends, or spends money. If you need an action taken, "
+    "tell the practitioner — you cannot do it here. When a result carries a "
+    "`next_step`, it names something Chief can do about what you just read "
+    "and the room it happens in; pass it along to the practitioner as an "
+    "option, not an instruction.")
+
+_INSTRUCTIONS_WRITE = (
+    "One Solutionist business, with permission to keep its records. The "
+    "write tools change things the practitioner can take back: contacts, "
+    "tasks, notes, sessions on their own calendar, availability, expenses, "
+    "logged time, drafts. None of them sends anything to a client, charges "
+    "anyone, or deletes for good — those actions are not available here at "
+    "any scope, so do not promise them. A draft you queue is sent only "
+    "when the practitioner approves it in the app. Read before you write: "
+    "look up the contact or module first, then act, and say what you "
+    "changed. undo_last reverses the most recent reversible action, "
+    "including yours. When a result carries a `next_step`, it names "
+    "something Chief can do about what you just read and the room it "
+    "happens in; pass it along as an option, not an instruction.")
+
+
+def _instructions(caller: Optional["Caller"]) -> str:
+    return _INSTRUCTIONS_WRITE if (caller and caller.may_write) else _INSTRUCTIONS_READ
+
 
 async def _handle_rpc(message: Dict[str, Any], caller: Caller,
                       actor: str) -> Optional[Dict[str, Any]]:
@@ -967,14 +1886,7 @@ async def _handle_rpc(message: Dict[str, Any], caller: Caller,
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
-            "instructions": (
-                "Read-only view of one Solutionist business. Every tool here "
-                "reads; nothing writes, sends, or spends money. If you need an "
-                "action taken, tell the practitioner — you cannot do it here. "
-                "When a result carries a `next_step`, it names something Chief "
-                "can do about what you just read and the room it happens in; "
-                "pass it along to the practitioner as an option, not an "
-                "instruction."),
+            "instructions": _instructions(caller),
         })
 
     if method in ("notifications/initialized", "initialized"):
@@ -984,7 +1896,7 @@ async def _handle_rpc(message: Dict[str, Any], caller: Caller,
         return _result(req_id, {})
 
     if method == "tools/list":
-        return _result(req_id, {"tools": tool_definitions()})
+        return _result(req_id, {"tools": tool_definitions(caller)})
 
     if method == "tools/call":
         name = params.get("name")
@@ -1154,19 +2066,12 @@ async def mcp_endpoint(request: Request,
                         user_id=user.id, scopes=[SCOPE_READ])
 
     actor = caller.actor
-    # The two refusals below happen BEFORE any tool is named, so they used
-    # to leave no trace at all. They are also the two most worth having:
-    # an authenticated non-owner reaching this endpoint, and a caller
-    # hitting the limiter, are the shapes an attempt looks like.
-    if caller.kind == "owner_jwt" and actor != PLATFORM_OWNER_EMAIL:
-        # 403 rather than 401: the caller IS authenticated, just not
-        # permitted. Stage 1 is owner-only by design.
-        logger.warning("[mcp] refused non-owner caller %s", actor)
-        _audit(actor=actor, actor_user_id=caller.user_id,
-               tool="(endpoint)", allowed=False, ok=False, duration_ms=0,
-               error="non-owner caller")
-        return JSONResponse(status_code=403, content=_error(
-            None, UNAUTHORIZED, "this surface is restricted to the platform owner"))
+    # Until Stage 4 a JWT that was not the platform owner's was refused
+    # here with a 403. It is not any more: any signed-in practitioner
+    # reaches their OWN business (resolved by owner_id, never by a
+    # parameter — see _resolve_business), read-only. The refusal that
+    # remains below, the limiter, still happens before any tool is named
+    # and is still the shape an attempt looks like.
 
     # 7/30 tier arc — a scoped token names its business in a signed claim;
     # if that business's subscription has since LOCKED, the token goes
@@ -1231,33 +2136,75 @@ async def mcp_endpoint(request: Request,
     return JSONResponse(content=response)
 
 
-# ─── Token management (owner-only, JWT-only) ─────────────────────────
+# ─── Token management (practitioner, JWT-only) ───────────────────────
 # Deliberately NOT reachable with an MCP token. A credential that can mint
-# more credentials is a privilege-escalation ladder, and "read-only agent
+# more credentials is a privilege-escalation ladder, and "scoped agent
 # surface" would stop being true the moment one of its tokens could issue
-# another. These three require a browser session as the platform owner.
+# another. These three require a browser session as the OWNER of the
+# business — the same `_require_owner` shape every write router uses:
+# a service-role read of businesses.owner_id against the JWT user id,
+# independent of RLS.
+#
+# Stage 1 gated these on PLATFORM_OWNER_EMAIL. Stage 4 gates them on
+# owning the business, which is what they were always really about.
 
 class _MintBody(BaseModel):
     label: str = "unnamed"
     ttl_days: int = 90
+    # Default read. `write` is a deliberate second click in the UI, and
+    # the response echoes what was actually granted.
+    scopes: List[str] = [SCOPE_READ]
+    # Optional. An owner of several businesses names which; otherwise the
+    # first they own. NEVER trusted on its own — _owned_business checks it.
+    business_id: Optional[str] = None
+
+
+async def _owned_business(client: httpx.AsyncClient, user: AuthedUser,
+                          business_id: Optional[str]) -> Dict[str, Any]:
+    """THE business this signed-in person owns — the one they named, if
+    they own it, else their first. 403 on a business they do not own,
+    404 on none at all. Raises HTTPException; the endpoints let it out."""
+    if business_id:
+        biz = await _business_by_id(client, str(business_id))
+        if not biz:
+            raise HTTPException(status_code=404, detail="business not found")
+        if str(biz.get("owner_id")) != str(user.id):
+            raise HTTPException(status_code=403,
+                                detail="not authorized for this business")
+        return biz
+    biz = await _resolve_business(
+        client, Caller("owner_jwt", (user.email or user.id or "").lower(),
+                       user_id=user.id))
+    if not biz:
+        raise HTTPException(status_code=404, detail="no business for this account")
+    return biz
 
 
 @router.post("/tokens")
 async def mint_token(body: _MintBody,
                      user: AuthedUser = Depends(require_user)):
-    """Mint a scoped token. Returns the plaintext ONCE."""
-    if (user.email or "").lower() != PLATFORM_OWNER_EMAIL:
-        raise HTTPException(status_code=403, detail="platform owner only")
+    """Mint a scoped token for a business the caller owns. Returns the
+    plaintext ONCE."""
     import mcp_tokens
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        biz = await _resolve_business(
-            client, Caller("owner_jwt", "owner", user_id=user.id))
-    if not biz:
-        raise HTTPException(status_code=400, detail="no business for this account")
+        biz = await _owned_business(client, user, body.business_id)
     ttl = max(1, min(int(body.ttl_days or 90), 365)) * 24 * 60 * 60
+    scopes = mcp_tokens.normalize_scopes(body.scopes)
+    if mcp_tokens.SCOPE_WRITE in scopes and not _tier_allows_write(biz):
+        # The 402 shape the app's upgrade prompt reads (billing_limits
+        # .require_feature); a read-only key is always available.
+        raise HTTPException(status_code=402, detail={
+            "error": "feature_locked", "feature": AGENT_CONNECTOR_WRITE_FEATURE,
+            "required_plan": "professional",
+            "message": ("A write key needs the Professional plan. Read-only "
+                        "keys are included on every plan."),
+        })
     token, row = mcp_tokens.mint(
-        str(biz["id"]), label=body.label, ttl_seconds=ttl,
+        str(biz["id"]), label=body.label, scopes=scopes, ttl_seconds=ttl,
         created_by=(user.email or user.id))
+    _audit(actor=(user.email or user.id or "owner").lower(),
+           actor_user_id=user.id, tool="(mint)", allowed=True, ok=True,
+           duration_ms=0, business_id=str(biz["id"]), arg_keys=scopes)
     return {
         "token": token,          # the only time this is ever returned
         "jti": row["jti"],
@@ -1270,28 +2217,25 @@ async def mint_token(body: _MintBody,
 
 
 @router.get("/tokens")
-async def list_tokens_endpoint(user: AuthedUser = Depends(require_user)):
-    if (user.email or "").lower() != PLATFORM_OWNER_EMAIL:
-        raise HTTPException(status_code=403, detail="platform owner only")
+async def list_tokens_endpoint(business_id: Optional[str] = None,
+                               user: AuthedUser = Depends(require_user)):
     import mcp_tokens
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        biz = await _resolve_business(
-            client, Caller("owner_jwt", "owner", user_id=user.id))
-    if not biz:
-        return {"tokens": []}
+        try:
+            biz = await _owned_business(client, user, business_id)
+        except HTTPException as e:
+            if e.status_code == 404 and not business_id:
+                return {"tokens": []}
+            raise
     return {"tokens": mcp_tokens.list_tokens(str(biz["id"]))}
 
 
 @router.delete("/tokens/{jti}")
-async def revoke_token(jti: str, user: AuthedUser = Depends(require_user)):
-    if (user.email or "").lower() != PLATFORM_OWNER_EMAIL:
-        raise HTTPException(status_code=403, detail="platform owner only")
+async def revoke_token(jti: str, business_id: Optional[str] = None,
+                       user: AuthedUser = Depends(require_user)):
     import mcp_tokens
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        biz = await _resolve_business(
-            client, Caller("owner_jwt", "owner", user_id=user.id))
-    if not biz:
-        raise HTTPException(status_code=400, detail="no business for this account")
+        biz = await _owned_business(client, user, business_id)
     # Scoped by business as well as jti — revocation is a write, and writes
     # get the same tenancy treatment as reads.
     ok = mcp_tokens.revoke(str(biz["id"]), jti)
@@ -1305,9 +2249,12 @@ async def revoke_token(jti: str, user: AuthedUser = Depends(require_user)):
 async def mcp_health():
     """Unauthenticated liveness + shape check. Deliberately says what is
     EXPOSED and nothing about the business — it is a public endpoint."""
+    reads = len(tool_definitions())
     return {
         "enabled": enabled(),
         "protocolVersion": PROTOCOL_VERSION,
         "server": {"name": SERVER_NAME, "version": SERVER_VERSION},
-        "tools": len(tool_definitions()),
+        "tools": reads,
+        "write_tools": len(exposed_tools(allow_writes=True)) - reads,
+        "scopes": [SCOPE_READ, SCOPE_WRITE],
     }

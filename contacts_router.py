@@ -8,6 +8,13 @@ Phase C.1 endpoints:
       by module slug, so ContactDetail.tsx can render one collapsible
       section per module (C7 / C8 rulings).
 
+  GET /contacts/{contact_id}/timeline?business_id=...&limit=&kinds=
+      One dated record for the client — bookings, forms, invoices and
+      payments, contracts, email and SMS, notes, time, balances, records —
+      merged from every table that knows them (client_timeline.assemble;
+      the same function Chief's contact_deep_dive reads). Owner-only: it
+      carries message subjects and invoice totals.
+
 Owner check mirrors the workflow_router / module_spec_router pattern:
   business.owner_id == auth.uid().
 """
@@ -101,3 +108,38 @@ async def related_entries(
         })
 
     return {"ok": True, "modules": out_modules}
+
+
+@router.get("/{contact_id}/timeline")
+async def timeline(
+    contact_id: str,
+    business_id: str = Query(..., description="scopes the lookup"),
+    limit: int = Query(200, ge=1, le=500, description="entries, newest first"),
+    kinds: Optional[str] = Query(None, description="comma-separated kinds to keep"),
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """The client's one record, newest first. See client_timeline for the
+    entry shape and which tables feed it.
+
+    Shape: { ok, contact, entries: [...], summary, sources: {table: count
+    or null when that read was refused}, partial }.
+
+    A refused read is reported in `sources` and `partial`, never rendered
+    as an empty history — a quiet client and a broken read are different
+    things and the practitioner must be able to tell them apart."""
+    _require_owner(business_id, user)
+    import client_timeline
+    record = await client_timeline.assemble(
+        business_id, contact_id, limit=limit,
+        kinds=[k for k in (kinds or "").split(",") if k.strip()] or None,
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="contact not found")
+    return {
+        "ok": True,
+        "contact": record["contact"],
+        "entries": record["entries"],
+        "summary": record["summary"],
+        "sources": record["sources"],
+        "partial": record["partial"],
+    }

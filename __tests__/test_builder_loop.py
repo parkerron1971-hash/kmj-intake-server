@@ -172,3 +172,33 @@ def test_loop_is_off_by_default_and_run_builder_v2_falls_back_to_one_pass(monkey
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out["html"] and len(calls) == 1
     assert any(f["stage"] == "loop" for f in out["report"]["fallbacks"])
+
+
+def test_opus_5_5_is_told_to_finish_without_a_forced_tool_choice(monkeypatch):
+    """Opus 5.5 answers tool_choice {"type": "tool"} with a 400 (2026-09-22).
+    At the cap it gets finish as the only tool and a closing note instead,
+    and the builder asks for high effort (5.5 defaults to medium)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("BUILDER_LOOP_MAX_TOOLS", "1")
+    box = _box(monkeypatch)
+    client = _Client([
+        _Msg([_Use("render", {"html": _doc()}, "t1")], "tool_use"),
+        _Msg([_Use("finish", {"html": _doc()}, "t2")], "tool_use"),
+    ])
+    out = bl.run_loop("SPEC", {}, "biz-1", v2.new_spend(), toolbox=box, client=client,
+                      model="claude-opus-5-5")
+    assert out["html"] == v2._parse_doc(_doc()) and out["report"]["forced_finish"] is None
+    forced = client.seen[1]
+    assert "tool_choice" not in forced
+    assert [t["name"] for t in forced["tools"]] == ["finish"]
+    assert forced["messages"][-1]["content"][-1]["text"] == bl.FINISH_NOW
+    assert all(b.get("text") != bl.FINISH_NOW for t in client.seen[0]["messages"]
+               for b in (t["content"] if isinstance(t["content"], list) else []))
+    assert all(kw["output_config"] == {"effort": "high"} for kw in client.seen)
+    assert all("temperature" not in kw for kw in client.seen)
+
+
+def test_the_opus_5_5_price_is_its_own():
+    import api_usage_logger as ul
+    assert ul._price_for_model("claude-opus-5-5") == (400.0, 2000.0)
+    assert ul._price_for_model("claude-opus-5") == (500.0, 2500.0)

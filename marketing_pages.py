@@ -4,7 +4,7 @@ marketing_pages.py — Multi-page public marketing site for mysolutionist.app.
 Pages served:
   /            → Home (hero + features + audience + why + CTA)
   /features    → Deep feature explanation, surface by surface
-  /compare     → Solutionist vs the 8-tool stack (with cost breakdown)
+  /compare     → Solutionist vs the 7-tool stack (with cost breakdown)
   /faq         → FAQ on its own URL
   /about       → Founder note + company
   /get-started → Talk to a person (intake form, POSTs to /api/leads)
@@ -114,6 +114,11 @@ CONTACT_TOKEN = "__CONTACT_EMAIL__"
 # five pages, and every one of them has to say what checkout actually
 # grants — so none of them hardcodes a number.
 TRIAL_TOKEN = "__TRIAL_FREE__"
+# Plan prices in prose (2026-09-04): two sentences on /compare and one in
+# the FAQ had "$199" and "$399" typed in, and survived a repricing. They
+# carry these tokens now and read the same dials the price cards do.
+PRICE_TOKENS = {"__PRICE_STARTER__": "starter", "__PRICE_PRO__": "professional",
+                "__PRICE_SOL__": "practice"}
 
 
 def _fill_contact(html: str) -> str:
@@ -134,6 +139,11 @@ def _fill_contact(html: str) -> str:
 def _fill_trial(html: str) -> str:
     """Swap the trial sentinel for the length checkout actually grants.
     Absent-token tolerant for the same reason _fill_contact is."""
+    if any(t in html for t in PRICE_TOKENS):
+        import pricing_config
+        prices = pricing_config.tier_price_cents()
+        for token, plan in PRICE_TOKENS.items():
+            html = html.replace(token, f"${prices.get(plan, 0) // 100}")
     if TRIAL_TOKEN not in html:
         return html
     return html.replace(TRIAL_TOKEN, _html.escape(_trial_free_phrase()))
@@ -162,17 +172,20 @@ SHARED_CSS = """
        Create, New Invoice, Chase Overdue, Chief AI). It is used ONLY
        inside the product replicas so they read as genuine screenshots —
        never on site chrome. ── */
-    --bg: #08090C;
-    --bg-2: #0E1015;
-    --bg-3: #141821;
+    /* 2026-09-11: the same ground, lines and greys the new home page
+       (marketing_home_v2) is built on, so a click from the home to any
+       page lands on the same material. */
+    --bg: #07080B;
+    --bg-2: #0D0F14;
+    --bg-3: #12151B;
     --surface: rgba(255,255,255,0.035);
     --surface-2: rgba(255,255,255,0.065);
-    --border: rgba(255,255,255,0.09);
-    --border-strong: rgba(255,255,255,0.17);
+    --border: #1B1F27;
+    --border-strong: #262B35;
     --text-primary: #F7F8FA;
     --text-secondary: #C9CDD6;
     --text-muted: #949AA6;
-    --text-dim: #6B707B;
+    --text-dim: #5F6672;
     --accent: #2E7DFF;
     --accent-2: #1D63E6;
     --info: #22D3EE;
@@ -201,13 +214,12 @@ SHARED_CSS = """
 
   .container{max-width:1140px;margin:0 auto;padding:0 28px;}
   .container-narrow{max-width:820px;margin:0 auto;padding:0 28px;}
-  .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:5px 14px;font-size:10px;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;color:var(--accent);background:color-mix(in srgb, var(--accent) 12%, transparent);border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);border-radius:99px;}
+  .eyebrow{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--text-muted);}
   .gradient-text{color:var(--accent);-webkit-text-fill-color:currentColor;background:none;}
-  h1,h2,h3{font-family:var(--font-heading);letter-spacing:-0.032em;line-height:1.04;}
-  /* 78, matching the home page's fold. At 68 the inner pages read as
-     a lesser tier of page, and nothing justified the demotion. */
-  h1{font-size:clamp(42px, 6.2vw, 78px);font-weight:700;}
-  h2{font-size:clamp(30px, 4.2vw, 46px);font-weight:700;letter-spacing:-0.03em;margin-bottom:14px;}
+  h1,h2,h3{font-family:var(--font-heading);letter-spacing:-0.035em;line-height:1.02;text-wrap:balance;}
+  /* the new home sets its display type at 600, not 700: same here */
+  h1{font-size:clamp(42px, 6.2vw, 78px);font-weight:600;}
+  h2{font-size:clamp(30px, 4.2vw, 46px);font-weight:600;letter-spacing:-0.035em;margin-bottom:14px;}
   h3{font-size:18px;font-weight:600;color:var(--text-primary);margin-bottom:6px;}
   p{color:var(--text-secondary);font-size:16px;}
   .lead{font-size:18px;color:var(--text-muted);line-height:1.65;}
@@ -224,8 +236,13 @@ SHARED_CSS = """
      rest — paints behind the wordmark instead of starting under it.
      Every first section carries 128px of top padding, which clears
      the 65px row with room to spare. */
-  .nav{position:absolute;top:0;left:0;right:0;z-index:50;background:transparent;border-bottom:none;}
-  .nav-inner{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;max-width:1140px;margin:0 auto;}
+  /* 2026-09-11: the new home's bar. In flow and sticky, 64px, the mark
+     and the six links, pill buttons; transparent until you scroll, then
+     it takes a ground so the way in stays one click away. */
+  .nav{position:sticky;top:0;left:0;right:0;z-index:50;background:transparent;border-bottom:1px solid transparent;transition:background .3s,border-color .3s;}
+  .nav.stuck{background:rgba(7,8,11,.86);border-bottom-color:var(--border);}
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:64px;padding:0 20px;max-width:1180px;margin:0 auto;}
+  .brand .mk{width:30px;height:26px;flex-shrink:0;filter:drop-shadow(0 0 8px rgba(224,64,251,.35)) drop-shadow(0 0 14px rgba(34,211,238,.25));}
   .brand{font-family:var(--font-heading);font-size:17px;font-weight:600;color:var(--text-primary);letter-spacing:-0.01em;display:inline-flex;align-items:center;gap:10px;}
   .brand .logo{height:32px;width:32px;object-fit:contain;display:block;flex-shrink:0;filter:drop-shadow(0 0 8px var(--glow));}
   .footer .brand .logo{height:28px;}
@@ -256,7 +273,7 @@ SHARED_CSS = """
   ::view-transition-group(nav-current){animation-duration:.34s;
     animation-timing-function:cubic-bezier(.2,.7,.3,1);}
 
-  .nav-links{display:flex;align-items:center;gap:22px;font-size:13px;font-weight:500;}
+  .nav-links{display:flex;align-items:center;gap:10px;font-size:13.5px;font-weight:400;}
   .nav-links a{color:var(--text-muted);transition:color 0.15s;position:relative;}
   .nav-links a:hover, .nav-links a.is-active{color:var(--text-primary);}
   /* THE NAV IS A TRACE. One rail under the page links, a node on it for each
@@ -267,21 +284,10 @@ SHARED_CSS = """
      it `nav-current`, so the browser morphs it across the navigation. It has
      to be a real element — a pseudo element cannot carry a
      view-transition-name, which is why this is a span and not ::after. */
-  .nav-pages{display:flex;align-items:center;gap:22px;position:relative;}
-  .nav-pages::before{content:'';position:absolute;left:0;right:0;bottom:-17px;height:1.5px;
-    background:#1E2A3B;border-radius:1px;pointer-events:none;}
-  .nav-pages a{position:relative;}
-  .nav-home{display:block;width:7px;height:7px;position:relative;flex:none;}
-  .nav-dot{position:absolute;left:50%;margin-left:-3.5px;bottom:-20.5px;width:7px;height:7px;
-    border-radius:50%;background:var(--bg);border:1.5px solid #1E2A3B;
-    transition:border-color .25s ease, background .25s ease;}
-  .nav-pages a.is-active .nav-dot, .nav-home.is-active .nav-dot{
-    border-color:var(--accent);background:#0B1220;view-transition-name:nav-current;}
-  .nav-pages a.is-active .nav-dot::after, .nav-home.is-active .nav-dot::after{
-    content:'';position:absolute;inset:1.5px;border-radius:50%;background:var(--accent);}
-  .nav-cta{white-space:nowrap;padding:8px 16px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:8px;font-weight:700;font-size:13px;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
+  .nav-pages{display:flex;align-items:center;gap:26px;position:relative;margin-right:16px;}
+  .nav-cta{white-space:nowrap;display:inline-flex;align-items:center;height:32px;padding:0 14px;background:var(--accent);color:var(--ink-on-accent) !important;border-radius:999px;font-weight:600;font-size:12px;letter-spacing:.02em;box-shadow:0 2px 14px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;}
   .nav-cta:hover{transform:translateY(-1px);background:var(--accent-2);box-shadow:0 4px 20px color-mix(in srgb, var(--accent) 45%, transparent);}
-  .nav-login{white-space:nowrap;padding:7px 15px;border:1px solid var(--border-strong);border-radius:8px;color:var(--text-primary) !important;font-weight:600;font-size:13px;transition:border-color 0.15s, background 0.15s;}
+  .nav-login{white-space:nowrap;display:inline-flex;align-items:center;height:32px;padding:0 14px;border:1px solid var(--border-strong);border-radius:999px;background:rgba(13,15,20,.6);color:var(--text-primary) !important;font-weight:600;font-size:12px;letter-spacing:.02em;transition:border-color 0.15s, background 0.15s;}
   .nav-login:hover{border-color:var(--accent);background:var(--surface);}
   /* 900, not 760: at ~768 every link still showed, which wrapped both the
      brand and "Get the App" onto extra lines and buckled the whole bar. */
@@ -372,9 +378,9 @@ SHARED_CSS = """
   }
 
   /* ─── buttons ─── */
-  .btn-primary{display:inline-flex;align-items:center;gap:8px;padding:14px 28px;background:var(--accent);color:var(--ink-on-accent);font-weight:700;font-size:14px;letter-spacing:.01em;border-radius:10px;border:none;cursor:pointer;box-shadow:0 6px 24px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;font-family:inherit;}
+  .btn-primary{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 22px;background:var(--accent);color:var(--ink-on-accent);font-weight:600;font-size:13.5px;letter-spacing:.02em;border-radius:999px !important;border-radius:10px;border:none;cursor:pointer;box-shadow:0 6px 24px color-mix(in srgb, var(--accent) 30%, transparent);transition:transform 0.15s, box-shadow 0.15s, background 0.15s;font-family:inherit;}
   .btn-primary:hover{transform:translateY(-2px);background:var(--accent-2);box-shadow:0 10px 34px color-mix(in srgb, var(--accent) 42%, transparent);}
-  .btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:13px 22px;background:var(--surface);color:var(--text-primary);font-weight:600;font-size:14px;border-radius:10px;border:1px solid var(--border-strong);cursor:pointer;transition:background 0.15s, border-color 0.15s;font-family:inherit;}
+  .btn-secondary{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 20px;background:rgba(13,15,20,.6);color:var(--text-primary);font-weight:600;font-size:13.5px;letter-spacing:.02em;border-radius:999px;border:1px solid var(--border-strong);cursor:pointer;transition:background 0.15s, border-color 0.15s;font-family:inherit;}
   .btn-secondary:hover{background:var(--surface-2);border-color:color-mix(in srgb, var(--accent) 50%, transparent);}
 
   /* ─── animations + reveals ─── */
@@ -427,6 +433,12 @@ SHARED_CSS = """
   .footer-links{display:flex;flex-wrap:wrap;gap:18px;font-size:13px;}
   .footer-links a{color:var(--text-muted);transition:color 0.15s;}
   .footer-links a:hover{color:var(--text-primary);}
+  /* 2026-09-11: four columns, the same map the new home's footer carries */
+  .footer-cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:24px;flex:1;min-width:0;max-width:720px;}
+  .footer-cols b{display:block;font-family:var(--font-mono, monospace);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-muted);margin-bottom:12px;font-weight:500;}
+  .footer-cols a{display:block;color:var(--text-dim);font-size:13px;padding:4px 0;transition:color .15s;}
+  .footer-cols a:hover{color:var(--text-primary);}
+  @media (max-width:720px){.footer-cols{grid-template-columns:1fr 1fr;max-width:none;}}
   .footer-bottom{max-width:1140px;margin:32px auto 0;padding:16px 28px 0;border-top:1px solid var(--border);font-size:11px;color:var(--text-dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
 
   /* ─── shared feature mini-visuals ─── */
@@ -513,8 +525,12 @@ SHARED_CSS = """
   .final-cta .btn-primary{margin-top:22px;}
 
   /* ─── page-hero (for non-home pages) ─── */
-  .page-hero{position:relative;padding:128px 0;text-align:center;overflow:hidden;border-bottom:1px solid var(--border);}
-  .page-hero::before{content:'';position:absolute;inset:-40px 0 auto;height:280px;background:radial-gradient(60% 80% at 50% 0%, var(--glow), transparent 70%);pointer-events:none;opacity:0.6;}
+  /* the bar is in flow now (64px), so the hero's own top padding
+     drops to keep the headline where it was; the light is the home's
+     aurora, held still: blue at the left shoulder, teal at the right */
+  .page-hero{position:relative;padding:88px 0 120px;text-align:center;overflow:hidden;border-bottom:0;}
+  .page-hero::before{content:'';position:absolute;inset:-120px 0 auto;height:520px;pointer-events:none;opacity:.9;
+    background:radial-gradient(40% 60% at 18% 20%, rgba(46,125,255,.28), transparent 70%),radial-gradient(38% 60% at 82% 30%, rgba(34,211,238,.16), transparent 70%);filter:blur(30px);}
   .page-hero .container{position:relative;z-index:1;}
   .page-hero h1{margin:14px 0 16px;}
 """
@@ -549,20 +565,25 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
 {pixel_script}
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"/><stop offset=".55" stop-color="#7C5CFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+  <symbol id="mark" viewBox="8 36 496 424"><g fill="url(#mkg)" stroke="#fff" stroke-width="7" stroke-linejoin="miter" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"/><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"/><polygon points="264,274 149,279 201,359"/></g></symbol>
+</defs></svg>
 
-<nav class="nav">
+<nav class="nav" id="siteNav">
   <div class="nav-inner">
     <a class="brand" href="/">
-      <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System">
+      <svg class="mk" aria-hidden="true"><use href="#mark"/></svg>
       <span class="brand-text">The Solutionist System</span>
     </a>
     <div class="nav-links">
       <div class="nav-pages">
-        <span class="nav-home {ax_home}" aria-hidden="true"><span class="nav-dot"></span></span>
-        <a href="/about" class="{ax_about}">About<span class="nav-dot"></span></a>
-        <a href="/features" class="{ax_features}">Features<span class="nav-dot"></span></a>
-        <a href="/compare" class="{ax_compare}">Compare<span class="nav-dot"></span></a>
-        <a href="/#pricing">Pricing<span class="nav-dot"></span></a>
+        <a href="/#what">What it is</a>
+        <a href="/features" class="{ax_features}">Product</a>
+        <a href="/#trust">Chief</a>
+        <a href="/compare" class="{ax_compare}">Compare</a>
+        <a href="/#pricing">Pricing</a>
+        <a href="/faq" class="{ax_faq}">FAQ</a>
       </div>
       <a class="nav-login" href="{app_url}">Log in</a>
       <a class="nav-cta" href="/start">Start free trial</a>
@@ -579,7 +600,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
   <div class="mm-panel" role="dialog" aria-modal="true" aria-label="Site menu">
     <div class="mm-top">
       <a class="brand" href="/">
-        <img class="logo" src="/assets/logo-nav.png" alt="" width="32" height="32">
+        <svg class="mk" aria-hidden="true"><use href="#mark"/></svg>
         <span class="brand-text">The Solutionist System</span>
       </a>
       <button class="mm-close" id="mmClose" type="button" aria-label="Close menu" data-mm-close>
@@ -587,10 +608,13 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       </button>
     </div>
     <nav class="mm-links" aria-label="Pages">
-      <a href="/about" class="{ax_about}">About</a>
-      <a href="/features" class="{ax_features}">Features</a>
+      <a href="/#what">What it is</a>
+      <a href="/features" class="{ax_features}">Product</a>
+      <a href="/#trust">Chief</a>
       <a href="/compare" class="{ax_compare}">Compare</a>
       <a href="/#pricing">Pricing</a>
+      <a href="/faq" class="{ax_faq}">FAQ</a>
+      <a href="/about" class="{ax_about}">About</a>
     </nav>
     <div class="mm-actions">
       <a class="mm-primary" href="/start">Start free trial &rarr;</a>
@@ -612,26 +636,16 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
   <div class="footer-inner">
     <div class="footer-brand">
       <span class="brand">
-        <img class="logo" src="/assets/logo-nav.png" alt="The Solutionist System" style="height:28px;">
+        <svg class="mk" aria-hidden="true"><use href="#mark"/></svg>
         <span class="brand-text">The Solutionist System</span>
       </span>
       <span class="small">Built by The Solutionist System LLC</span>
     </div>
-    <div class="footer-links">
-      <a href="/features">Features</a>
-      <a href="/compare">Compare</a>
-      <a href="/faq">FAQ</a>
-      <a href="/about">About</a>
-      <a href="/news">News</a>
-      <a href="/start">Start free trial</a>
-      <a href="/get-started">Talk to us</a>
-      <a href="{app_url}">Log in</a>
-      <a href="/download">Get the app</a>
-      <a href="/help">Help</a>
-      <a href="/privacy">Privacy</a>
-      <a href="/data-deletion">Data Deletion</a>
-      <a href="/terms">Terms</a>
-      <a href="mailto:{contact_email}">Contact</a>
+    <div class="footer-cols">
+      <div><b>Product</b><a href="/#what">What it is</a><a href="/#room">The room</a><a href="/features">Every feature</a><a href="/#trust">Chief</a></div>
+      <div><b>Plans</b><a href="/#pricing">Pricing</a><a href="/compare">Compare</a><a href="/start?plan=founder">Founding seat</a><a href="/start">Start free</a></div>
+      <div><b>Company</b><a href="/about">About</a><a href="/news">News</a><a href="/faq">Questions</a><a href="/help">Help</a><a href="/get-started">Talk to us</a><a href="/download">Get the app</a></div>
+      <div><b>Account</b><a href="{app_url}">Log in</a><a href="{app_url}/status.html">Status</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/data-deletion">Data deletion</a><a href="mailto:{contact_email}">Contact</a></div>
     </div>
   </div>
   <div class="footer-bottom">
@@ -673,6 +687,12 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
        Below 900px the nav links are hidden, so this panel is the only
        way to the other pages. Keep it keyboard-usable: Escape closes,
        Tab stays inside, focus returns to the button that opened it. */
+    var bar = document.getElementById('siteNav');
+    if (bar) {{
+      var stick = function () {{ bar.classList.toggle('stuck', window.scrollY > 40); }};
+      window.addEventListener('scroll', stick, {{ passive: true }});
+      stick();
+    }}
     var burger = document.getElementById('navBurger');
     var menu   = document.getElementById('mobileMenu');
     if (burger && menu) {{
@@ -766,6 +786,30 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     sessionStorage.setItem(KEY, JSON.stringify(attr));
   }} catch (e) {{ /* attribution must never break the page */ }}
 }})();
+
+/* The signup door. /start hands its campaign params to the app, but the
+   buttons that link to it carry none — so a visitor who came from a post
+   and signed up arrived in the app untracked. At click time, give the
+   /start link the session's stashed params (never the referrer, and never
+   over a param the link already names). */
+(function () {{
+  try {{
+    var CARRY = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','ref'];
+    document.addEventListener('click', function (ev) {{
+      var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+      if (!a) return;
+      var url = new URL(a.getAttribute('href'), location.href);
+      if (url.origin !== location.origin || url.pathname !== '/start') return;
+      var attr = JSON.parse(sessionStorage.getItem('_sol_attr') || 'null');
+      if (!attr) return;
+      var added = false;
+      CARRY.forEach(function (k) {{
+        if (attr[k] && !url.searchParams.has(k)) {{ url.searchParams.set(k, attr[k]); added = true; }}
+      }});
+      if (added) a.setAttribute('href', url.pathname + url.search + url.hash);
+    }}, true);
+  }} catch (e) {{ /* attribution must never break the page */ }}
+}})();
 </script>
 
 <script>
@@ -791,7 +835,7 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
       var a = JSON.parse(sessionStorage.getItem('_sol_attr') || 'null');
       if (a) {{
         camp = {{}};
-        ['utm_source','utm_medium','utm_campaign','gclid','fbclid','ref'].forEach(function (k) {{
+        ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','ref'].forEach(function (k) {{
           if (a[k]) camp[k] = a[k];
         }});
         if (!Object.keys(camp).length) camp = null;
@@ -874,18 +918,22 @@ def _render_shell(*, title: str, description: str, content_html: str, path: str 
         "ax_download":    "is-active" if active == "download"    else "",
         "ax_get_started": "is-active" if active == "get_started" else "",
     }
+    # The founding-seat flyer rides on the reading pages only, and only
+    # while there are seats to take (marketing_founder_ad.py).
+    import marketing_founder_ad
+    ad_css, ad_markup = marketing_founder_ad.founder_ad_bundle(path)
     return _fill_trial(_fill_contact(SHELL_TEMPLATE.format(
         title=_html.escape(title),
         description=_html.escape(description),
         og_title=_html.escape(f"{title} · {SITE_NAME}"),
         path=path,
         shared_css=SHARED_CSS,
-        extra_css=extra_css,
+        extra_css=extra_css + ad_css,
         contact_email=_html.escape(_public_contact_email()),
         business_name=_html.escape(BUSINESS_NAME),
         year=datetime.date.today().year,
         content=content_html,
-        extra_scripts=extra_scripts,
+        extra_scripts=extra_scripts + ad_markup,
         app_url=APP_URL,
         pixel_script=_pixel_script(),
         head_extra=head_extra,
@@ -1588,6 +1636,8 @@ TRADES_JS = """
       kpi: [['Chairs booked this week', '38', '4 open Friday'], ['Regulars', '124', '9 overdue for a cut'], ['Revenue \\u00b7 this month', '$6,910', '\\u25b2 12% vs last mo'], ['Business health', '61%', 'steady']],
       lead: 'I\\u2019ve analyzed your day. Here\\u2019s what I found:',
       ask: 'Want me to text them your Tuesday openings?',
+      read: '3 regulars have not rebooked in 6 weeks; 2 drafts are waiting on your word. $6,910 came in this month, with $410 still out.',
+      wk: [[2,.3],[3,.6],[2,.4],[3,1],[3,0],[2,.2],[0,0]], wksum: '38 bookings &middot; $6,910 in',
       rows: [['3 regulars not rebooked', '6 weeks'], ['2 drafts waiting for you', null], ['$6,910 collected this month', null]],
       sugg: [['Marcus Bell', 'last cut 41 days ago', 'Text'], ['Tia Okonkwo', 'last cut 38 days ago', 'Text'], ['2 drafts pending review', 'from last night\\u2019s run', 'Open']],
       today: ['7', ['9:00 AM', 'Marcus Bell'], ['10:30 AM', 'Devon Pryce'], ['1:00 PM', 'Walk-in hold']] },
@@ -1596,6 +1646,8 @@ TRADES_JS = """
       kpi: [['Sessions this week', '22', '2 unconfirmed'], ['Active clients', '31', '4 on the waitlist'], ['Revenue \\u00b7 this month', '$9,340', '\\u25b2 9% vs last mo'], ['Business health', '74%', 'steady']],
       lead: 'Two things before your 9:00. Clinical notes stay in your EHR:',
       ask: 'Want me to send both a reminder?',
+      read: '2 sessions tomorrow are unconfirmed and 1 intake form is still outstanding. $9,340 came in this month. Clinical notes stay in your EHR.',
+      wk: [[3,.5],[2,.3],[3,.7],[2,1],[2,0],[0,0],[0,0]], wksum: '22 sessions &middot; $9,340 in',
       rows: [['2 sessions unconfirmed', 'tomorrow'], ['1 intake form outstanding', null], ['$9,340 collected this month', null]],
       sugg: [['Priya Raman', 'unconfirmed for 9:00 AM', 'Remind'], ['Lewis Barr', 'intake form never opened', 'Resend'], ['3 superbills ready', 'for July sessions', 'Send']],
       today: ['5', ['9:00 AM', 'Priya Raman'], ['11:00 AM', 'Lewis Barr'], ['2:00 PM', 'Intake &mdash; new']] },
@@ -1604,6 +1656,8 @@ TRADES_JS = """
       kpi: [['Unbilled hours', '14.5', 'across 6 matters'], ['Open matters', '19', '3 with deadlines'], ['Collected \\u00b7 this month', '$28,600', 'trust reconciled'], ['Business health', '68%', 'steady']],
       lead: 'Your book as of this morning:',
       ask: 'Want me to draft this month\\u2019s invoices?',
+      read: '14.5 hours are unbilled across 6 matters and 3 filing deadlines land this week. Trust is reconciled; $28,600 collected this month.',
+      wk: [[1,.4],[2,1],[1,.2],[2,.6],[1,0],[0,0],[0,0]], wksum: '9 matters touched &middot; $28,600 in',
       rows: [['14.5 hours unbilled', '6 matters'], ['3 filing deadlines this week', null], ['Trust account reconciled', null]],
       sugg: [['Renner v. Colby', 'discovery due Thursday', 'Open'], ['Hartline LLC', '8.2 hours unbilled', 'Bill'], ['2 engagement letters', 'awaiting signature', 'Chase']],
       today: ['4', ['9:30 AM', 'Renner call'], ['11:00 AM', 'Hartline review'], ['3:00 PM', 'Filing deadline']] },
@@ -1612,6 +1666,8 @@ TRADES_JS = """
       kpi: [['Jobs scheduled', '9', '2 waiting on materials'], ['Estimates out', '6', '$41,200 in play'], ['Revenue \\u00b7 this month', '$18,750', '\\u25b2 14% vs last mo'], ['Business health', '57%', 'steady']],
       lead: 'Two jobs and one estimate need a decision:',
       ask: 'Want me to follow up on the estimate this morning?',
+      read: 'The Kellerman estimate has been quiet 11 days and 2 jobs are waiting on materials. $18,750 came in this month.',
+      wk: [[2,.6],[1,.2],[2,.4],[2,1],[1,0],[1,0],[0,0]], wksum: '9 jobs &middot; $18,750 in',
       rows: [['Kellerman estimate quiet', '11 days'], ['2 jobs waiting on materials', null], ['$18,750 collected this month', null]],
       sugg: [['Kellerman deck', 'estimate out 11 days', 'Follow up'], ['Bryce kitchen', 'change order unsigned', 'Send'], ['Materials delayed', '2 jobs affected', 'Reschedule']],
       today: ['4', ['7:30 AM', 'Kellerman site'], ['11:00 AM', 'Materials pickup'], ['2:30 PM', 'Bryce walkthrough']] },
@@ -1620,6 +1676,8 @@ TRADES_JS = """
       kpi: [['Active clients', '17', 'all in good standing'], ['Renewals this month', '3', 'none contacted yet'], ['Revenue \\u00b7 this month', '$12,480', '\\u25b2 18% vs last mo'], ['Business health', '61%', 'steady']],
       lead: 'I\\u2019ve analyzed your day. Here\\u2019s what I found:',
       ask: 'Want me to send the renewal offers now?',
+      read: '3 renewals land this month and none has been contacted; 2 drafts are waiting on your word. $12,480 came in this month.',
+      wk: [[2,.4],[3,.7],[2,.3],[3,1],[2,0],[1,0],[0,0]], wksum: '17 sessions &middot; $12,480 in',
       rows: [['3 renewals this month', 'uncontacted'], ['2 drafts waiting for you', null], ['$12,480 collected this month', null]],
       sugg: [['Marcus Bell', 'renews in 9 days', 'Offer'], ['Grace Okoye', 'renews in 14 days', 'Offer'], ['2 drafts pending review', 'from your last agent run', 'Open']],
       today: ['4', ['9:00 AM', 'Marcus Bell'], ['11:30 AM', 'Grace Okoye'], ['2:00 PM', 'Tia Okonkwo']] },
@@ -1628,6 +1686,8 @@ TRADES_JS = """
       kpi: [['Proposals out', '4', '2 quiet past ten days'], ['Live engagements', '7', '2 wrapping this month'], ['Retainer revenue', '$12,480', '\\u25b2 18% vs last mo'], ['Business health', '72%', 'steady']],
       lead: 'Your pipeline went quiet in two places:',
       ask: 'Want me to nudge both with the case study attached?',
+      read: '2 proposals have gone quiet past ten days and 2 engagements wrap this month. $12,480 in retainers came in.',
+      wk: [[1,1],[2,.3],[1,.5],[2,.4],[1,0],[0,0],[0,0]], wksum: '7 engagements &middot; $12,480 in',
       rows: [['2 proposals unanswered', '10+ days'], ['2 engagements wrapping', null], ['$12,480 in retainers this month', null]],
       sugg: [['Lowell Group', 'proposal out 12 days', 'Nudge'], ['Anders Co.', 'proposal out 10 days', 'Nudge'], ['Q3 wrap reports', '2 engagements ending', 'Draft']],
       today: ['3', ['10:00 AM', 'Lowell kickoff'], ['1:00 PM', 'Anders check-in'], ['4:00 PM', 'Q3 wrap draft']] },
@@ -1636,6 +1696,8 @@ TRADES_JS = """
       kpi: [['Giving this month', '$8,240', '\\u25b2 6% vs last mo'], ['Members', '218', '14 not seen in a month'], ['Volunteers serving', '34', '6 new this month'], ['Congregation health', '70%', 'steady']],
       lead: 'Before Sunday, two things worth your time:',
       ask: 'Want me to send each a check-in note?',
+      read: '14 members have not been seen in a month and 3 volunteer slots are open for Sunday. $8,240 was given this month.',
+      wk: [[1,.3],[1,.2],[2,.4],[1,.5],[1,0],[0,0],[3,1]], wksum: '5 services &middot; $8,240 in',
       rows: [['14 members not seen', 'a month'], ['3 volunteer slots open', null], ['$8,240 given this month', null]],
       sugg: [['14 members quiet', 'no attendance in 30 days', 'Check in'], ['Nursery Sunday', '2 slots unfilled', 'Ask'], ['Giving statements', 'ready for Q2', 'Send']],
       today: ['5', ['8:00 AM', 'Staff prayer'], ['12:00 PM', 'Hospital visit'], ['6:30 PM', 'Youth group']] }
@@ -1652,14 +1714,28 @@ FOLD_SCRIPT = """
 
 """ + TRADES_JS + """
 
-  var IDS = ['heroCap','fdBiz','fdOwner','fdFirst','fdGrp','fdN1','fdN2','fdN3','fdN4',
+  var IDS = ['heroCap','fdBiz','fdBm','fdFirst','fdN1','fdN2','fdN3','fdN4',
              'fdK1','fdV1','fdF1','fdK2','fdV2','fdF2','fdK3','fdV3','fdF3','fdK4','fdV4','fdF4',
-             'fdLead','fdAsk','fdR1','fdA1','fdR2','fdR3',
-             'fdS1','fdS1b','fdS2','fdS2b','fdS3','fdS3b',
-             'fdTn','fdT1','fdT1b','fdT2','fdT2b','fdT3','fdT3b'];
+             'fdNext','fdLead','fdAsk','fdR1','fdA1','fdR2','fdR3','fdWk','fdWkSum'];
   var el = {};
   IDS.forEach(function (id) { el[id] = document.getElementById(id); });
   for (var k in el) { if (!el[k]) return; }   /* markup drifted — leave the static state alone */
+
+  /* the week strip: seven days of bookings (amber) and money in (green),
+     today lit, the days ahead dimmed. Sample figures, like the rest. */
+  var DAYS = ['M','T','W','T','F','S','S'];
+  function week(t) {
+    var today = 3, h = '';
+    for (var d = 0; d < 7; d++) {
+      var b = t.wk[d][0], m = t.wk[d][1], bars = '';
+      for (var k = 0; k < Math.min(b, 3); k++) { bars += '<i class="b" style="height:' + (9 + k * 6) + 'px"></i>'; }
+      if (m > 0) { bars += '<i class="m" style="height:' + (8 + Math.round(m * 18)) + 'px"></i>'; }
+      h += '<span class="' + (d === today ? 'now' : d > today ? 'ahead' : '') + '"><span class="bars">' + bars + '</span><span class="dot"></span><span class="l">' + DAYS[d] + '</span></span>';
+    }
+    el.fdWk.innerHTML = h;
+    el.fdWkSum.innerHTML = t.wksum;
+  }
+  week(TRADES[0]);
 
   var reduced = window.matchMedia &&
                 window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1685,10 +1761,9 @@ FOLD_SCRIPT = """
       /* .nm and .nm.g hold their label as a leading TEXT NODE with a
          nested span after it. textContent on the parent would delete
          that span, so the label is written to the text node instead. */
-      el.fdOwner.firstChild.nodeValue = t.owner;
       el.fdBiz.innerHTML     = t.biz;
+      el.fdBm.textContent    = t.biz.charAt(0);
       el.fdFirst.textContent = t.first;
-      el.fdGrp.textContent   = t.grp;
       for (var n = 0; n < 4; n++) { el['fdN' + (n + 1)].innerHTML = t.nav[n]; }
       for (var m = 0; m < 4; m++) {
         var s = String(m + 1);
@@ -1696,20 +1771,14 @@ FOLD_SCRIPT = """
         el['fdV' + s].textContent = t.kpi[m][1];
         el['fdF' + s].innerHTML   = t.kpi[m][2];
       }
-      el.fdLead.innerHTML = t.lead;
+      el.fdNext.innerHTML = 'Next up is ' + t.today[1][1] + ' at ' + t.today[1][0] + ', and I have the notes ready.';
+      el.fdLead.innerHTML = t.read;
       el.fdAsk.innerHTML  = t.ask;
       el.fdR1.innerHTML   = t.rows[0][0];
       el.fdA1.textContent = t.rows[0][1] || '';
       el.fdR2.innerHTML   = t.rows[1][0];
       el.fdR3.innerHTML   = t.rows[2][0];
-      for (var g = 0; g < 3; g++) {
-        var q = String(g + 1);
-        el['fdS' + q].firstChild.nodeValue = t.sugg[g][0];
-        el['fdS' + q + 'b'].innerHTML      = t.sugg[g][1];
-        el['fdT' + q].firstChild.nodeValue = t.today[g + 1][0];
-        el['fdT' + q + 'b'].innerHTML      = t.today[g + 1][1];
-      }
-      el.fdTn.textContent = t.today[0];
+      week(t);
       stage.classList.remove('is-swapping');
     }, reduced ? 0 : 190);
     for (var c = 0; c < chips.children.length; c++) {
@@ -2125,24 +2194,133 @@ def _tier_dials() -> dict:
     return out
 
 
-def _price_cards_html() -> str:
-    """The home page's three price cards, numbers from the dials."""
-    d = _tier_dials()
+# Annual prices are ten months for twelve (the Stripe annual price
+# objects are exactly that). The per-month figure the switch shows is
+# the annual total over twelve, rounded down — never a made-up number.
+ANNUAL_MONTHS = 10
 
-    def card(plan: str, name: str, blurb: str, mid: bool = False) -> str:
+
+def _about(n: int) -> int:
+    """'about' means rounded down to a round number, never up."""
+    return (n // 25) * 25 if n >= 100 else n
+
+
+def _credits_in_words(credits: int, *, chief_works: bool, builds: int = 1) -> str:
+    """The line under the credit number: what a month looks like. A
+    conversation is one chat turn at the chat price; a site build is
+    the base build price. Kevin's framing (2026-09-04): a plan that
+    says "3,000 credits" invites the arithmetic; one that says "about
+    250 conversations, and Chief works between them" does not."""
+    import pricing_config
+    per_turn = max(1, pricing_config.chat_price())
+    build = max(1, pricing_config.build_base())
+    conversations = _about(credits // per_turn)
+    after = _about(max(0, (credits - builds * build) // per_turn))
+    noun = "a site build" if builds == 1 else f"{ {2: 'two', 3: 'three'}.get(builds, builds)} site builds"
+    out = f"about {conversations:,} conversations, or {noun} and {after:,}"
+    return out + (", and Chief works between them" if chief_works else "")
+
+
+_FOUNDER_CACHE: dict = {"taken": None, "at": 0.0}
+FOUNDER_CACHE_S = 300
+
+
+def _founder_seats_taken_sync() -> int:
+    """The same count checkout enforces (stripe_billing), read here with
+    the service role and cached five minutes. A page that said "43 left"
+    for three weeks would read as a trick; this one reads the seats."""
+    import time
+    import sb_clients
+    import stripe_billing
+    now = time.monotonic()
+    if _FOUNDER_CACHE["taken"] is not None and now - _FOUNDER_CACHE["at"] < FOUNDER_CACHE_S:
+        return int(_FOUNDER_CACHE["taken"])
+    ids = stripe_billing._founder_seat_price_ids()
+    taken = 0
+    if ids:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?subscription_plan=in.({','.join(ids)})"
+            "&subscription_status=in.(active,trialing,past_due)&select=id&limit=500") or []
+        taken = len(rows) if isinstance(rows, list) else 0
+    _FOUNDER_CACHE.update(taken=taken, at=now)
+    return taken
+
+
+def _founder_strip_html() -> str:
+    """The founding seat, above the cards: fifty at the founder price,
+    locked while the seat is held, with the LIVE count. Gone at zero —
+    the strip stays as one quiet line saying so, because that tells the
+    next visitor the offer was real. Absent entirely when no founder
+    price exists (fail-soft: the section is the three cards as before)."""
+    import pricing_config
+    import stripe_billing
+    try:
+        if not stripe_billing._founder_price_ids():
+            return ""
+        limit = stripe_billing._founder_seat_limit()
+        taken = _founder_seats_taken_sync()
+        left = max(0, limit - taken)
+        price = pricing_config.tier_price_cents().get("founder", 0) // 100
+        credits = pricing_config.founder_credits()
+    except Exception:
+        return ""
+    pct = 0 if limit <= 0 else min(100, int(round(100 * taken / limit)))
+    if left <= 0:
+        return f"""
+    <div class="founder is-gone reveal reveal-delay-1" id="founderStrip" data-left="0">
+      <div class="seal">Founding seats</div>
+      <div class="copy"><b>The {limit} founding seats are gone.</b> The price on this page is the price.
+        <div class="meter" aria-hidden><i style="width:100%"></i></div>
+        <div class="left">0 of {limit} seats left</div>
+      </div>
+    </div>"""
+    # Kevin, 2026-09-22: the founding seat is a futuristic ticket, the same
+    # one the popup carries (marketing_founder_ad.ticket_html). Its styles
+    # ride in the flyer's stylesheet, which the home carries under the very
+    # same condition as this ticket: an open founding offer.
+    import marketing_founder_ad as fad
+    n = {"limit": limit, "left": left, "next": min(limit, taken + 1), "pct": pct, "price": price,
+         "list_price": pricing_config.tier_price_cents().get("professional", 0) // 100, "credits": credits}
+    return f"""
+    <div class="fst-strip reveal reveal-delay-1" id="founderStrip" data-left="{left}">
+      {fad.ticket_html(n, popup=False)}
+    </div>"""
+
+
+def _price_cards_html() -> str:
+    """The home page's three price cards, numbers from the dials. One
+    card is lit (Professional — the one Kevin wants people to reach),
+    the other two stand quiet; the credit number carries its translation;
+    the figure carries its annual twin for the switch."""
+    d = _tier_dials()
+    import pricing_config
+    credits_n = pricing_config.tier_credits()
+
+    def card(plan: str, name: str, blurb: str, connector: str, mid: bool = False) -> str:
         t = d[plan]
         seats = "1 seat" if t["seats"] == 1 else f"{t['seats']} team seats"
         biz = "1 business" if t["businesses"] == 1 else f"{t['businesses']} businesses"
         banks = ("Unlimited bank connections" if t["banks"] == "Unlimited"
                  else f"{t['banks']} bank connections")
         model_li = f"<li>{t['analysis']} deep analysis</li>" if t["analysis"] else ""
+        monthly = t["price_num"]
+        annual_total = monthly * ANNUAL_MONTHS
+        annual_month = annual_total // 12
+        words = _credits_in_words(credits_n[plan], chief_works=(plan != "starter"),
+                                  builds=(3 if plan == "practice" else 1))
+        if plan == "practice":
+            words = words.replace(", and Chief works between them", "")
+        ribbon = '<div class="ribbon">Most people land here</div>' if mid else ""
         return f"""
       <div class="price-card{' is-mid' if mid else ''}">
+        {ribbon}
         <div class="price-name">{name}</div>
-        <div class="price-fig"><b class="pc-num" data-to="{t['price_num']}" data-prefix="$">{t['price']}</b><span>/month</span></div>
+        <div class="price-fig"><b class="pc-num" data-monthly="{monthly}" data-annual="{annual_month}" data-to="{monthly}" data-prefix="$">{t['price']}</b><span>/month</span></div>
+        <div class="price-billed" data-annual="${annual_total:,} a year, billed once">&nbsp;</div>
         <p>{blurb}</p>
         <ul class="price-facts">
-          <li>{t['credits']} AI actions a month</li>
+          <li class="credits">{t['credits']} AI actions a month<small>{words}</small></li>
+          <li>{connector}</li>
           {model_li}
           <li>{seats} &middot; {biz}</li>
           <li>{banks}</li>
@@ -2152,72 +2330,235 @@ def _price_cards_html() -> str:
 
     return (
         card("starter", "Starter",
-             "The full workspace. Contacts, invoicing, scheduling, content, goals, your site, and Chief.")
+             "The full workspace. Contacts, invoicing, scheduling, content, goals, your site, and Chief.",
+             "Connect your own AI, read-only")
+        # 9/02: this card sold "Autopilot running overnight" as the
+        # Professional difference. Autopilot has no gate — it is in
+        # neither FEATURE_MIN_PLAN nor any has_feature() call — so it
+        # runs on Starter too, and the /features page has always said
+        # so. The card was inventing a tier difference. What
+        # Professional actually buys is the gate map's professional
+        # block, so that is what it says now.
         + card("professional", "Professional",
-               "Everything in Starter, plus Autopilot running overnight and deeper Chief automation.",
+               "Everything in Starter, plus the full accounting layer: closing, "
+               "1099s, year-end. And Chief on your books, your site and your sourcing.",
+               "Your own AI can keep records here",
                mid=True)
         + card("practice", "Solutionist",
                "For the operator running everything through the system: "
-               "everything in Professional, plus room for a team and more than one business.")
+               "Professional, plus room for a team and more than one business.",
+               "Your own AI can keep records here")
     )
 
 
-# Feature rows for the tier table on /compare — keys are
-# feature_gates.FEATURE_MIN_PLAN entries; only labeled features render,
-# so an unlabeled future gate never leaks a raw key onto the site.
-_SITE_FEATURE_LABELS = (
-    ("general_ledger", "General Ledger &amp; Trial Balance"),
-    ("reports_full", "Full financial reports"),
-    ("period_close", "Period closing"),
-    ("contractor_payments", "Contractor payments + 1099"),
-    ("accountant_package", "Year-end accountant package"),
-    ("sourcing_desk", "Sourcing Desk — find &amp; RFQ vendors"),
-    ("vertical_ledgers", "Trust accounting check (IOLTA)"),
-    ("vertical_reports", "Compliance reports (trust reconciliation, 990 prep)"),
-    ("accountant_collaborator", "Accountant collaborator seat"),
-    ("audit_trail", "Audit trail"),
+# ══════════════════════════════════════════════════════════════════════
+# The tier table on /compare — "what do I actually get?"
+# ══════════════════════════════════════════════════════════════════════
+# 9/02: this table listed ten rows and every one of them was accounting.
+# Someone deciding whether $79 was worth it could not see that it sends
+# invoices, or texts, or email, or takes bookings — the things they were
+# actually shopping for. The table was drawn from the GATE MAP, so it
+# could only ever describe the DIFFERENCES between tiers, and the answer
+# to "is it worth it" is mostly the part that does NOT differ.
+#
+# So the table now names the whole product, and each row says where its
+# ✓ comes from:
+#
+#   _ALL         — no gate exists. feature_gates.FEATURE_MIN_PLAN is the
+#                  ENTIRE gate map (every require_feature/has_feature
+#                  call in the backend keys off it), so a capability
+#                  absent from that map ships on all three tiers and
+#                  saying so out loud is simply true.
+#   "<key>"      — a FEATURE_MIN_PLAN key; the ✓/— comes from the map,
+#                  never from a hand-typed guess. An unlabeled gate does
+#                  not render, so a raw key can never leak onto the page.
+#   callable     — a number row, read from the live dials.
+#
+# THE RULE: a row may only claim a difference the code actually
+# enforces. The 8/18 pricing review caught this site inventing tier
+# differences that did not exist ("priority onboarding"); the
+# completeness test in __tests__/test_marketing_site_pricing.py now
+# fails if a new gate lands in FEATURE_MIN_PLAN and nobody decides where
+# it belongs here — which is the moment an _ALL row would start lying.
+_ALL = "__every_plan__"
+
+# Keys deliberately not sold as their own row. Same two the in-app cards
+# hide (BillingPanel.HIDDEN_FEATURES), for the same reasons: seats show
+# as a number, and chief_unlimited gates nothing an allowance row does
+# not already say honestly.
+_NOT_A_ROW = ("multi_seat", "chief_unlimited")
+
+_COMPARE_GROUPS = (
+    ("The day-to-day work", (
+        ("Contacts &amp; CRM", _ALL,
+         "Everyone you work with in one list, with the whole history attached."),
+        ("Invoices &amp; estimates", "invoicing",
+         "Send it, they pay by card, and the books post themselves."),
+        ("Card payments &amp; checkout", _ALL,
+         "Stripe on your own account: the money lands in your bank, never ours."),
+        ("Email: send, receive, templates", _ALL,
+         "A real inbox for the business, sending from your own domain once you connect one."),
+        ("Text messaging (SMS)", _ALL,
+         "Two-way threads, appointment reminders, and broadcasts to your own list."),
+        # Dedicated numbers (2026-09-02) landed the gate and never told the
+        # compare table, so the SMS row above said "every plan" about a
+        # capability that had just grown a tier difference — the exact
+        # drift the completeness test exists to catch, and main was red
+        # for three merges before anybody decided where this row belongs.
+        ("A texting number of your own", "dedicated_sms_number",
+         "Your business texts from its own line, not the shared platform number."),
+        ("Calendar &amp; self-serve booking page", _ALL,
+         "Clients pick their own slot; confirmations and reminders go out without you."),
+        ("Documents &amp; e-signature", _ALL,
+         "Ready-made agreements, sent for signature, tracked until they come back signed."),
+        ("Expenses &amp; receipt capture", _ALL,
+         "Photograph the receipt and it files itself against the right account."),
+        ("Products, services &amp; online store", _ALL,
+         "A catalogue, a storefront that takes payment, and counter sales for walk-ins."),
+        ("Inventory &amp; stock counts", _ALL,
+         "What you hold, what it cost you, and what is about to run out."),
+        ("Projects, tasks &amp; billable time", _ALL,
+         "The work in flight, who it is for, and the hours behind the invoice."),
+        ("Intake forms &amp; lead capture", _ALL,
+         "Forms that arrive as contacts, already scored and routed."),
+    )),
+    ("Your presence", (
+        ("Your website, designed and built for you", _ALL,
+         "Chief builds it from what it knows about the business; you edit it in place."),
+        ("Brand kit: logo, palette, type, voice", _ALL,
+         "One brand, applied everywhere the business shows up."),
+        ("Print materials &amp; flyers", _ALL,
+         "Designed in the same brand, ready to hand out or post."),
+        ("Facebook &amp; Instagram publishing", _ALL,
+         "Draft, schedule, post, and read the engagement back."),
+    )),
+    ("Chief, your AI Chief of Staff", (
+        ("Chief on every screen, chat and voice", _ALL,
+         "Ask for it in plain words and the system moves."),
+        ("AI actions a month", lambda t: t["credits"],
+         "One action is a message, a piece of analysis, or a build. Top up any time; credits never expire."),
+        ("Depth of analysis", lambda t: t["analysis"],
+         "How hard the system is allowed to think on the slow, careful work."),
+        ("Give Chief an assignment: &ldquo;fill Thursday&rdquo;", _ALL,
+         "Say it once. Chief works it between conversations, checks the numbers, and closes it when it lands. One open on Starter, three on Professional, ten on Solutionist."),
+        ("Chief asks before it spends, on your phone", _ALL,
+         "A text, an invoice, a payment link: the exact words reach your phone with Yes, do that. Nothing goes out until you tap, and a draft you ignore is let go."),
+        ("Chief&rsquo;s week, every Monday", _ALL,
+         "What it did on its own, what came of it, what is waiting on you, and the minutes you did not spend. Counted, not guessed."),
+        ("Autopilot, the overnight run", _ALL,
+         "Chief works the list while you sleep, and logs a line for everything it did."),
+        ("Memory, standing instructions &amp; weekly briefing", _ALL,
+         "It remembers how you work, and tells you what changed before you ask."),
+        ("Chief reads and explains your books", "chief_bookkeeping",
+         "Ask why the month looks like that, and get the answer from the ledger."),
+        ("Website concierge: Chief answers your visitors", "site_concierge",
+         "The chat on your own site, answering from your real business facts."),
+        ("Connect your own AI to this business", "agent_connector",
+         "Point the assistant you already carry at your workspace. It can read on every plan."),
+        ("Let your own AI keep records here", "agent_connector_write",
+         "A write key: contacts, tasks, notes, sessions, time, drafts. Never a send, a charge, or a delete."),
+        ("Sourcing Desk: find &amp; RFQ vendors", "sourcing_desk",
+         "Search the live web for suppliers, then send them a request for quote."),
+    )),
+    ("Books, tax &amp; compliance", (
+        ("Bookkeeping &amp; bank reconciliation", "bookkeeping_basic",
+         "Connect the bank, match the transactions, keep the balance honest."),
+        ("Bank connections", lambda t: t["banks"], ""),
+        ("Core reports: P&amp;L, balance sheet, AR aging", "reports_basic", ""),
+        ("General Ledger &amp; Trial Balance", "general_ledger",
+         "Your authoritative books. Every business gets to see its own record."),
+        ("Full GL-authoritative reports", "reports_full",
+         "Period comparisons and statements drawn straight from the ledger."),
+        ("Period closing", "period_close", ""),
+        ("Contractor payments + 1099", "contractor_payments", ""),
+        ("Year-end accountant package + IIF", "accountant_package",
+         "One archive your accountant can open without asking you anything."),
+        ("Trust accounting check (IOLTA)", "vertical_ledgers", ""),
+        ("Compliance reports (trust reconciliation, 990 prep)", "vertical_reports", ""),
+        ("Accountant collaborator seat", "accountant_collaborator",
+         "A login for your accountant that sees the books and nothing else."),
+        ("Audit trail", "audit_trail", ""),
+    )),
+    ("Room to grow", (
+        ("Team seats", lambda t: t["seats"], ""),
+        ("Businesses in one account", lambda t: t["businesses"], ""),
+    )),
+    ("Getting set up, and getting out", (
+        ("Guided setup", _ALL,
+         "Three questions, then Chief builds the workspace around your answers."),
+        ("Bring the spreadsheets you already have", _ALL,
+         "Drop the file in; it reads your columns and turns them into a working list."),
+        ("Import your contacts", _ALL, ""),
+        ("Free trial on every plan", _ALL,
+         "__TRIAL_FREE__, then the plan you picked. Switch tier or cancel from inside the app."),
+        ("Your data stays yours", _ALL,
+         "Export the whole account, every business and every table, whenever you want it."),
+    )),
 )
 
 
 def _plan_compare_section_html() -> str:
-    """Tier-vs-tier table for /compare — the same rows the in-app
-    comparison shows, driven by the same feature map and dials."""
+    """Tier-vs-tier table for /compare. Numbers come from the live dials
+    and every ✓ comes from feature_gates.FEATURE_MIN_PLAN, so the page
+    cannot promise a tier difference the product does not enforce."""
     import feature_gates
     d = _tier_dials()
     plans = ("starter", "professional", "practice")
-
-    def num_row(label, value):
-        cells = "".join(f"<td>{value(d[p])}</td>" for p in plans)
-        return f"<tr><td>{label}</td>{cells}</tr>"
-
-    rows = [
-        num_row("AI actions / month", lambda t: t["credits"]),
-        num_row("Team seats", lambda t: t["seats"]),
-        num_row("Businesses", lambda t: t["businesses"]),
-        num_row("Bank connections", lambda t: t["banks"]),
-    ]
-    if all(d[p]["analysis"] for p in plans):
-        rows.insert(1, num_row("Deep analysis", lambda t: t["analysis"]))
+    names = ("Starter", "Professional", "Solutionist")
     rank = feature_gates._PLAN_RANK
-    for key, label in _SITE_FEATURE_LABELS:
-        min_plan = feature_gates.FEATURE_MIN_PLAN.get(key)
-        if not min_plan:
+
+    # data-p is what the mobile card reads back as the column name once
+    # the head is hidden — without it a stacked row is three unlabelled
+    # ticks. Kept on every cell so the two layouts cannot disagree.
+    def cell(plan_name, cls, body):
+        klass = f' class="{cls}"' if cls else ""
+        return f'<td data-p="{plan_name}"{klass}>{body}</td>'
+
+    def cell_html(label, source, note):
+        if callable(source):
+            # A dial with nothing behind it (the analysis ladder while a
+            # model override is set) drops rather than promising a
+            # difference nobody would get.
+            values = [source(d[p]) for p in plans]
+            if not all(str(v).strip() for v in values):
+                return ""
+            cells = "".join(cell(n, "", v) for n, v in zip(names, values))
+        elif source == _ALL:
+            cells = "".join(cell(n, "sol", "✓") for n in names)
+        else:
+            min_plan = feature_gates.FEATURE_MIN_PLAN.get(source)
+            if not min_plan:
+                return ""
+            cells = "".join(
+                cell(n, "sol", "✓") if rank.get(p, 0) >= rank.get(min_plan, 99)
+                else cell(n, "alt", "&mdash;")
+                for p, n in zip(plans, names))
+        sub = f'<span class="cp-note">{note}</span>' if note else ""
+        return f'<tr><td class="cp-what">{label}{sub}</td>{cells}</tr>'
+
+    rows = []
+    for group, entries in _COMPARE_GROUPS:
+        body = "".join(cell_html(label, source, note)
+                       for label, source, note in entries)
+        if not body:
             continue
-        cells = "".join(
-            '<td class="sol">✓</td>' if rank.get(p, 0) >= rank.get(min_plan, 99)
-            else '<td class="alt">&mdash;</td>'
-            for p in plans)
-        rows.append(f"<tr><td>{label}</td>{cells}</tr>")
-    header = "".join(
-        f'<th class="sol-col">{name} {d[p]["price"]}/mo</th>'
-        for p, name in zip(plans, ("Starter", "Professional", "Solutionist")))
+        rows.append(f'<tr class="cp-grp"><td colspan="{len(plans) + 1}">{group}</td></tr>')
+        rows.append(body)
+    header = "".join(f'<th class="sol-col">{name} {d[p]["price"]}/mo</th>'
+                     for p, name in zip(plans, names))
+    mprice = " &middot; ".join(f"{name} {d[p]['price']}"
+                               for p, name in zip(plans, names))
     return f"""
 <section>
   <div class="container">
     <div class="section-head reveal">
       <span class="eyebrow">Which plan</span>
       <h2>Every plan is the whole product.</h2>
-      <p>Bigger plans add AI headroom, deeper analysis, seats for a team, and room for more than one business.</p>
+      <p>Here is the whole thing, line by line. Most of it is on every plan &mdash;
+        the columns only differ where the system genuinely does something different.
+        Bigger plans add AI headroom, the full accounting layer, seats for a team,
+        and room for more than one business.</p>
+      <p class="cp-mprice">{mprice} &mdash; per month.</p>
     </div>
     <div class="table-wrap reveal reveal-delay-1">
       <table class="compare plans">
@@ -2236,6 +2577,16 @@ def _plan_compare_section_html() -> str:
 
 
 def render_home() -> str:
+    """The home page: the second edition (marketing_home_v2, 2026-09-11),
+    Kevin's cut-by-cut concept built into the site. The first edition
+    stays below as render_home_v1 for reference and for the pieces the
+    new page still borrows (_founder_strip_html, _price_cards_html,
+    _COMPARE_GROUPS, SHELL_TEMPLATE's analytics)."""
+    import marketing_home_v2
+    return marketing_home_v2.render_home_v2()
+
+
+def render_home_v1() -> str:
     #      1. blue leads (see :root) — the ember/brass pass read purple-
     #         adjacent to him and he asked to flip the original palette
     #         so blue carries it instead of violet/pink;
@@ -2497,11 +2848,134 @@ def render_home() -> str:
         box-shadow:0 0 8px var(--success);margin:-1px 7px 0 0;}
 
       .hero .app{min-height:472px;}
-      .hero .kpi-row{grid-template-columns:repeat(auto-fit,minmax(min(112px,100%),1fr));}
-      .hero-panes{display:flex;flex-wrap:wrap;gap:9px;flex:1;min-height:0;}
-      .hero-panes > .brief{flex:1 1 300px;min-width:0;}
-      .hero-panes > .pnl{flex:1 1 186px;min-width:0;}
-      .hero .qa{grid-template-columns:repeat(auto-fit,minmax(min(84px,100%),1fr));}
+
+      /* ── the Workspace Home replica (2026-09-11) ─────────────────
+         Traced from the product's Workspace shell (the default look
+         since the Home de-duplication): a 5-icon rail, the top bar
+         (business switcher · Studio · Chief · Voice), Chief's bar with
+         his one line, the ask field and his chips, then the greeting
+         (bar of brand light, serif hello, the three things, ONE
+         decision) beside Chief's read with the week strip, and the
+         At-a-glance tiles. Same .app palette as the rest of the
+         replica kit; amber stands in for the business's own brand
+         colour, which the real shell reads from its brand kit. */
+      .app.is-ws{flex-direction:row;}
+      .app.is-ws .wr{width:38px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:6px;
+        padding:10px 0;border-right:1px solid var(--line);background:#0A0D11;}
+      .wr-mark{width:16px;height:16px;border-radius:5px;margin-bottom:8px;
+        background:linear-gradient(135deg,#E879F9,#22D3EE);}
+      .wr-i{position:relative;width:24px;height:24px;border-radius:7px;display:grid;place-items:center;
+        border:1px solid transparent;}
+      .wr-i::before{content:'';width:10px;height:10px;border-radius:3px;background:rgba(255,255,255,.22);}
+      .wr-i.on{background:color-mix(in srgb, var(--gold) 18%, transparent);border-color:color-mix(in srgb, var(--gold) 45%, transparent);}
+      .wr-i.on::before{background:var(--gold);box-shadow:0 0 8px var(--gold);}
+      .wr-i.bu::before{background:rgba(236,72,153,.55);} .wr-i.op::before{background:rgba(59,130,246,.6);}
+      .wr-i.gr::before{background:rgba(245,197,66,.55);} .wr-i.sy::before{background:rgba(255,255,255,.18);}
+      .wr-i b{position:absolute;right:-3px;top:-3px;width:6px;height:6px;border-radius:50%;font-size:0;
+        background:#F59E0B;box-shadow:0 0 6px #F59E0B;}
+      .wr-me{margin-top:auto;width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,#F59E0B,#EF4444);}
+      .wm{flex:1;min-width:0;display:flex;flex-direction:column;gap:9px;padding:0 0 11px;overflow:hidden;}
+      .wtop{display:flex;align-items:center;gap:7px;padding:7px 11px;border-bottom:1px solid var(--line);
+        background:#0C0F14;flex-shrink:0;}
+      .wbiz{display:flex;align-items:center;gap:6px;min-width:0;margin-right:auto;}
+      .wbm{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;flex-shrink:0;
+        font-size:9px;font-weight:800;color:#1A1405;background:var(--gold);}
+      .wbn{display:flex;flex-direction:column;min-width:0;line-height:1.15;}
+      .wbn b{font-size:10.5px;font-weight:700;white-space:nowrap;}
+      .wbn span{font-size:7.5px;color:var(--ink-3);white-space:nowrap;}
+      .wpill{padding:1px 6px;border-radius:99px;font-size:7px;font-weight:700;color:var(--ink-2);
+        border:1px solid var(--line);}
+      .wsearch{display:none;align-items:center;gap:6px;padding:0 8px;height:22px;border-radius:7px;font-size:8.5px;
+        color:var(--ink-3);background:var(--pane);border:1px solid var(--line);white-space:nowrap;}
+      .wsearch .kbd{padding:0 4px;border-radius:3px;font-size:7px;background:rgba(255,255,255,.06);border:1px solid var(--line);}
+      .wbtn{padding:4px 8px;border-radius:7px;font-size:8.5px;font-weight:600;white-space:nowrap;
+        color:var(--ink-2);border:1px solid var(--line);background:var(--pane);}
+      .wbtn.wchf{color:var(--ink);border-color:color-mix(in srgb, var(--gold) 45%, transparent);
+        box-shadow:0 0 12px -5px var(--gold);}
+      .wbell{width:20px;height:20px;border-radius:6px;border:1px solid var(--line);background:var(--pane);position:relative;}
+      .wbell::after{content:'';position:absolute;right:-2px;top:-2px;width:6px;height:6px;border-radius:50%;background:#F59E0B;}
+      .wav{width:20px;height:20px;border-radius:50%;background:linear-gradient(135deg,#F59E0B,#EF4444);}
+      .wchief{display:flex;align-items:center;flex-wrap:wrap;gap:6px 9px;margin:0 11px;padding:7px 8px;
+        border-radius:9px;border:1px solid var(--line);
+        background:linear-gradient(90deg, color-mix(in srgb, var(--gold) 10%, transparent), var(--pane) 55%);}
+      .worb{width:18px;height:18px;border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,#E879F9,#22D3EE);
+        box-shadow:0 0 10px rgba(232,121,249,.45);}
+      .wline{flex:1;min-width:120px;display:flex;flex-direction:column;line-height:1.2;}
+      .wk{font-size:7px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);}
+      .wline .wt{font-size:9px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .wask{flex:1 1 150px;min-width:0;display:flex;align-items:center;gap:6px;padding:4px 4px 4px 8px;height:22px;
+        border-radius:7px;font-size:8.5px;color:var(--ink-3);background:var(--pane);border:1px solid var(--line);white-space:nowrap;overflow:hidden;}
+      .wgo{margin-left:auto;width:14px;height:14px;border-radius:4px;background:var(--gold);flex-shrink:0;}
+      .wchips{flex-basis:100%;display:flex;align-items:center;gap:4px;padding-left:27px;overflow:hidden;}
+      .wchips i{font-style:normal;font-size:7.5px;padding:2px 6px;border-radius:99px;white-space:nowrap;
+        color:var(--ink-2);border:1px solid var(--line);background:rgba(255,255,255,.03);}
+      .wchips i.sp{margin-left:auto;color:var(--ink-3);}
+      .whome{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,34%);gap:9px;margin:0 11px;}
+      .wg{position:relative;overflow:hidden;padding:11px 12px 9px 14px;border-radius:10px;border:1px solid var(--line);background:var(--pane);
+        display:flex;flex-direction:column;gap:5px;}
+      .wbar{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--gold);box-shadow:0 0 12px var(--gold);}
+      .wdate{font-size:7px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);}
+      .whi{font-family:Georgia,'Times New Roman',serif;font-size:22px;letter-spacing:-.015em;line-height:1;margin-top:3px;}
+      .whi b{font-weight:600;color:var(--gold);text-shadow:0 0 14px color-mix(in srgb, var(--gold) 45%, transparent);}
+      .wsub{font-size:9.5px;color:var(--ink-2);}
+      .wrows{display:flex;flex-direction:column;margin-top:5px;}
+      .wrow{display:flex;align-items:center;gap:7px;padding:5px 0;border-top:1px solid var(--line);font-size:9.5px;}
+      .wic{width:16px;height:16px;border-radius:5px;flex-shrink:0;background:color-mix(in srgb, var(--gold) 16%, transparent);}
+      .wrow.hot .wic{background:rgba(245,158,11,.22);}
+      .wtx{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+      .wtag{font-size:6.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:1px 5px;border-radius:99px;
+        border:1px solid currentColor;white-space:nowrap;}
+      .wtag.hot{color:#F87171;} .wtag.warn{color:#F5C542;} .wtag.good{color:#22C55E;}
+      .wgo2{width:6px;height:6px;border-right:1px solid var(--ink-3);border-top:1px solid var(--ink-3);transform:rotate(45deg);flex-shrink:0;margin-right:3px;}
+      .wdecide{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding-top:7px;margin-top:3px;border-top:1px solid var(--line);}
+      .wq{font-size:8.5px;color:var(--ink-2);margin-right:2px;}
+      .wdecide b{padding:4px 8px;border-radius:6px;font-size:8.5px;font-weight:700;background:var(--gold);color:#1A1405;white-space:nowrap;}
+      .wdecide i{padding:4px 8px;border-radius:6px;font-size:8.5px;font-style:normal;border:1px solid rgba(255,255,255,.16);color:var(--ink-2);white-space:nowrap;}
+      .wlnk{margin-left:auto;font-size:8.5px;font-weight:600;color:var(--gold);white-space:nowrap;}
+      .wrd{position:relative;overflow:hidden;display:flex;flex-direction:column;gap:6px;padding:10px 10px 9px 12px;
+        border-radius:10px;border:1px solid var(--line);background:var(--pane);}
+      .wrd::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--gold);opacity:.6;}
+      .wrd-h{display:flex;align-items:center;justify-content:space-between;gap:6px;}
+      .wrd-h .wk{color:color-mix(in srgb, var(--gold) 70%, var(--ink-2));}
+      .wlisten{font-size:7.5px;padding:2px 6px;border-radius:99px;border:1px solid var(--line);color:var(--ink-2);}
+      .wrd-t{font-family:Georgia,'Times New Roman',serif;font-size:10.5px;line-height:1.45;color:var(--ink);}
+      .wrd-wk{margin-top:auto;padding-top:6px;border-top:1px solid var(--line);}
+      .wwk{display:flex;gap:4px;padding:6px 2px 2px;}
+      .wwk > span{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;}
+      .wwk .bars{height:28px;display:flex;align-items:flex-end;gap:2px;}
+      .wwk .bars i{display:block;width:4px;border-radius:1.5px;transform-origin:bottom;}
+      .wwk .bars i.b{background:var(--gold);box-shadow:0 0 6px var(--gold);}
+      .wwk .bars i.m{background:#22C55E;box-shadow:0 0 6px #22C55E;}
+      .wwk .dot{width:4px;height:4px;border-radius:50%;background:rgba(255,255,255,.15);}
+      .wwk > span.now .dot{width:6px;height:6px;background:var(--gold);box-shadow:0 0 8px var(--gold);}
+      .wwk > span.ahead .dot{opacity:.5;}
+      .wwk .l{font-size:6.5px;color:var(--ink-3);}
+      .wwk > span.now .l{color:var(--ink);font-weight:700;}
+      .wleg{display:flex;align-items:center;gap:4px;font-size:7px;color:var(--ink-3);}
+      .wleg i{display:inline-block;width:4px;height:8px;border-radius:1.5px;margin:0 2px 0 6px;}
+      .wleg i:first-child{margin-left:0;}
+      .wleg i.b{background:var(--gold);} .wleg i.m{background:#22C55E;}
+      .wleg .sp{margin-left:auto;}
+      .wgl-h{margin:0 11px;}
+      .wgl{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:-3px 11px 0;}
+      .wgl .kpi{padding:8px 9px;}
+      .wgl .kpi .v{font-size:16px;}
+      /* the fold's canvas is 425–560 wide; the rail and the top bar's
+         words are what the canvas can spare first */
+      .hero .app.is-ws{container-type:inline-size;}
+      @container (max-width:560px){
+        .hero .whome{grid-template-columns:1fr;}
+        .hero .wrd .wrd-wk, .hero .wrd .wwk, .hero .wrd .wleg{display:none;}
+        .hero .wchips i:nth-child(n+5){display:none;}
+        .hero .wchips i.sp{display:inline-block;}
+        .hero .wsearch{display:none;}
+      }
+      @container (min-width:640px){ .hero .wsearch{display:flex;} }
+      @container (max-width:470px){
+        .hero .wgl{grid-template-columns:repeat(2,1fr);}
+        .hero .wgl .kpi:nth-child(n+3){display:none;}
+        .hero .wbtn:not(.wchf), .hero .wpill{display:none;}
+      }
 
       /* The rail has to answer to the CANVAS, not the window. Left to
          wrap it dropped under the briefing and took the panel to 789px
@@ -2512,24 +2986,17 @@ def render_home() -> str:
          hides below the width where it stops being readable. Without
          container-query support it just wraps: the old behaviour, still
          legible. */
-      .hero .app-canvas{container-type:inline-size;}
-      @container (max-width:498px){
-        .hero-panes > .pnl{display:none;}
-      }
       /* .brief puts the greeting beside Chief, which wants ~700px. In
          the fold it gets 425–500, so side-by-side crushed the greeting
          into a ~90px column. Stacked it reads correctly at any width the
          fold can produce; the standing line and the buttons come out to
          buy the height back, leaving the date and the greeting — the
          part that is recognisably this dashboard. */
-      .hero .brief{flex-direction:column;gap:10px;}
-      .hero .brief .cp, .hero .brief .brief-btns{display:none;}
       /* 8 tiles through an auto-fit floor of 84px resolved to 7 tracks
          and wrapped 7+1, which left a ragged single tile under a full
          row. A fixed 4x2 block reads as a deliberate grid, and at the
          widths the fold produces the tiles land near the size they are
          in the product. */
-      .hero .qa{grid-template-columns:repeat(4,1fr);}
       /* the labels cross-fade; the frame never moves, so it reads as one
          workspace changing its mind rather than a carousel */
       .fold-swap{transition:opacity .2s ease;}
@@ -2583,16 +3050,17 @@ def render_home() -> str:
         .fold-stage .app .kpi .k{font-size:10px;letter-spacing:.05em;
           white-space:normal;overflow:visible;line-height:1.25;}
         .fold-stage .app .kpi .f{font-size:11px;}
-        .fold-stage .app .brief-l .date{font-size:10px;}
-        .fold-stage .app .chief-h .on{font-size:10px;}
-        .fold-stage .app .chief-f .tag{font-size:9.5px;}
-        .fold-stage .app .chief-f .amt{font-size:10.5px;}
-        .fold-stage .app .chief-f .g{font-size:12px;}
-        .fold-stage .app .cf .chief-lead{font-size:11.5px;}
-        .fold-stage .app .cf .chief-ask{font-size:11.5px;}
-        .fold-stage .app .chief-btns b,
-        .fold-stage .app .chief-btns i{font-size:11.5px;}
-        .fold-stage .app .cin-wrap .cin-ph{font-size:11.5px;}
+        .fold-stage .app .wdate{font-size:9.5px;}
+        .fold-stage .app .whi{font-size:26px;}
+        .fold-stage .app .wsub{font-size:12px;}
+        .fold-stage .app .wrow{font-size:12px;padding:7px 0;}
+        .fold-stage .app .wtag{font-size:8.5px;}
+        .fold-stage .app .wq, .fold-stage .app .wdecide b, .fold-stage .app .wdecide i, .fold-stage .app .wlnk{font-size:11px;}
+        .fold-stage .app .wrd-t{font-size:12.5px;}
+        .fold-stage .app .wk{font-size:8.5px;}
+        .fold-stage .app .wline .wt{font-size:11px;white-space:normal;}
+        .fold-stage .app .wask{font-size:11px;height:26px;}
+        .fold-stage .app .wchips i{font-size:9.5px;}
       }
 
       @media (max-width:1000px){
@@ -2666,8 +3134,7 @@ def render_home() -> str:
         /* the phone keeps the numbers and Chief — the parts that carry
            the claim — and drops the chrome that needs width to read */
         .hero .app{min-height:0;}
-        .hero .app-side, .hero .qa, .hero .qa-h, .hero .app-top{display:none;}
-        .hero-panes > .pnl{display:none;}
+        .hero .app.is-ws .wr, .hero .wtop, .hero .wgl-h, .hero .wgl{display:none;}
       }
       @media (prefers-reduced-motion:reduce){
         .hero-slot .caret{animation:none;}
@@ -2706,6 +3173,61 @@ def render_home() -> str:
         transform:translateY(-1px);}
       .price-cta.is-mid{background:var(--accent);color:var(--ink-on-accent);border-color:transparent;
         box-shadow:0 6px 22px color-mix(in srgb, var(--accent) 30%, transparent);}
+      /* ── the section, lit (2026-09-04, Kevin: "make the tiers glow") ──
+         One card glows, not three: light only means something next to
+         dark. Professional lifts, glows, and carries a slow light along
+         its edge; the other two stand at 82% and come forward on hover. */
+      .grabber{display:inline-flex;align-items:center;gap:10px;margin-top:16px;font-family:var(--font-heading);
+        font-weight:600;font-size:13px;color:color-mix(in srgb, var(--accent) 70%, #fff);
+        border:1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        background:color-mix(in srgb, var(--accent) 10%, transparent);border-radius:999px;padding:6px 14px 6px 8px;}
+      .grabber .dot{width:8px;height:8px;border-radius:50%;background:color-mix(in srgb, var(--accent) 70%, #fff);
+        animation:pcPing 1.8s infinite;}
+      @keyframes pcPing{0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);}
+        70%{box-shadow:0 0 0 9px transparent;}100%{box-shadow:0 0 0 0 transparent;}}
+      .price-sub{color:var(--text-secondary);max-width:52ch;margin:12px auto 0;font-size:15.5px;}
+      .billing{display:inline-flex;border:1px solid var(--border-strong);border-radius:999px;padding:3px;
+        margin:16px auto 0;background:var(--surface);}
+      .billing button{font:600 12.5px var(--font-body);border:0;background:transparent;color:var(--text-secondary);
+        border-radius:999px;padding:6px 14px;cursor:pointer;}
+      .billing button[aria-pressed="true"]{background:var(--text-primary);color:var(--bg);}
+      .billing .save{font-size:11px;color:#F3C56B;margin-left:6px;}
+      .founder{max-width:1000px;margin:0 auto 18px;border:1px solid color-mix(in srgb, #F3C56B 45%, transparent);
+        background:linear-gradient(90deg, color-mix(in srgb, #F3C56B 10%, transparent), transparent 60%);
+        border-radius:14px;padding:14px 18px;display:grid;grid-template-columns:auto 1fr auto;gap:16px;align-items:center;}
+      @media (max-width:720px){.founder{grid-template-columns:1fr;}}
+      .founder .seal{font-family:var(--font-mono, monospace);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+        color:#F3C56B;border:1px solid color-mix(in srgb, #F3C56B 50%, transparent);border-radius:6px;padding:6px 8px;white-space:nowrap;}
+      .founder .copy{font-size:14px;color:var(--text-secondary);}
+      .founder .copy b{color:var(--text-primary);font-family:var(--font-heading);}
+      .founder .meter{height:4px;background:rgba(255,255,255,.08);border-radius:2px;margin-top:8px;overflow:hidden;max-width:320px;}
+      .founder .meter i{display:block;height:100%;background:#F3C56B;}
+      .founder .left{font-family:var(--font-mono, monospace);font-size:11px;color:#F3C56B;margin-top:6px;}
+      .founder a{font:700 13px var(--font-body);color:#0B0D12;background:#F3C56B;border-radius:10px;padding:11px 16px;
+        text-decoration:none;white-space:nowrap;}
+      .founder.is-gone{border-color:var(--border);background:transparent;}
+      .founder.is-gone .seal,.founder.is-gone .left{color:var(--text-muted);border-color:var(--border-strong);}
+      .founder.is-gone .meter i{background:var(--text-muted);}
+      .price-card{position:relative;}
+      .price-billed{font-size:11.5px;color:var(--text-muted);margin:-6px 0 10px;min-height:16px;font-variant-numeric:tabular-nums;}
+      .price-facts li.credits{color:var(--text-primary);font-weight:600;}
+      .price-facts li.credits small{display:block;font-weight:400;color:var(--text-muted);font-size:12px;margin-top:2px;}
+      .ribbon{position:absolute;top:-13px;left:50%;transform:translateX(-50%);font:700 11px var(--font-body);
+        letter-spacing:.06em;text-transform:uppercase;color:var(--ink-on-accent);background:var(--accent);
+        border-radius:999px;padding:6px 12px;white-space:nowrap;box-shadow:0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent);}
+      .is-lit-grid .price-card.is-mid{transform:translateY(-8px);border-color:transparent;
+        background:color-mix(in srgb, var(--accent) 9%, var(--surface));
+        box-shadow:0 30px 80px color-mix(in srgb, var(--accent) 22%, transparent),0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);}
+      @property --pcA{syntax:'<angle>';inherits:false;initial-value:0deg;}
+      .is-lit-grid .price-card.is-mid::before{content:"";position:absolute;inset:-1px;border-radius:17px;padding:1px;
+        background:conic-gradient(from var(--pcA), transparent 0 40%, color-mix(in srgb, var(--accent) 60%, #fff) 50%, transparent 60% 100%);
+        -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+        animation:pcSpin 6s linear infinite;pointer-events:none;}
+      @keyframes pcSpin{to{--pcA:360deg;}}
+      .is-lit-grid .price-card:not(.is-mid){opacity:.82;transition:opacity .2s,border-color .2s;}
+      .is-lit-grid .price-card:not(.is-mid):hover{opacity:1;border-color:var(--border-strong);}
+      @media (max-width:860px){.is-lit-grid .price-card.is-mid{transform:none;}}
+      @media (prefers-reduced-motion:reduce){.is-lit-grid .price-card.is-mid::before,.grabber .dot{animation:none;}}
       .price-cta.is-mid:hover{background:var(--accent-2);}
       @media (prefers-reduced-motion: reduce){.price-cta:hover{transform:none;}}
       .price-note{max-width:620px;margin:26px auto 0;text-align:center;font-size:13.5px;color:var(--text-muted);}
@@ -3144,11 +3666,11 @@ def render_home() -> str:
                 aria-haspopup="dialog" aria-controls="videoModal">
           <span class="tag">New</span>
           <b>See it move</b>
-          <span class="dur">&middot; 45 seconds</span>
+          <span class="dur">&middot; 64 seconds</span>
           <span class="play" aria-hidden="true">&#9654;</span>
         </button>
         <h1 class="reveal">Every Problem <span class="gradient-text">Has A Solution.</span></h1>
-        <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is one workspace that runs your whole business: clients, money, marketing, and your site. A chief of staff does the work, all under one subscription.</p>
+        <p class="hero-anchor reveal reveal-delay-1"><b>The Solutionist System</b> is the employee of record for your business: a chief of staff who keeps the books, holds the consent records, remembers why, and can be told to stop. Bring whatever assistant you already use; it works through Solutionist.</p>
         <p class="hero-slot-line reveal reveal-delay-1">
           <span>Tell it what you do:</span>
           <span class="hero-slot"><span id="heroWord">barber</span><span class="caret" aria-hidden="true"></span></span>
@@ -3171,83 +3693,57 @@ def render_home() -> str:
              (top bar, sidebar, briefing, Quick Actions) and the page did
              not define it until word ~566. So the caption carries the
              role, and the name is never naked on first sight. -->
-        <div class="fold-cap"><span class="dot"></span><b>Mission Control</b> &middot; what Chief, your chief of staff, has ready each morning <span id="heroCap">for a barber</span></div>
-        <div class="app">
-          <div class="app-top">
-            <span class="at-mark"></span>
-            <span class="at-search">Ask Chief anything&hellip;<span class="kbd">&#8984;K</span></span>
-            <span class="at-cta">+ Quick Create</span>
-            <span class="at-urgent">Urgent</span>
-            <span class="at-av"></span>
+        <div class="fold-cap"><span class="dot"></span><b>Home</b> &middot; what Chief, your chief of staff, has ready each morning <span id="heroCap">for a barber</span></div>
+        <div class="app is-ws">
+          <!-- the rail: Home, Build, Operate, Grow, System — icons only,
+               the way the Workspace shell folds it once you are in -->
+          <div class="wr">
+            <span class="wr-mark"></span>
+            <i class="wr-i on"></i><i class="wr-i bu"></i><i class="wr-i op"><b>15</b></i><i class="wr-i gr"></i><i class="wr-i sy"></i>
+            <span class="wr-me"></span>
           </div>
-          <div class="app-body">
-            <div class="app-side">
-              <div class="as-user"><span class="av"></span>
-                <span class="nm fold-swap" id="fdOwner">Jordan Reyes<span id="fdBiz">Fade &amp; Co.</span></span>
-                <span class="as-plan">STARTER</span></div>
-              <div class="as-sec">Mission Control</div>
-              <div class="as-item is-on"><span class="ic"></span>Dashboard</div>
-              <div class="as-item"><span class="ic"></span>Operations</div>
-              <div class="as-item"><span class="ic"></span>Notifications<span class="ct">15</span></div>
-              <div class="as-sec fold-swap" id="fdGrp">The chair</div>
-              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN1">Regulars</span></div>
-              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN2">Chair calendar</span></div>
-              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN3">Walk-ins</span></div>
-              <div class="as-item fold-swap"><span class="ic"></span><span id="fdN4">Payments</span></div>
-              <div class="as-sec">Finance</div>
-              <div class="as-item"><span class="ic"></span>Invoices</div>
-              <div class="as-item"><span class="ic"></span>Expenses</div>
-              <div class="as-item"><span class="ic"></span>Revenue</div>
-              <div class="as-chief">Chief AI<span class="on">Online</span></div>
+          <div class="wm">
+            <div class="wtop">
+              <span class="wbiz"><span class="wbm" id="fdBm">F</span><span class="wbn"><b class="fold-swap" id="fdBiz">Fade &amp; Co.</b><span>Your business dashboard</span></span><span class="wpill">starter</span></span>
+              <span class="wsearch">Search tools, people, actions<span class="kbd">&#8984;K</span></span>
+              <span class="wbtn">Studio</span><span class="wbtn wchf">Chief</span><span class="wbtn">Voice</span>
+              <span class="wbell"></span><span class="wav"></span>
             </div>
-            <div class="app-canvas">
-              <div class="kpi-row">
-                <div class="kpi fold-swap"><span class="k" id="fdK1">Chairs booked this week</span><span class="v" id="fdV1">38</span><span class="f" id="fdF1">4 open Friday</span></div>
-                <div class="kpi fold-swap"><span class="k" id="fdK2">Regulars</span><span class="v" id="fdV2">124</span><span class="f" id="fdF2">9 overdue for a cut</span></div>
-                <div class="kpi fold-swap"><span class="k" id="fdK3">Revenue &middot; this month</span><span class="v gold" id="fdV3">$6,910</span><span class="f up" id="fdF3">&#9650; 12% vs last mo</span></div>
-                <div class="kpi fold-swap"><span class="k" id="fdK4">Business health</span><span class="v up" id="fdV4">61%</span><span class="f" id="fdF4">steady</span></div>
-              </div>
-              <div class="hero-panes">
-                <div class="brief">
-                  <div class="brief-l">
-                    <span class="date">Monday, August 13 &middot; Morning edition</span>
-                    <span class="hi">Good morning,<br><b id="fdFirst">Jordan</b></span>
-                    <span class="cp">2 things need you today. Chief has them queued, and one word clears the deck.</span>
-                    <span class="brief-btns"><span class="ah-btn">Focus Mode &rarr;</span><span class="lnk">Read today&rsquo;s briefing</span></span>
-                  </div>
-                  <div class="chief">
-                    <div class="chief-h">Chief AI<span class="on">Online</span></div>
-                    <div class="chief-body">
-                      <div class="cf">
-                        <div class="chief-lead fold-swap" id="fdLead">I&rsquo;ve analyzed your day. Here&rsquo;s what I found:</div>
-                        <div class="chief-f fold-swap"><span class="sq warn"></span><span class="g" id="fdR1">3 regulars not rebooked</span><span class="amt" id="fdA1">6 weeks</span></div>
-                        <div class="chief-f fold-swap"><span class="sq"></span><span class="g" id="fdR2">2 drafts waiting for you</span><span class="tag">Needs you</span></div>
-                        <div class="chief-f fold-swap"><span class="sq ok"></span><span class="g" id="fdR3">$6,910 collected this month</span></div>
-                        <div class="chief-ask fold-swap" id="fdAsk">Want me to text them your Tuesday openings?</div>
-                        <div class="chief-btns"><b>Yes, handle it</b><i>Review first</i></div>
-                      </div>
-                    </div>
-                    <div class="chief-in"><span class="cin-wrap"><span class="cin-ph">Ask Chief anything&hellip;</span></span><span class="go"></span></div>
-                  </div>
+            <div class="wchief">
+              <span class="worb"></span>
+              <span class="wline"><span class="wk">Chief</span><span class="wt">Your day, read every turn. Ask me anything, or take a shortcut below.</span></span>
+              <span class="wask">Ask Chief anything about Home&hellip;<span class="wgo"></span></span>
+              <span class="wchips">
+                <i class="fold-swap" id="fdN1">Regulars</i><i class="fold-swap" id="fdN2">Chair calendar</i><i class="fold-swap" id="fdN3">Walk-ins</i><i class="fold-swap" id="fdN4">Payments</i><i>Focus Mode</i><i class="sp">Everything &#8984;K</i>
+              </span>
+            </div>
+            <div class="whome">
+              <div class="wg">
+                <span class="wbar"></span>
+                <span class="wdate">Monday, August 13 &middot; Morning edition</span>
+                <span class="whi">Good morning, <b class="fold-swap" id="fdFirst">Andre</b>.</span>
+                <span class="wsub">Three things need you. One word clears the deck.</span>
+                <div class="wrows">
+                  <div class="wrow hot fold-swap"><span class="wic"></span><span class="wtx" id="fdR1">3 regulars not rebooked</span><span class="wtag hot" id="fdA1">6 weeks</span><span class="wgo2"></span></div>
+                  <div class="wrow fold-swap"><span class="wic"></span><span class="wtx" id="fdR2">2 drafts waiting for you</span><span class="wtag warn">Needs you</span><span class="wgo2"></span></div>
+                  <div class="wrow fold-swap"><span class="wic"></span><span class="wtx" id="fdR3">$6,910 collected this month</span><span class="wtag good">In</span><span class="wgo2"></span></div>
                 </div>
-                <div class="pnl">
-                  <div class="pnl-h">AI Suggestions<span class="ct">4</span></div>
-                  <div class="r fold-swap"><span class="bar red"></span><span class="nm g" id="fdS1">Marcus Bell<span id="fdS1b">last cut 41 days ago</span></span><span class="pill sent">Text</span></div>
-                  <div class="r fold-swap"><span class="bar red"></span><span class="nm g" id="fdS2">Tia Okonkwo<span id="fdS2b">last cut 38 days ago</span></span><span class="pill sent">Text</span></div>
-                  <div class="r fold-swap"><span class="bar amb"></span><span class="nm g" id="fdS3">2 drafts pending review<span id="fdS3b">from last night&rsquo;s run</span></span><span class="pill draft">Open</span></div>
-                  <div class="pnl-h" style="margin-top:4px;">Today<span class="ct" id="fdTn">4</span></div>
-                  <div class="r fold-swap"><span class="bar grn"></span><span class="nm g" id="fdT1">9:00 AM<span id="fdT1b">Marcus Bell</span></span></div>
-                  <div class="r fold-swap"><span class="bar grn"></span><span class="nm g" id="fdT2">11:30 AM<span id="fdT2b">Grace Okoye</span></span></div>
-                  <div class="r fold-swap"><span class="bar"></span><span class="nm g" id="fdT3">2:00 PM<span id="fdT3b">Tia Okonkwo</span></span></div>
-                </div>
+                <div class="wdecide"><span class="wq fold-swap" id="fdAsk">Want me to text them your Tuesday openings?</span><b>Yes, handle it</b><i>Review first</i><span class="wlnk">Read today&rsquo;s briefing &rarr;</span></div>
               </div>
-              <div class="qa-h">Quick Actions<span class="hint">one click, Chief handles the rest</span></div>
-              <div class="qa">
-                <i style="--c:#3B82F6">Draft Email</i><i style="--c:#EF4444">Chase Overdue</i>
-                <i style="--c:#F59E0B">New Invoice</i><i style="--c:#22C55E">Add Contact</i>
-                <i style="--c:#06B6D4">Book Session</i><i style="--c:#A855F7">Create a Post</i>
-                <i style="--c:#7C3AED">Run Autopilot</i><i style="--c:#C9A84C">Set a Goal</i>
+              <div class="wrd">
+                <span class="wrd-h"><span class="wk">Chief&rsquo;s read &middot; 3 need you</span><span class="wlisten">Listen</span></span>
+                <span class="wrd-t fold-swap"><span id="fdNext">Next up is Marcus Bell at 9:00 AM, and I have the notes ready.</span> <span id="fdLead">3 regulars have not rebooked in 6 weeks; 2 drafts are waiting on your word. $6,910 came in this month.</span></span>
+                <span class="wk wrd-wk">This week</span>
+                <span class="wwk fold-swap" id="fdWk"></span>
+                <span class="wleg"><i class="b"></i>booked<i class="m"></i>money in<span class="sp" id="fdWkSum">38 bookings &middot; $6,910 in</span></span>
               </div>
+            </div>
+            <span class="wk wgl-h">At a glance</span>
+            <div class="wgl">
+              <div class="kpi fold-swap"><span class="k" id="fdK1">Chairs booked this week</span><span class="v" id="fdV1">38</span><span class="f" id="fdF1">4 open Friday</span></div>
+              <div class="kpi fold-swap"><span class="k" id="fdK2">Regulars</span><span class="v" id="fdV2">124</span><span class="f" id="fdF2">9 overdue for a cut</span></div>
+              <div class="kpi fold-swap"><span class="k" id="fdK3">Revenue &middot; this month</span><span class="v gold" id="fdV3">$6,910</span><span class="f up" id="fdF3">&#9650; 12% vs last mo</span></div>
+              <div class="kpi fold-swap"><span class="k" id="fdK4">Business health</span><span class="v up" id="fdV4">61%</span><span class="f" id="fdF4">steady</span></div>
             </div>
           </div>
         </div>
@@ -3427,7 +3923,7 @@ def render_home() -> str:
       <button class="room-tab" role="tab" aria-selected="true" data-i="0">Operate</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="1">Clients</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="2">The Studio</button>
-      <button class="room-tab" role="tab" aria-selected="false" data-i="3">The Academy</button>
+      <button class="room-tab" role="tab" aria-selected="false" data-i="3">Solutionist Academy</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="4">Smart Sites</button>
       <button class="room-tab" role="tab" aria-selected="false" data-i="5">Autopilot</button>
     </div>
@@ -3522,7 +4018,7 @@ def render_home() -> str:
             <div class="app-body">""" + SIDEBAR + """
               <div class="app-canvas">
                 <div class="ah-rule"></div>
-                <div class="ah-eyebrow">The Academy &middot; Legal &amp; Tax Setup</div>
+                <div class="ah-eyebrow">Solutionist Academy &middot; Legal &amp; Tax Setup</div>
                 <div style="display:flex;align-items:center;gap:14px;">
                   <span class="ring"><i>62%</i></span>
                   <span style="flex:1;"><span class="ah-title" style="display:block;">5 of 8 courses sealed</span>
@@ -3604,14 +4100,16 @@ def render_home() -> str:
   <div class="container">
     <div class="section-head reveal">
             <span data-spine class="eyebrow">What it costs</span>
-      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">Priced for one person running the whole thing.</h2>
-    </div>
-    <div class="price-grid reveal reveal-delay-2">""" + _price_cards_html() + """
+      <div class="grabber reveal reveal-delay-1"><span class="dot" aria-hidden></span> Chief works while you work &mdash; every plan, from day one</div>
+      <h2 class="reveal reveal-delay-1" style="margin-top:14px;">One price. The whole business. A chief of staff who never clocks out.</h2>
+      <div class="billing reveal reveal-delay-2" role="group" aria-label="Billing period"><button type="button" data-period="monthly" aria-pressed="true">Monthly</button><button type="button" data-period="annual" aria-pressed="false">Annual <span class="save">2 months free</span></button></div>
+    </div>""" + _founder_strip_html() + """
+    <div class="price-grid is-lit-grid reveal reveal-delay-2">""" + _price_cards_html() + """
     </div>
     <div class="price-doors reveal reveal-delay-3">
       <a class="price-compare" href="/compare">Compare every plan &rarr;</a>
     </div>
-    <p class="price-note reveal">Running a team or more than one business? That is what the Solutionist plan is for; bigger networks are custom. <a href="/get-started" style="color:var(--accent);">Talk to us</a>. Every plan starts with __TRIAL_FREE__, and you can change tier or cancel yourself at any time.</p>
+    <p class="price-note reveal">Every plan starts with __TRIAL_FREE__, and you can change tier or cancel yourself at any time. Bigger networks are custom &mdash; <a href="/get-started" style="color:var(--accent);">talk to us</a>.</p>
   </div>
 </section>
 
@@ -3626,21 +4124,22 @@ def render_home() -> str:
      Deliberately no `.reveal` anywhere in here: see DEVICE_BAND_CSS.
      The scene is aria-hidden — it is product art, and the copy above it
      already says everything a screen reader needs. ══ -->
-<!-- The walkthrough. preload="none" so the 8.7MB costs nothing until
-     somebody asks for it; the source is only fetched on the first open.
-     The same film is still inline on /features for anyone reading that
-     page top to bottom. -->
+<!-- The film. preload="none" so the 6.8MB costs nothing until somebody
+     asks for it; the source is only fetched on the first open. The same
+     film is still inline on /features for anyone reading that page top
+     to bottom. ?v=2 since 2026-09-02: "The System" replaced "Takes Shape"
+     at the same URL, and a cached poster would have shown the old film. -->
 <div class="vmodal" id="videoModal" role="dialog" aria-modal="true"
-     aria-label="The Solutionist System, forty-five seconds end to end">
+     aria-label="The Solutionist System, sixty-four seconds of the product at work">
   <div class="vmodal-box">
     <button type="button" class="vmodal-x" id="videoModalClose" aria-label="Close video">&times;</button>
     <video id="videoModalPlayer" controls playsinline preload="none"
-           poster="/assets/film-poster.jpg?v=1">
-      <source src="/assets/film.mp4?v=1" type="video/mp4">
+           poster="/assets/film-poster.jpg?v=4">
+      <source src="/assets/film.mp4?v=3" type="video/mp4">
       Your browser doesn&rsquo;t support embedded video.
-      <a href="/assets/film.mp4?v=1">Download the film</a>.
+      <a href="/assets/film.mp4?v=3">Download the film</a>.
     </video>
-    <div class="vmodal-cap">The same system in three different businesses, the shift it works while you are closed, and the one thing it will not do without you.</div>
+    <div class="vmodal-cap">One photographer&rsquo;s Tuesday: Home, Chief, the rooms, the shift it works while you are closed, and the one thing it will not do without you.</div>
   </div>
 </div>
 
@@ -4004,6 +4503,30 @@ def render_home() -> str:
       if (p < 1) requestAnimationFrame(step);
     }
     requestAnimationFrame(step);
+  }
+
+  /* Monthly / annual (2026-09-04). The figure carries both numbers;
+     the switch swaps the text and the count-up target together, so a
+     card that has not arrived yet still counts up to the right price. */
+  var billing = document.querySelector('.pricing .billing');
+  if (billing) {
+    billing.addEventListener('click', function (ev) {
+      var btn = ev.target.closest('button[data-period]');
+      if (!btn) return;
+      var annual = btn.getAttribute('data-period') === 'annual';
+      billing.querySelectorAll('button[data-period]').forEach(function (b) {
+        b.setAttribute('aria-pressed', (b.getAttribute('data-period') === 'annual') === annual ? 'true' : 'false');
+      });
+      cards.forEach(function (card) {
+        var b = card.querySelector('.pc-num');
+        var billed = card.querySelector('.price-billed');
+        if (!b) return;
+        var v = annual ? b.getAttribute('data-annual') : b.getAttribute('data-monthly');
+        b.setAttribute('data-to', v);
+        b.textContent = '$' + v;
+        if (billed) billed.innerHTML = annual ? billed.getAttribute('data-annual') : '&nbsp;';
+      });
+    });
   }
 
   function arrive(card, i) {
@@ -4511,23 +5034,6 @@ def render_features() -> str:
   </div>
 </section>
 
-<section id="demo" class="demo-section">
-  <div class="container">
-    <div class="section-head reveal">
-            <span data-spine class="eyebrow">See it move</span>
-      <h2>Forty-five seconds, <span class="gradient-text">end to end.</span></h2>
-      <p>The same system in three different businesses, the shift it works while you are closed, and the one thing it will not do without you.</p>
-    </div>
-    <div class="demo-frame reveal">
-      <div class="demo-chrome"><span></span><span></span><span></span><em>The Solutionist System</em></div>
-      <video class="demo-video" controls playsinline preload="metadata" poster="/assets/film-poster.jpg?v=1">
-        <source src="/assets/film.mp4?v=1" type="video/mp4">
-        Your browser doesn't support embedded video. <a href="/assets/film.mp4?v=1">Download the film</a>.
-      </video>
-    </div>
-  </div>
-</section>
-
 <section class="final-cta">
   <div class="container">
     <span class="eyebrow reveal">Ready to try it?</span>
@@ -4597,7 +5103,7 @@ def render_features() -> str:
 # price change lands in both places or neither. The per-tool prices
 # under STACK_TOTAL are list prices for the named plans and are stated
 # as "about" for that reason.
-STACK_TOTAL = "$125+"
+STACK_TOTAL = "$105+"
 SOLUTIONIST_FROM = "$79"
 
 
@@ -4639,7 +5145,7 @@ def render_compare() -> str:
 
       /* Ten rows is long enough that the column you are reading stops
          being obvious. The head pins under the page's own sticky
-         offset so "Solutionist" and "The 8-tool stack" stay overhead. */
+         offset so "Solutionist" and "The 7-tool stack" stay overhead. */
       table.compare thead th{position:sticky;top:0;z-index:2;
         background:color-mix(in srgb, var(--bg) 92%, transparent);
         backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);}
@@ -4680,6 +5186,72 @@ def render_compare() -> str:
       .table-wrap{overflow-x:auto;}
       .compare.plans{min-width:600px;}
       .compare.plans td{font-variant-numeric:tabular-nums;}
+
+      /* ── the tier table, now that it names the whole product ──────
+         Forty-odd rows need banding or they read as one wall. The group
+         row is a full-width band; the row under it carries a "what it
+         is" line so the label does not have to do the selling on its
+         own. The tier columns are held narrow so the description column
+         keeps the room — that column is the one being read. */
+      .compare.plans .cp-grp td{padding:16px 18px 8px;
+        background:color-mix(in srgb, var(--accent) 6%, transparent);
+        border-top:1px solid var(--border);
+        font-family:var(--font-heading);font-size:11px;font-weight:700;
+        letter-spacing:1.8px;text-transform:uppercase;color:var(--accent);}
+      .compare.plans .cp-grp + tr td{border-top:none;}
+      .compare.plans td.cp-what{font-weight:600;color:var(--text-primary);
+        line-height:1.45;font-variant-numeric:normal;}
+      .cp-note{display:block;margin-top:3px;font-size:12px;font-weight:400;
+        line-height:1.5;color:var(--text-dim);}
+      .compare.plans thead th:not(:first-child),
+      .compare.plans tbody tr:not(.cp-grp) td:not(:first-child){
+        text-align:center;width:15%;}
+      .cp-mprice{display:none;}
+
+      /* ── on a phone, this stops being a table ─────────────────────
+         It carried a 600px min-width, so every phone got a horizontal
+         drag across the one surface where the decision is made — and
+         the column you have to drag to reach is the tier we are trying
+         to sell. Narrowing the columns instead is worse, not better: at
+         360px the label column collapses to a 90px ribbon and
+         "checkout" breaks as "checkou / t". Measured both before
+         writing this.
+         So each row becomes a card: the capability and its description
+         at full width, then the three verdicts as chips underneath,
+         each labelled from data-p (the head is hidden, so the cell has
+         to carry its own column name). Same rows, same source of truth,
+         no drag. The prices move to .cp-mprice above the list. */
+      @media (max-width: 720px){
+        .cp-mprice{display:block;margin-top:10px;font-size:12.5px;
+          color:var(--text-muted);font-variant-numeric:tabular-nums;}
+        .table-wrap{overflow-x:visible;}
+        .compare.plans{min-width:0;display:block;}
+        .compare.plans thead{display:none;}
+        .compare.plans tbody{display:block;}
+        .compare.plans tr{display:block;}
+        .compare.plans .cp-grp td{display:block;padding:15px 14px 8px;
+          font-size:10px;border-top:1px solid var(--border);}
+        .compare.plans tbody tr:not(.cp-grp){padding:13px 14px;
+          border-top:1px solid var(--border-subtle, var(--border));}
+        .compare.plans .cp-grp + tr{border-top:none;}
+        .compare.plans tbody tr:not(.cp-grp) td{border:none;padding:0;}
+        .compare.plans td.cp-what{display:block;font-size:13.5px;}
+        .cp-note{font-size:12px;margin-top:4px;}
+        /* NOTE THE `tbody`. A media query adds no specificity, so this
+           rule has to out-specify the desktop one it is overriding
+           (.compare.plans tbody tr:not(.cp-grp) td:not(:first-child)),
+           and without the tbody it loses on element count and keeps the
+           desktop width:15% — ~43px, narrower than the word
+           "PROFESSIONAL", so the three chips printed on top of each
+           other. Same reason width and text-align are reset by hand. */
+        .compare.plans tbody tr:not(.cp-grp) td:not(.cp-what){
+          display:inline-flex;align-items:baseline;gap:5px;
+          width:auto;text-align:left;white-space:nowrap;
+          margin:9px 14px 0 0;font-size:12.5px;font-style:normal;}
+        .compare.plans tbody tr:not(.cp-grp) td:not(.cp-what)::before{
+          content:attr(data-p);font-size:9.5px;font-weight:700;
+          letter-spacing:1.1px;text-transform:uppercase;color:var(--text-dim);}
+      }
       .switch-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:18px;margin-top:14px;}
       @media (max-width: 860px){.switch-grid{grid-template-columns:1fr;}}
       .switch-card{padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:14px;}
@@ -4691,23 +5263,9 @@ def render_compare() -> str:
 <section class="page-hero">
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
-    <span class="eyebrow reveal">Solutionist vs. alternatives</span>
-    <h1 class="reveal reveal-delay-1">Eight tools that don&rsquo;t know each other.<br>Or <span class="gradient-text">one that knows you.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:700px;margin:14px auto 0;">The stack is not expensive because of what it costs. It is expensive because you are the integration layer.</p>
-    <div class="cmp-math reveal reveal-delay-3">
-      <div class="cmp-side">
-        <span class="cmp-lbl">Eight tools, list price</span>
-        <span class="cmp-fig alt">""" + STACK_TOTAL + """<i>/mo</i></span>
-        <span class="cmp-sub">HubSpot &middot; Stripe &middot; Calendly &middot; Buffer &middot; Notion
-          &middot; Mixpanel &middot; Squarespace &middot; ChatGPT</span>
-      </div>
-      <div class="cmp-arrow" aria-hidden="true"><span></span></div>
-      <div class="cmp-side">
-        <span class="cmp-lbl">One system</span>
-        <span class="cmp-fig">""" + SOLUTIONIST_FROM + """<i>/mo</i></span>
-        <span class="cmp-sub">Everything below, on one login, sharing what it knows</span>
-      </div>
-    </div>
+    <span class="eyebrow reveal">Every plan, every row</span>
+    <h1 class="reveal reveal-delay-1">What you get <span class="gradient-text">on each plan.</span></h1>
+    <p class="lead reveal reveal-delay-2" style="max-width:700px;margin:14px auto 0;">The short version, seven tools against one system, is on the <a href="/#compare" style="color:var(--accent);">home page</a>. This page is the whole table: every row, on every plan, and what changes if you are switching from something else.</p>
 
   </div>
 </section>
@@ -4717,11 +5275,11 @@ def render_compare() -> str:
     <div class="section-head reveal">
       <span class="eyebrow">The real number</span>
       <h2>The subscriptions are the cheap part.</h2>
-      <p>Add up the subscriptions and you get one number. Add up the re-typing, the copy-paste between tabs, the context you rebuild every time you open ChatGPT, and the client who slipped because two tools disagreed about what happened, and you get the real one. A stack of eight tools has no idea you exist: each one holds a slice of your business and none of them holds the business.</p>
+      <p>Add up the subscriptions and you get one number. Add up the re-typing, the copy-paste between tabs, the context you rebuild every time you open another tab, and the client who slipped because two tools disagreed about what happened, and you get the real one. A stack of seven tools has no idea you exist: each one holds a slice of your business and none of them holds the business.</p>
     </div>
     <div class="cost-grid">
       <div class="cost-card alt reveal">
-        <div class="cost-title">The 8-tool stack (per month)</div>
+        <div class="cost-title">The 7-tool stack (per month)</div>
         <ul class="cost-stack">
           <li><span>HubSpot Starter (CRM)</span><span>$20</span></li>
           <li><span>Stripe (no monthly, fees on volume)</span><span>$0+</span></li>
@@ -4730,7 +5288,6 @@ def render_compare() -> str:
           <li><span>Notion Plus (notes/goals)</span><span>$10</span></li>
           <li><span>Mixpanel / Looker Studio (analytics)</span><span>$25+</span></li>
           <li><span>Squarespace Business (website)</span><span>$23</span></li>
-          <li><span>ChatGPT Plus (AI assistant)</span><span>$20</span></li>
         </ul>
         <div class="cost-total"><span class="label">≈ Total</span><span class="price">""" + STACK_TOTAL + """ /mo</span></div>
         <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Plus the time + headache of stitching them together. Each tool wants its own login, notification settings, billing cycle, and integrations that mostly don't work.</p>
@@ -4748,39 +5305,13 @@ def render_compare() -> str:
           <li><span>Chief of Staff (AI)</span><span>✓</span></li>
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
-        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter $79 &middot; Professional $199 &middot; Solutionist $399. Every plan starts with __TRIAL_FREE__, and you can cancel yourself at any time.</p>
+        <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter __PRICE_STARTER__ &middot; Professional __PRICE_PRO__ &middot; Solutionist __PRICE_SOL__. Every plan starts with __TRIAL_FREE__, and you can cancel yourself at any time.</p>
+<p style="margin-top:10px;font-size:12px;color:var(--text-dim);">Already use an AI assistant? Keep it. Connect it from Settings and it works through Solutionist &mdash; reading your business, or, with your permission, keeping its records &mdash; with every action logged, reversible, and yours to revoke.</p>
       </div>
     </div>
   </div>
 </section>
 
-<section>
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="eyebrow">Feature by feature</span>
-      <h2>The side-by-side.</h2>
-    </div>
-    <div class="reveal reveal-delay-1">
-      <table class="compare">
-        <thead>
-          <tr><th>What you need</th><th class="sol-col">Solutionist</th><th>The 8-tool stack</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>CRM &amp; contacts</td><td class="sol">✓ Built-in</td><td class="alt">HubSpot / Notion / spreadsheet</td></tr>
-          <tr><td>Invoicing &amp; payments</td><td class="sol">✓ Built-in</td><td class="alt">Stripe + QuickBooks</td></tr>
-          <tr><td>Calendar &amp; booking</td><td class="sol">✓ Built-in</td><td class="alt">Calendly + Google Calendar</td></tr>
-          <tr><td>Content planning &amp; publishing</td><td class="sol">✓ Built-in</td><td class="alt">Buffer / Hootsuite + Notion</td></tr>
-          <tr><td>Goals &amp; tracking</td><td class="sol">✓ Built-in</td><td class="alt">Spreadsheet + sticky notes</td></tr>
-          <tr><td>Funnel &amp; pipeline analytics</td><td class="sol">✓ Built-in</td><td class="alt">Mixpanel / Looker / DIY</td></tr>
-          <tr><td>Website &amp; brand</td><td class="sol">✓ Built-in</td><td class="alt">Squarespace / Webflow + Figma</td></tr>
-          <tr><td>AI assistant that knows your business</td><td class="sol">✓ Chief of Staff</td><td class="alt">ChatGPT + manual context every time</td></tr>
-          <tr><td>One login</td><td class="sol">✓</td><td class="alt">8+ logins</td></tr>
-          <tr><td>Real-time data flow</td><td class="sol">✓ Native</td><td class="alt">Zapier / manual sync</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
 """ + _plan_compare_section_html() + """
 <section>
   <div class="container">
@@ -4818,7 +5349,7 @@ def render_compare() -> str:
 """
     return _render_shell(
         title="Compare",
-        description="Eight tools that do not know each other, or one that knows you. Feature-by-feature comparison and switching guides for the Solutionist System.",
+        description="Seven tools that do not know each other, or one that knows you. Feature-by-feature comparison and switching guides for the Solutionist System.",
         content_html=body, path="/compare", active="compare", extra_css=extra_css,
     )
 
@@ -4862,7 +5393,7 @@ def render_faq() -> str:
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
     <span class="eyebrow reveal">Common questions</span>
-    <h1 class="reveal reveal-delay-1">Answers to <span class="gradient-text">what people ask first.</span></h1>
+    <h1 class="reveal reveal-delay-1">Every question, <span class="gradient-text">answered.</span></h1>
     <p class="lead reveal reveal-delay-2" style="max-width:600px;margin:14px auto 0;">Don't see your question? Email us at <a href="mailto:__CONTACT_EMAIL__" style="color:var(--accent);">__CONTACT_EMAIL__</a>.</p>
   </div>
 </section>
@@ -4870,9 +5401,9 @@ def render_faq() -> str:
 <section>
   <div class="container-narrow">
     <div class="faq-filter reveal" id="faqFilter" role="group" aria-label="Filter questions">
-      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>10</span></button>
+      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>11</span></button>
       <button type="button" class="faq-f" data-f="fit"   aria-pressed="false">Is it for me<span>3</span></button>
-      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>3</span></button>
+      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>4</span></button>
       <button type="button" class="faq-f" data-f="money" aria-pressed="false">Money<span>2</span></button>
       <button type="button" class="faq-f" data-f="data"  aria-pressed="false">Your data<span>2</span></button>
     </div>
@@ -4887,7 +5418,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="money">
         <summary>What about pricing?</summary>
-        <div class="faq-body"><p>Starter is $79/month, Professional $199, and Solutionist $399. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. Every plan opens with __TRIAL_FREE__, and you can move between tiers or cancel yourself from inside the app.</p></div>
+        <div class="faq-body"><p>Starter is __PRICE_STARTER__/month, Professional __PRICE_PRO__, and Solutionist __PRICE_SOL__. Every plan is the whole product; bigger plans add AI headroom, deeper analysis, and room for a team. See the <a href="/compare" style="color:var(--accent);">plan comparison</a> for the side-by-side. Every plan opens with __TRIAL_FREE__, and you can move between tiers or cancel yourself from inside the app.</p></div>
       </details>
       <details class="faq-item" data-g="how">
         <summary>How is this different from Notion, HubSpot, or just using ChatGPT?</summary>
@@ -4914,6 +5445,10 @@ def render_faq() -> str:
       <details class="faq-item" data-g="fit">
         <summary>Does it work for churches and ministries?</summary>
         <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first: one person runs the workspace. The Solutionist plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
+      </details>
+      <details class="faq-item" data-g="how">
+        <summary>What does Chief do while I&rsquo;m not logged in?</summary>
+        <div class="faq-body"><p>It works. Turn on &ldquo;Chief works between conversations&rdquo; and a new booking, lead, or payment gets the bookkeeping you would have asked for within a minute or two: logged on the client, a task set, a note left, and for a new lead the first reply drafted. Hand it an outcome in chat &mdash; &ldquo;fill Thursday&rdquo; &mdash; and it keeps working that until the calendar says so. Anything that sends, charges, or publishes reaches your phone as one tap, and nothing goes out until you tap it. Every move is on the record, and every Monday it tells you what it did, what landed, and what is waiting on you.</p></div>
       </details>
       <details class="faq-item" data-g="how">
         <summary>Can the AI publish to my social accounts?</summary>
@@ -5048,7 +5583,7 @@ def render_about() -> str:
         font-family:var(--font-heading);font-size:21px;line-height:1.4;letter-spacing:-.02em;
         color:var(--text-primary);}
 
-      /* Eight tools that never spoke to each other, and the thing that
+      /* Seven tools that never spoke to each other, and the thing that
          replaced them. The page says it; this shows it. */
       .stack-flow{display:grid;grid-template-columns:1fr 72px 1fr;align-items:center;gap:10px;
         max-width:940px;margin:0 auto;}
@@ -5135,7 +5670,7 @@ def render_about() -> str:
   <div class="container">
     <span class="eyebrow reveal">Why this exists</span>
     <h1 class="reveal reveal-delay-1">The work was never <span class="gradient-text">the problem.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">The eight tools
+    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">The seven tools
        around it were.</p>
   </div>
 </section>
@@ -5317,7 +5852,7 @@ def render_about() -> str:
     return _render_shell(
         title="About",
         description=("Why the Solutionist System exists: one workspace for the person who runs the "
-                     "whole business, instead of eight tools that never speak to each other."),
+                     "whole business, instead of seven tools that never speak to each other."),
         content_html=body, path="/about", active="about", extra_css=extra_css,
     )
 
@@ -6181,13 +6716,13 @@ async def handle_lead_intake(req: LeadIntakeRequest,
             logger.warning(f"owner email failed: {e}")
 
         # Lead confirmation
-        lead_subject = "Got your note — and the trial is open whenever you are"
+        lead_subject = "We got your note. Your trial is ready whenever you are"
         lead_body = f"""<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#222;padding:20px;max-width:600px;margin:0 auto;background:#fff;line-height:1.65;">
 <h2 style="color:#1D63E6;margin-bottom:14px;">Thanks for writing, {_html.escape(name.split()[0])}.</h2>
-<p style="font-size:15px;color:#333;">We got your note about the Solutionist System, and someone from the team will reply within 24 hours &mdash; usually faster.</p>
+<p style="font-size:15px;color:#333;">We got your note about the Solutionist System, and someone from the team will reply within 24 hours, usually faster.</p>
 <p style="font-size:15px;color:#333;">One thing worth saying now: <strong>you don't have to wait on us to start.</strong> The system is self-serve, every plan opens with a {_trial_days()}-day free trial, and your workspace is built around your trade the moment you name it.</p>
 <p style="text-align:center;margin:26px 0;"><a href="https://mysolutionist.app/start" style="display:inline-block;background:#1D63E6;color:#fff;text-decoration:none;padding:13px 26px;border-radius:8px;font-weight:600;font-size:15px;">Start your free trial &rarr;</a></p>
-<p style="font-size:14px;color:#666;margin-top:18px;">Either way, just reply to this email &mdash; it comes straight to the team.</p>
+<p style="font-size:14px;color:#666;margin-top:18px;">Either way, just reply to this email. It comes straight to the team.</p>
 <p style="margin-top:24px;font-size:14px;color:#444;">Talk soon,<br><strong>The Solutionist Team</strong><br>The Solutionist System LLC</p>
 </body></html>"""
         try:

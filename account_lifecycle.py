@@ -84,14 +84,113 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 #   mcp_oauth_* / referrals / waitlist / scheduler_lease / fx_rates /
 #   platform_* / inference_cache — platform- or user-keyed, not
 #                             business children.
+#
+# The list above used to be prose only, and prose does not fail a
+# test. Every table a migration creates WITH a business_id column now
+# has to appear in exactly one of BUSINESS_CHILD_TABLES or
+# EXPORT_EXCLUDED (test_export_import pins it, scanning the migrations),
+# so the next table someone adds is a decision, not an omission. On
+# 2026-09-04 the scan found nine practitioner tables the export had
+# never carried — concierge conversations, consent records, the
+# business's own document templates, auditor links, push
+# subscriptions, the Stripe disputes cache, support-ticket messages,
+# and the texting number itself — and sixteen platform-side ones that
+# belong here with a reason.
+
+EXPORT_EXCLUDED: Dict[str, str] = {
+    "agentcard_wallets": "encrypted customer OAuth credentials and wallet-bound purchase journal; never portable, cascade on user/business deletion",
+    "lane_purchases": "encrypted wallet-bound purchase journal; never portable, cascade on user/business deletion",
+    "lane_saved_links": "owner-saved Lane merchant links encrypted under the server key; never portable, cascade on user/business deletion",
+    "link_wallet_sessions": "encrypted Link OAuth credentials and pending authorization; never portable, cascade on user/business deletion",
+    "chief_link_pilot_sessions": "encrypted private Link OAuth credentials and test journal; never portable, cascade on user/business deletion",
+    "business_card_connections": "encrypted third-party OAuth credentials and card preferences; never portable, cascade on business deletion",
+    "business_secrets": "encrypted browser credentials; never exported, cascade on business deletion",
+    "checkin_stations": "check-in station device tokens and PIN hashes; credentials, never portable — a restored church pairs its tablets again; cascade on business deletion",
+    # Platform books and metering — the platform must keep these for its
+    # own accounts, whatever a business does with theirs.
+    "usage_grants":            "platform credit grants; platform billing record",
+    "usage_notifications":     "platform allowance notices; platform record",
+    "usage_stripe_reports":    "platform usage reports to Stripe; platform record",
+    "api_usage":               "platform metering",
+    "product_events":          "platform product analytics",
+    "stripe_webhook_events":   "platform-global Stripe dedup log",
+    # Cross-account learning, k-anonymous by design.
+    "vertical_knowledge":      "Feed 2 cross-account learning; no per-business rows on purpose",
+    "library_gap_log":         "module-library learning; SET NULL on business delete, kept for the platform",
+    "inference_cache":         "Arc 20 inference cache; platform-side, regenerable",
+    # An employee's SSN is Fernet ciphertext keyed to the platform's
+    # TIN_ENCRYPTION_KEY: unreadable outside this deployment, and an
+    # SSN must never travel in an export ZIP anyway. Deleting the
+    # business cascades employees → this table, so nothing lingers.
+    "employee_tax_profiles":   "W-4 + encrypted SSN; never exported, cascades from employees on delete",
+    "inference_gate_decisions": "Arc 20 gate decisions; platform-side learning about the gate, not practitioner records",
+    "model_route_log":         "Chief routing + first-token telemetry (no content); platform-side tuning data, like api_usage",
+    "voice_turn_log":          "call time-to-first-audio telemetry (durations only); platform-side tuning data, like api_usage",
+    # Keyed to a person or to the platform, not to a business.
+    "email_suppressions":      "recipient-keyed deliverability protection; deleting it re-mails bounces",
+    "entity_groups":           "owner-keyed consolidation groups; die with the auth user",
+    "mcp_oauth_codes":         "user-keyed OAuth codes; short-lived",
+    "member_login_codes":      "member portal sign-in codes (hashed, 10-minute, pruned daily); credentials, not records, cascade on business deletion",
+    "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
+    "site_events":             "anonymous marketing-site traffic; no business_id by design",
+    # The tamper-evident ledger has its own door. audit_log is exported
+    # under its own name and erased through the tombstone RPC; the chain
+    # state, anchors, tombstones, redactions and their tickets are the
+    # evidence that erasure happened, and bulk-deleting evidence of an
+    # erasure defeats the ledger. They stay, and ledger_verify reads them.
+    "ledger_chain_state":      "tamper-evident ledger: per-business chain head; erased through the ledger's own RPC",
+    "ledger_tombstones":       "tamper-evident ledger: proof rows were erased; must outlive the business",
+    "ledger_anchors":          "tamper-evident ledger: external anchors; evidence, outlives the business",
+    "ledger_anchor_failures":  "tamper-evident ledger: anchor attempts; evidence",
+    "ledger_anchor_upgrades":  "tamper-evident ledger: anchor provider upgrades; evidence",
+    "ledger_redactions":       "tamper-evident ledger: what was redacted and why; evidence",
+    "ledger_redaction_tickets": "tamper-evident ledger: redaction requests; evidence",
+    "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
+}
 BUSINESS_CHILD_TABLES: List[str] = [
+    # Owner-only account export includes private care and finance history.
+    # Erase children before their business, contact and invoice records.
+    "ministry_care_requests", "ministry_gift_history",
+    # Who was at each occasion; before module_entries and contacts.
+    "attendance", "attendance_headcounts",
+    # Families and children: notes, pickups and children before their
+    # household, and the household's adult links before contacts.
+    "child_checkins",
+    # Groups: who came to each meeting, the meetings, the roster, then
+    # the groups — all before contacts.
+    "group_live_sessions", "group_meeting_attendance", "group_meetings", "group_members", "groups",
+    "sermons", "sermon_series",   # sermons before the series they point at
+    # Live: chat, pauses and presence before their session; all before
+    # contacts and module_entries.
+    "live_chat", "live_mutes", "live_presence", "live_sessions",
+    "child_care_notes", "household_pickups", "children", "household_adults", "households",
+    "chief_errand_events", "chief_errands",  # preserve history; events before errands
+    "agent_assignments",      # before connected_agents (foreign key)
+    "connected_agents",       # bot profiles; no live credentials in this table
+    # Connection metadata travels with the business; credentials never do.
+    # Remove devices first so workers lose access before jobs are erased.
+    "connected_ai_devices", "connected_ai_pairings",
+    "creative_director_profiles",  # preserve owner preferences before deleting their source artwork
+    "image_publications", "image_artworks",  # publication records reference originals
+    "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
+    "media_assets",
+    "growth_events",          # references contacts; export history before erasure
+    "growth_records",         # reporting settings, actions, costs and invoice credit
     "events",
     "agent_queue",
     "agent_runs",             # MCP agent access trail (business-scoped)
     "mcp_tokens",             # business-scoped agent tokens
     "chief_memories",
+    "business_operating_profile_history",
+    "program_outcome_reports",
+    "business_financial_policies",
+    "business_financial_account_locks",
+    "business_financial_policy_history",
+    "business_operating_profiles",
     "chief_conversations",
     "chief_activity",
+    "chief_assignments",      # the outcomes they handed Chief + its moves log (9/4)
+    "chief_moves",            # what came of each of Chief's moves (9/4)
     "chief_proposals",
     "chief_bookkeeping_proposals",
     "chief_learning_signals",
@@ -123,6 +222,16 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "sms_bindings",
     "sms_opt_outs",
     "email_replies",
+    # The texting number itself. Exported so the record says which line
+    # was theirs; on delete the line is handed back to the provider FIRST
+    # (_release_sms_lines) — a cascade would drop the row and leave the
+    # number billing the platform forever.
+    "sms_numbers",
+    # Conversations the site concierge had with visitors (references
+    # contacts), and the consent a client gave (the record a dispute
+    # turns on — it goes with the business that holds it).
+    "concierge_conversations",
+    "consent_records",
     # Money ABOUT the business — ledgers before the rows they cite.
     "customer_ledger",        # references contacts, invoices, offerings
     "time_entries",           # references contacts
@@ -173,6 +282,11 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "growth_objectives",
     "strategy_tracks",
     "business_tracks",
+    # The day-one arc. Cascades on business delete already; listing it is
+    # what makes it EXPORTABLE, which is the half a cascade cannot do.
+    "first_run_arc",
+    # Ticket messages reference their ticket.
+    "support_ticket_messages",
     "support_tickets",
     "workflows",
     "workflow_definitions",
@@ -202,12 +316,26 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "coa_external_mappings",  # references chart_of_accounts rows
     "chart_of_accounts",
     "quickbooks_connections",
+    # Pay your team (2026-09-05): line items reference runs and
+    # employees; runs reference employees through the items. The W-4
+    # profile (SSN ciphertext) is NOT exported — see EXPORT_EXCLUDED —
+    # and cascades from employees on delete.
+    "pay_run_items",
+    "pay_runs",
+    "employees",
     # Payroll/contractors — transfers reference contractors.
     "outbound_transfers",
     "payroll_interest",
     "contractors",
     "email_threads",
     "sms_threads",
+    # The business's own document templates, the auditor links it
+    # issued, the devices it pushes to, and Stripe's disputes as cached
+    # for it — each keyed to the business and each part of its record.
+    "business_doc_templates",
+    "auditor_links",
+    "push_subscriptions",
+    "stripe_disputes_cache",
     # Team seats + invites die with the business.
     "business_users",
     "business_collaborators",
@@ -237,8 +365,8 @@ USER_CHILD_TABLES: List[str] = [
 # level deeper ("{business_id}/receipts/…") and product-files likewise
 # ("{business_id}/{offering_id}/…"), which _delete_storage_objects
 # handles by descending one folder level.
-STORAGE_BUCKETS: List[str] = ["business-assets", "business-documents",
-                              "product-files"]
+STORAGE_BUCKETS: List[str] = ["image-originals", "business-assets", "business-documents",
+                              "product-files", "program-media", "video-studio"]
 
 
 def _service_headers() -> Dict[str, str]:
@@ -269,6 +397,14 @@ async def _owned_businesses(client: httpx.AsyncClient, user_id: str) -> List[Dic
 # export under their own names, and the hash columns come along so the
 # chain stays independently verifiable. See audit_log.LEDGER_EXPORT_SELECT.
 _TABLE_SELECT = {"audit_log": LEDGER_EXPORT_SELECT}
+from media_library import PUBLIC_COLUMNS as MEDIA_EXPORT_COLUMNS
+_TABLE_SELECT['media_assets'] = MEDIA_EXPORT_COLUMNS
+_TABLE_SELECT['connected_ai_devices'] = (
+    'id,business_id,owner_id,provider,label,state,last_seen_at,expires_at,revoked_at,created_at'
+)
+_TABLE_SELECT['connected_ai_pairings'] = (
+    'id,business_id,owner_id,provider,expires_at,consumed_at,created_at'
+)
 
 
 # One page of a table, and the ceiling past which we stop and SAY SO.
@@ -450,7 +586,51 @@ async def export_account(user: AuthedUser = Depends(require_user)):
 # Storage FILES are not covered either — the export is JSON and the
 # documents live in S3. Stated here rather than discovered later.
 
-_IMPORT_SKIP = {"audit_log", "agent_runs", "chief_jobs", "mcp_tokens"}
+_IMPORT_SKIP = {
+    # Private archives retain original contact/form/invoice identifiers; the
+    # generic importer cannot safely remap them or recreate audit evidence.
+    # They remain in the owner archive and are explicitly reported as skipped.
+    "ministry_care_requests", "ministry_gift_history",
+    "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
+    "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
+    # Preserve the archive, but never restore paid job state, publication
+    # claims or private storage paths tied to the original business.
+    "creative_director_profiles",  # source/logo IDs belong to the original private gallery; remember again after restore
+    "image_publications", "image_artworks",
+    "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
+    "media_assets",  # media files and review proofs need an explicit restore
+    # Derived snapshots and security decisions cannot be recreated from an
+    # untrusted uploaded bundle. Export preserves them for reference; reports
+    # must be recalculated and approved against the restored source records.
+    "program_outcome_reports", "business_financial_policies",
+    "business_financial_account_locks", "business_financial_policy_history",
+    "audit_log", "agent_runs", "chief_jobs", "mcp_tokens",
+    # A restored archive must pair fresh devices, never resurrect access.
+    "connected_ai_devices", "connected_ai_pairings",
+    # Growth history and JSON records cite original contact/invoice/campaign
+    # IDs. The generic importer mints new IDs without a reference map; copying
+    # these would attach evidence to another business's records. Preserve the
+    # full export, report the skipped restore, and keep fresh history coverage.
+    "growth_events", "growth_records",
+    # Attendance cites original occasion and contact ids; same reason.
+    "attendance", "attendance_headcounts",
+    # Families link contacts and each other by id; same reason. The export
+    # keeps them (children's allergies included) for the owner.
+    "households", "household_adults", "children", "household_pickups", "child_care_notes",
+    "child_checkins",
+    # Groups link contacts and each other by id; same reason.
+    "groups", "group_members", "group_meetings", "group_meeting_attendance", "group_live_sessions",
+    # Sermons cite their series by id; same reason.
+    "sermon_series", "sermons",
+    # Live sessions, chat and presence cite contacts and occasions by id;
+    # same reason.
+    "live_sessions", "live_chat", "live_mutes", "live_presence",
+    # A texting number belongs to the provider account that bought it;
+    # a restored business provisions its own. Auditor links and push
+    # subscriptions are credentials and devices, not records. The
+    # disputes cache is Stripe's, re-fetched on demand.
+    "sms_numbers", "auditor_links", "push_subscriptions", "stripe_disputes_cache",
+}
 
 # Columns the platform owns. Carrying them across would let an import
 # assert its own billing state, or claim rows the hash chain wrote.
@@ -621,8 +801,45 @@ async def _delete_storage_objects(client: httpx.AsyncClient, business_id: str) -
     return removed
 
 
+async def _release_sms_lines(client: httpx.AsyncClient, business_id: str) -> int:
+    """Hand the business's texting number(s) back to the provider before
+    the row that remembers them is deleted. The normal path is a grace
+    window and a sweep (sms_numbers_router.release_sweep); a deleted
+    business has no later, so this releases now. Each line is its own
+    try: a provider error must not stop the deletion, but it is logged
+    loudly because the alternative is a number billing the platform
+    for a business that no longer exists."""
+    released = 0
+    try:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/sms_numbers", headers=_service_headers(),
+            params={"business_id": f"eq.{business_id}",
+                    "status": "in.(active,suspended,releasing)",
+                    "select": "id,phone_number,provider_sid"})
+        rows = r.json() if r.status_code < 400 else []
+    except Exception as e:
+        logger.warning(f"[lifecycle] could not list sms lines for {business_id}: {e}")
+        return 0
+    for row in rows or []:
+        sid = row.get("provider_sid")
+        try:
+            if sid:
+                import twilio_sms
+                from starlette.concurrency import run_in_threadpool
+                await run_in_threadpool(twilio_sms.detach_from_service, sid)
+                await run_in_threadpool(twilio_sms.release_number, sid)
+            released += 1
+        except Exception as e:
+            logger.error(f"[lifecycle] release of {row.get('phone_number')} (sid={sid}) "
+                         f"failed during business delete: {e} — release it by hand")
+    return released
+
+
 async def _delete_business(client: httpx.AsyncClient, biz: Dict[str, Any]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
+    lines = await _release_sms_lines(client, biz["id"])
+    if lines:
+        counts["_sms_lines_released"] = lines
     for table in BUSINESS_CHILD_TABLES:
         n = await _delete_table_rows(client, table, biz["id"])
         if n:

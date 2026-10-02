@@ -31,15 +31,18 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import chief_of_staff as cos
 import mcp_server
 
 
 def _prompt_region() -> str:
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     i = src.index("def _build_system_prompt")
-    j = src.index(chr(10) + "async def ", i)
-    return src[i:j]
+    # to the next async def, or the end: chief_prompt (2026-09-04) ends
+    # with the two synchronous assemblers, so there may be none after.
+    j = src.find(chr(10) + "async def ", i)
+    return src[i:] if j == -1 else src[i:j]
 
 
 def test_the_region_extraction_actually_sees_the_prompt():

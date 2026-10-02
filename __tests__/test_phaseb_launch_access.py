@@ -59,15 +59,33 @@ def _future_iso(days=30):
 
 # ─── Waitlist ────────────────────────────────────────────────────────
 
-def test_waitlist_idempotent_and_validated(fake):
+class _AnonReq:
+    """The request the limiter reads (2026-09-04: /waitlist is
+    rate-limited per trusted IP). No forwarded header, no peer."""
+    headers: dict = {}
+    client = None
+
+
+def test_waitlist_idempotent_and_validated(fake, monkeypatch):
     fb = fake
-    out = la.join_waitlist(la.WaitlistBody(email="New@Person.com", name="New"))
+    import rate_limit
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda bucket, key: True)
+    out = la.join_waitlist(la.WaitlistBody(email="New@Person.com", name="New"), _AnonReq())
     assert out["ok"]
-    la.join_waitlist(la.WaitlistBody(email="new@person.com"))   # dup, case-folded
+    la.join_waitlist(la.WaitlistBody(email="new@person.com"), _AnonReq())   # dup, case-folded
     assert len(fb.rows("waitlist")) == 1
     assert fb.rows("waitlist")[0]["email"] == "new@person.com"
     with pytest.raises(HTTPException):
-        la.join_waitlist(la.WaitlistBody(email="not-an-email"))
+        la.join_waitlist(la.WaitlistBody(email="not-an-email"), _AnonReq())
+
+
+def test_waitlist_refuses_when_the_limiter_says_so(fake, monkeypatch):
+    import rate_limit
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda bucket, key: False)
+    with pytest.raises(HTTPException) as e:
+        la.join_waitlist(la.WaitlistBody(email="new@person.com"), _AnonReq())
+    assert e.value.status_code == 429
+    assert fake.rows("waitlist") == []
 
 
 # ─── Invite validate + redeem ────────────────────────────────────────

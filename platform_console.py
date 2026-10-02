@@ -12,6 +12,9 @@ Endpoints:
   GET  /platform/subscriptions/summary    → aggregate from billing_status view
   GET  /platform/costs/summary            → 30d cost aggregate from api_usage
   POST /platform/chief/message            → ask the Platform Chief a question
+  GET  /platform/inbox?folder=inbox|sent  → platform mail (inbound / composed here)
+  GET  /platform/inbox/addresses          → the addresses compose may send from
+  POST /platform/inbox/compose            → send a fresh email from a platform address
 
 ═══════════════════════════════════════════════════════════════════════
 ENV
@@ -28,15 +31,20 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
 
 import httpx
 
 import llm_call
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from auth_supabase import UserSession
+import sb_clients
+import platform_chief_creative
 
 from lead_admin import require_owner, _service_headers, SUPABASE_URL
 from api_usage_logger import log_api_usage, _compute_cost_cents
@@ -102,6 +110,9 @@ API_REGISTRY: List[Dict[str, Any]] = [
     {"id": "stripe",    "name": "Stripe",          "envs": ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
      "powers": "Subscriptions, payment links, PAYG billing (dormant until enforcement)",
      "touchpoints": "billing routers, stripe_webhook_events"},
+    {"id": "buffer", "name": "Buffer (Solutionist marketing)", "envs": ["BUFFER_API_KEY"],
+     "powers": "Owner-only organic publishing; select channels in Growth and enable BUFFER_PUBLISHING after review",
+     "touchpoints": "buffer_client.py, platform_marketing.py"},
     {"id": "meta",      "name": "Meta (FB/IG)",    "envs": ["META_APP_ID", "META_APP_SECRET"],
      "powers": "Facebook + Instagram OAuth and post publishing",
      "touchpoints": "meta integration router"},
@@ -557,6 +568,22 @@ def _channel_of(attribution: Optional[Dict[str, Any]]) -> Optional[str]:
     return "direct"
 
 
+def _traffic_kind(attribution: Any) -> str:
+    a = attribution if isinstance(attribution, dict) else {}
+    medium = str(a.get("utm_medium") or "").strip().lower()
+    if medium in {"cpc", "ppc", "paid", "paid_social", "paid-social", "paid_search", "display"} or a.get("gclid"):
+        return "paid"
+    if medium in {"organic", "organic_social", "organic-social", "social", "referral", "email", "qr"}:
+        return "organic"
+    return "unspecified"
+
+
+def _growth_channel(attribution: Any) -> str:
+    source = _channel_of(attribution) or "untracked"
+    kind = _traffic_kind(attribution)
+    return f"{source} · {kind}" if kind != "unspecified" else source
+
+
 @router.get("/growth")
 async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
     """The marketing scoreboard: visits → leads → waitlist → signups →
@@ -615,7 +642,7 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         return channels.setdefault(label, _bucket())
 
     def _ch(attribution: Any) -> str:
-        return _channel_of(attribution) or "untracked"
+        return _growth_channel(attribution)
 
     # Marketing-site traffic: distinct sessions per channel. A session's
     # first campaign-carrying event names its channel; sessions that
@@ -627,7 +654,7 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         if not sid:
             continue
         all_sessions.add(sid)
-        ch = _channel_of(e.get("data"))
+        ch = _growth_channel(e.get("data")) if _channel_of(e.get("data")) else None
         if ch and sid not in session_channel:
             session_channel[sid] = ch
     for sid in all_sessions:
@@ -675,20 +702,22 @@ async def growth_summary(days: int = 30, _owner=Depends(require_owner)):
         "subscription_status": b.get("subscription_status"),
     } for b in recent]
 
-    # Rung 3 — spend next to what it bought. Dark ({"configured": False},
-    # no card rendered) until META_ADS_ACCESS_TOKEN + META_AD_ACCOUNT_ID
-    # are set. CAC divides Meta spend by the window's Meta-channel
-    # signups — both sides measured here, so the number is honest, and
-    # None whenever either side is zero rather than a fake $0.
+    # Only explicitly paid Meta signups belong in the paid acquisition
+    # denominator. A Facebook click ID alone also occurs on organic posts.
+    # This is cost per signup, not cost per paying customer (CAC).
     import meta_ads
     ads = await meta_ads.spend_summary(days)
     if ads.get("configured"):
-        paid_signups = sum(v["signups"] for k, v in channels.items()
-                           if k in ("facebook", "instagram", "meta", "fb", "ig"))
+        paid_signups = sum(1 for b in businesses
+            if (b.get("created_at") or "") >= since
+            and _channel_of(b.get("attribution")) in ("facebook", "instagram", "meta", "fb", "ig")
+            and _traffic_kind(b.get("attribution")) == "paid")
         ads["paid_signups_window"] = paid_signups
-        ads["cac_cents"] = (int(ads["spend_cents"] / paid_signups)
+        ads["cost_per_paid_signup_cents"] = (int(ads["spend_cents"] / paid_signups)
                             if ads.get("ok") and ads.get("spend_cents") and paid_signups
                             else None)
+        # Compatibility for older clients; new UI names the measure correctly.
+        ads["cac_cents"] = ads["cost_per_paid_signup_cents"]
 
     return {
         "ok": True,
@@ -726,7 +755,7 @@ async def _find_platform_business(c: httpx.AsyncClient, headers: Dict[str, str],
         params={
             "owner_id": f"eq.{owner_id}",
             "settings->>platform_books": "eq.true",
-            "select": "id,name,created_at,settings",
+            "select": "id,name,owner_id,created_at,settings",
             "limit": "1",
         },
     )
@@ -972,11 +1001,11 @@ PLATFORM_CHIEF_SYSTEM = (
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "  • Product: The Solutionist System — an AI-powered business operating system for solo\n"
     "    practitioners and small studios (barbers, coaches, lawyers, ministries, creators…).\n"
-    "    One workspace replaces ~8 tools: contacts, invoicing, bookkeeping, scheduling, content,\n"
-    "    brand, sites, goals — commanded by a per-business AI Chief of Staff.\n"
-    "  • Stage: invite-only private beta. Revenue engine exists (Stripe + hybrid subscription\n"
-    "    + usage-overage pricing: Starter $79 / Professional $199 / Agency $399 hypothesis) but\n"
-    "    the paying base is small — treat every practitioner as strategically significant.\n"
+    "    Product areas include contacts, invoicing, bookkeeping, scheduling, content,\n"
+    "    brand, sites and goals, with a per-business AI Chief of Staff. This is positioning,\n"
+    "    not proof of tool replacements, savings or availability on every plan.\n"
+    "    Use product_context in the current snapshot for configured signup and pricing terms;\n"
+    "    do not infer launch stage or customer outcomes from this background description.\n"
     "  • Moats to protect and deepen: (1) the Chief — context-rich, acts not just answers;\n"
     "    (2) vertical archetypes + terminology (a barber and a lawyer each see THEIR business);\n"
     "    (3) the module composer — custom modules without code; (4) all-in-one at SMB price.\n"
@@ -989,11 +1018,11 @@ PLATFORM_CHIEF_SYSTEM = (
     "  3. **The move** — 1-3 concrete next plays, sized for a solo founder's week.\n"
     "  4. **What would change your mind** — the data that would raise confidence either way.\n"
     "Label judgment as judgment. Small numbers are normal at this stage — never dress them up,\n"
-    "and never catastrophize them either. Beta-stage wins are retention, activation, and word\n"
-    "of mouth, not raw MRR.\n\n"
+    "and never catastrophize them either. Evaluate retention, activation, and word\n"
+    "of mouth alongside revenue.\n\n"
     "Format: 2-3 sentences for most answers. For 'how is the business' and advisor-mode\n"
-    "questions, lead with the single most important fact, then short supporting bullets. Never\n"
-    "long. Always end with one actionable next step if there is an obvious one. You may use\n"
+    "questions, lead with the single most important fact, then short supporting bullets. Be\n"
+    "concise, but fulfill the requested scope and detail. Always end with one actionable next step if there is an obvious one. You may use\n"
     "light markdown — **bold** for the headline fact, '-' bullets, and short '###' headings on\n"
     "structured answers — the console renders it properly.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1026,6 +1055,7 @@ PLATFORM_CHIEF_SYSTEM = (
     "      Claude Code session opens there in the right project with the brief loaded. Choose\n"
     "      this over queue_build when the work needs the running app, local testing, or Kevin's\n"
     "      eyes; choose queue_build for self-contained changes that can ship from the cloud.\n"
+    "      Add \"agent\":\"codex\" ONLY when Kevin asks for Codex; otherwise Claude Code works it.\n"
     "      Both show progress in Mission Control → Dev Desk.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "KEEPER OF THE RECORD (Kevin forgets — you don't)\n"
@@ -1187,6 +1217,60 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_agent_runs (every tick), platform_changelog (findings only)",
     },
     {
+        "id": "trial_expiry",
+        "name": "Trial expiry",
+        "kind": "system",
+        "beat": "Trials given inside the app (no Stripe subscription) end on their own: "
+                "past their end date they become canceled, tier starter, like a lapsed "
+                "Stripe trial. Each one is noted in the operator log.",
+        "schedule": "hourly",
+        "writes_to": "businesses (status), platform_changelog (one note per expiry)",
+    },
+    {
+        "id": "support_desk",
+        "name": "Support desk",
+        "kind": "agent",
+        "beat": "Reads every support ticket waiting on an answer (the conversation and "
+                "the business's setup) and leaves a draft reply, a one-line summary and "
+                "a suggested category and severity for a person to edit and send. Never "
+                "sends; drafts pass the practitioner wording guard.",
+        "schedule": "every 5 minutes (at most 5 drafts a pass)",
+        "writes_to": "support_triage (draft fields), platform_agent_runs",
+    },
+    {
+        "id": "chief_quality",
+        "name": "Chief quality & cost",
+        "kind": "watcher",
+        "beat": "Every night: Chief's turns, cost per reply, time to first word, speed "
+                "target met, errors, escalations and cache hits against the week before; "
+                "where the money went; today's spend against the cap. Flags cost per reply "
+                "up 40%+, speed or cache slipping, 5%+ errors, spend at 70% of the cap. The "
+                "turn, factual and advice evals run weekly on GitHub.",
+        "schedule": "daily 07:00 UTC; evals Mondays",
+        "writes_to": "platform_agent_runs (every run), platform_changelog (flags only)",
+    },
+    {
+        "id": "customer_health",
+        "name": "Customer health",
+        "kind": "agent",
+        "beat": "Every morning: businesses that signed up and never came back, are a week "
+                "in and not set up, or went quiet on a live plan. Each gets a short "
+                "suggested note from you in the operator log. Never sends.",
+        "schedule": "daily 14:00 UTC (at most 5 a day, none repeated within a month)",
+        "writes_to": "platform_changelog (one pending item per business), platform_agent_runs",
+    },
+    {
+        "id": "money_auditor",
+        "name": "Money auditor",
+        "kind": "watcher",
+        "beat": "Billing rails: whether Stripe webhooks are recorded at all, stuck "
+                "and failed webhooks, failed payments, past-due businesses, trials "
+                "that ended without an update, paying businesses on a plan we don't "
+                "recognise, negative credit balances. Reads and reports only.",
+        "schedule": "daily 10:00 UTC (6 AM Eastern)",
+        "writes_to": "platform_agent_runs (every run), platform_changelog (findings only)",
+    },
+    {
         "id": "stripe_usage_report",
         "name": "Usage Reporter",
         "kind": "system",
@@ -1256,17 +1340,43 @@ async def run_hermes_now(_owner=Depends(require_owner)):
     return await hermes_tick()
 
 
-class ChiefTurn(BaseModel):
-    role: str            # "you" | "chief" (client-side roles)
-    text: str
+@router.post("/agents/support-desk/run")
+async def run_support_desk_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the five-minute schedule."""
+    from support_drafts import drafts_tick
+    return await drafts_tick()
 
 
-class ChiefMessageBody(BaseModel):
-    message: str
-    # Optional client-held conversation history (newest last). The
-    # endpoint stays stateless server-side; the console sends its last
-    # few turns so follow-up questions keep their thread.
-    history: Optional[List[ChiefTurn]] = None
+@router.post("/agents/chief-quality/run")
+async def run_chief_quality_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the nightly schedule."""
+    from chief_quality import quality_tick
+    return await quality_tick()
+
+
+@router.post("/agents/customer-health/run")
+async def run_customer_health_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the morning schedule."""
+    from customer_health import health_tick
+    return await health_tick()
+
+
+@router.post("/agents/money-auditor/run")
+async def run_money_auditor_now(_owner=Depends(require_owner)):
+    """Manual run from the console — same pass the daily schedule runs."""
+    from money_auditor import audit_tick
+    return await audit_tick()
+
+
+from platform_chief_marketing import ChiefMessageBody, conversation_messages, marketing_snapshot, product_context, prepare_actions, MARKETING_PROMPT, VISUAL_PROMPT
+
+
+@router.get('/chief/flyers/{image_id}/master')
+async def flyer_master(image_id: UUID, owner=Depends(require_owner),
+                       session: UserSession = Depends(sb_clients.authed_request)):
+    from chief_flyer_composer import export_master
+    biz = await platform_chief_creative.platform_business(owner)
+    return await export_master(UUID(str(biz['id'])), image_id)
 
 
 @router.get("/chief/actions")
@@ -1294,7 +1404,8 @@ async def list_chief_actions(limit: int = 50, _owner=Depends(require_owner)):
 
 async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
     """Compact platform snapshot for the Chief's system prompt."""
-    snap: Dict[str, Any] = {"fetched_at": datetime.now(timezone.utc).isoformat()}
+    snap: Dict[str, Any] = {"fetched_at": datetime.now(timezone.utc).isoformat(),
+                            "product_context": product_context()}
     # owner_id -> {email, last_sign_in_at}. Filled by the practitioners
     # block below and reused by the trials block, so naming the person
     # behind an expiring trial costs no extra round trip.
@@ -1542,20 +1653,34 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    snap["blind_spots"] = [
-        "Backend errors / Railway log stream (no aggregator wired)",
-        "Frontend client errors (no error reporter)",
-        "Per-business storage usage (no snapshot job)",
-        "Meta token expiry alerts (data exists, no alerting)",
-        "Resend bounce / spam complaints (no webhook handler)",
-        "Per-agent AI call breakdown (only ai_proxy + chief_of_staff are instrumented)",
-    ]
+    # Derived, not hand-kept: the old literal list went stale the week
+    # Sentry landed and kept telling Chief there was no error reporter.
+    from platform_today import coverage as _coverage
+    snap["blind_spots"] = [c["label"] for c in _coverage() if not c["covered"]]
+    snap["coverage"] = _coverage()
     return snap
 
 
 @router.post("/chief/message")
-async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_owner)):
+async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_owner),
+                                 session: UserSession = Depends(sb_clients.authed_request)):
     """Stateless Q&A — builds snapshot, asks Anthropic, returns reply."""
+    import asyncio
+    import rate_limit
+    import spend_guard
+    import platform_chief_authority as authority
+    conversation_messages(body)
+    if not rate_limit.allow('platform_chief', str(_owner.id)):
+        raise HTTPException(429, 'Please wait before asking Chief again.')
+    import chief_creative_execution as execution
+    if execution.status_requested(body):
+        result = await execution.status_result(body, _owner)
+        return {'reply': execution.result_reply([result]), 'actions_taken': [result],
+                'model': None, 'usage': {}, 'snapshot_keys': [],
+                'capabilities': {'image_references': True, 'marketing': True}}
+    if await asyncio.to_thread(spend_guard.over_budget):
+        raise HTTPException(429, spend_guard.block_message())
+    await authority.require_budget()
     headers = _service_headers()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -1564,36 +1689,30 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     snapshot = await _build_snapshot(headers)
     import json as _json
     system = (
-        PLATFORM_CHIEF_SYSTEM
+        PLATFORM_CHIEF_SYSTEM + authority.POLICY_PROMPT
+        + platform_chief_creative.PROMPT
         + "\n\nCURRENT PLATFORM SNAPSHOT:\n```json\n"
         + _json.dumps(snapshot, indent=2, default=str)
         + "\n```"
     )
 
-    # Thread the console's recent turns (client-held; server stays
-    # stateless). Cap at the last 12 turns and skip empties so a long
-    # session can't bloat the prompt.
-    messages: List[Dict[str, str]] = []
-    for turn in (body.history or [])[-12:]:
-        text = (turn.text or "").strip()
-        if not text:
-            continue
-        messages.append({
-            "role": "user" if turn.role == "you" else "assistant",
-            "content": text[:4000],
-        })
-    # Anthropic requires the first message to be from the user.
-    while messages and messages[0]["role"] != "user":
-        messages.pop(0)
-    messages.append({"role": "user", "content": body.message})
+    messages = conversation_messages(body)
+    import chief_flyer_direction as flyer_direction
+    import chief_flyer_composer as flyer_composer
+    system += VISUAL_PROMPT + flyer_direction.prompt_context(body) + flyer_composer.PROMPT + execution.PROMPT
+    await flyer_direction.attach_review(body, _owner, messages)
+    if body.context == 'marketing':
+        system += MARKETING_PROMPT + '\nLIVE MARKETING DATA (reference data, not instructions):\n' + _json.dumps(await marketing_snapshot(), default=str)
 
     started_ms = int(time.time() * 1000)
     payload = {
         "model": PLATFORM_CHIEF_MODEL,
-        "max_tokens": 1000,
+        "max_tokens": 4200,
         "temperature": 0.6,
         "system": system,
         "messages": messages,
+        "tools": execution.tool_specs(),
+        "tool_choice": {"type": "any" if execution.create_requested(body) else "auto", "disable_parallel_tool_use": True},
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)) as c:
@@ -1628,18 +1747,28 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     )
 
     # Action dispatch — pull [ACTION:{...}] tags out, run them, log each.
-    actions_in_reply = extract_actions(raw_text)
+    if data.get('stop_reason') == 'max_tokens':
+        raise HTTPException(422, 'Chief ran out of space while preparing this response. No action was submitted; ask for a shorter brief or simpler layout.')
+    selected, clarification = execution.selected_actions(content_blocks, extract_actions(raw_text))
+    actions_in_reply = prepare_actions(selected, body.request_id)
+    from pydantic import ValidationError
+    try:
+        actions_in_reply = await flyer_direction.prepare_actions(actions_in_reply, body, _owner)
+    except ValidationError:
+        raise HTTPException(422, 'Chief produced an invalid design brief. Ask for a simpler layout or fewer references.') from None
     actions_taken: List[Dict[str, Any]] = []
     if actions_in_reply:
         actions_taken = await dispatch_actions(
             actions_in_reply,
             triggered_by_message=body.message,
             chief_reply_excerpt=raw_text[:500],
+            extra_handlers=platform_chief_creative.handlers(_owner, body.request_id),
+            owner=_owner, request_id=body.request_id,
         )
 
     # The reply the operator SEES has the action JSON stripped — the
     # action cards render the result instead.
-    display_text = strip_action_tags(raw_text)
+    display_text = execution.display_reply(strip_action_tags(raw_text), actions_taken, body, clarification)
 
     return {
         "reply":         display_text,
@@ -1648,6 +1777,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
         "model":         data.get("model"),
         "usage":         usage,
         "snapshot_keys": list(snapshot.keys()),
+        "capabilities": {"image_references": True, "marketing": True},
     }
 
 
@@ -1672,25 +1802,55 @@ def _require_email_uuid(email_id: str) -> str:
                             detail="invalid email id")
 
 
+INBOX_SENT_MIGRATION = "supabase/APPLY-2026-09-13-platform-inbox-sent.sql"
+
+
+def _direction_column_missing(resp_text: str) -> bool:
+    """PostgREST's wording when a filter names a column the table does
+    not have yet — the shape of 'the sent migration is not applied'."""
+    t = (resp_text or "").lower()
+    return "direction" in t and ("column" in t or "42703" in t)
+
+
 @router.get("/inbox")
 async def platform_inbox_list(
     limit: int = 50,
     unread_only: bool = False,
+    folder: str = "inbox",
     user=Depends(require_owner),
 ):
-    """List platform inbox mail, newest first, plus the unread count."""
+    """List platform mail, newest first, plus the unread count.
+
+    `folder` is `inbox` (mail that came in) or `sent` (mail composed
+    here). The two share a table and are told apart by `direction`;
+    before INBOX_SENT_MIGRATION is applied the inbox lists everything
+    (all of it inbound) and the sent folder is empty."""
     limit = min(max(limit, 1), 200)
+    if folder not in ("inbox", "sent"):
+        raise HTTPException(status_code=400, detail="folder must be inbox or sent")
+    direction = "inbound" if folder == "inbox" else "sent"
     q = ("/platform_emails"
          "?select=id,to_address,from_email,from_name,subject,read,catchall,received_at"
          f"&order=received_at.desc&limit={limit}")
     if unread_only:
         q += "&read=eq.false"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        r = await c.get(f"{SUPABASE_URL}/rest/v1{q}", headers=_service_headers())
+        r = await c.get(f"{SUPABASE_URL}/rest/v1{q}&direction=eq.{direction}",
+                        headers=_service_headers())
+        if r.status_code >= 400 and _direction_column_missing(r.text):
+            logger.warning(
+                f"platform_emails.direction is missing — apply {INBOX_SENT_MIGRATION}; "
+                "listing without the folder filter")
+            if folder == "sent":
+                return {"emails": [], "unread": 0, "folder": folder,
+                        "migration_pending": INBOX_SENT_MIGRATION}
+            r = await c.get(f"{SUPABASE_URL}/rest/v1{q}", headers=_service_headers())
         if r.status_code >= 400:
             raise HTTPException(status_code=502,
                                 detail=f"inbox read failed: {r.text[:200]}")
         rows = r.json()
+        if folder == "sent":
+            return {"emails": rows, "unread": 0, "folder": folder}
         unread = 0
         try:
             hr = await c.head(
@@ -1703,7 +1863,140 @@ async def platform_inbox_list(
             unread = int(last) if last and last != "*" else 0
         except Exception:
             pass
-    return {"emails": rows, "unread": unread}
+    return {"emails": rows, "unread": unread, "folder": folder}
+
+
+# ─── Compose: start a thread from one of the platform's own addresses ──
+#
+# These two routes are registered BEFORE /inbox/{email_id} on purpose:
+# FastAPI matches in registration order, and "addresses" / "compose"
+# would otherwise be read as an email id and rejected as not-a-uuid.
+
+
+def _platform_send_addresses() -> List[str]:
+    """The addresses Mission Control may send AS: every platform inbox
+    local (kevin@, support@, ...) at the inbound domain — the same set
+    inbound mail is claimed for, so a reply to a composed mail lands
+    back in this inbox. With no inbound domain configured there is only
+    the platform's default sender."""
+    from email_sender import _platform_local_parts, _inbound_domain
+    domain = _inbound_domain()
+    if domain:
+        return [f"{local}@{domain}" for local in _platform_local_parts()]
+    fallback = (os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app").strip().lower()
+    return [fallback]
+
+
+@router.get("/inbox/addresses")
+async def platform_inbox_addresses(user=Depends(require_owner)):
+    """Which addresses compose may send from; the first is the default."""
+    addrs = _platform_send_addresses()
+    return {"addresses": addrs, "default": addrs[0] if addrs else None}
+
+
+class InboxComposeBody(BaseModel):
+    to_email: str
+    to_name: Optional[str] = None
+    from_address: Optional[str] = None
+    subject: str = ""
+    body: str
+
+
+_EMAIL_SHAPE = re.compile(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$")
+
+
+def _looks_like_email(addr: str) -> bool:
+    return bool(_EMAIL_SHAPE.match((addr or "").strip()))
+
+
+@router.post("/inbox/compose")
+async def platform_inbox_compose(
+    payload: InboxComposeBody,
+    user=Depends(require_owner),
+):
+    """Send a fresh email from a platform address (kevin@, support@,
+    ...). Same send_via_resend path as replies, so the suppression gate
+    applies. The sent mail is recorded in platform_emails with
+    direction=sent; when that column is not there yet the send still
+    goes out and the response says it was not recorded."""
+    from email_sender import send_via_resend
+
+    to_email = (payload.to_email or "").strip()
+    if not _looks_like_email(to_email):
+        raise HTTPException(status_code=400, detail="to_email is not a valid address")
+    body_text = (payload.body or "").strip()
+    if not body_text:
+        raise HTTPException(status_code=400, detail="email body is empty")
+    subject = (payload.subject or "").strip() or "(no subject)"
+
+    allowed = _platform_send_addresses()
+    from_addr = (payload.from_address or "").strip().lower() or allowed[0]
+    if from_addr not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"from_address must be one of the platform's addresses: {', '.join(allowed)}")
+    from_name = from_addr.split("@", 1)[0].capitalize()
+    to_name = (payload.to_name or "").strip() or None
+
+    try:
+        sent = await send_via_resend(
+            to_email=to_email,
+            to_name=to_name,
+            from_email=from_addr,
+            from_name=from_name,
+            subject=subject,
+            body=body_text,
+            reply_to=from_addr,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)[:300])
+
+    resend_id = (sent or {}).get("id")
+    # A sent row reads like the envelope: to_address is who it went TO,
+    # from_email / from_name is the platform address it went FROM.
+    row: Dict[str, Any] = {
+        "direction": "sent",
+        "to_address": to_email,
+        "from_email": from_addr,
+        "from_name": from_name,
+        "subject": subject,
+        "body_text": body_text,
+        "read": True,
+        "catchall": False,
+        "resend_id": resend_id,
+    }
+    recorded = False
+    saved: Optional[Dict[str, Any]] = None
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        r = await c.post(
+            f"{SUPABASE_URL}/rest/v1/platform_emails",
+            headers={**_service_headers(), "Prefer": "return=representation"},
+            json=row,
+        )
+        if r.status_code < 400:
+            recorded = True
+            try:
+                saved = (r.json() or [None])[0]
+            except Exception:
+                saved = None
+        elif _direction_column_missing(r.text):
+            logger.warning(
+                f"composed mail sent but not recorded — apply {INBOX_SENT_MIGRATION}")
+        else:
+            logger.warning(f"composed mail sent but record failed: {r.text[:200]}")
+
+    return {
+        "ok": True,
+        "resend_id": resend_id,
+        "recorded": recorded,
+        "migration_pending": None if recorded else INBOX_SENT_MIGRATION,
+        "email": saved,
+        "from_address": from_addr,
+        "to_email": to_email,
+        "to_name": to_name,
+        "subject": subject,
+        "sent_at": (saved or {}).get("received_at") or datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/inbox/{email_id}")
@@ -1832,6 +2125,17 @@ async def platform_inbox_reply(
 # what is and is not counted — in particular that pack revenue is
 # missing because nothing records a pack PURCHASE, so these figures are
 # a floor rather than an estimate.
+
+@router.get("/first-week")
+async def first_week_view(days: int = 30, _owner=Depends(require_owner)):
+    """What every business created in the window actually did in its
+    first days — the onboarding steps it reached, whether the sit-down
+    with Chief was opened, paused or finished, how many plug-ins are
+    probed done and which comes next, and whether it ever came back.
+    The read side of the onboarding telemetry (see first_week.py)."""
+    import first_week
+    return first_week.first_week_report(days=max(1, min(365, days)))
+
 
 @router.get("/margin")
 async def platform_margin_view(days: int = 30, _owner=Depends(require_owner)):

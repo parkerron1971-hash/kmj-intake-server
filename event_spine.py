@@ -36,11 +36,31 @@ logger = logging.getLogger("event_spine")
 #         kept under its historical name because consumers filter on it.
 
 EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
+    "agent_assignment_reported": {
+        "source": "agent_coordination: a claimed bot assignment submitted or failed",
+        "payload": ["assignment_id", "agent_id", "status"],
+    },
     # ── Money in ─────────────────────────────────────────────────
     "invoice_paid_auto": {
         "source": "stripe webhooks (payment link match + Connect checkout)",
         "payload": ["invoice_id", "invoice_number", "total", "payment_method"],
         "legacy": True,  # name predates the spine; chief revenue readers filter on it
+    },
+    "hand_run_completed": {
+        "source": "chief_jobs kind=browser_hand (browser_hand.run) — one per run, "
+                  "whatever stopped it",
+        "payload": ["job_id", "queue_id", "task", "ok", "stopped", "summary",
+                    "frames", "steps"],
+    },
+    "site_check_completed": {
+        "source": "site_check.run — after a visual check of the live site "
+                  "(Chief's check_site job, the post-deploy hook, or a post-edit pass)",
+        "payload": ["reason", "findings", "high", "pages", "summary"],
+    },
+    "module_check_completed": {
+        "source": "module_check.run — after the system looked at one module at phone "
+                  "and desktop size (every accept, or Chief's check_module job)",
+        "payload": ["module_id", "module", "reason", "findings", "high", "design_score", "summary"],
     },
     "booking_paid": {
         "source": "stripe_connect_router checkout/payment_intent",
@@ -156,6 +176,16 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "source": "public_site contact_submit_endpoint (composed-site contact form)",
         "payload": ["name", "email", "message_preview", "new_contact"],
     },
+    # 2026-09-04: bookings reached the rules engine (rules_engine.on_event)
+    # and the practitioner's notification, but never the spine — so the
+    # standing agent, whose only cursor is this table, could not see the
+    # single event it is most useful for. Emitted by
+    # booking_widget_router._create_appointment for every path that
+    # books (widget, walk-in, Chief).
+    "booking_created": {
+        "source": "booking_widget_router._create_appointment",
+        "payload": ["booking_id", "contact_name", "offering", "starts_at", "created_by"],
+    },
     "lead_scored": {
         "source": ("lead_scoring.store — every capture door (intake form, "
                    "composed-site contact form, site concierge, booking "
@@ -189,12 +219,33 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
         "source": "site_concierge /public/concierge/{slug}/lead "
                   "(widget lead-capture form)",
         "payload": ["name", "email", "message_preview", "conversation_id",
-                    "new_contact"],
+                    "new_contact", "tier", "score", "signals", "answers"],
     },
     "concierge_escalated": {
         "source": "site_concierge guardrail deflection (crisis/clinical "
                   "ask on a visitor conversation)",
         "payload": ["conversation_id", "reason"],
+    },
+    # A booking made INSIDE the website chat (2026-09-05). The walk-in
+    # flow also emits booking_created for the appointment itself; this
+    # one says the chat closed it, with the lead tier alongside.
+    "concierge_booking_made": {
+        "source": "site_concierge /public/concierge/{slug}/booking/book "
+                  "(in-chat picker → booking_widget_router.book_anon)",
+        "payload": ["name", "email", "offering", "offering_id", "start",
+                    "appointment_id", "conversation_id", "tier"],
+    },
+    # ── Pay your team (payroll data layer, 2026-09-05) ────────────
+    # Approval freezes a pay run's numbers; it moves no money. `paid`
+    # is the owner saying they paid from their own bank (or, later, a
+    # payout rail confirming). Bookkeeping reads these off the spine.
+    "pay_run_approved": {
+        "source": "payroll_router /payroll/runs/{id}/approve",
+        "payload": ["pay_run_id", "pay_date", "employees", "net", "federal_941"],
+    },
+    "pay_run_paid": {
+        "source": "payroll_router /payroll/runs/{id}/mark-paid",
+        "payload": ["pay_run_id", "pay_date", "net", "rail"],
     },
 }
 
@@ -225,7 +276,15 @@ def emit(event_type: str, business_id: Optional[str],
         row["contact_id"] = contact_id
     try:
         sb_clients.sb_post_as_service("/events", row, prefer=None)
-        return True
     except Exception as e:
         logger.error(f"[spine] emit({event_type}) failed: {e}")
         return False
+    # The standing agent's fast lane (2026-09-04): a lead or a booking
+    # wakes it within a minute instead of waiting for the sweep. After
+    # the row is safely written, best-effort, never able to fail the emit.
+    try:
+        import chief_agent
+        chief_agent.nudge(business_id, event_type)
+    except Exception as e:  # pragma: no cover
+        logger.debug(f"[spine] nudge skipped: {e}")
+    return True

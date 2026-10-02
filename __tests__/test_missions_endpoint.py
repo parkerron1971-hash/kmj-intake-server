@@ -25,6 +25,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import pytest
 from fastapi import HTTPException
 
@@ -122,7 +123,7 @@ def test_the_route_is_read_only():
     for mover in ("handle_start_mission", "handle_advance_mission",
                   "handle_abandon_mission", "handle_propose_mission"):
         assert mover not in src
-    assert '@router.get("/agents/chief/missions")' in inspect.getsource(cos)
+    assert '@router.get("/agents/chief/missions")' in chief_source()
 
 
 def test_it_runs_under_the_callers_own_jwt():

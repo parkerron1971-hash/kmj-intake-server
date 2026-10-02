@@ -18,10 +18,13 @@ env-overridable per bucket.
 
 import os
 import time
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 # bucket name → (max_requests, window_seconds), env-overridable.
 _LIMITS: Dict[str, Tuple[int, int]] = {
+    "platform_chief_creative": (12, 3600),
+    "platform_marketing_week": (6, 3600),
+    "business_learning": (int(os.environ.get("RL_BUSINESS_LEARNING_PER_HOUR", "24")), 3600),
     "chief":  (int(os.environ.get("RL_CHIEF_PER_MIN", "30")), 60),
     "voice":  (int(os.environ.get("RL_VOICE_PER_MIN", "40")), 60),
     "proxy":  (int(os.environ.get("RL_PROXY_PER_MIN", "60")), 60),
@@ -31,6 +34,40 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # and checked with allow_strict() — an external agent that loops is a
     # different problem from a person clicking twice.
     "mcp": (int(os.environ.get("RL_MCP_PER_MIN", "20")), 60),
+    # The agent-readable public site API (agent_site.py): anonymous,
+    # cheap JSON, no model call — but checked with allow_strict(), because
+    # the caller is a customer's agent and a looping one is a scripted
+    # sweep of every business we host. Per IP.
+    "agent_site": (int(os.environ.get("RL_AGENT_SITE_PER_MIN", "60")), 60),
+    # ── Launch hardening (2026-09-04) ─────────────────────────────────
+    # The OAuth front door to the MCP surface. These three were called
+    # with allow_strict() but never registered, so each silently fell to
+    # _DEFAULT (60/min) — a consent form that can be brute-forced 60
+    # times a minute is not what the module docstring promised.
+    "mcp_oauth_register": (int(os.environ.get("RL_MCP_OAUTH_REGISTER_PER_HOUR", "10")), 3600),
+    "mcp_oauth_consent": (int(os.environ.get("RL_MCP_OAUTH_CONSENT_PER_MIN", "6")), 60),
+    "mcp_oauth_token": (int(os.environ.get("RL_MCP_OAUTH_TOKEN_PER_MIN", "30")), 60),
+    # Anonymous Stripe Checkout session for a booking. Its docstring
+    # claimed "handled by the existing wizard rate-limit middleware";
+    # there is no such middleware. Per IP, per hour, strict.
+    "booking_checkout": (int(os.environ.get("RL_BOOKING_CHECKOUT_PER_HOUR", "20")), 3600),
+    # The public waitlist: an anonymous insert per novel email, with no
+    # limiter at all until now.
+    "waitlist": (int(os.environ.get("RL_WAITLIST_PER_HOUR", "10")), 3600),
+    # Web-form SMS consent: writes the A2P audit trail, and was limited
+    # only per PHONE, which the caller chooses. Per IP too, strict.
+    "sms_opt_in": (int(os.environ.get("RL_SMS_OPT_IN_PER_HOUR", "10")), 3600),
+    # The traffic beacon: keyed only on a caller-supplied session id,
+    # which the anon-spend audit's own words call decorative. A per-IP
+    # courtesy bucket beside it — fail-open, because a tracking endpoint
+    # must never surface an error to a visitor's browser.
+    "track": (int(os.environ.get("RL_TRACK_PER_MIN", "240")), 60),
+    # The booking widget's three anonymous routes (2026-09-04): they had
+    # their own 10/hour dict in booking_widget_router; they ride the
+    # strict, shared path now with the same numbers.
+    "booking_config_anon": (int(os.environ.get("RL_BOOKING_ANON_PER_HOUR", "10")), 3600),
+    "booking_book_anon": (int(os.environ.get("RL_BOOKING_ANON_PER_HOUR", "10")), 3600),
+    "booking_fresh_link": (int(os.environ.get("RL_BOOKING_ANON_PER_HOUR", "10")), 3600),
     # Digital-delivery downloads — anon, token-gated; generous enough
     # for a buyer grabbing a multi-item order, tight enough to stop a
     # scripted token search.
@@ -61,6 +98,30 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # and because the free lane is the one most likely to be called on a
     # schedule later. Per business, per minute.
     "grants_search": (int(os.environ.get("RL_GRANTS_SEARCH_PER_MIN", "30")), 60),
+    # Member sign-in (member_portal.py). Asking for a code mails a real
+    # person, so both the sender (per IP) and the inbox (per church +
+    # address) are capped; checking a code is capped per IP on top of the
+    # 5 tries each code allows.
+    # Per network (a church's own Wi-Fi is one address on a Sunday, so it
+    # is generous), then per address: a one-minute cooldown and a daily
+    # ceiling, rather than an hourly cap a stranger could spend to keep a
+    # member from ever receiving a code. Wrong codes have their own daily
+    # cap per address in member_portal (MAX_FAILED_PER_DAY).
+    "member_code_ip": (int(os.environ.get("RL_MEMBER_CODE_PER_HOUR", "40")), 3600),
+    "member_code_email_minute": (1, 60),
+    "member_code_email_day": (int(os.environ.get("RL_MEMBER_CODE_EMAIL_PER_DAY", "12")), 86400),
+    "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
+    # A signed-in member's writes (RSVP, prayer, details), per person.
+    "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
+    # Check-in stations (kids_station.py), all strict: pairing codes per
+    # network, PIN tries per station, and mobile-number lookups per
+    # self check-in kiosk — so neither a code nor a family can be guessed.
+    "station_pair": (int(os.environ.get("RL_STATION_PAIR_PER_10MIN", "10")), 600),
+    "station_pin": (int(os.environ.get("RL_STATION_PIN_PER_15MIN", "6")), 900),
+    "station_self_find": (int(os.environ.get("RL_STATION_SELF_PER_10MIN", "40")), 600),
+    # Live chat (member_portal_live.py), per member: a lively service, not
+    # a flood. "I'm here" rides member_action.
+    "live_chat": (int(os.environ.get("RL_LIVE_CHAT_PER_MIN", "8")), 60),
 }
 _DEFAULT = (60, 60)
 
@@ -127,8 +188,100 @@ def allow(bucket: str, key: str) -> bool:
         return True
 
 
+# ─── The shared window (2026-09-04) ──────────────────────────────────
+#
+# Every bucket above lives in THIS process. The platform runs N web
+# replicas (scheduler_lock exists for that), so every anonymous budget
+# was really N times the number in _LIMITS. The strict buckets — the
+# ones that are a control, not a courtesy — now also take from a window
+# in Postgres (supabase/APPLY-2026-09-04-rate-windows.sql, rate_take()),
+# which every replica shares.
+#
+# Order matters and is deliberate: the in-process check runs FIRST. It
+# is free, and under a flood it answers "no" before a single database
+# round-trip is spent — the shared window exists to stop the sum across
+# replicas, not to absorb one replica's flood. Only a call the local
+# window admits goes on to the shared one.
+#
+# Fail-SOFT to local, not open: if the RPC is missing (migration not
+# applied yet) or the database blips, allow_strict() returns the local
+# answer it already computed, with a warning. That is a limiter still,
+# just per process again — the posture the service had until today.
+# RATE_LIMIT_SHARED=off pins that behaviour deliberately.
+
+_SHARED_RPC = "/rpc/rate_take"
+# Flips False after the first refused RPC so a not-yet-applied migration
+# costs one warning, not one failed round-trip per anonymous request.
+# Re-armed by the purge tick, so an applied migration is picked up
+# within the hour without a restart.
+_shared_ok = True
+
+
+def shared_enabled() -> bool:
+    return (os.environ.get("RATE_LIMIT_SHARED") or "on").strip().lower() != "off"
+
+
+def _shared_take(bucket: str, key: str) -> Optional[bool]:
+    """True/False from the shared window, or None when it could not
+    decide (disabled, unavailable, unexpected shape)."""
+    global _shared_ok
+    if not shared_enabled() or not _shared_ok:
+        return None
+    max_req, window = _LIMITS.get(bucket, _DEFAULT)
+    try:
+        import sb_clients
+        out = sb_clients.sb_post_as_service(_SHARED_RPC, {
+            "p_bucket": str(bucket)[:80], "p_key": str(key or "unknown")[:200],
+            "p_max": int(max_req), "p_window_sec": int(window)})
+    except Exception as e:
+        _shared_ok = False
+        _log_shared_down(e)
+        return None
+    if isinstance(out, bool):
+        return out
+    if isinstance(out, list) and out and isinstance(out[0], bool):
+        return out[0]
+    # sb_post_as_service returns None on any 4xx/5xx (a missing function
+    # is a 404) — treat exactly like a transport failure.
+    _shared_ok = False
+    _log_shared_down(f"unexpected reply {out!r}")
+    return None
+
+
+def _log_shared_down(reason) -> None:
+    import logging
+    logging.getLogger("rate_limit").warning(
+        "[rate_limit] shared window unavailable (%s) — strict buckets are "
+        "per-process until the next purge tick re-arms it. Apply "
+        "APPLY-2026-09-04-rate-windows.sql if this persists.", reason)
+
+
+def rearm_shared() -> None:
+    """Try the shared window again. Called by the purge tick."""
+    global _shared_ok
+    _shared_ok = True
+
+
+def purge_shared(older_than_sec: int = 86400) -> int:
+    """Delete rows nobody has touched in a day. Called hourly on the
+    scheduler leader; re-arms the shared path first so a migration
+    applied after boot is picked up. Never raises."""
+    rearm_shared()
+    if not shared_enabled():
+        return 0
+    try:
+        import sb_clients
+        out = sb_clients.sb_post_as_service("/rpc/rate_purge",
+                                            {"p_older_than_sec": int(older_than_sec)})
+        return int(out) if isinstance(out, int) else 0
+    except Exception as e:
+        _log_shared_down(e)
+        return 0
+
+
 def allow_strict(bucket: str, key: str) -> bool:
-    """`allow`, but FAIL-CLOSED.
+    """`allow`, but FAIL-CLOSED — and, since 2026-09-04, shared across
+    replicas.
 
     Every bucket above fails open, which is right for a practitioner: a
     limiter glitch must never stop someone running their own business.
@@ -139,9 +292,17 @@ def allow_strict(bucket: str, key: str) -> bool:
 
     Kept separate from `allow` rather than adding a flag, so that no
     existing caller can acquire this behaviour by accident.
+
+    The local window decides first (free; absorbs a flood). A call it
+    admits is then counted in the shared window, whose answer wins. If
+    the shared window cannot decide, the local answer stands.
     """
     try:
-        return _check(bucket, key)
+        local = _check(bucket, key)
+        if not local:
+            return False
+        shared = _shared_take(bucket, key)
+        return local if shared is None else shared
     except Exception:
         return False
 

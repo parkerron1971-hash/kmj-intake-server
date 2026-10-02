@@ -141,7 +141,29 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # message body (the conversation itself is not on this surface at
     # all). Same self-description class as site_health. It carries a
     # handoff, because no keyword means inbound texts reach nobody.
-    assert len(tools) == 29, (
+    # 30 (9/2): email_setup_status joined - sending identity, DNS/verify
+    # state incl. drift, inbox + sync freshness, last test, next step.
+    # Configuration and counts, never a message body. Same class as
+    # sms_status; explicitly silent (see SILENT_TOOLS).
+    # 31 (9/4): assignment_status joined - the outcomes the standing agent
+    # is working between conversations: target, progress, deadline, the
+    # moves log. Operational state in the mission_status class; giving
+    # and stopping one are writes and stay off this surface.
+    # 32 (9/6): growth_report combines the business's own invoice totals,
+    # contact/source aggregates and saved analytical records. Same scoped
+    # financial/operational class as show_revenue and assignment_status;
+    # no message bodies or new external source. Schema + handoff reviewed.
+    # 33 (9/7): recall_business_knowledge reads the token-scoped business's
+    # private operating profile. Same authorized private-data class as
+    # recall_conversation; no cross-business lookup and no profile writes.
+    # 34 (9/8): inspect_course reads the owner's teaching content and keys,
+    # never student responses. SQL checks auth.uid and business ownership;
+    # missing creator JWT fails closed. Authoring has its own write scope.
+    # 35 (9/26): list_tasks reads the owner's own open to-dos by due date
+    # (title, due date, priority, the contact's name). Same class as
+    # list_projects, which already shows client names; no message bodies.
+    # Creating, completing and deleting tasks are writes and stay off.
+    assert len(tools) == 35, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -549,13 +571,22 @@ def test_migration_revokes_the_table_grants():
 # derived: a newly exposed verb should make a human decide whether it can
 # end in work, and a derived list would quietly answer "no" forever.
 SILENT_TOOLS = {
+    "recall_business_knowledge",  # pure recall; no navigation or external handoff
     "catch_up", "check_balance", "check_goals", "check_inventory",
     "inspect_module", "list_availability", "list_expenses",
     "list_module_entries", "list_offerings", "list_products",
-    "list_projects", "list_scheduled", "mission_status",
+    "list_projects", "list_scheduled", "list_tasks", "mission_status",
     "propose_brand_kit_from_context",
     "propose_voice_rule", "recall_conversation", "show_revenue",
     "show_view", "site_health", "summarize_module", "what_undo",
+    # email_setup_status (9/2): the next step is a DNS record at the
+    # practitioner's registrar, which no Chief verb can do for them -
+    # the result names the step in words instead.
+    "email_setup_status",
+    # assignment_status (9/4): the next step is a word in chat ("stop
+    # working on Thursday"); giving and stopping are writes off this
+    # surface, so the result carries the progress and no verb.
+    "assignment_status",
 }
 
 
@@ -894,14 +925,19 @@ def _plan_row(plan):
     return {"id": "biz-1", "comp_tier": plan}
 
 
-def test_agent_connector_is_declared_professional():
+def test_agent_connector_reads_on_every_plan_and_writes_on_professional():
+    """2026-09-04: a read costs the platform nothing (their model thinks),
+    so it is on every plan; the write key rides Professional."""
     import feature_gates
-    assert feature_gates.FEATURE_MIN_PLAN["agent_connector"] == "professional"
+    assert feature_gates.FEATURE_MIN_PLAN["agent_connector"] == "starter"
+    assert feature_gates.FEATURE_MIN_PLAN["agent_connector_write"] == "professional"
 
 
-def test_starter_is_refused_when_enforcement_is_on(monkeypatch):
+def test_starter_may_read_but_not_write_when_enforcement_is_on(monkeypatch):
     _enforce(monkeypatch)
-    assert mcp._tier_allows(_plan_row("starter")) is False
+    assert mcp._tier_allows(_plan_row("starter")) is True
+    assert mcp._tier_allows_write(_plan_row("starter")) is False
+    assert mcp._tier_allows_write(_plan_row("professional")) is True
 
 
 def test_professional_and_practice_are_allowed(monkeypatch):
@@ -945,8 +981,30 @@ def test_a_below_tier_call_is_REFUSED_not_failed(monkeypatch):
     allowed, ok, msg, biz_id = _run(mcp._call_tool("catch_up", {}, _caller()))
     assert allowed is False and ok is False
     assert biz_id == "biz-1", "the refusal is still attributed to a business"
-    assert "Professional" in msg
+    assert "plan" in msg
     assert "inside Solutionist" in msg, "say what they still have, not just what they lack"
+
+
+def test_a_starter_write_is_refused_with_the_plan_named(monkeypatch):
+    """Read on every plan, write on Professional (2026-09-04). A Starter
+    key with the write scope can look; a write call is refused, names the
+    plan, and never reaches the handler."""
+    _enforce(monkeypatch)
+
+    async def _biz(client, caller):
+        return {"id": "biz-1", "comp_tier": "starter"}
+    monkeypatch.setattr(mcp, "_resolve_business", _biz)
+    import chief_of_staff
+    monkeypatch.setitem(chief_of_staff.ACTION_HANDLERS, "create_contact",
+                        lambda *a, **k: pytest.fail("a refused write must not run"))
+    write_key = mcp.Caller("token", "agent:x", user_id="u", business_id="biz-1",
+                           scopes=["read", "write"], jti="j")
+    allowed, ok, msg, biz_id = _run(mcp._call_tool("create_contact", {"name": "A"}, write_key))
+    assert (allowed, ok, biz_id) == (False, False, "biz-1")
+    assert "Professional" in msg and "Reading stays available" in msg
+    allowed, ok, msg, _ = _run(mcp._call_tool("propose_send_sms",
+                                               {"contact_name": "M", "message": "hi"}, write_key))
+    assert (allowed, ok) == (False, False) and "Professional" in msg
 
 
 def test_a_below_tier_call_never_reaches_the_handler(monkeypatch):

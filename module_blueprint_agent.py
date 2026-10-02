@@ -271,7 +271,8 @@ def provision_modules(
 
     blueprint = get_blueprint(business_type or "custom")
     if not blueprint:
-        logger.info(f"no blueprint for business_type={business_type!r}; nothing to provision")
+        report.update(status="needs_discovery", ok=False)
+        logger.info(f"no blueprint for business_type={business_type!r}; business discovery required")
         return report
 
     existing = _existing_slugs(business_id)

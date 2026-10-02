@@ -423,6 +423,8 @@ async def _qbo_get(biz: str, path: str, params: Dict[str, str]) -> Dict[str, Any
 
 
 async def _qbo_post(biz: str, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    from financial_policy import require_operational_write
+    require_operational_write(biz)
     access, realm = await _fresh_access_token(biz)
     url = f"{_api_base()}/v3/company/{realm}{path}"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:

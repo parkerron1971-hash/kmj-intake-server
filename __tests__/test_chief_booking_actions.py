@@ -17,6 +17,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from __tests__._chief_source import chief_source  # noqa: E402
 import asyncio
 
 import pytest
@@ -308,7 +309,7 @@ def test_verbs_are_documented_in_the_prompt():
     """A handler Chief has never been told about is dead code."""
     import chief_of_staff as cos
 
-    src = pathlib.Path(cos.__file__).read_text(encoding="utf-8")
+    src = chief_source()
     for verb in ("create_booking", "reschedule_booking", "cancel_booking"):
         assert f'"type":"{verb}"' in src, f"{verb} missing from the action catalog"
 

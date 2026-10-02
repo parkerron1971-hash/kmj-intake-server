@@ -157,7 +157,7 @@ async def has_sms_consent(client: httpx.AsyncClient, business_id: str,
     phone = normalize_phone(phone) or (phone or "")
     if not phone:
         return False
-    if await is_opted_out(client, phone):
+    if await is_opted_out(client, phone, business_id):
         return False
     return await _positive_consent(client, business_id, phone)
 
@@ -256,7 +256,8 @@ async def send_booking_confirmation(
             first = (customer_name or "").strip().split()[0] if (customer_name or "").strip() else "there"
             body = confirmation_text(first, biz_name, parts["date"], parts["time"])
 
-            provider_id = await _send_platform_sms(phone, body)
+            provider_id = await _send_platform_sms(
+                phone, body, business_id=biz_id, client=client)
 
             # Record exactly like /sms/send does: sms_messages row + event.
             contact = await _find_contact_by_phone(client, biz_id, phone)
@@ -264,7 +265,7 @@ async def send_booking_confirmation(
             msg_id = await _store_sms(
                 client, business_id=biz_id, contact_id=contact_id,
                 phone_number=phone, message=body, direction="outbound",
-                telnyx_id=provider_id, status="sent",
+                telnyx_id=provider_id, status="sent", sent_by="system",
             )
             await _log_event(client, biz_id, contact_id, "sms_confirmation_sent", {
                 "to": phone,
@@ -391,7 +392,7 @@ async def reminder_sweep() -> Dict[str, int]:
                 if not phone:
                     stats["skipped_no_phone"] += 1
                     continue
-                if await is_opted_out(client, phone):
+                if await is_opted_out(client, phone, biz["id"]):
                     stats["skipped_optout"] += 1
                     continue
                 if not await _positive_consent(client, biz["id"], phone):
@@ -406,12 +407,13 @@ async def reminder_sweep() -> Dict[str, int]:
                 body = reminder_text(biz.get("name") or "the business",
                                      parts["day"], parts["time"])
                 try:
-                    provider_id = await _send_platform_sms(phone, body)
+                    provider_id = await _send_platform_sms(
+                        phone, body, business_id=biz["id"], client=client)
                     msg_id = await _store_sms(
                         client, business_id=biz["id"],
                         contact_id=contact.get("id"), phone_number=phone,
                         message=body, direction="outbound",
-                        telnyx_id=provider_id, status="sent",
+                        telnyx_id=provider_id, status="sent", sent_by="system",
                     )
                     # The dedupe marker — logged AFTER a successful send
                     # so failures retry on the next hourly pass.
