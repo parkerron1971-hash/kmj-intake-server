@@ -38,10 +38,12 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 import plaid_categorization
+import bank_money
 
 logger = logging.getLogger("bookkeeping_overview")
 
@@ -172,23 +174,11 @@ def real_account_key(a: Optional[Dict[str, Any]]) -> Optional[Tuple[str, str, st
             str(a.get("mask")), str(a.get("type") or ""))
 
 
-def needs_category(t: Dict[str, Any]) -> bool:
-    # Same rule as chief_bookkeeping.bookkeeping_counts (the Home nudge):
-    # no bucket, or the 'other' catch-all Plaid falls back to.
-    return t.get("business_category") in (None, "", "other")
-
-
-def counts_as_income(t: Dict[str, Any]) -> bool:
-    """Would the books count this inflow as income? (gl_engine.desired_for_plaid:
-    an inflow not reconciled to a payout, with an income-ish Plaid category.)"""
-    return _amt(t) < 0 and not t.get("reconciled_to_payout_id") and \
-        plaid_categorization.is_income_category(
-            t.get("plaid_category_primary"), t.get("plaid_category_detail"))
-
-
-def counts_as_spending(t: Dict[str, Any]) -> bool:
-    return _amt(t) > 0 and not plaid_categorization.is_income_category(
-        t.get("plaid_category_primary"), t.get("plaid_category_detail"))
+# One rule set for the whole app lives in bank_money; these names stay for
+# the detectors below.
+needs_category = bank_money.needs_category
+counts_as_income = bank_money.is_income
+counts_as_spending = bank_money.is_expense
 
 
 def number_word(n: int) -> str:
@@ -205,6 +195,8 @@ def find_transfer_pairs(txs: List[Dict[str, Any]],
     accounts, within a few days. Greedy, closest date first, each row used
     once. Rows on the same real account (a bank linked twice) are duplicates,
     not transfers, and payout deposits are already explained by Stripe."""
+    # Rows the practitioner has already answered (a money_kind) are settled.
+    txs = [t for t in txs if bank_money.kind(t) is None]
     ins_by_cents: Dict[int, List[Dict[str, Any]]] = {}
     for t in txs:
         if _amt(t) < 0 and not t.get("reconciled_to_payout_id") and _d(t.get("date")):
@@ -586,7 +578,7 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,name,merchant_name,"
             f"business_category,plaid_category_primary,plaid_category_detail,"
-            f"reconciliation_status,reconciled_to_payout_id"
+            f"reconciliation_status,reconciled_to_payout_id{bank_money.cols()}"
             f"&order=date.desc,transaction_id.desc"), [])
     txs = [t for t in txs if _amt(t) != 0]
     books_txs = [t for t in txs if t.get("account_id") not in trust_ids]  # trust is client money
@@ -771,3 +763,169 @@ def overview(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, An
         # "no Stripe account connected", so it refuses instead.
         raise HTTPException(503, "Couldn't read this business just now.")
     return build_overview(biz, rows[0])
+
+
+# ─── The review queue ────────────────────────────────────────────────
+#
+# The Transactions tab's "To review" view: every row that still needs an
+# answer, newest first, each with a suggestion and the reason for it.
+# Deposits get answers that make sense for money coming in (client income,
+# money from you, a move between your accounts); spending gets its bucket.
+
+def _suggest(t: Dict[str, Any], pair_with: Optional[Dict[str, Any]],
+             accounts: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    amt = _amt(t)
+    name = _norm(tx_name(t))
+    primary = (t.get("plaid_category_primary") or "").upper()
+    if pair_with is not None:
+        other = account_label(accounts.get(pair_with.get("account_id")))
+        where = f"left {other}" if amt < 0 else f"landed in {other}"
+        return {"kind": "transfer", "label": "Move between your accounts",
+                "reason": f"The same {_money(amt)} {where} on {_day(_d(pair_with.get('date')))}."}
+    if amt < 0:
+        if "stripe" in name:
+            return {"kind": "income", "label": "Client income",
+                    "reason": "A Stripe deposit: money your clients paid."}
+        if primary == "INCOME":
+            return {"kind": "income", "label": "Client income", "reason": "The bank marks it as income."}
+        if primary == "TRANSFER_IN":
+            return {"kind": "owner", "label": "Money from you",
+                    "reason": "A transfer in from an account that isn't one of the business's."}
+        return None
+    if primary == "TRANSFER_OUT":
+        return {"kind": "owner", "label": "Money to you",
+                "reason": "A transfer out to an account that isn't one of the business's."}
+    bucket = plaid_categorization.map_plaid_to_bucket(
+        t.get("plaid_category_primary"), t.get("plaid_category_detail"))
+    if bucket and bucket != "other":
+        label = {"tax": "Tax", "owner_pay": "Owner pay", "operating": "Operating",
+                 "savings": "Savings"}.get(bucket, bucket)
+        return {"bucket": bucket, "label": label, "reason": "From the bank's own category."}
+    return None
+
+
+def build_review(biz: str, limit: int = 200) -> Dict[str, Any]:
+    accounts = _get(f"/plaid_accounts?business_id=eq.{biz}&deleted_at=is.null"
+                    f"&select=account_id,name,official_name,mask,type,included_in_bookkeeping,is_trust_account")
+    acct_by_id = {a["account_id"]: a for a in accounts if a.get("account_id")}
+    included = [a for a in accounts if a.get("included_in_bookkeeping") and not a.get("is_trust_account")]
+    if not included:
+        return {"ok": True, "supported": bank_money.supported(), "total": 0, "rows": [], "pairs": []}
+    ids = ",".join(a["account_id"] for a in included)
+    txs = _get_all(
+        f"/plaid_transactions?business_id=eq.{biz}&account_id=in.({ids})"
+        f"&pending=eq.false&excluded_from_books=eq.false"
+        f"&select=transaction_id,account_id,amount,date,name,merchant_name,business_category,"
+        f"business_subcategory,plaid_category_primary,plaid_category_detail,"
+        f"reconciliation_status,reconciled_to_payout_id{bank_money.cols()}"
+        f"&order=date.desc,transaction_id.desc")
+    txs = [t for t in txs if _amt(t) != 0]
+    pairs = find_transfer_pairs(txs, acct_by_id)
+    partner: Dict[str, Dict[str, Any]] = {}
+    for p_ in pairs:
+        partner[p_["out"]["transaction_id"]] = p_["in"]
+        partner[p_["in"]["transaction_id"]] = p_["out"]
+    dup_ids = {tid for g in find_duplicates(txs, acct_by_id) for tid in g["transaction_ids"][1:]}
+    queue = [t for t in txs if needs_category(t)]
+    rows = []
+    for t in queue[:limit]:
+        tid = t.get("transaction_id")
+        mate = partner.get(tid)
+        rows.append({
+            "transaction_id": tid, "date": t.get("date"), "name": tx_name(t),
+            "merchant_name": t.get("merchant_name"),   # what a category rule matches on
+            "amount": _amt(t), "direction": "in" if _amt(t) < 0 else "out",
+            "account": account_label(acct_by_id.get(t.get("account_id"))),
+            "business_category": t.get("business_category"),
+            "business_subcategory": t.get("business_subcategory"),
+            "plaid_primary": t.get("plaid_category_primary"),
+            "suggestion": _suggest(t, mate, acct_by_id),
+            "pair_with": mate.get("transaction_id") if mate else None,
+            "duplicate": tid in dup_ids,
+        })
+    # Only pairs with a leg still in the queue are news here.
+    queued = {t.get("transaction_id") for t in queue}
+    pair_rows = [{
+        "out_id": p_["out"]["transaction_id"], "in_id": p_["in"]["transaction_id"],
+        "date": p_["out"].get("date"), "amount": abs(_amt(p_["out"])),
+        "from": account_label(acct_by_id.get(p_["out"].get("account_id"))),
+        "to": account_label(acct_by_id.get(p_["in"].get("account_id"))),
+    } for p_ in pairs if p_["out"]["transaction_id"] in queued or p_["in"]["transaction_id"] in queued]
+    return {"ok": True, "supported": bank_money.supported(), "total": len(queue),
+            "rows": rows, "pairs": pair_rows}
+
+
+@router.get("/review")
+def review(biz: str, limit: int = 200, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    from plaid_router import _require_reader
+    _require_reader(biz, user)
+    try:
+        return build_review(biz, max(1, min(int(limit), 500)))
+    except SourceFailed as e:
+        raise HTTPException(503, f"Couldn't read your bank rows just now ({e}).")
+
+
+MAX_CONFIRM_PAIRS = 100
+_TX_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
+
+
+def _chunks(items: List[str], n: int):
+    for i in range(0, len(items), n):
+        yield items[i:i + n]
+
+
+class ConfirmPairsBody(BaseModel):
+    business_id: str
+    pairs: List[List[str]]   # [[out_transaction_id, in_transaction_id], ...]
+
+
+@router.post("/transfer-pairs/confirm")
+def confirm_transfer_pairs(body: ConfirmPairsBody,
+                           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Mark matched legs as one move between the business's own accounts
+    (money_kind='transfer' on both). Each pair is re-checked server-side:
+    both rows belong to this business, one out and one in, the same amount,
+    within the transfer window, and neither already answered."""
+    from plaid_router import _require_owner
+    _require_owner(body.business_id, user)
+    if not bank_money.supported():
+        raise HTTPException(409, "Marking transfers needs the 2026-10-02 bank money migration.")
+    if not body.pairs or len(body.pairs) > MAX_CONFIRM_PAIRS:
+        raise HTTPException(400, f"Send between 1 and {MAX_CONFIRM_PAIRS} pairs.")
+    ids = sorted({tid for p_ in body.pairs for tid in p_ if isinstance(tid, str)})
+    if not all(_TX_ID.fullmatch(tid) for tid in ids):
+        raise HTTPException(400, "Those don't look like transaction ids.")
+    # The same scope as the review queue: included, non-trust accounts only.
+    accts = _get(f"/plaid_accounts?business_id=eq.{body.business_id}&deleted_at=is.null"
+                 f"&included_in_bookkeeping=eq.true&select=account_id,is_trust_account")
+    in_books = {a["account_id"] for a in accts if not a.get("is_trust_account")}
+    rows: List[Dict[str, Any]] = []
+    for chunk in _chunks(ids, 40):   # keep each URL well under proxy limits
+        rows += _get(f"/plaid_transactions?business_id=eq.{body.business_id}"
+                     f"&transaction_id=in.({','.join(chunk)})"
+                     f"&select=transaction_id,account_id,amount,date,money_kind")
+    by_id = {r["transaction_id"]: r for r in rows if r.get("account_id") in in_books}
+    confirmed, skipped = [], []
+    for p_ in body.pairs:
+        if len(p_) != 2 or p_[0] not in by_id or p_[1] not in by_id:
+            skipped.append(p_)
+            continue
+        o, i = by_id[p_[0]], by_id[p_[1]]
+        d_o, d_i = _d(o.get("date")), _d(i.get("date"))
+        ok = (_amt(o) > 0 > _amt(i) and _cents(o) == _cents(i)
+              and o.get("account_id") != i.get("account_id")
+              and d_o and d_i and abs((d_o - d_i).days) <= TRANSFER_WINDOW_DAYS
+              and not o.get("money_kind") and not i.get("money_kind"))
+        if not ok:
+            skipped.append(p_)
+            continue
+        confirmed.extend([o["transaction_id"], i["transaction_id"]])
+    stamp = datetime.now(timezone.utc).isoformat()
+    for chunk in _chunks(confirmed, 40):
+        res = sb_clients.sb_patch_as_service(
+            f"/plaid_transactions?business_id=eq.{body.business_id}"
+            f"&transaction_id=in.({','.join(chunk)})",
+            {"money_kind": "transfer", "updated_at": stamp})
+        if res is None:
+            raise HTTPException(502, "Those transfers didn't save. Try again.")
+    return {"ok": True, "confirmed_pairs": len(confirmed) // 2, "skipped": skipped}

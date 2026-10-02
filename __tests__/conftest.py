@@ -44,3 +44,18 @@ def _fresh_chief_turn():
     except Exception:  # pragma: no cover
         pass
     yield
+
+
+# bank_money caches "does plaid_transactions.money_kind exist?" for five
+# minutes. In one test process that cache would carry one test's fake
+# database into the next, so every test starts unprobed.
+@pytest.fixture(autouse=True)
+def _fresh_money_kind_probe():
+    try:
+        import time as _time
+        import bank_money as _bm
+        # A definite "not yet", cached, so no test probes the network. Tests
+        # of the after-migration behaviour monkeypatch bank_money.supported.
+        _bm._probe.update(at=_time.monotonic(), ok=False)
+    except Exception:  # pragma: no cover
+        pass
