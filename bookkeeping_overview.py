@@ -267,8 +267,20 @@ def _twin_sig(t: Dict[str, Any]) -> Tuple[Any, ...]:
     return (t.get("date"), int(round(_amt(t) * 100)), _norm(tx_name(t)))
 
 
-def _answered(t: Dict[str, Any]) -> bool:
-    return not needs_category(t)
+def _carry_fields(old: Dict[str, Any], twin: Dict[str, Any]) -> Dict[str, Any]:
+    """What the extra copy knows that its twin doesn't, answer by answer:
+    a money_kind the twin lacks, and a real spending category where the
+    twin has none. (A twin with a category but no money_kind still gets the
+    old copy's "owner" or "transfer"; dropping it would book the row as an
+    expense again.)"""
+    fields: Dict[str, Any] = {}
+    if bank_money.kind(old) and not bank_money.kind(twin):
+        fields["money_kind"] = bank_money.kind(old)
+    if old.get("business_category") not in (None, "", "other") and \
+            twin.get("business_category") in (None, "", "other"):
+        fields["business_category"] = old.get("business_category")
+        fields["business_subcategory"] = old.get("business_subcategory")
+    return fields
 
 
 def linked_twice_plans(accounts: List[Dict[str, Any]], items: List[Dict[str, Any]],
@@ -312,8 +324,9 @@ def linked_twice_plans(accounts: List[Dict[str, Any]], items: List[Dict[str, Any
                     no_twin += 1
                     continue
                 twin = twins.pop(0)
-                if _answered(t) and not _answered(twin):
-                    carry.append((t, twin))
+                fields = _carry_fields(t, twin)
+                if fields:
+                    carry.append((twin, fields))
             plans.append({
                 "old_account_id": old["account_id"], "keep_account_id": keep["account_id"],
                 "label": account_label(old),
@@ -668,7 +681,9 @@ def build_overview(biz: str, biz_row: Dict[str, Any],
                    for i in items if i.get("last_error")],
         "accounts_linked": len(accounts),
         "accounts_linked_twice": linked_twice,
-        "linked_twice": [_public_plan(p_) for p_ in linked_twice_plans(accounts, items, books_txs)],
+        # Built from the bank rows; a failed read must not read as "safe".
+        "linked_twice": ([_public_plan(p_) for p_ in linked_twice_plans(accounts, items, books_txs)]
+                         if rows_ok else []),
         "accounts_in_use": [{"account_id": a["account_id"], "label": account_label(a),
                              "type": a.get("type"), "trust": bool(a.get("is_trust_account"))}
                             for a in included],
@@ -1033,6 +1048,7 @@ def resolve_linked_twice(body: ResolveTwiceBody,
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,name,merchant_name,business_category,"
             f"business_subcategory{bank_money.cols()}&order=date.desc,transaction_id.desc") if ids else []
+        txs = [t for t in txs if _amt(t) != 0]   # the same rows the overview planned with
     except SourceFailed as e:
         raise HTTPException(503, f"Couldn't read the accounts just now ({e}).")
     plans = {p_["old_account_id"]: p_ for p_ in linked_twice_plans(accounts, items, txs)}
@@ -1047,23 +1063,25 @@ def resolve_linked_twice(body: ResolveTwiceBody,
             refused.append({"account_id": acct,
                             "why": f"{plan['rows_without_twin']} rows on it have no twin, so they'd leave the books"})
             continue
-        for old_row, twin in plan["_carry"]:
-            fields = {"business_category": old_row.get("business_category") or "other",
-                      "business_subcategory": old_row.get("business_subcategory")}
-            if bank_money.kind(old_row):
-                fields["money_kind"] = bank_money.kind(old_row)
+        for twin, fields in plan["_carry"]:
             if sb_clients.sb_patch_as_service(
                     f"/plaid_transactions?transaction_id=eq.{twin['transaction_id']}", fields) is None:
                 raise HTTPException(502, "An answer didn't carry over. Nothing was switched off; try again.")
+        # Queue the copy's rows BEFORE switching it off. The drain reads the
+        # account's state when it runs. If the switch-off then fails, the
+        # queued rows re-post unchanged, which is harmless. The other order
+        # could switch the copy off with nothing queued to reverse its
+        # entries, and a retry could never find it again.
+        settled = [t["transaction_id"] for t in plan["_rows"]]
+        for chunk in _chunks(settled, 200):
+            if sb_clients.sb_post_as_service("/gl_sync_queue", [
+                    {"business_id": biz, "source_table": "plaid_transactions", "source_id": tid}
+                    for tid in chunk]) is None:
+                raise HTTPException(502, "The ledger couldn't be told. Nothing was switched off; try again.")
         if sb_clients.sb_patch_as_service(
                 f"/plaid_accounts?account_id=eq.{acct}&business_id=eq.{biz}",
                 {"included_in_bookkeeping": False, "updated_at": stamp}) is None:
             raise HTTPException(502, "That account didn't switch off. Try again.")
-        settled = [t["transaction_id"] for t in plan["_rows"]]
-        for chunk in _chunks(settled, 200):
-            sb_clients.sb_post_as_service("/gl_sync_queue", [
-                {"business_id": biz, "source_table": "plaid_transactions", "source_id": tid}
-                for tid in chunk], prefer=None)
         resolved.append({"account_id": acct, "label": plan["label"], "rows": plan["rows"],
                          "answers_carried": plan["answers_to_carry"]})
     return {"ok": True, "resolved": resolved, "refused": refused}

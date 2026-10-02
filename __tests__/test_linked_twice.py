@@ -77,9 +77,10 @@ def test_resolve_carries_answers_then_switches_the_copy_off(db):
     out = bo.resolve_linked_twice(bo.ResolveTwiceBody(business_id="biz", account_ids=["a-old"]), user=object())
     assert out["resolved"][0]["answers_carried"] == 1 and out["refused"] == []
     kinds = [(w[0], w[1].split("?")[0]) for w in writes]
-    assert kinds == [("patch", "/plaid_transactions"), ("patch", "/plaid_accounts"), ("post", "/gl_sync_queue")]
+    # answers first, then the ledger is told, and only then the copy goes off
+    assert kinds == [("patch", "/plaid_transactions"), ("post", "/gl_sync_queue"), ("patch", "/plaid_accounts")]
     assert writes[0][2]["business_category"] == "operating"
-    assert writes[1][2]["included_in_bookkeeping"] is False
+    assert writes[2][2]["included_in_bookkeeping"] is False
 
 
 def test_resolve_refuses_a_copy_that_would_lose_rows(db):
@@ -95,3 +96,37 @@ def test_resolve_refuses_the_copy_being_kept(db):
     tables["/plaid_transactions"] = [tx("n1", "a-new", 5.0, "2026-06-01")]
     out = bo.resolve_linked_twice(bo.ResolveTwiceBody(business_id="biz", account_ids=["a-new"]), user=object())
     assert out["resolved"] == [] and writes == []
+
+
+def test_an_owner_answer_carries_even_when_the_twin_has_a_category(db):
+    tables, writes = db
+    old = dict(tx("o1", "a-old", 41.0, "2026-08-12", name="Chime", bucket="operating"), money_kind="owner")
+    twin = tx("n1", "a-new", 41.0, "2026-08-12", name="Chime", bucket="operating")
+    tables["/plaid_transactions"] = [old, twin]
+    out = bo.resolve_linked_twice(bo.ResolveTwiceBody(business_id="biz", account_ids=["a-old"]), user=object())
+    assert out["resolved"][0]["answers_carried"] == 1
+    assert writes[0][2] == {"money_kind": "owner"}         # not the category: the twin had one
+
+
+def test_if_the_ledger_cant_be_told_nothing_is_switched_off(db, monkeypatch):
+    tables, writes = db
+    tables["/plaid_transactions"] = [tx("o1", "a-old", 5.0, "2026-06-01"), tx("n1", "a-new", 5.0, "2026-06-01")]
+    monkeypatch.setattr(bo.sb_clients, "sb_post_as_service", lambda p, b, prefer=None: None)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        bo.resolve_linked_twice(bo.ResolveTwiceBody(business_id="biz", account_ids=["a-old"]), user=object())
+    assert e.value.status_code == 502
+    assert not any(w[1].startswith("/plaid_accounts") for w in writes)
+
+
+def test_plans_are_withheld_when_bank_rows_did_not_load(monkeypatch):
+    from datetime import datetime, timezone
+    tables = {"/plaid_items": ITEMS, "/plaid_accounts": [OLD, NEW]}
+
+    def get(path):
+        t = path.split("?")[0]
+        return None if t == "/plaid_transactions" else tables.get(t, [])
+    monkeypatch.setattr(bo.sb_clients, "sb_get_as_service", get)
+    monkeypatch.setattr(bo, "year_so_far", lambda biz, row: None)
+    o = bo.build_overview("biz", {"id": "biz", "settings": {}}, now=datetime(2026, 10, 2, tzinfo=timezone.utc))
+    assert o["bank"]["linked_twice"] == []
