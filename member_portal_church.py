@@ -55,6 +55,7 @@ DONE = {
     "joined": "You're in. The group's leader will see you on the list.",
     "left": "You've left that group.",
     "here": "Thanks for joining us. You're counted as here today.",
+    "meeting_ended": "The meeting has ended for everyone.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -78,6 +79,8 @@ ERRORS = {
     "empty_chat": "Write a message first.",
     "slow_chat": "That's a lot of messages at once. Wait a moment, then try again.",
     "signed_out": "Your sign-in ended. Open the page again to sign back in.",
+    "video_off": "Live meetings aren't available right now. Please try again later.",
+    "not_host": "Only leaders the church has approved can host a group meeting.",
 }
 
 
@@ -323,9 +326,9 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
     read (the page says "try again" rather than showing no groups)."""
     groups = sb_clients.sb_get_as_service(
         f"/groups?business_id=eq.{business_id}&active=eq.true"
-        f"&select=id,name,kind,description,meets,location,capacity,open_to_join&order=name.asc&limit=500")
+        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,youth&order=name.asc&limit=500")
     members = sb_clients.sb_get_as_service(
-        f"/group_members?business_id=eq.{business_id}&select=group_id,contact_id,role&limit=20000")
+        f"/group_members?business_id=eq.{business_id}&select=group_id,contact_id,role,can_host_live&limit=20000")
     if groups is None or members is None:
         return None
     leader_ids = sorted({str(m["contact_id"]) for m in members if m.get("role") == "leader"})
@@ -338,6 +341,8 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
         names.update({str(r["id"]): _first(r.get("name")) for r in rows})
     me_id = str(me["id"])
     my_role = {str(m["group_id"]): m.get("role") for m in members if str(m["contact_id"]) == me_id}
+    my_host = {str(m["group_id"]) for m in members
+               if str(m["contact_id"]) == me_id and m.get("role") == "leader" and m.get("can_host_live")}
     count: Dict[str, int] = {}
     for m in members:
         count[str(m["group_id"])] = count.get(str(m["group_id"]), 0) + 1
@@ -352,9 +357,16 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
             "full": bool(g.get("capacity")) and count.get(gid, 0) >= int(g["capacity"]),
         }
         if gid in my_role:
-            mine.append({**item, "role": my_role[gid]})
+            mine.append({**item, "role": my_role[gid], "host": gid in my_host, "youth": bool(g.get("youth"))})
         elif g.get("open_to_join") and not item["full"]:
             open_.append(item)
+    # Live group meetings (member_portal_group_live.py) for the groups
+    # this person is in. A failed read only hides the Join buttons.
+    if mine:
+        import member_portal_group_live as mgl
+        live = mgl.open_sessions(business_id, [g["id"] for g in mine]) or {}
+        for g in mine:
+            g["live"] = live.get(g["id"])
     return {"mine": mine, "open": open_}
 
 
@@ -417,7 +429,25 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str]) -> str:
         button = (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
                   f'<input type="hidden" name="action" value="join">'
                   f'<button class="mp-go" type="submit" aria-describedby="{title_id}">Join</button></form>')
-    elif action == "leave" and g.get("role") != "leader":
+    meet = ""
+    if action == "leave":
+        live = g.get("live")
+        if live:
+            label = ("Join live meeting" if live.get("status") == "live" or g.get("host")
+                     else "Meeting starting — waiting for leaders")
+            meet = (f'<a class="mp-go" href="/my/groups/live/{_e(live["id"])}" aria-describedby="{title_id}">'
+                    f'<span class="mb-live-dot" aria-hidden="true"></span>{label}</a>')
+        elif g.get("host"):
+            meet = (f'<form method="post" action="/my/groups/live/start" class="mb-start">'
+                    f'<input type="hidden" name="group_id" value="{gid}">'
+                    f'<label class="mp-sr" for="mb-mode-{gid}">Kind of meeting</label>'
+                    f'<select class="mp-input" id="mb-mode-{gid}" name="mode">'
+                    f'<option value="meeting">Meeting: everyone can be on camera</option>'
+                    f'<option value="broadcast">Broadcast: only leaders on camera</option></select>'
+                    f'<button class="mp-go mb-soft" type="submit" aria-describedby="{title_id}">Start live meeting</button></form>'
+                    + ('<p class="mp-muted" style="margin:0;font-size:12px">A youth group meeting opens once a second '
+                       'approved adult leader joins.</p>' if g.get("youth") else ''))
+    if action == "leave" and g.get("role") != "leader":
         button = (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
                   f'<input type="hidden" name="action" value="leave">'
                   f'<button class="mp-link" type="submit" aria-describedby="{title_id}">Leave this group</button></form>')
@@ -425,7 +455,7 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str]) -> str:
   {ui.poster(g['id'], pal, g.get('name') or '', g.get('kind') or '', tag='div', cls='mb-band', title_tag='h3', title_id=title_id)}
   {f'<p class="mp-muted">{facts}</p>' if facts else ''}
   {led}{about}{you}
-  <div class="mp-actions">{button}</div>
+  <div class="mp-actions">{meet}{button}</div>
 </article>"""
 
 
@@ -650,11 +680,13 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
             break
     for g in (groups or {}).get("mine", [])[:3]:
         led = ", ".join(g.get("leaders") or [])
-        cards.append(f'<a class="mb-wk" href="/my/groups"><span class="mb-wk-d">{_e(g.get("kind") or "Group")}</span>'
+        href = f"/my/groups/live/{_e(g['live']['id'])}" if g.get("live") else "/my/groups"
+        cards.append(f'<a class="mb-wk" href="{href}"><span class="mb-wk-d">{_e(g.get("kind") or "Group")}</span>'
                      f'<strong>{_e(g.get("name"))}</strong>'
                      f'<span class="mb-wk-s">{_e(g.get("meets") or g.get("location") or "")}</span>'
                      f'{f"<span class=mb-wk-s>Led by {_e(led)}</span>" if led and g.get("role") != "leader" else ""}'
-                     f'{"<span class=mb-chip>You lead</span>" if g.get("role") == "leader" else ""}</a>')
+                     f'{"<span class=mb-chip>You lead</span>" if g.get("role") == "leader" and not g.get("live") else ""}'
+                     f'{"<span class=mb-chip><span class=mb-live-dot aria-hidden=true></span>Live now</span>" if g.get("live") else ""}</a>')
     if not cards:
         return ""
     return (f'<section aria-labelledby="mb-week"><h2 id="mb-week" class="mp-sect">Your week</h2>'
@@ -703,7 +735,7 @@ async def _signed_in(request: Request):
 
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if target not in ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live"):
+    if target not in ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live")             and not re.fullmatch(r"/my/groups/live/[0-9a-f-]{36}", target):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
