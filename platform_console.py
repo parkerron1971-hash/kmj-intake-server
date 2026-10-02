@@ -1206,6 +1206,16 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_agent_runs (every tick), platform_changelog (findings only)",
     },
     {
+        "id": "trial_expiry",
+        "name": "Trial expiry",
+        "kind": "system",
+        "beat": "Trials given inside the app (no Stripe subscription) end on their own: "
+                "past their end date they become canceled, tier starter, like a lapsed "
+                "Stripe trial. Each one is noted in the operator log.",
+        "schedule": "hourly",
+        "writes_to": "businesses (status), platform_changelog (one note per expiry)",
+    },
+    {
         "id": "support_desk",
         "name": "Support desk",
         "kind": "agent",
