@@ -497,20 +497,31 @@ WEATHER_UNVERIFIED_REPLY = "I couldn't verify the current weather, so I don't ha
 def _weather_assertions(reply):
     assertions = []
     for sentence in re.split(r'(?<=[.!?])\s+|\n+', reply or ''):
-        # Scope exemptions to their own clause: neither an attribution nor
-        # "I haven't checked" can verify an independent condition after it.
-        for clause in re.split(r'[;:]\s*|,?\s+(?:and|but|because)\s+|\bhowever,?\s+',
-                               sentence, flags=re.I):
-            clause = clause.strip()
-            if (not clause or clause.endswith('?') or _WEATHER_UNCERTAIN.search(clause)
-                    or _WEATHER_OFFER.search(clause)):
+        # A conditional keeps its coordinated predicates: "If it is rainy
+        # and windy, move indoors" describes a contingency, not conditions.
+        # A separate "but/however" clause can still assert current weather.
+        for scope in re.split(r'[;:]\s*|,?\s+but\s+|\bhowever,?\s+', sentence, flags=re.I):
+            scope = scope.strip()
+            if re.match(r'^(?:if|when|whether|in case)\b', scope, re.I):
                 continue
-            # Guard explicit current conditions, not generic weather nouns:
-            # "Rain is water" and "Rainy days are a reason to plan" are not
-            # reports that a location is experiencing rain right now.
-            if (_WEATHER_CONDITION.search(clause)
-                    or (_WEATHER_WORD.search(clause) and _WEATHER_NOW.search(clause))):
-                assertions.append(clause)
+            # Attribution, uncertainty, and offers apply only to their own
+            # clause. A comma splice cannot turn the following fact into a
+            # quotation or an uncertainty statement.
+            for clause in re.split(r',\s*(?:(?:and|because)\s+)?|\s+(?:and|because)\s+', scope, flags=re.I):
+                clause = clause.strip()
+                if (not clause or clause.endswith('?') or _WEATHER_UNCERTAIN.search(clause)
+                        or _WEATHER_OFFER.search(clause)):
+                    continue
+                timed = bool(_WEATHER_NOW.search(clause))
+                if not timed and re.match(
+                        r'^(?:winters|summers|springs|autumns|falls|rainy days|snowy days)\s+'
+                        r'(?:are|can be|tend to be)\b', clause, re.I):
+                    continue
+                # Guard explicit current conditions, not generic weather nouns:
+                # "Rain is water" and "Rainy days are a reason to plan" are not
+                # reports that a location is experiencing rain right now.
+                if _WEATHER_CONDITION.search(clause) or (_WEATHER_WORD.search(clause) and timed):
+                    assertions.append(clause)
     return assertions
 
 

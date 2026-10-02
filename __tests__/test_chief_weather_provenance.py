@@ -172,3 +172,25 @@ def test_separately_cited_weather_and_wind_clauses_are_both_supported():
     assert truth._weather_assertions(draft) == [
         'Muskegon is rainy right now', 'the wind is from the west.']
     assert truth.assess_review(raw, draft, {sid: {'kind': 'research', 'text': draft}})[0] == 'supported'
+
+
+@pytest.mark.parametrize('draft', [
+    "If it's rainy and it's windy, move indoors.",
+    'If it is rainy and it is windy, move indoors.',
+    'Winters are snowy.',
+])
+def test_coordinated_conditionals_and_general_seasons_do_not_assert_current_weather(draft):
+    assert not truth._weather_assertions(draft)
+
+
+def test_comma_splice_after_uncertainty_does_not_hide_current_condition():
+    draft = "I haven't checked the weather, it's rainy right now."
+    assert truth._weather_assertions(draft) == ["it's rainy right now."]
+    raw = json.dumps({'verdict': 'supported', 'claims': []})
+    assert truth.assess_review(raw, draft, {})[0] == 'unsupported'
+
+
+def test_conditional_does_not_hide_independent_but_clause():
+    draft = "If it's rainy and it's windy, move indoors, but Muskegon is sunny right now."
+    assert truth._weather_assertions(draft) == ['Muskegon is sunny right now.']
+    assert truth._weather_provenance_missing(draft, [], {})
