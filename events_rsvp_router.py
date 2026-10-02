@@ -141,6 +141,54 @@ def resolve_fields(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def occasion_roles(data: Dict[str, Any],
+                   module_roles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The roles ONE occasion needs. The app lets each occasion carry its
+    own list in entry.data['_roles'] (Christmas Eve needs more ushers than
+    a Wednesday class); an occasion without one uses the module's default
+    list. An empty list the practitioner saved is respected. Mirrors the
+    frontend's event_roster/types.ts occasionRoles."""
+    own = (data or {}).get("_roles")
+    if not isinstance(own, list):
+        return module_roles
+    return [r for r in own
+            if isinstance(r, dict) and r.get("id") and r.get("label")]
+
+
+# Who may see one occasion (Kevin, 2026-09-29: "meetings that could be set
+# public or private or invite, so everything won't be shared").
+#   public   the public events page and every member's own page
+#   private  the church only: never listed outside the app
+#   invite   only the people it was shared with (entry.data._invited) or
+#            already on its roster, on their own member page; never public
+# An occasion that never chose is public — how every occasion behaved
+# before the choice existed. Mirrors event_roster/types.ts.
+VISIBILITIES = ("public", "private", "invite")
+
+
+def occasion_visibility(data: Dict[str, Any]) -> str:
+    v = (data or {}).get("_visibility")
+    return v if v in VISIBILITIES else "public"
+
+
+def is_public(data: Dict[str, Any]) -> bool:
+    return occasion_visibility(data) == "public"
+
+
+def visible_to_member(data: Dict[str, Any], contact_id: str, signups_field: str) -> bool:
+    """May this person see (and answer) this occasion on their own page?"""
+    v = occasion_visibility(data)
+    if v == "public":
+        return True
+    if v == "private" or not contact_id:
+        return False
+    invited = (data or {}).get("_invited")
+    if isinstance(invited, list) and str(contact_id) in {str(x) for x in invited}:
+        return True
+    return any(str(s.get("contact_id") or "") == str(contact_id)
+               for s in read_signups(data, signups_field))
+
+
 def read_signups(data: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
     raw = (data or {}).get(field)
     if not isinstance(raw, list):
@@ -190,6 +238,7 @@ def build_occasions(
     modules: List[Dict[str, Any]],
     entries_by_module: Dict[str, List[Dict[str, Any]]],
     today: Optional[date] = None,
+    include=None,
 ) -> List[Dict[str, Any]]:
     """The page's data: dated, upcoming occasions across every roster
     module, soonest first. Undated entries are skipped — internally an
@@ -201,6 +250,10 @@ def build_occasions(
         f = resolve_fields(mod.get("archetype_params"))
         for e in entries_by_module.get(str(mod.get("id"))) or []:
             data = e.get("data") or {}
+            # Who may see it: public ones only unless the caller says
+            # otherwise (the member page passes its own rule).
+            if not (include(data, f) if include else is_public(data)):
+                continue
             d = _parse_day(data.get(f["date_field"]))
             if d is None or d < today or (d - today).days > UPCOMING_WINDOW_DAYS:
                 continue
@@ -221,7 +274,8 @@ def build_occasions(
                                if capacity is not None else None),
                 "full": full,
                 "occasion_noun": f["occasion_noun"],
-                "roles": [role_fill(r, signups) for r in f["roles"]],
+                "roles": [role_fill(r, signups)
+                          for r in occasion_roles(data, f["roles"])],
             })
     out.sort(key=lambda o: o["date"])
     return out[:MAX_OCCASIONS]
@@ -360,7 +414,7 @@ async def public_event_rsvp(
     entries = sb_clients.sb_get_as_service(
         f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}"
         f"&business_id=eq.{business_id}&status=eq.active"
-        f"&select=id,module_id,data&limit=1"
+        f"&select=id,module_id,data,updated_at&limit=1"
     ) or []
     if not entries:
         raise HTTPException(404, "that occasion wasn't found")
@@ -369,14 +423,17 @@ async def public_event_rsvp(
                    if str(m.get("id")) == str(entry.get("module_id"))), None)
     if not module:
         raise HTTPException(404, "that occasion wasn't found")
+    # A private or invite-only occasion is not on the public page, so the
+    # public signup cannot reach it either — same answer as a wrong id.
+    if not is_public(entry.get("data") or {}):
+        raise HTTPException(404, "that occasion wasn't found")
 
     import hashlib
-    import json
     # Stable registration identity survives duplicate contact-create races and
     # contact lookup failures without placing an email address in public data.
     registration_key = hashlib.sha256(f'{business_id}:{entry_id}:{email}'.encode()).hexdigest()
     contact_id = None
-    for attempt in range(3):
+    for attempt in range(5):
         f = resolve_fields(module.get("archetype_params"))
         original_data = entry.get("data") or {}
         data = dict(original_data)
@@ -392,7 +449,8 @@ async def public_event_rsvp(
         if capacity is not None and attending_count(signups) >= capacity:
             raise HTTPException(409, 'this occasion is full')
         if role_id:
-            role = next((r for r in f['roles'] if r.get('id') == role_id), None)
+            role = next((r for r in occasion_roles(data, f['roles'])
+                         if r.get('id') == role_id), None)
             if not role:
                 raise HTTPException(400, 'unknown role')
             fill = role_fill(role, signups)
@@ -405,23 +463,26 @@ async def public_event_rsvp(
             new_signup['role'] = role_id
         data[f['signups_field']] = signups + [new_signup]
         data['_registration_keys'] = {**keys, registration_key: True}
-        # Compare-and-swap the JSON document: concurrent registrations cannot
-        # overwrite one another or both consume the last available seat.
-        expected = urllib.parse.quote(json.dumps(original_data, separators=(',', ':')), safe='')
+        # A compact revision avoids sending the whole roster in the URL.
+        revision = entry.get('updated_at')
+        if not revision:
+            raise HTTPException(503, 'Signup storage is not ready. Please retry later.')
+        expected = urllib.parse.quote(str(revision), safe='')
         updated = sb_clients.sb_patch_as_service(
             f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
-            f"&status=eq.active&data=eq.{expected}", {'data': data})
+            f"&status=eq.active&updated_at=eq.{expected}", {'data': data})
         if updated is None:
             raise HTTPException(503, 'Registration could not be saved. Please try again.')
         if updated:
             return {'ok': True, 'already': False, 'attending': attending_count(data[f['signups_field']])}
         rows = sb_clients.sb_get_as_service(
             f"/module_entries?id=eq.{urllib.parse.quote(entry_id, safe='')}&business_id=eq.{business_id}"
-            '&status=eq.active&select=id,module_id,data&limit=1') or []
+            '&status=eq.active&select=id,module_id,data,updated_at&limit=1') or []
         if not rows or str(rows[0].get('module_id')) != str(module['id']):
             raise HTTPException(404, "that occasion wasn't found")
         entry = rows[0]
     raise HTTPException(409, 'Registration changed while saving. Please try again.')
+
 
 
 
@@ -503,6 +564,12 @@ def _brand_css_vars(business: Dict[str, Any]) -> str:
     same seam giving uses) so /events matches /give and /book."""
     from booking_page_renderer import _css_vars, _brand_kit
     return _css_vars(_brand_kit(business))
+
+
+def _brand_font_links(business: Dict[str, Any]) -> str:
+    """The brand's faces, loaded — the partner of _brand_css_vars."""
+    from booking_page_renderer import _font_links, _brand_kit
+    return _font_links(_brand_kit(business))
 
 
 def _occasion_card(o: Dict[str, Any]) -> str:
@@ -741,6 +808,7 @@ def render_events_unavailable_page(business: Dict[str, Any],
         f"<title>{_esc(name)}</title>",
         '<meta name="robots" content="noindex,nofollow">',
         f'<link rel="canonical" href="{_esc(canonical_url)}">',
+        _brand_font_links(business),
         f"<style>{css_vars}</style>",
         "<style>html,body{margin:0;padding:0;font-family:var(--font-body);"
         "color:var(--text-primary);background:var(--surface);min-height:100vh;}"

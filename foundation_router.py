@@ -109,6 +109,48 @@ async def complete_phase(business_id: str, phase: int, user: AuthedUser = Depend
 
 
 # ──────────────────────────────────────────────────────────────
+# Phase 2 - EIN: the answers, and the official SS-4 prefilled
+# ──────────────────────────────────────────────────────────────
+# There is no IRS API for EINs; the owner applies on irs.gov. These make
+# that sitting short (ein_prep) and cover the fax/mail route (the SS-4).
+# Neither holds or asks for an SSN, and neither submits anything.
+
+@router.get("/ein-prep/{business_id}")
+def ein_prep(business_id: str, user: AuthedUser = Depends(require_user)) -> JSONResponse:
+    _require_owner(business_id, user)
+    import ein_prep as ep
+    return JSONResponse(ep.prep_for(ep.load_inputs(business_id)))
+
+
+@router.get("/ss4/{business_id}")
+def ss4_prefilled(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The official SS-4 with the owner's own recorded facts written in —
+    unsigned, still fillable, SSN and every tax determination left blank."""
+    from fastapi.responses import Response
+    import ein_prep as ep
+    import irs_forms
+
+    _require_owner(business_id, user)
+    inputs = ep.load_inputs(business_id)
+    try:
+        pdf = irs_forms.fill_ss4(
+            inputs["identity"], inputs["practitioner"],
+            business_name=(inputs["business"] or {}).get("name") or "",
+            profile=inputs["profile"])
+    except irs_forms.FormUnavailable as e:
+        # 503: the form exists, we could not prepare it right now. The
+        # message is shown verbatim and the blank link stays available.
+        raise HTTPException(503, str(e))
+    safe = "".join(ch for ch in ((inputs["identity"] or {}).get("legal_name") or "SS-4")
+                   if ch.isalnum() or ch in " -_").strip() or "SS-4"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="SS-4 {safe}.pdf"'},
+    )
+
+
+# ──────────────────────────────────────────────────────────────
 # Phase 1 - Entity formation
 # ──────────────────────────────────────────────────────────────
 

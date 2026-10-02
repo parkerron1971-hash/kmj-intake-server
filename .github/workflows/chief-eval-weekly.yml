@@ -1,0 +1,109 @@
+name: Chief eval (weekly)
+
+# The weekly half of Chief quality & cost (agent operations plan, Wave 3;
+# the nightly half is chief_quality.py). The three evals that exist —
+# turn behaviour, factual answers and unsupported claims, advice quality —
+# only ran when someone remembered to start ci.yml by hand. Now they run
+# every Monday against the real model, and a failure opens one
+# `chief-quality` issue (or comments on the open one) with what failed.
+# A clean week closes it.
+#
+# Paid: these call the Anthropic API with the repo's ANTHROPIC_API_KEY,
+# once a week. Re-run any time from the Actions tab.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"   # Mondays 09:00 UTC (5 AM Eastern)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: chief-eval-weekly
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Turn behaviour
+        id: turn
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/chief_turn_eval.py --live --out chief-eval-report.json
+
+      - name: Factual answers and unsupported claims
+        id: factual
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/chief_factual_eval.py --live --out chief-factual-report.json
+
+      - name: Advice answers
+        id: advice
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/chief_advice_eval.py --live --out chief-advice-report.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chief-eval-weekly
+          path: |
+            chief-eval-report.json
+            chief-factual-report.json
+            chief-advice-report.json
+          if-no-files-found: ignore
+
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TURN: ${{ steps.turn.outcome }}
+          FACTUAL: ${{ steps.factual.outcome }}
+          ADVICE: ${{ steps.advice.outcome }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create chief-quality --color 5319e7 \
+            --description "Chief's weekly eval found a regression" --force || true
+          line() { if [ "$2" = "success" ]; then echo "- $1: passed"; else echo "- $1: **$2**"; fi; }
+          body="Chief's weekly eval, $(date -u '+%Y-%m-%d'):
+
+          $(line 'Turn behaviour' "$TURN")
+          $(line 'Factual answers and unsupported claims' "$FACTUAL")
+          $(line 'Advice answers' "$ADVICE")
+
+          The reports (which cases failed, and Chief's actual replies) are attached to the [run]($RUN)."
+          existing=$(gh issue list --label chief-quality --state open --json number --jq '.[0].number')
+          if [ "$TURN" = success ] && [ "$FACTUAL" = success ] && [ "$ADVICE" = success ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$body
+
+          Clean week; closing."
+              gh issue close "$existing"
+            fi
+            exit 0
+          fi
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --label chief-quality --title "Chief's weekly eval found a regression" --body "$body"
+          fi

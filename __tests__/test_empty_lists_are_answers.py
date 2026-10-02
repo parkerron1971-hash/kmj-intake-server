@@ -109,6 +109,27 @@ def test_a_full_page_is_not_called_complete(gather, monkeypatch):
     assert "(10 loaded draft rows; sample, not a total)" in chief._format_context_for_prompt(ctx)
 
 
+def test_a_full_page_with_the_welcome_note_is_still_a_full_page(gather, monkeypatch):
+    # The welcome note is dropped after the read (onboarding_welcome), so
+    # nine drafts are left; the read still came back at its limit, and
+    # there may be more drafts behind it. Completeness is the read's.
+    import onboarding_welcome
+    original = chief._sb
+
+    async def rows(client, method, path, body=None):
+        if path.startswith('/agent_queue?') and 'status=eq.draft' in path:
+            page = [{"id": f"q{i}", "agent": "nurture", "action_type": "email"} for i in range(9)]
+            page.append({"id": "w", "agent": "system", "action_type": "email",
+                         "ai_reasoning": onboarding_welcome.REASONING})
+            return page
+        return await original(client, method, path, body)
+    monkeypatch.setattr(chief, '_sb', rows)
+    _, ctx = gather(query_text=None)
+    assert len(ctx["queue"]) == 9
+    assert ctx["queue_complete"] is False
+    assert "queue" not in ctx["context_quality"]["complete_lists"]
+
+
 def test_a_complete_list_longer_than_the_page_is_not_called_complete():
     """Projects and invoices show their first 25: 30 read in full are
     still a sample on the page."""

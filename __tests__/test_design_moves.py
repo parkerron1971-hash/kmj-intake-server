@@ -179,13 +179,44 @@ def test_every_authoring_prompt_teaches_the_primitives():
         "atelier": atelier._SYSTEM_PROMPT,
         "atelier refine": atelier._REFINE_SYSTEM_PROMPT,
         "canvas": canvas._SYSTEM_PROMPT,
-        "builder_v2": builder_v2._SYSTEM,
     }
     for label, prompt in surfaces.items():
         assert "color-mix(in srgb" in prompt, f"{label} not taught the tint"
         assert "TINTING RULE" in prompt, f"{label} missing the stated rule"
         for move in ("THE STAGE LIGHT", "THE FOIL", "THE THREAD"):
             assert move in prompt, f"{label} missing {move}"
+    # builder_v2 (2026-10-01): the rule lives in the system prompt and the
+    # named moves' primitives ride the build's own message.
+    assert "color-mix(in srgb" in builder_v2._SYSTEM
+    assert "TINTING RULE" in builder_v2._SYSTEM
+    user = builder_v2.build_user_prompt(
+        "1. OVERVIEW. The page is built on THE STAGE LIGHT, THE FOIL and "
+        "THE THREAD.", "BUSINESS: x")
+    for move in ("THE STAGE LIGHT", "THE FOIL", "THE THREAD"):
+        assert MOVES[move].css.strip().splitlines()[0] in user, (
+            f"builder_v2 named {move} without handing over its primitive")
+
+
+def test_builder_v2_carries_only_the_moves_its_blueprint_names():
+    """All thirteen primitives rode every build (8,300 characters) though a
+    blueprint commits to one or two. Named moves arrive; the rest stay out."""
+    import builder_v2
+    for name, m in MOVES.items():
+        assert m.css not in builder_v2._SYSTEM, f"{name} still in the system prompt"
+    user = builder_v2.build_user_prompt("1. OVERVIEW. THE THREAD walks it.",
+                                        "BUSINESS: x")
+    assert MOVES["THE THREAD"].css in user
+    assert MOVES["THE STAGE LIGHT"].css not in user
+    plain = builder_v2.build_user_prompt("1. OVERVIEW. No moves here.",
+                                         "BUSINESS: x")
+    assert "WORKING PRIMITIVES" not in plain
+
+
+def test_primitives_block_ignores_unknown_names():
+    assert design_moves.primitives_block([]) == ""
+    assert design_moves.primitives_block(["THE MADE-UP MOVE"]) == ""
+    block = design_moves.primitives_block(["THE FOIL"])
+    assert MOVES["THE FOIL"].css in block and ".scope" in block
 
 
 def test_the_director_vocabulary_is_generated_not_hardcoded():

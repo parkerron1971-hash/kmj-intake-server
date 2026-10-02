@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const { PGlite } = await import(process.env.PGLITE_MODULE || '@electric-sql/pglite');
+const db = new PGlite();
+await db.exec('CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role BYPASSRLS; CREATE SCHEMA auth; CREATE TABLE auth.users(id uuid PRIMARY KEY); CREATE TABLE businesses(id uuid PRIMARY KEY);');
+const sql = readFileSync('supabase/APPLY-2026-09-30-agentcard-wallet.sql', 'utf8');
+await db.exec(sql); await db.exec(sql);
+const id = n => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
+await db.query('INSERT INTO businesses VALUES($1),($2)', [id(1),id(2)]);
+await db.query('INSERT INTO auth.users VALUES($1),($2)', [id(3),id(4)]);
+const rpc = async (fn,args) => (await db.query('SELECT '+fn+'('+args.map((_,i)=>'$'+(i+1)).join(',')+') AS v',args)).rows[0].v;
+const a=[id(1),id(3),'a'.repeat(64),id(5)];
+assert.equal((await rpc('agentcard_wallet_acquire',a)).revision,0);
+assert.equal(await rpc('agentcard_wallet_acquire',[...a.slice(0,3),id(6)]),null);
+assert.equal(await rpc('agentcard_wallet_save',[...a,0,'encrypted']),1);
+assert.equal(await rpc('agentcard_wallet_save',[...a,0,'stale']),null);
+assert.equal(await rpc('agentcard_wallet_save',[id(2),...a.slice(1),1,'other-business']),null);
+assert.equal(await rpc('agentcard_wallet_save',[id(1),id(4),...a.slice(2),1,'other-user']),null);
+assert.equal(await rpc('agentcard_wallet_save',[id(1),id(3),'b'.repeat(64),id(5),1,'other-client']),null);
+await db.exec("UPDATE agentcard_wallets SET lease_until=clock_timestamp()-interval '1 second'");
+assert.equal(await rpc('agentcard_wallet_save',[...a,1,'expired']),null);
+const b=[...a.slice(0,3),id(6)];
+assert.equal((await rpc('agentcard_wallet_acquire',b)).encrypted_state,'encrypted');
+await rpc('agentcard_wallet_release',a);
+assert.equal(await rpc('agentcard_wallet_acquire',a),null);
+assert.equal(await rpc('agentcard_wallet_save',[...b,1,'durable-claim']),2);
+await rpc('agentcard_wallet_release',b);
+assert.equal((await rpc('agentcard_wallet_acquire',a)).encrypted_state,'durable-claim');
+for(const role of ['anon','authenticated']) {
+ for(const table of ['agentcard_wallets','agentcard_events']) assert.equal((await db.query('SELECT has_table_privilege($1,$2,\'SELECT\') AS v',[role,table])).rows[0].v,false);
+ for(const fn of ['agentcard_wallet_acquire(uuid,uuid,text,uuid)','agentcard_wallet_save(uuid,uuid,text,uuid,integer,text)','agentcard_wallet_release(uuid,uuid,text,uuid)']) assert.equal((await db.query('SELECT has_function_privilege($1,$2,\'EXECUTE\') AS v',[role,fn])).rows[0].v,false);
+}
+await db.exec('SET ROLE service_role');
+assert.equal((await db.query('SELECT count(*)::int AS n FROM agentcard_wallets')).rows[0].n,1);
+await db.close();
+console.log('PASS: migration replay, tenant/client isolation, leases, stale writers, durable claims and service-only privileges.');

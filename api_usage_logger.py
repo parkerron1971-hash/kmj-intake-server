@@ -96,6 +96,7 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # Sonnet 5 — $2/$10 is now permanent; the scheduled September increase
     # was cancelled. Verified 2026-09-09 against the official pricing page.
     "claude-sonnet-5":   (200.0, 1000.0),
+    "claude-sonnet-5-5": (200.0, 1000.0),   # same list price as Sonnet 5 (2026-09-28)
     # Sonnet 4.x — $3/MTok in, $15/MTok out
     "claude-sonnet-4":   (300.0, 1500.0),
     # Haiku 4.5 — $1/MTok in, $5/MTok out
@@ -324,3 +325,39 @@ async def log_api_usage(
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def capture_in_memory() -> list:
+    """Divert every api_usage row in this process to a list instead of the
+    table, and return that list (each row carries its computed `cents`).
+
+    For offline evals and benches that drive Chief against fixture
+    businesses: the rows are not real tenants, and a run should say what it
+    cost. Rebinds the module-level names every already-imported module
+    holds, since callers import these functions by name. Irreversible for
+    the life of the process -- never call it in the server."""
+    import sys
+    rows: list = []
+    originals = {log_api_usage_sync, log_api_usage}
+
+    def _sync(**kw):
+        try:
+            kw["cents"] = kw.get("cost_cents_override") or _compute_cost_cents(
+                kw.get("model") or "", kw.get("input_tokens") or 0, kw.get("output_tokens") or 0,
+                kw.get("cache_read_tokens") or 0, kw.get("cache_creation_tokens") or 0,
+                kw.get("cache_creation_1h_tokens") or 0)
+        except Exception:
+            kw["cents"] = 0
+        rows.append(kw)
+
+    async def _async(**kw):
+        _sync(**kw)
+
+    for mod in list(sys.modules.values()):
+        for name, repl in (("log_api_usage_sync", _sync), ("log_api_usage", _async)):
+            try:
+                if getattr(mod, name, None) in originals:
+                    setattr(mod, name, repl)
+            except Exception:
+                pass
+    return rows
