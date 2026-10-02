@@ -217,6 +217,7 @@ from chief_offering_actions import (
 # The browser hand (2026-09-04) — proposes; the approval starts the job.
 from chief_link_pilot import handle_link_wallet_pilot
 from chief_lane_wallet import handle_lane_wallet
+from chief_agentcard import handle_agentcard_wallet
 from chief_site_view import handle_view_website
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
@@ -463,49 +464,114 @@ def _humanize_actions(actions: List[Dict[str, Any]]) -> str:
 # Now each finished sentence of the FIRST model call is checked the moment
 # it is complete (chief_truth.streamable_sentence: every figure and name in
 # one record, no claim anything was done, no state of a record, nothing
-# about the business unproved) and sent as it passes. The first sentence
-# that cannot be proved closes the stream for the turn; everything after
-# it waits for the full answer check exactly as before, and arrives as the
-# continuation of what was already said (_stitch_after_stream).
+# about the business unproved) and sent as it passes. A sentence that
+# needs more evidence gets a bounded check alongside the writer. Rejection
+# still holds the remaining prefix for final review; nothing is skipped or
+# reordered (_stitch_after_stream).
 PROSE_PREFIX = "\x00prose:"
 _SENTENCE_END = re.compile(r'(?<=[.!?])["”’)]?\s+|\n+')
 
 
 class _SentenceStreamer:
-    """The main model call's stream sink on a streamed turn."""
+    """Release an ordered, checked prefix while the main model is writing.
 
-    def __init__(self, sink, prover) -> None:
+    Up to two bounded checks may overlap. Each sees its preceding candidate
+    text as context, but no sentence escapes until every earlier one passed.
+    A rejection/action tag still holds the remainder for the final review.
+    """
+
+    def __init__(self, sink, prover, review=None, *, message="") -> None:
         self._sink = sink
+        self._message = message
         self._prover = prover
+        self._review = review
         self._filt = _ActionTagFilter()
         self._buf = ""
         self._raw_tail = ""
+        self._pending = []
+        self._review_tasks = set()
+        self._review_calls = 0
+        self._blocked = False
         self.open = prover is not None and sink is not None
         self.sent: List[str] = []
 
     def __call__(self, piece: str) -> None:
         if not self.open or not isinstance(piece, str):
             return
-        # An action tag means the reply is about to narrate work: stop
-        # before it. The tag filter hides the tag; this sees it coming.
-        self._raw_tail = (self._raw_tail + piece)[-16:]
-        if "[ACTION" in self._raw_tail.upper() or "[ACTION" in piece.upper():
+        prior_tail = self._raw_tail
+        self._raw_tail = (prior_tail + piece)[-16:]
+        combined = prior_tail + piece
+        action_at = combined.upper().find("[ACTION")
+        if action_at >= 0:
+            # A provider delta can contain both complete safe prose and the
+            # next action tag. Preserve that prose exactly as when split into
+            # separate deltas; the tag and everything after it stay private.
+            before_tag = piece[:max(0, action_at - len(prior_tail))]
+            self._buf += self._filt.feed(before_tag)
+            self._drain()
             self.close()
             return
         self._buf += self._filt.feed(piece)
-        while self.open:
+        if len(self._buf) + sum(len(p["sentence"]) for p in self._pending) > 12000:
+            self.close()
+            return
+        self._drain()
+
+    def _drain(self) -> None:
+        while self.open and not self._blocked:
             m = _SENTENCE_END.search(self._buf)
             if not m:
                 break
             sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
-            if not sentence.strip():
-                self._emit(sentence)
-                continue
-            import chief_truth as _truth
-            if not _truth.streamable_sentence(self._prover, sentence):
+            import chief_speech_boundary as _speech
+            if _speech.internal_scaffolding(sentence, self._message):
+                # Factual review cannot approve authoring instructions for
+                # speech, even when they make no factual/action claim.
+                _speech.note_block("sentence")
                 self.close()
-                break
-            self._emit(sentence)
+                return
+            import chief_truth as _truth
+            accepted = not sentence.strip() or _truth.streamable_sentence(self._prover, sentence)
+            candidate = {"sentence": sentence, "accepted": True if accepted else None}
+            prefix = self.text + "".join(p["sentence"] for p in self._pending) + sentence
+            self._pending.append(candidate)
+            if not accepted:
+                if self._review is None or self._review_calls >= 2:
+                    # Let preceding checks settle before holding this remainder.
+                    candidate["accepted"] = False
+                    self._blocked = True
+                else:
+                    self._review_calls += 1
+                    task = asyncio.create_task(self._check(prefix, candidate))
+                    self._review_tasks.add(task)
+                    task.add_done_callback(self._review_tasks.discard)
+            self._release_checked()
+
+    def _release_checked(self) -> None:
+        while self.open and self._pending:
+            candidate = self._pending[0]
+            if candidate["accepted"] is None:
+                return
+            if candidate["accepted"] is not True:
+                self.close()
+                return
+            self._pending.pop(0)
+            self._emit(candidate["sentence"])
+
+    async def _check(self, prefix: str, candidate) -> None:
+        try:
+            accepted = await asyncio.wait_for(self._review(prefix), timeout=4.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            import chief_truth as _truth
+            _truth._prefix_review_diagnostic('timeout' if isinstance(exc, asyncio.TimeoutError)
+                                             else 'review_error', prefix_chars=len(prefix))
+            accepted = False
+        if not self.open:
+            return
+        candidate["accepted"] = accepted is True
+        self._release_checked()
 
     def _emit(self, text: str) -> None:
         try:
@@ -515,17 +581,30 @@ class _SentenceStreamer:
             self.close()
 
     def close(self) -> None:
-        """Nothing more streams this turn; an unfinished sentence waits."""
+        """Stop before final review. No late checker may append to the reply."""
         self.open = False
         self._buf = ""
+        self._pending.clear()
+        for task in tuple(self._review_tasks):
+            if not task.done():
+                task.cancel()
+
+    def finish_input(self) -> None:
+        # Generation ended, but final review/actions may still be running.
+        # Release a complete final sentence; an unfinished thought stays held.
+        if self.open and self._buf.rstrip().endswith(('.', '!', '?')):
+            self(' ')
+
+    async def wait_closed(self) -> None:
+        if self._review_tasks:
+            await asyncio.gather(*tuple(self._review_tasks), return_exceptions=True)
 
     def reopen(self) -> None:
-        """A second writer's turn (chief_headline: Haiku's headline, then the
-        main model): what is said stays said, the new writer starts clean.
-        Only while a prover is in place — the lane's switch still holds."""
+        """Legacy headline handoff: start a new writer after the old one ends."""
+        self.close()
         self._filt = _ActionTagFilter()
-        self._buf = ""
         self._raw_tail = ""
+        self._blocked = False
         self.open = self._prover is not None and self._sink is not None
 
     @property
@@ -1194,6 +1273,23 @@ def _looks_like_beta_rejection(status: int, body: str) -> bool:
     return any(t in b for t in ("ttl", "extended-cache", "anthropic-beta", "beta"))
 
 
+def _refusal_fallback_model(model: Optional[str]) -> Optional[str]:
+    """The model a declined turn is asked again on, or None.
+
+    A decline is a 200 with stop_reason "refusal" and usually no text.
+    Before this, the stream read it as "returned empty", asked the SAME
+    model twice more (it declines the same request the same way) and then
+    handed the turn to the backup brain on another provider. Sonnet 5.5
+    declines in more categories than Sonnet 5 (general_harms among them,
+    which ordinary business requests can trip), so the turn is asked once
+    on the previous Sonnet instead. CHIEF_REFUSAL_FALLBACK_MODEL=off keeps
+    the old path; a fallback equal to the declining model is no fallback."""
+    fb = (os.environ.get("CHIEF_REFUSAL_FALLBACK_MODEL") or "claude-sonnet-5").strip()
+    if not fb or fb.lower() in ("off", "0", "false", "no") or fb == (model or ""):
+        return None
+    return fb
+
+
 async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
@@ -1203,7 +1299,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                        read_tools: Optional[List[Dict[str, Any]]] = None,
                        tool_biz: Optional[Dict[str, Any]] = None,
                        effort: Optional[str] = None,
-                       stable_tools: bool = False) -> str:
+                       stable_tools: bool = False,
+                       timing_role: str = "chief_auxiliary") -> str:
     # Spend circuit breaker (beta-readiness audit): soft-block new AI
     # turns once this business crosses its daily-dollar ceiling, or the
     # platform crosses its own. Fail-open — a bookkeeping hiccup must
@@ -1217,7 +1314,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # against, and blocked by, the platform ceiling everyone shares.
     try:
         import spend_guard
-        if spend_guard.over_budget(business_id):
+        if await asyncio.to_thread(spend_guard.over_budget, business_id):
             logger.warning("[chief] daily spend cap hit — turn soft-blocked "
                            "(business=%s)", business_id or "unattributed")
             return spend_guard.block_message()
@@ -1408,19 +1505,26 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         for _round in range(rounds_cap):
           round_done = False
           mute_course_retry = False
+          empty_budget_recovery = False
+          immediate_retry = False
           for attempt in range(3):
-              if attempt:
+              if attempt and not immediate_retry:
                   await asyncio.sleep(1.5 * attempt)
+              immediate_retry = False
               full_parts: List[str] = []
               blocks: Dict[int, Dict[str, Any]] = {}
+              block_counts = {"text": 0, "tool_use": 0, "server_tool_use": 0,
+                              "thinking": 0, "redacted_thinking": 0}
               import chief_search_steps
               searches = chief_search_steps.SearchSteps(_emit_stream_step)
               stop_reason = ""
+              stop_details: Dict[str, Any] = {}
               in_tok = out_tok = 0
               cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
               try:
                   async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                              extra_headers=_beta_headers(_extended)) as resp:
+                                              extra_headers=_beta_headers(_extended),
+                                              task=timing_role) as resp:
                       if resp.status_code >= 400:
                           body = await resp.aread()
                           # If the API is rejecting the extended-ttl beta, stop
@@ -1437,7 +1541,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   client, system, messages, max_tokens=max_tokens,
                                   enable_web_search=enable_web_search,
                                   business_id=business_id, model=model,
-                                  stream_sink=stream_sink)
+                                  stream_sink=stream_sink, timing_role=timing_role)
                           logger.warning(
                               f"Claude stream error (attempt {attempt + 1}/3): "
                               f"{resp.status_code} {body[:300]}")
@@ -1460,6 +1564,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           if et == "content_block_start":
                               idx = int(evt.get("index") or 0)
                               cb = evt.get("content_block") or {}
+                              if cb.get("type") in block_counts:
+                                  block_counts[cb["type"]] += 1
                               searches.block_start(idx, cb)
                               if cb.get("type") == "tool_use":
                                   blocks[idx] = {"type": "tool_use", "id": cb.get("id"),
@@ -1503,6 +1609,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               d = evt.get("delta") or {}
                               if d.get("stop_reason"):
                                   stop_reason = d["stop_reason"]
+                              if isinstance(d.get("stop_details"), dict):
+                                  stop_details = d["stop_details"]
                               u = evt.get("usage") or {}
                               out_tok = int(u.get("output_tokens") or out_tok)
               except httpx.HTTPError as e:
@@ -1522,6 +1630,15 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               else:
                   searches.close()
                   text = "".join(full_parts).strip()
+                  import chief_request_timing as _crt
+                  _trace = _crt.CURRENT.get()
+                  logger.info("[chief stream result] %s", json.dumps({
+                      "request_id": _trace.request_id if _trace else "",
+                      "model": model, "round": _round + 1, "attempt": attempt + 1,
+                      "stop_reason": str(stop_reason)[:64], "text_chars": len(text),
+                      "blocks": block_counts, "output_tokens": out_tok,
+                      "empty_budget_recovery": empty_budget_recovery,
+                  }, separators=(",", ":")))
                   await log_api_usage(
                       endpoint="/chief/backend", model=model,
                       input_tokens=in_tok, output_tokens=out_tok,
@@ -1530,6 +1647,22 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       business_id=business_id, task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms)
                   route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok)
+                  if stop_reason == "refusal":
+                      category = stop_details.get("category")
+                      logger.warning("[chief] %s declined the turn (category=%s)", model, category)
+                      if text or turn_streamed:
+                          # Words already reached the client; they are the reply.
+                          return "".join(turn_parts + [text]).strip()
+                      fb_model = _refusal_fallback_model(model)
+                      if fb_model:
+                          return await _call_claude(
+                              client, system, messages, max_tokens=max_tokens,
+                              enable_web_search=enable_web_search,
+                              business_id=business_id, model=fb_model,
+                              stream_sink=stream_sink, timing_role=timing_role, read_tools=read_tools,
+                              tool_biz=tool_biz, effort=effort, stable_tools=stable_tools)
+                      fb_reason = f"declined ({category})"
+                      break                      # the same model declines again
                   from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
                   if stop_reason == 'max_tokens' and is_course_tool(blocks.values()):
                       # No tool from this truncated round was executed. Retry only
@@ -1576,6 +1709,27 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           break                  # next ROUND, fresh attempts
                   if text or turn_streamed:
                       return "".join(turn_parts + [text]).strip()
+                  if stop_reason == "max_tokens":
+                      # A completed request that consumed its entire budget is
+                      # not a transport hiccup. Repeating the identical request
+                      # can spend three budgets thinking without saying a word.
+                      # Try the SAME model once with its supported minimal
+                      # thinking controls; keep tools, prior receipts, and the
+                      # token limit intact. Never execute truncated tool input.
+                      import model_ladder as _ml
+                      recovery = {**_ml.thinking_off_kwargs(model),
+                                  **_ml.effort_kwargs(model, "low")}
+                      has_tool_blocks = (block_counts["tool_use"]
+                                         or block_counts["server_tool_use"])
+                      changed = any(payload.get(k) != v for k, v in recovery.items())
+                      if (not has_tool_blocks and not empty_budget_recovery
+                              and changed and attempt < 2):
+                          payload.update(recovery)
+                          empty_budget_recovery = True
+                          immediate_retry = True
+                          continue
+                      fb_reason = "stream empty at max_tokens"
+                      break
                   # A 200 that streamed no text at all — treat as transient.
                   logger.warning(f"Claude stream returned empty (attempt {attempt + 1}/3)")
                   fb_reason = fb_reason or "stream empty"
@@ -1585,8 +1739,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               continue
           break
 
-        # Three attempts with backoff have failed — this is an outage, a
-        # rate-limit wall, or a bad key. One shot on the backup brain
+        # Transient retries or bounded empty-budget recovery failed.
+        # One shot on the backup brain
         # before conceding the turn, exactly like the non-streaming path.
         # (If earlier ROUNDS already streamed text, return that instead --
         # the practitioner heard it; a fallback would contradict it.)
@@ -1617,7 +1771,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               await asyncio.sleep(1.5 * attempt)
           try:
               resp = await llm_call.apost(client, payload, timeout=HTTP_TIMEOUT, key=key,
-                                          extra_headers=_beta_headers(_extended))
+                                          extra_headers=_beta_headers(_extended), task=timing_role)
           except httpx.HTTPError as e:
               last_err = str(e)
               logger.warning(f"Claude request failed (attempt {attempt + 1}/3): {e}")
@@ -1637,7 +1791,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   return await _call_claude(
                       client, system, messages, max_tokens=max_tokens,
                       enable_web_search=enable_web_search,
-                      business_id=business_id, model=model, stream_sink=stream_sink,
+                      business_id=business_id, model=model, stream_sink=stream_sink, timing_role=timing_role,
                       read_tools=read_tools, tool_biz=tool_biz)
               if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
                   resp = None
@@ -1705,6 +1859,17 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
       route_ledger.tally_usage(str((data.get("model") if isinstance(data, dict) else None) or model),
                                usage)
       content = data.get("content", []) if isinstance(data, dict) else []
+      if isinstance(data, dict) and data.get("stop_reason") == "refusal":
+          category = (data.get("stop_details") or {}).get("category")
+          logger.warning("[chief] %s declined the turn (category=%s)", model, category)
+          fb_model = _refusal_fallback_model(model)
+          if fb_model:
+              return await _call_claude(
+                  client, system, messages, max_tokens=max_tokens,
+                  enable_web_search=enable_web_search,
+                  business_id=business_id, model=fb_model, stream_sink=stream_sink, timing_role=timing_role,
+                  read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                  stable_tools=stable_tools)
       from chief_academy_actions import allow_course_output, is_course_tool, COURSE_INCOMPLETE_REPLY
       if isinstance(data, dict) and data.get('stop_reason') == 'max_tokens' and is_course_tool(content):
           if _round < chief_tool_loop.MAX_TOOL_ROUNDS - 1 and allow_course_output(payload, content):
@@ -1886,6 +2051,12 @@ def _blend_memories(memories: List[Dict], keep: int = 50) -> List[Dict]:
 # evidence both carry them.
 _INVOICE_SAMPLE_LIMIT = 40
 
+# The row limit of each list _gather_context reads. A read that succeeded
+# and came back under its limit holds every matching row, so the prompt
+# and the answer check call that list complete (see complete_lists).
+_LIST_LIMITS = {"queue": 10, "sessions": 10, "projects": 50,
+                "open_invoices": _INVOICE_SAMPLE_LIMIT, "products": 50, "offerings": 60}
+
 
 def _invoice_today():
     return datetime.now(timezone.utc).date()
@@ -1976,18 +2147,23 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             # it builds the known-sender allowlist in Python and is
             # deliberately NOT copied into contacts_lookup, so it never
             # reaches the prompt. Gating costs one column, not a PII dump.
+            # The allowlist rides in ctx as email_known_senders (see
+            # mailbox_policy.split_for_prompt), which no prompt or review
+            # evidence renders.
             f"/contacts?business_id=eq.{biz_id}"
             f"&select=id,name,email,status,health_score,lead_score,role,last_interaction,created_at&limit=500"),
+        # ai_reasoning rides along only so the onboarding welcome note can
+        # be recognised and dropped (onboarding_welcome, after the gather).
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
-            f"&select=id,agent,action_type,subject,priority,contact_id,created_at"
-            f"&order=priority.asc,created_at.desc&limit=10"),
+            f"&select=id,agent,action_type,subject,priority,contact_id,created_at,ai_reasoning"
+            f"&order=priority.asc,created_at.desc&limit={_LIST_LIMITS['queue']}"),
         _sb(client, "GET",
             f"/events?business_id=eq.{biz_id}&order=created_at.desc&limit=20"
             f"&select=event_type,data,created_at,contacts(name)"),
         _sb(client, "GET",
             f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit=10"
+            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit={_LIST_LIMITS['sessions']}"
             f"&select=id,title,scheduled_for,contact_id,contacts(name)"),
         _sb(client, "GET",
             f"/insights?business_id=eq.{biz_id}&status=eq.unread"
@@ -2013,7 +2189,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/agent_queue?business_id=eq.{biz_id}"
             f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(hours=24)).isoformat().replace('+00:00', 'Z')}"
             f"&order=created_at.desc&limit=30"
-            f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at"),
+            f"&select=id,agent,action_type,subject,status,priority,contact_id,body,created_at,ai_reasoning"),
         _sb(client, "GET",
             f"/business_sites?business_id=eq.{biz_id}"
             f"&order=updated_at.desc&limit=1"
@@ -2032,7 +2208,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # having to repeat themselves.
         _sb(client, "GET",
             f"/products?business_id=eq.{biz_id}&status=eq.active"
-            f"&order=type.asc,sort_order.asc,name.asc&limit=50"
+            f"&order=type.asc,sort_order.asc,name.asc&limit={_LIST_LIMITS['products']}"
             f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
         # Recent email replies — full body content so the Chief can
         # quote a contact's actual words back when drafting responses.
@@ -2077,7 +2253,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/module_entries?business_id=eq.{biz_id}"
             f"&custom_modules.slug=eq.projects"
             f"&select=id,data,created_at,custom_modules!inner(slug)"
-            f"&order=created_at.desc&limit=50"),
+            f"&order=created_at.desc&limit={_LIST_LIMITS['projects']}"),
         # Open missions — Chief must never forget a plan in flight, and a
         # mission waiting on the practitioner should be raised, not
         # discovered. Bounded and tiny.
@@ -2095,7 +2271,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/invoices?business_id=eq.{biz_id}"
             f"&status=in.(draft,sent,viewed,overdue)"
             f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
-            f"&order=due_date.asc.nullslast&limit=40"),
+            f"&order=due_date.asc.nullslast&limit={_LIST_LIMITS['open_invoices']}"),
         # Open assignments (2026-09-04) — the outcomes the standing
         # agent is working between conversations. Chief must know
         # what it is already on, so it never takes the same one twice
@@ -2117,7 +2293,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # saw the offerings table, withheld the answer as "no evidence".
         _sb(client, "GET",
             f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&select=name,current_price,category&order=name.asc&limit=60"),
+            f"&select=name,current_price,category&order=name.asc&limit={_LIST_LIMITS['offerings']}"),
     ]
     context_unavailable = []
 
@@ -2177,57 +2353,64 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id'),
     )]
 
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = await asyncio.gather(*tasks)
+    # Start each dependent read as soon as its own scoped prerequisite is
+    # available. A slow mailbox/contact query must not postpone owner profiles
+    # or module counts. All sources still join before prompt construction.
+    primary = [asyncio.ensure_future(a) for a in tasks]
 
+    async def _owner_context():
+        scoped_business = await primary[0]
+        owner_id = (scoped_business[0] if scoped_business else {}).get("owner_id")
+        if not owner_id:
+            return "", {}, ""
+        return await asyncio.gather(
+            _soft(asyncio.to_thread(pp_chief_context_block, owner_id), ""),
+            _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id), {}),
+            _soft(asyncio.to_thread(voice_chief_context_block, owner_id), ""),
+        )
+
+    async def _module_counts():
+        scoped_business = await primary[0]
+        if not scoped_business:
+            return []
+        scoped_modules = await primary[6]
+        return await asyncio.gather(*[
+            _sb_count(client,
+                f"/module_entries?business_id=eq.{biz_id}&module_id=eq.{m['id']}&status=eq.active&select=id")
+            for m in (scoped_modules or [])
+        ])
+
+    dependent = [asyncio.create_task(_owner_context()), asyncio.create_task(_module_counts())]
+    try:
+        if not await primary[0]:
+            return {}
+        primary_values, owner_values, module_entry_rows, early_values = await asyncio.gather(
+            asyncio.gather(*primary), *dependent, asyncio.gather(*early))
+    finally:
+        # Cancellation/error must not leave reads using this turn's closed client.
+        for task in [*primary, *dependent, *early]:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*primary, *dependent, *early, return_exceptions=True)
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = primary_values
+    # The onboarding welcome note sat in the draft queue like work: a new
+    # practitioner's first greeting said "1 waiting for your review" and
+    # pointed them at a system note. It is not a draft anyone owes a
+    # decision on, so it is not counted or shown here (onboarding_welcome).
+    import onboarding_welcome
+    # Completeness is judged on the rows the read returned, before the
+    # welcome note is dropped: a full page (limit rows, one of them the
+    # welcome note) is still a page, not every draft.
+    queue_read = queue
+    queue = onboarding_welcome.without_welcome(queue)
+    recent_queue = onboarding_welcome.without_welcome(recent_queue)
     if not biz_rows:
-        for t in early:
-            t.cancel()
-        await asyncio.gather(*early, return_exceptions=True)
         return {}
     biz = biz_rows[0]
-
-    # ── Wave 2 (latency round 4, 2026-08-26) ─────────────────────────
-    # These context blocks had become TEN SEQUENTIAL awaits — one
-    # Supabase round trip after another, 2-4s of the context leg every
-    # turn. That is the exact serial-reads class the 8/14 fix (#584)
-    # cured in wave 1, regrown BEHIND it as new blocks accreted one
-    # try/except at a time. Every one depends only on biz_id or
-    # owner_id (which wave 1's business row supplies), so they run as
-    # ONE gather. Each keeps its own fail-open fallback — a block that
-    # errors degrades to empty exactly as it always did, never the turn.
-    #
-    # The semantic memory match rides in the same wave — and moves OFF
-    # the event loop while it's at it: chief_memory_semantic.match does
-    # a SYNCHRONOUS OpenAI embedding call (httpx.post) that was running
-    # directly on the loop every turn, blocking the whole process —
-    # including other requests' SSE streams — for the length of an
-    # external API round trip.
-    owner_id_for_pp = (biz or {}).get("owner_id")
-
-    # The rest of wave 2: practitioner-keyed blocks (Build 3 / Pass 2.5b)
-    # need owner_id, because they follow the human across all their
-    # businesses; the module counts need wave 1's module list. They join
-    # whatever of the early wave is still running.
-    module_entries_tasks = [
-        _sb_count(client,
-            f"/module_entries?business_id=eq.{biz_id}&module_id=eq.{m['id']}&status=eq.active&select=id")
-        for m in (modules or [])
-    ]
-    late = await asyncio.gather(
-        _soft(asyncio.to_thread(pp_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
-        _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id_for_pp)
-              if owner_id_for_pp else _const({}), {}),
-        _soft(asyncio.to_thread(voice_chief_context_block, owner_id_for_pp)
-              if owner_id_for_pp else _const(""), ""),
-        *early,
-        *module_entries_tasks,
-    )
-    practitioner_block, practitioner_profile_raw, voice_block = late[0:3]
+    practitioner_block, practitioner_profile_raw, voice_block = owner_values
     (foundation_block, business_profile_block, _mat_block, _growth_block,
      business_profile_raw, brand_block, playbook_block, _semantic_hits,
-     blueprint_block, exact_contact_total) = late[3:3 + len(early)]
-    module_entry_rows = list(late[3 + len(early):])
+     blueprint_block, exact_contact_total) = early_values
 
     contacts_available = contacts is not None
     # A server-side row cap can be lower than our requested limit. Even a
@@ -2300,13 +2483,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "queue": queue or [],
         "events": events or [],
         "sessions": sessions or [],
-        # The calendar read succeeded and came back under its limit of 10:
-        # every scheduled session in the window is in the list, so an empty
-        # list means nothing is booked. Without this the prompt said "none
-        # in the loaded sample; check data availability" either way, and
-        # "When is my next appointment?" spent two lookups (17.9 s) before
-        # saying nothing was booked (2026-09-24).
-        "sessions_complete": sessions is not None and len(sessions) < 10,
+        # <list>_complete: the read succeeded (None is a failed read) and
+        # came back under its limit, so the list is every matching row and
+        # an empty one means none yet. The calendar came first: the prompt
+        # said "none in the loaded sample; check data availability" either
+        # way, and "When is my next appointment?" spent two lookups (17.9 s)
+        # before saying nothing was booked (2026-09-24). A business that
+        # signed up today is mostly empty lists, and "You have no open
+        # invoices yet" was just as hard to say (2026-09-26).
+        **{f"{name}_complete": rows is not None and len(rows) < _LIST_LIMITS[name]
+           for name, rows in (("queue", queue_read), ("sessions", sessions),
+                              ("projects", project_rows), ("open_invoices", open_invoices),
+                              ("products", products), ("offerings", offering_rows))},
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
@@ -2395,6 +2583,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # Totals and ages computed once, here, from the rows: the reply and the
     # answer check read the same figures (see _invoice_summary_lines).
     _ctx["invoice_summary"] = _invoice_summary_lines(_ctx["open_invoices"])
+    # Named where Chief and the answer check both read data quality.
+    _ctx["context_quality"]["complete_lists"] = complete_lists(_ctx)
     return _ctx
 
 
@@ -2625,7 +2815,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     # ─── Business JIT section ──────────────────────────────────
     biz_section = ""
     try:
-        biz_missing = business_profile_agent.get_missing_jit_fields(biz_id)
+        biz_missing = (business_profile_agent.missing_jit_fields_from_profile(ctx["business_profile_raw"])
+                       if "business_profile_raw" in ctx
+                       else business_profile_agent.get_missing_jit_fields(biz_id))
     except Exception as e:
         logger.warning(f"[jit] business get_missing_jit_fields failed: {e}")
         biz_missing = []
@@ -2672,7 +2864,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     owner_id = (ctx.get("business") or {}).get("owner_id")
     if owner_id:
         try:
-            p_missing = practitioner_profile_agent.get_missing_jit_fields(owner_id)
+            p_missing = (practitioner_profile_agent.missing_jit_fields_from_profile(ctx["practitioner_profile_raw"])
+                         if "practitioner_profile_raw" in ctx
+                         else practitioner_profile_agent.get_missing_jit_fields(owner_id))
         except Exception as e:
             logger.warning(f"[jit] practitioner get_missing_jit_fields failed: {e}")
             p_missing = []
@@ -2720,7 +2914,9 @@ def _build_jit_directive(ctx: Dict[str, Any], user_message: str) -> str:
     voice_section = ""
     if voice_depth_agent and owner_id:
         try:
-            v_missing = voice_depth_agent.get_missing_voice_jit_fields(owner_id)
+            v_missing = (voice_depth_agent.missing_voice_jit_fields_from_profile(ctx["practitioner_profile_raw"])
+                         if "practitioner_profile_raw" in ctx
+                         else voice_depth_agent.get_missing_voice_jit_fields(owner_id))
         except Exception as e:
             logger.warning(f"[jit] voice get_missing_voice_jit_fields failed: {e}")
             v_missing = []
@@ -3208,6 +3404,48 @@ SESSIONS_HEADING = "UPCOMING SESSIONS (next 7 days)"
 AT_RISK_HEADING = "at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed)"
 CONTEXT_HEADINGS = {"sessions": SESSIONS_HEADING, "at_risk": AT_RISK_HEADING}
 
+# What an empty list says when its read came back complete, in the prompt
+# and in the answer check's record of it: the same words, so a reply that
+# repeats the prompt quotes its evidence. A read that failed never says
+# these; it says UNREAD_LIST.
+EMPTY_COMPLETE = {
+    "queue": "nothing waiting for review",
+    "sessions": "nothing booked in this window: this list is the whole calendar for it",
+    "projects": "no projects yet: this list is complete",
+    "open_invoices": "no open invoices: this list is complete",
+    "invoice_summary": "no open invoices: this list is complete",
+    "products": "no products or services yet: this catalog is complete",
+    "offerings": "no offerings yet: this list is complete",
+}
+UNREAD_LIST = "none in the loaded sample; check data availability"
+
+
+def complete_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists that hold every matching row (<list>_complete,
+    set in _gather_context). The invoice totals are computed from every
+    open invoice, so they are complete when the invoices are."""
+    names = [name for name in _LIST_LIMITS if (ctx or {}).get(f"{name}_complete")]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def unread_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists known to have failed to load: marked not complete
+    and still empty (an empty read is under every limit, so only a failed
+    one lands here). A context without the marks says nothing either way."""
+    names = [name for name in _LIST_LIMITS
+             if (ctx or {}).get(f"{name}_complete") is False and not (ctx or {}).get(name)]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def _empty_list_line(ctx: Dict[str, Any], name: str) -> str:
+    """The line under an empty list: plainly none when it was read in
+    full, and never an absence when it was not."""
+    return f"  ({EMPTY_COMPLETE[name] if ctx.get(f'{name}_complete') else UNREAD_LIST})"
+
 
 def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """context_quality for the CACHED state segment: the retrieval DATE,
@@ -3649,12 +3887,28 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         image_lines.append(
             f"  - \"{_neutralize_untrusted(job.get('prompt') or '')[:90]}\" — {job.get('status') or 'queued'}{started}")
 
+    # A list read in full says so (complete_lists); a sample says it is one.
+    # Projects and invoices show their first 25, so they are called
+    # complete only when every row is on the page.
+    n_queue = len(ctx['queue'])
+    queue_heading = (
+        f"QUEUE ({n_queue} draft{'' if n_queue == 1 else 's'} waiting for review; this list is complete)"
+        if ctx.get('queue_complete') else f"QUEUE ({n_queue} loaded draft rows; sample, not a total)")
+    projects_heading = (
+        "PROJECTS (every project on file; this list is complete)"
+        if ctx.get('projects_complete') and len(ctx.get('projects') or []) <= 25
+        else "PROJECTS (loaded sample; use list_projects for additional records)")
+    invoices_heading = (
+        "OPEN INVOICES (every open invoice, itemized; this list is complete; show_view displays them)"
+        if ctx.get('open_invoices_complete') and len(ctx.get('open_invoices') or []) <= 25
+        else "OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them)")
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
 
 DATA QUALITY: {json.dumps(_quality_for_prompt(ctx))}
-  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete. Never infer a total or absence from a capped list.
+  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete (complete_lists names them; an empty complete list means none yet, so say so plainly). Never infer a total or absence from a capped list.
 CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unknown'} total
   loaded: {ctx.get('contacts_loaded', 'unknown')}; complete: {ctx.get('contacts_complete', False)}
   by_status (loaded sample only): {json.dumps(ctx['contacts_by_status'])}
@@ -3663,14 +3917,14 @@ CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unkn
 {chr(10).join(at_risk_lines) if at_risk_lines else '  (none in this context sample)'}
   For complete Retention counts, names, repeat-payment rates and follow-up decisions, call growth_report section=client_health or section=retention. Do not treat this context sample as a complete report.
 
-QUEUE ({len(ctx['queue'])} loaded draft rows; sample, not a total):
-{chr(10).join(queue_lines) if queue_lines else '  (none in the loaded sample; check data availability)'}
+{queue_heading}:
+{chr(10).join(queue_lines) if queue_lines else _empty_list_line(ctx, 'queue')}
 
 {SESSIONS_HEADING}:
-{chr(10).join(session_lines) if session_lines else ('  (nothing booked in this window: this list is the whole calendar for it)' if ctx.get('sessions_complete') else '  (none in the loaded sample; check data availability)')}
+{chr(10).join(session_lines) if session_lines else _empty_list_line(ctx, 'sessions')}
 
-PROJECTS (loaded sample; use list_projects for additional records):
-{chr(10).join(project_lines) if project_lines else '  (none in the loaded sample; check data availability)'}
+{projects_heading}:
+{chr(10).join(project_lines) if project_lines else _empty_list_line(ctx, 'projects')}
 
 ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner; never re-propose one that already exists):
 {chr(10).join(mission_lines) if mission_lines else '  (none)'}
@@ -3684,10 +3938,10 @@ STANDING PERMISSIONS:
 {chr(10).join(standing_lines) if standing_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
 
 OPEN INVOICES — TOTALS (computed from the rows below; quote these for any count, total, age or who-owes-most answer, never add them up yourself):
-{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or '  (no open invoices)'}
+{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or _empty_list_line(ctx, 'open_invoices')}
 
-OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them):
-{chr(10).join(invoice_lines) if invoice_lines else '  (none in the loaded sample; check data availability)'}
+{invoices_heading}:
+{chr(10).join(invoice_lines) if invoice_lines else _empty_list_line(ctx, 'open_invoices')}
 
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
@@ -3725,7 +3979,7 @@ PRACTITIONER SITE:
 {_format_site_info(ctx)}
 
 PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull description + unit_price from the catalog rather than asking again):
-{chr(10).join(product_lines) if product_lines else '  (no products yet)'}
+{chr(10).join(product_lines) if product_lines else _empty_list_line(ctx, 'products')}
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
@@ -4340,10 +4594,15 @@ async def handle_update_contact_status(client, biz, action) -> Dict:
             "nav": _nav("operate", "contacts", contact["id"]),
         }
 
-    await _sb(client, "PATCH", f"/contacts?id=eq.{contact['id']}",
-              {"status": new_status})
+    updated = await _sb(client, "PATCH",
+                        f"/contacts?id=eq.{contact['id']}&business_id=eq.{biz['id']}",
+                        {"status": new_status})
+    if not (isinstance(updated, list) and any(
+            isinstance(row, dict) and str(row.get("id")) == str(contact["id"])
+            and row.get("status") == new_status for row in updated)):
+        return _fail("update_contact_status", "Contact status change could not be confirmed")
 
-    # Emit event so contact-linked modules can pick it up
+    # Emit event only after the write returned the confirmed contact state.
     await _sb(client, "POST", "/events", {
         "business_id": biz["id"],
         "contact_id": contact["id"],
@@ -5051,11 +5310,13 @@ async def handle_show_readout(client, biz, action) -> Dict:
     drawn = sum(1 for b in blocks if b.get("kind") != "failed")
     result = f"readout '{title}' on screen — {drawn} block" + ("s" if drawn != 1 else "")
     if failed_any:
-        result += (" · ONE OR MORE BLOCKS COULD NOT LOAD — say which part is "
-                   "missing rather than describing the readout as complete")
+        missing = ", ".join(b["view"] for b in blocks if b.get("kind") == "failed")
+        result += f"; couldn't load: {missing}"
     return {
         "type": "show_readout",
         "result": result,
+        **({"note_for_chief": "Explain which blocks could not load; do not describe the readout as complete."}
+           if failed_any else {}),
         "label": f"📊 {title} — {drawn} block" + ("s" if drawn != 1 else ""),
         "title": title,
         "blocks": blocks,
@@ -6731,6 +6992,8 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         # Background bookkeeping, not this turn's reply: its model calls stay
         # out of the turn's route cost (route_ledger). Task-local context.
         route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
         try:
             async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
                 auto_count = await _autopilot_sweep(c, biz_lite)
@@ -6767,6 +7030,25 @@ def _spawn_turn_sweeps(biz_lite: Dict[str, Any]) -> None:
         outer.add_done_callback(_TURN_SWEEP_TASKS.discard)
     except Exception as e:  # pragma: no cover — no loop = no sweep, never a crash
         print(f"[Chief] sweep spawn failed: {e}", flush=True)
+
+
+def _spawn_proactive_suggestions(biz: Dict[str, Any]) -> None:
+    """Track independent suggestion writes without delaying this turn's model call."""
+    async def _body() -> None:
+        # Keep the originating billing/JWT context, but do not bill background
+        # work to the foreground route. The emitter owns its database clients.
+        route_ledger.TALLY.set(None)
+        import chief_request_timing as _crt
+        _crt.CURRENT.set(None)
+        try:
+            import chief_proactive_suggestions
+            await asyncio.to_thread(chief_proactive_suggestions.maybe_emit_proactive_suggestions, biz)
+        except Exception as exc:  # best-effort, just as when awaited inline
+            logger.warning("proactive suggestions failed: %s", exc)
+
+    task = asyncio.create_task(_body())
+    _TURN_SWEEP_TASKS.add(task)
+    task.add_done_callback(_TURN_SWEEP_TASKS.discard)
 
 
 async def _drain_turn_sweeps() -> None:
@@ -8012,6 +8294,10 @@ class _TurnClock:
     def log(self, **fields: Any) -> None:
         try:
             total = int((time.perf_counter() - self._t0) * 1000)
+            import chief_request_timing as _crt
+            trace = _crt.CURRENT.get()
+            if trace is not None:
+                fields["request_id"] = trace.request_id
             parts = " ".join(f"{n}={ms}" for n, ms in self.stages)
             parts += f" tools={getattr(self, 'tools', 0)}"
             extra = " ".join(
@@ -8064,7 +8350,11 @@ def _context_sources(client, biz: Dict[str, Any]) -> Dict[str, Tuple[Any, Any]]:
     }
 
 
-async def _resolve_source(warm: Dict[str, Any], name: str, factory, fallback):
+OPTIONAL_CONTEXT_BUDGET_S = 0.75
+_OPTIONAL_CONTEXT_SOURCES = {"mentor_active", "habit_block", "relationship_insights"}
+
+
+async def _resolve_source(warm: Dict[str, Any], name: str, factory, fallback, *, optional_deadline=True):
     """A warmed value if the prewarm left one, otherwise fetch it now.
 
     Failure isolation is identical either way: a source that raises
@@ -8072,9 +8362,13 @@ async def _resolve_source(warm: Dict[str, Any], name: str, factory, fallback):
     """
     if name in warm:
         return warm[name]
+    import chief_truth
     try:
+        if optional_deadline and name in _OPTIONAL_CONTEXT_SOURCES and chief_truth.continuous_stream_enabled():
+            return await asyncio.wait_for(factory(), timeout=OPTIONAL_CONTEXT_BUDGET_S)
         return await factory()
     except Exception as e:  # pragma: no cover
+        chief_truth.record("context:" + name, None)
         logger.warning(f"context source {name} failed: {e}")
         return fallback
 
@@ -8190,6 +8484,70 @@ async def handle_complete_task(client, biz, action) -> Dict:
         "type": "complete_task",
         "result": "completed",
         "label": f"✓ Task completed",
+        "nav": {"tab": "operate", "sub": "tasks"},
+    }
+
+
+TASK_DUE_WINDOWS = ("overdue", "today", "week", "all")
+
+
+async def handle_list_tasks(client, biz, action) -> Dict:
+    """The practitioner's open tasks, by when they are due.
+
+    Asked "what tasks are due this week?" (2026-09-26), Chief could only open
+    the Tasks tab and say it had no way to read the list back: its context
+    carries no tasks and no read existed. `due`: overdue | today | week (the
+    next seven days, overdue included; the default) | all open. Days are the
+    business's own (its timezone), so "today" is the owner's today.
+    """
+    due = str(action.get("due") or "week").strip().lower()
+    if due not in TASK_DUE_WINDOWS:
+        due = "week"
+    import chief_assignments
+    tz = await asyncio.to_thread(chief_assignments._tz_for, str(biz["id"]))
+    today = datetime.now(tz).date()
+    q = (f"/tasks?business_id=eq.{biz['id']}&status=neq.done"
+         f"&select=id,title,due_date,priority,status,contact_id"
+         f"&order=due_date.asc.nullslast,created_at.asc&limit=50")
+    if due == "overdue":
+        q += f"&due_date=lt.{today.isoformat()}"
+    elif due == "today":
+        q += f"&due_date=eq.{today.isoformat()}"
+    elif due == "week":
+        q += f"&due_date=lte.{(today + timedelta(days=6)).isoformat()}"
+    rows = await _sb(client, "GET", q)
+    if rows is None:
+        return _fail("list_tasks", "the task list couldn't be read right now")
+    names: Dict[str, str] = {}
+    ids = sorted({r["contact_id"] for r in rows if r.get("contact_id")})
+    if ids:
+        people = await _sb(client, "GET", f"/contacts?business_id=eq.{biz['id']}"
+                                          f"&id=in.({','.join(ids)})&select=id,name") or []
+        names = {p["id"]: p.get("name") or "" for p in people}
+    tasks = []
+    for r in rows:
+        d = str(r.get("due_date") or "")[:10]
+        tasks.append({
+            "id": r.get("id"), "title": r.get("title") or "Untitled",
+            "due_date": d or None, "overdue": bool(d) and d < today.isoformat(),
+            "priority": r.get("priority") or "medium", "status": r.get("status") or "todo",
+            "contact": names.get(r.get("contact_id") or "", ""),
+        })
+    window = {"overdue": "overdue", "today": "due today", "week": "due in the next seven days or overdue",
+              "all": "open"}[due]
+    lines = []
+    for t in tasks[:25]:
+        when = f"due {t['due_date']}" + (" (overdue)" if t["overdue"] else "") if t["due_date"] else "no due date"
+        lines.append(f"- {t['title']}: {when}" + (f", {t['contact']}" if t["contact"] else "")
+                     + (f", {t['priority']} priority" if t["priority"] in ("urgent", "high") else ""))
+    n = len(tasks)
+    return {
+        "type": "list_tasks",
+        "result": f"{n} task{'s' if n != 1 else ''} {window} (as of {today.isoformat()})",
+        "label": f"✅ {n} task{'s' if n != 1 else ''} {window}",
+        "tasks": tasks,
+        "today": today.isoformat(),
+        "summary": "\n".join(lines) if lines else f"(no tasks {window})",
         "nav": {"tab": "operate", "sub": "tasks"},
     }
 
@@ -9663,84 +10021,94 @@ def _conversation_matches(row: Dict[str, Any], query: str) -> bool:
     return False
 
 
+def _recall_excerpt(text: str, query: str = "", limit: int = 260) -> str:
+    """Keep the matched words, even near the end of a long archived message."""
+    text = " ".join(str(text or "").split())
+    at = text.lower().find(query.lower()) if query else -1
+    start = max(0, at - 60) if at >= 0 else 0
+    excerpt = text[start:start + limit]
+    return ("..." if start else "") + excerpt + ("..." if start + limit < len(text) else "")
+
+
+def _recall_exchange(conv: Dict[str, Any], query: str) -> str:
+    """A bounded, role-labelled exchange; old assistant prose is not a receipt."""
+    messages = [m for m in (conv.get("messages") or [])
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    match = next((i for i, m in enumerate(messages)
+                  if query and query.lower() in str(m.get("content") or "").lower()), None)
+    if match is None:
+        selected = messages[-2:]
+    elif messages[match]["role"] == "assistant" and match:
+        selected = messages[match - 1:match + 1]
+    else:
+        selected = messages[match:match + 2]
+    return "\n".join(m["role"] + ": " + _recall_excerpt(m.get("content"), query)
+                     for m in selected)
+
+
 async def handle_recall_conversation(client, biz, action) -> Dict:
-    """Search archived chief_conversations rows for relevant context.
-    Filters by `query` (matched against summary, key_topics and the
-    messages) and `time_range`.
-
-    THE TABLE IS WRITTEN NOW (2026-09-04). Until today nothing in this
-    backend wrote chief_conversations; the only writer was a browser
-    sweep that fired when the panel was reopened after four idle hours,
-    or on Clear chat — so a practitioner who never did either produced
-    no rows, on any device, ever, and this handler answered "nothing
-    archived" as if that were a fact about their history. chief_chat
-    now archives every turn (see _archive_turn), so recall is
-    structurally true for every turn on every surface.
-
-    Two lies removed on the same day: (1) a query with no matches used
-    to fall back to returning EVERY row, so "what did we say about
-    Marcus" came back with conversations that never mentioned Marcus —
-    the raw material for confabulated recall; it now says no match.
-    (2) The empty-state copy asserted an auto-archive behaviour the
-    backend never had.
-    """
+    """Recall bounded historical exchanges, preserving read failures and search scope."""
     query = (action.get("query") or "").strip()
     days = _parse_time_range_days(action.get("time_range"))
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-
+    # _ts keeps '+00:00' from decoding to a space in the PostgREST query.
+    since = _ts(datetime.now(timezone.utc) - timedelta(days=days))
     rows = await _sb(
         client, "GET",
         f"/chief_conversations?business_id=eq.{biz['id']}&ended_at=gte.{since}"
         f"&order=ended_at.desc&limit=60"
         f"&select=id,summary,key_topics,actions_taken,messages,"
         f"started_at,ended_at,message_count",
-    ) or []
-    if not isinstance(rows, list):
-        rows = []
+    )
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return {
+            "type": "recall_conversation", "result": "Failed: conversation history unavailable",
+            "label": "Conversation history is unavailable", "failed": True,
+            "summary": "Conversation history is unavailable right now. This does not mean there are no saved conversations.",
+            "conversations": [], "search_complete": False,
+        }
 
+    searched = len(rows)
+    search_complete = searched < 60
+    scope = {"searched_count": searched, "search_complete": search_complete}
     if not rows:
         return {
-            "type": "recall_conversation",
-            "result": "no_conversations",
-            "label": "📜 No recent conversations to recall",
-            "summary": (
-                f"I don't have anything from the last {days} days on file — "
-                "every conversation is kept from here on, so there is simply "
-                "nothing in that window yet."
-            ),
-            "conversations": [],
+            "type": "recall_conversation", "result": "no_conversations",
+            "label": "No recent conversations to recall",
+            "summary": f"No saved conversations were found in the last {days} days.",
+            "conversations": [], **scope,
         }
 
     if query:
         rows = [c for c in rows if _conversation_matches(c, query)]
         if not rows:
             return {
-                "type": "recall_conversation",
-                "result": "no_matches",
-                "label": f"📜 Nothing about “{query[:40]}” in the last {days} days",
+                "type": "recall_conversation", "result": "no_matches",
+                "label": f"No matches for {query[:40]}",
                 "summary": (
-                    f"Nothing in the last {days} days mentions “{query}”. "
-                    "I can widen the window if you like."
+                    f'No matches for "{query}" were found in the '
+                    f'{searched} saved conversations checked from the last {days} days.'
+                    + (" Older conversations in that window have not been checked." if not search_complete else "")
                 ),
-                "conversations": [],
+                "conversations": [], **scope,
             }
 
     summaries: List[str] = []
+    exchanges: List[str] = []
     for conv in rows[:5]:
         ended = (conv.get("ended_at") or "")[:10]
-        summary = conv.get("summary") or "No summary recorded."
-        topics = ", ".join(conv.get("key_topics") or []) or "—"
-        msg_count = conv.get("message_count") or 0
-        summaries.append(
-            f"**{ended}** ({msg_count} messages · topics: {topics})\n{summary}"
-        )
+        summary = _recall_excerpt(conv.get("summary") or "No summary recorded.", query, 150)
+        summaries.append(f"{ended}: {summary}")
+        exchange = _recall_exchange(conv, query)
+        exchanges.append(f"{ended}: {summary}" + ("\n" + exchange if exchange else ""))
 
     return {
         "type": "recall_conversation",
         "result": f"{len(rows)} conversations",
-        "label": f"📜 Found {len(rows)} recent conversation{'s' if len(rows) != 1 else ''}",
-        "conversations": summaries,
+        "label": f"Found {len(rows)} matching saved conversation{'s' if len(rows) != 1 else ''}",
+        "context_note": "Historical conversation excerpts; assistant statements are not execution receipts or proof of current status.",
+        "conversations": exchanges,
         "summary": "\n\n".join(summaries),
+        "returned_count": len(exchanges), **scope,
     }
 
 
@@ -11084,6 +11452,7 @@ ACTION_HANDLERS = {
     "use_browser_hand":      handle_use_browser_hand,
     "link_wallet_pilot":     handle_link_wallet_pilot,
     "lane_wallet":           handle_lane_wallet,
+    "agentcard_wallet":      handle_agentcard_wallet,
     "view_website":          handle_view_website,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
@@ -11136,6 +11505,7 @@ ACTION_HANDLERS = {
     "create_task":                handle_create_task,
     "delete_task":                handle_delete_task,
     "complete_task":              handle_complete_task,
+    "list_tasks":                 handle_list_tasks,
     "create_note":                handle_create_note,
     "log_activity":               handle_log_activity,
     "create_invoice":             handle_create_invoice,
@@ -11425,7 +11795,6 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
     contradiction impossible — independent of any LLM behavior."""
     if len(taken or []) == 1 and taken[0].get('needs_confirmation') and taken[0].get('label'):
         return taken[0]['label']
-    succeeded: List[tuple] = []
     failed: List[tuple] = []
     # An action HELD for the practitioner's confirmation is not a failure
     # to report; its label is the read-back they need to hear. Its
@@ -11443,29 +11812,16 @@ def _deterministic_fallback_reply(taken: List[Dict[str, Any]]) -> str:
             if reason.lower().startswith("failed:"):
                 reason = reason[len("failed:"):].strip()
             failed.append((atype, label, reason))
-        else:
-            succeeded.append((atype, label, result))
 
+    from chief_receipts import receipt_lines
+    from chief_truth import _receipts_said
+    success_receipts = [t for t in (taken or [])
+                        if not _action_failed(t) and not t.get("needs_confirmation")]
+    success_text = _receipts_said(receipt_lines(success_receipts))
     if not failed and not held:
-        # Defensive — _deterministic_fallback_reply is only called when
-        # any_failed is true. If somehow we land here without failures,
-        # acknowledge the success terse so the bubble isn't blank.
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            return (lbl or res or "Done.").strip()
-        return f"{len(succeeded)} action(s) completed."
+        return success_text or "No action result was returned."
 
-    chunks: List[str] = []
-
-    # Brief success acknowledgment first (if any) — keeps the message
-    # accurate when a turn had mixed outcomes.
-    if succeeded:
-        if len(succeeded) == 1:
-            _, lbl, res = succeeded[0]
-            chunks.append(f"{(lbl or res).strip()}.")
-        else:
-            total = len(succeeded) + len(failed) + len(held)
-            chunks.append(f"{len(succeeded)} of {total} actions went through.")
+    chunks: List[str] = [success_text] if success_text else []
 
     # Failures — name + reason for each.
     if len(failed) == 1:
@@ -11589,11 +11945,16 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
     """Build a human-readable summary of what just happened, for the
     second-pass LLM to reason about. NOT a raw JSON dump — we want the
     LLM to focus on the WHAT and WHY, not the wire format."""
-    succeeded, failed = [], []
+    succeeded, failed, held = [], [], []
     for t in taken or []:
         atype = t.get("type") or "unknown_action"
         result = t.get("result") or ""
         label = t.get("label") or ""
+        if t.get("needs_confirmation"):
+            # Composition cannot execute a hold. It needs the owner's read-back,
+            # not the tool-facing instructions to emit or retry an action.
+            held.append((atype, label or "Waiting for your confirmation; nothing ran."))
+            continue
         if _action_failed(t):
             # Extract the reason after "Failed: "
             reason = result.strip()
@@ -11604,6 +11965,10 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
             succeeded.append((atype, label, result, t))
 
     parts: List[str] = []
+    if held:
+        parts.append("AWAITING OWNER CONFIRMATION (these actions did not run):")
+        for atype, label in held:
+            parts.append(f"  {atype}: {label}")
     if failed:
         parts.append("✗ FAILED ACTIONS (you must NOT claim these succeeded):")
         for atype, label, reason, _ in failed:
@@ -11615,7 +11980,8 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
         parts.append("")
         parts.append("RESULTS (use the exact state; queued/running is not completed, and held/draft is not sent):")
         for atype, label, result, t in succeeded:
-            parts.append(f"  • {atype}: {label or result}")
+            parts.append(f"  • {atype}: {label}")
+            parts.append(f"      result: {result or '(no detail returned)'}")
             # Read verbs (show_view) return a `speak` digest of the rows
             # they fetched. Forwarding it is what lets the second pass
             # SAY the values ("Marcus owes the most at $520") instead of
@@ -11625,7 +11991,7 @@ def _format_action_results_for_reply(taken: List[Dict[str, Any]]) -> str:
                 parts.append(f"      data now shown to the practitioner: {speak.strip()}")
             note = t.get("note_for_chief")
             if isinstance(note, str) and note.strip():
-                parts.append(f"      note: {note.strip()}")
+                parts.append(f"      internal composition guidance (apply silently, do not quote): {note.strip()}")
     return "\n".join(parts) if parts else "(no actions ran)"
 
 
@@ -11633,7 +11999,11 @@ _POST_ACTION_REPLY_SYSTEM = """\
 You are the Chief, replying to the practitioner AFTER actions you tagged \
 in your previous turn have already run. Some may have succeeded; some may \
 have failed. Your job in this single message is to give the practitioner \
-an HONEST account of what actually happened.
+an HONEST answer to their request, including what actually happened. Preserve the \
+useful explanation, calculations, or advice from the draft; receipts supplement \
+the requested answer, not replace it. Correct unsupported premises and arithmetic. \
+Apply internal composition guidance silently; it is not text for the practitioner. \
+Explain relevant business policies or required confirmations in ordinary language.
 
 RULES (load-bearing — failing these breaks practitioner trust):
 1. REWRITE — do not append to or amend the draft. If any action failed, \
@@ -11646,15 +12016,15 @@ warmth + specificity you'd use normally. Don't be over-formal.
 3. For failures, explain the reason in plain words (translate technical \
 errors). If you can identify what should have been done instead — \
 especially when a sibling action exists that would have worked — say so \
-and offer to retry. Examples of common alternatives:
+without requesting the same permission again. Do not claim a retry is running. Examples of common alternatives:
    - update_product failed for a service-shaped name → update_offering \
      (the canonical service catalog)
    - update_offering failed because the name wasn't found → suggest \
      list_offerings to see what's on file
-4. Keep it short. 1–3 sentences typically. Match the practitioner's tone.
+4. Keep it short, while retaining the substance needed to answer their question. Match the practitioner's tone.
 5. Do NOT emit any [ACTION:...] tags in this reply — actions already ran. \
-If a retry is appropriate, describe it in prose and the practitioner will \
-confirm or re-ask.
+Do not turn a question into extra work, or ask the practitioner to re-authorize \
+a request they already made. Report any remaining gap without inventing a new job.
 6. Don't ramble about HOW the system works internally. Speak from the \
 practitioner's frame: their goal, the outcome, the next step.
 7. SUBSTITUTION CHECK: if the practitioner asked for X (a module, a \
@@ -11760,9 +12130,9 @@ async def _compose_post_action_reply(
         # delivered). Replace with a deterministic substitution reply.
         if _has_breadcrumb(taken):
             return _deterministic_substitution_reply(taken)
-        # No failures + no substitution breadcrumbs — first-pass is
-        # safe to keep verbatim.
-        return first_pass_clean
+        # Success on some actions does not validate the optimistic draft
+        # (other work may still be queued or absent). Report actual results.
+        return _deterministic_fallback_reply(taken)
 
     # Strip any stray action tags the second pass might have emitted
     # despite the system prompt (belt-and-suspenders).
@@ -12138,6 +12508,10 @@ async def _execute_actions(client, biz, actions: List[Dict],
     for action in actions:
         _finish_pending()
         atype = action.get("type")
+        if atype == "submit_work_order" and turn_scope.get() and not worker_scope.get():
+            # What this reply already did, so a plan's closing check can tell
+            # a piece done here from a piece nobody did (2026-09-26, live).
+            chief_build_runtime.note_done_in_turn(results)
         if (chief_build_runtime.enabled() and turn_scope.get() and turn_scope.get().get("submitted")
                 and not worker_scope.get() and atype in ("ensure_module", "create_module_entry", "set_site_capability")):
             results.append(_fail(atype, "Your build is already handling those steps. Check its progress card."))
@@ -12237,7 +12611,11 @@ async def _execute_actions(client, biz, actions: List[Dict],
             resolved["_unattended"] = True
 
         try:
-            if atype == 'lane_wallet':
+            if atype == 'agentcard_wallet':
+                import chief_agentcard
+                res = await chief_agentcard.dispatch(client, biz, resolved,
+                    surface=surface, prompted=prompted, user_id=user_id)
+            elif atype == 'lane_wallet':
                 import chief_lane_wallet
                 res = await chief_lane_wallet.dispatch(client, biz, resolved,
                     surface=surface, prompted=prompted, user_id=user_id)
@@ -12750,59 +13128,27 @@ def _looks_like_mentor_tip(text: str) -> bool:
 
 # ─── Sentiment detection ─────────────────────────────────────────────
 
-_FRUSTRATED_WORDS = (
-    "again", "still", "not working", "broken", "wrong", "didn't",
-    "did not", "failed", "fix", "ugh", "annoying", "frustrating",
-)
-_RELAXED_WORDS = (
-    "please", "thanks", "thank you", "when you get a chance",
-    "no rush", "appreciate",
-)
-
-
 def _detect_sentiment(history: List[Any], current_message: str) -> str:
-    """Return 'rushed' | 'frustrated' | 'relaxed'. Pure heuristic — best
-    effort on a single turn. `history` is the trimmed conversation history
-    (objects with .role + .content OR plain dicts)."""
-    msg = (current_message or "").strip()
-    if not msg:
+    """Conservative delivery hint from explicit signals in the current turn.
+
+    Conversation length is not pace: history has no reliable timing data,
+    and short replies often mean the practitioner is engaged. Let the model
+    read the full thread; only force a delivery override on a clear cue.
+    """
+    low = (current_message or "").strip().lower()
+    if not low:
         return "relaxed"
-
-    rushed = 0
-    frustrated = 0
-    relaxed = 0
-
-    if len(msg) < 20:
-        rushed += 1
-    if len(msg) > 100:
-        relaxed += 1
-
-    # Multiple user messages in quick succession → rushed
-    user_recent = []
-    for m in (history or [])[-6:]:
-        role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else None)
-        if role == "user":
-            user_recent.append(m)
-    if len(user_recent) >= 3:
-        rushed += 2
-
-    # Frustration signals
-    if msg.count("!") > 1:
-        frustrated += 2
-    # Mostly-uppercase 5+ letter messages — avoid catching short ALL-CAPS like "OK"
-    letters = [c for c in msg if c.isalpha()]
-    if len(letters) >= 5 and "".join(letters).isupper():
-        frustrated += 2
-
-    low = msg.lower()
-    if any(w in low for w in _FRUSTRATED_WORDS):
-        frustrated += 1
-    if any(w in low for w in _RELAXED_WORDS):
-        relaxed += 1
-
-    if frustrated >= 2:
+    # An excited 'WE DID IT!!' is not frustration. Punctuation and case alone
+    # must not suppress personality or force an apology.
+    if re.search(
+        r"\b(?:not working|still broken|doesn't work|does not work|"
+        r"didn't work|did not work|frustrat\w*|annoying|ugh)\b", low
+    ):
         return "frustrated"
-    if rushed >= 2:
+    if re.search(
+        r"\b(?:in a (?:rush|hurry)|short on time|keep (?:it|this) (?:short|brief)|"
+        r"just (?:the answer|tell me)|quick answer|quickly please|asap)\b", low
+    ):
         return "rushed"
     return "relaxed"
 
@@ -13179,17 +13525,73 @@ def _business_age_days(biz: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+def _first_week_day(biz: Dict[str, Any], arc: Optional[Dict[str, Any]]) -> int:
+    """Which day of their first week this is, as a whole number: the day
+    it started is day 1. 0 when it cannot be known.
+
+    The day-one arc is the anchor (first_run_arc.day_of): it starts when
+    the trial does, and a signup in March followed by a subscription in
+    April is one business with its first week in April. The business's
+    own age is the fallback for accounts that predate the arc or when the
+    arc read failed. Either way a whole day: the greeting used to say
+    "FIRST WEEK, DAY 3.4166…" because _business_age_days is a float.
+    """
+    try:
+        import first_run_arc as _fra
+        day = _fra.day_of(arc)
+    except Exception:  # pragma: no cover — the fallback still answers
+        day = 0
+    if day:
+        return day
+    age = _business_age_days(biz)
+    return int(age) + 1 if age is not None else 0
+
+
+def _intro_went_out(reply: str, grounding: Optional[Dict[str, Any]]) -> bool:
+    """Did the launch greeting actually reach the practitioner?
+
+    The introduction is said once, so it may only be spent on a reply
+    that went out. A turn that failed, came back empty, or had its words
+    withheld by the answer check ("I couldn't verify that") has not
+    introduced anyone — the next greeting must still be the launch."""
+    if not (reply or "").strip():
+        return False
+    return (grounding or {}).get("status") != "withheld"
+
+
+def _note_intro_delivered(business_id: Any) -> None:
+    """Stamp the day-one arc's introduction, off the event loop and off
+    the reply's critical path. Never raises."""
+    try:
+        import first_run_arc as _fra
+        asyncio.create_task(asyncio.to_thread(_fra.mark_intro_delivered, business_id))
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"first-run intro stamp not scheduled (non-fatal): {e}")
+
+
 def _setup_snapshot_wanted(biz: Dict[str, Any],
-                           track: Optional[Dict[str, Any]]) -> bool:
+                           track: Optional[Dict[str, Any]],
+                           greeting_on_empty: bool = False) -> bool:
     """Spend the plug-in probes on this turn?
 
     Yes while the coached track is unfinished (that IS the setup phase),
     or while the business is young enough that setup talk is plausible.
     A dismissed checklist is the practitioner saying stop — honored here
-    the same way the BUILD banner honors it."""
+    the same way the BUILD banner honors it.
+
+    Yes too for a greeting on a business that is still nearly empty,
+    whatever its age. That greeting takes the launch shape, and without
+    measured setup Chief guessed the steps and stated their premises ("your
+    booking hours aren't set", "the site is booking-only"). The answer check
+    could not confirm them, so the greeting came back as "I couldn't verify
+    my proposed answer" or behind a block of unverified lines (2026-09-26, a
+    four-month-old empty business). Measured, the steps are real and
+    citeable (context:setup)."""
     settings = biz.get("settings") or {}
     if settings.get("checklist_dismissed"):
         return False
+    if greeting_on_empty:
+        return True
     if track is not None and (track.get("status") or "in_progress") != "completed":
         return True
     age = _business_age_days(biz)
@@ -13449,9 +13851,41 @@ _DESCRIBED_ACTION_PHRASES = (
     "i've added", "i've created", "i've drafted", "in your system as a",
     "sent the", "queued", "invoice created", "is now in your",
     "added as a lead", "contact and", "email is on its way",
-    "done.", "done —", "done!", "i'll add", "i'll create",
+    "i'll add", "i'll create",
     "adding them now", "creating the", "sending the",
 )
+
+# "Done." claims work only as its own sentence ("Done.", "All done!",
+# "That's done — …"). Matched anywhere, it read advice as a finished
+# operation: a strategy answer that said "…once the testing is done." was
+# re-asked as an action, and Kevin, on a call asking how to relaunch his
+# business, heard "I couldn't start that operation" (2026-09-28).
+_BARE_DONE = re.compile(r"^(?:all |it['’]s |that['’]s )?done\s*(?:[.!—–-]|$)", re.I)
+# A completion phrase after one of these in the same sentence is a
+# condition or advice, not a report: "if you've sent the proposal", "when
+# you're creating the offer". A question that is not about Chief's own
+# work ("have you sent the invoice?") is not a claim either.
+_CONDITION_LEAD = re.compile(
+    r"\b(?:once|if|when|after|as soon as|before|unless|until|whether)\b", re.I)
+
+
+def _described_action_phrase(text: str) -> Optional[str]:
+    """The phrase-list entry (or "done") that reads as a claim that work
+    already happened, judged sentence by sentence; None when none does."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", (text or "").lower()):
+        s = sentence.strip().lstrip("*-•> ").strip()
+        if not s:
+            continue
+        if _BARE_DONE.search(s):
+            return "done"
+        for p in _DESCRIBED_ACTION_PHRASES:
+            at = s.find(p)
+            if at < 0 or _CONDITION_LEAD.search(s[:at]):
+                continue
+            if s.endswith("?") and not p.startswith("i"):
+                continue
+            return p
+    return None
 
 # A promise to open a page, said as a plain statement, is a navigation
 # with no tag (2026-09-23: "…The Academy is built to work through with
@@ -13533,7 +13967,7 @@ def _looks_like_completed_action(text: str) -> bool:
     low = (text or "").lower()
     if not low:
         return False
-    return any(p in low for p in _DESCRIBED_ACTION_PHRASES) or bool(re.search(
+    return bool(_described_action_phrase(text)) or bool(re.search(
         r"(?:^|[.!?]\s+)(?:(?:i['\u2019]m|i am)\s+)?"
         r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low)) \
         or _promises_navigation(text)
@@ -13557,9 +13991,9 @@ def _completed_action_trigger(text: str) -> str:
     """Which detector made _looks_like_completed_action fire — for the
     RETRY log line. Names our own phrase list's entry, never the reply."""
     low = (text or "").lower()
-    for p in _DESCRIBED_ACTION_PHRASES:
-        if p in low:
-            return f"phrase:{p!r}"
+    hit = _described_action_phrase(text)
+    if hit:
+        return f"phrase:{hit!r}"
     if re.search(r"(?:^|[.!?]\s+)(?:(?:i['’]m|i am)\s+)?"
                  r"(?:generating|rendering|adding|editing)\b[^.!?\n]{0,500}\bnow\b", low):
         return "doing_it_now"
@@ -13584,16 +14018,20 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
         "with the actual existing flyer image ID in reference_ids; "
         "use the recent conversation to resolve which image and preserve its format. "
         "Do not invent an image ID. Do not claim rendering or approval-queue placement "
-        "without an action. Never mention this internal correction. User request:\n\n"
-        + effective_message
+        "without an action. If the request needs no operation (a question, advice, a "
+        "conversation), answer it in full and claim nothing was done. "
+        "Never mention this internal correction. The user message is the original request."
     )
     # The former empty-history retry discarded the artwork IDs needed for edits.
     history = list(api_messages[-7:-1])
     while history and history[0].get('role') != 'user':
         history.pop(0)
-    messages = history + [{"role": "user", "content": correction}]
+    # App-authored repair guidance is a system instruction, not something
+    # the owner said. Keep their original question and recent context intact.
+    messages = history + [{"role": "user", "content": effective_message}]
+    retry_system = system + "\n\n" + correction
     before = len(chief_tool_loop.writes_this_turn())
-    retry_raw = await _call_claude(client, system, messages, max_tokens=turn_tokens, model=model,
+    retry_raw = await _call_claude(client, retry_system, messages, max_tokens=turn_tokens, model=model,
                                  read_tools=read_tools, tool_biz=tool_biz, effort=effort,
                                  enable_web_search=enable_web_search, stable_tools=stable_tools)
     if not retry_raw:
@@ -13602,6 +14040,12 @@ async def _retry_missing_actions(client, system, api_messages, effective_message
         actions, clean = _extract_actions_and_clean(retry_raw)
         if actions or len(chief_tool_loop.writes_this_turn()) > before:
             return chief_tool_loop.remaining_tag_actions(actions), clean, retry_raw
+        # The retry answered without acting and without claiming anything
+        # done: the request needed no operation. Deliver that answer; the
+        # canned line below replaced a whole business-strategy answer on
+        # a call (2026-09-28). The answer check still reviews it.
+        if clean and clean.strip() and not _looks_like_completed_action(clean):
+            return [], clean, retry_raw
     # No action exists: replace optimistic prose instead of appending a contradiction.
     return [], ("I couldn't start that operation. Nothing was queued or sent from this request. "
                 "Please try the request again."), retry_raw or ''
@@ -13748,6 +14192,7 @@ async def chief_chat(
     _uid_token = _TURN_USER_ID.set(str(user_session.user.id))
     import chief_truth
     _truth_token = chief_truth.begin(str(user_session.user.id), req.message or '')
+    _sentence_streamer = None
     chief_truth.record('owner:message', req.message or '', kind='owner_report')
     import image_studio
     _image_turn_token = image_studio.turn_id.set(req.request_id or str(__import__('uuid').uuid4()))
@@ -13762,6 +14207,10 @@ async def chief_chat(
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
+
+        # Include admission checks in preparation timing; they precede context
+        # reads and previously disappeared from the stage breakdown.
+        _t = _TurnClock()
 
         # Per-user rate limit (beta-readiness audit) — one tester can't
         # fire thousands of Chief turns. Fail-open.
@@ -13780,6 +14229,8 @@ async def chief_chat(
             raise
         except Exception:
             pass
+
+        _t.mark("rate_limit")
 
         # 7/30 tier arc — the Chief backend never consulted the allowance
         # (only /ai/proxy did). Dormant behind BILLING_ENFORCE; the 402
@@ -13802,7 +14253,7 @@ async def chief_chat(
         # these stamps say which STAGE was slow, so the next change goes
         # where the time actually is instead of where it is suspected.
         # Durations and counts only; nothing here is content.
-        _t = _TurnClock()
+        _t.mark("billing_gates")
 
         async with httpx.AsyncClient() as client:
             # Recurrence "cron" — generate any due invoice instances
@@ -13864,6 +14315,12 @@ async def chief_chat(
             if not ctx:
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
+            # Only after the scoped context read: share delivery preferences, never records.
+            try:
+                import chief_fast_track
+                chief_fast_track.remember_style(str(user_session.user.id), biz)
+            except Exception:
+                pass
             if chief_build_runtime.enabled():
                 ctx['build_jobs'] = await chief_build_runtime.context(client, biz['id'], str(user_session.user.id))
 
@@ -13900,8 +14357,7 @@ async def chief_chat(
             # Intelligence enrichment — voice samples, session context,
             # mentor cooldown, revenue forecast, relationship insights,
             # time context, habits, live bookkeeping, and cross-vertical
-            # learning. Plus the proactive-suggestion emit, which writes
-            # rather than reads but is nobody's dependency either.
+            # learning. Independent proactive suggestions run separately below.
             #
             # These are independent: not one of them consumes another's
             # result. They used to run as ten sequential awaits — twelve
@@ -13937,16 +14393,9 @@ async def chief_chat(
                 return await asyncio.to_thread(
                     _vctx.build_vertical_learned_block, biz, req.message or "")
 
-            async def _proactive():
-                # NT8b — best-effort proactive suggestion emission on
-                # state change. Runs ONCE per chat turn; idempotent (the
-                # emitter checks for active dupes + has a cap). Nothing
-                # this turn reads what it writes — ctx was gathered above
-                # — so it rides along here instead of blocking ahead of
-                # the enrichment it never feeds.
-                import chief_proactive_suggestions as _cps
-                return await asyncio.to_thread(
-                    _cps.maybe_emit_proactive_suggestions, biz)
+            # Suggestions do not feed the snapshot already read above. Keep
+            # their existing per-turn trigger, without waiting for their writes.
+            _spawn_proactive_suggestions(biz)
 
             # Mic-open prewarm (Kevin, 8/14): if /agents/chief/prewarm ran
             # while the practitioner was still talking, the eight
@@ -13965,25 +14414,50 @@ async def chief_chat(
             # (off-thread) and only while setup is plausibly in progress.
             # Coach modes never see operational setup nudges (2026-07-16
             # isolation rule), so they never pay for the probes either.
+            _looks_empty = (ctx.get("contacts_total") is not None
+                            and ctx.get("contacts_total") <= 3 and not ctx.get("sessions"))
             want_setup = (not is_coach_mode) and _setup_snapshot_wanted(
-                biz, ctx.get("business_track"))
+                biz, ctx.get("business_track"),
+                greeting_on_empty=bool(is_greeting and _looks_empty))
 
             async def _setup_probe():
                 if not want_setup:
                     return None
                 return await asyncio.to_thread(_fetch_setup_snapshot, biz)
 
+            # The day-one arc (first_run_arc): whether the introduction
+            # has been said, and which day of their first week this is.
+            # Only a greeting in the setup phase reads it, and it rides
+            # the gather so it costs the turn nothing it was not already
+            # waiting for. None = no arc, or the read failed.
+            async def _arc_probe():
+                if not (is_greeting and want_setup):
+                    return None
+                import first_run_arc as _fra
+                return await asyncio.to_thread(_fra.state, biz.get("id"))
+
+            # What is already on file from their records, so the Business
+            # Coach skips what the practitioner entered elsewhere. Coach
+            # mode only — every other turn would pay for a dozen reads.
+            async def _knowledge_probe():
+                if (req.mode or "") != "business_coach":
+                    return None
+                import business_knowledge
+                return await asyncio.to_thread(business_knowledge.knowledge_for, biz)
+
             sources = _context_sources(client, biz)
             _names = list(sources.keys())
             _results = await asyncio.gather(
                 *[_resolve_source(warm, n, *sources[n]) for n in _names],
                 _enrich("vertical learned context", _learned(), ""),
-                _enrich("proactive emit (non-blocking)", _proactive(), None),
                 _enrich("setup snapshot", _setup_probe(), None),
+                _enrich("business knowledge", _knowledge_probe(), None),
+                _enrich("first-run arc", _arc_probe(), None),
             )
             _ctx_vals = dict(zip(_names, _results))
             for source_name, source_value in _ctx_vals.items():
-                chief_truth.record('context:' + source_name, source_value, kind='context')
+                if 'context:' + source_name not in chief_truth.unavailable_sources():
+                    chief_truth.record('context:' + source_name, source_value, kind='context')
             voice_examples = _ctx_vals["voice_examples"]
             session_context = _ctx_vals["session_context"]
             mentor_active = _ctx_vals["mentor_active"]
@@ -13993,7 +14467,10 @@ async def chief_chat(
             habit_block = _ctx_vals["habit_block"]
             bookkeeping_block = _ctx_vals["bookkeeping_block"]
             learned_block = _results[len(_names)]
-            setup_snapshot = _results[len(_names) + 2]
+            setup_snapshot = _results[len(_names) + 1]
+            if _results[len(_names) + 2] is not None:
+                ctx["business_knowledge"] = _results[len(_names) + 2]
+            first_run_arc_row = _results[len(_names) + 3]
             setup_block = _format_setup_block(setup_snapshot)
             chief_truth.record('context:setup', setup_block, kind='context')
             # First-run = the account is days old and nearly nothing is
@@ -14008,24 +14485,25 @@ async def chief_chat(
             # that it was (intro_delivered_at); before it existed, a
             # 20-day-old business with nothing connected heard "this
             # business is brand new" on every greeting.
+            # It is stamped only once the reply has actually gone out —
+            # after the answer check, at the end of the turn. Stamped
+            # here, a greeting that failed or was withheld spent the one
+            # introduction and the next greeting skipped it.
+            intro_owed = False
             if first_run and is_greeting:
-                try:
-                    import first_run_arc as _fra
-                    if _fra.intro_delivered(biz.get("id")):
-                        first_run = False
-                    else:
-                        asyncio.create_task(asyncio.to_thread(
-                            _fra.mark_intro_delivered, biz.get("id")))
-                except Exception as e:  # pragma: no cover
-                    logger.warning(f"first-run arc check failed (non-fatal): {e}")
+                if (first_run_arc_row or {}).get("intro_delivered_at"):
+                    first_run = False
+                else:
+                    intro_owed = True
             # Days two to seven: Chief's greeting knows the day. Not the
             # launch script, not the ordinary day-read — one line on what
             # is in so far, then the one next move with its why.
             week_day = 0
-            if (is_greeting and not first_run and setup_snapshot
-                    and _age_days is not None and 1 <= _age_days <= 6
-                    and setup_snapshot["done"] < setup_snapshot["total"]):
-                week_day = _age_days + 1
+            if is_greeting and not first_run and setup_snapshot \
+                    and setup_snapshot["done"] < setup_snapshot["total"]:
+                _day = _first_week_day(biz, first_run_arc_row)
+                if 2 <= _day <= 7:
+                    week_day = _day
 
             # Pure, no I/O — computed off what the gather returned.
             priorities = _build_daily_priorities(biz, ctx) if is_greeting else []
@@ -14227,6 +14705,10 @@ async def chief_chat(
                 system = system + _spoken_opener_block(req.spoken_opener)
             # The phone's Ask · Do · Build dial — any lane, uncached tail.
             system = system + _intent_block(req.intent)
+            # Every writer follows the same latest conversational direction;
+            # keep the original message intact for constraints and permissions.
+            from chief_turn_direction import direction_for
+            system += direction_for(req.message or "").prompt()
             # The voice confirmation grammar. Set from the SURFACE, not
             # the lane, so a coach turn spoken aloud is still treated as
             # spoken (coaches ride the deep lane and would otherwise slip
@@ -14283,8 +14765,19 @@ async def chief_chat(
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] sentence streaming unavailable: {e}")
                     _prover = None
-                _sentence_streamer = (_SentenceStreamer(_STREAM_SINK.get(), _prover)
-                                      if _prover is not None else (lambda _piece: None))
+                async def _review_stream_prefix(prefix):
+                    sources = chief_truth.evidence_for_review(
+                        ctx, _format_view_block(req.current_context, view_detail), [])
+                    sources.update(chief_truth.conversation_for_review(req.message, history))
+                    return await chief_truth.review_stream_prefix(
+                        client, prefix, sources=sources, message=req.message,
+                        business_id=biz.get("id"))
+
+                _sentence_streamer = (_SentenceStreamer(
+                    _STREAM_SINK.get(), _prover,
+                    review=_review_stream_prefix if chief_truth.continuous_stream_enabled() else None,
+                    message=req.message)
+                    if _prover is not None else (lambda _piece: None))
             # The two-track reply (chief_fast_track): the practitioner has
             # already seen the opening the first track wrote, so this answer
             # continues it. Uncached tail; "" (no change) on the plain
@@ -14292,16 +14785,36 @@ async def chief_chat(
             try:
                 import chief_fast_track as _cft
                 _opening = await _cft.opener_for_turn()
-                if _opening:
-                    system += _cft.continuation_block(_opening)
+                system += _cft.continuation_block(_opening)
             except Exception as e:  # pragma: no cover — never cost the turn
                 logger.warning(f"[chief] opener handoff failed: {e}")
-            # Haiku's headline (chief_headline, 2026-09-25): on a question
+            # Legacy headline, retained behind the rollback switch: on a question
             # about the records, the first real sentence comes from Haiku,
             # from the records just read, proven sentence by sentence by this
             # turn's own streamer — then the main model continues from it.
             _headline_said = ""
-            if isinstance(_sentence_streamer, _SentenceStreamer) and _evidence:
+            _voice_bridge = None
+            if (lane == "voice" and chief_truth.continuous_stream_enabled()
+                    and isinstance(_sentence_streamer, _SentenceStreamer) and _evidence):
+                import chief_headline as _hl
+                import chief_voice_bridge as _vb
+                _prior_reply = next((m.content for m in reversed(history)
+                                     if m.role == "assistant"), "")
+                if _hl.eligible(req.message or "", _prior_reply, lane=lane,
+                                is_greeting=is_greeting, is_coach_mode=is_coach_mode):
+                    _voice_bridge = _vb.VoiceBridge(
+                        _STREAM_SINK.get(), _prover,
+                        lambda sink, prover: _SentenceStreamer(sink, prover, message=req.message),
+                        prefix=PROSE_PREFIX)
+                    _sentence_streamer._sink = _voice_bridge.main
+                    _voice_bridge.start(req.message or "", _evidence,
+                                        history=api_messages[:-1], business_id=biz.get("id"))
+                    system += ("\nA short verified preview of relevant business records may be "
+                               "spoken concurrently. Begin directly with the answer and explanation. "
+                               "Still give the complete answer: do not assume the preview succeeded "
+                               "or omit any requested detail, qualification, or correction.")
+            if (not chief_truth.continuous_stream_enabled()
+                    and isinstance(_sentence_streamer, _SentenceStreamer) and _evidence):
                 try:
                     import chief_headline as _hl
                     _prior_reply = next((m.content for m in reversed(history)
@@ -14316,36 +14829,41 @@ async def chief_chat(
                             system += _hl.continuation_block(_headline_said)
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] headline skipped: {e}")
-            raw = await _call_claude(client, system, api_messages,
-                                     max_tokens=turn_tokens,
-                                     model=chief_models.model_for(lane, _plan),
-                                     # A turn that is plainly an
-                                     # instruction — "you send that text
-                                     # for me", "yes", "go ahead" — has
-                                     # nothing to look up. Seen 2026-09-02:
-                                     # the model reached for web_search on
-                                     # exactly that turn, then spent its
-                                     # reply apologising for the search.
-                                     enable_web_search=_web_search_allowed(req.message or ""),
-                                     # Same tools every turn; the choice rides the
-                                     # uncached tail (cache: see _call_claude).
-                                     stable_tools=True,
-                                     # Voice streaming arc — set only when
-                                     # /chat/stream drives this turn.
-                                     stream_sink=_sentence_streamer,
-                                     read_tools=_read_tools,
-                                     tool_biz=biz,
-                                     effort=chief_models.effort_for(lane))
-            if isinstance(_sentence_streamer, _SentenceStreamer):
-                _sentence_streamer.close()
+            try:
+                raw = await _call_claude(client, system, api_messages,
+                                         max_tokens=turn_tokens,
+                                         model=chief_models.model_for(lane, _plan),
+                                         # A turn that is plainly an
+                                         # instruction — "you send that text
+                                         # for me", "yes", "go ahead" — has
+                                         # nothing to look up. Seen 2026-09-02:
+                                         # the model reached for web_search on
+                                         # exactly that turn, then spent its
+                                         # reply apologising for the search.
+                                         enable_web_search=_web_search_allowed(req.message or ""),
+                                         # Same tools every turn; the choice rides the
+                                         # uncached tail (cache: see _call_claude).
+                                         stable_tools=True,
+                                         # Voice streaming arc — set only when
+                                         # /chat/stream drives this turn.
+                                         stream_sink=_sentence_streamer,
+                                         read_tools=_read_tools,
+                                         tool_biz=biz,
+                                         effort=chief_models.effort_for(lane), timing_role="chief_main")
+                if isinstance(_sentence_streamer, _SentenceStreamer):
+                    _sentence_streamer.finish_input()
+            finally:
+                if _voice_bridge is not None:
+                    await _voice_bridge.close()
             _t.mark("model")
             _t.tools = chief_tool_loop.calls_this_turn()
             if not raw:
                 raw = _image_action_summary(chief_tool_loop.writes_this_turn())
             if not raw:
                 _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
+                _unavailable = "I'm having trouble connecting right now — give me a moment and try again."
                 return {
-                    "response": "I'm having trouble connecting right now — give me a moment and try again.",
+                    "response": _voice_bridge.stitch(_unavailable) if _voice_bridge is not None else _unavailable,
                     "actions_taken": [],
                 }
 
@@ -14536,11 +15054,15 @@ async def chief_chat(
                         # first-pass narration so it doesn't survive as
                         # a substitution-blind lie.
                         clean = _deterministic_substitution_reply(taken)
+                    else:
+                        clean = _deterministic_fallback_reply(taken)
 
             # One final boundary for normal, native-tool, coach and fallback
             # replies. Only checked prose may enter history, learning or speech.
             _t.mark("actions")
             _turn_status("checking the answer")
+            import chief_speech_boundary as _speech
+            clean = _speech.final_reply(clean or _scrub_response_text(raw or ''), req.message)
             clean, grounding = await chief_truth.finalize_reply(
                 client, clean or _scrub_response_text(raw or ''), ctx=ctx,
                 view_detail=_format_view_block(req.current_context, view_detail),
@@ -14550,6 +15072,10 @@ async def chief_chat(
                 repairer=chief_truth.repair_reply,
                 # A spoken reply that arrives after a minute is no reply.
                 budget_s=20.0 if lane == "voice" else 45.0)
+            # Freeze the visible prefix before history/final-payload stitching.
+            if isinstance(_sentence_streamer, _SentenceStreamer):
+                _sentence_streamer.close()
+                await _sentence_streamer.wait_closed()
             _t.mark("review")
             _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
 
@@ -14614,6 +15140,9 @@ async def chief_chat(
                     _headline_said, _sentence_streamer.text, response_text)
             elif isinstance(_sentence_streamer, _SentenceStreamer) and _sentence_streamer.text:
                 response_text = _stitch_after_stream(_sentence_streamer.text, response_text)
+            if _voice_bridge is not None and _voice_bridge.text:
+                response_text = _voice_bridge.stitch(response_text)
+            response_text = _speech.final_reply(response_text, req.message)
 
             # The turn goes on file (2026-09-04) — every turn, every
             # surface, no model call — so recall_conversation reads a
@@ -14621,6 +15150,14 @@ async def chief_chat(
             # app talking to itself and are not a conversation.
             if not is_greeting:
                 await _archive_turn(client, biz, req.message, response_text, taken)
+
+            # The launch greeting went out, checked: now it has been said.
+            # Every earlier return (no model reply, an error) leaves the
+            # introduction owed. The stream path runs this same turn, and
+            # its result is kept for the client's re-POST if the stream
+            # drops, so this is the point the reply is delivered on both.
+            if intro_owed and _intro_went_out(response_text, grounding):
+                _note_intro_delivered(biz.get("id"))
 
             result = {
                 "response": response_text,
@@ -14641,6 +15178,9 @@ async def chief_chat(
             content={"error": str(e), "traceback": tb},
         )
     finally:
+        if isinstance(_sentence_streamer, _SentenceStreamer):
+            _sentence_streamer.close()
+            await _sentence_streamer.wait_closed()
         # Pass RLS-readiness — restore prior user_jwt context. Safe to call
         # even if set_user_jwt's prior call raised after binding (token
         # captured before the try block).
@@ -14776,7 +15316,14 @@ async def chief_chat_stream(
         if not (piece.startswith(STATUS_PREFIX) or piece.startswith(STEP_PREFIX)
                 or piece.startswith(PROSE_PREFIX)):
             return
+        if piece.startswith(PROSE_PREFIX):
+            import chief_speech_boundary as _speech
+            if _speech.internal_scaffolding(piece[len(PROSE_PREFIX):], req.message):
+                _speech.note_block("checked_wire", request_id=track.rec.request_id if track else req.request_id)
+                return
         try:
+            if track is not None and piece.startswith(PROSE_PREFIX):
+                track.holder.answer_ready.set()
             q.put_nowait(piece)
         except Exception:
             pass
@@ -14801,7 +15348,11 @@ async def chief_chat_stream(
             # create_task snapshots the current context, so the sink rides
             # into the turn; resetting immediately keeps THIS request's
             # context clean for anything that runs after.
+            if track is not None:
+                track.rec.trace.work_started()
             turn = asyncio.create_task(chief_chat(req, user_session))
+            if track is not None:
+                turn.add_done_callback(lambda _task: track.holder.answer_ready.set())
             import chief_stream_replay
             _uid = getattr(getattr(user_session, "user", None), "id", None)
             if _uid:
@@ -14924,6 +15475,11 @@ async def chief_chat_stream(
                     yield _evt({"type": "error", "detail": "turn failed"})
                     return
                 final_text = payload.get("response")
+                if isinstance(final_text, str):
+                    import chief_speech_boundary as _speech
+                    final_text = _speech.final_reply(final_text, req.message,
+                        request_id=track.rec.request_id if track else req.request_id)
+                    payload = {**payload, "response": final_text}
                 already = "".join(sent)
                 if isinstance(final_text, str) and final_text:
                     if already:
@@ -15023,6 +15579,7 @@ async def chief_missions_endpoint(
 
 class PrewarmRequest(BaseModel):
     business_id: str
+    refresh_style: bool = False
 
 
 @router.post("/agents/chief/prewarm")
@@ -15053,7 +15610,7 @@ async def chief_prewarm_endpoint(
         user_id = getattr(getattr(user_session, "user", None), "id", None)
 
         # Mic-tap throttle: four taps must not fan out four sweeps.
-        if not chief_prewarm.should_rewarm(user_id, req.business_id):
+        if not req.refresh_style and not chief_prewarm.should_rewarm(user_id, req.business_id):
             return {"ok": True, "warmed": 0, "reason": "already warm"}
 
         async with httpx.AsyncClient() as client:
@@ -15064,15 +15621,20 @@ async def chief_prewarm_endpoint(
             # allowed, and it is keyed by user besides.
             rows = await _sb(client, "GET",
                              f"/businesses?id=eq.{req.business_id}"
-                             f"&select=id,name,type,settings,owner_id&limit=1")
+                             f"&select=id,name,type,settings,owner_id,voice_profile&limit=1")
             biz = (rows or [None])[0]
             if not biz:
                 return {"ok": True, "warmed": 0, "reason": "no such business"}
 
+            import chief_fast_track
+            chief_fast_track.remember_style(str(user_id or ""), biz)
+            if req.refresh_style:
+                # Refresh only the authorized delivery profile after settings change.
+                return {"ok": True, "warmed": 0, "style_refreshed": True}
             sources = _context_sources(client, biz)
             names = list(sources.keys())
             results = await asyncio.gather(
-                *[_resolve_source({}, n, *sources[n]) for n in names])
+                *[_resolve_source({}, n, *sources[n], optional_deadline=False) for n in names])
 
         payload = dict(zip(names, results))
         chief_prewarm.store(user_id, req.business_id, payload)

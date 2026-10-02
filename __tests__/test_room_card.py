@@ -145,3 +145,16 @@ class TestRoute:
         src = (pathlib.Path(__file__).resolve().parent.parent / "kmj_intake_automation.py").read_text(encoding="utf-8")
         assert "from room_card_router import router as room_card_router" in src
         assert "app.include_router(room_card_router)" in src
+
+
+def test_goals_tile_counts_the_settings_store_not_a_missing_table(monkeypatch):
+    # create_goal writes settings.goals.active_goals; there is no goals
+    # table. Counting the table returned None and hid the tile for everyone.
+    _wire(monkeypatch)
+    biz = {**BIZ, "settings": {"goals": {"active_goals": [
+        {"id": "g1", "title": "Reach $10,000 a month"},
+        {"id": "g2", "title": "20 clients"},
+        {"id": "g3", "title": "  "},
+    ]}}}
+    assert rc._now_goals(biz) == [{"label": "goals", "value": "2", "hint": "with a number on them"}]
+    assert rc._now_goals(BIZ) == [{"label": "goals", "value": "0", "hint": "with a number on them"}]

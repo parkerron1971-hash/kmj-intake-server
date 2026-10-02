@@ -155,8 +155,13 @@ def _now_integrations(biz):
 
 
 def _now_goals(biz):
-    bid = biz["id"]
-    return [_tile("goals", _count(f"/goals?business_id=eq.{bid}&status=eq.active"), "with a number on them")]
+    # Goals live in settings.goals.active_goals (chief_grow_actions writes
+    # them there); there is no goals table, and counting one returned None,
+    # which hid this tile for every business.
+    store = (biz.get("settings") or {}).get("goals")
+    active = store.get("active_goals") if isinstance(store, dict) else None
+    n = sum(1 for g in (active or []) if isinstance(g, dict) and str(g.get("title") or "").strip())
+    return [_tile("goals", n, "with a number on them")]
 
 
 def _now_notes(biz):

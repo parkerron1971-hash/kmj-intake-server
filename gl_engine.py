@@ -84,6 +84,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _url_ts(dt: datetime) -> str:
+    """A timestamp safe inside a PostgREST query string. isoformat() ends in
+    '+00:00', and an unencoded '+' arrives as a space, which PostgREST
+    rejects (22007). Request bodies (JSON) don't need this; URLs do. Same
+    lesson as sms_service._pq."""
+    return dt.isoformat().replace("+", "%2B")
+
+
 def _today() -> _date:
     return datetime.now(timezone.utc).date()
 
@@ -800,20 +808,33 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
     atomic conditional PATCH (Postgres row locks re-evaluate the WHERE
     under concurrency, so two replicas can never claim the same row);
     stale claims (>5 min, a crashed worker) are reclaimable. Falls back
-    to the unclaimed path when the claim columns aren't migrated yet."""
+    to the unclaimed path when the claim columns aren't migrated yet.
+
+    2026-10-01: the claim never worked. `stale` went into the URL as raw
+    isoformat(), and PostgREST read its '+00:00' as ' 00:00' and rejected
+    the filter (22007). sb_clients returns None on a 4xx; it never raises.
+    So the claim matched nothing, the except-fallback never ran, and every
+    drain since the 2026-06-10 deploy found "nothing to do". 252 rows sat
+    unclaimed and every ledger froze at Jun 9. Two fixes: the timestamp is
+    encoded (_url_ts), and a None from the claim counts as a failure, so the
+    unclaimed path takes over instead of a silent zero."""
     import uuid as _uuid
     filt = f"&business_id=eq.{business_id}" if business_id else ""
     token = _uuid.uuid4().hex
-    stale = (datetime.now(timezone.utc) - _timedelta(minutes=5)).isoformat()
+    stale = _url_ts(datetime.now(timezone.utc) - _timedelta(minutes=5))
     try:
-        sb_clients.sb_patch_as_service(
+        claimed = sb_clients.sb_patch_as_service(
             f"/gl_sync_queue?processed_at=is.null{filt}"
             f"&or=(claimed_at.is.null,claimed_at.lt.{stale})",
             {"claimed_by": token, "claimed_at": _now_iso()})
+        if claimed is None:  # an error, not "no rows" (that comes back as [])
+            raise RuntimeError("queue claim PATCH failed")
         rows = sb_clients.sb_get_as_service(
             f"/gl_sync_queue?claimed_by=eq.{token}&processed_at=is.null"
             f"&order=enqueued_at.asc&limit={int(limit)}"
-            f"&select=id,business_id,source_table,source_id") or []
+            f"&select=id,business_id,source_table,source_id")
+        if rows is None:
+            raise RuntimeError("queue claim read failed")
     except Exception as e:
         logger.warning(f"[gl] queue claim unavailable, falling back unclaimed: {e}")
         rows = sb_clients.sb_get_as_service(
@@ -827,6 +848,7 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
         by_biz.setdefault(r["business_id"], []).append(r)
 
     processed = 0
+    failed = 0
     for biz, biz_rows in by_biz.items():
         # One business's failure must not abort the rest of the drain.
         try:
@@ -834,18 +856,30 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
             coa = ensure_chart_of_accounts(biz, btype)
             included = set(_included_account_ids(biz))
             trust = set(_trust_account_ids(biz))
-            seen = set()
+            posted: Dict[tuple, bool] = {}
             for r in biz_rows:
                 key = (r["source_table"], r["source_id"])
-                if key not in seen:
-                    seen.add(key)
+                if key not in posted:
                     try:
                         process_source_row(biz, r["source_table"], r["source_id"], coa,
                                            included, trust, btype)
+                        posted[key] = True
                     except Exception as e:
+                        posted[key] = False
                         logger.warning(f"[gl] process row failed {key}: {e}")
-                sb_clients.sb_patch_as_service(
+                if not posted[key]:
+                    # Left unprocessed on purpose: its claim goes stale in five
+                    # minutes and the row is retried. Marking it processed (as
+                    # this loop used to) dropped a failed row from the books for
+                    # good while `processed` still counted it.
+                    failed += 1
+                    continue
+                marked = sb_clients.sb_patch_as_service(
                     f"/gl_sync_queue?id=eq.{r['id']}", {"processed_at": _now_iso()})
+                if marked is None:  # an error; the row stays queued and is retried
+                    logger.warning(f"[gl] couldn't mark queue row {r['id']} processed")
+                    failed += 1
+                    continue
                 processed += 1
             try:
                 reconcile_opening_balance(biz, coa)
@@ -855,13 +889,14 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
             logger.warning(f"[gl] process_queue business {biz} failed: {e}")
 
     try:
-        cutoff = (datetime.now(timezone.utc) - _timedelta(days=7)).isoformat()
-        sb_clients.sb_delete_as_service(
-            f"/gl_sync_queue?processed_at=not.is.null&processed_at=lt.{cutoff}")
+        cutoff = _url_ts(datetime.now(timezone.utc) - _timedelta(days=7))
+        if not sb_clients.sb_delete_as_service(
+                f"/gl_sync_queue?processed_at=not.is.null&processed_at=lt.{cutoff}"):
+            logger.warning("[gl] queue prune was rejected")  # sb_clients returns False, never raises
     except Exception as e:
         logger.warning(f"[gl] queue prune failed: {e}")
 
-    return {"ok": True, "processed": processed, "businesses": len(by_biz)}
+    return {"ok": True, "processed": processed, "failed": failed, "businesses": len(by_biz)}
 
 
 # ─── Divergence reconciliation ───────────────────────────────────────

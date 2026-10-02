@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -66,6 +67,8 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, Depends
 
+from chief_conversation import conversation_style
+from chief_turn_direction import direction_for
 import chief_models
 import llm_call
 import model_router as mr
@@ -112,8 +115,17 @@ def _classifier_timeout_s() -> float:
 # turn's own words take over, whatever the model is doing.
 OPENER_HARD_CAP_S = 2.5
 FAST_ANSWER_CAP_S = 20.0
+# A call cannot spend twenty seconds waiting for the small model before
+# starting the full answer. Progress means released answer text, not a lead
+# or raw tokens still held by the answer gate.
+VOICE_FAST_ANSWER_CAP_S = 8.0
+VOICE_FAST_FIRST_CONTENT_S = 2.5
+VOICE_FAST_IDLE_S = 2.5
 FAST_MAX_TOKENS = 500
-OPENER_MAX_TOKENS = 40
+OPENER_MAX_TOKENS = 80
+VOICE_OPENER_MAX_TOKENS = 140
+VOICE_OPENER_MAX_WORDS = 48
+VOICE_OPENER_HARD_CAP_S = 3.5
 
 
 # ─── When the request arrived ────────────────────────────────────────
@@ -204,6 +216,25 @@ CACHE = mr.SemanticCache()
 # establishes: that the business is this user's (the RLS read) and that
 # they are inside their allowance.
 _KNOWN_GOOD: Dict[str, float] = {}
+# Delivery preferences only, learned from an authorized full turn. Never records.
+_STYLES: Dict[str, tuple[float, str]] = {}
+
+
+def remember_style(user_id: str, biz: Dict[str, Any]) -> None:
+    if not user_id or not biz.get("id"):
+        return
+    _STYLES[_pair(user_id, str(biz["id"]))] = (time.time(), conversation_style(biz))
+    if len(_STYLES) > 5000:
+        for key in sorted(_STYLES, key=lambda k: _STYLES[k][0])[:1000]:
+            _STYLES.pop(key, None)
+
+
+def style_for(user_id: str, business_id: str) -> str:
+    saved = _STYLES.get(_pair(user_id, business_id))
+    if saved and time.time() - saved[0] < KNOWN_GOOD_TTL_S:
+        return saved[1]
+    return conversation_style({})
+
 KNOWN_GOOD_TTL_S = 1800
 # conversation → what the last turn was, for "that's not what I asked".
 _CONVO: Dict[str, Dict[str, Any]] = {}
@@ -251,9 +282,9 @@ def _remember_turn(key: str, lane: str, *, opener: str = "", dissatisfied: bool 
 class OpenerHolder:
     """What the first track has said, for the full turn to continue from.
 
-    The turn freezes it when it builds its prompt: from then on the first
-    track releases nothing more, so the words the turn is told about are
-    exactly the words the practitioner saw."""
+    Chat freezes it when building the prompt. Voice snapshots it without
+    waiting, so a bounded intent-only opening can finish while the main
+    model generates its substantive answer."""
 
     def __init__(self) -> None:
         self.text = ""
@@ -262,6 +293,8 @@ class OpenerHolder:
         self.done = asyncio.Event()
         self.closing = ""            # a dash the first track still owes
         self.deadline: Optional[float] = None   # when the local lead goes out
+        self.parallel_voice = False
+        self.answer_ready = asyncio.Event()
 
     def said(self, piece: str) -> None:
         if piece and not self.frozen:
@@ -292,11 +325,16 @@ OPENER: "contextvars.ContextVar[Optional[OpenerHolder]]" = contextvars.ContextVa
 
 async def opener_for_turn(wait_s: float = 0.35) -> str:
     """Called by chief_chat just before its model call: the opening already
-    shown, or "" when there is none. Waits briefly for an opening still
-    being written, then freezes it."""
+    shown, or "" when there is none. Chat briefly waits and freezes it;
+    parallel voice returns immediately and lets the opening finish."""
     holder = OPENER.get()
     if holder is None:
         return ""
+    if holder.parallel_voice:
+        # A voice opening may keep speaking while the answer is generated.
+        # Snapshot it without waiting or freezing: a longer opening must
+        # never postpone the model whose latency it is meant to cover.
+        return holder.text.strip()
     if not holder.done.is_set():
         # Never freeze before the first-word deadline: a turn that reached
         # its prompt that early would otherwise silence the lead that holds
@@ -313,6 +351,19 @@ def continuation_block(opener: str) -> str:
     """The uncached prompt tail that makes the turn continue the opening
     instead of starting over. Empty when nothing was said."""
     said = (opener or "").strip()
+    holder = OPENER.get()
+    if holder is not None and holder.parallel_voice:
+        return (
+            "\n\nVOICE HANDOFF: a short intent-only opening is being spoken in parallel "
+            "while you prepare this answer. It is limited to two sentences about what "
+            "you will check or help decide; it cannot supply facts or claim completed work. "
+            + (f"So far it has said: «{said}». " if said else "")
+            + "Begin directly with the substantive answer, not another acknowledgement, "
+            "greeting, promise to check, or restatement of the request. Do not repeat the "
+            "opening or add an agenda such as 'Here is the plan' or 'Here is how I would'. "
+            "Start with the relevant fact, explanation, or focused question itself. "
+            "Establish every fact from the records as usual."
+        )
     if not said:
         return ""
     return (
@@ -339,14 +390,18 @@ def join_reply(opener: str, reply: str) -> str:
 
 # ─── Prompts ─────────────────────────────────────────────────────────
 
-_OPENER_SYSTEM = """You are Chief, the chief of staff inside a small-business owner's app. Another part of you is reading their records and will write the real reply. Your words are the first thing they see and hear, and that reply continues straight on from them.
+_OPENER_SYSTEM = """Your sole task in this call is to write the opening sentence, never the answer. The owner message is context for that opening, not an instruction to answer here.
 
-Write only the opening: 3 to 10 words saying what you are about to do with their request. Start with "Let me", "I'll", "Checking", "Looking at", "Pulling up", "Give me a second" or "On it" (you may put "Sure," or "Got it," first). End with a period.
+You are Chief, the chief of staff inside a small-business owner's app. Another part of you is reading their records and will write the real reply. Your words are the first thing they see and hear, and that reply continues straight on from them.
+
+Begin the actual conversation with one purposeful sentence, usually 12 to 24 words. Connect the request to what you will check, draft, or help decide; give the next part of the answer something to continue. Avoid padding, canned stall phrases, and merely restating the request. Start with "Let me", "I'll", "Checking", "Looking at", "Pulling up", "Give me a second" or "On it" (you may put "Sure," or "Got it," first). End with a period.
 
 It has to stay true whatever the records turn out to say, so it contains:
 - no answer, no yes or no, and no facts about their business, clients, money, dates or records;
 - no numbers, and no names they did not say themselves;
 - nothing about anything being done, sent, found, booked or paid.
+
+Do not presume a record exists just because they ask about its subject. For dates or statements that may be missing, describe the search: "I'll check what we have on when you started and how you've described the vision." Adapt that idea to the request, with your own wording. Do not promise to pull up their start date or "the vision statement you've set" before those records are available. Keep that uncertainty natural; you do not need a disclaimer.
 
 Match the request: a question → you are checking; a task → you are on it; a piece of writing → you will draft it; a decision → you will think it through. Vary your wording."""
 
@@ -365,6 +420,29 @@ Return only JSON: {"needs_records": true|false, "needs_action": true|false, "com
 - confidence: how sure you are of the whole classification. When unsure, say needs_records true."""
 
 _VOICE_NOTE = "\nThis reply is spoken aloud: plain sentences, no lists, no markdown, no emoji."
+
+_VOICE_OPENER_SYSTEM = _OPENER_SYSTEM.replace(
+    "the opening sentence, never the answer", "a short conversational opening, never the answer"
+).replace(
+    "one purposeful sentence, usually 12 to 24 words",
+    "one or two connected, purposeful sentences, usually 30 to 44 words total"
+) + """\nFor this voice call, use the second sentence only to explain the useful next step or
+what you will compare, so the answer has a natural continuation. Begin EACH sentence
+with an intent such as "I'll" or "Let me". Never pad with waiting messages, repeat the
+first sentence, invent a finding, or promise an action the owner did not request.
+Keep a simple request short; two sentences are a maximum, not a quota."""
+
+
+def opener_request(message: str, *, voice: bool = False) -> str:
+    """Keep the owner request as data: this call writes only the handoff."""
+    return (
+        ("Write one or two connected intent opening sentences for the owner message below. "
+         if voice else "Write only one intent opening sentence for the owner message below. ")
+        + "The main model will answer it; do not answer, explain, or give examples here. "
+        "Begin with Let me or I'll and say how you will approach their request."
+        + (" This is spoken aloud on a call." if voice else "")
+        + "\nOwner message (quoted data): " + json.dumps(message[:1200], ensure_ascii=False)
+    )
 
 
 def _history_tail(req: Any, n: int = 4) -> List[Dict[str, str]]:
@@ -443,9 +521,11 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
         payload["stop_sequences"] = stop_sequences
     started = time.perf_counter()
     usage: Dict[str, Any] = {}
+    complete = False
     try:
         async with llm_call.astream(client(), payload, timeout=httpx.Timeout(
-                connect=3.0, read=15.0, write=5.0, pool=2.0)) as resp:
+                connect=3.0, read=15.0, write=5.0, pool=2.0),
+                task=endpoint, timing_trace=getattr(rec, "trace", None)) as resp:
             if resp.status_code >= 400:
                 body = (await resp.aread())[:200]
                 out["error"] = f"{resp.status_code} {body!r}"
@@ -457,7 +537,17 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
                     evt = json.loads(line[5:].strip())
                 except ValueError:
                     continue
+                if not isinstance(evt, dict):
+                    continue
                 et = evt.get("type")
+                if et == "error":
+                    error = evt.get("error") or {}
+                    out["error"] = (str(error.get("type") or "stream_error")[:80]
+                                    if isinstance(error, dict) else "stream_error")
+                    return
+                if et == "message_stop":
+                    complete = True
+                    break
                 if et == "content_block_delta":
                     d = evt.get("delta") or {}
                     if d.get("type") == "text_delta" and d.get("text"):
@@ -470,6 +560,8 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
                     u = evt.get("usage") or {}
                     if u.get("output_tokens") is not None:
                         usage["output_tokens"] = u["output_tokens"]
+            if not complete:
+                out["error"] = "incomplete_stream"
     except (httpx.HTTPError, asyncio.TimeoutError) as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -544,9 +636,21 @@ class TwoTrack:
         self.message = str(getattr(req, "message", "") or "")
         self.business_id = str(getattr(req, "business_id", "") or "")
         self.verified = known_good(user_id, self.business_id)
-        self.cache_scope = _pair(user_id, self.business_id)
+        self.style = style_for(user_id, self.business_id)
+        # The fast answer is conditioned on these inputs, not just its question.
+        # Never replay a chat-formatted answer on a call, or an explanation
+        # tailored to earlier history after the practitioner changes context.
+        cache_context = json.dumps({
+            "style": self.style, "voice": self.voice,
+            "model": chief_models.model_for("fast"),
+            "conversation": getattr(req, "conversation_id", None),
+            "history": _history_tail(req),
+        }, sort_keys=True, ensure_ascii=False)
+        context_key = hashlib.sha256(cache_context.encode()).hexdigest()
+        self.cache_scope = _pair(user_id, self.business_id) + ":" + context_key
         self.cache_hit: Optional[mr.CacheHit] = None
         self.fast_answer = ""
+        self.calculated_answer = None
         self.lead_text = ""                 # everything the first track sent
         self.turn_started = False
         self._key = _convo_key(user_id, req)
@@ -569,6 +673,9 @@ class TwoTrack:
         # "Let me check…" in front of "thanks" or "bye" reads as a machine that
         # did not listen; those get the one-word lead at the deadline instead.
         self.model_opener = complexity.kind not in ("social", "farewell") and not self.system_turn
+        self.holder.parallel_voice = (self.voice and self.model_opener and not passive
+                                      and route.lane == mr.LANE_FULL and not route.ambiguous
+                                      and not self.client_opener and _on("CHIEF_ROUTER_OPENER"))
 
     # -- what the endpoint asks ------------------------------------------------
 
@@ -581,12 +688,15 @@ class TwoTrack:
 
     def bind_turn_context(self) -> List[Any]:
         """Context the full turn task must be created with (reset after)."""
-        return [(OPENER, OPENER.set(self.holder)),
+        import chief_request_timing as _crt
+        return [(_crt.CURRENT, _crt.CURRENT.set(self.rec.trace)),
+                (OPENER, OPENER.set(self.holder)),
                 (route_ledger.TALLY, route_ledger.TALLY.set(self.rec.tally))]
 
     def mark_turn_delta(self) -> None:
         """A delta from the full turn went out."""
         self.rec.mark_first_token("turn" if not self.lead_text else None)
+        self.rec.mark_content()
 
     def answered(self) -> bool:
         """The first track gave the whole reply (fast lane or cache)."""
@@ -615,7 +725,8 @@ class TwoTrack:
         """The fast lane's (or the cache's) answer, in /chat's shape."""
         text = self.lead_text
         return {"response": text, "actions_taken": [],
-                "grounding": {"status": "unchecked", "reason": "no records needed",
+                "grounding": {"status": "calculated" if self.calculated_answer else "unchecked",
+                              "reason": "exact arithmetic" if self.calculated_answer else "no records needed",
                               "sources": []},
                 "routing": {"lane": self.rec.lane, "model": self.rec.answer_model}}
 
@@ -628,6 +739,28 @@ class TwoTrack:
             return
         deadline = self.rec.arrived + route_ledger.budget_ms() / 1000.0 - _deadline_margin_s()
         self.holder.deadline = deadline
+        if self.calculated_answer is not None:
+            # This uses the same previously authorized user/business pair as
+            # the fast lane, and still checks its current rate/spend guards.
+            # No model/context read is needed to prove a bounded calculation.
+            try:
+                allowed = await asyncio.wait_for(asyncio.to_thread(
+                    _fast_guards, self.user_id, self.business_id), timeout=0.25)
+            except Exception:
+                allowed = False
+            if not allowed:
+                self.calculated_answer = None
+                self.rec.escalate("guard")
+                self.rec.lane = mr.LANE_FULL
+                self.holder.finish()
+                start_turn()
+                self.turn_started = True
+                return
+            self.rec.answer_model = "deterministic"
+            async for ev in self._emit(self.calculated_answer, "answer"):
+                yield ev
+            self.holder.finish()
+            return
         if self.rec.lane == mr.LANE_CACHE and self.cache_hit is not None:
             async for ev in self._emit(self.cache_hit.answer, "cache"):
                 yield ev
@@ -645,6 +778,8 @@ class TwoTrack:
         if self.holder.frozen and source not in ("cache", "answer"):
             return
         self.rec.mark_first_token(source)
+        if source in ("answer", "cache"):
+            self.rec.mark_content()
         self.lead_text += text
         self.holder.said(text)
         yield {"type": "delta", "text": text, "checked": True, "lead": source}
@@ -693,12 +828,32 @@ class TwoTrack:
             else:
                 await asyncio.wait({task}, timeout=deadline - now)
 
-    async def _pump(self, gen: AsyncIterator[str], q: "asyncio.Queue[Optional[str]]") -> None:
+    async def _pump(self, gen: AsyncIterator[str], q: "asyncio.Queue[Optional[str]]", *, out=None,
+                    stage="fast") -> None:
+        import chief_speech_boundary as speech
+        boundary = speech.SentenceBoundary(self.message, stage=stage,
+            request_id=getattr(getattr(self, "rec", None), "request_id", None))
         try:
             async for piece in gen:
-                await q.put(piece)
+                checked = boundary.feed(piece)
+                if checked:
+                    await q.put(checked)
+                if boundary.blocked:
+                    if out is not None:
+                        out["error"] = "internal_scaffolding"
+                    break
+            tail = boundary.feed("", final=True)
+            if tail:
+                await q.put(tail)
+            if boundary.blocked and out is not None:
+                out["error"] = "internal_scaffolding"
         finally:
-            await q.put(None)
+            try:
+                close = getattr(gen, "aclose", None)
+                if close is not None:
+                    await close()
+            finally:
+                await q.put(None)
 
     async def _next(self, q: "asyncio.Queue[Optional[str]]", deadline: float,
                     hard_stop: float) -> Any:
@@ -755,23 +910,47 @@ class TwoTrack:
             self.holder.finish()
             return
 
-        gate = mr.OpenerGate(self.message)
+        direction = direction_for(self.message)
+        fuller_voice = self.voice and not direction.brief_opener
+        gate = mr.OpenerGate(self.message, max_words=VOICE_OPENER_MAX_WORDS if fuller_voice else mr.OpenerGate.MAX_WORDS,
+                             max_sentences=2 if fuller_voice else 1)
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
-        system = _OPENER_SYSTEM
+        system = self.style + "\n\n" + (_VOICE_OPENER_SYSTEM if fuller_voice else _OPENER_SYSTEM)
+        system += direction.prompt()
         last = (_CONVO.get(self._key) or {}).get("last_opener")
         if last:
             system += f"\nYour last opening in this conversation was «{last}» — do not reuse it."
-        content = self.message[:1200] + (" (said aloud on a call)" if self.voice else "")
+        content = opener_request(self.message, voice=fuller_voice)
         pump = asyncio.ensure_future(self._pump(stream_text(
-            system, [{"role": "user", "content": content}],
-            model=chief_models.model_for("fast"), max_tokens=OPENER_MAX_TOKENS, rec=self.rec,
+            system, _history_tail(self.req) + [{"role": "user", "content": content}],
+            model=chief_models.model_for("fast"),
+            max_tokens=VOICE_OPENER_MAX_TOKENS if self.voice else OPENER_MAX_TOKENS, rec=self.rec,
             endpoint="/chief/opener", units=0,
-            business_id=self.business_id if self.verified else None, out=out), q))
-        hard_stop = self.rec.arrived + OPENER_HARD_CAP_S
+            business_id=self.business_id if self.verified else None, out=out), q, out=out, stage="opener"))
+        hard_stop = self.rec.arrived + (VOICE_OPENER_HARD_CAP_S if self.voice else OPENER_HARD_CAP_S)
         try:
             while not gate.closed and not self.holder.frozen:
-                piece = await self._next(q, deadline, hard_stop)
+                if self.holder.parallel_voice and not gate.dangling:
+                    # If the answer wins, do not start another filler sentence
+                    # or wait on a stalled opener provider. Mid-sentence speech
+                    # is allowed to finish naturally within the hard deadline.
+                    incoming = asyncio.ensure_future(self._next(q, deadline, hard_stop))
+                    ready = asyncio.ensure_future(self.holder.answer_ready.wait())
+                    try:
+                        await asyncio.wait((incoming, ready), return_when=asyncio.FIRST_COMPLETED)
+                        if ready.done():
+                            gate.close("answer_ready")
+                            break
+                        piece = incoming.result()
+                    finally:
+                        for pending in (incoming, ready):
+                            if not pending.done():
+                                pending.cancel()
+                        await asyncio.gather(incoming, ready, return_exceptions=True)
+                else:
+                    piece = await self._next(q, deadline, hard_stop)
+                gate.stop_after_sentence = self.holder.parallel_voice and self.holder.answer_ready.is_set()
                 if piece == "AGAIN":
                     continue
                 if piece == "STOP":
@@ -850,7 +1029,8 @@ class TwoTrack:
         gate = mr.AnswerGate()
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
-        system = _FAST_SYSTEM + (_VOICE_NOTE if self.voice else "")
+        system = self.style + "\n\n" + _FAST_SYSTEM + (_VOICE_NOTE if self.voice else "")
+        system += direction_for(self.message).prompt()
         if continuing and self.lead_text.strip():
             system += (f"\nYour reply has already begun with «{self.lead_text.strip()}»; continue "
                        "straight on from it without repeating it.")
@@ -860,18 +1040,23 @@ class TwoTrack:
         guard = asyncio.ensure_future(asyncio.to_thread(_fast_guards, self.user_id, self.business_id))
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, messages, model=model, max_tokens=FAST_MAX_TOKENS, rec=self.rec,
-            endpoint="/chief/backend", units=None, business_id=self.business_id, out=out), q))
-        hard_stop = self.rec.arrived + FAST_ANSWER_CAP_S
+            endpoint="/chief/backend", units=None, business_id=self.business_id, out=out), q, out=out))
+        hard_stop = self.rec.arrived + (VOICE_FAST_ANSWER_CAP_S if self.voice else FAST_ANSWER_CAP_S)
+        content_deadline = time.perf_counter() + VOICE_FAST_FIRST_CONTENT_S
         after_lead = bool(self.lead_text)
         first_model_text = True
         escalate: Optional[str] = None
         try:
             while not gate.closed:
-                piece = await self._next(q, deadline, hard_stop)
+                wait_until = min(hard_stop, content_deadline) if self.voice else hard_stop
+                piece = await self._next(q, deadline, wait_until)
                 if piece == "AGAIN":
                     continue
                 if piece == "STOP":
-                    escalate = "timeout"
+                    if self.voice and content_deadline <= hard_stop:
+                        escalate = "voice_answer_idle" if self.fast_answer else "voice_first_content_timeout"
+                    else:
+                        escalate = "voice_answer_timeout" if self.voice else "timeout"
                     break
                 if piece == "LEAD":
                     after_lead = True
@@ -894,6 +1079,8 @@ class TwoTrack:
                             text.lstrip(), lower=not self._lead_is_sentence())
                     first_model_text = False
                     self.fast_answer += text
+                    if self.voice:
+                        content_deadline = time.perf_counter() + VOICE_FAST_IDLE_S
                     async for ev in self._emit(text, "answer"):
                         yield ev
                 if piece is None:
@@ -904,6 +1091,7 @@ class TwoTrack:
         finally:
             if not pump.done():
                 pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
 
         if escalate:
             self.rec.escalate(escalate)
@@ -969,6 +1157,7 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
         # The app's id for this turn: what a client-side measurement (time
         # to first audio on a call) is reported against.
         rec.request_id = str(req.request_id)[:80]
+        rec.trace.request_id = rec.request_id
     message = str(getattr(req, "message", "") or "")
     c = mr.score(message, _prior_assistant(req),
                  has_images=bool(getattr(req, "image_ids", None)),
@@ -985,13 +1174,34 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
     business_id = str(getattr(req, "business_id", "") or "")
     allow_fast = (_on("CHIEF_ROUTER_FAST_LANE") and known_good(user_id, business_id))
     route = mr.decide(c, allow_fast=allow_fast, dissatisfied_now=unhappy, sticky_up=sticky)
+    calculated = None
+    if (allow_fast and not getattr(req, "image_ids", None)
+            and (getattr(req, "mode", None) or "") in ("", "chief")):
+        from chief_truth import elementary_arithmetic_reply
+        calculated = elementary_arithmetic_reply(message)
+        if calculated is not None:
+            # The complete message is an integer expression; prior conversational
+            # complexity cannot turn it into a business lookup or an action.
+            route = mr.Route(mr.LANE_FAST, "exact_arithmetic")
+    if route.ambiguous and (getattr(req, "client_surface", "") or "") == "voice":
+        # Uncertain spoken turns already need the full turn unless a separate
+        # classifier proves otherwise. Start that authorized path now instead
+        # of putting a classifier's network wait in front of it. Clear/simple
+        # fast answers and exact arithmetic retain their existing routes.
+        route = mr.Route(mr.LANE_FULL, "voice_ambiguous")
     if unhappy and st.get("lane") == mr.LANE_FAST:
         rec.escalate("dissatisfied_after_fast")
     rec.lane, rec.reason = route.lane, route.reason
     track = TwoTrack(req, user_id, rec, c, route)
-    if route.lane == mr.LANE_FAST and c.cacheable and _on("CHIEF_ROUTER_CACHE"):
+    track.calculated_answer = calculated
+    if calculated is None and route.lane == mr.LANE_FAST and c.cacheable and _on("CHIEF_ROUTER_CACHE"):
         hit = CACHE.get(track.cache_scope, message)
         if hit is not None:
+            from chief_speech_boundary import clean_reply, note_block
+            if clean_reply(hit.answer, message) != hit.answer.strip():
+                note_block("cache", request_id=track.rec.request_id)
+                CACHE.invalidate(track.cache_scope)
+                return track
             track.cache_hit = hit
             rec.lane, rec.reason = mr.LANE_CACHE, "cache"
             rec.cache_hit, rec.cache_similarity = True, round(hit.similarity, 3)

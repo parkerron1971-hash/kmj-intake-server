@@ -228,9 +228,12 @@ async def morning_brief_tick() -> None:
                     f"&scheduled_for=gte.{today}T00:00:00&scheduled_for=lte.{today}T23:59:59"
                     f"&select=id&limit=50"
                 ) or []
-                drafts = sb_clients.sb_get_as_service(
-                    f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id&limit=50"
-                ) or []
+                # The onboarding welcome note is not a draft waiting.
+                import onboarding_welcome
+                drafts = onboarding_welcome.without_welcome(sb_clients.sb_get_as_service(
+                    f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
+                    f"&select=id,{onboarding_welcome.SELECT_COLUMNS}&limit=50"
+                )) or []
                 overdue = sb_clients.sb_get_as_service(
                     f"/invoices?business_id=eq.{biz_id}&status=eq.overdue&select=id&limit=50"
                 ) or []

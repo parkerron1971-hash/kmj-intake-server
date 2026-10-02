@@ -1493,7 +1493,7 @@
 
   function setTrade(t){
     trade=t;target={c1:T[t].c1,c2:T[t].c2};flare=1;
-    try{if(location.protocol.startsWith('http'))history.replaceState(null,'','?trade='+t)}catch(e){}
+    try{if(location.protocol.startsWith('http')){const q=new URLSearchParams(location.search);q.set('trade',t);history.replaceState(null,'','?'+q.toString()+location.hash)}}catch(e){}
     const st=$('#stage');st.style.setProperty('--accent',T[t].c1);st.style.setProperty('--accent-2',T[t].c2);
     document.documentElement.style.setProperty('--accent',T[t].c1);document.documentElement.style.setProperty('--accent-2',T[t].c2);
     document.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed',String(x.dataset.trade===t)));
@@ -1505,7 +1505,7 @@
   const SHAPE={barber:'barbers & salons',therapist:'therapists',contractor:'contractors',coach:'coaches'};
   const WITHOUT_LINE={barber:'No one texted the regulars. No one drafted the pomade order. You find out when the chair sits empty.',therapist:'No one chased the intake forms. Thursday stays open. The unpaid balance turns 45 days.',contractor:'The Harper estimate goes cold. The change order stays unsigned. You eat the $2,150.',coach:'Six check-ins slide. Priya finishes Friday with no renewal in hand.'};
   const WITHOUT_HINTS=['not checked since Friday','nobody noticed','unreconciled','no one answered'];
-  const PRICING=t=>`For ${t.trade} like ${t.biz}, most people start on Professional: $199 a month, 1,000 AI actions, deeper analysis, all three rooms. Starter is $79 for the essentials, Elite is $399 with the strongest model and priority support. Annual takes two months off. And right now a Founding seat locks Professional at $149 a month for as long as you keep it: 50 seats, first come.`;
+  const PRICING=t=>`For ${t.trade} like ${t.biz}, most people start on Professional: ${{PRO_PRICE}} a month, {{PRO_CREDITS}} AI actions, all three rooms. Starter is ${{STARTER_PRICE}} for the essentials, and Solutionist is ${{SOL_PRICE}} for the biggest workload. Annual takes two months off.{{FOUNDER_SENTENCE}}`;
   const PROBLEM_RUBRIC=[
     {k:['no-show','noshow','no show','cancel','forget their','miss their','don’t show','dont show','flake'],tag:t=>'Operate · '+t.booking,reply:t=>`No-shows are a reminder problem, not a people problem. Tonight I would text every appointment 24 hours out with a one-tap confirm from your number, and flag anyone who has missed twice so you decide about a deposit. Most see no-shows fall by half in the first month. Want me to draft the text?`},
     {k:['invoice','chase','owe','unpaid','late pay','get paid','collect','money','cash'],tag:t=>'Operate · Invoices',reply:t=>`I chase money so you do not have to. Reminders go from your address on day 7 and day 14 in your voice, anything over $500 waits for your OK, and a paid invoice closes itself. Right now at ${t.biz}: ${t.qa[1][2].toLowerCase()}. Say the word and I send the first two tonight.`},

@@ -17,6 +17,10 @@ from chief_code import WorkOrder, BuildQuestion, run, receipt, stable_id, worker
 log = logging.getLogger(__name__)
 _tasks = {}
 _slots = asyncio.Semaphore(8)
+# One message may start this many background jobs (a workshop, a flyer, a
+# plan for the rest...). They run side by side when their lanes differ
+# (APPLY-2026-09-26-chief-build-lanes.sql).
+MAX_ORDERS_PER_TURN = 4
 
 
 def enabled():
@@ -64,13 +68,18 @@ async def submit(client, biz, payload):
         raise ValueError('Background builds are not enabled yet.')
     if not ctx or not ctx.get('user_id'):
         raise ValueError('Start this build from your signed-in conversation.')
-    if ctx.get('submitted'):
-        raise ValueError('One build is already being handled in this turn.')
-    ctx['submitted'] = True
+    if ctx.get('responded'):
+        raise ValueError('This turn answered a build; start new work in the next message.')
+    count = int(ctx.get('submitted') or 0)
+    if count >= MAX_ORDERS_PER_TURN:
+        raise ValueError(f'{MAX_ORDERS_PER_TURN} background jobs is the most one message can start. '
+                         f'Put the rest into a plan, or start it in the next message.')
     await owned_business(client, biz['id'], ctx['user_id'])
     order = WorkOrder.create(payload, business_id=biz['id'], user_id=ctx['user_id'],
         turn_id=ctx['turn_id'], surface=ctx['surface'], words=ctx['words'], tainted=ctx.get('tainted'),
-        conversation_id=ctx.get('conversation_id') or '')
+        conversation_id=ctx.get('conversation_id') or '',
+        slot='build' if count == 0 else f'build:{count + 1}')
+    ctx['submitted'] = count + 1
     if order.kind == 'flyer' or order.facts.get('wants_flyer'):
         import image_studio
         if not order.facts.get('reference_ids') and image_studio.turn_references.get():
@@ -80,6 +89,10 @@ async def submit(client, biz, payload):
         tz = (biz.get('settings') or {}).get('timezone')
         if tz:
             order.facts['timezone'] = tz
+    if order.kind == 'plan':
+        # Written by the server from this turn's own results, never by the
+        # model (normalize_facts keeps only title, goal and steps).
+        order.facts['done_in_turn'] = list(ctx.get('done') or [])[:12]
     order.submission_fingerprint = digest({"kind":order.kind,"facts":order.facts})
     query = f"/chief_jobs?business_id=eq.{biz['id']}&kind=eq.build&params->>order_id=eq.{order.order_id}&limit=1"
     existing = await db(client, 'GET', query)
@@ -106,21 +119,74 @@ async def submit(client, biz, payload):
         job = rows[0]
     if job['status'] in ('queued','running'):
         launch(job)
-    summary = (job.get('result') or {}).get('summary_label') or QUEUED_LABEL
+    summary = (job.get('result') or {}).get('summary_label') or queued_label(order)
     return {'type':'submit_work_order','result':summary,'label':summary,'nav':None,'job_id':job['id'],
             'build':public_job(job),'frontend_event':{'name':'solutionist-builds-changed'}}
 
 
+def note_done_in_turn(results_so_far):
+    """Record, on the turn, the labels of the changes this reply already made
+    (its tool writes and the tags before this one) as a plan is submitted."""
+    ctx = turn_scope.get()
+    if not ctx:
+        return
+    import chief_of_staff as chief
+    import chief_tool_loop
+    labels = []
+    for r in list(chief_tool_loop.writes_this_turn()) + list(results_so_far or []):
+        if not isinstance(r, dict) or chief._action_failed(r):
+            continue
+        if r.get('type') == 'respond_work_order':
+            continue
+        if r.get('type') == 'submit_work_order':
+            # Another job this message started: done by it, not missing.
+            build = r.get('build') or {}
+            what = STARTED_NAMES.get(build.get('build_kind'), 'a job')
+            title = str(build.get('title') or '').strip()
+            labels.append(f"Started in the background: {what}" + (f" ({title})" if title else ""))
+            continue
+        label = str(r.get('label') or r.get('result') or '').strip()[:200]
+        if label and label not in labels:
+            labels.append(label)
+    ctx['done'] = labels[:12]
+
+
+STARTED_NAMES = {'event_setup': 'a workshop setup', 'form_and_link': 'a form', 'flyer': 'a flyer',
+                 'site_door': 'an events page', 'plan': 'a plan'}
+
+# Read by the model, never shown: the moment it has just queued a job is
+# the moment it decides what else to do (live 2026-09-26: a form and three
+# changes went out, "call Plan Test H" went nowhere, and the reply said
+# "the rest of what you asked for isn't done yet").
+LEFTOVER_NOTE = ("Queued. Before you reply: if anything else the owner asked for in this message is "
+                 "neither done in this reply nor inside a work order, submit ONE plan with all of it "
+                 "now. Never tell them the rest will happen later or in a next pass.")
+
+
 async def handle_submit_work_order(client, biz, action):
     import chief_of_staff as chief
+    # A model-selected kind is a routing error, not a missing owner detail.
+    # Reject before storage/ownership reads; never infer a replacement job.
+    from chief_code import KINDS
+    kind = action.get('kind')
+    if not isinstance(kind, str) or kind not in KINDS:
+        label = "I couldn't start that work because I chose an unsupported build type. Nothing was queued."
+        return {'type': 'submit_work_order', 'label': label, 'result': label,
+                'failed': True, 'nav': None, 'error_code': 'invalid_build_kind',
+                'for_chief': 'Tool selection failed, not missing user information. Do not ask the owner '
+                    'to choose a build type. Answer their current question. Only if they requested '
+                    'a write, use a supported tool for that request; do not invent a replacement job.'}
     ctx = turn_scope.get()
     if ctx:
         ctx['tainted'] = bool(chief.untrusted_taint())
     try:
-        return await submit(client, biz, action)
+        out = await submit(client, biz, action)
     except (ValueError, HTTPException) as exc:
         label = str(getattr(exc, 'detail', str(exc)))
         return {'type':'submit_work_order','result':label,'label':label,'failed':True,'nav':None}
+    if ctx and int(ctx.get('submitted') or 0) < MAX_ORDERS_PER_TURN:
+        out['for_chief'] = LEFTOVER_NOTE
+    return out
 
 
 # Said when a build starts (Kevin, 2026-09-24): the work runs on the
@@ -128,6 +194,29 @@ async def handle_submit_work_order(client, biz, action):
 # this chat say when it is done or needs them.
 QUEUED_LABEL = ("I'm on it and working in the background. You can leave this chat; "
                 "I'll let you know here when it's done or if I need you.")
+
+
+def queued_label(order):
+    """What starting a job says. A plan names its pieces, so the reply and
+    its receipts say what went to the background (live 2026-09-26: the reply
+    was a stitched list of labels that never said what the plan would do)."""
+    if order.kind != 'plan':
+        return QUEUED_LABEL
+    titles = [str(s.get('title') or '').strip() for s in order.facts.get('steps') or []]
+    titles = [t for t in titles if t][:8]
+    if not titles:
+        return QUEUED_LABEL
+    listed = titles[0] if len(titles) == 1 else ', '.join(titles[:-1]) + ' and ' + titles[-1]
+    return (f"Working on these in the background: {listed}. You can leave this chat; "
+            f"I'll let you know here when they're done or if I need you.")
+
+# Why the website link step stopped, said plainly (first live build,
+# 2026-09-26: a business with no built site got only "could not be
+# verified yet"). The events page itself is verified before this step runs.
+NO_SITE_LABEL = ("Your website isn't built yet, so there's no menu to add an Events link to. "
+                 "Your events page works on its own.")
+SITE_LINK_REFUSED_LABEL = ("The Events link couldn't be added to your website automatically. "
+                           "Your events page works on its own.")
 
 
 def public_job(job):
@@ -139,6 +228,11 @@ def public_job(job):
         safe['held'] = {k:safe['held'].get(k) for k in ('step','say','label')}
     safe['receipts'] = [{k:r.get(k) for k in ('step','outcome','label','ids','verified','nav','frontend_event')}
                         for r in result.get('receipts', [])]
+    # What Chief changed at a plan's stops, in its own plain words.
+    notes = [str(l.get('note'))[:300] for l in (result.get('looks') or [])
+             if l.get('note') and l.get('choice') != 'ask'][-4:]
+    if notes:
+        safe['notes'] = notes
     params=job.get('params') or {}
     facts=params.get('facts') or {}
     return {k:job.get(k) for k in ('id','kind','status','created_at','build_revision')} | {
@@ -154,6 +248,14 @@ async def context(client, bid, uid):
         if row['status'] in ('queued','running'):
             launch(row)
     return [public_job(r) for r in rows]
+
+
+async def _launch_waiting(client, business_id):
+    with contextlib.suppress(Exception):
+        rows = await db(client, 'GET', f"/chief_jobs?business_id=eq.{UUID(str(business_id))}"
+                                       f"&kind=eq.build&status=eq.queued&order=created_at.asc&limit=8")
+        for row in rows:
+            launch(row)
 
 
 async def recover():
@@ -218,8 +320,12 @@ async def worker(job_id):
                     if not await rpc(client,'renew',{'p_id':job_id,'p_token':token}):
                         raise RuntimeError('Build lease lost')
             heartbeat = asyncio.create_task(renew())
-            adapter = Adapter(client, job, token, order)
-            execution = asyncio.create_task(run(order, adapter, job.get('result')))
+            import chief_plans
+            adapter = chief_plans.adapter_for(order)(client, job, token, order)
+            # A plan is run with Chief's first look at any stop; every other
+            # kind is the fixed recipe alone.
+            runner = chief_plans.run_plan if order.kind == 'plan' else run
+            execution = asyncio.create_task(runner(order, adapter, job.get('result')))
             done, _ = await asyncio.wait((heartbeat,execution), return_when=asyncio.FIRST_COMPLETED)
             if heartbeat in done:
                 execution.cancel()
@@ -237,6 +343,9 @@ async def worker(job_id):
             await adapter.save(result, terminal)
             if terminal == 'done':
                 await announce(client, job, result)
+                # Its lane is free: whatever waited behind it starts now, not
+                # at the next five-minute tick.
+                await _launch_waiting(client, job['business_id'])
             if terminal == 'running':
                 # Release the lease; the next scheduler tick reconciles the child.
                 await db(client,'PATCH',f'/chief_jobs?id=eq.{job_id}&build_lease_token=eq.{token}',
@@ -267,7 +376,7 @@ async def worker(job_id):
 
 
 _KIND_NAMES = {'event_setup': 'your event', 'form_and_link': 'your form', 'flyer': 'your flyer',
-               'site_door': 'your events page'}
+               'site_door': 'your events page', 'plan': 'your plan'}
 
 
 def outcome_message(job, result):
@@ -458,6 +567,11 @@ class Adapter:
             import site_adopt
             if await asyncio.to_thread(site_adopt.hand_built_block_for,self.bid):
                 return {'manual':True}
+            # The link is an edit to a composed page. With none (the site was
+            # never built), the edit job can only come back "compose first",
+            # and the card used to say nothing but "could not be verified".
+            if not await self.rows('business_sites','&site_config->page_spec=not.is.null&select=id&limit=1'):
+                return {'no_site':True}
             import chief_jobs
             import spend_guard
             if await asyncio.to_thread(spend_guard.over_budget,business_id=self.bid):
@@ -474,6 +588,21 @@ class Adapter:
             action = {'type':'send_sms' if params['channel']=='sms' else 'draft_and_send',
                       'to':params['to'],'phone':params['to'],'email':params['to'],
                       'contact_id':params.get('contact_id'),'subject':self.order.facts.get('name','Your form'), 'body':params['url'],'message':params['url']}
+        with self.handler_scope(step, params):
+            if step.sensitive:
+                import spend_guard
+                if await asyncio.to_thread(spend_guard.over_budget,business_id=self.bid):
+                    return {'failed':True,'result':'Daily spending limit reached.'}
+            results = await chief._execute_actions(self.client,self.biz,[action],user_id=self.uid,surface='chat',prompted=True,owner_text=self.order.practitioner_words)
+            return results[-1] if results else None
+
+    @contextlib.contextmanager
+    def handler_scope(self, step, params):
+        """The trusted turn a step's handler runs in: this worker's business
+        and owner, the order's surface, taint and bound approval. Shared by
+        every kind, so a plan step is judged exactly as a build step is."""
+        import chief_of_staff as chief
+        import image_studio
         scope = worker_scope.set({'business_id':self.bid,'user_id':self.uid})
         actor = image_studio.build_actor.set({'business_id':self.bid,'user_id':self.uid})
         image_turn = image_studio.turn_id.set(self.order.order_id)
@@ -485,12 +614,7 @@ class Adapter:
         taint = chief._UNTRUSTED_TAINT.set(int(self.order.untrusted_taint))
         uid = chief._TURN_USER_ID.set(self.uid)
         try:
-            if step.sensitive:
-                import spend_guard
-                if await asyncio.to_thread(spend_guard.over_budget,business_id=self.bid):
-                    return {'failed':True,'result':'Daily spending limit reached.'}
-            results = await chief._execute_actions(self.client,self.biz,[action],user_id=self.uid,surface='chat',prompted=True,owner_text=self.order.practitioner_words)
-            return results[-1] if results else None
+            yield
         finally:
             worker_scope.reset(scope); entity_id.reset(eid); image_studio.build_actor.reset(actor)
             image_studio.turn_id.reset(image_turn); image_studio.turn_image_index.reset(image_index); image_studio.turn_references.reset(image_refs)
@@ -574,8 +698,17 @@ class Adapter:
         elif step.name=='site_link':
             if (result or {}).get('manual'):
                 return receipt(step,'needs_hand','Your hand-built website needs an Events link added in its code.')
+            if (result or {}).get('no_site'):
+                return receipt(step,'needs_hand',NO_SITE_LABEL)
             if (result or {}).get('status') in ('queued','running'):
                 return receipt(step,'queued','Your website link is being added.')
+            # The edit job finished and said no. Its reason is the receipt,
+            # in plain words; the job's own text is for the logs.
+            child=(result or {}).get('result') if (result or {}).get('status')=='done' else None
+            if isinstance(child,dict) and child.get('ok') is False:
+                if 'no composed page' in str(child.get('error') or ''):
+                    return receipt(step,'needs_hand',NO_SITE_LABEL)
+                return receipt(step,'failed',SITE_LINK_REFUSED_LABEL)
             import offering_profiles
             info=await asyncio.to_thread(offering_profiles.business_state,self.bid)
             url=info.get('events_url') or ''
@@ -598,7 +731,8 @@ class Adapter:
         if not ok:
             label={'events_page':'The events page could not be verified yet.',
                    'form':'The form could not be verified yet.', 'flyer':'The flyer could not be verified. Check Media Library before creating another.',
-                   'send':'The send could not be verified. Check its history before sending again.'}.get(step.name,'This part of the build could not be verified yet.')
+                   'send':'The send could not be verified. Check its history before sending again.',
+                   'site_link':'The Events link on your website could not be verified yet. Your events page works on its own.'}.get(step.name,'This part of the build could not be verified yet.')
         checked=receipt(step,outcome if ok else 'failed',label,ids=ids,verified={'ok':bool(ok),'how':'read-back and public page' if step.name in ('events_page','form','registration','site_link') else 'read-back'})
         for key in ('nav','frontend_event'):
             if isinstance(result,dict) and result.get(key): checked[key]=result[key]
@@ -609,8 +743,8 @@ class Adapter:
 
 
 BUILD_TOOLS = {
- 'submit_work_order': ('Queue one background build. Use event_setup for a workshop, form_and_link for a form, flyer for an image, or site_door for Events. Never invent missing facts.',
-  {'type':'object','properties':{'kind':{'type':'string','enum':['event_setup','form_and_link','flyer','site_door']},'brief':{'type':'string'},'facts':{'type':'object'}},'required':['kind','facts'],'additionalProperties':False}),
+ 'submit_work_order': ('Queue one background build. Use event_setup for a workshop, form_and_link for a form, flyer for an image, site_door for Events, or plan for several pieces of work from one request. Never invent missing facts.',
+  {'type':'object','properties':{'kind':{'type':'string','enum':['event_setup','form_and_link','flyer','site_door','plan']},'brief':{'type':'string'},'facts':{'type':'object'}},'required':['kind','facts'],'additionalProperties':False}),
  'respond_work_order': ('Answer the one missing field of an existing build, or continue its held step only when the current user explicitly says go ahead. Use its existing job id.',
   {'type':'object','properties':{'job_id':{'type':'string'},'field':{'type':'string'},'answer':{},'approve':{'type':'boolean'},'cancel':{'type':'boolean'}},'required':['job_id'],'additionalProperties':False})}
 
@@ -648,7 +782,7 @@ def route_actions(actions):
 def context_block(jobs):
     if not enabled():
         return ''
-    return ('BUILD vs DO: For event setup, forms with links, flyers, and events pages, emit exactly one submit_work_order. '
+    return ('BUILD vs DO: For event setup, forms with links, flyers, events pages, and a request with more than three changes or a long piece (kind plan), emit exactly one submit_work_order. '
         'Do not execute their individual build steps inline. Read-only questions about an existing build never submit a new one. '
         'Use respond_work_order with its job id for a missing answer or an explicit go-ahead. '
         'Custom coding is not available through work orders. Do not promise it. '
@@ -666,9 +800,9 @@ async def handle_respond_work_order(client,biz,action):
     import chief_of_staff as chief
     ctx=turn_scope.get()
     try:
-        if not enabled() or not ctx or ctx.get('submitted'):
+        if not enabled() or not ctx or ctx.get('submitted') or ctx.get('responded'):
             raise ValueError('One build response is allowed per conversation turn.')
-        ctx['submitted']=True
+        ctx['responded']=True
         rows=await db(client,'GET',f"/chief_jobs?id=eq.{UUID(str(action.get('job_id')))}&business_id=eq.{biz['id']}&user_id=eq.{ctx['user_id']}&kind=eq.build&limit=1")
         if not rows: raise ValueError('That build is not available in this business.')
         job=rows[0]
@@ -707,13 +841,14 @@ def routing_instructions():
         return ''
     return '''CURRENT BUILD ROUTING POLICY (instructions, not business data):
 For workshops, forms, flyers and Events pages, these rules replace the earlier examples that call generate_image, create_client_form, or individual event setup actions.
-Call submit_work_order exactly once. Do not plan or perform its component actions in this conversation turn. Put the user's known facts in facts, with one of these kinds:
+For those requested builds, call submit_work_order exactly once. Do not perform its component actions in this conversation turn. Put the user's known facts in facts, with one of these kinds:
 - event_setup: title, starts_at (ISO date and time), timezone (IANA name), location, price, capacity, wants_registration_form, wants_flyer. Workshop registration and the website link belong to this ONE order.
 - form_and_link: name, fields (form field objects with label/type/required), form_type, optional send_to and channel. An event registration must use form_type=event. For form_type=event, also supply description, starts_at (ISO date and time), timezone (IANA), location and admission. These event details are mandatory public page content, separate from visitor questions. Use the owner's confirmed facts; never invent them. Ask whether to include a flyer unless the owner has already chosen; include_flyer=true/false records that choice. If true, flyer_url must be the chosen public image URL. A flyer is optional and never substitutes for written event details. If the owner asks to create a flyer, prepare it through the flyer workflow, then attach its published image URL with update_client_form; never claim a private preview or pending image is attached. For an existing form, update_client_form accepts event_details and the same detail fields; include_flyer=false removes its flyer.
 - flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.
 - site_door: capability=events.
+- plan: a request that needs more than three changes, includes a long piece (an image), or is a job of dependent steps. Submit it FIRST, before doing any of it directly: a reply can make only three direct changes. Up to three quick changes are done directly instead. It runs in the background and the owner keeps talking. facts: title, goal, steps: [{"title": "...", "action": {"type": "<action>", ...the same fields that action takes in chat}}]. Steps run in order. A later step can use an earlier step's result with "@type.field" (for example "@create_contact.contact_id"), or repeat over a list with "for_each": "@show_view.rows" and {{item.field}}. Put "approval": true on a step the owner wants to review first. A plan may include one generate_image step. Workshops, forms with links and events pages are never plan steps: they are their own orders. A message with several pieces gets one order per piece (for example an event_setup for the workshop, a flyer, and one plan for everything else), up to four orders per turn; they run side by side. Sends, bookings and charges in a plan run on the owner's ask, exactly as in chat.
 Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form or generate_image for those build steps.
 Questions about a job in BUILDS IN PROGRESS are read-only: answer with its summary_label verbatim, without extra execution claims or follow-up offers. Never create another build to check progress.
-An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer.
-After submitting or responding, read only the returned label; queued work is not finished work.
+An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer; a plan's question is answered with field plan_answer.
+After submitting or responding, use the returned label for its execution status; queued work is not finished work. Still answer any question the owner asked alongside the work. A request to discuss, calculate, or explain a plan is not a request to save or queue it; use ordinary prose. Goal trackers use create_goal, milestone initiatives use create_growth_objective, and notes use save_note when requested; there is no goal_setup build kind.
 '''
