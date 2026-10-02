@@ -57,6 +57,7 @@ ICONS = {
     "check": '<path d="M20 6 9 17l-5-5"/>',
     "share": '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>'
              '<path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+    "chat": '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
     "doc": '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
 }
 
@@ -265,6 +266,20 @@ a{{color:var(--accent);}}
 .mb-meet-bar .mp-go[aria-pressed="true"]{{background:var(--mb-soft);color:var(--accent);border-color:var(--mb-soft-line);}}
 .mb-end{{margin-top:10px;}}
 .mb-end .mp-go{{width:100%;}}
+.mb-chat-link{{width:38px;height:38px;flex:none;border-radius:50%;display:grid;place-items:center;color:var(--text-primary);
+  border:1.5px solid var(--mb-line);text-decoration:none;}}
+.mb-unread{{min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:var(--accent);color:var(--accent-text);
+  font-size:12px;font-weight:800;display:inline-grid;place-items:center;flex:none;}}
+.mb-chat-av{{width:44px;height:44px;border-radius:50%;background:var(--mb-surface-2);color:var(--text-primary);font-weight:800;font-size:14px;}}
+.mb-msg-held{{font-size:11.5px;font-style:italic;opacity:.85;}}
+.mb-report{{margin:0;}}
+.mb-report-btn{{background:none;border:0;padding:4px 0 0;font:inherit;font-size:11.5px;color:var(--text-muted);cursor:pointer;text-decoration:underline;}}
+.mb-request{{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px;}}
+.mb-request p{{flex:1 1 100%;margin:0;}}
+.mb-request form{{margin:0;}}
+.mb-request .mp-go{{width:auto;}}
+.mb-chat-tools{{margin-top:6px;}}
+.mb-guide-list{{margin:10px 0 16px;padding-left:20px;display:flex;flex-direction:column;gap:8px;line-height:1.5;color:var(--text-secondary);}}
 .mb-top{{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;}}
 .mb-brand{{display:flex;align-items:center;gap:10px;min-width:0;}}
 .mb-mark{{width:34px;height:34px;flex:none;border-radius:10px;display:grid;place-items:center;font-weight:900;font-size:13px;
