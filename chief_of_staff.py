@@ -14473,6 +14473,17 @@ async def chief_chat(
                        streamed=_STREAM_SINK.get() is not None)
                 return result
 
+            # A short plan can be selected from independently grounded proposals
+            # without the full tool prompt, duplicate narration and prose review.
+            import chief_quick_plan
+            quick_plan = await chief_quick_plan.try_reply(client, req, ctx, user_session.user.id)
+            if quick_plan is not None:
+                if _STREAM_SINK.get() is not None:
+                    chief_stream_replay.remember(req, user_session.user.id, quick_plan)
+                _t.mark("plan")
+                _t.log(lane="quick_plan", streamed=_STREAM_SINK.get() is not None)
+                return quick_plan
+
             is_greeting = _is_greeting(req.message)
             # Room orientation turns (first visit / the door / the walk)
             # get their own instructions instead of the day-read.
