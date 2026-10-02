@@ -80,6 +80,8 @@ def test_resolve_carries_answers_then_switches_the_copy_off(db):
     # answers first, then the ledger is told, and only then the copy goes off
     assert kinds == [("patch", "/plaid_transactions"), ("post", "/gl_sync_queue"), ("patch", "/plaid_accounts")]
     assert writes[0][2]["business_category"] == "operating"
+    # gl_sync_queue.op is NOT NULL; a row without it is rejected (2026-10-02, live 502)
+    assert all(r.get("op") == "update" for r in writes[1][2])
     assert writes[2][2]["included_in_bookkeeping"] is False
 
 
