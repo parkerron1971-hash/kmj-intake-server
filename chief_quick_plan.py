@@ -29,7 +29,8 @@ def eligible(req):
     if getattr(req, 'image_ids', None):
         return False
     import chief_plan_context
-    if not chief_plan_context.history_preflight(req):
+    if (not chief_plan_context.history_preflight(req)
+            or not chief_plan_context.plain_history(req)):
         return False
     from chief_shortcut_scope import constrained
     if constrained(req, 'plan'):

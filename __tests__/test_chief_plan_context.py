@@ -219,3 +219,23 @@ def test_hard_history_checks_also_guard_synchronous_shortcut(provider,monkeypatc
     assert asyncio.run(quick.try_reply(None,req(history),{'business':{'id':'biz','owner_id':'owner'}},'owner')) is None
     builder.assert_not_awaited()
     provider.assert_not_awaited()
+
+
+@pytest.mark.parametrize('history', [['Please only Ada'],['For Acme'],['Read the latest email'],
+    ['Take a screenshot of my website'], ['15 minutes']])
+def test_unknown_meaningful_history_cannot_skip_semantic_resolution(monkeypatch,history):
+    request=req(history)
+    assert not quick.eligible(request) and quick.request_shape(request)
+    classifier=AsyncMock(return_value=False)
+    builder=AsyncMock(side_effect=AssertionError('No plan after scope deferral'))
+    monkeypatch.setattr(scope,'allows_generic_plan',classifier)
+    monkeypatch.setattr(quick,'_build_action',builder)
+    assert asyncio.run(quick.try_reply(None,request,{'business':{'id':'biz','owner_id':'owner'}},'owner')) is None
+    classifier.assert_awaited_once()
+    builder.assert_not_awaited()
+
+
+@pytest.mark.parametrize('history', [['Show invoices'],['Show me a short plan for the next two days'],
+    ['[SYSTEM:opening_greeting:evening]','Show invoices','Thanks']])
+def test_known_self_contained_history_keeps_zero_scope_call(history):
+    assert quick.eligible(req(history))

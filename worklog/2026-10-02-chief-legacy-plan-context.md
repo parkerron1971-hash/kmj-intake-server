@@ -32,7 +32,7 @@ Plan-shaped turns defer speculative enrichment until the decision: accepted shor
 plans skip unused learned/source retrieval; declined scope starts the normal path.
 Existing proposal normalization, action policy, audit and replay remain in use.
 
-Validation: 116 focused context, quick-plan, request integration, scope and
+Validation: 124 focused context, quick-plan, request integration, scope and
 preparation tests passed. Real fictional provider checks covered unrelated reads,
 an old isolated time fragment, implicit client/topic/time restrictions, explicit
 constraints, injection rejection, opening markers and scope acknowledgments.
@@ -40,3 +40,9 @@ The representative invoice/weather-retry/noise/email-visibility history was
 accepted in 1.66 seconds; its explicit email-only-plan negative was blocked locally.
 These were classifier-only checks with no customer records or business actions,
 not an end-to-end production latency measurement. Parent owns review and release.
+
+A final sync-route audit restricts the zero-classifier path to recognized plain
+invoice/short-plan requests, known control markers, and acknowledgments. Unknown
+history such as a truncated named qualifier must resolve or defer, even if an old
+keyword guard did not recognize its topic. The live fictional "Please only Ada"
+case deferred, while the representative unrelated-history case still cleared.

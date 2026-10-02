@@ -30,7 +30,7 @@ def request_without_history(req):
 
 
 _OPENING = re.compile(r"\[SYSTEM:opening_greeting:(?:morning|afternoon|evening)\]")
-_ACK = re.compile(r"(?:yes(?: please)?|no(?: thanks)?|ok(?:ay)?|sure|go ahead|do that|sounds good)[.!?, ]*", re.I)
+_ACK = re.compile(r"(?:yes(?: please)?|no(?: thanks)?|ok(?:ay)?|sure|go ahead|do that|sounds good|great|thanks|thank you|all right)[.!?, ]*", re.I)
 _QUESTION_SCOPE = re.compile(r"\b(?:plan|work|focus|budget|client|time|hours?|minutes?|exclu\w*|website|marketing|invoices?|reminders?|outreach)\b", re.I)
 _USER_PLAN = re.compile(r"\b(?:plan|work|focus|budget|priorit\w*)\b", re.I)
 _EXCLUSION = re.compile(r"\b(?:no|skip|avoid|exclude) (?:invoices?|reminders?|outreach|calls|emails?|texts?)\b", re.I)
@@ -97,6 +97,24 @@ def history_preflight(req):
                         and _OPENING.fullmatch(m.content) for m in users):
         return True
     return _history(req) is not None
+
+
+def plain_history(req):
+    """Only recognized self-contained history can skip semantic resolution."""
+    from chief_invoice_readout import invoice_display_request
+    import chief_quick_plan
+    for message in getattr(req, 'conversation_history', None) or []:
+        if getattr(message, 'role', '') != 'user':
+            continue
+        text = getattr(message, 'content', '')
+        if not isinstance(text, str):
+            return False
+        if _OPENING.fullmatch(text) or _ACK.fullmatch(text.strip()):
+            continue
+        if invoice_display_request(text) or chief_quick_plan.request_shape(SimpleNamespace(message=text)):
+            continue
+        return False
+    return True
 
 
 async def allows_generic_plan(client, req, business_id=None):

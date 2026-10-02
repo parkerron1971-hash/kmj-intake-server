@@ -59,5 +59,7 @@ def test_plain_previous_invoice_display_is_not_a_plan_constraint():
 
 
 def test_unrelated_site_read_is_not_a_persistent_plan_constraint():
-    assert plans.eligible(request('Show me a short plan for the next two days',
-                                 ['Can you pull up a screenshot of my website from the public internet?']))
+    req = request('Show me a short plan for the next two days',
+                  ['Can you pull up a screenshot of my website from the public internet?'])
+    # A semantic scope check can clear this independent older operation.
+    assert plans.request_shape(req) and not plans.eligible(req)
