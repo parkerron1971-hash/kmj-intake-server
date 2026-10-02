@@ -1,4 +1,4 @@
-﻿---
+---
 title: Preserve invoice scope without long conversation preparation
 date: 2026-10-02
 agent: Codex (GPT-6)
@@ -21,4 +21,3 @@ Follow-up review covered the complete descriptive email-visibility discussion an
 Independent review found scope questions that omit the word invoice and the imperative Open being mistaken for an open-status modifier. A pending invoice question now retains the full conversation path for any meaningful owner reply, including acknowledgments and intervening assistant debug output. Status is captured only from the modifier position in the display grammar. Fully recognized invoice history constructs the allowed display directly; unknown history still needs strict model agreement. The full descriptive email fixture, including its second email-visibility qualifier, passed live all/list (1450 ms) and after-plan all/list (499 ms). The provider still sometimes misreads the imperative Open in complex history; contradictory output is rejected rather than overriding inherited scope, so that case may retain full-path latency.
 
 Integrated in PR #1213. Final combined validation: 406 focused tests passed; independent invoice review passed 256 related tests. Protected CI and production playback measurements are recorded in the PR. Unsupported or ambiguous constraints intentionally retain the full-context path.
-

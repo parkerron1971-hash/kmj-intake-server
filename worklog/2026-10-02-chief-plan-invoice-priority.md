@@ -1,4 +1,4 @@
-﻿---
+---
 title: Prioritize useful invoice reminders in short Chief plans
 date: 2026-10-02
 agent: Codex (GPT-6)
@@ -31,4 +31,3 @@ voice recovery worklogs were reviewed; this change has no frontend impact.
 Local commit is handed to the parent agent for review and release; no child PR/push.
 
 Integrated in PR #1213. Final combined validation: 406 focused tests passed; independent invoice review passed 256 related tests. Protected CI and production playback measurements are recorded in the PR. Unsupported or ambiguous constraints intentionally retain the full-context path.
-

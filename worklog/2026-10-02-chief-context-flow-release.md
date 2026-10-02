@@ -1,4 +1,4 @@
-﻿---
+---
 title: Close the remaining long-conversation voice gaps
 date: 2026-10-02
 agent: Codex (GPT-6)
@@ -17,4 +17,3 @@ Independent review covered owner scope, replay before spending, the full email-v
 Focused regression checks precede full protected CI. Final production measurements and deployment evidence will be recorded in the release PR. The playback test uses typed requests with ElevenLabs read-aloud; it does not measure microphone capture or speech recognition.
 
 Integrated in PR #1213. Final combined validation: 406 focused tests passed; independent invoice review passed 256 related tests. Protected CI and production playback measurements are recorded in the PR. Unsupported or ambiguous constraints intentionally retain the full-context path.
-

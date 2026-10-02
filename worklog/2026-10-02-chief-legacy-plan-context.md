@@ -1,4 +1,4 @@
-﻿---
+---
 title: Resolve unrelated history before short Chief plans
 date: 2026-10-02
 agent: Codex (GPT-6)
@@ -48,4 +48,3 @@ keyword guard did not recognize its topic. The live fictional "Please only Ada"
 case deferred, while the representative unrelated-history case still cleared.
 
 Integrated in PR #1213. Final combined validation: 406 focused tests passed; independent invoice review passed 256 related tests. Protected CI and production playback measurements are recorded in the PR. Unsupported or ambiguous constraints intentionally retain the full-context path.
-
