@@ -848,6 +848,7 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
         by_biz.setdefault(r["business_id"], []).append(r)
 
     processed = 0
+    failed = 0
     for biz, biz_rows in by_biz.items():
         # One business's failure must not abort the rest of the drain.
         try:
@@ -855,18 +856,30 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
             coa = ensure_chart_of_accounts(biz, btype)
             included = set(_included_account_ids(biz))
             trust = set(_trust_account_ids(biz))
-            seen = set()
+            posted: Dict[tuple, bool] = {}
             for r in biz_rows:
                 key = (r["source_table"], r["source_id"])
-                if key not in seen:
-                    seen.add(key)
+                if key not in posted:
                     try:
                         process_source_row(biz, r["source_table"], r["source_id"], coa,
                                            included, trust, btype)
+                        posted[key] = True
                     except Exception as e:
+                        posted[key] = False
                         logger.warning(f"[gl] process row failed {key}: {e}")
-                sb_clients.sb_patch_as_service(
+                if not posted[key]:
+                    # Left unprocessed on purpose: its claim goes stale in five
+                    # minutes and the row is retried. Marking it processed (as
+                    # this loop used to) dropped a failed row from the books for
+                    # good while `processed` still counted it.
+                    failed += 1
+                    continue
+                marked = sb_clients.sb_patch_as_service(
                     f"/gl_sync_queue?id=eq.{r['id']}", {"processed_at": _now_iso()})
+                if marked is None:  # an error; the row stays queued and is retried
+                    logger.warning(f"[gl] couldn't mark queue row {r['id']} processed")
+                    failed += 1
+                    continue
                 processed += 1
             try:
                 reconcile_opening_balance(biz, coa)
@@ -877,12 +890,13 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
 
     try:
         cutoff = _url_ts(datetime.now(timezone.utc) - _timedelta(days=7))
-        sb_clients.sb_delete_as_service(
-            f"/gl_sync_queue?processed_at=not.is.null&processed_at=lt.{cutoff}")
+        if not sb_clients.sb_delete_as_service(
+                f"/gl_sync_queue?processed_at=not.is.null&processed_at=lt.{cutoff}"):
+            logger.warning("[gl] queue prune was rejected")  # sb_clients returns False, never raises
     except Exception as e:
         logger.warning(f"[gl] queue prune failed: {e}")
 
-    return {"ok": True, "processed": processed, "businesses": len(by_biz)}
+    return {"ok": True, "processed": processed, "failed": failed, "businesses": len(by_biz)}
 
 
 # ─── Divergence reconciliation ───────────────────────────────────────

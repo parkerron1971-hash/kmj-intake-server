@@ -104,3 +104,14 @@ def test_a_failed_claim_falls_back_instead_of_reporting_zero(fake, monkeypatch):
 def test_url_ts_encodes_the_offset():
     from datetime import datetime, timezone
     assert gl._url_ts(datetime(2026, 10, 1, 21, 0, tzinfo=timezone.utc)) == "2026-10-01T21:00:00%2B00:00"
+
+
+def test_a_row_that_fails_to_post_stays_queued(fake, monkeypatch):
+    _queue_expense(fake)
+
+    def boom(*a, **k):
+        raise RuntimeError("posting failed")
+    monkeypatch.setattr(gl, "process_source_row", boom)
+    out = gl.process_queue("b1")
+    assert out["processed"] == 0 and out["failed"] == 1
+    assert fake.rows("gl_sync_queue")[0].get("processed_at") is None   # retried, not dropped
