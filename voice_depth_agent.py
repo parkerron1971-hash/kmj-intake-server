@@ -66,14 +66,20 @@ def _sb_url() -> str:
     return os.environ.get("SUPABASE_URL", "").rstrip("/")
 
 
-def _sb_anon() -> str:
-    return os.environ.get("SUPABASE_ANON", "")
+def _sb_key() -> str:
+    """SERVICE ROLE. Renamed from `_sb_anon` on 2026-09-01 — this module
+    wrote its tables with the public key, which docs/RLS_MODEL.md Rule 1
+    forbids for a server path. Renamed rather than re-bodied: a helper
+    called `_sb_anon` that returns the service-role key already cost this
+    project a false claim about production and two commits to unwind
+    (#768). See practitioner_profile_agent._sb_key for the full story."""
+    return os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
 def _sb_headers() -> Dict[str, str]:
     return {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
+        "apikey": _sb_key(),
+        "Authorization": f"Bearer {_sb_key()}",
         "Content-Type": "application/json",
         "Prefer": "return=representation",
     }
@@ -389,7 +395,12 @@ def get_missing_voice_jit_fields(owner_id: str) -> List[str]:
     """Return the JIT_VOICE_FIELDS the practitioner hasn't filled yet."""
     if not owner_id:
         return list(JIT_VOICE_FIELDS)
-    voice = get_voice_depth(owner_id) or {}
+    return missing_voice_jit_fields_from_profile(get_voice_depth(owner_id))
+
+
+def missing_voice_jit_fields_from_profile(voice: Optional[Dict[str, Any]]) -> List[str]:
+    """A full practitioner row also contains all voice fields used here."""
+    voice = voice or {}
     samples = voice.get("voice_samples") or {}
     missing: List[str] = []
     for field_path in JIT_VOICE_FIELDS:

@@ -147,9 +147,9 @@ def test_a_prose_gap_beside_a_receipt_still_delivers_the_answer():
     result, meta = asyncio.run(truth.finalize_reply(None, draft, ctx={}, view_detail="",
         taken=[receipt], message="So there's already an Embrace the Shift workshop that exists?",
         business_id="biz", reviewer=AsyncMock(return_value=raw)))
-    assert result.startswith("Yes, it is already on file.")
-    assert "still unverified" in result
-    assert meta["status"] == "caveated"
+    assert "Embrace the Shift Workshop: updated" in result
+    assert "got created" not in result and "still unverified" not in result
+    assert meta["status"] == "receipts"
 
 
 # ── the prompt ────────────────────────────────────────────────────────

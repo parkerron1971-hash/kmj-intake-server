@@ -65,6 +65,30 @@ def test_everything_that_needs_the_business_or_thought_goes_up(msg, why):
         why == "complexity" and r.reason.startswith("complexity")), (msg, r.reason)
 
 
+@pytest.mark.parametrize("msg", [
+    # A setup starter on a new account's empty chat (FE ChiefOfStaff
+    # SETUP_ASKS). It used to route "ambiguous", and a sure classifier sent
+    # it to Haiku alone, which cannot see the product or the setup list.
+    "What can you do for me?",
+    "what else can you help with?", "How can you help my business?",
+    "Can you help me?", "who are you?", "What is Chief?", "what's your name?",
+    "What is the Solutionist System?", "how does this app work?",
+    "How do I get started?", "how do I use this?", "what features do you have?",
+    "Are you able to run my payroll?",
+])
+def test_questions_about_chief_or_the_app_go_to_the_full_turn(msg):
+    c, r = _route(msg)
+    assert c.kind == "product" and not r.ambiguous, (msg, c, r)
+    assert r.lane == mr.LANE_FULL and r.reason == "product", (msg, r)
+    assert not c.cacheable
+
+
+def test_the_product_gate_leaves_general_and_social_questions_alone():
+    for msg in ["What does ROI mean?", "how are you?", "thanks chief", "define gross margin",
+                "what do you think?", "can you cheer me up?", "give me a pep talk"]:
+        assert mr.score(msg).kind != "product", msg
+
+
 @pytest.mark.parametrize("msg", ["yes", "sounds good", "perfect, thanks", "go ahead", "no"])
 def test_a_short_reply_to_a_question_is_the_go_ahead_not_small_talk(msg):
     c, r = _route(msg, prior="I've drafted the reminder to Maria. Shall I send it?")
@@ -133,8 +157,8 @@ def test_normalise_drops_framing_not_meaning():
 
 @pytest.mark.parametrize("a,b", [
     ("What does ROI mean?", "what does roi mean"),
-    ("what does ROI mean?", "Hey chief, what does ROI mean please"),
-    ("what's the difference between a W-2 and a 1099?", "difference between a 1099 and a W-2?"),
+    ("what does ROI mean?", "Hey chief, what does ROI mean, please"),
+    ("what's the difference between a W-2 and a 1099?", "Hey Chief, what's the difference between a W-2 and a 1099, please"),
 ])
 def test_near_repeats_hit(a, b):
     cache = mr.SemanticCache(ttl_s=3600)
@@ -259,6 +283,39 @@ def test_the_opening_goes_out_word_by_word_not_at_the_end():
     assert first.startswith("Let me") and not g.closed
 
 
+@pytest.mark.parametrize("chunk_size", [1, 4, 1000])
+def test_voice_opening_allows_two_intent_sentences_but_not_a_third(chunk_size):
+    text = "Let me check the invoices. I'll look for anything that needs your attention. Let me keep talking."
+    g = mr.OpenerGate("Check invoices", max_words=48, max_sentences=2)
+    out = "".join(g.feed(text[i:i + chunk_size]) for i in range(0, len(text), chunk_size)) + g.finish()
+    assert out == "Let me check the invoices. I'll look for anything that needs your attention."
+    assert g.sentences == 2
+
+
+@pytest.mark.parametrize("second", ["You have three invoices.", "Maria paid yesterday.",
+                                  "I'll check the $300 balance.", "I'll check what's already sent."])
+def test_extra_voice_sentence_keeps_the_intent_and_fact_guards(second):
+    g = mr.OpenerGate("Check invoices", max_words=48, max_sentences=2)
+    out = g.feed("Let me check the invoices. " + second) + g.finish()
+    assert "three" not in out and "Maria" not in out and "$300" not in out and "already" not in out
+    assert g.cut_reason in ("no_intent_lead", "figure", "already")
+
+
+def test_voice_word_limit_is_shared_across_both_sentences():
+    g = mr.OpenerGate("check invoices", max_words=48, max_sentences=2)
+    text = "Let me check the invoices. I'll " + "check " * 80
+    out = g.feed(text) + g.finish()
+    assert len(out.split()) == 48 and g.cut_reason == "length"
+
+
+def test_ready_answer_finishes_current_sentence_without_starting_another():
+    g = mr.OpenerGate("check invoices", max_words=48, max_sentences=2)
+    out = g.feed("Let me check ")
+    g.stop_after_sentence = True
+    out += g.feed("the invoices. I'll look for anything urgent.") + g.finish()
+    assert out == "Let me check the invoices."
+
+
 def test_a_cut_opening_is_marked_dangling():
     _, g = _gate("Let me pull up the 3 invoices.", "any unpaid invoices?")
     assert g.dangling
@@ -323,3 +380,22 @@ def test_only_a_question_counts_as_asked():
         assert mr.is_question(q), q
     for s in ["give me a pep talk", "For me to revisit.", "We also put in the notes box in a flyer as well."]:
         assert not mr.is_question(s), s
+
+
+@pytest.mark.parametrize("first,second", [
+    ("convert 5 kilometers to miles", "convert 5 miles to kilometers"),
+    ("what is 20 divided by 5", "what is 5 divided by 20"),
+    ("what is 5 + 2", "what is 5 / 2"),
+    ("what is 5 * 2", "what is 5 - 2"),
+    ("what is 5!", "what is 5"),
+    ("define thanks", "define please"),
+    ("what is the difference between annual simple interest and compound interest",
+     "what is the difference between annual simple interest and compound interest rates"),
+    ("what is risk with insurance", "what is risk without insurance"),
+])
+def test_cache_requires_the_same_question_even_at_lowest_overlap_threshold(monkeypatch, first, second):
+    monkeypatch.setenv("ROUTER_CACHE_SIMILARITY", "0.6")
+    cache = mr.SemanticCache()
+    cache.put("owner:business", first, "Answer to the first question")
+    assert cache.get("owner:business", second) is None
+    assert cache.get("owner:business", first).answer == "Answer to the first question"

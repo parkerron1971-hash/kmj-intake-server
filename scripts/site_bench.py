@@ -19,6 +19,9 @@
 #       → the REAL DATA block alone
 #   python scripts/site_bench.py validate --fixture ... page.html
 #       → every builder_v2 law on that page, as JSON
+#   python scripts/site_bench.py objects [--out DIR] [--shoot]
+#       → every library object in three themes on one page (site_objects),
+#         and with --shoot its 1440 and 390 screenshots
 #   python scripts/site_bench.py shoot page.html [--out DIR]
 #       → 1440 and 390 screenshots, fold + full page (needs playwright);
 #         unreachable photo urls are swapped for labeled dark stand-ins
@@ -193,6 +196,9 @@ def director_prompt(ctx: Dict[str, Any]) -> str:
     kwargs = dict(inventory=inventory, discovery=disc, facts=facts)
     if "vertical" in spec_author.build_user_prompt.__code__.co_varnames:
         kwargs["vertical"] = vertical
+    if "concept" in spec_author.build_user_prompt.__code__.co_varnames:
+        import site_concept
+        kwargs["concept"] = site_concept.brief_block(site_concept.attach(ctx))
     return spec_author.build_user_prompt(dossier, plan, **kwargs)
 
 
@@ -206,7 +212,7 @@ def builder_prompt(ctx: Dict[str, Any], spec_text: str) -> str:
     return builder_v2.build_user_prompt(spec_text, real_data(ctx))
 
 
-def validate(ctx: Dict[str, Any], html: str) -> Dict[str, Any]:
+def validate(ctx: Dict[str, Any], html: str, spec_text: str = "") -> Dict[str, Any]:
     import builder_v2
     bid = (ctx.get("business") or {}).get("id") or ""
     rd = real_data(ctx)
@@ -229,11 +235,26 @@ def validate(ctx: Dict[str, Any], html: str) -> Dict[str, Any]:
             out[name] = fn(doc, rd) if fn.__code__.co_argcount >= 2 else fn(doc)
         except Exception as e:
             out[name] = [f"(validator error: {e!r})"]
+    try:
+        import craft_laws
+        _, out["typography_fixes"] = craft_laws.typographer(doc)
+        out["craft_floor"] = craft_laws.check_html(doc, rd)
+    except Exception as e:
+        out["craft_floor"] = [f"(craft floor error: {e!r})"]
+    try:
+        import site_concept
+        sheet = site_concept.parse_sheet(spec_text) if spec_text else {}
+        out["concept_sheet"] = sheet
+        out["concept_floor"] = site_concept.check_page(doc, sheet)
+    except Exception as e:
+        out["concept_floor"] = [f"(concept check error: {e!r})"]
     _, n = builder_v2.annotate_editability(doc)
     out["editability_stamps_added_by_annotator"] = n
     out["bytes"] = len(doc.encode("utf-8"))
     out["violations_total"] = sum(len(v) for k, v in out.items()
                                   if k.startswith("check_") or k == "armor_violations")
+    out["soft_total"] = (len(out.get("check_stand_ins") or []) + len(out.get("craft_floor") or [])
+                         + len(out.get("concept_floor") or []))
     return out
 
 
@@ -289,16 +310,50 @@ def shoot(path: str, out_dir: str) -> List[str]:
     return written
 
 
+def objects_sheet(out_dir: str, shoot_it: bool = False) -> List[str]:
+    """The object library's contact sheet: every object in every theme,
+    photo urls swapped for labeled stand-ins (the examples point nowhere)."""
+    import site_objects
+    html = site_objects.contact_sheet_html(site_objects.CONTACT_THEMES)
+    html = re.sub(r"https://example\.com/([a-z]+)\.jpg",
+                  lambda m: _stand_in(m.group(1), 800, 1000), html)
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "objects.html")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(html)
+    written = [path]
+    if shoot_it:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            b = p.chromium.launch()
+            for w in (1440, 390):
+                pg = b.new_page(viewport={"width": w, "height": 900})
+                pg.goto("file:///" + os.path.abspath(path).replace(os.sep, "/"))
+                pg.wait_for_timeout(1500)
+                f = os.path.join(out_dir, f"objects_{w}.png")
+                pg.screenshot(path=f, full_page=True)
+                written.append(f)
+            b.close()
+    return written
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Review a site build with zero model calls.")
-    ap.add_argument("command", choices=("director", "builder", "realdata", "validate", "shoot"))
+    ap.add_argument("command", choices=("director", "builder", "realdata", "validate",
+                                         "shoot", "objects"))
     ap.add_argument("page", nargs="?", help="page.html for validate / shoot")
     ap.add_argument("--fixture", help="JSON fixture (see scripts/fixtures/)")
     ap.add_argument("--business", help="live business id (needs SUPABASE env)")
     ap.add_argument("--spec", help="blueprint text file for `builder`")
     ap.add_argument("--system", action="store_true", help="also print the system prompt")
-    ap.add_argument("--out", default="bench_out", help="output dir for `shoot`")
+    ap.add_argument("--out", default="bench_out", help="output dir for `shoot` / `objects`")
+    ap.add_argument("--shoot", action="store_true", help="`objects`: also take screenshots")
     args = ap.parse_args(argv)
+
+    if args.command == "objects":
+        for f in objects_sheet(args.out, shoot_it=args.shoot):
+            print(f)
+        return 0
 
     if args.command == "shoot":
         if not args.page:
@@ -331,7 +386,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.page:
             sys.exit("validate needs page.html")
         html = open(args.page, encoding="utf-8").read()
-        print(json.dumps(validate(ctx, html), indent=1, ensure_ascii=False))
+        spec = open(args.spec, encoding="utf-8").read() if args.spec else ""
+        print(json.dumps(validate(ctx, html, spec), indent=1, ensure_ascii=False))
     return 0
 
 

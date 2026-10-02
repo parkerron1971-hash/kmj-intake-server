@@ -374,6 +374,7 @@ async def send_via_resend(
     reply_to: Optional[str],
     attachments: Optional[List[Dict[str, Any]]] = None,
     business_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Low-level Resend client. Raises on API error.
 
@@ -466,6 +467,7 @@ async def send_via_resend(
             headers={
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
+                **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
             },
             json=payload,
         )

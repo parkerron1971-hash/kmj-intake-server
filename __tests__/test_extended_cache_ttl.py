@@ -113,7 +113,14 @@ class TestTheDowngradeIsTheSafetyNet:
         handler — otherwise the first practitioner after a deploy still
         loses their turn."""
         src = inspect.getsource(cos._call_claude)
-        assert src.count("return await _call_claude(") == 2
+        # One per path (streaming and plain), each right after the
+        # downgrade. (The refusal fallback re-calls too, on another model;
+        # it is not this retry.)
+        import re
+        retries = re.findall(
+            r'globals\(\)\["_extended_cache_ok"\] = False.{0,400}?return await _call_claude\(',
+            src, re.S)
+        assert len(retries) == 2
 
 
 class TestTheShapeStaysHonest:

@@ -17,6 +17,17 @@ from typing import Any, Dict, Optional
 import giving_statements as gs
 
 
+def _authorize(biz):
+    from chief_of_staff import _TURN_USER_ID
+    from giving_records import require_finance
+    from types import SimpleNamespace
+    user_id = _TURN_USER_ID.get()
+    if not user_id:
+        from fastapi import HTTPException
+        raise HTTPException(403, "A signed-in finance user must request giving statements.")
+    require_finance(biz["id"], SimpleNamespace(id=user_id))
+
+
 def _fail(action_type: str, msg: str) -> Dict[str, Any]:
     return {"type": action_type, "result": f"failed: {msg}",
             "label": msg[:80], "nav": None}
@@ -40,6 +51,7 @@ def _year(action: Dict[str, Any]) -> int:
 async def handle_giving_statement(client, biz, action) -> Dict[str, Any]:
     """One donor's annual contribution statement."""
     from chief_of_staff import _validate_contact, _nav
+    _authorize(biz)
     contact = await _validate_contact(client, biz["id"], action.get("contact_id"))
     if not contact:
         return _fail("giving_statement",
@@ -78,6 +90,7 @@ async def handle_giving_statement(client, biz, action) -> Dict[str, Any]:
 
 async def handle_giving_statements_run(client, biz, action) -> Dict[str, Any]:
     """Every donor's totals for a tax year — the January mailing."""
+    _authorize(biz)
     year = _year(action)
     run = await asyncio.to_thread(
         gs.statements_for_year, biz["id"], year,

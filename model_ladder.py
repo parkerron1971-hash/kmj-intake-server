@@ -146,7 +146,7 @@ def supports_sampling(model: str) -> bool:
 
 # Families that REJECT a forced tool_choice (`any` / `tool` → 400). Only
 # `auto` and `none` are accepted there.
-_NO_FORCED_TOOL_MARKERS = ("opus-5-5", "fable-5-1", "mythos-5-1")
+_NO_FORCED_TOOL_MARKERS = ("opus-5-5", "fable-5-1", "mythos-5-1", "sonnet-5-5")
 
 
 def supports_forced_tool_choice(model: str) -> bool:
@@ -174,6 +174,24 @@ def effort_kwargs(model: str, effort: Optional[str]) -> dict:
     if not effort or not supports_effort(model):
         return {}
     return {"output_config": {"effort": effort}}
+
+
+def thinking_off_kwargs(model: str) -> dict:
+    """The lowest thinking setting a model accepts, as request fields, or
+    `{}` where thinking cannot be turned off (the caller then bounds it
+    with a low effort instead).
+
+    Sonnet 5 and older Sonnets take `{"type": "disabled"}`. Sonnet 5.5
+    rejects that with a 400 and takes `{"type": "between_tools"}` instead
+    (no extended thinking; notes between tool calls come back as thinking
+    blocks), which no other model accepts. Opus 5.5 / Fable / Mythos cannot
+    turn thinking off at all."""
+    m = (model or "").lower()
+    if "sonnet-5-5" in m:
+        return {"thinking": {"type": "between_tools"}}
+    if "sonnet" in m:
+        return {"thinking": {"type": "disabled"}}
+    return {}
 
 
 def sampling_kwargs(model: str, temperature: Optional[float]) -> dict:
