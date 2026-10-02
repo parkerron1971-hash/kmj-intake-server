@@ -116,6 +116,24 @@ def test_late_in_the_week_plans_the_next_one():
     assert week_of.isoformat() == '2026-09-28' and len(times) == 3
 
 
+def test_thursday_morning_plans_next_week_on_purpose():
+    # Until 2026-10-02 Thursday 7:00 to 10:00 still planned this week's Thursday and Friday,
+    # and next week happened to be planned at 10:00. Now Thursday morning is the plan.
+    week_of, times = e.week_window(at(2026, 10, 1, 7, 5))
+    assert week_of.isoformat() == '2026-10-05' and len(times) == 5
+    week_of, times = e.week_window(at(2026, 10, 1, 6))         # before the run hour: the rest of this week
+    assert week_of.isoformat() == '2026-09-28' and len(times) == 2
+    week_of, _ = e.week_window(at(2026, 10, 4, 20))            # Sunday evening: the week starting tomorrow
+    assert week_of.isoformat() == '2026-10-05'
+
+
+def test_the_next_plan_is_thursday_at_seven():
+    assert e.next_run(MONDAY_8AM) == datetime(2026, 10, 1, 7, tzinfo=ET).isoformat()
+    assert e.next_run(at(2026, 10, 2, 9)) == datetime(2026, 10, 8, 7, tzinfo=ET).isoformat()
+    assert e.relation('2026-10-05', at(2026, 10, 2, 9)) == 'next week'
+    assert e.relation('2026-09-28', at(2026, 10, 2, 9)) == 'this week'
+
+
 def slots_for(sig, facts=FACTS, now=MONDAY_8AM):
     d = e.diagnose(sig)
     return d, e.pick_plays(d, sig, facts, e.week_window(now)[1])
@@ -270,6 +288,12 @@ def world(monkeypatch, model):
     async def asset_row(path):
         return [a for a in s['assets'].values() if a['id'] in path]
     s['asset_row'] = asset_row
+    s['told'] = []
+    import marketing_desk
+
+    async def tell(what, run_id, reason=None):
+        s['told'].append((what, str(run_id), reason))
+    monkeypatch.setattr(marketing_desk, 'tell_owner_about_plan', tell)
     return s
 
 
@@ -420,13 +444,14 @@ def test_when_every_caption_breaks_a_rule_nothing_is_saved(world, model):
     assert world['run']['status'] == 'failed' and len(world['run']['dropped']) == 5
 
 
-def test_the_scheduled_tick_waits_for_monday_morning(monkeypatch):
+def test_the_scheduled_tick_runs_in_the_daytime_every_day(monkeypatch):
     calls = []
 
     async def fake(trigger, now=None):
         calls.append(trigger)
     monkeypatch.setattr(e, 'run_week', fake)
-    for when, expected in ((at(2026, 9, 28, 6), 0), (at(2026, 9, 28, 7, 5), 1), (at(2026, 10, 1, 9), 1), (at(2026, 10, 2, 9), 0)):
+    for when, expected in ((at(2026, 9, 28, 6), 0), (at(2026, 9, 28, 7, 5), 1), (at(2026, 10, 1, 9), 1),
+                           (at(2026, 10, 2, 9), 1), (at(2026, 10, 4, 3), 0)):
         calls.clear()
         monkeypatch.setattr(m, 'now', lambda when=when: when)
         run(e.engine_tick())
@@ -436,6 +461,33 @@ def test_the_scheduled_tick_waits_for_monday_morning(monkeypatch):
     calls.clear()
     run(e.engine_tick())
     assert calls == []
+
+
+def test_a_scheduled_week_tells_the_owner_once(world, model):
+    run(e.run_week('scheduled'))
+    assert world['told'] == [('succeeded', str(e.run_id_for(e.week_window(MONDAY_8AM)[0])), None)]
+    world['told'].clear()
+    world['run'] = {}
+    run(e.run_week('manual'))
+    assert world['told'] == []           # the owner started it on the desk and is watching
+
+
+def test_a_failing_week_tells_the_owner_on_its_first_attempt_only(world, model):
+    world['channels'] = []
+    out = run(e.run_week('scheduled'))
+    assert out['status'] == 'skipped' and world['told'][0][0] == 'skipped' and 'Connect' in world['told'][0][2]
+    world['told'].clear()
+    world['run']['attempts'] = 2
+    run(e.run_week('scheduled'))
+    assert world['told'] == []
+
+
+def test_planning_is_read_from_the_run_row():
+    now = MONDAY_8AM
+    assert e.is_planning({'status': 'running', 'created_at': (now - timedelta(minutes=3)).isoformat()}, now)
+    assert not e.is_planning({'status': 'running', 'created_at': (now - timedelta(minutes=20)).isoformat()}, now)
+    assert not e.is_planning({'status': 'succeeded', 'created_at': now.isoformat()}, now)
+    assert not e.is_planning(None, now)
 
 
 # ── facts ─────────────────────────────────────────────────────────────

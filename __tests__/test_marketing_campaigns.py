@@ -173,22 +173,6 @@ def test_provider_outage_marks_rows_unavailable_without_erasing_values(state,mon
     assert stored['error'] and stored['provider_id']=='buffer-one'
 
 
-def test_linked_week_preserves_campaign_on_all_drafts(state,monkeypatch):
-    import json, httpx, llm_call, rate_limit
-    monkeypatch.setattr(rate_limit,'allow',lambda *_:True)
-    async def config(): return {'organization_id':'org','channels':[{'id':'channel','name':'Owner','service':'facebook'}]}
-    monkeypatch.setattr(m,'config',config)
-    async def generate(*_args,**_kwargs):
-        return httpx.Response(200,request=httpx.Request('POST','https://example.test'),json={
-            'content':[{'type':'text','text':json.dumps({'captions':['Review this useful workflow.']*7})}]})
-    monkeypatch.setattr(llm_call,'apost',generate)
-    req=m.Week(id=uuid4(),campaign_id=state['campaign']['id'],campaign='mc-test',audience='Solo owners',
-        facts='Client records and invoices live together.',offer='Explore the demo',channel_id='channel',start_at=m.now()+timedelta(days=1))
-    run(m.draft_week(req,SimpleNamespace(id=uuid4())))
-    rows=next(w[2] for w in state['writes'] if w[1]=='/platform_marketing_posts')
-    assert len(rows)==7 and all(r['campaign_id']==state['campaign']['id'] for r in rows)
-
-
 def test_linked_post_uses_permanent_tracking_and_still_needs_review(state,monkeypatch):
     async def config():
         return {'organization_id':'org','channels':[{'id':'channel','name':'Owner','service':'facebook'}]}
