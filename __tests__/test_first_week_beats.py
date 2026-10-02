@@ -41,6 +41,8 @@ class _Mail:
 
 @pytest.fixture
 def fake(monkeypatch):
+    from lifecycle_delivery_fake import install_delivery_fake
+    install_delivery_fake(monkeypatch)
     fb = FakeSB()
     monkeypatch.setattr(sb_clients, "sb_get_as_service", fb.get)
     monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda p, b, prefer="rep": fb.post(p, b, prefer))
@@ -199,6 +201,9 @@ class TestWeekClause:
         assert "FIRST WEEK, DAY 3" in prompt
         assert "Yesterday you brought" in prompt
         assert "THIS BUSINESS IS BRAND NEW" not in prompt
+        # "no list" and the fallback's 3-4 step list never ride together
+        # (the real week_day computation: test_chief_first_words).
+        assert "LAUNCH GREETING" not in prompt
 
     def test_first_run_wins_over_the_week_read(self):
         prompt = cos._build_system_prompt(concierge_ctx(), True, time_of_day="morning",

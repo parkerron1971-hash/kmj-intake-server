@@ -583,3 +583,213 @@ def test_run_carries_the_eyes_reason_onto_the_report(monkeypatch):
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out["html"] and out["report"]["vision"]["ran"] is False
     assert "no screenshots" in out["report"]["vision"]["reason"]
+
+
+# ─── THE MEASURED RENDER (2026-10-01, the concept-layer plan) ─────────
+
+def test_role_navigation_counts_as_a_nav():
+    rd = "CONTACT FORM ENDPOINT (the form's action): https://e/x"
+    page = ('<div role="navigation"><a href="#a">A</a></div>'
+            '<form action="https://e/x"></form><footer></footer>')
+    assert not any("nav" in p for p in v2.check_coverage(page, rd))
+    assert any("nav" in p for p in v2.check_coverage("<form></form><footer></footer>", rd))
+
+
+def test_render_findings_name_only_certain_defects():
+    measures = {
+        "390": {"overflow_x": True, "scroll_width": 612, "empty_headings": 1,
+                "overlaps": [{"a": 'h2.title "Our work"', "b": 'p.lede "We cut"', "y": 900},
+                             {"a": 'img.hero ""', "b": 'h1 "Cut sharp"', "y": 0}]},
+        "1440": {"overflow_x": False, "scroll_width": 1440, "empty_headings": 0,
+                 "overlaps": []},
+    }
+    found = v2.render_findings(measures)
+    joined = " ".join(found)
+    assert "612px wide" in joined and "sideways" in joined
+    assert "heading(s) render with no text" in joined
+    assert "h2.title" in joined and "data-overlap-ok" in joined
+    assert "img.hero" not in joined, "a photo behind a headline is usually layering"
+    assert v2.render_findings(None) == [] and v2.render_findings({}) == []
+
+
+def test_walk_measurements_are_read_once_per_document():
+    v2._record_measure("<html>a</html>", 390, {"overflow_x": True, "scroll_width": 500})
+    assert v2.walk_measurements("<html>b</html>") is None
+    got = v2.walk_measurements("<html>a</html>")
+    assert got == {"390": {"overflow_x": True, "scroll_width": 500}}
+    assert v2.walk_measurements("<html>a</html>") is None
+
+
+def test_a_measured_defect_earns_the_vision_repair_without_a_verdict(monkeypatch):
+    """The eyes may not answer (no key, cut reply), but a page measured as
+    scrolling sideways on a phone still gets its repair round."""
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    def _eyes(doc, spec, biz, why=None):
+        v2._record_measure(doc, 390, {"overflow_x": True, "scroll_width": 700,
+                                      "empty_headings": 0, "overlaps": []})
+        if why is not None:
+            why["reason"] = "no ANTHROPIC_API_KEY"
+        return None
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+    monkeypatch.setattr(v2, "inspect_with_eyes", _eyes)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"]
+    assert out["report"]["vision"]["ran"] is False
+    assert out["report"]["vision"]["measured"]
+    assert len(calls) == 2, "author + one repair for the measured defect"
+    assert "MEASURED IN THE RENDER" in calls[1] and "700px wide" in calls[1]
+    assert out["report"]["vision"].get("repaired") is True
+
+
+def test_the_system_prompt_teaches_layering_on_purpose():
+    assert "data-overlap-ok" in v2._SYSTEM
+    # 17,458 chars with all thirteen move primitives inline (before
+    # 2026-10-01); the rules now fit well under that, moves arrive per build.
+    assert len(v2._SYSTEM) < 14000, "the system prompt is growing back toward the old 17k"
+
+
+# ─── THE CRAFT FLOOR (2026-10-01, the concept-layer plan) ─────────────
+
+def test_the_type_floor_is_a_numbered_rule_in_order():
+    s = v2._SYSTEM
+    assert s.index("15. FILLED SPACE") < s.index("16. THE TYPE FLOOR") < s.index("CRAFT FLOOR:")
+    for must in ("one <h1>", "14px", "11px", "tabular-nums", "text-wrap: balance",
+                 "font: inherit", "opsz"):
+        assert must in s, must
+
+
+def test_the_typographer_rides_the_mechanical_armor(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    quoted = '<p>"Walk-ins welcome," the sign says. Open 10am - 7pm.</p>'
+    monkeypatch.setattr(v2, "_call", lambda s, u, b, spend=None: _law_passing_doc(endpoint, quoted))
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert "“Walk-ins welcome,”" in out["html"]
+    assert "10am–7pm" in out["html"], "the spaced range is set, not flagged"
+    assert out["report"]["mechanical"]["typography_fixes"] > 0
+    assert not out["report"]["violations"]
+
+
+def test_craft_misses_earn_the_repair_but_never_the_fallback(monkeypatch):
+    """Two h1s and an image with no alt are quality defects, not lies:
+    one surgical round, and the page ships even if they survive it."""
+    endpoint = "https://api.example/contact/biz-1"
+    sloppy = '<h1>Second headline</h1><img src="https://x/a.jpg">'
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint, sloppy)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"], "a craft miss never sends the build to the fallback"
+    assert len(calls) == 2
+    assert "2 <h1>" in calls[1] and "alt attribute" in calls[1]
+    craft = " ".join(out["report"]["craft"])
+    assert "2 <h1>" in craft, "what survived the repair is reported"
+
+
+def test_craft_render_findings_ride_the_measured_list(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    def _eyes(doc, spec, biz, why=None):
+        v2._record_measure(doc, 390, {"overflow_x": False, "scroll_width": 390,
+                                      "empty_headings": 0, "overlaps": []})
+        v2._record_measure(doc, 390, {"small_text": [{"label": 'p "Over five weeks"', "px": 9}]})
+        return {"verdict": "ship", "violations": []}
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
+    monkeypatch.setattr(v2, "inspect_with_eyes", _eyes)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    measured = " ".join(out["report"]["vision"]["measured"])
+    assert "under 14px" in measured, "merged from the second measurement"
+    assert len(calls) == 2 and "MEASURED IN THE RENDER" in calls[1]
+
+
+# ─── THE OBJECT LIBRARY (2026-10-01, the concept-layer plan) ──────────
+
+def test_named_objects_arrive_with_their_source():
+    import site_objects
+    spec = ("0. CONCEPT\nINTENSITY: world\nOBJECTS: tear-off tickets (paper), seal (metal)\n"
+            "1. OVERVIEW\nA take-a-number counter.")
+    user = v2.build_user_prompt(spec, "BUSINESS: x")
+    assert site_objects.OBJECTS["ticket"].css in user
+    assert site_objects.OBJECTS["seal"].css in user
+    assert site_objects.OBJECTS["letter"].css not in user
+    assert user.index("THE APPROVED SPEC") < user.index("WORKING SOURCE") < user.index("THE REAL DATA")
+    plain = v2.build_user_prompt("0. CONCEPT\nINTENSITY: plain\n1. OVERVIEW\nx", "BUSINESS: x")
+    assert "WORKING SOURCE" not in plain
+
+
+def test_url_is_allowed_only_for_the_library_grain():
+    assert "the one exception: the object library's own paper grain" in v2._SYSTEM
+
+
+def test_the_page_ceiling_is_450_kb():
+    """Kevin, 2026-10-01: richer pages with library objects must not fall
+    to the fallback engine for size alone."""
+    assert v2.DOC_MAX_BYTES == 450 * 1024
+    body = "<p>" + ("x" * 1000) + "</p>"
+    doc = "<!DOCTYPE html><html><body>" + body * 400 + "</body></html>"
+    assert 300 * 1024 < len(doc.encode()) < 450 * 1024
+    assert v2._parse_doc(doc) is not None
+    assert v2._parse_doc(doc.replace("</body>", body * 80 + "</body>")) is None
+
+
+# ─── THE CONCEPT (2026-10-01, the concept-layer plan) ─────────────────
+
+_WORLD_SPEC = ("0. THE CONCEPT\nINTENSITY: world\nSCOPE: site\n"
+               "IDEA: The shop is a take-a-number counter.\n"
+               "VOCABULARY: Book -> Take a number\n"
+               "OBJECTS: ticket (paper), letterboard (paper)\n"
+               "1. OVERVIEW\nA counter.")
+
+
+def test_rule_17_teaches_the_concept_and_the_plain_word():
+    s = v2._SYSTEM
+    assert "17. THE CONCEPT" in s and "plain word" in s
+    assert s.index("16. THE TYPE FLOOR") < s.index("17. THE CONCEPT") < s.index("CRAFT FLOOR:")
+
+
+def test_a_page_that_ignores_its_concept_earns_the_repair(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2(_WORLD_SPEC, {}, "biz-1")
+    assert out["html"], "a concept miss never sends the build to the fallback"
+    assert out["report"]["concept"]["intensity"] == "world"
+    assert len(calls) == 2 and "CONCEPT:" in calls[1]
+    assert "ticket" in calls[1] and "letterboard" in calls[1]
+    assert "WORKING SOURCE" in calls[0], "the named objects arrived with the author's brief"

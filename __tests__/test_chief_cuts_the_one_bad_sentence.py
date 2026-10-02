@@ -46,7 +46,7 @@ def test_the_bad_sentence_is_cut_and_the_advice_delivered():
     out, meta = _finalize(DRAFT, _review(), repairer)
     assert "$750" not in out
     assert "I'd price seats at $797." in out and "wider list" in out
-    assert "left out one figure" in out and "try again" not in out
+    assert "left out" not in out and "try again" not in out
     assert meta["status"] == "trimmed" and meta["cuts"] == 1
     repairer.assert_not_awaited()
 

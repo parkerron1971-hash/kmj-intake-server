@@ -66,7 +66,7 @@ def _owner_or_accountant(biz: str, user: AuthedUser) -> Dict[str, Any]:
     what the accountant collaborator exists for; allow active accountants
     read access alongside the owner."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,type,owner_id,settings&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) == str(user.id):
@@ -98,9 +98,11 @@ def _owner_or_reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
     Writes (budgets PUT, sends) and the TIN-decrypting 1099 draft PDF
     stay owner-only via _owner."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,type,owner_id,settings&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
+    from giving_records import require_ministry_finance
+    require_ministry_finance(biz, user, rows[0])
     if str(rows[0].get("owner_id")) == str(user.id):
         return rows[0]
     from business_collaborators_router import is_active_accountant
@@ -702,6 +704,8 @@ def trust_reconciliation(biz: str, as_of: Optional[str] = None,
 def donors(biz: str, period: str = "this_year",
            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    from giving_records import require_finance
+    require_finance(biz, user)
     biz_row = _owner_or_reader(biz, user)
     billing_limits.require_feature(biz, "vertical_reports")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
@@ -916,6 +920,9 @@ def export(biz: str, report: str, format: str = "csv",
            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
            user: AuthedUser = Depends(require_user)) -> Response:
     biz_row = _owner_or_reader(biz, user)
+    if report == "donors":
+        from giving_records import require_finance
+        require_finance(biz, user)
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
     # Exports gate exactly like their screens; Starter reports (P&L,

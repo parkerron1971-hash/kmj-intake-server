@@ -67,3 +67,5 @@ hiero-sdk-python>=0.1.0
 # MX/DMARC records itself so the UI can show expected vs FOUND instead
 # of Resend's bare "pending". Pure Python.
 dnspython>=2.6.0
+# craft_laws: likely typos in page copy (concept-layer plan, 2026-10-01)
+pyspellchecker==0.9.0
