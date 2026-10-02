@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("setup_brief")
@@ -79,9 +79,10 @@ EARLIEST_LOCAL_HOUR = 5
 LATEST_LOCAL_HOUR = 11
 
 # When lifecycle_emails.week_beats_tick runs (kmj_intake_automation,
-# job id "week_beats"). A test pins this to the registered job, so the
-# overlap check cannot drift away from the email it avoids.
-WEEK_BEATS_UTC = (14, 45)
+# job id "week_beats"): hourly, at this minute past each UTC hour (#1099
+# moved it from once a day at 14:45). A test pins this to the registered
+# job, so the overlap check cannot drift away from the email it avoids.
+WEEK_BEATS_MINUTE = 45
 
 # Catalog items a morning brief never leads with. QuickBooks is only for
 # people who already keep their books there, and Chief is told never to
@@ -221,9 +222,22 @@ def _in_window_day(biz: Dict[str, Any], now: datetime) -> Tuple[int, Optional[da
 # ─── The day-three and day-seven emails ──────────────────────────────
 
 def _next_beat_tick(now: datetime) -> datetime:
-    hour, minute = WEEK_BEATS_UTC
-    at = datetime.combine(now.date(), time(hour, minute), tzinfo=timezone.utc)
-    return at if at > now else at + timedelta(days=1)
+    """The first week_beats tick strictly after `now`."""
+    now = now.astimezone(timezone.utc)
+    at = now.replace(minute=WEEK_BEATS_MINUTE, second=0, microsecond=0)
+    return at if at > now else at + timedelta(hours=1)
+
+
+def _beat_landing(biz: Dict[str, Any], now: datetime, from_days: float) -> Optional[datetime]:
+    """The tick that will send a beat whose window opens `from_days` after
+    the business was created: the first tick after both now and the
+    window's start. None when the business's age is unknown."""
+    import lifecycle_emails as le
+    age = le._age_days(biz, now)
+    if age is None:
+        return None
+    opens = now + timedelta(days=max(0.0, from_days - age))
+    return _next_beat_tick(opens - timedelta(microseconds=1))
 
 
 def week_beat_today(biz: Dict[str, Any], now: Optional[datetime] = None) -> Optional[str]:
@@ -255,17 +269,21 @@ def week_beat_today(biz: Dict[str, Any], now: Optional[datetime] = None) -> Opti
         if sent and sent.astimezone(tz).date() == today:
             return kind
 
-    tick = _next_beat_tick(now)
-    if tick.astimezone(tz).date() != today:
-        return None
-    kind = le._classify_week(biz, tick)
-    if not kind:
-        return None
-    # Grandfathered owners never get the week beats, so there is no
-    # email to make room for.
-    if le._is_grandfathered(str(biz.get("owner_id") or "")):
-        return None
-    return kind
+    # The sweep is hourly, so a beat goes out on the first tick after its
+    # window opens. Find that tick for each beat, and ask the email's own
+    # classifier whether that tick sends it.
+    for kind, opens in (("day_three", le.DAY_THREE_FROM), ("day_seven", le.DAY_SEVEN_FROM)):
+        tick = _beat_landing(biz, now, opens)
+        if not tick or tick.astimezone(tz).date() != today:
+            continue
+        if le._classify_week(biz, tick) != kind:
+            continue
+        # Grandfathered owners never get the week beats, so there is no
+        # email to make room for.
+        if le._is_grandfathered(str(biz.get("owner_id") or "")):
+            return None
+        return kind
+    return None
 
 
 # ─── The step ────────────────────────────────────────────────────────

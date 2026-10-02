@@ -523,6 +523,19 @@ def test_the_local_morning_tick_is_registered_on_the_half_hour():
     assert _jobs()["notif_morning_brief"]["kw"]["minute"] != 35
 
 
+def test_the_hourly_sweep_lands_the_email_within_the_hour_of_its_window(probes):
+    """week_beats runs hourly (#1099): the day-three email goes on the
+    first :45 tick after the business turns 2.5 days old."""
+    # Turns 2.5 days old at 17:20 UTC today: the 17:45 tick sends it.
+    later_today = _biz(2.5 - (4 + 15 / 60) / 24)
+    assert sbf._beat_landing(later_today, NOW, le.DAY_THREE_FROM) == NOW.replace(hour=17, minute=45)
+    assert sbf.week_beat_today(later_today, NOW) == "day_three"
+    # Turns 2.5 days old at 01:05 UTC tomorrow: not today's email.
+    tomorrow = _biz(2.5 - 12 / 24)
+    assert sbf.week_beat_today(tomorrow, NOW) is None
+
+
 def test_the_email_overlap_check_reads_the_email_schedule():
     job = _jobs()["week_beats"]
-    assert (job["kw"]["hour"], job["kw"]["minute"]) == sbf.WEEK_BEATS_UTC
+    assert job["trigger"] == "cron" and "hour" not in job["kw"]
+    assert job["kw"]["minute"] == sbf.WEEK_BEATS_MINUTE
