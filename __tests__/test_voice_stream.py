@@ -217,3 +217,24 @@ def test_relay_rejects_a_missing_hello(relay):
         msg = json.loads(ws.receive_text())
         assert msg["type"] == "closed" and msg["reason"].startswith("expected hello")
     assert not _FakeUpstream.instances
+
+
+@pytest.mark.parametrize("kind,extra,expected", [
+    ("input_audio_buffer.speech_started", {}, {"type": "speech_started"}),
+    ("input_audio_buffer.speech_stopped", {}, {"type": "speech_stopped"}),
+    ("input_audio_buffer.committed", {"previous_item_id": "prior"}, {"type": "committed", "previous_item_id": "prior"}),
+    ("conversation.item.input_audio_transcription.delta", {"delta": "yes"}, {"type": "delta", "text": "yes"}),
+    ("conversation.item.input_audio_transcription.completed", {"transcript": "yes"}, {"type": "final", "text": "yes"}),
+])
+def test_transcript_identity_survives_relay(kind, extra, expected):
+    assert vs.map_event({"type": kind, "item_id": "utterance-2", **extra}) == {**expected, "item_id": "utterance-2"}
+
+
+def test_first_manual_commit_has_identity_without_a_vad_start():
+    assert vs.map_event({"type": "input_audio_buffer.committed", "item_id": "manual", "previous_item_id": None}) == {
+        "type": "committed", "item_id": "manual", "previous_item_id": None}
+
+
+def test_invalid_identity_is_not_forwarded():
+    assert vs.map_event({"type": "input_audio_buffer.committed", "item_id": {"unexpected": "object"}}) is None
+    assert vs.map_event({"type": "conversation.item.input_audio_transcription.completed", "item_id": [], "transcript": "yes"}) == {"type": "final", "text": "yes"}

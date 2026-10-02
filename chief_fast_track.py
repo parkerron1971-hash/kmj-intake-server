@@ -672,7 +672,10 @@ class TwoTrack:
             rec.slo_applies = False
         # "Let me check…" in front of "thanks" or "bye" reads as a machine that
         # did not listen; those get the one-word lead at the deadline instead.
-        self.model_opener = complexity.kind not in ("social", "farewell") and not self.system_turn
+        import chief_call_feedback
+        self.feedback_reply = chief_call_feedback.for_request(req)
+        self.model_opener = (complexity.kind not in ("social", "farewell") and not self.system_turn
+                             and self.feedback_reply is None)
         self.holder.parallel_voice = (self.voice and self.model_opener and not passive
                                       and route.lane == mr.LANE_FULL and not route.ambiguous
                                       and not self.client_opener and _on("CHIEF_ROUTER_OPENER"))
@@ -794,7 +797,8 @@ class TwoTrack:
 
     def _lead_allowed(self) -> bool:
         return (_on("CHIEF_ROUTER_LOCAL_LEAD") and not self.lead_text
-                and not self.client_opener and not self.system_turn and bool(self._lead()))
+                and not self.client_opener and not self.system_turn
+                and self.feedback_reply is None and bool(self._lead()))
 
     def _joined(self, text: str) -> str:
         """Model text that follows what the first track already said."""

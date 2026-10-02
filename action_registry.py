@@ -636,6 +636,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "lane_wallet": {**_w("C", "look at merchant pages, prepare owner-bound Lane purchase drafts and saved merchant links after the owner's go-ahead, and read saved status; approval and checkout only in Wallet"), "chief_only": True},
     "agentcard_wallet": {**_w("C", "prepare a customer-owned Agentcard cart or check status; confirmation and payment only in Wallet"), "chief_only": True},
     "link_wallet_pilot":    {**_w("C", "private owner-only Link authorization and simulated payment rehearsal; never live spending"), "chief_only": True},
+    "get_weather": {**_r("reads timestamped public NWS observations and forecasts for Chief; external network requests are not exposed to outside agents", sensitive=True), "chief_only": True},
     "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
     "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),
     "stop_errand":          _w("A", "stops further browser actions; does not reverse a submitted order"),

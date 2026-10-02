@@ -136,16 +136,26 @@ def map_event(ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Translate an upstream event into the small vocabulary the browser
     speaks. None = nothing the client needs to hear."""
     t = ev.get("type") or ""
+    # Completion can arrive out of order; preserve upstream identity so
+    # the browser can distinguish replay from a repeated spoken phrase.
+    item_id = ev.get("item_id")
+    identity = {"item_id": item_id} if isinstance(item_id, str) and 0 < len(item_id) <= 256 else {}
+    if t == "input_audio_buffer.committed":
+        if not identity:
+            return None
+        previous = ev.get("previous_item_id")
+        return {"type": "committed", **identity,
+                "previous_item_id": previous if isinstance(previous, str) and len(previous) <= 256 else None}
     if t == "session.updated":
         return {"type": "ready"}
     if t == "input_audio_buffer.speech_started":
-        return {"type": "speech_started"}
+        return {"type": "speech_started", **identity}
     if t == "input_audio_buffer.speech_stopped":
-        return {"type": "speech_stopped"}
+        return {"type": "speech_stopped", **identity}
     if t == "conversation.item.input_audio_transcription.delta":
-        return {"type": "delta", "text": ev.get("delta") or ""}
+        return {"type": "delta", "text": ev.get("delta") or "", **identity}
     if t == "conversation.item.input_audio_transcription.completed":
-        return {"type": "final", "text": (ev.get("transcript") or "").strip()}
+        return {"type": "final", "text": (ev.get("transcript") or "").strip(), **identity}
     if t == "conversation.item.input_audio_transcription.failed":
         err = ev.get("error") or {}
         return {"type": "error", "message": err.get("message") or "transcription failed"}

@@ -8,7 +8,7 @@ conditional PATCH, never auto-retry external work after a lost worker.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from urllib.parse import quote
 from uuid import UUID, uuid4
@@ -130,6 +130,30 @@ class RotateBody(StrictBody):
     revision: int = Field(ge=1)
 
 
+class ConnectionTestBody(StrictBody):
+    business_id: UUID
+    request_id: UUID
+
+
+def connection_state(p: dict, key: dict | None) -> dict:
+    """Report observed authentication, never infer a running worker from a key."""
+    state = "waiting"
+    last_seen = (key or {}).get("last_used_at")
+    if not key or key.get("revoked_at"):
+        state = "revoked"
+    elif key.get("expires_at") and datetime.fromisoformat(key["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+        state = "expired"
+    elif not p.get("enabled"):
+        state = "paused"
+    elif last_seen:
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(last_seen.replace("Z", "+00:00"))).total_seconds()
+            state = "seen_recently" if 0 <= age <= 120 else "inactive"
+        except (ValueError, TypeError):
+            last_seen = None
+    return {"connection_status": state, "last_seen_at": last_seen}
+
+
 def tool_choices() -> list[dict]:
     import mcp_server
     # Proposals, spend, sends and other bots' assignments cannot be delegated.
@@ -160,12 +184,12 @@ async def overview(business_id: UUID, user: AuthedUser = Depends(require_user)):
     await owned(business_id, user)
     bid = str(business_id)
     def read():
-        keys = {k["jti"]: k for k in rows(f"/mcp_tokens?business_id=eq.{bid}&select=jti,expires_at,revoked_at")}
+        keys = {k["jti"]: k for k in rows(f"/mcp_tokens?business_id=eq.{bid}&select=jti,expires_at,revoked_at,last_used_at")}
         agents = []
         for p in rows(f"/connected_agents?business_id=eq.{bid}&order=created_at.asc"):
             key = keys.get(p["token_jti"])
             expired = bool(key and key.get("expires_at") and datetime.fromisoformat(key["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc))
-            agents.append({**public_agent(p), "key_expires_at": key.get("expires_at") if key else None,
+            agents.append({**public_agent(p), **connection_state(p, key), "key_expires_at": key.get("expires_at") if key else None,
                            "credential_status": "revoked" if not key or key.get("revoked_at") else "expired" if expired else "active"})
         return {"agents": agents,
                 "assignments": rows(f"/agent_assignments?business_id=eq.{bid}&order=created_at.desc&limit=100"),
@@ -286,6 +310,24 @@ def create_assignment(biz: dict, body: BriefBody) -> dict:
 async def assign(body: BriefBody, business_id: UUID, user: AuthedUser = Depends(require_user)):
     biz = await owned(business_id, user)
     return {"assignment": await asyncio.to_thread(create_assignment, biz, body)}
+
+
+@router.post("/{agent_id}/connection-test")
+async def connection_test(agent_id: UUID, body: ConnectionTestBody, user: AuthedUser = Depends(require_user)):
+    """The owner's button releases only this fixed, no-business-data test."""
+    biz = await owned(body.business_id, user)
+    def run():
+        brief = BriefBody(agent_id=agent_id, request_id=body.request_id,
+            title="Solutionist connection check",
+            objective="Claim this assignment and submit exactly: Solutionist connection verified. Do not use any other tools, access files, contact anyone, or perform business work.",
+            context="Owner-requested connection test. No business or customer data is needed.",
+            expected_output="Solutionist connection verified.",
+            deadline=datetime.now(timezone.utc) + timedelta(minutes=15))
+        task = create_assignment(biz, brief)
+        if task["status"] == "awaiting_approval":
+            task = review(biz, task["id"], ReviewBody(business_id=body.business_id, action="approve"))
+        return {"assignment": task}
+    return await asyncio.to_thread(run)
 
 
 def review(biz: dict, tid: str, body: ReviewBody) -> dict:

@@ -283,3 +283,44 @@ def test_chief_can_read_complete_profiles_and_long_results(db):
     assert 'result' not in listing['assignments'][0]
     result = asyncio.run(ac.chief_handler(None, BIZ, {'type': 'connected_agent_assignments', 'assignment_id': task['id']}))
     assert 'FINAL FINDING' in chief_tool_loop._shrink(result)
+
+
+def test_connection_state_never_calls_an_unused_key_connected(db):
+    p = db['connected_agents'][0]
+    key = db['mcp_tokens'][0]
+    assert ac.connection_state(p, key)['connection_status'] == 'waiting'
+    key['last_used_at'] = ac.now()
+    assert ac.connection_state(p, key)['connection_status'] == 'seen_recently'
+    key['last_used_at'] = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    assert ac.connection_state(p, key)['connection_status'] == 'inactive'
+    key['revoked_at'] = ac.now()
+    assert ac.connection_state(p, key)['connection_status'] == 'revoked'
+
+
+def test_connection_test_round_trip_and_retry(db, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(ac, 'owned', AsyncMock(return_value=BIZ))
+    body = ac.ConnectionTestBody(business_id=BID, request_id=uuid4())
+    result = asyncio.run(ac.connection_test(ac.UUID(AID), body, SimpleNamespace(id='owner')))
+    task = result['assignment']
+    assert task['status'] == 'queued'
+    assert db['connected_agents'][0]['approval_mode'] == 'ask'
+    again = asyncio.run(ac.connection_test(ac.UUID(AID), body, SimpleNamespace(id='owner')))
+    assert again['assignment']['id'] == task['id']
+    assert len(db['agent_assignments']) == 1
+    claim = ac.mailbox(caller(), BIZ, 'claim_agent_assignment', {'assignment_id': task['id']})
+    done = ac.mailbox(caller(), BIZ, 'report_agent_assignment', {'assignment_id': task['id'], 'claim_id': claim['claim_id'], 'status': 'submitted', 'message': 'Solutionist connection verified.'})
+    assert done['status'] == 'submitted'
+
+
+def test_connection_test_rejects_other_agent_and_paused_agent(db, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(ac, 'owned', AsyncMock(return_value=BIZ))
+    body = ac.ConnectionTestBody(business_id=BID, request_id=uuid4())
+    with pytest.raises(HTTPException):
+        asyncio.run(ac.connection_test(ac.UUID(OTHER), body, SimpleNamespace(id='owner')))
+    db['connected_agents'][0]['enabled'] = False
+    with pytest.raises(HTTPException):
+        asyncio.run(ac.connection_test(ac.UUID(AID), body, SimpleNamespace(id='owner')))
