@@ -212,7 +212,12 @@ def test_give_is_one_tap_from_every_signed_in_screen(monkeypatch):
     assert 'aria-label="Give"' not in mp._shell(_biz(), None, "Groups", "<p>x</p>", tab="groups", who=ME)
 
 
-def test_the_bar_has_live_between_sermons_and_groups():
+def test_the_bar_is_home_sermons_bible_groups_live_and_me_is_the_picture():
+    # Kevin, 10/02: the Bible took a tab; Live moved to the end; Me is the
+    # profile picture at the top.
     page = mp._shell(_biz(), None, "Live", "<p>x</p>", tab="live", who=ME)
     nav = page[page.index('aria-label="Main"'):]
-    assert nav.index('href="/my/sermons"') < nav.index('href="/my/live" aria-current="page"') < nav.index('href="/my/groups"')
+    order = [nav.index(f'href="{h}"') for h in ("/my", "/my/sermons", "/my/bible", "/my/groups", "/my/live")]
+    assert order == sorted(order) and 'href="/my/live" aria-current="page"' in nav and "/my/me" not in nav
+    me = mp._shell(_biz(), None, "Me", "<p>x</p>", tab="me", who=ME)
+    assert 'href="/my/me" aria-label="Me" aria-current="page">AR<' in me
