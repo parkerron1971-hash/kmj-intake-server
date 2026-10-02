@@ -67,7 +67,9 @@ def test_all_routes_require_verified_platform_owner(monkeypatch):
     assert client.get('/platform/marketing/status').status_code in (401,403)
     app.dependency_overrides[require_user]=lambda: SimpleNamespace(id=str(uuid4()),email='tenant@example.com')
     assert client.get('/platform/marketing/status').status_code == 403
-    assert client.post('/platform/marketing/week',json={}).status_code == 403
+    assert client.post('/platform/marketing/slot/edit',json={}).status_code == 403
+    assert client.post('/platform/marketing/slot/cancel',json={}).status_code == 403
+    assert client.post(f'/platform/marketing/posts/{uuid4()}/not-sent',json={}).status_code == 403
     assert client.post('/platform/marketing/assets').status_code == 403
 
 
@@ -270,23 +272,139 @@ def test_upload_persists_verified_bytes_without_overwrite(state,monkeypatch):
     assert result['sha256'] in result['url'] and 'server-secret' not in str(result)
 
 
-def test_week_generator_saves_seven_drafts_atomically(state,monkeypatch):
-    import llm_call, spend_guard, rate_limit
-    monkeypatch.setattr(llm_call,'api_key',lambda:'configured')
-    monkeypatch.setattr(spend_guard,'over_budget',lambda:False)
-    monkeypatch.setattr(rate_limit,'allow',lambda *args:True)
-    async def write(client,payload,**kw):
-        assert 'No invented testimonials' in payload['system']
-        return httpx.Response(200,request=httpx.Request('POST','https://llm.example'),json={'content':[{'type':'text','text':m.json.dumps({'captions':[f'Useful message {i}.' for i in range(7)]})}]})
-    monkeypatch.setattr(llm_call,'apost',write)
-    req=m.Week(id=uuid4(),campaign='week',audience='Service owners',facts='Bookings and invoices are available in the workspace.',offer='Explore the app',channel_id='channel-1',start_at=m.now()+timedelta(days=1))
-    run(m.draft_week(req,SimpleNamespace(id=uuid4())))
-    assert len(state['writes'])==1
-    method,path,rows=state['writes'][0]
-    assert method=='POST' and path=='/platform_marketing_posts' and len(rows)==7
-    assert len({r['id'] for r in rows})==7
-    assert all('approved_hash' not in r and r['payload']['ai_assisted'] for r in rows)
-    assert m.aware(rows[-1]['run_at'])-m.aware(rows[0]['run_at'])==timedelta(days=6)
+def test_the_seven_caption_generator_is_retired():
+    # 2026-10-02: the weekly plan is the one way a week is drafted. The old
+    # generator had no number guard, no flyers and no play, so its posts never
+    # fed what the plan learns from.
+    paths = {r.path for r in m.router.routes}
+    assert '/platform/marketing/week' not in paths and not hasattr(m, 'draft_week')
+
+
+def test_a_failure_before_buffer_is_reached_fails_plainly(state, monkeypatch):
+    row = approved_row(state); api = FakeBuffer()
+
+    async def broken():
+        raise HTTPException(503, 'Marketing storage is unavailable. Please retry.')
+    monkeypatch.setattr(m, 'config', broken)
+    patch = run(m.dispatch(row, api))
+    assert api.creates == [] and patch['status'] == 'failed' and 'not sent' in patch['error']
+    assert state['writes'][-1][2]['status'] == 'failed'
+
+
+def test_an_unknown_error_during_create_is_uncertain(state):
+    api = FakeBuffer(RuntimeError('socket closed'))
+    patch = run(m.dispatch(approved_row(state), api))
+    assert len(api.creates) == 1 and patch['status'] == 'uncertain'
+
+
+@pytest.fixture
+def slot(monkeypatch):
+    """Two channel posts of one idea, stored by id, with a db that filters by id."""
+    x = channel(id='channel-2', name='SolutionistSys', service='twitter')
+    s = {'config': cfg(channels=[channel(), x]), 'writes': [], 'rows': {}}
+
+    async def config():
+        return s['config']
+
+    async def db(method, path, body=None):
+        if method == 'GET' and path.startswith('/platform_marketing_posts?id=eq.'):
+            key = path.split('id=eq.')[1].split('&')[0]
+            return [copy.deepcopy(s['rows'][key])] if key in s['rows'] else []
+        if method == 'GET':
+            return []
+        s['writes'].append((method, path, copy.deepcopy(body)))
+        key = path.split('id=eq.')[1].split('&')[0]
+        if method == 'PATCH' and key in s['rows']:
+            s['rows'][key].update(copy.deepcopy(body))
+            return [copy.deepcopy(s['rows'][key])]
+        return []
+    monkeypatch.setattr(m, 'config', config)
+    monkeypatch.setattr(m, 'db', db)
+    for cid in ('channel-1', 'channel-2'):
+        row = run(m.build_draft(m.Draft(campaign='week-2026-10-05', text='Answer the oldest client first.',
+                                        channel_id=cid, run_at=m.now() + timedelta(days=2), ai_assisted=True)))
+        row.update(revision=1, status='approved', approved_hash=row['content_hash'], play_id='workflow_tip')
+        s['rows'][row['id']] = row
+    s['items'] = [{'id': k, 'revision': 1} for k in s['rows']]
+    return s
+
+
+def test_one_caption_rewrites_every_channel_and_sends_it_back_to_review(slot):
+    out = run(m.edit_slot(m.SlotEdit(items=slot['items'], text='Reply to the client who waited longest.')))
+    assert len(out['posts']) == 2
+    for post in out['posts']:
+        assert post['payload']['text'] == 'Reply to the client who waited longest.'
+        assert post['status'] == 'draft' and post['approved_hash'] is None and post['revision'] == 2
+        assert post['play_id'] == 'workflow_tip'              # what the plan learns from survives the edit
+    assert all('revision=eq.1' in w[1] for w in slot['writes'])
+
+
+def test_moving_an_idea_gives_it_a_fresh_delivery_window(slot):
+    later = m.now() + timedelta(days=5)
+    out = run(m.edit_slot(m.SlotEdit(items=slot['items'], run_at=later)))
+    for post in out['posts']:
+        assert m.aware(post['run_at']) == m.aware(later)
+        assert m.aware(post['expires_at']) == m.aware(later) + timedelta(hours=6)
+
+
+def test_every_channel_is_checked_before_any_is_saved(slot):
+    with pytest.raises(HTTPException) as err:
+        run(m.edit_slot(m.SlotEdit(items=slot['items'], text='x' * 270)))   # fine on Facebook, too long for X
+    assert err.value.status_code == 422 and slot['writes'] == []
+
+
+def test_an_edit_must_change_something(slot):
+    with pytest.raises(HTTPException) as err:
+        run(m.edit_slot(m.SlotEdit(items=slot['items'])))
+    assert err.value.status_code == 422
+
+
+def test_skipping_an_idea_cancels_each_channel(slot):
+    out = run(m.cancel_slot(m.SlotCancel(items=slot['items'])))
+    assert out['cancelled'] == 2 and all(p['status'] == 'cancelled' for p in out['posts'])
+
+
+def test_only_an_unconfirmed_delivery_can_be_marked_not_sent(state):
+    post_id = uuid4()
+    run(m.mark_not_sent(post_id, m.Revision(revision=3)))
+    method, path, body = state['writes'][-1]
+    assert method == 'PATCH' and 'status=eq.uncertain' in path and 'provider_id=is.null' in path
+    assert 'revision=eq.3' in path and body['status'] == 'failed' and body['revision'] == 4
+
+    async def nothing(*a, **k):
+        return []
+    import platform_marketing
+    state_db = platform_marketing.db
+    try:
+        platform_marketing.db = nothing
+        with pytest.raises(HTTPException) as err:
+            run(m.mark_not_sent(post_id, m.Revision(revision=3)))
+        assert err.value.status_code == 409
+    finally:
+        platform_marketing.db = state_db
+
+
+def test_a_post_that_does_not_go_out_tells_the_owner(state, monkeypatch):
+    import marketing_desk
+    monkeypatch.setenv('BUFFER_PUBLISHING', 'on')
+    monkeypatch.setenv('BUFFER_API_KEY', 'key')
+    row = approved_row(state)
+    claims = [[row], []]
+    told = []
+
+    async def db(method, path, body=None):
+        if path == '/rpc/platform_marketing_claim':
+            return claims.pop(0)
+        state['writes'].append((method, path, body))
+        return [body]
+
+    async def tell(rows):
+        told.append(rows)
+    monkeypatch.setattr(m, 'db', db)
+    monkeypatch.setattr(marketing_desk, 'tell_owner_about_delivery', tell)
+    state['config']['paused'] = True                        # the preflight refuses: a plain failure
+    run(m.due_tick())
+    assert len(told) == 1 and told[0][0]['status'] == 'failed' and told[0][0]['id'] == row['id']
 
 
 def test_paid_attribution_does_not_count_organic_facebook_clicks():

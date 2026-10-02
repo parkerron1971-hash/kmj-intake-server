@@ -318,24 +318,14 @@ async def _practitioners(c: httpx.AsyncClient) -> Dict[str, int]:
             "signed_in": sum(1 for u in users if u.get("last_sign_in_at"))}
 
 
-async def _platform_posts_pending(c: httpx.AsyncClient, owner_id: str) -> int:
-    from platform_console import _find_platform_business
-    import post_approval
-    biz = await _find_platform_business(c, _service_headers(), owner_id)
-    if not biz:
-        return 0
-    cal = (biz.get("settings") or {}).get("content_calendar")
-    planned = (cal or {}).get("planned_posts") if isinstance(cal, dict) else None
-    n = 0
-    for p in planned or []:
-        if not isinstance(p, dict):
-            continue
-        ap = p.get(post_approval.APPROVAL_KEY)
-        approved = isinstance(ap, dict) and ap.get("at")
-        stale = bool(approved and ap.get("fingerprint") != post_approval.fingerprint(p))
-        if not approved or stale:
-            n += 1
-    return n
+async def _marketing() -> List[Dict[str, Any]]:
+    """Solutionist's own marketing: drafts waiting with their deadline, posts
+    that missed their time or failed, paused publishing, a plan that could not
+    be written (marketing_desk). Until 2026-10-02 this counted the platform
+    business's content calendar, a different pipeline, so the weekly plan's
+    drafts never reached Today."""
+    import marketing_desk
+    return marketing_desk.today_items(await marketing_desk.read_state())
 
 
 _coupon_cache: Dict[str, Any] = {"at": 0.0, "data": None}
@@ -408,7 +398,7 @@ async def build_today(owner) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         since_day = (now - timedelta(hours=36)).isoformat()
         (subs, practitioners, businesses, tickets, unread, findings_rows, runs,
-         approvals, posts_pending, dev_tasks, traffic, coupons) = await asyncio.gather(
+         approvals, marketing, dev_tasks, traffic, coupons) = await asyncio.gather(
             _guard("subscriptions", lambda: pc.subscriptions_summary(_owner=owner), failed, {}),
             _guard("practitioners", lambda: _practitioners(c), failed, {}),
             _guard("businesses", lambda: _count(c, "businesses", {"is_active": "eq.true"}), failed, None),
@@ -427,7 +417,7 @@ async def build_today(owner) -> Dict[str, Any]:
                 "select": "id,action,status,created_at,expires_at",
                 "owner_id": f"eq.{owner_id}", "status": "eq.pending",
                 "order": "created_at.desc", "limit": "20"}), failed, None),
-            _guard("posts", lambda: _platform_posts_pending(c, owner_id), failed, None),
+            _guard("marketing", _marketing, failed, None),
             _guard("dev_desk", lambda: _get(c, "dev_tasks", {
                 "select": "id,title,status,lane,agent,updated_at,created_at",
                 "order": "updated_at.desc", "limit": "30"}), failed, None),
@@ -485,14 +475,7 @@ async def build_today(owner) -> Dict[str, Any]:
             "room": "inbox", "tone": "blue", "seen": 1, "count": unread,
             "action": {"label": "Open Inbox", "nav": "platform-inbox"},
         })
-    if posts_pending:
-        needs.append({
-            "id": "posts:pending", "kind": "posts", "source": "Marketing",
-            "title": f"{posts_pending} post{'s' if posts_pending != 1 else ''} waiting for your approval",
-            "detail": "Nothing publishes as The Solutionist System until you've read it.",
-            "lanes": ["people"], "room": "growth", "tone": "blue", "seen": 1,
-            "count": posts_pending, "action": {"label": "Review posts", "nav": "platform-growth"},
-        })
+    needs.extend(marketing or [])
 
     # Money: coupons that are about to stop working.
     for cp in (coupons or {}).get("expiring") or []:

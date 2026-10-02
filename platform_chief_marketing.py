@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID, uuid4, uuid5
@@ -124,18 +125,32 @@ For edits include the exact existing id and revision and preserve all fields not
 Ask for a destination and time/timezone when unspecified; never guess among multiple channels.
 To cancel an explicitly identified post: [ACTION:{"type":"marketing_cancel_post","id":"UUID","revision":1}]
 To pause future delivery when requested: [ACTION:{"type":"marketing_pause"}]
-THE WEEKLY PLAN (this_week in the snapshot): every Monday the plan reads the live numbers, names ONE
-problem with the counted number that proves it, picks plays from a fixed library and saves the week as
-drafts for review. When the owner asks what you are pushing this week or why, answer from this_week's
+THE WEEKLY PLAN (this_week and desk in the snapshot): every Thursday at 7:00 AM ET the plan for NEXT
+week is written (a week that was never planned is planned for its remaining days Monday to Wednesday). It
+reads the live numbers, names ONE problem with the counted number that proves it, picks plays from a fixed
+library and saves the week as drafts for review. this_week.which_week says whether the newest plan is this
+week or next week; say the right one. When the owner asks what you are pushing or why, answer from the
 diagnosis evidence and each play's reason, in your own words; do not invent other reasons or numbers.
-If no plan exists or it was skipped, say so and say why (note). Only when the owner explicitly asks you to
-plan or draft this week: [ACTION:{"type":"marketing_run_week"}]. It saves drafts only; approval and
-publishing stay on the page. A week already planned is not redone; say so. Planning runs in the
-background: say it has started, never that drafts are ready, until this_week shows them.
+desk.your_read is what the desk shows as your read and what opened this conversation: continue from it,
+do not repeat it word for word. desk.posts is the plan, one entry per post (one caption on every channel it
+goes to), with its post_ids. desk.needs_a_look lists posts that missed their time, failed, may or may not
+have gone out, or are held by paused publishing.
+To change a post's caption and/or time on every channel at once (it goes back to the owner's review):
+[ACTION:{"type":"marketing_edit_slot","post_ids":["UUID","UUID"],"text":"new caption","run_at":"ISO timestamp with timezone"}]
+Include only the fields being changed; use every post_id of that post. Keep captions free of links (the post
+adds its own), hashtags and any number the post did not already carry; a rewrite that adds a number is refused.
+To skip a post entirely, or let posts that missed their time go: [ACTION:{"type":"marketing_skip_slot","post_ids":[...]}]
+(the owner approves this on a review card). To reschedule a missed post, use marketing_edit_slot with run_at.
+Only when the owner explicitly asks you to plan or draft the week: [ACTION:{"type":"marketing_run_week"}]. It saves
+drafts only; approval and publishing stay on the page. A week already planned is not redone; say so. Only when the
+owner explicitly asks to start the planned week over: [ACTION:{"type":"marketing_replan_week"}] (it cancels the
+week's drafts and writes new ones; refused once any of the week is approved). Planning runs in the background:
+say it has started, never that drafts are ready, until the desk shows them.
 Every planned post carries a flyer made from its own verified words (free to make), and Instagram gets
 only posts that have one. The week's lead play may carry one generated photograph, paid from the monthly
 design_budget. If budget_request is set, the budget ran out: say so plainly and that only the owner can
-raise it on the Publishing Desk. You cannot change the budget.
+raise it on the desk. You cannot change the budget. You can never approve posts: approving is the owner's,
+on the desk.
 Saved posts remain drafts for review. Approval/resume happen through the page's exact-post review and
 publishing controls. Do not claim approval or publication. Action result cards establish success;
 describe proposed actions as requests, not completed work. Do not repeat an action already recorded
@@ -214,6 +229,33 @@ async def _this_week():
         raise HTTPException(503, 'The weekly plan could not be read.') from None
 
 
+async def _desk():
+    """The plan as the desk shows it (one entry per post, every channel) and what needs a look."""
+    import marketing_desk as desk
+    from marketing_engine import PLAYS
+    try:
+        state = await desk.read_state()
+        f = desk.facts(state)
+        items = desk.attention(f)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(503, 'The desk could not be read.') from None
+
+    def view(slot):
+        statuses = sorted(set(slot['statuses']))
+        return {'when': f"{desk.short_day(slot['run_at'])} {desk.clock(slot['run_at'])}", 'run_at': slot['run_at'],
+                'play': (PLAYS.get(slot.get('play_id')) or {}).get('label'), 'text': slot['text'],
+                'channels': slot['channels'], 'status': statuses[0] if len(statuses) == 1 else statuses,
+                'post_ids': [i['id'] for i in slot['items']]}
+    read = desk.note(f, items)
+    return {'which_week': f['which_week'], 'planning_now': f['planning'],
+            'your_read': {'headline': read['headline'], 'body': read['body']},
+            'posts': [view(s) for s in f['plan']],
+            'needs_a_look': [{'title': i['title'], 'detail': i['detail'], 'posts': [view(s) for s in i['slots']]}
+                             for i in items]}
+
+
 async def marketing_snapshot():
     import platform_marketing as marketing
     result = {
@@ -245,6 +287,7 @@ async def marketing_snapshot():
     await read('assets', marketing.assets)
     await read('link_results', _link_results)
     await read('this_week', _this_week)
+    await read('desk', _desk)
     campaign_rows = await read('campaign_briefs', lambda: marketing.db('GET', '/platform_marketing_campaigns?select=id,name,tracking_key,revision,stage,brief,brief_hash,plan_brief_hash&order=updated_at.desc&limit=11'), 10)
     if campaign_rows is not None:
         result['campaign_briefs'] = [{'id':c['id'],'name':c['name'],'tracking_key':c['tracking_key'],
@@ -287,19 +330,104 @@ async def run_week(action):
     drafts that do not exist yet."""
     import marketing_engine
     import platform_marketing as marketing
-    week_of, _ = marketing_engine.week_window(marketing.now())
+    from marketing_desk import week_label
+    now = marketing.now()
+    week_of, _ = marketing_engine.week_window(now)
+    which = marketing_engine.relation(week_of, now)
     run = await marketing_engine.get_run(marketing_engine.run_id_for(week_of))
     if run and run['status'] == 'succeeded':
         drafts = len(run.get('post_ids') or [])
-        return {'ok': True, 'label': f"This week is already planned ({drafts} drafts). Review them in the Publishing Desk.",
+        return {'ok': True, 'label': f"{which.capitalize()} is already planned ({drafts} drafts). Review them on the desk.",
                 'run_id': run['id'], 'diagnosis': (run.get('diagnosis') or {}).get('evidence')}
+    if marketing_engine.is_planning(run, now):
+        return {'ok': True, 'label': f'{which.capitalize()} is already being planned.'}
     started = marketing_engine.start_week()
-    return {'ok': True, 'label': 'Planning this week now. The drafts and their flyers will be in the Publishing Desk '
-                                 'in a minute or two.' if started else 'This week is already being planned.'}
+    return {'ok': True, 'label': f"Planning {which} (the week of {week_label(week_of)}) now. The drafts and their "
+                                 'flyers will be on the desk in a minute or two.' if started
+            else f'{which.capitalize()} is already being planned.'}
+
+
+async def replan_week(action):
+    """Start the planned week over: cancels its drafts and writes new ones. The
+    claim refuses once anything from the week is past a draft; this says so
+    first instead of answering "started" for a run that will not start."""
+    import marketing_engine
+    import platform_marketing as marketing
+    now = marketing.now()
+    week_of, _ = marketing_engine.week_window(now)
+    which = marketing_engine.relation(week_of, now)
+    run = await marketing_engine.get_run(marketing_engine.run_id_for(week_of))
+    if not run or run['status'] != 'succeeded':
+        return await run_week(action)
+    posts = await marketing.db('GET', f"/platform_marketing_posts?run_id=eq.{run['id']}&select=status&limit=60")
+    if any(p['status'] not in ('draft', 'cancelled') for p in posts):
+        return {'ok': False, 'label': f'Part of {which} is already approved or sent, so it cannot be started over. '
+                                      'Change or skip single posts instead.'}
+    started = marketing_engine.start_week(replan=True)
+    return {'ok': True, 'label': f"Starting {which} over: its drafts are cancelled and new ones are being written. "
+                                 'They will be on the desk in a minute or two.' if started
+            else f'{which.capitalize()} is already being planned.'}
+
+
+_LINK = re.compile(r'https?://|www\.|\.app\b|\.com\b', re.I)      # the engine's own caption rule
+
+
+async def _slot_rows(action):
+    import platform_marketing as marketing
+    try:
+        ids = list(dict.fromkeys(str(UUID(str(i))) for i in action.get('post_ids') or []))
+    except ValueError:
+        ids = []
+    if not 1 <= len(ids) <= 10:
+        raise HTTPException(422, 'Name the post by every one of its post_ids from the desk.')
+    rows = await marketing.db('GET', f"/platform_marketing_posts?id=in.({','.join(ids)})&limit=10")
+    if len(rows) != len(ids):
+        raise HTTPException(409, 'Some of those posts no longer exist. Read the desk again.')
+    return rows
+
+
+def _where(rows):
+    from marketing_desk import SERVICE, _join, day_name
+    return (day_name(min(r['run_at'] for r in rows)),
+            _join(sorted({SERVICE.get(r['payload']['service'], r['payload']['service']) for r in rows})))
+
+
+async def edit_slot(action):
+    """Rewrite and/or move one post on every channel; it goes back to review."""
+    import platform_marketing as marketing
+    from marketing_engine import _numbers
+    rows = await _slot_rows(action)
+    text = action.get('text')
+    if text is not None:
+        text = str(text).strip()
+        if _LINK.search(text) or '#' in text:
+            return {'ok': False, 'label': 'A caption cannot carry a link or a hashtag; the post adds its own link.'}
+        before = set().union(*(_numbers(r['payload']['text']) for r in rows))
+        stray = _numbers(text) - before
+        if stray:
+            return {'ok': False, 'label': f"Chief cannot add a number the post did not already carry "
+                                          f"({', '.join(sorted(stray))}). If it is right, change it on the desk."}
+    req = marketing.SlotEdit(items=[{'id': r['id'], 'revision': r['revision']} for r in rows],
+                             text=text or None, run_at=action.get('run_at') or None)
+    saved = (await marketing.edit_slot(req, ai_assisted=True))['posts']
+    day, channels = _where(saved)
+    did = 'rewritten and moved' if text and req.run_at else 'rewritten' if text else 'moved'
+    return {'ok': True, 'label': f"{day}'s post was {did} on {channels}. It is back in your review; nothing goes "
+                                 'out until you approve it.', 'post_ids': [r['id'] for r in saved]}
+
+
+async def skip_slot(action):
+    """Skip one post on every channel (or let posts that missed their time go)."""
+    import platform_marketing as marketing
+    rows = await _slot_rows(action)
+    await marketing.cancel_slot(marketing.SlotCancel(items=[{'id': r['id'], 'revision': r['revision']} for r in rows]))
+    day, channels = _where(rows)
+    return {'ok': True, 'label': f"{day}'s post was skipped on {channels}. It will not go out."}
 
 
 HANDLERS = {'marketing_save_draft': save_draft, 'marketing_cancel_post': cancel_post, 'marketing_pause': pause_marketing,
-            'marketing_run_week': run_week}
+            'marketing_run_week': run_week, 'marketing_replan_week': replan_week,
+            'marketing_edit_slot': edit_slot, 'marketing_skip_slot': skip_slot}
 
 
 def prepare_actions(actions, request_id):
