@@ -112,3 +112,46 @@ def test_a_missing_business_cancels_the_early_wave(monkeypatch):
     monkeypatch.setattr(cos, "_sb", no_biz)
     ctx, _ = _drive()
     assert ctx == {}
+
+
+def test_owner_and_module_reads_do_not_wait_for_unrelated_mailbox(monkeypatch):
+    _patch(monkeypatch, 0.0, [])
+    original_sb = cos._sb
+    original_count = cos._sb_count
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        owner_started = asyncio.Event()
+        count_started = asyncio.Event()
+        mailbox_started = asyncio.Event()
+        release_mailbox = asyncio.Event()
+
+        async def sb(client, method, path, *args, **kwargs):
+            if path.startswith("/mailbox_messages"):
+                mailbox_started.set()
+                await release_mailbox.wait()
+            return await original_sb(client, method, path, *args, **kwargs)
+
+        async def count(client, path, *args, **kwargs):
+            if path.startswith("/module_entries"):
+                count_started.set()
+            return await original_count(client, path, *args, **kwargs)
+
+        def owner(*args):
+            loop.call_soon_threadsafe(owner_started.set)
+            return "scoped owner context"
+
+        monkeypatch.setattr(cos, "_sb", sb)
+        monkeypatch.setattr(cos, "_sb_count", count)
+        monkeypatch.setattr(cos, "pp_chief_context_block", owner)
+        task = asyncio.create_task(cos._gather_context(None, "biz-1", "fixture"))
+        try:
+            await asyncio.wait_for(mailbox_started.wait(), 2)
+            await asyncio.wait_for(asyncio.gather(owner_started.wait(), count_started.wait()), 2)
+            assert not task.done(), "the slow source must still be included in context"
+        finally:
+            release_mailbox.set()
+            ctx = await task
+        assert ctx["business"]["owner_id"] == "user-1"
+        assert ctx["contacts_total"] == 3
+    asyncio.run(run())

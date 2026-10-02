@@ -5,6 +5,8 @@ Live 9/23: "help me think through pricing" -> the main call spent 2,507
 output tokens and 46 s for a ~250-token answer. No effort was set, so
 Sonnet 5 thought at its default ("high") on every conversational turn.
 Chat now answers at "medium", voice at "low"; the deep lane is unchanged.
+2026-09-28: chat moved to "low" with Sonnet 5.5 (recalibrated levels; the
+advice bench answered as fully at low, faster and cheaper).
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ import chief_of_staff as cos
 def test_lane_defaults(monkeypatch):
     for k in ("CHIEF_EFFORT_CHAT", "CHIEF_EFFORT_VOICE", "CHIEF_EFFORT_DEEP"):
         monkeypatch.delenv(k, raising=False)
-    assert chief_models.effort_for("chat") == "medium"
+    assert chief_models.effort_for("chat") == "low"
     assert chief_models.effort_for("voice") == "low"
     assert chief_models.effort_for("deep") is None
 

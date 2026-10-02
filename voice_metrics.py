@@ -30,6 +30,7 @@ separately from the first-token page, so neither can mask the other.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -74,6 +75,9 @@ class VoiceTurn(BaseModel):
     business_id: Optional[str] = None
     ttfa_ms: Optional[int] = None
     reply_audio_ms: Optional[int] = None
+    first_answer_text_ms: Optional[int] = None
+    answer_tts_ms: Optional[int] = None
+    max_audio_gap_ms: Optional[int] = None
     transcript_ms: Optional[int] = None
     first_text_ms: Optional[int] = None
     vad_silence_ms: Optional[int] = None
@@ -126,6 +130,9 @@ def row_for(body: VoiceTurn, user_id: str, business_id: Optional[str]) -> Dict[s
         "user_id": user_id if _UUID.match(user_id or "") else None,
         "ttfa_ms": ttfa,
         "reply_audio_ms": _ms(body.reply_audio_ms),
+        "first_answer_text_ms": _ms(body.first_answer_text_ms),
+        "answer_tts_ms": _ms(body.answer_tts_ms),
+        "max_audio_gap_ms": _ms(body.max_audio_gap_ms),
         "transcript_ms": _ms(body.transcript_ms),
         "first_text_ms": _ms(body.first_text_ms),
         "vad_silence_ms": _ms(body.vad_silence_ms),
@@ -148,6 +155,10 @@ _skip_db_until = 0.0
 _missing_logged = False
 
 
+# Additional durations remain in structured logs until a schema migration is applied.
+_FLOW_LOG_FIELDS = {"first_answer_text_ms", "answer_tts_ms", "max_audio_gap_ms"}
+
+
 def _write(row: Dict[str, Any]) -> None:
     if (os.environ.get("VOICE_LOG_DB") or "on").strip().lower() == "off":
         return
@@ -158,7 +169,8 @@ def _write(row: Dict[str, Any]) -> None:
         global _skip_db_until, _missing_logged
         try:
             import sb_clients
-            ok = bool(sb_clients.sb_post_as_service("/voice_turn_log", row))
+            ok = bool(sb_clients.sb_post_as_service("/voice_turn_log", {
+                k: v for k, v in row.items() if k not in _FLOW_LOG_FIELDS}))
         except Exception:
             ok = False
         if not ok:
@@ -199,6 +211,10 @@ def record(row: Dict[str, Any]) -> None:
         row["first_audio"], row["reply_audio_ms"], row["transcript_ms"], row["first_text_ms"],
         row["vad_silence_ms"], row["outcome"], row["engine"], row["barge_in"],
         row["barge_in_ms"], row["underruns"], row["tts_cache_hits"], row["tts_requests"])
+    logger.info("[voice flow] %s", json.dumps({
+        "request_id": row.get("request_id"), "reply_audio_ms": row.get("reply_audio_ms"),
+        **{key: row.get(key) for key in sorted(_FLOW_LOG_FIELDS)},
+    }))
     try:
         alert = WINDOW.add(row)
         if alert:

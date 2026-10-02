@@ -53,7 +53,7 @@ import time
 import unicodedata
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 LANE_FAST = "fast"
 LANE_FULL = "full"
@@ -105,7 +105,7 @@ _SPACES = re.compile(r"\s+")
 
 
 def normalize(text: str) -> str:
-    """The request as a cache key: case, width, punctuation, spacing and the
+    """The request for routing: case, width, punctuation, spacing and the
     framing words around it no longer matter. Numbers keep their decimal
     point and sign so '$1.5k' and '$15k' never collide."""
     t = unicodedata.normalize("NFKC", str(text or "")).strip().lower()
@@ -116,55 +116,32 @@ def normalize(text: str) -> str:
     return _SPACES.sub(" ", t).strip()
 
 
-_STOP = frozenset("""
-a an the and or of to in on at for with by from about as is are was were be been being
-do does did doing have has had i me my we our you your it its this that these those there
-what whats what's how who whom which when where why can could would will should shall may
-might must tell show give let lets let's just really also some any please thanks thank
-""".split())
-_NEGATIONS = frozenset({"no", "not", "never", "none", "nothing", "without", "cannot",
-                        "cant", "can't", "dont", "don't", "doesnt", "doesn't", "didnt",
-                        "didn't", "isnt", "isn't", "arent", "aren't", "wasnt", "wasn't",
-                        "wont", "won't", "un", "non"})
-_NUM = re.compile(r"\$?\d[\d,]*(?:\.\d+)?%?|\b(?:zero|one|two|three|four|five|six|seven|"
-                  r"eight|nine|ten|eleven|twelve|hundred|thousand|million|half|double)\b")
+def cache_key(text: str) -> str:
+    """Exact request identity, ignoring only greeting/politeness framing.
 
-
-def _stem(w: str) -> str:
-    for suf in ("ing", "ied", "ies", "ed", "es", "s"):
-        if len(w) > len(suf) + 2 and w.endswith(suf):
-            base = w[: -len(suf)]
-            return base + ("y" if suf in ("ied", "ies") else "")
-    return w
-
-
-def _content(norm: str) -> Tuple[frozenset, frozenset, frozenset]:
-    """(content stems, numbers, negations) of a normalised request."""
-    words = norm.split()
-    nums = frozenset(_NUM.findall(norm))
-    negs = frozenset(w for w in words if w in _NEGATIONS or w.endswith("n't"))
-    stems = frozenset(_stem(w) for w in words
-                      if w not in _STOP and w not in _NEGATIONS and not _NUM.fullmatch(w))
-    return stems, nums, negs
+    Unlike the scoring normalizer, preserve interior punctuation: arithmetic
+    operators, quoted phrases and hyphenated terms can change the answer.
+    Word order and every term matter; lexical overlap is not equivalence.
+    """
+    t = unicodedata.normalize("NFKC", str(text or "")).strip().lower()
+    t = t.replace("\u2019", "'").replace("\u2018", "'")
+    t = _LEAD_FILLERS.sub("", t, count=1)
+    # A trailing term can be the object of a definition ("define thanks").
+    # Only remove a courtesy when punctuation separates it from the question.
+    t = re.sub(r"[,?.!]\s*(?:please|pls|thanks|thank you|chief)[.!?]*$", "", t)
+    return _SPACES.sub(" ", t).strip().rstrip(".?").rstrip()
 
 
 def similarity(a: str, b: str) -> float:
-    """How close two normalised requests are, 0..1 — and 0.0 whenever they
-    differ in a number or a negation, because 'invoices that are paid' and
-    'invoices that are not paid' share every other word."""
-    if a == b:
-        return 1.0
-    sa, na, ga = _content(a)
-    sb, nb, gb = _content(b)
-    if na != nb or ga != gb or not sa or not sb:
-        return 0.0
-    ratio = len(a) / max(1, len(b))
-    if ratio < 0.6 or ratio > 1.67:
-        return 0.0
-    return len(sa & sb) / len(sa | sb)
+    """Conservative identity only; reordered or edited requests regenerate.
+
+    A bag of words rated reversed conversions and division operands 1.0.
+    No adjustable overlap threshold can establish equivalent meaning safely.
+    """
+    return 1.0 if a == b else 0.0
 
 
-# ─── Complexity scoring ──────────────────────────────────────────────
+# Complexity scoring
 
 @dataclass
 class Complexity:
@@ -516,7 +493,7 @@ class CacheHit:
 
 
 class SemanticCache:
-    """Record-free answers, keyed by the normalised request.
+    """Record-free answers, keyed by the exact request after framing cleanup.
 
     Only fast-lane answers of kind `general` are ever stored — never a
     turn that read the business or acted on it (docs/inference_layer.md: a
@@ -545,7 +522,7 @@ class SemanticCache:
         return _env_float("ROUTER_CACHE_SIMILARITY", 0.8, 0.6, 1.0)
 
     def get(self, scope: str, text: str, *, now: Optional[float] = None) -> Optional[CacheHit]:
-        key = normalize(text)
+        key = cache_key(text)
         if not scope or not key:
             return None
         now = time.time() if now is None else now
@@ -571,7 +548,7 @@ class SemanticCache:
 
     def put(self, scope: str, text: str, answer: str, *, model: str = "",
             cost_cents: float = 0.0, now: Optional[float] = None) -> None:
-        key = normalize(text)
+        key = cache_key(text)
         if not scope or not key or not (answer or "").strip():
             return
         with self._lock:
@@ -655,10 +632,11 @@ class OpenerGate:
     turn's checked answer carries on from what was said. `dangling` is True
     when the cut fell mid-sentence, so the caller can close it with a dash."""
 
-    MAX_WORDS = 14
+    MAX_WORDS = 28
     LEAD_PROBE_WORDS = 3
 
-    def __init__(self, user_message: str, *, after_lead: bool = False) -> None:
+    def __init__(self, user_message: str, *, after_lead: bool = False,
+                 max_words: int = MAX_WORDS, max_sentences: int = 1) -> None:
         said = set()
         for w in re.findall(r"\S+", user_message or ""):
             w = w.lower().strip(".,!?;:\"()'").replace("’", "'")
@@ -668,6 +646,11 @@ class OpenerGate:
         self._buf = ""
         self._framed = False
         self._words = 0
+        self.max_words = max_words
+        self.max_sentences = max_sentences
+        self.sentences = 0
+        self.stop_after_sentence = False
+        self._sentence_start = True
         self.after_lead = after_lead
         self.lower_after_lead = True     # False after a whole-sentence lead
         self.closed = False
@@ -717,11 +700,11 @@ class OpenerGate:
             nxt = self._buf[m.end(2):]
             if word.endswith(",") and not final and not re.match(r"\s+\S+\s", nxt):
                 break                       # a comma: wait to see what joins it
-            why = self._word_problem(word, not self.text)
+            why = self._word_problem(word, self._sentence_start)
             if why:
                 self.close(why)
                 break
-            if self._words >= self.MAX_WORDS:
+            if self._words >= self.max_words:
                 self.close("length")
                 break
             # A second clause starting after this word ("…that, and she paid",
@@ -736,11 +719,25 @@ class OpenerGate:
                 r"\s*(?:" + _INTERJECTION_WORDS + r")\s*", self.text, re.I))
             chunk = (ws if self.text else "") + word
             self.text += chunk
+            self._sentence_start = False
             self._words += 0 if is_dash else 1
             out.append(chunk)
             self._buf = nxt
             if _END.search(word):
-                self.close("sentence_end")
+                self.sentences += 1
+                if self.sentences >= self.max_sentences or self.stop_after_sentence:
+                    self.close("sentence_end")
+                else:
+                    # Each extra sentence must establish intent again before
+                    # any words escape. The total word budget still spans both.
+                    rest, self._buf = self._buf, ""
+                    self._framed = False
+                    self._sentence_start = True
+                    self.after_lead = False
+                    out.append(self.feed(rest))
+                    if final and not self.closed and self._framed:
+                        out.append(self._release(final=True))
+                    break
             elif second_clause:
                 self.close("clause_break")
             elif is_dash and not lead_dash:
@@ -768,6 +765,9 @@ class OpenerGate:
         if self.closed:
             return ""
         if not self._framed:
+            if self.sentences and not self._pending.strip():
+                self.close("sentence_end")
+                return ""
             self.close("no_intent_lead")
             return ""
         out = self._release(final=True)

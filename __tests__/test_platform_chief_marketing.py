@@ -103,10 +103,74 @@ def test_draft_reuses_existing_validation_and_retries(monkeypatch):
     assert 'marketing_approve' not in actions.HANDLERS
 
 
-def test_snapshot_failure_is_not_empty_success(monkeypatch):
-    async def fail(): raise HTTPException(503,'Storage unavailable')
-    monkeypatch.setattr(marketing,'config',fail)
-    assert asyncio.run(m.marketing_snapshot())=={'unavailable':'Storage unavailable'}
+@pytest.fixture
+def empty_marketing(monkeypatch):
+    async def config(): return {'channels': []}
+    async def empty(*args): return []
+    monkeypatch.setattr(marketing, 'config', config)
+    monkeypatch.setattr(marketing, 'assets', empty)
+    monkeypatch.setattr(marketing, 'db', empty)
+
+
+def test_empty_calendar_is_loaded_not_inaccessible(empty_marketing):
+    snapshot = asyncio.run(m.marketing_snapshot())
+    for key in ('recent_posts', 'campaign_briefs'):
+        assert snapshot[key] == []
+        assert snapshot['source_status'][key] == {
+            'status': 'loaded', 'source': 'Mission Control', 'returned_count': 0, 'truncated': False}
+    assert snapshot['source_status']['buffer_calendar']['status'] == 'not_loaded'
+
+
+@pytest.mark.parametrize('failed_source', ['config', 'assets', 'recent_posts', 'campaign_briefs'])
+def test_one_failed_source_preserves_other_reads(monkeypatch, empty_marketing, failed_source):
+    async def fail(*args): raise HTTPException(503, 'Storage unavailable')
+    if failed_source in ('config', 'assets'):
+        monkeypatch.setattr(marketing, failed_source, fail)
+    else:
+        async def db(method, path):
+            failed_table = 'posts' if failed_source == 'recent_posts' else 'campaigns'
+            if f'/platform_marketing_{failed_table}?' in path:
+                raise HTTPException(503, 'Storage unavailable')
+            return []
+        monkeypatch.setattr(marketing, 'db', db)
+    snapshot = asyncio.run(m.marketing_snapshot())
+    assert snapshot[failed_source] == {'unavailable': 'Storage unavailable'}
+    for key in ('config', 'assets', 'recent_posts', 'campaign_briefs'):
+        assert snapshot['source_status'][key]['status'] == ('unavailable' if key == failed_source else 'loaded')
+
+
+def test_snapshot_marks_bounded_data_and_preserves_campaign_facts(monkeypatch, empty_marketing):
+    async def db(method, path):
+        if '/platform_marketing_posts?' in path:
+            assert 'limit=31' in path
+            return [{'id': str(i)} for i in range(31)]
+        assert 'limit=11' in path
+        return [{'id': str(i), 'name': 'Launch', 'tracking_key': 'launch', 'revision': 2,
+                 'stage': 'planning', 'brief': {'facts': 'x' * 2600, 'evidence': [1, 2, 3, 4]},
+                 'brief_hash': 'current', 'plan_brief_hash': 'current'} for i in range(11)]
+    monkeypatch.setattr(marketing, 'db', db)
+    snapshot = asyncio.run(m.marketing_snapshot())
+    assert len(snapshot['recent_posts']) == 30
+    assert len(snapshot['campaign_briefs']) == 10
+    for key in ('recent_posts', 'campaign_briefs'):
+        assert snapshot['source_status'][key]['truncated'] is True
+    brief = snapshot['campaign_briefs'][0]
+    assert len(brief['brief']['facts']) == 2500
+    assert brief['brief']['evidence'] == [1, 2, 3]
+    assert brief['plan_current'] is True
+
+
+def test_product_context_follows_runtime_settings(monkeypatch):
+    monkeypatch.setenv('LAUNCH_INVITE_ONLY', 'off')
+    monkeypatch.setenv('BILLING_TRIAL_DAYS', '14')
+    monkeypatch.setenv('PRICE_TIER_STARTER_CENTS', '8900')
+    context = m.product_context()
+    assert context['invite_only'] is False
+    assert context['trial_days'] == 14
+    assert context['standard_monthly_prices_usd_cents']['starter'] == 8900
+    assert 'founder' not in context['standard_monthly_prices_usd_cents']
+    monkeypatch.setenv('LAUNCH_INVITE_ONLY', 'on')
+    assert m.product_context()['invite_only'] is True
 
 
 def test_stale_revision_failure_propagates(monkeypatch):

@@ -39,6 +39,7 @@ import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import onboarding_welcome as _welcome
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -272,7 +273,7 @@ async def _gather_morning_data(client, biz_id: str) -> Dict:
     day_ago = _z(now - timedelta(hours=24))
 
     pending, sessions, at_risk, urgent, new_leads, hot_leads, needs_hand = await asyncio.gather(
-        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,subject&limit=20"),
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,subject,{_welcome.SELECT_COLUMNS}&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{morning}&scheduled_for=lte.{end_of_day}&order=scheduled_for.asc&limit=10&select=id,title,scheduled_for,contacts(name)"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&health_score=lt.40&status=in.(active,lead,vip)&order=health_score.asc&limit=5&select=id,name,health_score"),
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&priority=eq.urgent&select=id,subject&limit=5"),
@@ -287,7 +288,8 @@ async def _gather_morning_data(client, biz_id: str) -> Dict:
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&channel=eq.action&select=id,subject,expires_at&order=created_at.asc&limit=10"),
     )
     return {
-        "pending": pending or [],
+        # The onboarding welcome note is not a draft waiting on anyone.
+        "pending": _welcome.without_welcome(pending) or [],
         "needs_your_hand": needs_hand or [],
         "sessions_today": sessions or [],
         "at_risk": at_risk or [],
@@ -301,13 +303,13 @@ async def _gather_midday_data(client, biz_id: str) -> Dict:
     cutoff = _z(datetime.now(timezone.utc) - timedelta(hours=MIDDAY_LOOKBACK_HOURS))
 
     new_drafts, urgent_drafts, no_shows, health_drops = await asyncio.gather(
-        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{cutoff}&status=eq.draft&select=id,agent,subject,priority&limit=20"),
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{cutoff}&status=eq.draft&select=id,subject,priority,{_welcome.SELECT_COLUMNS}&limit=20"),
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&created_at=gte.{cutoff}&status=eq.draft&priority=eq.urgent&select=id,subject&limit=5"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.no_show&updated_at=gte.{cutoff}&select=id,title,contacts(name)&limit=5"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&health_score=lt.30&updated_at=gte.{cutoff}&select=id,name,health_score&limit=5"),
     )
     return {
-        "new_drafts": new_drafts or [],
+        "new_drafts": _welcome.without_welcome(new_drafts) or [],
         "urgent_drafts": urgent_drafts or [],
         "no_shows": no_shows or [],
         "health_drops": health_drops or [],
@@ -323,14 +325,14 @@ async def _gather_evening_data(client, biz_id: str) -> Dict:
         _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.approved&reviewed_at=gte.{cutoff}&select=id,agent,subject&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.completed&scheduled_for=gte.{cutoff}&select=id,title,contacts(name)&limit=10"),
         _sb(client, "GET", f"/contacts?business_id=eq.{biz_id}&created_at=gte.{cutoff}&select=id,name,status&limit=10"),
-        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority&limit=20"),
+        _sb(client, "GET", f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id,priority,{_welcome.SELECT_COLUMNS}&limit=20"),
         _sb(client, "GET", f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled&scheduled_for=gte.{_z(datetime.now(timezone.utc))}&scheduled_for=lte.{tomorrow_end}&order=scheduled_for.asc&select=id,title,scheduled_for,contacts(name)&limit=10"),
     )
     return {
         "approved_today": approved or [],
         "completed_sessions": completed or [],
         "new_contacts": new_contacts or [],
-        "pending_carryover": pending or [],
+        "pending_carryover": _welcome.without_welcome(pending) or [],
         "tomorrow_sessions": upcoming or [],
     }
 

@@ -70,7 +70,8 @@ import lead_identity
 import lead_scoring
 import llm_call
 import rate_limit
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
+from auth_supabase import AuthedUser, require_user
 from pydantic import BaseModel
 
 # Arc 29 — abuse gate for the anon intake endpoint. Each submission
@@ -485,6 +486,11 @@ async def submit_intake(req: IntakeSubmission, request: Request):
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
 
+        # Stop before contact creation, events, module routes, scoring or AI drafts.
+        from private_care import needs_private_care, save_submission
+        if needs_private_care(form_config, submission_data):
+            return await asyncio.to_thread(save_submission, req.business_id, req.form_id, submission_data)
+
         voice_profile = business.get("voice_profile", {})
         business_type = business.get("type", "general")
         business_name = business.get("name", "")
@@ -747,3 +753,16 @@ async def intake_health():
         "supabase_configured": bool(get_supabase_url()),
         "anthropic_configured": bool(get_anthropic_key()),
     }
+
+
+@router.get("/intake/private-care/{business_id}")
+def private_care_requests(business_id: str, user: AuthedUser = Depends(require_user)):
+    from private_care import require_owner
+    import sb_clients
+    require_owner(business_id, user)
+    rows = sb_clients.sb_get_as_service(
+        f"/ministry_care_requests?business_id=eq.{business_id}"
+        "&select=id,created_at,status,submission&order=created_at.desc&limit=100")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "Private requests could not be loaded")
+    return {"requests": rows}

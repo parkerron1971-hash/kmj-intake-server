@@ -788,6 +788,13 @@ def build_business_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
     if growth:
         known.append(f"growth: {json.dumps(growth)[:200]}")
     known_block = "\n".join(f"  {k}" for k in known) or "  (nothing captured yet)"
+    # What is on file from their RECORDS — profile, catalog, contacts,
+    # connections. Without it the coach interviewed a practitioner with a
+    # 95% profile and seven priced offerings as if they were new.
+    import business_knowledge
+    records_block = business_knowledge.known_block_for_coach(ctx.get("business_knowledge"))
+    if records_block:
+        known_block += "\n\n" + records_block
 
     phase_goals = "\n".join(
         f"{i + 1}. {p.upper()} — {BUSINESS_PHASE_LABELS[p]}: {BUSINESS_PHASE_GOALS[p]}"
@@ -824,6 +831,13 @@ def build_business_coach_prompt(ctx: Dict[str, Any], is_greeting: bool,
                 "been running it?' or 'Tell me what you do — in your words, not "
                 "brochure words.' 3-4 sentences total. No actions in the opening."
             )
+            if records_block:
+                greeting_clause += (
+                    "\nThey have ALREADY put a lot into the system (see ALREADY ON FILE). "
+                    "Say so in one line — name one real thing you can see — so they know "
+                    "you won't make them repeat it, promise it will be shorter because of "
+                    "that, and make your one question about the first area that is NOT known."
+                )
 
     resume_clause = ""
     gap = getattr(resume_note, "gap_minutes", None) if resume_note else None

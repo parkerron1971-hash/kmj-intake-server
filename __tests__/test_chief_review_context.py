@@ -133,9 +133,7 @@ def test_fragment_is_labeled_as_an_excerpt_without_blaming_question_length():
     fragment = 'despite the back-and-forth texts'
     draft = 'We are still working through this, ' + fragment + '.'
     result, metadata = finalize(draft, review(claim(fragment, gap='No messages supplied')))
-    assert result.startswith(draft)
-    assert '\n- “' + fragment + '”' in result
-    assert 'I could not confirm:' not in result
-    assert metadata['status'] == 'caveated'
+    assert fragment not in result and 'still unverified' not in result
+    assert metadata['status'] == 'withheld'
     assert 'narrow' not in truth.UNVERIFIED_REPLY
     assert 'rephrase' not in truth.UNVERIFIED_REPLY
