@@ -326,3 +326,17 @@ def test_an_unreadable_business_row_refuses_rather_than_guesses(monkeypatch):
     with pytest.raises(HTTPException) as e:
         bo.overview("biz", user=object())
     assert e.value.status_code == 503
+
+
+def test_a_copy_already_switched_off_is_not_counted_as_linked_twice(monkeypatch):
+    """Right after an old copy comes out, the notice must not keep saying
+    "Fix in Settings": only accounts in the books can double their rows."""
+    off = dict(PRIMARY_AGAIN, included_in_bookkeeping=False)
+    tables = {"/plaid_items": [], "/plaid_accounts": [PRIMARY, TAXES, off]}
+
+    def get(path):
+        return tables.get(path.split("?")[0], [])
+    monkeypatch.setattr(bo.sb_clients, "sb_get_as_service", get)
+    monkeypatch.setattr(bo, "year_so_far", lambda biz, row: None)
+    o = bo.build_overview("biz", {"id": "biz", "settings": {}}, now=NOW)
+    assert o["bank"]["accounts_linked_twice"] == 0
