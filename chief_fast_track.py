@@ -828,12 +828,32 @@ class TwoTrack:
             else:
                 await asyncio.wait({task}, timeout=deadline - now)
 
-    async def _pump(self, gen: AsyncIterator[str], q: "asyncio.Queue[Optional[str]]") -> None:
+    async def _pump(self, gen: AsyncIterator[str], q: "asyncio.Queue[Optional[str]]", *, out=None,
+                    stage="fast") -> None:
+        import chief_speech_boundary as speech
+        boundary = speech.SentenceBoundary(self.message, stage=stage,
+            request_id=getattr(getattr(self, "rec", None), "request_id", None))
         try:
             async for piece in gen:
-                await q.put(piece)
+                checked = boundary.feed(piece)
+                if checked:
+                    await q.put(checked)
+                if boundary.blocked:
+                    if out is not None:
+                        out["error"] = "internal_scaffolding"
+                    break
+            tail = boundary.feed("", final=True)
+            if tail:
+                await q.put(tail)
+            if boundary.blocked and out is not None:
+                out["error"] = "internal_scaffolding"
         finally:
-            await q.put(None)
+            try:
+                close = getattr(gen, "aclose", None)
+                if close is not None:
+                    await close()
+            finally:
+                await q.put(None)
 
     async def _next(self, q: "asyncio.Queue[Optional[str]]", deadline: float,
                     hard_stop: float) -> Any:
@@ -907,7 +927,7 @@ class TwoTrack:
             model=chief_models.model_for("fast"),
             max_tokens=VOICE_OPENER_MAX_TOKENS if self.voice else OPENER_MAX_TOKENS, rec=self.rec,
             endpoint="/chief/opener", units=0,
-            business_id=self.business_id if self.verified else None, out=out), q))
+            business_id=self.business_id if self.verified else None, out=out), q, out=out, stage="opener"))
         hard_stop = self.rec.arrived + (VOICE_OPENER_HARD_CAP_S if self.voice else OPENER_HARD_CAP_S)
         try:
             while not gate.closed and not self.holder.frozen:
@@ -1020,7 +1040,7 @@ class TwoTrack:
         guard = asyncio.ensure_future(asyncio.to_thread(_fast_guards, self.user_id, self.business_id))
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, messages, model=model, max_tokens=FAST_MAX_TOKENS, rec=self.rec,
-            endpoint="/chief/backend", units=None, business_id=self.business_id, out=out), q))
+            endpoint="/chief/backend", units=None, business_id=self.business_id, out=out), q, out=out))
         hard_stop = self.rec.arrived + (VOICE_FAST_ANSWER_CAP_S if self.voice else FAST_ANSWER_CAP_S)
         content_deadline = time.perf_counter() + VOICE_FAST_FIRST_CONTENT_S
         after_lead = bool(self.lead_text)
@@ -1177,6 +1197,11 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
     if calculated is None and route.lane == mr.LANE_FAST and c.cacheable and _on("CHIEF_ROUTER_CACHE"):
         hit = CACHE.get(track.cache_scope, message)
         if hit is not None:
+            from chief_speech_boundary import clean_reply, note_block
+            if clean_reply(hit.answer, message) != hit.answer.strip():
+                note_block("cache", request_id=track.rec.request_id)
+                CACHE.invalidate(track.cache_scope)
+                return track
             track.cache_hit = hit
             rec.lane, rec.reason = mr.LANE_CACHE, "cache"
             rec.cache_hit, rec.cache_similarity = True, round(hit.similarity, 3)
