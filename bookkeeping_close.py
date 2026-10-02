@@ -208,10 +208,17 @@ def sync_step(m_start: date, m_end: date, today: date, items: List[Dict[str, Any
     stuck = [i for i in revoked if not past_end(i)]
     if stuck:
         who = stuck[0].get("institution_name") or "bank"
+        dead_ids = {i.get("item_id") for i in stuck}
+        n = sum(1 for a in included if a.get("item_id") in dead_ids)
+        # Connections' one-click fix only covers an account linked twice; a
+        # dead connection's own accounts are switched off under Manage accounts.
         return {**base, "done": False, "action": "connections", "unposted": None,
                 "last_sync_at": None,
-                "detail": (f"An old {who} connection is still in the books, and it can’t sync "
-                           f"anymore. Take its accounts out in Settings → Connections.")}
+                "detail": (f"{_cap_word(n)} {_plural(n, 'account', 'accounts')} from an old {who} "
+                           f"connection {_plural(n, 'is', 'are')} still in the books, and that "
+                           f"connection can’t sync anymore. Switch "
+                           f"{_plural(n, 'it', 'them')} off under Settings → Connections → "
+                           f"Manage accounts.")}
     live = [i for i in live if i not in revoked] or live
     stamps = [_ts(i.get("last_sync_at")) for i in live]
     broken = [i for i in live if i.get("last_error") and i not in revoked]

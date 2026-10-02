@@ -363,6 +363,8 @@ def test_a_revoked_connection_holds_open_only_the_months_it_never_reached():
     accounts = [PRIMARY, dict(TAXES, item_id="old")]
     aug = bc.sync_step(AUG, bc.month_end(AUG), TODAY, [ITEM, old], accounts, [], None, False)
     assert not aug["done"] and aug["action"] == "connections" and "old Found connection" in aug["detail"]
+    assert aug["detail"].startswith("One account from an old Found connection is still in the books")
+    assert "Manage accounts" in aug["detail"]
     apr = date(2026, 4, 1)
     assert bc.sync_step(apr, bc.month_end(apr), TODAY, [ITEM, old], accounts, [], None, False)["done"]
 
