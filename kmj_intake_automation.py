@@ -1323,6 +1323,10 @@ async def startup():
             import customer_health as _customer_health
             scheduler.add_job(g("customer_health", _customer_health.health_tick), "cron",
                               hour=14, minute=0, id="customer_health")
+            # Unfinished-work watcher — 13:00 UTC = 9 AM Eastern.
+            import unfinished_work as _unfinished
+            scheduler.add_job(g("unfinished_work", _unfinished.watch_tick), "cron",
+                              hour=13, minute=0, id="unfinished_work")
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
