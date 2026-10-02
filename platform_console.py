@@ -985,6 +985,17 @@ PLATFORM_CHIEF_SYSTEM = (
     "     trials, resend invites, email practitioners, bump lead status.\n\n"
     "Be specific. Quote numbers from the snapshot. If the snapshot does not have the data, SAY so "
     "explicitly — never invent numbers.\n\n"
+    "You CANNOT run SQL, and Kevin should never be asked to run it for you. Telling the operator "
+    "to go query the database himself is not an answer — it hands back the job he asked you to do. "
+    "If something genuinely is not in the snapshot, name the gap in one line and say what you CAN "
+    "do with what is there.\n\n"
+    "TRIALS AND PAYMENT ISSUES ARRIVE AS ROWS, NOT JUST COUNTS. subscriptions.trials_ending_soon "
+    "lists every expiring trial with business_name, business_id, the exact trial_ends_at, days_left, "
+    "the owner email, when that owner last signed in, and their vertical. Use them: name the "
+    "business, say when it lapses, and make the advice specific to that trade and to whether they "
+    "have actually been using the product — an owner who has never signed in needs a different "
+    "message from one who is in every day. Both extend_trial and send_practitioner_email take the "
+    "business_id sitting right there in the row.\n\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
     "THE BUSINESS YOU ADVISE (strategic context — Kevin's company, not a practitioner's)\n"
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1054,6 +1065,13 @@ PLATFORM_CHIEF_SYSTEM = (
     "  • pending_items — follow-ups not yet done. Surface these UNPROMPTED when relevant\n"
     "    (\"before you flip billing on, the log shows X is still pending\").\n"
     "  • recent_ships — merged pull requests from both repos = what actually shipped, with dates.\n"
+    "  • work_log — the summary every Claude Code / Codex session leaves (worklog/ in both repos):\n"
+    "    what it was asked, what it built (PRs, migrations), its status and what it left undone.\n"
+    "    BEFORE recommending or queueing a build, check work_log for the same or overlapping\n"
+    "    work and say so (\"we started this on Sep 26, PR #1059, left undone: …\"). When Kevin asks\n"
+    "    \"have we built X?\", answer from work_log + recent_ships, with PR numbers.\n"
+    "  • unfinished — this morning's open PRs ready for his yes, news drafts, conflicts, failing\n"
+    "    checks and migrations not yet applied. Surface it when he asks what's open or pending.\n"
     "Duties:\n"
     "  • When Kevin TELLS you something changed (\"I ran the migration\", \"campaign resubmitted\",\n"
     "    \"set the Stripe prices\") — LOG IT with log_platform_note, category config/decision, in the\n"
@@ -1249,6 +1267,18 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "platform_changelog (one pending item per business), platform_agent_runs",
     },
     {
+        "id": "unfinished_work",
+        "name": "Unfinished work",
+        "kind": "watcher",
+        "beat": "Every morning: open PRs in both repos sorted into ready for your yes, "
+                "conflicts, failing, news drafts and stale; green PRs that fell behind are "
+                "brought up to date; migrations written but not applied; work-log entries "
+                "not shipped or with something left undone. One GitHub issue holds the list. "
+                "Never merges.",
+        "schedule": "daily 13:00 UTC",
+        "writes_to": "GitHub issue `unfinished-work`, platform_agent_runs, platform_changelog",
+    },
+    {
         "id": "money_auditor",
         "name": "Money auditor",
         "kind": "watcher",
@@ -1322,6 +1352,21 @@ async def get_agents(_owner=Depends(require_owner)):
     return {"ok": True, "registry": AGENT_REGISTRY, "runs": runs, "findings": findings}
 
 
+@router.get("/agents/live")
+async def get_agents_live(_owner=Depends(require_owner)):
+    """Agents at work: every agent (backend and GitHub) with a status light
+    and its last run, the activity feed in plain words, and today's tally."""
+    import agents_live
+    return {"ok": True, **(await agents_live.snapshot())}
+
+
+@router.post("/agents/{agent_id}/run-now")
+async def run_agent_now(agent_id: str, _owner=Depends(require_owner)):
+    """Run any backend agent now, or start a GitHub agent's workflow."""
+    import agents_live
+    return await agents_live.run(agent_id)
+
+
 @router.post("/agents/hermes/run")
 async def run_hermes_now(_owner=Depends(require_owner)):
     """Manual tick from the console — same pass the hourly schedule runs."""
@@ -1348,6 +1393,33 @@ async def run_customer_health_now(_owner=Depends(require_owner)):
     """Manual pass from the console — same as the morning schedule."""
     from customer_health import health_tick
     return await health_tick()
+
+
+@router.post("/agents/unfinished-work/run")
+async def run_unfinished_work_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the morning schedule."""
+    from unfinished_work import watch_tick
+    return await watch_tick()
+
+
+@router.get("/unfinished")
+async def get_unfinished(_owner=Depends(require_owner)):
+    """The latest unfinished-work lists; gathered fresh (without updating any
+    branch) when this process has not run the watcher yet."""
+    import unfinished_work
+    if unfinished_work.LAST:
+        return {"ok": True, **unfinished_work.LAST}
+    return {"ok": True, **(await unfinished_work.gather(update=False))}
+
+
+@router.get("/worklog")
+async def get_worklog(q: Optional[str] = None, _owner=Depends(require_owner)):
+    """The work log from both repos, or the entries that match `q`
+    ("have we built a refund flow?")."""
+    import worklog
+    items, errors = await worklog.entries()
+    found = worklog.search(items, q) if q else items[:60]
+    return {"ok": True, "entries": found, "total": len(items), "errors": errors}
 
 
 @router.post("/agents/money-auditor/run")
@@ -1395,6 +1467,10 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
     """Compact platform snapshot for the Chief's system prompt."""
     snap: Dict[str, Any] = {"fetched_at": datetime.now(timezone.utc).isoformat(),
                             "product_context": product_context()}
+    # owner_id -> {email, last_sign_in_at}. Filled by the practitioners
+    # block below and reused by the trials block, so naming the person
+    # behind an expiring trial costs no extra round trip.
+    users_by_id: Dict[str, Dict[str, Any]] = {}
 
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         # Practitioners
@@ -1410,6 +1486,12 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
             if ur.status_code < 400:
                 u = ur.json()
                 users = u.get("users", []) if isinstance(u, dict) else u
+                for x in users:
+                    if x.get("id"):
+                        users_by_id[str(x["id"])] = {
+                            "email": x.get("email"),
+                            "last_sign_in_at": x.get("last_sign_in_at"),
+                        }
                 snap["practitioners"] = {
                     "total":             len(users),
                     "signed_in_ever":    sum(1 for x in users if x.get("last_sign_in_at")),
@@ -1440,27 +1522,85 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
         snap["leads_new"]         = await _head_count("marketing_leads", {"status": "eq.new"})
         snap["leads_onboarded"]   = await _head_count("marketing_leads", {"status": "eq.onboarded"})
 
-        # Subscriptions
+        # Subscriptions.
+        #
+        # This used to select subscription_status + trial_days_left and
+        # hand the Chief a COUNT: "trials_ending_in_7d: 1". Asked which
+        # trial and what to do about it, the Chief could only say it did
+        # not know and tell Kevin to go and run SQL himself — which is a
+        # fair answer to give when you have been handed a number and no
+        # rows, and a useless one to receive. The view already carries
+        # the name, the exact end date and the owner; nothing was
+        # missing except the columns being asked for.
         try:
             sr = await c.get(
                 f"{SUPABASE_URL}/rest/v1/billing_status",
                 headers=headers,
-                params={"select": "subscription_status,trial_days_left"},
+                params={"select": (
+                    "business_id,business_name,owner_id,subscription_status,"
+                    "subscription_plan,trial_ends_at,trial_days_left"
+                )},
             )
             if sr.status_code < 400:
                 rows = sr.json()
                 by_status: Dict[str, int] = {}
-                trials_ending_in_7d = 0
+                trials: List[Dict[str, Any]] = []
+                issues: List[Dict[str, Any]] = []
                 for row in rows:
-                    s = row.get("subscription_status")
-                    if s:
-                        by_status[s] = by_status.get(s, 0) + 1
+                    st = row.get("subscription_status")
+                    if st:
+                        by_status[st] = by_status.get(st, 0) + 1
                     dl = row.get("trial_days_left")
                     if isinstance(dl, (int, float)) and 0 < dl <= 7:
-                        trials_ending_in_7d += 1
+                        owner = users_by_id.get(str(row.get("owner_id") or ""), {})
+                        trials.append({
+                            "business_id":     row.get("business_id"),
+                            "business_name":   row.get("business_name") or "(unnamed)",
+                            "trial_ends_at":   row.get("trial_ends_at"),
+                            "days_left":       round(float(dl), 1),
+                            "owner_email":     owner.get("email"),
+                            "owner_last_sign_in_at": owner.get("last_sign_in_at"),
+                        })
+                    if st in ("past_due", "unpaid", "incomplete"):
+                        owner = users_by_id.get(str(row.get("owner_id") or ""), {})
+                        issues.append({
+                            "business_id":   row.get("business_id"),
+                            "business_name": row.get("business_name") or "(unnamed)",
+                            "status":        st,
+                            "owner_email":   owner.get("email"),
+                        })
+
+                # Vertical, so advice can be trade-specific rather than
+                # generic. One request for every trial at once.
+                if trials:
+                    ids = [t["business_id"] for t in trials if t.get("business_id")]
+                    if ids:
+                        try:
+                            br = await c.get(
+                                f"{SUPABASE_URL}/rest/v1/businesses",
+                                headers=headers,
+                                params={
+                                    "select": "id,type,created_at",
+                                    "id": f"in.({','.join(ids)})",
+                                },
+                            )
+                            if br.status_code < 400:
+                                by_id = {str(b.get("id")): b for b in br.json()}
+                                for t in trials:
+                                    b = by_id.get(str(t.get("business_id"))) or {}
+                                    t["vertical"] = b.get("type")
+                                    t["signed_up_at"] = b.get("created_at")
+                        except Exception:
+                            pass  # names and dates still beat a bare count
+
+                trials.sort(key=lambda t: t["days_left"])
                 snap["subscriptions"] = {
                     "by_status":            by_status,
-                    "trials_ending_in_7d":  trials_ending_in_7d,
+                    "trials_ending_in_7d":  len(trials),
+                    # The rows themselves. Capped so a future surge
+                    # cannot quietly bloat the system prompt.
+                    "trials_ending_soon":   trials[:25],
+                    "payment_issues":       issues[:25],
                     "stripe_configured":    bool(os.environ.get("STRIPE_SECRET_KEY")),
                 }
         except Exception as e:
@@ -1571,6 +1711,27 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
         snap["operator_log_error"] = str(e)
     try:
         snap["recent_ships"] = await _recent_merged_prs()
+    except Exception:
+        pass
+
+    # The work log (2026-10-02): what every Claude Code / Codex session built,
+    # left undone or decided, from worklog/ in both repos. Lets Chief answer
+    # "have we built this already?" before anything new is queued.
+    try:
+        import worklog
+        items, _errs = await worklog.entries()
+        snap["work_log"] = [worklog.compact(e) for e in items[:40]]
+    except Exception as e:
+        snap["work_log_error"] = str(e)[:200]
+    # The unfinished-work watcher's latest lists (counts + what is ready).
+    try:
+        import unfinished_work
+        last = unfinished_work.LAST
+        if last:
+            snap["unfinished"] = {
+                k: (last.get(k) or [])[:12] if isinstance(last.get(k), list) else last.get(k)
+                for k in ("generated_at", "ready", "updated", "news", "conflicts",
+                          "failing", "migrations")}
     except Exception:
         pass
 

@@ -10,13 +10,21 @@ Two lanes, one list:
     Claude Code by default, or Codex when the task names it — seeds the
     brief, and submits it.
 
+A third kind of row is not dispatched at all (2026-09-26): a session Kevin
+opens by hand in Solution Space announces itself (origin 'desktop'), so the
+Dev Desk shows every project he has open on the desktop, not only the ones
+he sent from his phone, and a reply reaches it the same way.
+
 Both lanes report back into dev_tasks, which the Dev Desk panel renders.
+When a session reports, or goes quiet while Kevin is away from the machine,
+his phone hears about it (web push).
 Auth: /platform/dev-desk/* uses the owner's JWT (require_owner) like every
 other Mission Control endpoint; /dev-bridge/queue and /status use a device
 token minted at pairing; /report uses the task's own report_key so the
 session working the task can post its result.
 """
 
+import asyncio
 import hashlib
 import logging
 import ntpath
@@ -52,6 +60,7 @@ LOCAL_PROJECTS = {
 # every task before 2026-09-24 ran on it. The cloud lane is Claude only: it
 # is the @claude GitHub workflow.
 AGENTS = ("claude", "codex")
+AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex"}
 
 _BUILD_LABEL = "chief-build"
 _GH_REPOS = {
@@ -162,13 +171,21 @@ def _compose_prompt(task: Dict[str, Any]) -> str:
         body += ('\nYour final report may include work_result: {"summary":"What you produced and file paths", '
                  '"plan":null}. For strategy work, plan must match the schema in the brief. '
                  'Report editable output paths and any missing evidence. Never include credentials in reports.')
-    report_url = f"{PUBLIC_BASE_URL}/dev-bridge/tasks/{task['id']}/report"
     return (
         f"{body}\n\n"
         "---\n"
         "This task came from Mission Control's Dev Desk. Kevin is most likely "
         "away from this machine, so nobody is at the keyboard: work the task "
         "through on your own, and talk to Kevin through the Dev Desk.\n\n"
+        f"{_how_to_report(task)}"
+    )
+
+
+def _how_to_report(task: Dict[str, Any]) -> str:
+    """The report channel, in the words every brief uses — a dispatched
+    task's and a reopened desktop session's alike."""
+    report_url = f"{PUBLIC_BASE_URL}/dev-bridge/tasks/{task['id']}/report"
+    return (
         "To report, POST to:\n"
         f"  {report_url}\n"
         "  JSON body with three fields: key (given below), status, and note.\n"
@@ -195,6 +212,8 @@ def _reopen_brief(task: Dict[str, Any]) -> str:
     original brief plus what has been said on the Dev Desk since, so a fresh
     session picks the task up where it was left. Terminal captures are left
     out — they are screen noise, not conversation."""
+    if task.get("origin") == "desktop":
+        return _desktop_reopen_brief(task)
     lines = []
     for n in (task.get("notes") or [])[-16:]:
         who = {"kevin": "Kevin", "dev": "You (report)", "device": "Solution Space"}.get(n.get("from"))
@@ -210,6 +229,40 @@ def _reopen_brief(task: Dict[str, Any]) -> str:
         f"{history}\n\n"
         "Kevin's newest message is the last line above. Check the working tree "
         "for what was already done before changing anything, then continue.\n"
+    )
+
+
+def _desktop_reopen_brief(task: Dict[str, Any]) -> str:
+    """A session Kevin opened by hand has no brief to replay. When he replies
+    from his phone after it closed, the fresh session gets what there is:
+    that it was open, the last screen it showed (the only record of what it
+    was doing), and what Kevin has said since."""
+    notes = task.get("notes") or []
+    screen = next((n.get("text") or "" for n in reversed(notes)
+                   if n.get("from") == "session"), "").strip()
+    lines = []
+    for n in notes[-16:]:
+        who = {"kevin": "Kevin", "dev": "You (report)"}.get(n.get("from"))
+        text = (n.get("text") or "").strip()
+        if who and text:
+            lines.append(f"- {who}: {text[:1200]}")
+    history = "\n".join(lines) or "- (nothing yet)"
+    last_screen = "\n".join(screen.splitlines()[-40:]) or "(none was captured)"
+    return (
+        f"Kevin had a {AGENT_NAMES.get(task.get('agent') or 'claude', 'coding')} "
+        f"session open in this project ({task.get('title') or 'this folder'}) "
+        "on his desktop. It has since closed, and he has messaged it from "
+        "Mission Control's Dev Desk on his phone. He is away from this "
+        "machine, so nobody is at the keyboard.\n\n"
+        "The last screen that session showed:\n"
+        f"```\n{last_screen}\n```\n\n"
+        "What Kevin has said on the Dev Desk, oldest first:\n"
+        f"{history}\n\n"
+        "His newest message is the last line above. Check the working tree "
+        "and recent commits for what was already done before changing "
+        "anything, then do what he asks.\n\n"
+        "---\n"
+        f"{_how_to_report(task)}"
     )
 
 
@@ -232,6 +285,10 @@ class PairBody(BaseModel):
     name: Optional[str] = None
 
 
+_DESK_COLUMNS = ("id,created_at,updated_at,lane,status,title,details,repo,agent,origin,"
+                 "project_path,issue_url,notes,picked_up_at,finished_at")
+
+
 @router.get("/platform/dev-desk")
 async def dev_desk(lite: bool = False, _owner=Depends(require_owner)):
     """Everything the Dev Desk panel shows, one call. Fails soft on the
@@ -241,12 +298,31 @@ async def dev_desk(lite: bool = False, _owner=Depends(require_owner)):
     seconds while a conversation is live, which would otherwise spend three
     GitHub API calls a poll on lists that change a few times a day."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        tasks = await _sb_get(c, "dev_tasks", {
-            "select": "id,created_at,updated_at,lane,status,title,details,repo,agent,"
-                      "project_path,issue_url,notes,picked_up_at,finished_at",
-            "order": "created_at.desc",
-            "limit": "50",
-        })
+        try:
+            tasks = await _sb_get(c, "dev_tasks", {
+                "select": _DESK_COLUMNS,
+                "origin": "eq.dev_desk",
+                "order": "created_at.desc",
+                "limit": "50",
+            })
+            # Desktop sessions are their own window, newest activity first:
+            # Kevin opens several a day, and in one shared window of 50 they
+            # would push every dispatched conversation off the desk in a week.
+            tasks += await _sb_get(c, "dev_tasks", {
+                "select": _DESK_COLUMNS,
+                "origin": "eq.desktop",
+                "order": "updated_at.desc",
+                "limit": "20",
+            })
+        except HTTPException:
+            # No origin column yet (APPLY-2026-09-26-dev-desk-desktop-sessions
+            # not applied): the desk still opens, as it did before desktop
+            # sessions existed. Announcing one fails loud until then.
+            tasks = await _sb_get(c, "dev_tasks", {
+                "select": _DESK_COLUMNS.replace("origin,", ""),
+                "order": "created_at.desc",
+                "limit": "50",
+            })
         devices = await _sb_get(c, "dev_bridge_devices", {
             "select": "id,name,created_at,last_seen_at,revoked,agents",
             "order": "created_at.desc",
@@ -439,6 +515,11 @@ class StatusBody(BaseModel):
     status: str
     note: Optional[str] = None
     sender: Optional[str] = None  # 'device' (default) | 'session'
+    # Solution Space's read of whether Kevin is at the machine (no input for
+    # a while). A relayed screen from a session that went quiet while he is
+    # away is the one his phone hears about; a build that predates the field
+    # sends nothing, and nothing is pushed.
+    away: Optional[bool] = None
 
 
 class ReportBody(BaseModel):
@@ -636,8 +717,188 @@ async def bridge_status(task_id: str, body: StatusBody,
                 patch["finished_at"] = _now()
             await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
         if body.note:
-            await _append_note(c, task, sender, body.note)
-    return {"ok": True}
+            if sender == "session" and task.get("origin") == "desktop":
+                await _put_screen(c, task, body.note)
+            else:
+                await _append_note(c, task, sender, body.note)
+        pushed = 0
+        if (sender == "session" and body.away and not settled
+                and not _is_work(task) and not _said_it_itself(task)):
+            pushed = await _tell_kevin(
+                c, task, f"{task.get('title') or 'A session'} — your turn",
+                "It stopped: finished, or waiting on you. Its screen is on the Dev Desk.")
+    return {"ok": True, "pushed": pushed}
+
+
+# A session that reported in its own words within this window has already
+# told Kevin what the quiet means; a generic "it stopped" on top would
+# replace its sentence on his lock screen (one notification per task).
+_OWN_WORDS_S = 300
+
+
+def _said_it_itself(task: Dict[str, Any]) -> bool:
+    cutoff = datetime.now(timezone.utc).timestamp() - _OWN_WORDS_S
+    for n in task.get("notes") or []:
+        if n.get("from") != "dev":
+            continue
+        try:
+            at = datetime.fromisoformat(str(n.get("at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.timestamp() >= cutoff:
+            return True
+    return False
+
+
+async def _put_screen(c: httpx.AsyncClient, task: Dict[str, Any], text: str) -> None:
+    """A desktop session relays its screen every time it goes quiet — every
+    turn, in a session Kevin is using by hand. Consecutive screens replace
+    one another instead of piling up: the thread keeps the newest screen
+    between two things anyone said, which is all the panel shows anyway."""
+    notes = list(task.get("notes") or [])
+    screen = {"from": "session", "text": text[:4000], "at": _now()}
+    if notes and notes[-1].get("from") == "session":
+        notes[-1] = screen
+    else:
+        notes.append(screen)
+    await _sb_patch(c, "dev_tasks", {"id": f"eq.{task['id']}"},
+                    {"notes": notes, "updated_at": _now()})
+
+
+# ─── Telling Kevin: web push to his phone ─────────────────────────────
+
+async def _tell_kevin(c: httpx.AsyncClient, task: Dict[str, Any],
+                      title: str, body: str) -> int:
+    """One notification per task — the tag makes a newer one replace the
+    older on the lock screen instead of stacking — and a tap opens that
+    task's thread on the Dev Desk. Returns how many devices it reached.
+    Fail-soft: a report or a relay never fails because the telling did."""
+    try:
+        import platform_watchdog
+        import push_notifications
+        if not push_notifications.push_enabled():
+            return 0
+        owner = await platform_watchdog._owner_user_id(c, _service_headers())
+        if not owner:
+            logger.warning("dev_bridge push skipped — no owner user id resolved")
+            return 0
+        # send_to_user posts to each push service synchronously.
+        return await asyncio.to_thread(
+            push_notifications.send_to_user, owner,
+            title=title[:90], body=body[:220],
+            nav=f"studio:platform-dev-desk:{task['id']}",
+            tag=f"dev-task-{task['id']}",
+        )
+    except Exception as e:
+        logger.warning(f"dev_bridge push failed for {task.get('id')}: {e}")
+        return 0
+
+
+# ─── Desktop sessions: the ones Kevin opened by hand ──────────────────
+
+class DesktopSessionBody(BaseModel):
+    project_path: str
+    project_name: Optional[str] = None
+    agent: Optional[str] = None  # 'claude' (default) | 'codex'
+    label: Optional[str] = None  # what Solution Space calls the pane, if named
+
+
+@router.post("/dev-bridge/sessions")
+async def bridge_open_session(body: DesktopSessionBody,
+                              authorization: Optional[str] = Header(None)):
+    """Solution Space announces a session Kevin opened himself. It becomes a
+    live Dev Desk conversation with no brief: its screen arrives as it goes
+    quiet, and a reply is typed into it like any task's. The report key is
+    for the session that reopens it after it closed — see
+    _desktop_reopen_brief — since nobody is at the keyboard then."""
+    agent = (body.agent or "claude").strip().lower()
+    if agent not in AGENTS:
+        raise HTTPException(422, "agent must be claude or codex")
+    path = body.project_path.strip()
+    if not path:
+        raise HTTPException(422, "project_path required")
+    name = ((body.project_name or "").strip()
+            or ntpath.basename(path.rstrip("\\/")) or "project")
+    repo = next((k for k, v in LOCAL_PROJECTS.items() if v.lower() == path.lower()), None)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        device = await _require_device(c, authorization)
+        try:
+            row = await _sb_insert(c, "dev_tasks", {
+                "lane": "local",
+                "origin": "desktop",
+                "device_id": device["id"],
+                "status": "working",
+                "title": ((body.label or "").strip() or name)[:200],
+                "repo": repo,
+                "agent": agent,
+                "project_path": path,
+                "report_key": secrets.token_hex(16),
+            })
+        except HTTPException as e:
+            raise HTTPException(e.status_code, "Desktop sessions need "
+                                "supabase/APPLY-2026-09-26-dev-desk-desktop-sessions.sql "
+                                f"applied. {e.detail}")
+    return {"ok": True, "task_id": row.get("id")}
+
+
+class SweepBody(BaseModel):
+    live: List[str] = []
+
+
+# A session announced, or a closed one reopened by a reply, is not in the
+# device's live list until it is bound to a pane; a sweep in that window
+# must not close it.
+_SWEEP_GRACE_S = 120
+
+
+@router.post("/dev-bridge/sessions/{task_id}/closed")
+async def bridge_close_session(task_id: str, authorization: Optional[str] = Header(None)):
+    """The pane closed. Only a desktop session ends this way — a dispatched
+    task ends with its own report — so anything else is left as it is."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        device = await _require_device(c, authorization)
+        task = await _get_task(c, task_id)
+        if task.get("origin") != "desktop" or task.get("device_id") != device["id"]:
+            return {"ok": True, "closed": False}
+        closed = await _close_desktop(c, task, "The session was closed in Solution Space.")
+    return {"ok": True, "closed": closed}
+
+
+@router.post("/dev-bridge/sessions/sweep")
+async def bridge_sweep_sessions(body: SweepBody, authorization: Optional[str] = Header(None)):
+    """Solution Space says which desktop sessions it still has open; the rest
+    of its own are over. A restart or a crash never sends 'closed', and
+    without this every session it lost would sit on the Dev Desk as live."""
+    live = set(body.live or [])
+    # Z form — '+00:00' reads as a space in a PostgREST query string.
+    before = datetime.fromtimestamp(
+        datetime.now(timezone.utc).timestamp() - _SWEEP_GRACE_S, timezone.utc,
+    ).isoformat().replace("+00:00", "Z")
+    closed = 0
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        device = await _require_device(c, authorization)
+        rows = await _sb_get(c, "dev_tasks", {
+            "origin": "eq.desktop",
+            "device_id": f"eq.{device['id']}",
+            "status": f"in.({','.join(sorted(_ACTIVE_STATUSES))})",
+            "updated_at": f"lt.{before}",
+            "select": "id,status,origin,device_id,notes",
+            "limit": "50",
+        })
+        for t in rows:
+            if t["id"] not in live and await _close_desktop(
+                    c, t, "Solution Space no longer has this session open."):
+                closed += 1
+    return {"ok": True, "closed": closed}
+
+
+async def _close_desktop(c: httpx.AsyncClient, task: Dict[str, Any], why: str) -> bool:
+    if task.get("status") in _FINISHED_STATUSES:
+        return False
+    await _sb_patch(c, "dev_tasks", {"id": f"eq.{task['id']}"},
+                    {"status": "done", "finished_at": _now(), "updated_at": _now()})
+    await _append_note(c, task, "device", why)
+    return True
 
 
 _REPORT_STATUSES = {"working", "done", "failed"}
@@ -669,6 +930,16 @@ async def bridge_report(task_id: str, body: ReportBody):
         await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
         if body.note:
             await _append_note(c, task, "dev", body.note)
+        # Every report is the session speaking to Kevin on purpose — a
+        # finish, a failure, a progress line or a question — so each one
+        # reaches his phone, in the session's own words.
+        if not _is_work(task):
+            name = task.get("title") or "A task"
+            said = " ".join((body.note or "").split())
+            await _tell_kevin(c, task, *{
+                "done": (f"Done — {name}", said or "Finished. The report is on the Dev Desk."),
+                "failed": (f"Stopped — {name}", said or "It stopped with a failure."),
+            }.get(status, (name, said or "New update on the Dev Desk.")))
 
     # If this task came from a support ticket, the person who reported the
     # problem hears about it now — in the session's own sentence when it is

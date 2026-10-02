@@ -1547,6 +1547,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                               f"{resp.status_code} {body[:300]}")
                           await log_api_usage(endpoint="/chief/backend", model=model,
                               input_tokens=0, output_tokens=0, business_id=business_id,
+                              task_type=prompt_shape,
                               duration_ms=int(time.time() * 1000) - started_ms, ok=False,
                               error=f"{resp.status_code}")
                           fb_reason = f"stream {resp.status_code}"
@@ -1618,6 +1619,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   logger.warning(f"Claude stream failed (attempt {attempt + 1}/3): {e}")
                   await log_api_usage(endpoint="/chief/backend", model=model,
                       input_tokens=in_tok, output_tokens=out_tok, business_id=business_id,
+                      task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms, ok=False, error=str(e))
                   partial = "".join(full_parts).strip()
                   if partial or turn_streamed:
@@ -1802,6 +1804,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
       if resp is None:
           await log_api_usage(endpoint="/chief/backend", model=model,
               input_tokens=0, output_tokens=0, business_id=business_id,
+              task_type=prompt_shape,
               duration_ms=int(time.time() * 1000) - started_ms, ok=False,
               error=last_err or "exhausted retries")
           # Backup Brain (#103, 2026-07-12). Anthropic has now failed three
@@ -2051,6 +2054,12 @@ def _blend_memories(memories: List[Dict], keep: int = 50) -> List[Dict]:
 # evidence both carry them.
 _INVOICE_SAMPLE_LIMIT = 40
 
+# The row limit of each list _gather_context reads. A read that succeeded
+# and came back under its limit holds every matching row, so the prompt
+# and the answer check call that list complete (see complete_lists).
+_LIST_LIMITS = {"queue": 10, "sessions": 10, "projects": 50,
+                "open_invoices": _INVOICE_SAMPLE_LIMIT, "products": 50, "offerings": 60}
+
 
 def _invoice_today():
     return datetime.now(timezone.utc).date()
@@ -2141,6 +2150,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             # it builds the known-sender allowlist in Python and is
             # deliberately NOT copied into contacts_lookup, so it never
             # reaches the prompt. Gating costs one column, not a PII dump.
+            # The allowlist rides in ctx as email_known_senders (see
+            # mailbox_policy.split_for_prompt), which no prompt or review
+            # evidence renders.
             f"/contacts?business_id=eq.{biz_id}"
             f"&select=id,name,email,status,health_score,lead_score,role,last_interaction,created_at&limit=500"),
         # ai_reasoning rides along only so the onboarding welcome note can
@@ -2148,13 +2160,13 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb(client, "GET",
             f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft"
             f"&select=id,agent,action_type,subject,priority,contact_id,created_at,ai_reasoning"
-            f"&order=priority.asc,created_at.desc&limit=10"),
+            f"&order=priority.asc,created_at.desc&limit={_LIST_LIMITS['queue']}"),
         _sb(client, "GET",
             f"/events?business_id=eq.{biz_id}&order=created_at.desc&limit=20"
             f"&select=event_type,data,created_at,contacts(name)"),
         _sb(client, "GET",
             f"/sessions?business_id=eq.{biz_id}&status=eq.scheduled"
-            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit=10"
+            f"&scheduled_for=lte.{in_7d}&order=scheduled_for.asc&limit={_LIST_LIMITS['sessions']}"
             f"&select=id,title,scheduled_for,contact_id,contacts(name)"),
         _sb(client, "GET",
             f"/insights?business_id=eq.{biz_id}&status=eq.unread"
@@ -2199,7 +2211,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # having to repeat themselves.
         _sb(client, "GET",
             f"/products?business_id=eq.{biz_id}&status=eq.active"
-            f"&order=type.asc,sort_order.asc,name.asc&limit=50"
+            f"&order=type.asc,sort_order.asc,name.asc&limit={_LIST_LIMITS['products']}"
             f"&select=id,name,type,price,currency,pricing_type,duration_minutes,description"),
         # Recent email replies — full body content so the Chief can
         # quote a contact's actual words back when drafting responses.
@@ -2244,7 +2256,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/module_entries?business_id=eq.{biz_id}"
             f"&custom_modules.slug=eq.projects"
             f"&select=id,data,created_at,custom_modules!inner(slug)"
-            f"&order=created_at.desc&limit=50"),
+            f"&order=created_at.desc&limit={_LIST_LIMITS['projects']}"),
         # Open missions — Chief must never forget a plan in flight, and a
         # mission waiting on the practitioner should be raised, not
         # discovered. Bounded and tiny.
@@ -2262,7 +2274,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             f"/invoices?business_id=eq.{biz_id}"
             f"&status=in.(draft,sent,viewed,overdue)"
             f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
-            f"&order=due_date.asc.nullslast&limit=40"),
+            f"&order=due_date.asc.nullslast&limit={_LIST_LIMITS['open_invoices']}"),
         # Open assignments (2026-09-04) — the outcomes the standing
         # agent is working between conversations. Chief must know
         # what it is already on, so it never takes the same one twice
@@ -2284,7 +2296,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # saw the offerings table, withheld the answer as "no evidence".
         _sb(client, "GET",
             f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&select=name,current_price,category&order=name.asc&limit=60"),
+            f"&select=name,current_price,category&order=name.asc&limit={_LIST_LIMITS['offerings']}"),
     ]
     context_unavailable = []
 
@@ -2326,8 +2338,10 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _soft(asyncio.to_thread(_lazy_sync, "growth_objective_agent",
                                 "growth_context_block", biz_id), ""),
         # Raw profile row — the JIT capture detector reads
-        # proactive_capture_enabled and brand_voice from it.
-        _soft(asyncio.to_thread(business_profile_agent.get_profile, biz_id), {}),
+        # proactive_capture_enabled and brand_voice from it. No row yet is
+        # {}, an answer; only a failed read is None, and "unavailable".
+        _soft(asyncio.to_thread(business_profile_agent.get_profile, biz_id,
+                                empty_if_missing=True), {}),
         _soft(asyncio.to_thread(brand_engine_chief_context_block, biz_id), ""),
         # Standing playbook (2026-07-13) — the distilled per-business brief.
         _soft(asyncio.to_thread(_lazy_sync, "chief_playbook",
@@ -2356,7 +2370,11 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             return "", {}, ""
         return await asyncio.gather(
             _soft(asyncio.to_thread(pp_chief_context_block, owner_id), ""),
-            _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id), {}),
+            # A practitioner who signed up today has no profile row: {}, not a
+            # failed read (2026-09-26: every day-one prompt said a context
+            # source was unavailable).
+            _soft(asyncio.to_thread(practitioner_profile_agent.get_profile, owner_id,
+                                    empty_if_missing=True), {}),
             _soft(asyncio.to_thread(voice_chief_context_block, owner_id), ""),
         )
 
@@ -2389,6 +2407,10 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # pointed them at a system note. It is not a draft anyone owes a
     # decision on, so it is not counted or shown here (onboarding_welcome).
     import onboarding_welcome
+    # Completeness is judged on the rows the read returned, before the
+    # welcome note is dropped: a full page (limit rows, one of them the
+    # welcome note) is still a page, not every draft.
+    queue_read = queue
     queue = onboarding_welcome.without_welcome(queue)
     recent_queue = onboarding_welcome.without_welcome(recent_queue)
     if not biz_rows:
@@ -2470,13 +2492,18 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "queue": queue or [],
         "events": events or [],
         "sessions": sessions or [],
-        # The calendar read succeeded and came back under its limit of 10:
-        # every scheduled session in the window is in the list, so an empty
-        # list means nothing is booked. Without this the prompt said "none
-        # in the loaded sample; check data availability" either way, and
-        # "When is my next appointment?" spent two lookups (17.9 s) before
-        # saying nothing was booked (2026-09-24).
-        "sessions_complete": sessions is not None and len(sessions) < 10,
+        # <list>_complete: the read succeeded (None is a failed read) and
+        # came back under its limit, so the list is every matching row and
+        # an empty one means none yet. The calendar came first: the prompt
+        # said "none in the loaded sample; check data availability" either
+        # way, and "When is my next appointment?" spent two lookups (17.9 s)
+        # before saying nothing was booked (2026-09-24). A business that
+        # signed up today is mostly empty lists, and "You have no open
+        # invoices yet" was just as hard to say (2026-09-26).
+        **{f"{name}_complete": rows is not None and len(rows) < _LIST_LIMITS[name]
+           for name, rows in (("queue", queue_read), ("sessions", sessions),
+                              ("projects", project_rows), ("open_invoices", open_invoices),
+                              ("products", products), ("offerings", offering_rows))},
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
@@ -2565,6 +2592,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # Totals and ages computed once, here, from the rows: the reply and the
     # answer check read the same figures (see _invoice_summary_lines).
     _ctx["invoice_summary"] = _invoice_summary_lines(_ctx["open_invoices"])
+    # Named where Chief and the answer check both read data quality.
+    _ctx["context_quality"]["complete_lists"] = complete_lists(_ctx)
     return _ctx
 
 
@@ -3384,6 +3413,48 @@ SESSIONS_HEADING = "UPCOMING SESSIONS (next 7 days)"
 AT_RISK_HEADING = "at_risk (sample; shared Retention rules: health < 40 or 30+ days quiet, excluding lapsed)"
 CONTEXT_HEADINGS = {"sessions": SESSIONS_HEADING, "at_risk": AT_RISK_HEADING}
 
+# What an empty list says when its read came back complete, in the prompt
+# and in the answer check's record of it: the same words, so a reply that
+# repeats the prompt quotes its evidence. A read that failed never says
+# these; it says UNREAD_LIST.
+EMPTY_COMPLETE = {
+    "queue": "nothing waiting for review",
+    "sessions": "nothing booked in this window: this list is the whole calendar for it",
+    "projects": "no projects yet: this list is complete",
+    "open_invoices": "no open invoices: this list is complete",
+    "invoice_summary": "no open invoices: this list is complete",
+    "products": "no products or services yet: this catalog is complete",
+    "offerings": "no offerings yet: this list is complete",
+}
+UNREAD_LIST = "none in the loaded sample; check data availability"
+
+
+def complete_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists that hold every matching row (<list>_complete,
+    set in _gather_context). The invoice totals are computed from every
+    open invoice, so they are complete when the invoices are."""
+    names = [name for name in _LIST_LIMITS if (ctx or {}).get(f"{name}_complete")]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def unread_lists(ctx: Dict[str, Any]) -> List[str]:
+    """The context lists known to have failed to load: marked not complete
+    and still empty (an empty read is under every limit, so only a failed
+    one lands here). A context without the marks says nothing either way."""
+    names = [name for name in _LIST_LIMITS
+             if (ctx or {}).get(f"{name}_complete") is False and not (ctx or {}).get(name)]
+    if "open_invoices" in names:
+        names.append("invoice_summary")
+    return names
+
+
+def _empty_list_line(ctx: Dict[str, Any], name: str) -> str:
+    """The line under an empty list: plainly none when it was read in
+    full, and never an absence when it was not."""
+    return f"  ({EMPTY_COMPLETE[name] if ctx.get(f'{name}_complete') else UNREAD_LIST})"
+
 
 def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """context_quality for the CACHED state segment: the retrieval DATE,
@@ -3825,12 +3896,28 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         image_lines.append(
             f"  - \"{_neutralize_untrusted(job.get('prompt') or '')[:90]}\" — {job.get('status') or 'queued'}{started}")
 
+    # A list read in full says so (complete_lists); a sample says it is one.
+    # Projects and invoices show their first 25, so they are called
+    # complete only when every row is on the page.
+    n_queue = len(ctx['queue'])
+    queue_heading = (
+        f"QUEUE ({n_queue} draft{'' if n_queue == 1 else 's'} waiting for review; this list is complete)"
+        if ctx.get('queue_complete') else f"QUEUE ({n_queue} loaded draft rows; sample, not a total)")
+    projects_heading = (
+        "PROJECTS (every project on file; this list is complete)"
+        if ctx.get('projects_complete') and len(ctx.get('projects') or []) <= 25
+        else "PROJECTS (loaded sample; use list_projects for additional records)")
+    invoices_heading = (
+        "OPEN INVOICES (every open invoice, itemized; this list is complete; show_view displays them)"
+        if ctx.get('open_invoices_complete') and len(ctx.get('open_invoices') or []) <= 25
+        else "OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them)")
+
     return f"""BUSINESS: {bizname} (type: {biztype})
   Practitioner: {(biz.get('settings') or {}).get('practitioner_name', 'the practitioner')}
   Voice profile: {json.dumps(biz.get('voice_profile') or {})[:1200]}{et_summary}{autopilot_block}
 
 DATA QUALITY: {json.dumps(_quality_for_prompt(ctx))}
-  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete. Never infer a total or absence from a capped list.
+  A missing/failed source means unavailable, not zero. Lists below are samples unless explicitly complete (complete_lists names them; an empty complete list means none yet, so say so plainly). Never infer a total or absence from a capped list.
 CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unknown'} total
   loaded: {ctx.get('contacts_loaded', 'unknown')}; complete: {ctx.get('contacts_complete', False)}
   by_status (loaded sample only): {json.dumps(ctx['contacts_by_status'])}
@@ -3839,14 +3926,14 @@ CONTACTS: {ctx['contacts_total'] if ctx['contacts_total'] is not None else 'unkn
 {chr(10).join(at_risk_lines) if at_risk_lines else '  (none in this context sample)'}
   For complete Retention counts, names, repeat-payment rates and follow-up decisions, call growth_report section=client_health or section=retention. Do not treat this context sample as a complete report.
 
-QUEUE ({len(ctx['queue'])} loaded draft rows; sample, not a total):
-{chr(10).join(queue_lines) if queue_lines else '  (none in the loaded sample; check data availability)'}
+{queue_heading}:
+{chr(10).join(queue_lines) if queue_lines else _empty_list_line(ctx, 'queue')}
 
 {SESSIONS_HEADING}:
-{chr(10).join(session_lines) if session_lines else ('  (nothing booked in this window: this list is the whole calendar for it)' if ctx.get('sessions_complete') else '  (none in the loaded sample; check data availability)')}
+{chr(10).join(session_lines) if session_lines else _empty_list_line(ctx, 'sessions')}
 
-PROJECTS (loaded sample; use list_projects for additional records):
-{chr(10).join(project_lines) if project_lines else '  (none in the loaded sample; check data availability)'}
+{projects_heading}:
+{chr(10).join(project_lines) if project_lines else _empty_list_line(ctx, 'projects')}
 
 ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner; never re-propose one that already exists):
 {chr(10).join(mission_lines) if mission_lines else '  (none)'}
@@ -3860,10 +3947,10 @@ STANDING PERMISSIONS:
 {chr(10).join(standing_lines) if standing_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
 
 OPEN INVOICES — TOTALS (computed from the rows below; quote these for any count, total, age or who-owes-most answer, never add them up yourself):
-{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or '  (no open invoices)'}
+{chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or _empty_list_line(ctx, 'open_invoices')}
 
-OPEN INVOICES (loaded itemized sample, not a complete total; use a lookup for additional rows, or show_view to display them):
-{chr(10).join(invoice_lines) if invoice_lines else '  (none in the loaded sample; check data availability)'}
+{invoices_heading}:
+{chr(10).join(invoice_lines) if invoice_lines else _empty_list_line(ctx, 'open_invoices')}
 
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
@@ -3901,7 +3988,7 @@ PRACTITIONER SITE:
 {_format_site_info(ctx)}
 
 PRODUCTS / SERVICES CATALOG (use these exact ids when creating invoices — pull description + unit_price from the catalog rather than asking again):
-{chr(10).join(product_lines) if product_lines else '  (no products yet)'}
+{chr(10).join(product_lines) if product_lines else _empty_list_line(ctx, 'products')}
 
 {_format_email_replies_block(ctx)}
 {_format_sms_block(ctx)}
@@ -4278,6 +4365,14 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
         body = f"Hi {contact.get('name')}, just thinking of you. Wanted to check in. — {practitioner}"
 
     subject = "Checking in"   # client-facing subject — not the internal "Check-in for X" label
+    # The practitioner asked for this one check-in, so it is drafted — but
+    # an imported unsubscribe is written on the draft, and autopilot holds
+    # it for them rather than sending (_process_autopilot_for_draft).
+    import contact_fields
+    unsub = contact_fields.email_opted_out(contact)
+    reasoning = f"Chief of Staff requested: {reason}"
+    if unsub:
+        reasoning += f" Note: {contact_fields.UNSUBSCRIBED_NOTE} ({unsub})."
     inserted = await _sb(client, "POST", "/agent_queue", {
         "business_id": biz["id"], "contact_id": contact["id"],
         "agent": "nurture", "action_type": "check_in",
@@ -4285,7 +4380,7 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
         "body": body,
         "channel": "email" if contact.get("email") else "in_app",
         "status": "draft", "priority": "medium",
-        "ai_reasoning": f"Chief of Staff requested: {reason}",
+        "ai_reasoning": reasoning,
         "ai_model": DRAFT_MODEL,
     })
     if not inserted:
@@ -4305,8 +4400,10 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
 
     return {
         "type": "draft_nurture",
-        "result": "auto_approved" if auto_label_suffix else "queued for approval",
-        "label": f"Check-in for {contact.get('name')}{auto_label_suffix}",
+        "result": ("auto_approved" if auto_label_suffix else "queued for approval")
+                  + (f"; note: {contact_fields.UNSUBSCRIBED_NOTE}" if unsub else ""),
+        "label": f"Check-in for {contact.get('name')}{auto_label_suffix}"
+                 + (f" · note: {contact_fields.UNSUBSCRIBED_NOTE}" if unsub else ""),
         "nav": _nav("operate", "queue"),
         "queue_id": queue_id,
         "draft_preview": {"subject": subject, "body": (body or "")[:200]},
@@ -4345,6 +4442,15 @@ async def handle_draft_email(client, biz, action) -> Dict:
         if not body:
             body = f"Hi {name},\n\nReaching out from {biz.get('name')}. — {practitioner}"
 
+    # One email to one person, asked for by the practitioner: an imported
+    # unsubscribe does not block it, but the draft says so where they
+    # review it (ai_reasoning shows in the approval queue) and in the
+    # action label Chief narrates from.
+    import contact_fields
+    unsub = contact_fields.email_opted_out(contact) if contact else None
+    reasoning = f"Chief of Staff drafted: {action.get('reason', 'conversational request')}"
+    if unsub:
+        reasoning += f" Note: {contact_fields.UNSUBSCRIBED_NOTE} ({unsub})."
     inserted = await _sb(client, "POST", "/agent_queue", {
         "business_id": biz["id"],
         "contact_id": contact["id"] if contact else None,
@@ -4352,7 +4458,7 @@ async def handle_draft_email(client, biz, action) -> Dict:
         "subject": subject, "body": body,
         "channel": "email" if (contact and contact.get("email")) else "in_app",
         "status": "draft", "priority": action.get("priority", "medium"),
-        "ai_reasoning": f"Chief of Staff drafted: {action.get('reason', 'conversational request')}",
+        "ai_reasoning": reasoning,
         "ai_model": DRAFT_MODEL,
     })
     if not inserted:
@@ -4360,13 +4466,16 @@ async def handle_draft_email(client, biz, action) -> Dict:
 
     queue_id = inserted[0].get("id") if isinstance(inserted, list) and inserted else None
     label = f"Email: {subject}" + (f" → {contact.get('name')}" if contact else "")
+    if unsub:
+        label += f" · note: {contact_fields.UNSUBSCRIBED_NOTE}"
     return {
         "type": "draft_email",
-        "result": "queued for approval",
+        "result": "queued for approval" + (f"; note: {contact_fields.UNSUBSCRIBED_NOTE}" if unsub else ""),
         "label": label,
         "nav": _nav("operate", "queue"),
         "queue_id": queue_id,
         "draft_preview": {"subject": subject, "body": (body or "")[:200]},
+        **({"unsubscribed": unsub} if unsub else {}),
     }
 
 
@@ -4419,11 +4528,16 @@ async def handle_draft_and_send(client, biz, action) -> Dict:
         result_str = "drafted (email provider not configured)"
     else:
         result_str = "drafted and approved"
+    label = _approve_label(item.get("subject"), delivery)
+    if delivery.get("unsubscribed") or draft_result.get("unsubscribed"):
+        import contact_fields
+        result_str += f"; note: {contact_fields.UNSUBSCRIBED_NOTE}"
+        label += f" · note: {contact_fields.UNSUBSCRIBED_NOTE}"
 
     return {
         "type": "draft_and_send",
         "result": result_str,
-        "label": _approve_label(item.get("subject"), delivery),
+        "label": label,
         "nav": _nav("operate", "queue"),
         "queue_id": queue_id,
         "email_sent": bool(delivery.get("sent")),
@@ -6550,11 +6664,19 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
         return out
 
     rows = await _sb(client, "GET",
-        f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=id,name,email")
+        f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=id,name,email,metadata")
     if not rows:
         out["reason"] = "no_contact"
         return out
     contact = rows[0]
+    # A person approving ONE email to ONE contact is never blocked by an
+    # imported unsubscribe — but the result says so, where they see it.
+    # (The unattended sender holds marketing drafts before reaching here:
+    # _process_autopilot_for_draft.)
+    import contact_fields
+    _unsub = contact_fields.email_opted_out(contact)
+    if _unsub:
+        out["unsubscribed"] = _unsub
     email = (contact.get("email") or "").strip()
     if expected_email is not None and email.lower() != expected_email.lower():
         return {**out, "reason": "recipient_changed"}
@@ -6770,6 +6892,34 @@ async def _should_auto_approve(
     return False, "default_manual"
 
 
+# Agents whose drafts are marketing-shaped outreach (re-engagement
+# check-ins, growth nudges) rather than mail about the person's own
+# bookings, invoices or documents.
+_MARKETING_AGENTS = frozenset({"nurture", "growth"})
+
+
+async def _unsubscribed_for_autopilot(client, biz_id: str, contact_id: Optional[str],
+                                      contact: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why the unattended sender must NOT mail this contact, or None.
+    Uses the contact row when it was read with metadata; otherwise reads
+    it. A read that fails holds the draft — an unsubscribe we could not
+    check is not permission to send (the same fail-closed rule as the
+    policy check in _should_auto_approve)."""
+    import contact_fields
+    if not contact_id:
+        return None
+    if isinstance(contact, dict) and "metadata" in contact:
+        return contact_fields.email_opted_out(contact)
+    try:
+        rows = await _sb(client, "GET",
+            f"/contacts?id=eq.{contact_id}&business_id=eq.{biz_id}&select=id,metadata&limit=1")
+    except Exception:
+        rows = None
+    if rows is None:
+        return "unsubscribe check unavailable"
+    return contact_fields.email_opted_out(rows[0]) if rows else None
+
+
 async def _process_autopilot_for_draft(
     client,
     biz: Dict[str, Any],
@@ -6783,6 +6933,15 @@ async def _process_autopilot_for_draft(
     agent_name = (draft_row.get("agent") or "").strip().lower()
     if not agent_name:
         return None
+    # An imported unsubscribe holds on the unattended sender: a nurture or
+    # growth draft to someone who unsubscribed waits for the practitioner,
+    # who sees it (with the note) and can still choose to send it.
+    if agent_name in _MARKETING_AGENTS:
+        why = await _unsubscribed_for_autopilot(
+            client, biz["id"], draft_row.get("contact_id"), contact)
+        if why:
+            print(f"[Chief Autopilot] Queued for review: {agent_name} -- unsubscribed ({why})", flush=True)
+            return None
     should_auto, reason = await _should_auto_approve(client, biz, agent_name, draft_row, contact)
     if not should_auto:
         print(f"[Chief Autopilot] Queued for review: {agent_name} -- {reason}", flush=True)
@@ -8840,10 +8999,13 @@ async def handle_batch_email(client, biz, action) -> Dict:
     try:
         contacts = await _sb(
             client, "GET",
-            f"/contacts?id=in.({id_filter})&business_id=eq.{biz['id']}&select=id,name,email"
+            # metadata: the unsubscribe the client-list import recorded
+            # lives there, and a row read without it reads as mailable.
+            f"/contacts?id=in.({id_filter})&business_id=eq.{biz['id']}&select=id,name,email,metadata"
         ) or []
     except Exception as e:
         return _fail("batch_email", f"contact lookup failed: {e}")
+    import contact_fields
 
     settings = biz.get("settings") or {}
     et = (settings.get("email_templates") or {}) if isinstance(settings.get("email_templates"), dict) else {}
@@ -8854,6 +9016,7 @@ async def handle_batch_email(client, biz, action) -> Dict:
 
     sent = 0
     skipped: List[str] = []
+    unsubscribed: List[str] = []
     failures: List[str] = []
     sample_subject = subject_tpl
 
@@ -8863,6 +9026,11 @@ async def handle_batch_email(client, biz, action) -> Dict:
         name = c.get("name") or "there"
         if not email:
             skipped.append(cid)
+            continue
+        # A batch is bulk mail: someone who unsubscribed is left out,
+        # whatever list Chief was handed (contact_fields.email_opted_out).
+        if contact_fields.email_opted_out(c):
+            unsubscribed.append(name)
             continue
         subj = subject_tpl.replace("{contact_name}", name).replace("{business_name}", biz_name)
         body_personal = body_tpl.replace("{business_name}", biz_name)
@@ -8904,16 +9072,21 @@ async def handle_batch_email(client, biz, action) -> Dict:
     parts = [f"📧 Batch email: {sent}/{len(contacts)} delivered"]
     if skipped:
         parts.append(f"{len(skipped)} skipped (no email)")
+    if unsubscribed:
+        parts.append(f"{len(unsubscribed)} left out (unsubscribed from your emails)")
     if failures:
         parts.append(f"{len(failures)} failed")
 
     return {
         "type": "batch_email",
-        "result": f"sent {sent} of {len(contacts)}",
+        "result": f"sent {sent} of {len(contacts)}"
+                  + (f"; {len(unsubscribed)} left out because they unsubscribed" if unsubscribed else ""),
         "label": " · ".join(parts),
         "subject": sample_subject,
         "sent_count": sent,
         "skipped_count": len(skipped),
+        "unsubscribed_count": len(unsubscribed),
+        "unsubscribed": unsubscribed[:20],
         "failure_count": len(failures),
     }
 

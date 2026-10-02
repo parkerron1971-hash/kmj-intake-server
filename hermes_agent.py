@@ -51,6 +51,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=15.0, pool=10.0)
 AGENT = "hermes"
 UNREAD_STALE_HOURS = 4
 STUCK_SENT_HOURS = 24
+REPEAT_WINDOW_HOURS = 24
 
 
 async def _count(c: httpx.AsyncClient, headers: Dict[str, str],
@@ -87,6 +88,18 @@ async def _last_run_details(c: httpx.AsyncClient, headers: Dict[str, str]) -> Di
 
 async def _log_finding(c: httpx.AsyncClient, headers: Dict[str, str],
                        title: str, detail: str, pending: bool = False) -> None:
+    # Hourly ticks re-find a standing problem every hour; the operator log
+    # got 121 copies in a day and a half (2026-10-02). Say it once a day.
+    # Titles carry the count, so a changed number is new and is logged.
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(hours=REPEAT_WINDOW_HOURS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        r = await c.get(f"{SUPABASE_URL}/rest/v1/platform_changelog", headers=headers, params={
+            "select": "id", "agent": f"eq.{AGENT}", "title": f"eq.{title[:300]}",
+            "created_at": f"gte.{since}", "limit": "1"})
+        if r.status_code < 400 and r.json():
+            return
+    except Exception as e:
+        logger.warning(f"repeat check failed, logging anyway: {e}")
     try:
         await c.post(
             f"{SUPABASE_URL}/rest/v1/platform_changelog",
@@ -143,6 +156,15 @@ async def hermes_tick() -> Dict[str, Any]:
                     "Customers texting and hearing nothing is a churn signal for the practitioner "
                     "and a platform-quality signal for us. Consider nudging the practitioner(s).",
                 )
+
+            # 3a. Ask Twilio about texts still marked `sent`: a delivery
+            # report can beat the row it updates, so `sent` alone is not
+            # evidence that delivery failed (twilio_sms.reconcile_sent).
+            try:
+                from twilio_sms import reconcile_sent
+                details["delivery_reconciled"] = await reconcile_sent()
+            except Exception as e:
+                details["delivery_reconciled"] = {"error": str(e)[:200]}
 
             # 3. Stuck at 'sent' (> 24h, no delivery confirmation)
             stuck_cutoff = (now - timedelta(hours=STUCK_SENT_HOURS)).isoformat()
