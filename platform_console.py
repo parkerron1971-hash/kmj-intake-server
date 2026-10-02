@@ -1322,6 +1322,21 @@ async def get_agents(_owner=Depends(require_owner)):
     return {"ok": True, "registry": AGENT_REGISTRY, "runs": runs, "findings": findings}
 
 
+@router.get("/agents/live")
+async def get_agents_live(_owner=Depends(require_owner)):
+    """Agents at work: every agent (backend and GitHub) with a status light
+    and its last run, the activity feed in plain words, and today's tally."""
+    import agents_live
+    return {"ok": True, **(await agents_live.snapshot())}
+
+
+@router.post("/agents/{agent_id}/run-now")
+async def run_agent_now(agent_id: str, _owner=Depends(require_owner)):
+    """Run any backend agent now, or start a GitHub agent's workflow."""
+    import agents_live
+    return await agents_live.run(agent_id)
+
+
 @router.post("/agents/hermes/run")
 async def run_hermes_now(_owner=Depends(require_owner)):
     """Manual tick from the console — same pass the hourly schedule runs."""
