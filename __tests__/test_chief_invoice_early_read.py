@@ -194,3 +194,32 @@ def test_revoked_owner_access_cannot_recover_a_cached_invoice_payload(monkeypatc
         env.policy.assert_not_called()
     finally:
         replay._receipts.clear()
+
+
+def test_checked_speech_is_released_before_archive_completes(monkeypatch):
+    env = arrange(monkeypatch)
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        pieces = []
+        async def archive(*args, **kwargs):
+            entered.set()
+            await release.wait()
+        env.archive.side_effect = archive
+        token = chief._STREAM_SINK.set(pieces.append)
+        task = asyncio.create_task(chief.chief_chat(request(client_surface='voice'), SESSION))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            assert not task.done()
+            spoken = [p[len(chief.PROSE_PREFIX):] for p in pieces if p.startswith(chief.PROSE_PREFIX)]
+            assert len(spoken) == 1 and 'DEMO-1' in spoken[0]
+            release.set()
+            result = await task
+            assert spoken == [result['response']]
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            chief._STREAM_SINK.reset(token)
+            replay._receipts.clear()
+    asyncio.run(run())

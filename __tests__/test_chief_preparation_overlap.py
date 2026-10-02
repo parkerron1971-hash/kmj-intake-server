@@ -182,6 +182,17 @@ def test_warm_sources_do_not_construct_duplicate_reads(prep):
     prep.warm.assert_called_once()
 
 
+def test_changed_business_discards_old_warm_settings_without_reconsuming(prep):
+    prep.warm.return_value = {name: 'old coach settings' for name in NAMES}
+    prep.context.return_value['business'] = {**BIZ, 'type': 'consultant'}
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(request())
+    assert exc.value.status_code == 490
+    prep.warm.assert_called_once()
+    assert 'consultant' in prep.captured['sources']['context:voice_examples']['text']
+    assert 'old coach settings' not in str(prep.captured['sources'])
+
+
 def test_failed_optional_source_keeps_unavailable_marker(prep, monkeypatch):
     original = prep.sources.side_effect
     def sources(client, biz):

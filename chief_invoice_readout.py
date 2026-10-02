@@ -88,6 +88,9 @@ async def serve_request(client, req, session, biz):
             grounding = {'status': 'withheld', 'sources': []}
     answer = speech.final_reply(answer, req.message)
     result = {'response': answer, 'actions_taken': taken, 'grounding': grounding}
+    sink = chief._STREAM_SINK.get()
+    if sink is not None:
+        sink(chief.PROSE_PREFIX + answer)
     await chief._archive_turn(client, biz, req.message, answer, taken)
     await chief._log_chief_activity(client, user_id=owner_id, business_id=biz['id'],
                                     source=req.client_surface, taken=taken)
