@@ -856,6 +856,18 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mpc.render_events(biz, site, request, occ, who=me))
     if sub == "/my/prayer":
         return _page(mpc.render_prayer(biz, site, request, who=me))
+    if sub.startswith("/my/groups/live/"):
+        import member_portal_group_live as mgl
+        sid = sub[len("/my/groups/live/"):]
+        if not UUID_RE.match(sid):
+            return RedirectResponse("/my/groups", status_code=303, headers=_SECURE_HEADERS)
+        s = await asyncio.to_thread(mgl.session, biz["id"], sid)
+        g = m = False
+        if s:
+            g, m = await asyncio.gather(asyncio.to_thread(mgl.group, biz["id"], s["group_id"]),
+                                        asyncio.to_thread(mgl.membership, biz["id"], s["group_id"], me["id"]))
+        html, status = mgl.render_meeting(biz, site, me, s, g, m)
+        return _page(html, status)
     if sub == "/my/groups":
         data = await asyncio.to_thread(mpc.groups_for, biz["id"], me)
         return _page(mpc.render_groups(biz, site, request, data, who=me))

@@ -158,7 +158,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "child_checkins",
     # Groups: who came to each meeting, the meetings, the roster, then
     # the groups — all before contacts.
-    "group_meeting_attendance", "group_meetings", "group_members", "groups",
+    "group_live_sessions", "group_meeting_attendance", "group_meetings", "group_members", "groups",
     "sermons", "sermon_series",   # sermons before the series they point at
     # Live: chat, pauses and presence before their session; all before
     # contacts and module_entries.
@@ -619,7 +619,7 @@ _IMPORT_SKIP = {
     "households", "household_adults", "children", "household_pickups", "child_care_notes",
     "child_checkins",
     # Groups link contacts and each other by id; same reason.
-    "groups", "group_members", "group_meetings", "group_meeting_attendance",
+    "groups", "group_members", "group_meetings", "group_meeting_attendance", "group_live_sessions",
     # Sermons cite their series by id; same reason.
     "sermon_series", "sermons",
     # Live sessions, chat and presence cite contacts and occasions by id;
