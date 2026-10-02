@@ -789,6 +789,11 @@ def api(db, monkeypatch):
 
 def test_connect_list_sync_remove_and_the_url_never_comes_back(api, db, monkeypatch):
     monkeypatch.setattr(oc, "fetch_feed", lambda url: _ics(WEEKLY))
+    # The fixture's dates are fixed (from Oct 1, 2026), so the reading
+    # clock is too: on the real clock the first occurrence fell out of the
+    # one-day look-back on Oct 2 and the count went from 3 to 2.
+    parse = oc.parse_busy_blocks
+    monkeypatch.setattr(oc, "parse_busy_blocks", lambda *a, **k: parse(*a, **{**k, "now": NOW}))
     c = TestClient(api)
     r = c.post(f"/availability/{BIZ}/calendar-feeds", json={"url": FEED_URL.replace("https", "webcal", 1)})
     assert r.status_code == 200, r.text
