@@ -31,8 +31,10 @@ Conservative by design: a brand-new business is 'idea'/'launching', not
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -53,6 +55,10 @@ CACHE_TTL_SECONDS = 6 * 3600
 
 # Cap on count scans — thresholds are small, so we never need exact counts past this.
 _COUNT_CAP = 200
+
+# Share the bound across concurrent cache misses, rather than creating five
+# additional workers for every business. Threads are started lazily.
+_SIGNAL_POOL = ThreadPoolExecutor(max_workers=5, thread_name_prefix="maturity-read")
 
 # Per-stage gating thresholds. A business is at stage S if it meets S's thresholds.
 # Walk from highest to lowest; first all-met band wins. 'idea' is the floor.
@@ -96,15 +102,24 @@ def _business_age_days(business_id: str) -> int:
 def collect_signals(business_id: str) -> Dict[str, int]:
     """Gather the maturity signals for a business. Every signal soft-fails to
     0 independently — a missing/empty table never blocks the computation."""
-    return {
-        "age_days": _business_age_days(business_id),
-        "module_count": _count(f"/custom_modules?business_id=eq.{business_id}&is_active=eq.true"),
-        "entry_count": _count(f"/module_entries?business_id=eq.{business_id}"),
-        "contact_count": _count(f"/contacts?business_id=eq.{business_id}"),
-        "paid_invoice_count": _count(
-            f"/invoices?business_id=eq.{business_id}&status=eq.paid"
-        ),
+    reads = {
+        "age_days": (_business_age_days, business_id),
+        "module_count": (_count, f"/custom_modules?business_id=eq.{business_id}&is_active=eq.true"),
+        "entry_count": (_count, f"/module_entries?business_id=eq.{business_id}"),
+        "contact_count": (_count, f"/contacts?business_id=eq.{business_id}"),
+        "paid_invoice_count": (_count, f"/invoices?business_id=eq.{business_id}&status=eq.paid"),
     }
+    futures = {}
+    try:
+        for name, (read, argument) in reads.items():
+            # A Context cannot be entered concurrently: each read gets its own
+            # snapshot of the caller's JWT, billing, and tracing context.
+            futures[name] = _SIGNAL_POOL.submit(contextvars.copy_context().run, read, argument)
+        return {name: future.result() for name, future in futures.items()}
+    finally:
+        # Preserve unexpected-error propagation without leaving reads running
+        # after this invocation returns. Existing HTTP timeouts still apply.
+        wait(futures.values())
 
 
 # ──────────────────────────────────────────────────────────────
