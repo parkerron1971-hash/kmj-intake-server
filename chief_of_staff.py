@@ -14525,7 +14525,7 @@ async def chief_chat(
                     and str(prep_biz.get('owner_id')) == str(user_session.user.id)
                     and _STREAM_SINK.get() is not None
                     and chief_call_feedback.for_request(req) is None
-                    and not chief_quick_plan.eligible(req)):
+                    and not chief_quick_plan.request_shape(req)):
                 _start_preparation(prep_biz)
 
             # Gather global context + view-specific detail in parallel

@@ -26,13 +26,22 @@ _DISPLAY_ONLY = re.compile(
     r"(?:show(?: me)?|list|pull up|display|open|give me)\s+"
     r"(?:a (?:list|visual|chart|timeline) of\s+)?"
     r"(?:(?:all|every)\s+(?:of\s+)?)?(?:(?:my|the|our)\s+)?"
-    r"(?:(?:open|paid|draft|overdue)\s+)?invoices?"
+    r"(?:(?P<status>open|paid|draft|overdue)\s+)?invoices?"
     r"(?:\s+(?:as|in) a (?:visual|chart|list|timeline))?[.!?\s]*$", re.I)
 
 
 def invoice_display_request(message):
     """Whole-message display intent only; advice, mutations and filters stay modeled."""
     return bool(_DISPLAY_ONLY.fullmatch(message or ''))
+
+
+def explicit_invoice_status(message):
+    # The imperative "Open invoices" names no status. Only the modifier slot
+    # in the whole display grammar can override an inherited invoice filter.
+    match = _DISPLAY_ONLY.fullmatch(message or '')
+    if match:
+        return (match['status'] or '').lower() or None
+    return None
 
 
 def request_action(req):
@@ -45,10 +54,10 @@ def request_action(req):
     message = getattr(req, 'message', '') or ''
     if not invoice_display_request(message):
         return None
-    status = re.search(r'\b(open|paid|draft|overdue)\s+invoices?\b', message, re.I)
+    status = explicit_invoice_status(message)
     form = re.search(r'\b(chart|timeline|list)\b', message, re.I)
     return {'type': 'show_view', 'view': 'invoices',
-            'filter': status[1].lower() if status else ('all' if _ALL_INVOICES.search(message) else 'open'),
+            'filter': status if status else ('all' if _ALL_INVOICES.search(message) else 'open'),
             'form': form[1].lower() if form else 'list'}
 
 
@@ -60,19 +69,37 @@ async def serve_request(client, req, session, biz):
     Returning None means no action has run; once attempted, never fall through
     and repeat it through a model turn.
     """
-    action = request_action(req)
+    from chief_invoice_scope import eligible_request, planning_input, resolve
+    if not eligible_request(req):
+        return None
     owner_id = str(getattr(getattr(session, 'user', None), 'id', '') or '')
-    if (action is None or not isinstance(biz, dict) or not owner_id
+    if (not isinstance(biz, dict) or not owner_id
             or str(biz.get('id') or '') != str(req.business_id)
             or str(biz.get('owner_id') or '') != owner_id):
         return None
     import chief_of_staff as chief
     import chief_stream_replay as replay
     import chief_speech_boundary as speech
+    recovered = replay.recover(req, owner_id)
+    if recovered is not None:
+        return recovered
     if chief._STREAM_SINK.get() is None:
         recovered = await replay.recover_async(req, owner_id)
         if recovered is not None:
             return recovered
+    history_scope = planning_input(req)
+    if history_scope is None:
+        return None
+    if history_scope['requires_model']:
+        action = await resolve(client, req, biz['id'])
+    else:
+        # Every meaningful owner turn fits a supported display grammar, so its
+        # explicit filter/form can carry forward without semantic interpretation.
+        action = {'type': 'show_view', 'view': 'invoices',
+                  'filter': history_scope['required_filter'],
+                  'form': history_scope['required_form']}
+    if action is None:
+        return None
     taken = await chief._execute_actions(client, biz, [action], user_id=owner_id,
                                          owner_text=req.message)
     if any(chief._action_failed(row) for row in taken):
@@ -141,8 +168,8 @@ def direct_invoice_answer(message, taken):
     data = invoice_display_evidence(taken)
     if data is None:
         return None
-    requested_status = re.search(r'\b(open|paid|draft|overdue)\s+invoices?\b', message, re.I)
-    if requested_status and requested_status[1].lower() != data['filter']:
+    requested_status = explicit_invoice_status(message)
+    if requested_status and requested_status != data['filter']:
         return None
     if not requested_status and _ALL_INVOICES.search(message) and data['filter'] != 'all':
         return None

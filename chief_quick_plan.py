@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
+from datetime import date, datetime, timezone
 
 import chief_models
 import llm_call
@@ -25,6 +27,10 @@ def eligible(req):
     if (getattr(req, 'mode', None) or '') not in ('', 'chief'):
         return False
     if getattr(req, 'image_ids', None):
+        return False
+    import chief_plan_context
+    if (not chief_plan_context.history_preflight(req)
+            or not chief_plan_context.plain_history(req)):
         return False
     from chief_shortcut_scope import constrained
     if constrained(req, 'plan'):
@@ -44,6 +50,12 @@ def eligible(req):
             '', text, flags=re.I)).strip(), re.I))
 
 
+def request_shape(req):
+    """Current request gates only; never grants permission to ignore history."""
+    import chief_plan_context
+    return eligible(chief_plan_context.request_without_history(req))
+
+
 def _safe_name(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 100:
         return False
@@ -54,6 +66,34 @@ def _safe_name(value):
                 or ACTION_TAGLIKE_RE.search(value))
 
 
+def _invoice_priority(row, today):
+    """Rank this loaded sample: past due, due today, unknown, then future.
+
+    Within urgency, prefer a larger known amount; age only breaks value ties.
+    Missing amounts remain usable for older sparse context, but invalid supplied
+    amounts never select a reminder. A valid due date wins over status/hints.
+    """
+    amount = row.get('total')
+    if amount is not None:
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount < 0:
+            return None
+        try:
+            if not math.isfinite(amount):
+                return None
+        except OverflowError:
+            return None
+    value = amount if amount is not None else -1
+    try:
+        due = date.fromisoformat(row.get('due_date') or '')
+        days = (today - due).days
+        urgency = 3 if days > 0 else 2 if days == 0 else 0
+    except (ValueError, TypeError):
+        days = row.get('days_overdue')
+        days = days if isinstance(days, int) and not isinstance(days, bool) and days >= 0 else 0
+        urgency = 3 if days > 0 or row.get('status') == 'overdue' else 1
+    return urgency, value, days
+
+
 def candidates(ctx):
     """Only fresh loaded records select the topics; missing lists prove nothing."""
     out = []
@@ -61,15 +101,24 @@ def candidates(ctx):
         out.append({'id': key, 'step': text})
 
     invoices = ctx.get('open_invoices') or []
+    ranked = []
+    today = datetime.now(timezone.utc).date()
     for row in invoices:
         if not isinstance(row, dict) or row.get('status') not in ('sent', 'viewed', 'overdue'):
             continue
         name, number = row.get('client'), row.get('number')
-        if _safe_name(name) and _safe_name(number):
-            text = f'Draft {name} a reminder about {number}'
-            if text not in {r['step'] for r in out}:
-                add(f'invoice_{len(out)}', text)
-        if len(out) == 2:
+        priority = _invoice_priority(row, today)
+        if _safe_name(name) and _safe_name(number) and priority is not None:
+            ranked.append((priority, row))
+    seen_clients = set()
+    for _, row in sorted(ranked, key=lambda item: item[0], reverse=True):
+        name, number = row['client'], row['number']
+        client_key = ' '.join(name.casefold().split())
+        if client_key in seen_clients:
+            continue
+        seen_clients.add(client_key)
+        add(f'invoice_{len(out)}', f'Draft {name} a reminder about {number}')
+        if len(seen_clients) == 2:
             break
     if ctx.get('sms_messages') or ctx.get('email_replies'):
         add('messages', 'Review recent messages and draft a reply')
@@ -148,6 +197,10 @@ async def _choose(client, req, ctx, options):
 async def action(client, req, ctx):
     if not eligible(req):
         return None
+    return await _build_action(client, req, ctx)
+
+
+async def _build_action(client, req, ctx):
     options = candidates(ctx)
     # A new business may only have three generic starting points. There is no
     # need to invent a fourth record or call a model to rank an empty business.
@@ -168,12 +221,19 @@ async def action(client, req, ctx):
 async def try_reply(client, req, ctx, user_id):
     """Only the already-authorized owner shortcut; usual path handles other access."""
     biz = (ctx or {}).get('business') or {}
-    if (not eligible(req) or str(biz.get('id') or '') != req.business_id
+    if (str(biz.get('id') or '') != req.business_id
             or str(biz.get('owner_id') or '') != str(user_id)):
         return None
     import chief_of_staff as chief
     from chief_plan_recovery import normalize_plan_receipt, plan_readout
-    proposed = await action(client, req, ctx)
+    if eligible(req):
+        proposed = await action(client, req, ctx)
+    else:
+        import chief_plan_context
+        if (not request_shape(req)
+                or not await chief_plan_context.allows_generic_plan(client, req, biz['id'])):
+            return None
+        proposed = await _build_action(client, req, ctx)
     # Build and validate the exact card before its only execution. The handler
     # is a pure formatting function; the execution door retains UI policy/audit.
     preview = await chief.handle_show_plan(client, biz, proposed)
