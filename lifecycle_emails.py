@@ -1,40 +1,9 @@
-"""
-lifecycle_emails.py — the three emails a practitioner's first week deserves.
+"""Account lifecycle emails: welcome, first-week guidance and trial notices.
 
-THE GAP THIS CLOSES
-  A business was created, a trial started, a trial ran out, and the
-  platform said nothing by email at any of those moments. The trial
-  countdown lived in Settings → Billing and the platform-owner panels;
-  enforcement is ON, so a practitioner who stopped opening the app was
-  locked out with no warning. This module sends exactly three
-  transactional emails, each once per business:
-
-    welcome        — the moment their FIRST business is created
-    trial_ending   — TRIAL_ENDING_DAYS before trial_ends_at, while trialing
-    trial_ended    — once the trial has lapsed (calendar or credit tank)
-
-WHAT THIS JOB IS ALLOWED TO BE
-  * It reads /businesses only — the row that already carries
-    subscription_status, trial_ends_at and comp_tier. No new table.
-  * Idempotency rides on businesses.settings.lifecycle_emails, a small
-    dict of ISO stamps ({"welcome_at", "trial_ending_at",
-    "trial_ended_at"}). Read-modify-write on settings, stamped AFTER a
-    successful send: a send that fails is retried by the next pass; a
-    stamp that fails after a send costs at most one duplicate. Never the
-    silent-never-sent failure this module exists to fix.
-  * Grandfathered owners and comped businesses never trial, so they never
-    get trial mail. They still get the welcome.
-  * The ENDED email fires only inside ENDED_LOOKBACK_DAYS of
-    trial_ends_at. The first deploy must not write to everyone whose
-    trial lapsed months ago (the first-pass-is-silent rule).
-  * Nothing raises out of the public entry points. Both callers sit on
-    paths where failing loudly costs something real — a business signup
-    and a scheduler tick.
-  * Kill switch: LIFECYCLE_EMAILS=off.
-
-Transactional, not marketing: these go to the account holder about the
-account. send_via_resend still attaches List-Unsubscribe to every send
-and honours the suppression list, as it does for all platform mail.
+Durable delivery claims and Resend idempotency protect retries. Legacy
+business settings stamps remain readable and prevent historical resends.
+Signup reminders require explicit business intent; all sending honors
+LIFECYCLE_EMAILS and the shared suppression gate.
 """
 from __future__ import annotations
 
@@ -134,11 +103,11 @@ def welcome_body(*, business_name: str, first_name: str) -> str:
         f"you sell most, so bookings and invoices have something to point at.\n"
         f"   {app}/?nav=build\n\n"
         f"3. Ask Chief for tomorrow. Open Chief and say what you want done "
-        f"this week. It plans, drafts and follows up — you approve.\n"
+        f"this week. It plans, drafts and follows up with your approval.\n"
         f"   {app}/\n\n"
-        f"{trial_line}Reply to this email if anything is unclear — a person "
+        f"{trial_line}Reply to this email if anything is unclear. A person "
         f"reads it.\n\n"
-        f"— The Solutionist System\n"
+        f"The Solutionist System\n"
         f"{_support_email()}"
     )
 
@@ -153,12 +122,12 @@ def trial_ending_body(*, business_name: str, first_name: str,
         f"({ends_at.strftime('%B %d')}).\n\n"
         f"If your card is on file, nothing changes: your plan continues and "
         f"you are billed from that day. If it is not, the app locks at the "
-        f"end of the trial. Nothing is deleted — your data stays put and "
-        f"stays exportable — but Chief stops working until a plan is chosen.\n\n"
+        f"end of the trial. Nothing is deleted. Your data stays available and "
+        f"exportable, but Chief stops working until a plan is chosen.\n\n"
         f"Choose or confirm your plan here:\n"
         f"   {app}/?settings=billing\n\n"
-        f"Not the right fit? Reply and say so — no forms, no hoops.\n\n"
-        f"— The Solutionist System\n"
+        f"Not the right fit? Reply and let us know.\n\n"
+        f"The Solutionist System\n"
         f"{_support_email()}"
     )
 
@@ -167,20 +136,20 @@ def trial_ended_body(*, business_name: str, first_name: str,
                      reason: str) -> str:
     app = app_base_url()
     why = ("You used the trial's full allowance of Chief work before the "
-           "calendar ran out — which usually means it earned its keep."
+           "calendar ran out."
            if reason == "trial_credits_spent" else
            "The trial window has closed.")
     return (
         f"Hi {first_name},\n\n"
         f"The free trial for {business_name} has ended. {why}\n\n"
         f"Everything you built is still there: contacts, bookings, invoices, "
-        f"Chief's notes — all of it. Pick a plan and it is exactly where you "
+        f"and Chief's notes. Pick a plan and it is exactly where you "
         f"left it:\n"
         f"   {app}/?settings=billing\n\n"
         f"If you would rather take your data with you, the export lives in "
         f"Settings → Your Data, and it keeps working after the trial.\n\n"
         f"Questions, or a reason the trial didn't fit? Reply here.\n\n"
-        f"— The Solutionist System\n"
+        f"The Solutionist System\n"
         f"{_support_email()}"
     )
 
@@ -188,12 +157,12 @@ def trial_ended_body(*, business_name: str, first_name: str,
 # ─── Plumbing ────────────────────────────────────────────────────────
 
 async def _send(*, to_email: str, to_name: Optional[str],
-                subject: str, body: str) -> bool:
-    from email_sender import send_via_resend
-    await send_via_resend(
+                subject: str, body: str, delivery_key: str) -> bool:
+    from lifecycle_delivery import send_once
+    await send_once(delivery_key, dict(
         to_email=to_email, to_name=to_name,
         from_email=_from_email(), from_name=FROM_NAME,
-        subject=subject, body=body, reply_to=_support_email())
+        subject=subject, body=body, reply_to=_support_email()))
     return True
 
 
@@ -228,15 +197,19 @@ def _stamp(business_id: str, key: str) -> None:
     into the LIVE settings blob is what keeps this write from clobbering
     theirs."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,settings&limit=1") or []
+        f"/businesses?id=eq.{business_id}&select=id,settings&limit=1")
+    if not rows:
+        raise RuntimeError("Cannot save lifecycle stamp without current business settings")
     settings = (rows[0].get("settings") if rows else None) or {}
     if not isinstance(settings, dict):
         settings = {}
     le = dict(settings.get(SETTINGS_KEY) or {})
     le[key] = _now().strftime("%Y-%m-%dT%H:%M:%SZ")
     settings[SETTINGS_KEY] = le
-    sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
-                                   {"settings": settings})
+    result = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
+                                           {"settings": settings})
+    if result is None:
+        raise RuntimeError("Lifecycle send stamp was not saved")
 
 
 def _is_grandfathered(owner_id: Optional[str]) -> bool:
@@ -273,15 +246,18 @@ async def send_welcome(business: Dict[str, Any], to_email: Optional[str],
             return {"sent": False, "reason": "already_sent"}
         owner_id = str(business.get("owner_id") or "")
         if owner_id:
-            others = sb_clients.sb_get_as_service(
-                f"/businesses?owner_id=eq.{owner_id}&id=neq.{biz_id}"
-                f"&select=id&limit=1") or []
-            if others:
+            first = sb_clients.sb_get_as_service(
+                f"/businesses?owner_id=eq.{owner_id}"
+                f"&select=id&order=created_at.asc,id.asc&limit=1")
+            if first is None:
+                raise RuntimeError("Could not establish first business")
+            if not first or str(first[0].get("id")) != biz_id:
                 return {"sent": False, "reason": "not_first_business"}
         name = (business.get("name") or "Your business").strip()
         await _send(
+            delivery_key=f"business/{biz_id}/welcome",
             to_email=to_email, to_name=user_name or None,
-            subject=f"{name} is set up — three moves for your first week",
+            subject=f"{name} is set up. Three moves for your first week",
             body=welcome_body(business_name=name,
                               first_name=_first_name(user_name)))
         _stamp(biz_id, "welcome_at")
@@ -343,7 +319,7 @@ def _classify(row: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
 
 
 async def sweep_tick() -> Dict[str, Any]:
-    """Daily. Reads every active business that could be in or just past a
+    """Hourly. Reads every active business that could be in or just past a
     trial and sends whichever of the two trial emails is due. Never
     raises — a scheduler tick that throws is a scheduler tick that
     silently stops being scheduled."""
@@ -392,6 +368,7 @@ async def sweep_tick() -> Dict[str, Any]:
             first = "there"
             if need["kind"] == "trial_ending":
                 await _send(
+                    delivery_key=f"business/{row['id']}/{need['kind']}",
                     to_email=to, to_name=None,
                     subject=f"Your {name} trial ends "
                             + ("tomorrow" if need["days_left"] <= 1
@@ -402,8 +379,9 @@ async def sweep_tick() -> Dict[str, Any]:
                 _stamp(str(row["id"]), "trial_ending_at")
             else:
                 await _send(
+                    delivery_key=f"business/{row['id']}/{need['kind']}",
                     to_email=to, to_name=None,
-                    subject=f"Your {name} trial has ended — your work is still here",
+                    subject=f"Your {name} trial has ended. Your work is still here",
                     body=trial_ended_body(business_name=name, first_name=first,
                                           reason=need["reason"]))
                 _stamp(str(row["id"]), "trial_ended_at")
@@ -447,7 +425,12 @@ def _age_days(row: Dict[str, Any], now: datetime) -> Optional[float]:
 
 
 def _classify_week(row: Dict[str, Any], now: datetime) -> Optional[str]:
-    """'day_three' | 'day_seven' | None, pure over the row and the clock."""
+    """Choose a first-week message only while the business retains full access."""
+    import feature_gates
+    if feature_gates.enforcement_on():
+        state = feature_gates.access_state(row, trial_spent=_tank_spent(row))
+        if state["state"] != "full":
+            return None
     age = _age_days(row, now)
     if age is None:
         return None
@@ -487,6 +470,12 @@ def _site_link(row: Dict[str, Any]) -> Optional[str]:
         return None
 
 
+def _email_sentence(value: Optional[str]) -> str:
+    """Format optional setup descriptions as ordinary email prose."""
+    import re
+    return re.sub(r"\s*[—–]\s*", ", ", (value or "").strip())
+
+
 def day_three_body(*, business_name: str, first_name: str,
                    done: int, total: int, next_title: Optional[str],
                    next_why: Optional[str]) -> str:
@@ -495,8 +484,8 @@ def day_three_body(*, business_name: str, first_name: str,
              if total else f"{business_name} is set up and waiting for its first pieces.")
     if next_title:
         ask = (f"The one thing to do today: {next_title}.\n"
-               f"{(next_why or '').strip()}\n\n"
-               f"Open Chief and say \"let's do this one\" — it walks you through it, or does it with you.\n"
+               f"{_email_sentence(next_why)}\n\n"
+               f"Open Chief and say \"let's do this one.\" It walks you through the next step.\n"
                f"   {app}/")
     else:
         ask = (f"Everything on the list is connected. Open Chief and ask what "
@@ -505,9 +494,9 @@ def day_three_body(*, business_name: str, first_name: str,
         f"Hi {first_name},\n\n"
         f"Day three. {where}\n\n"
         f"{ask}\n\n"
-        f"Twenty minutes with Chief, when you have them, and it learns how you "
-        f"actually run — it will keep offering until you do, and it never blocks you.\n\n"
-        f"— The Solutionist System\n"
+        f"Spend twenty minutes with Chief when you have time so it can learn how you "
+        f"actually run. You can work at your own pace.\n\n"
+        f"The Solutionist System\n"
         f"{_support_email()}"
     )
 
@@ -518,8 +507,8 @@ def day_seven_body(*, business_name: str, first_name: str, site_url: Optional[st
     if site_url:
         middle = (
             f"Your site is up: {site_url}\n\n"
-            f"Send it to one person today — a regular, a friend who asks what you do, "
-            f"the group chat. That is the whole ask. Chief can write the message for you: "
+            f"Send it to one person today: a regular, a friend who asks what you do, "
+            f"or your group chat. Chief can write the message for you: "
             f"open it and say \"write a text sending my site to a regular.\"\n   {app}/"
         )
     elif next_title:
@@ -533,13 +522,13 @@ def day_seven_body(*, business_name: str, first_name: str, site_url: Optional[st
         f"Hi {first_name},\n\n"
         f"One week in with {business_name}.\n\n"
         f"{middle}\n\n"
-        f"— The Solutionist System\n"
+        f"The Solutionist System\n"
         f"{_support_email()}"
     )
 
 
 async def week_beats_tick() -> Dict[str, Any]:
-    """Daily. Every active business created in the last ten days gets its
+    """Hourly. Every active business created in the last ten days gets its
     day-three and day-seven beats, once each. Never raises."""
     out: Dict[str, Any] = {"ok": True, "scanned": 0, "sent": 0, "skipped": 0,
                            "failed": 0, "sent_kinds": []}
@@ -580,6 +569,7 @@ async def week_beats_tick() -> Dict[str, Any]:
             nxt = st.get("next") or {}
             if kind == "day_three":
                 await _send(
+                    delivery_key=f"business/{row['id']}/{kind}",
                     to_email=to, to_name=None,
                     subject=f"Day three with {name}: one thing to do today",
                     body=day_three_body(business_name=name, first_name=first,
@@ -589,6 +579,7 @@ async def week_beats_tick() -> Dict[str, Any]:
             else:
                 site = _site_link(row)
                 await _send(
+                    delivery_key=f"business/{row['id']}/{kind}",
                     to_email=to, to_name=None,
                     subject=(f"One week in: send {name}'s site to one person" if site
                              else f"One week in with {name}"),
@@ -603,4 +594,84 @@ async def week_beats_tick() -> Dict[str, Any]:
             logger.warning(f"[lifecycle] week beat failed biz={row.get('id')}: {e}")
     logger.info(f"[lifecycle] week beats scanned={out['scanned']} sent={out['sent']} "
                 f"failed={out['failed']}")
+    return out
+
+
+async def welcome_retry_tick() -> Dict[str, Any]:
+    """Recover interrupted/failed first-business welcomes, including restarts.
+
+    The business row is the durable source. Only the first 72 hours are
+    eligible, so installing this job does not email the historic customer list.
+    """
+    out = {"ok": True, "scanned": 0, "sent": 0, "failed": 0}
+    if not enabled():
+        return dict(out, ok=False, reason="disabled")
+    since = (_now() - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?select={_BIZ_SELECT}&is_active=eq.true"
+            f"&created_at=gte.{since}&order=created_at.asc,id.asc&limit=1000")
+        if rows is None:
+            raise RuntimeError("Welcome candidate read failed")
+        for row in rows:
+            if _stamps(row).get("welcome_at"):
+                continue
+            out["scanned"] += 1
+            result = await send_welcome(
+                row, await _owner_email(str(row.get("owner_id") or "")),
+                (row.get("settings") or {}).get("practitioner_name"))
+            out["sent"] += int(bool(result.get("sent")))
+            out["failed"] += int(result.get("reason") == "error")
+    except Exception:
+        logger.exception("[lifecycle] welcome recovery failed")
+        out["ok"] = False
+    return out
+
+
+def signup_reminder_body(first_name: str, *, final: bool = False) -> str:
+    intro = ("Your business setup is still waiting for you. This is our last setup reminder."
+             if final else "Your account is ready. The next step is to finish setting up your business.")
+    return (f"Hi {_first_name(first_name)},\n\n{intro}\n\n"
+            "Sign in, tell us your name and what you do, and choose how you want Chief "
+            "to communicate. You can continue here:\n"
+            f"{app_base_url()}/\n\n"
+            "If you need a hand, reply to this email and tell us where you got stuck.\n\n"
+            f"The Solutionist System\n{_support_email()}")
+
+
+async def signup_reminders_tick() -> Dict[str, Any]:
+    """Two setup reminders at day one/day three, only for business intent.
+
+    The SQL eligibility check excludes unverified, invited, banned, staff,
+    grandfathered and business-owning accounts. It stops after seven days.
+    It is checked again immediately before a send, after enumeration.
+    """
+    from lifecycle_delivery import rpc
+    out = {"ok": True, "scanned": 0, "sent": 0, "failed": 0}
+    if not enabled():
+        return dict(out, ok=False, reason="disabled")
+    try:
+        rows = rpc("lifecycle_signup_candidates", {})
+        for row in rows:
+            out["scanned"] += 1
+            try:
+                current = rpc("lifecycle_signup_candidates", {"p_user_id": row["user_id"]})
+                if not current:
+                    continue
+                recipient = current[0]
+                kind = recipient["kind"]
+                await _send(
+                    delivery_key=f"signup/{recipient['user_id']}/{kind}",
+                    to_email=recipient["email"], to_name=None,
+                    subject=("Ready to finish setting up your business?" if kind == "signup_day_one"
+                             else "Your business setup is here when you are ready"),
+                    body=signup_reminder_body(recipient.get("first_name") or "",
+                                             final=kind == "signup_day_three"))
+                out["sent"] += 1
+            except Exception:
+                out["failed"] += 1
+                logger.exception("[lifecycle] setup reminder failed")
+    except Exception:
+        out["ok"] = False
+        logger.exception("[lifecycle] setup reminder sweep failed")
     return out

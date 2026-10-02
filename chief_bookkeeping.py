@@ -709,8 +709,14 @@ def send_to_inbox(business_id: str, proposal_id: str) -> Dict[str, Any]:
         "propose_categorize": "Chief: confirm a transaction category",
         "propose_exclude": "Chief: confirm excluding a transaction",
     }.get(p.get("proposal_type"), "Chief bookkeeping proposal")
+    # The proposal is only marked sent once its Inbox row exists. This
+    # used to post with prefer=None (no body back, so success and failure
+    # looked the same) and mark the proposal sent either way. agent_queue
+    # had no `data` column until APPLY-2026-10-01-agent-queue-data.sql, so
+    # every insert 400'd and every proposal sent to the Inbox vanished:
+    # gone from the review list, never in the Inbox.
     try:
-        sb_clients.sb_post_as_service("/agent_queue", {
+        inserted = sb_clients.sb_post_as_service("/agent_queue", {
             "business_id": business_id,
             "agent": "bookkeeping",
             "action_type": "proposal",   # existing valid agent_queue type
@@ -721,9 +727,13 @@ def send_to_inbox(business_id: str, proposal_id: str) -> Dict[str, Any]:
             "ai_reasoning": "Phase G bookkeeping proposal sent to Inbox",
             "data": {"chief_bookkeeping_proposal_id": proposal_id,
                      "proposal_type": p.get("proposal_type")},
-        }, prefer=None)
+        })
     except Exception as e:
         logger.warning(f"[chief_bk] inbox insert failed: {e}")
+        inserted = None
+    if not inserted:
+        raise HTTPException(
+            502, "This couldn't be added to your Inbox. It's still here to review.")
     sb_clients.sb_patch_as_service(
         f"/chief_bookkeeping_proposals?id=eq.{proposal_id}&business_id=eq.{business_id}",
         {"status": "sent_to_inbox", "resolved_at": _now_iso()})

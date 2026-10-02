@@ -167,7 +167,12 @@ def get_missing_jit_fields(business_id: str) -> List[str]:
     """Return JIT_FIELDS_V1 entries that are still null/missing on this profile."""
     if not business_id:
         return list(JIT_FIELDS_V1)
-    profile = get_profile(business_id) or {}
+    return missing_jit_fields_from_profile(get_profile(business_id))
+
+
+def missing_jit_fields_from_profile(profile: Optional[Dict[str, Any]]) -> List[str]:
+    """Inspect the current turn snapshot without another database round trip."""
+    profile = profile or {}
     missing: List[str] = []
     for field_path in JIT_FIELDS_V1:
         if "." in field_path:

@@ -36,6 +36,8 @@ def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, A
     if not rows:
         raise HTTPException(404, "business not found")
     row = rows[0]
+    from giving_records import require_ministry_finance
+    require_ministry_finance(biz, user, row)
     if str(row.get("owner_id")) == str(user.id):
         return row
     if min_role == "viewer":

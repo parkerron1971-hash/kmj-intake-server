@@ -82,7 +82,10 @@ def _gen_kwargs(model: str, temperature: Optional[float]) -> Dict[str, Any]:
     import model_ladder
     return {**model_ladder.sampling_kwargs(model, temperature),
             **model_ladder.effort_kwargs(model, BUILDER_EFFORT)}
-DOC_MAX_BYTES = 300 * 1024
+# 2026-10-01 (Kevin, the concept-layer plan): 300 KB sent richer pages to
+# the fallback engine whole. Library objects (letters, seals, tickets,
+# boarding passes) carry real markup, so the ceiling is 450 KB.
+DOC_MAX_BYTES = 450 * 1024
 
 _ALLOWED_LINK_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 # AUDIT FIX (flight one): the 2-digit rule attacked the DESIGN — the
@@ -190,7 +193,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 2. TRUTH: every fact, number, price, and claim on the page appears in the REAL DATA below. Nothing invented — a stat the data doesn't prove renders as a clearly-marked editable placeholder, never a made-up figure.
 3. COVERAGE: every listed image appears (exact url in src); a fixed navigation; a working contact form posting to the given endpoint (method="POST", the given action url, name/email fields at minimum); a footer. Every real service/offering has a home, with its price and, when the data carries duration_min, its duration in minutes beside the price.
 4. EXTERNAL REQUESTS: Google Fonts stylesheet links, the provided https image urls, and the one contact-form fetch of rule 9 ONLY. No other external scripts, styles, frames, or calls.
-5. EDITABILITY: stamp data-override-target="v2/f1", "v2/f2", … on headings, paragraphs, and captions as you write them (a platform pass guarantees any you miss — stamping well keeps the labels meaningful).
+5. EDITABILITY: stamp data-override-target="v2/f1", "v2/f2", … on headings, paragraphs, and captions as you write them (a platform pass guarantees any you miss — stamping well keeps the labels meaningful). Every top-level <section> carries a unique, meaningful id (id="prices", id="story"): the navigation anchors to it, the review names it, and a repair can rebuild that one section without touching the rest.
 6. MOBILE: a real responsive pass in the same document — media queries so every section holds at 390px. What breaks on a phone fails the whole page. The page must also hold on wide screens (1900px+): content keeps an intentional measure, backgrounds and motifs extend, nothing stretches thin or drifts off-grid.
 7. The spec's color hexes and font names are law — write them directly in your CSS, once, as :root custom properties named as the spec names them; everything below :root is a var() reference or a color-mix() against those tokens, never a second literal.
 8. COPY GRAMMAR (the DASH LAW): never splice a sentence with a dash. No em dashes, no " - " splices in headings, paragraphs, or list copy — rewrite with a period, comma, or colon. A dash may appear only inside a proper title supplied by the data (an artwork or event name).
@@ -199,12 +202,14 @@ HARD RULES (a validator checks each; violations cost a repair round):
 11. INVENTORY-SHAPED LAYOUT: compose the gallery/grid to the number of images that actually exist. Two images get a two-image composition; never a grid with holes, never a repeated image as filler.
 11b. ART-DIRECTED DROP SLOTS: when the composition WANTS an image the inventory doesn't have (a hero portrait, a third gallery piece), author a placeholder the owner can fill: <div class="sx-drop" data-sx-slot="short_name">…</div> containing ONE line of shot direction in plain words ("You at the chair, mid-cut, warm light" — you are telling them what to photograph). Style: a dashed 1px frame in the accent color at low opacity, the design's crop and position already decided, so a dropped-in photo inherits your intention. Your CSS MUST include `.sx-drop{display:none}` and `body.sx-studio .sx-drop{display:flex;…}` — the public page never shows an empty frame; the owner's Studio reveals them. Never fake an image, never leave a hole: real, or an art-directed drop slot.
 11c. NO VISIBLE STAND-INS: a photo the inventory lacks is INVISIBLE to the visitor. Never author a "filled" or "art-directed" placeholder that reads as intentional — no tinted or textured box, no framed panel, no caption-only frame, no italic line describing the photograph that should be there. The hidden .sx-drop of 11b is the ONLY stand-in; its shot direction never appears outside it. HERO without a hero photo: a typographic hero — display type carries the composition and rule 15's presence is a ghost word or the signature motif, never an empty frame. WORK/GALLERY with fewer than two real photos: no photo grid at all — say what you make and how it feels in words, with drop slots the Studio reveals. A visitor must never be able to tell a photo is missing.
-12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border.
+12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border. LAYERING ON PURPOSE: when you overlap elements deliberately (a cut-out crossing a section edge, a nameplate over a photo, an object breaking its frame, ghost type behind a headline), put data-overlap-ok on the outer element of the layered piece. The render is measured, and any other overlap of text on text counts as a collision.
 13. HEAD + SHARE: a real <title>, a meta description written from the data, and og:title / og:description / og:image (the strongest image url from the data) so a shared link looks intentional.
 14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store, events) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section, an Upcoming Events moment that invites the visitor to see the dates and RSVP). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
 15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
+16. THE TYPE FLOOR (measured on the render; a miss costs a repair round): exactly one <h1> (the hero headline), headings stepping down one level at a time. Set a type scale with clamp() and keep to it. Display sizes tighten their tracking (-0.01em to -0.03em); uppercase labels open theirs (0.08em or more). Running text is 16px or larger on a phone and never under 14px; nothing a visitor reads is under 11px. Body copy holds a 45 to 75 character measure (max-width in ch). Headings get text-wrap: balance and paragraphs text-wrap: pretty. Digits that line up (prices, hours, durations, stats) get font-variant-numeric: tabular-nums. When a face offers an optical-size axis, request it in the Google Fonts url (opsz) and set font-optical-sizing: auto. Buttons, inputs and selects inherit the page's fonts (font: inherit). No paragraph longer than three lines is centered. At most two type families, three with a utility face. Write straight quotes freely: a typographer pass sets real quotes, apostrophes and ranges after you.
+17. THE CONCEPT: the blueprint's section 0 sets how far the page's idea goes, and the page obeys it. PLAIN: nothing renamed, no objects. SIGNATURE: the one object and the one or two renamed labels it names, nothing more. WORLD: the navigation and section names use its VOCABULARY, its OBJECTS hold the content, its LIVING DETAIL moves once. Every in-world label keeps its plain word, visible beneath it (a small line) or in the link's aria-label, so a first-time visitor never has to guess. A concept never hides what a thing is or what it costs. When section 0 says SCOPE: offer, this page is the home: it stays at SIGNATURE and links to the offer page.
 
-CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold.
+CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold. ONE PHOTO TREATMENT: every content photo wears one treatment defined once from the tokens (a grade, a tint, or a duotone through filter or a mix-blend overlay in the accent), applied by one class, so photos taken on different days read as one shoot. The brand mark is never treated.
 
 OUTPUT: the HTML document only. No commentary, no code fences."""
 
@@ -213,14 +218,21 @@ OUTPUT: the HTML document only. No commentary, no code fences."""
 # THE PRIMITIVES (2026-08-09 design review) — see design_moves.
 # The atmosphere techniques the spec names were never taught to any
 # author, while the colour validator banned the natural syntax.
+# 2026-10-01 (the concept-layer plan): the system prompt keeps the colour
+# voice and the tinting rule; the CSS for the moves a blueprint names
+# rides that build's own message (build_user_prompt). All thirteen
+# primitives in front of every build was 8,300 characters for the one or
+# two a blueprint commits to, and the invariant the moves tests guard
+# holds either way: a named move always arrives with its primitive.
 import design_moves as _dm
-_SYSTEM = _SYSTEM + chr(10)*2 + _dm.builder_block(
-    "the element's own class", color_law="hexes")
+_SYSTEM = _SYSTEM + chr(10)*2 + _dm.tinting_block(color_law="hexes").replace(
+    "no url().", "no url() (the one exception: the object library's own paper "
+    "grain, inside data-sx-object elements).")
 _SYSTEM = _SYSTEM + "\n\n== TWO HARD RULES ON WHAT THE PAGE DOES WITHOUT HELP ==\n\n1. THE PAGE MUST SURVIVE WITHOUT JAVASCRIPT.\nScroll-reveal is the classic way to ship a blank page. If you write\n`.reveal{opacity:0}` and clear it from script, then ANY script error, a\nblocked asset, or a crawler that does not execute JS sees your nav and a\nblack rectangle. On the live site this hid 14 elements below the hero.\nSo: gate every reveal on a class the script itself adds, and give a\nno-script escape.\n\n   <script>document.documentElement.className+=' js'</script>  (put it in <head>)\n   .js .reveal{opacity:0;transform:translateY(14px)}\n   .js .reveal.in{opacity:1;transform:none}\n   <noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>\n\nNever write a bare `.reveal{opacity:0}`. Content is visible by default and\nJS may only take it away.\n\n2. THE BRAND MARK IS NOT A PORTFOLIO PIECE.\nUse the BRAND MARK url from the real-data block for the header logo, and\nnothing else. If no mark was supplied, set a typographic wordmark. A\ngallery image in the header is a broken brand: it shipped once as a\n1200x675 campaign flyer squashed into a 59x34 box. Give the mark its own\nbox with object-fit: contain so it keeps its aspect ratio.\n"
 
 def build_user_prompt(spec_text: str, real_data: str,
                       violations: Optional[List[str]] = None,
-                      prior_doc: str = "") -> str:
+                      prior_doc: str = "", page_brief: str = "") -> str:
     """Pure prompt assembly (testable). With violations + prior_doc it
     becomes the ONE surgical repair prompt (Amendment 1: minimal edits,
     never a fresh re-roll)."""
@@ -242,17 +254,36 @@ def build_user_prompt(spec_text: str, real_data: str,
             "",
             "Output the corrected complete HTML document only.",
         ])
-    return "\n".join([
+    parts = [
         "== THE APPROVED SPEC (the law of the page — the owner read and "
         "approved this document) ==",
         spec_text.strip(),
         "",
+    ]
+    if page_brief.strip():
+        parts += [page_brief.strip(), ""]
+    primitives = _dm.primitives_block(_dm.move_names_in(spec_text))
+    if primitives:
+        parts += [primitives, ""]
+    # THE OBJECTS (2026-10-01): the library objects the blueprint's concept
+    # sheet names arrive with their working source, the way named moves
+    # arrive with their primitives.
+    try:
+        import site_objects
+        objects = site_objects.builder_block(site_objects.object_names_in(spec_text))
+    except Exception as e:
+        logger.info(f"[v2] object library skipped: {e}")
+        objects = ""
+    if objects:
+        parts += [objects, ""]
+    parts += [
         "== THE REAL DATA (the only facts you may render; every image url "
         "listed here must appear on the page) ==",
         real_data.strip()[:16000],
         "",
         "Build the complete page now.",
-    ])
+    ]
+    return "\n".join(parts)
 
 
 # ─── real data assembly ──────────────────────────────────────────────
@@ -342,6 +373,15 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
     block = connected_systems_block(business_id, ctx)
     if block:
         parts.append(block)
+    # THE OFFER PAGE (2026-10-01): a World concept scoped to one offer is
+    # built as its own page; the home page links to it.
+    offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
+    if offer.get("path"):
+        try:
+            import site_pages
+            parts.append(site_pages.offer_line(offer["path"], offer.get("name") or ""))
+        except Exception as e:
+            logger.info(f"[v2] offer line skipped: {e}")
     # ONE SET OF FACTS (2026-08-29): the same block the Director read, so
     # a founding year the Blueprint states is traceable here and the
     # truth law never deletes a true sentence again.
@@ -746,18 +786,24 @@ def check_tenure(html: str, real_data: str) -> List[str]:
     return site_facts.tenure_claims(_visible_text(html), facts)
 
 
-def check_coverage(html: str, real_data: str) -> List[str]:
+def check_coverage(html: str, real_data: str, page: str = "home") -> List[str]:
+    """page="offer" (2026-10-01): the offer page carries the offer, not the
+    whole inventory, so every-image and the contact form are home-page
+    laws; navigation and a footer are every page's."""
     problems: List[str] = []
     for m in re.finditer(r"^- (https://\S+)", real_data, re.MULTILINE):
+        if page != "home":
+            break
         url = m.group(1)
         if url not in html:
             problems.append(f"required image missing: {url}")
-    if not re.search(r"<nav\b", html, re.IGNORECASE):
+    if not re.search(r"<nav\b|role\s*=\s*[\"']navigation[\"']", html,
+                     re.IGNORECASE):
         problems.append("no <nav> — a fixed navigation is required")
     endpoint = re.search(r"CONTACT FORM ENDPOINT[^\n]*:\s*(\S+)", real_data)
-    if endpoint and endpoint.group(1) not in html:
+    if page == "home" and endpoint and endpoint.group(1) not in html:
         problems.append(f"contact form must post to {endpoint.group(1)}")
-    if not re.search(r"<form\b", html, re.IGNORECASE):
+    if page == "home" and not re.search(r"<form\b", html, re.IGNORECASE):
         problems.append("no <form> — the working inquiry form is required")
     if not re.search(r"<footer\b", html, re.IGNORECASE):
         problems.append("no <footer>")
@@ -882,6 +928,86 @@ VISION_SETTLE_MS = 1600
 INSPECTOR_MAX_TOKENS = 4000
 
 
+# THE MEASURED RENDER (2026-10-01, the concept-layer plan): site_check
+# measured overflow, empty headings and collisions on the LIVE site, but
+# the build never ran it, so a page that scrolled sideways on a phone
+# shipped and was only reported afterwards. The eyes' walk already has
+# the page open at 390 and 1440; it now runs the same audit there (free,
+# no model call) and the findings ride the vision repair. Kept beside the
+# walk rather than in its return value so every caller of
+# _screenshot_walk (the tool loop, the tests) sees the same shape.
+_MEASURES: Dict[str, Dict[str, Any]] = {}
+_MEASURES_KEEP = 8
+_TEXTISH_RE = re.compile(r"^(?:h[1-6]|p|li|blockquote|a|button|input|textarea|form)\b")
+
+
+def _doc_key(html: str) -> str:
+    import hashlib
+    return hashlib.sha1((html or "").encode("utf-8", "ignore")).hexdigest()
+
+
+def _record_measure(html: str, width: int, data: Any) -> None:
+    if not isinstance(data, dict):
+        return
+    key = _doc_key(html)
+    if key not in _MEASURES and len(_MEASURES) >= _MEASURES_KEEP:
+        _MEASURES.pop(next(iter(_MEASURES)))
+    _MEASURES.setdefault(key, {}).setdefault(str(width), {}).update(data)
+
+
+def _measure_page(page: Any, html: str, width: int) -> None:
+    """Geometry (site_check's audit) and the craft floor (craft_laws),
+    measured on the open page once the hero has settled. Free; never
+    fatal."""
+    try:
+        import site_check
+        _record_measure(html, width, page.evaluate(site_check._AUDIT_JS))
+    except Exception as e:
+        logger.info(f"[v2:eyes] geometry skipped at {width}px: {e}")
+    try:
+        import craft_laws
+        _record_measure(html, width, page.evaluate(craft_laws.RENDER_JS))
+    except Exception as e:
+        logger.info(f"[v2:eyes] craft measure skipped at {width}px: {e}")
+
+
+def walk_measurements(html: str) -> Optional[Dict[str, Any]]:
+    """What the last walk of this exact document measured, by width, or
+    None when it was not walked (no playwright, eyes off). Read once."""
+    return _MEASURES.pop(_doc_key(html), None)
+
+
+def render_findings(measures: Optional[Dict[str, Any]]) -> List[str]:
+    """Measured defects worth a repair round, in the builder's words.
+    Only what is certainly wrong: content wider than the screen, a
+    heading with no words, and text colliding with text. An image under
+    a caption or a photo behind a headline is usually layering on
+    purpose, so those overlaps are left to the eyes and to
+    data-overlap-ok."""
+    out: List[str] = []
+    for width, m in sorted((measures or {}).items(), key=lambda kv: int(kv[0])):
+        if not isinstance(m, dict):
+            continue
+        if m.get("overflow_x"):
+            out.append(f"at {width}px the page is {m.get('scroll_width')}px wide: "
+                       "something is wider than the screen, so the page scrolls "
+                       "sideways. Find the element and constrain it.")
+        if m.get("empty_headings"):
+            out.append(f"at {width}px {m['empty_headings']} heading(s) render "
+                       "with no text. Give each words or remove it.")
+        hits = []
+        for o in (m.get("overlaps") or []):
+            a, b = str(o.get("a") or ""), str(o.get("b") or "")
+            if _TEXTISH_RE.match(a) and _TEXTISH_RE.match(b):
+                hits.append(f"{a} over {b}")
+        if hits:
+            out.append(f"at {width}px text collides with text: "
+                       + "; ".join(hits[:3])
+                       + ". Separate them, or mark deliberate layering with "
+                         "data-overlap-ok.")
+    return out[:6]
+
+
 def eyes_enabled() -> bool:
     return (os.environ.get("SITE_V2_VISION_LOOP") or "on").strip().lower() \
         in ("on", "1", "true", "yes")
@@ -920,6 +1046,8 @@ def _screenshot_walk(html: str) -> Optional[List[Tuple[str, bytes]]]:
                         shots.append((f"{width}px {name}",
                                       page.screenshot(type="jpeg",
                                                       quality=55)))
+                        if name == "top":
+                            _measure_page(page, html, width)
                     page.close()
                 page = browser.new_page(
                     viewport={"width": VISION_WIDE_WIDTH, "height": 1000})
@@ -951,9 +1079,16 @@ Measure against THE CHECKLIST (each item is a law, not a suggestion):
 - MOBILE (390px): nothing crowded, cropped, or broken; rhythm holds.
 - ULTRAWIDE: the page keeps an intentional measure; nothing stretches thin or drifts.
 - SPEC FIDELITY: the named signature move is visible and executed; the spec's palette and type are what actually rendered.
+- THE IDEA: the hero says what this business is; a stranger knows in five seconds.
+- ONE SIGNATURE MOMENT: it is visible, and the sections around it are quiet enough to let it lead.
+- RHYTHM: no two neighboring sections share the same shape (the same heading-number-paragraph opening, the same three cards). A page where every section opens the same way has defaulted.
+- PHONE COMPOSITION: at 390px the headline survives, objects simplify, nothing collides or shrinks to unreadable.
+- CONCEPT CLARITY: when the page wears a concept, it never hides what a thing is or what it costs, and in-world labels keep their plain words.
+
+Each violation names its "section": the id from SECTIONS ON THE PAGE, or "page" when it spans the page. Then name the WEAKEST section, the one a designer would rebuild first, with a score from 1 to 10 against everything above.
 
 Output STRICT JSON only:
-{"verdict":"ship"|"repair","violations":[{"where":"<section/breakpoint>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}]}
+{"verdict":"ship"|"repair","violations":[{"where":"<section/breakpoint>","section":"<id or page>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}],"weakest":{"section":"<id>","score":<1-10>,"why":"<one sentence>","fix":"<what the rebuilt section does instead>"}}
 Rules: at most 6 violations, ranked by owner-visible damage. Cosmetic taste differences are NOT violations. An empty violations list means verdict "ship". JSON only, no commentary."""
 
 
@@ -977,6 +1112,17 @@ def _parse_inspector(raw: str) -> Optional[Dict[str, Any]]:
                          if isinstance(v, dict) and v.get("what")][:6]
     if not out["violations"]:
         out["verdict"] = "ship"
+    w = out.get("weakest")
+    if isinstance(w, dict) and str(w.get("section") or "").strip():
+        try:
+            score = int(w.get("score"))
+        except (TypeError, ValueError):
+            score = None
+        out["weakest"] = {"section": str(w["section"]).strip().lstrip("#"),
+                          "score": score, "why": str(w.get("why") or "")[:240],
+                          "fix": str(w.get("fix") or "")[:240]}
+    else:
+        out["weakest"] = None
     return out
 
 
@@ -1005,6 +1151,10 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
         content: List[Dict[str, Any]] = [
             {"type": "text", "text": "THE APPROVED SPEC (what the page "
              "promised):\n" + (spec_text or "").strip()[:2400]}]
+        outline = section_outline(doc)
+        if outline:
+            content.append({"type": "text", "text": "SECTIONS ON THE PAGE (id: "
+                            "heading), top to bottom:\n" + outline})
         for label, shot in shots:
             content.append({"type": "text", "text": f"View — {label}:"})
             content.append({"type": "image", "source": {
@@ -1149,8 +1299,216 @@ def _call(system: str, user: str, business_id: str,
         return None
 
 
+# ─── THE DESIGNER'S REVIEW (2026-10-01, the concept-layer plan) ──────
+# The vision repair used to resend the whole document for any defect the
+# eyes saw, paying for a full page to fix one band and risking the
+# sections that were already right. When every defect lives in named
+# sections, only those sections are rebuilt, and the rest of the page
+# stays byte for byte. A page-wide defect still gets the whole-page pass.
+
+WEAKEST_REBUILD_BELOW = 7        # the weakest section is rebuilt when it scores under this
+MAX_SECTION_REPAIRS = 2
+
+_SECTION_SYSTEM = ("THIS CALL REPAIRS ONE SECTION OF A FINISHED PAGE. Where the "
+                   "rules below say document or page, read section: you output ONE "
+                   "<section> element and nothing else.\n\n" + "{SYSTEM}")
+
+
+def _section_id(open_tag: str) -> str:
+    m = re.search(r'\bid\s*=\s*["\']([^"\']+)', open_tag)
+    return m.group(1) if m else ""
+
+
+def section_spans(doc: str) -> List[Tuple[str, int, int]]:
+    """(id, start, end) for every top-level <section> with an id."""
+    try:
+        import site_pages
+        out = []
+        for a, z in site_pages.top_sections(doc or ""):
+            open_tag = re.match(r"<section\b[^>]*>", doc[a:z], re.IGNORECASE).group(0)
+            sid = _section_id(open_tag)
+            if sid:
+                out.append((sid, a, z))
+        return out
+    except Exception:
+        return []
+
+
+def section_outline(doc: str) -> str:
+    lines = []
+    for sid, a, z in section_spans(doc):
+        h = re.search(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]>", doc[a:z], re.IGNORECASE | re.DOTALL)
+        heading = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h.group(1))).strip() if h else ""
+        lines.append(f"- {sid}: {heading[:70] or '(no heading)'}")
+    return "\n".join(lines[:24])
+
+
+def build_section_prompt(spec_text: str, real_data: str, doc: str, sid: str,
+                         issues: List[str]) -> str:
+    span = next(((a, z) for i, a, z in section_spans(doc) if i == sid), None)
+    current = doc[span[0]:span[1]] if span else ""
+    return "\n".join([
+        f"SECTION REPAIR: rebuild ONE section of your page, the <section id=\"{sid}\">. "
+        "Every other byte of the page is final and stays exactly as it is.",
+        "",
+        "WHAT TO FIX IN THIS SECTION:",
+        *[f"- {x}" for x in issues[:6]],
+        "",
+        f"Return ONLY the complete replacement element: it starts with <section, keeps "
+        f"id=\"{sid}\", uses the page's existing classes, tokens and fonts, keeps every "
+        "data-override-target it already has, and ends with </section>. New styles go in a "
+        "<style> element inside the section. No commentary, no code fences.",
+        "",
+        "THE APPROVED SPEC (excerpt):",
+        (spec_text or "").strip()[:6000],
+        "",
+        "THE REAL DATA (the only source of facts):",
+        (real_data or "").strip()[:10000],
+        "",
+        "THE WHOLE PAGE (context; do not return it):",
+        doc,
+        "",
+        "THE SECTION TO REBUILD:",
+        current,
+    ])
+
+
+def splice_section(doc: str, sid: str, raw: str) -> Optional[str]:
+    """The page with section `sid` replaced by the model's element, or None
+    when the reply is not one balanced <section id=sid>."""
+    text = _FENCE_RE.sub("", raw or "").strip()
+    i = text.lower().find("<section")
+    j = text.lower().rfind("</section>")
+    if i < 0 or j < i:
+        return None
+    new = text[i:j + len("</section>")]
+    try:
+        import site_pages
+        tops = site_pages.top_sections(new)
+    except Exception:
+        return None
+    if len(tops) != 1 or tops[0] != (0, len(new)):
+        return None
+    if _section_id(re.match(r"<section\b[^>]*>", new, re.IGNORECASE).group(0)) != sid:
+        return None
+    span = next(((a, z) for i2, a, z in section_spans(doc) if i2 == sid), None)
+    if not span:
+        return None
+    return doc[:span[0]] + new + doc[span[1]:]
+
+
+def plan_vision_repair(verdict: Optional[Dict[str, Any]], doc: str,
+                       page_items: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
+    """(page-wide items, {section id: items}). Anything the eyes could not
+    place in a section on this page is page-wide."""
+    ids = {sid for sid, _, _ in section_spans(doc)}
+    page = list(page_items)
+    by_section: Dict[str, List[str]] = {}
+    if verdict and verdict.get("verdict") == "repair":
+        for v in verdict.get("violations") or []:
+            item = (f"SEEN IN THE RENDER ({v.get('where', 'page')}): {v.get('what')} "
+                    f"— FIX: {v.get('fix', 'minimal edit')}")
+            sid = str(v.get("section") or "").strip().lstrip("#")
+            if sid in ids:
+                by_section.setdefault(sid, []).append(item)
+            else:
+                page.append(item)
+    w = (verdict or {}).get("weakest")
+    if isinstance(w, dict) and w.get("section") in ids and isinstance(w.get("score"), int) \
+            and w["score"] < WEAKEST_REBUILD_BELOW:
+        by_section.setdefault(w["section"], []).append(
+            f"THE WEAKEST SECTION (scored {w['score']}/10): {w.get('why')} "
+            f"— REBUILD IT SO: {w.get('fix')}")
+    return page, by_section
+
+
+def _concept_sheet(spec_text: str) -> Dict[str, str]:
+    try:
+        import site_concept
+        return site_concept.parse_sheet(spec_text)
+    except Exception as e:
+        logger.info(f"[v2] concept sheet unreadable: {e}")
+        return {}
+
+
+def _concept_findings(html: str, sheet: Dict[str, str]) -> List[str]:
+    try:
+        import site_concept
+        return site_concept.check_page(html, sheet)
+    except Exception as e:
+        logger.info(f"[v2] concept check skipped: {e}")
+        return []
+
+
+def _craft():
+    """craft_laws, imported late so a missing module can never stop a
+    build (the floor is quality, not a gate)."""
+    try:
+        import craft_laws
+        return craft_laws
+    except Exception as e:                     # pragma: no cover
+        logger.warning(f"[v2] craft floor unavailable: {e}")
+
+        class _Off:
+            RENDER_JS = "() => ({})"
+
+            @staticmethod
+            def typographer(d):
+                return d, 0
+
+            @staticmethod
+            def check_html(d, rd=""):
+                return []
+
+            @staticmethod
+            def render_findings(m):
+                return []
+        return _Off
+
+
+def house_style(home_html: str) -> str:
+    """What an offer page must wear exactly: the home page's styles, font
+    links, header and footer (capped so the brief stays sane)."""
+    h = home_html or ""
+    styles = "\n".join(re.findall(r"<style\b[^>]*>(.*?)</style>", h,
+                                   re.DOTALL | re.IGNORECASE))[:60000]
+    fonts = "\n".join(re.findall(r"<link\b[^>]*fonts\.googleapis\.com[^>]*>", h,
+                                  re.IGNORECASE))[:2000]
+    header = (re.search(r"<header\b.*?</header>", h, re.DOTALL | re.IGNORECASE)
+              or re.search(r"<nav\b.*?</nav>", h, re.DOTALL | re.IGNORECASE))
+    footer = re.search(r"<footer\b.*?</footer>", h, re.DOTALL | re.IGNORECASE)
+    return "\n".join([
+        "FONT LINKS:", fonts,
+        "STYLES (reuse these rules and class names; add rules only for this page's own sections):",
+        styles,
+        "HEADER (reuse it, pointing its links at the home page's sections with /#id):",
+        header.group(0)[:8000] if header else "(none)",
+        "FOOTER (reuse it):",
+        footer.group(0)[:6000] if footer else "(none)",
+    ])
+
+
+def offer_page_brief(path: str, name: str, house: str) -> str:
+    return "\n".join([
+        "== THIS CALL BUILDS THE OFFER PAGE, NOT THE HOME PAGE ==",
+        f"Build ONE complete page: the offer page{(' for ' + name) if name else ''} "
+        f"that the blueprint's section 6 describes, served at {path}. It runs the "
+        "section 0 concept at WORLD intensity: its vocabulary, its objects, its "
+        "living detail. The home page (section 3) is already built; do not rebuild "
+        "it. Link back to it (href=\"/\") from the header.",
+        "Wear the house style below EXACTLY: the same :root tokens, the same fonts, "
+        "the same header and footer, so a visitor never feels they left the site.",
+        "The every-image law is the home page's: show only the images this offer "
+        "needs. The one action (book, enroll, ask) is a real link or the contact form.",
+        "",
+        "== THE HOUSE STYLE (from the home page already built) ==",
+        house,
+    ])
+
+
 def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
-                   progress_cb=None) -> Dict[str, Any]:
+                   progress_cb=None, page: str = "home",
+                   house: str = "") -> Dict[str, Any]:
     """ONE call → armor → (one scoped repair) → document or None.
     None = the old path takes over (and still wears the spec's tokens
     via the bridge). The report always returns — loud failures."""
@@ -1168,6 +1526,17 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             pass
 
     real_data = assemble_real_data(ctx, business_id)
+    sheet = _concept_sheet(spec_text)
+    offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
+    page_brief = ""
+    if page == "offer":
+        report["page"] = "offer"
+        page_brief = offer_page_brief(offer.get("path") or "/offer",
+                                      offer.get("name") or "", house)
+        # the offer page IS the World page: hold it to the world rules
+        sheet = dict(sheet, scope="site", intensity="world") if sheet else sheet
+    report["concept"] = {k: sheet.get(k) for k in ("intensity", "scope", "idea", "objects")
+                         if sheet.get(k)}
     _progress(48, "One mind builds the whole page")
     # THE BUILDER WITH TOOLS (2026-08-29): when the loop is on, the
     # authoring step can look at the owner's images, pull whole sections
@@ -1177,7 +1546,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     doc: Optional[str] = None
     try:
         import builder_loop
-        if builder_loop.enabled():
+        if builder_loop.enabled() and page == "home":
             _progress(48, "The builder looks, renders, corrects")
             looped = builder_loop.run_loop(spec_text, ctx, business_id, spend,
                                            progress_cb=_progress)
@@ -1193,8 +1562,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         report["fallbacks"].append({"stage": "loop",
                                     "detail": f"{type(e).__name__}: {e}"})
     if not doc:
-        raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data), business_id,
-                    spend=spend)
+        raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data,
+                                               page_brief=page_brief),
+                    business_id, spend=spend)
         doc = _parse_doc(raw or "")
     if not doc:
         report["fallbacks"].append({"stage": "author",
@@ -1206,18 +1576,35 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     def _mechanical(d: str) -> str:
         d, dropped = armor_scripts(d, allowed_fetch=endpoint)
         d, stripped = armor_external(d)
+        d, typeset = _craft().typographer(d)
         d, added = annotate_editability(d)
         report["mechanical"] = {"scripts_dropped": dropped,
                                 "externals_stripped": stripped,
+                                "typography_fixes": typeset,
                                 "override_targets_added": added}
         return d
+
+    def _soft(d: str) -> List[str]:
+        # THE SOFT TIER: quality defects that earn the repair round and
+        # never the fallback: visible stand-ins (11c), the craft floor
+        # (one h1, alt text, type families, likely typos) and the page
+        # held to its concept sheet (objects, the plain-word rule).
+        out = (check_stand_ins(d) + _craft().check_html(d, real_data)
+               + _concept_findings(d, sheet))
+        if page == "home" and offer.get("path"):
+            try:
+                import site_pages
+                out += site_pages.check_offer_link(d, offer["path"])
+            except Exception:
+                pass
+        return out
 
     def _laws(d: str) -> List[str]:
         # armor_violations reads the drops _mechanical just recorded for
         # this same doc — a dropped script must fail the law gate loudly
         # (silently shipping it is the 2026-07-25 blank-sections bug).
         return (check_truth(d, real_data) + check_tenure(d, real_data)
-                + check_coverage(d, real_data)
+                + check_coverage(d, real_data, page=page)
                 + check_grammar(d) + check_head(d) + check_interactions(d)
                 + check_connected(d, real_data)
                 + armor_violations(
@@ -1230,7 +1617,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     # but a stand-in is a quality defect, not an invented fact — it never
     # sends a build to the fallback engine. Whatever survives the repair
     # is reported (report["stand_ins"]) and handed to the eyes.
-    stand_ins = check_stand_ins(doc)
+    stand_ins = _soft(doc)
     if (violations or stand_ins) and not _budget_left(spend):
         # THE HARD BUDGET: no repair round left in the purse. Stand-ins
         # ride the report; hard laws still cannot ship (below).
@@ -1277,6 +1664,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                                         "detail": "stand-in repair unparseable "
                                                   "— keeping the document"})
     report["stand_ins"] = check_stand_ins(doc)
+    report["craft"] = _craft().check_html(doc, real_data)
 
     # THE EYES (Arc 2): the builder looks at its own rendered work and
     # gets ONE surgical pass to fix what it sees. Quality violations are
@@ -1289,23 +1677,57 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         verdict = inspect_with_eyes(doc, spec_text, business_id, why=why)
         if not verdict and why.get("reason"):
             report["vision"]["reason"] = why["reason"]
+        _m = walk_measurements(doc)
+        measured = render_findings(_m) + _craft().render_findings(_m)
+        report["vision"]["measured"] = measured
         if verdict:
             report["vision"]["ran"] = True
             report["vision"]["verdict"] = verdict.get("verdict")
             report["vision"]["violations"] = verdict.get("violations", [])
-            if verdict.get("verdict") == "repair" and not _budget_left(spend):
+            report["vision"]["weakest"] = verdict.get("weakest")
+        page_items, by_section = plan_vision_repair(
+            verdict, doc, [f"MEASURED IN THE RENDER: {m}" for m in measured])
+        if by_section and not page_items:
+            # THE DESIGNER'S REVIEW: only the named sections are rebuilt.
+            _progress(68, "Rebuilding the sections the eyes flagged")
+            done: List[Dict[str, Any]] = []
+            for sid, items in list(by_section.items())[:MAX_SECTION_REPAIRS]:
+                if not _budget_left(spend):
+                    spend["skipped"].append(f"section-repair:{sid}")
+                    break
+                raw_s = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
+                              build_section_prompt(spec_text, real_data, doc, sid, items),
+                              business_id, spend=spend)
+                cand = splice_section(doc, sid, raw_s or "")
+                applied = False
+                if cand:
+                    cand = _mechanical(cand)
+                    if not _laws(cand):
+                        doc, applied = cand, True
+                done.append({"section": sid, "applied": applied})
+            report["vision"]["section_repairs"] = done
+            report["vision"]["repaired"] = any(d["applied"] for d in done)
+            if report["vision"]["repaired"]:
+                report["stand_ins"] = check_stand_ins(doc)
+                report["craft"] = _craft().check_html(doc, real_data)
+        wants_repair = bool(page_items)
+        if wants_repair:
+            if not _budget_left(spend):
                 spend["skipped"].append("vision-repair")
                 report["fallbacks"].append({
                     "stage": "vision-repair",
                     "detail": "output budget reached — keeping the law-passing document"})
-            elif verdict.get("verdict") == "repair":
+            else:
                 _progress(68, "Vision repair: fixing what the eyes found")
-                seen = [f"SEEN IN THE RENDER ({v.get('where', 'page')}): "
-                        f"{v.get('what')} — FIX: {v.get('fix', 'minimal edit')}"
-                        for v in verdict["violations"]]
-                # a stand-in the surgical round left behind rides the
-                # vision repair too — the eyes' round is the last chance
+                # page-wide: one whole-page pass carries everything, the
+                # section items included
+                seen = list(page_items)
+                for items in by_section.values():
+                    seen += items
+                # a stand-in or a craft miss the surgical round left behind
+                # rides the vision repair too — the eyes' round is the last chance
                 seen += [f"STILL ON THE PAGE: {s}" for s in report["stand_ins"]]
+                seen += [f"STILL ON THE PAGE: {s}" for s in report.get("craft") or []]
                 raw3 = _call(_SYSTEM,
                              build_user_prompt(spec_text, real_data,
                                                violations=seen,
@@ -1318,6 +1740,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                         doc = doc3
                         report["vision"]["repaired"] = True
                         report["stand_ins"] = check_stand_ins(doc)
+                        report["craft"] = _craft().check_html(doc, real_data)
                     else:
                         report["fallbacks"].append({
                             "stage": "vision-repair",

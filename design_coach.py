@@ -80,6 +80,7 @@ Every turn, extract anything learned into "saves". Use these dossier sections/fi
 - story: origin, craft, proof, voice, atmosphere
 - taste: each answered pair saved as its OWN field (field is one of ground/density/carrier/edges/era/tone/motion, value is the chosen word); plus admired (what and why, one string) and bans (the cringe answers, one string or list); plus THE GALLERY PICKS: look (the look KEY they tapped, e.g. "neon"), hero_shape (the layout key), motion (the motion key). THE PICK BINDS: a tapped card arrives as a message like "Neon, that's the one." Save it that same turn as {"section": "taste", "field": "look", "value": "neon"}; the build reads this field and speaks that language, so a pick that is not saved is a pick that is lost.
 - signature: moment (their words), sharpened (your one-line phrasing of it)
+- taste (THE CONCEPT PICK): concept (the card KEY they tapped: plain, signature, world-offer or world-site), concept_idea (the idea in one line, your pitch or their correction of it), concept_offer (when world-offer: the offer's name, from KNOWN CONTEXT or their words). Save all that apply the same turn they tap.
 - truth: proven_stats (value is a list of {label, value, proof} objects)
 - capabilities: booking, store (value "on" or "off" — the owner's answer to whether the SITE carries that door)
 Save the practitioner's OWN PHRASING in values — verbatim quotes are design material. Only save what THIS turn established. Empty saves list is fine.
@@ -100,6 +101,7 @@ THE GALLERIES (show, then ask — the Claude Design pattern): when the conversat
 - kind "looks" (the design language — the platform shows each as a real full-page design the system can build). The keys, what each is, and who it sings for:
 {LOOKS_CATALOG}
 - kind "layouts" (the hero's shape): split-stage (copy one side, portrait the other), poster (one full-bleed statement), editorial (a magazine column with a lead image), exhibition (the work itself leads, gallery-first), monument (the name at monumental scale, the work small beneath), corridor (a short headline over a filmstrip of the work), letter (a typed letter to the visitor — no image, the voice is the hero).
+- kind "concept" (how far the site's idea goes; the platform shows each as a real rendering of one section at that setting). Keys: plain (no concept: clear, calm, nothing renamed), signature (one object carries one moment, the rest stays plain), world-offer (the idea runs one offer page, a course or a launch, while the home stays calm), world-site (the idea runs the whole site). Add "notes": {"<key>": "one line, for THIS business"} so each card carries its pitch ("signature": "your price list as the felt letterboard on your wall"; "world-offer": "your six-week course as a college semester"). Show it ONCE, in the signature station, after the look is chosen. Put KNOWN CONTEXT's CONCEPT DEFAULT first and say it is the usual choice for their kind of business; offer world-site only alongside world-offer. Plain is always one of the cards. Never pick for them.
 - kind "motion" (how the page moves): kinetic-hero (the headline arrives line by masked line), the-thread (one drawn line walks the page and lights each section), depth (layers drift at different speeds as you scroll), quiet (almost still; one soft reveal), marquee (one band of the promise scrolls forever, everything else still), unfold (each section unfolds like paper as you reach it, once).
 Offer 3 to 6 looks (2 to 4 for layouts and motion), chosen for THIS business — never all eleven, never a default trio.
 CHOOSING THE LOOKS: the KNOWN CONTEXT carries LOOKS THAT FIT THIS BUSINESS, ranked by the platform from their trade, their photos and their words. Offer from the top of that list, best fit first, and include one that is a real alternative (a different ground or a different temperature), never six shades of the same thing. Keep the reply ONE short question ("Which of these feels like walking into your shop?") and never describe the options in words: the cards do that. If they say none of them fit, show "looks" ONE more time with the keys you have not shown yet; layouts and motion are shown at most once per session.
@@ -248,6 +250,16 @@ def _known_context(business_id: str) -> str:
                              "build on them): "
                              + json.dumps(prefs, ensure_ascii=False)[:900])
             try:
+                import site_concept
+                d_int = site_concept.default_intensity(str(b.get("business_type") or ""))
+                parts.append(
+                    f"CONCEPT DEFAULT FOR THIS BUSINESS: {d_int} (the platform's "
+                    "default for their kind of business: plain for health, legal, "
+                    "finance and therapy; signature for everyone else). World is "
+                    "only ever their choice.")
+            except Exception as e:
+                logger.info(f"[coach] concept default skipped: {e}")
+            try:
                 gal = ((st.get("media_library") or {}).get("gallery")) or []
                 fit = looks_that_fit_block(
                     str(b.get("business_type") or ""), len(gal),
@@ -339,13 +351,33 @@ _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.MULTILINE)
 
 # THE PICK BINDS (2026-09-04): a tapped gallery card is saved as the
 # owner's own answer, by KEY, so design_languages.resolve can read it.
-_PICK_FIELDS = {"look": "looks", "hero_shape": "layouts", "motion": "motion"}
+_PICK_FIELDS = {"look": "looks", "hero_shape": "layouts", "motion": "motion",
+                "concept": "concept"}
 _PICK_KEYS = {
     "layouts": {"split-stage", "poster", "editorial", "exhibition",
                 "monument", "corridor", "letter"},
     "motion": {"kinetic-hero", "the-thread", "depth", "quiet",
                "marquee", "unfold"},
+    "concept": {"plain", "signature", "world-offer", "world-site"},
 }
+
+
+def _normalize_concept(raw: Any) -> Optional[str]:
+    """'World: one offer page, that's the one.' → world-offer. A bare
+    'world' means the recommended form, the offer page (Kevin,
+    2026-10-01: World lives on one offer page by default)."""
+    t = str(raw or "").strip().lower()
+    if t in _PICK_KEYS["concept"]:
+        return t
+    if "world" in t or "whole" in t or "immers" in t:
+        if "whole" in t or "entire" in t or "everywhere" in t or "site" in t.replace("offer", ""):
+            return "world-site"
+        return "world-offer"
+    if "signature" in t or "one object" in t:
+        return "signature"
+    if "plain" in t or "simple" in t or "clean" in t or "no concept" in t:
+        return "plain"
+    return None
 
 
 def _normalize_pick(field: str, raw: Any) -> Optional[str]:
@@ -353,6 +385,8 @@ def _normalize_pick(field: str, raw: Any) -> Optional[str]:
     kind = _PICK_FIELDS.get(field)
     if not kind:
         return None
+    if kind == "concept":
+        return _normalize_concept(raw)
     keys = _look_keys() if kind == "looks" else _PICK_KEYS[kind]
     text = str(raw or "").strip().lower()
     text = re.sub(r"[,.!'’].*$", "", text).strip()          # drop the sentence tail
@@ -414,6 +448,7 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
                     "monument", "corridor", "letter"},
         "motion": {"kinetic-hero", "the-thread", "depth", "quiet",
                    "marquee", "unfold"},
+        "concept": set(_PICK_KEYS["concept"]),
     }
     out["gallery"] = None
     if isinstance(g, dict) and g.get("kind") in _G_KINDS:
@@ -422,6 +457,12 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
         if len(opts) >= 2:
             cap = 6 if g["kind"] == "looks" else 4
             out["gallery"] = {"kind": g["kind"], "options": opts[:cap]}
+            notes = g.get("notes")
+            if isinstance(notes, dict):
+                kept = {str(k): str(v).strip()[:90] for k, v in notes.items()
+                        if str(k) in out["gallery"]["options"] and str(v or "").strip()}
+                if kept:
+                    out["gallery"]["notes"] = kept
     rb = out.get("reflect_back")
     out["reflect_back"] = [str(x)[:200] for x in rb[:12]] \
         if isinstance(rb, list) else []

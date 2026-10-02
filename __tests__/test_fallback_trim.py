@@ -15,10 +15,66 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import asyncio
+import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import fallback_brain as fb
+
+
+@pytest.mark.parametrize("reply", [
+    'Done. [ACTION:{"type":"submit_work_order","capability":"goal_setup"}]',
+    'Sent. [ACTION:{"type":"send_sms","message":"nested ] and { braces }"}]',
+    '[ACTION:{"type":"create_contact"',
+    'Queued. [ action : {"type":"create_invoice"}]',
+    '```\n[ACTION:{"type":"create_goal"}]\n```',
+])
+def test_backup_cannot_emit_executable_actions_or_attached_completion_claims(monkeypatch, reply):
+    import chief_of_staff as cos
+
+    class Client:
+        async def post(self, *args, **kwargs):
+            class Response:
+                status_code = 200
+                def json(self):
+                    return {"choices": [{"message": {"content": reply}}], "usage": {}}
+            return Response()
+
+    async def noop(*args, **kwargs):
+        pass
+
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-key")
+    monkeypatch.setenv("FALLBACK_BRAIN", "on")
+    monkeypatch.setattr(fb, "_notify_owner", noop)
+    import api_usage_logger
+    monkeypatch.setattr(api_usage_logger, "log_api_usage", noop)
+    text = asyncio.run(fb.call_fallback(Client(), "system", [], 100))
+    assert text == "I couldn't complete that request right now. Please try again in a moment."
+    actions, cleaned = cos._extract_actions_and_clean(text)
+    assert not actions and cleaned == text
+
+
+def test_backup_still_returns_ordinary_advice(monkeypatch):
+    advice = "Start with one fixed monthly price and adjust after the first few customers."
+
+    class Client:
+        async def post(self, *args, **kwargs):
+            class Response:
+                status_code = 200
+                def json(self):
+                    return {"choices": [{"message": {"content": advice}}], "usage": {}}
+            return Response()
+
+    async def noop(*args, **kwargs):
+        pass
+
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-key")
+    monkeypatch.setenv("FALLBACK_BRAIN", "on")
+    monkeypatch.setattr(fb, "_notify_owner", noop)
+    import api_usage_logger
+    monkeypatch.setattr(api_usage_logger, "log_api_usage", noop)
+    assert asyncio.run(fb.call_fallback(Client(), "system", [], 100)) == advice
 
 
 # Sized to the real thing. OpenAI reported 33,565 tokens for one Chief
