@@ -31,3 +31,5 @@ Production speed claims remain pending deployment and a measured retest.
 
 Code release: PR #1210. The production retest and measured results are recorded on the PR after deployment; the changes above do not by themselves establish a latency result.
 Validation before release: 366 focused tests passed; full CI is the protected merge gate.
+
+A fictional live-provider check caught fenced JSON selections. The parser now accepts a single complete JSON fence before strict candidate validation. The selection deadline covers spend-check I/O as well as the provider. Free fallback does not start a paid call after a slow guard. The corrected live selection was accepted; this isolated check is not an end-to-end voice latency measurement.

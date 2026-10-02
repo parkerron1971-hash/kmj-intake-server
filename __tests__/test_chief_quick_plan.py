@@ -79,7 +79,7 @@ def test_model_can_only_select_real_distinct_ids_with_relative_days():
         assert quick._selection(changed, options) is None
 
 
-@pytest.mark.parametrize('provider_behavior', ['timeout', 'malformed', 'valid'])
+@pytest.mark.parametrize('provider_behavior', ['timeout', 'malformed', 'valid', 'fenced'])
 def test_single_bounded_model_call_has_grounded_fallback(monkeypatch, provider_behavior):
     import spend_guard
     monkeypatch.setattr(spend_guard, 'over_budget', lambda *a: False)
@@ -91,7 +91,9 @@ def test_single_bounded_model_call_has_grounded_fallback(monkeypatch, provider_b
         def json(self):
             selection = {'steps': [{'id': row['id'], 'when': 'Today' if i < 2 else 'Tomorrow'}
                                    for i, row in enumerate(reversed(options[-4:]))]}
-            raw = json.dumps(selection) if provider_behavior == 'valid' else '{bad json'
+            raw = json.dumps(selection) if provider_behavior in ('valid', 'fenced') else '{bad json'
+            if provider_behavior == 'fenced':
+                raw = '```json\n' + raw + '\n```'
             return {'stop_reason': 'end_turn', 'content': [{'type': 'text', 'text': raw}]}
     async def call(*args, **kwargs):
         if provider_behavior == 'timeout':
@@ -107,6 +109,31 @@ def test_single_bounded_model_call_has_grounded_fallback(monkeypatch, provider_b
     assert provider.await_args.kwargs['business_id'] == 'business'
     payload = provider.await_args.args[1]
     assert 'tools' not in payload and len(json.dumps(payload)) < 4500
+    if provider_behavior in ('valid', 'fenced'):
+        assert [row['step'] for row in result['steps']] == [row['step'] for row in reversed(options[-4:])]
+
+
+def test_slow_spend_check_uses_free_fallback_without_starting_paid_call(monkeypatch):
+    import spend_guard
+    import threading
+    started, release = threading.Event(), threading.Event()
+    def slow_guard(*args):
+        started.set()
+        release.wait(2)
+        return False
+    monkeypatch.setattr(spend_guard, 'over_budget', slow_guard)
+    monkeypatch.setattr(quick.llm_call, 'api_key', lambda: 'fixture')
+    monkeypatch.setattr(quick, 'SELECTION_BUDGET_S', .025)
+    provider = AsyncMock(side_effect=AssertionError('No paid call after guard budget expires'))
+    monkeypatch.setattr(quick.llm_call, 'apost', provider)
+    async def run():
+        try:
+            result = await asyncio.wait_for(quick.action(None, req(), fixture()), .5)
+            assert started.is_set() and result['steps']
+            provider.assert_not_awaited()
+        finally:
+            release.set()
+    asyncio.run(run())
 
 
 def test_empty_business_proposes_starting_points_without_a_model(monkeypatch):
