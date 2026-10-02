@@ -3,10 +3,10 @@ title: Chief reads invoice displays without a contradictory rewrite
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Invoice answer lists records and then tells me to disregard them"
-status: in progress
+status: shipped
 prs: []
 migrations: []
-left_undone: ["Parent integration and deployment", "Production voice retest"]
+left_undone: ["Owner retest of the new reply recovery"]
 decisions: ["Only whole-message invoice display requests qualify", "One actual validated invoice card is the authority", "Mixed advice and operations keep normal composition and review"]
 related: [2026-10-02-chief-conversation-recovery.md]
 ---

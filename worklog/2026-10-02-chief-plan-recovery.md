@@ -3,10 +3,10 @@ title: Chief keeps proposed plan steps when narration fails verification
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Improve Chief conversation flow after a short two-day plan became a records warning"
-status: in progress
+status: shipped
 prs: []
 migrations: []
-left_undone: ["Coordinating session integration and deployment"]
+left_undone: ["Owner retest of the new reply recovery"]
 decisions: ["Plans prove display and step count, not their authored factual premises", "Recovery uses closed generic proposals or independently matched open-invoice targets"]
 related: []
 ---
