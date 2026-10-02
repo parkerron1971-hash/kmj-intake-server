@@ -28,6 +28,9 @@ def eligible(req):
         return False
     if getattr(req, 'image_ids', None):
         return False
+    import chief_plan_context
+    if not chief_plan_context.history_preflight(req):
+        return False
     from chief_shortcut_scope import constrained
     if constrained(req, 'plan'):
         return False
@@ -44,6 +47,12 @@ def eligible(req):
         re.sub(r'[.!?]+$', '', re.sub(
             r'[.]?\s*Only show the plan; do not create tasks, send messages, or change records[.!?]?$',
             '', text, flags=re.I)).strip(), re.I))
+
+
+def request_shape(req):
+    """Current request gates only; never grants permission to ignore history."""
+    import chief_plan_context
+    return eligible(chief_plan_context.request_without_history(req))
 
 
 def _safe_name(value):
@@ -187,6 +196,10 @@ async def _choose(client, req, ctx, options):
 async def action(client, req, ctx):
     if not eligible(req):
         return None
+    return await _build_action(client, req, ctx)
+
+
+async def _build_action(client, req, ctx):
     options = candidates(ctx)
     # A new business may only have three generic starting points. There is no
     # need to invent a fourth record or call a model to rank an empty business.
@@ -207,12 +220,19 @@ async def action(client, req, ctx):
 async def try_reply(client, req, ctx, user_id):
     """Only the already-authorized owner shortcut; usual path handles other access."""
     biz = (ctx or {}).get('business') or {}
-    if (not eligible(req) or str(biz.get('id') or '') != req.business_id
+    if (str(biz.get('id') or '') != req.business_id
             or str(biz.get('owner_id') or '') != str(user_id)):
         return None
     import chief_of_staff as chief
     from chief_plan_recovery import normalize_plan_receipt, plan_readout
-    proposed = await action(client, req, ctx)
+    if eligible(req):
+        proposed = await action(client, req, ctx)
+    else:
+        import chief_plan_context
+        if (not request_shape(req)
+                or not await chief_plan_context.allows_generic_plan(client, req, biz['id'])):
+            return None
+        proposed = await _build_action(client, req, ctx)
     # Build and validate the exact card before its only execution. The handler
     # is a pure formatting function; the execution door retains UI policy/audit.
     preview = await chief.handle_show_plan(client, biz, proposed)
