@@ -179,3 +179,103 @@ def test_stale_revision_failure_propagates(monkeypatch):
     with pytest.raises(HTTPException) as error:
         asyncio.run(m.cancel_post({'id':str(uuid4()),'revision':1}))
     assert error.value.status_code==409
+
+
+# ── one post on every channel (2026-10-02) ─────────────────────────────
+
+@pytest.fixture
+def idea(monkeypatch):
+    """Tuesday's post on X and Facebook, as Chief finds it on the desk."""
+    from datetime import timedelta
+    run_at = (marketing.now() + timedelta(days=3)).isoformat()
+    rows = [{'id': str(uuid4()), 'revision': 2, 'status': 'draft', 'run_at': run_at,
+             'payload': {'text': 'Answer the oldest client first. Two minutes a day.', 'service': s}}
+            for s in ('twitter', 'facebook')]
+    calls = {'edit': [], 'cancel': []}
+
+    async def db(method, path, body=None):
+        assert method == 'GET' and path.startswith('/platform_marketing_posts?id=in.(')
+        return [r for r in rows if r['id'] in path]
+
+    async def edit(req, *, ai_assisted=None):
+        calls['edit'].append((req, ai_assisted))
+        return {'posts': [{**r, 'run_at': (req.run_at.isoformat() if req.run_at else r['run_at'])} for r in rows]}
+
+    async def cancel(req):
+        calls['cancel'].append(req)
+        return {'cancelled': len(req.items), 'posts': rows}
+    monkeypatch.setattr(marketing, 'db', db)
+    monkeypatch.setattr(marketing, 'edit_slot', edit)
+    monkeypatch.setattr(marketing, 'cancel_slot', cancel)
+    return {'rows': rows, 'ids': [r['id'] for r in rows], 'calls': calls}
+
+
+def test_chief_rewrites_one_post_on_every_channel_and_it_goes_back_to_review(idea):
+    out = asyncio.run(m.edit_slot({'post_ids': idea['ids'], 'text': 'Reply to whoever waited longest. Two minutes.'}))
+    req, ai = idea['calls']['edit'][0]
+    assert ai is True and [str(i.id) for i in req.items] == idea['ids'] and [i.revision for i in req.items] == [2, 2]
+    assert req.text == 'Reply to whoever waited longest. Two minutes.' and req.run_at is None
+    assert out['ok'] and 'post was rewritten on Facebook and X' in out['label'] and 'back in your review' in out['label']
+
+
+@pytest.mark.parametrize('text,refusal', [
+    ('Answer the oldest client first. Join 500 owners.', 'cannot add a number'),
+    ('Answer the oldest client first at mysolutionist.app', 'link or a hashtag'),
+    ('Answer the oldest client first #smallbusiness', 'link or a hashtag'),
+])
+def test_chief_cannot_add_a_number_link_or_hashtag(idea, text, refusal):
+    out = asyncio.run(m.edit_slot({'post_ids': idea['ids'], 'text': text}))
+    assert out['ok'] is False and refusal in out['label'] and idea['calls']['edit'] == []
+
+
+def test_chief_moves_a_missed_post_with_a_new_time(idea):
+    from datetime import timedelta
+    when = (marketing.now() + timedelta(days=4)).isoformat()
+    out = asyncio.run(m.edit_slot({'post_ids': idea['ids'], 'run_at': when}))
+    assert idea['calls']['edit'][0][0].text is None and out['label'].endswith('nothing goes out until you approve it.')
+    assert "post was moved on" in out['label']
+
+
+def test_chief_names_a_post_by_all_its_ids(idea):
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(m.edit_slot({'post_ids': [], 'text': 'x'}))
+    assert err.value.status_code == 422
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(m.skip_slot({'post_ids': idea['ids'] + [str(uuid4())]}))
+    assert err.value.status_code == 409 and idea['calls']['cancel'] == []
+
+
+def test_chief_skips_a_post_on_every_channel(idea):
+    out = asyncio.run(m.skip_slot({'post_ids': idea['ids']}))
+    assert len(idea['calls']['cancel'][0].items) == 2 and out['ok'] and 'will not go out' in out['label']
+
+
+def test_starting_over_is_refused_once_part_of_the_week_is_approved(monkeypatch):
+    import marketing_engine as engine
+
+    async def get_run(run_id):
+        return {'id': str(run_id), 'status': 'succeeded', 'post_ids': []}
+
+    async def db(method, path, body=None):
+        return [{'status': 'draft'}, {'status': 'approved'}]
+    started = []
+    monkeypatch.setattr(engine, 'get_run', get_run)
+    monkeypatch.setattr(engine, 'start_week', lambda replan=False: started.append(replan) or True)
+    monkeypatch.setattr(marketing, 'db', db)
+    out = asyncio.run(m.replan_week({}))
+    assert out['ok'] is False and 'cannot be started over' in out['label'] and started == []
+
+
+def test_new_marketing_actions_are_gated():
+    import platform_chief_authority as authority
+    assert authority.GROUPS['marketing_edit_slot'] == 'drafts'
+    assert authority.GROUPS['marketing_skip_slot'] == 'marketing_stop'
+    assert authority.GROUPS['marketing_replan_week'] == 'marketing_stop'
+    for kind in ('marketing_edit_slot', 'marketing_skip_slot', 'marketing_replan_week'):
+        assert kind in actions.HANDLERS and f'"{kind}"' in m.MARKETING_PROMPT
+    assert 'marketing_approve' not in actions.HANDLERS and 'never approve posts' in m.MARKETING_PROMPT
+
+
+def test_a_time_chief_cannot_read_is_refused_plainly(idea):
+    out = asyncio.run(m.edit_slot({'post_ids': idea['ids'], 'run_at': 'next tuesday-ish'}))
+    assert out['ok'] is False and 'could not be read' in out['label'] and idea['calls']['edit'] == []

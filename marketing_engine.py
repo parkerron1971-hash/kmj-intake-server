@@ -1,4 +1,8 @@
-"""marketing_engine.py — the Monday plan for Solutionist's own marketing.
+"""marketing_engine.py — the weekly plan for Solutionist's own marketing.
+
+Next week is planned on Thursday morning (2026-10-02), so the owner has the
+weekend to review it before Monday's post; a week that was never planned is
+planned for its remaining days on Monday to Wednesday.
 
 Kevin, 2026-09-28: build the marketing engine in Mission Control and perfect
 it on Solutionist itself before any practitioner gets it.
@@ -55,7 +59,7 @@ router = APIRouter(prefix='/platform/marketing/engine', tags=['platform-marketin
 log = logging.getLogger(__name__)
 
 TZ = ZoneInfo('America/New_York')
-RUN_HOUR = 7                      # Monday, local: the plan is ready before the day starts
+RUN_HOUR = 7                      # local: a plan, and its push, land in the morning
 POST_HOUR = 11                    # each post goes out at 11:00 local
 WEEK_SLOTS = 5                    # Monday to Friday
 CAPTION_MAX = 220                 # leaves room for the link on X
@@ -371,17 +375,35 @@ def price_problem(text, play, facts):
 
 # ── plays and slots ───────────────────────────────────────────────────
 
+PLAN_AHEAD_DAY = 3                # Thursday: next week is written with the weekend to review it
+
+
+def plans_ahead(now):
+    """From Thursday morning on, the week being planned is next week."""
+    local = now.astimezone(TZ)
+    return local.weekday() > PLAN_AHEAD_DAY or (local.weekday() == PLAN_AHEAD_DAY and local.hour >= RUN_HOUR)
+
+
 def week_window(now):
-    """The week to plan and its posting times: the rest of this week if at least
-    two weekdays are left, otherwise all of next week."""
+    """The week to plan and its posting times.
+
+    From Thursday at RUN_HOUR, all of next week: the plan lands with days to
+    spare before Monday's post. Before that, the rest of this week if at least
+    two weekdays are left (a first run, or a week whose Thursday plan never
+    happened), otherwise all of next week.
+
+    Until 2026-10-02 this rolled over only when fewer than two posting times
+    were left, which made every plan after the first land on Thursday at
+    10:00 by accident while the desk said Monday 7:00."""
     local = now.astimezone(TZ)
     monday = local.date() - timedelta(days=local.weekday())
 
     def times(first):
         return [datetime.combine(first + timedelta(days=i), time(POST_HOUR), TZ) for i in range(WEEK_SLOTS)]
-    left = [t for t in times(monday) if t > local + timedelta(hours=1)]
-    if len(left) >= 2:
-        return monday, left
+    if not plans_ahead(now):
+        left = [t for t in times(monday) if t > local + timedelta(hours=1)]
+        if len(left) >= 2:
+            return monday, left
     return monday + timedelta(days=7), times(monday + timedelta(days=7))
 
 
@@ -621,9 +643,11 @@ async def run_week(trigger, now=None, replan=False):
     """Plan one week and save it as drafts. Idempotent per week: the run id is
     derived from the week, and a week already planned is returned, not redone —
     unless the owner starts it over (replan), which the claim allows only while
-    nothing from the week has been approved, and which cancels its drafts."""
-    import llm_call
-    import spend_guard
+    nothing from the week has been approved, and which cancels its drafts.
+
+    A scheduled week tells the owner how it went (a push; Today reads the same
+    rows): drafts ready with their deadline, or why it could not be planned. A
+    week the owner started from the desk says nothing extra; they are watching."""
     now = now or marketing.now()
     week_of, times = week_window(now)
     run_id = run_id_for(week_of)
@@ -640,6 +664,30 @@ async def run_week(trigger, now=None, replan=False):
     # A started-over week writes new drafts beside the cancelled ones, so each
     # attempt after the first gets its own ids.
     attempts = int(((await get_run(run_id)) or {}).get('attempts') or 1)
+    try:
+        result = await _plan(run_id, week_of, times, now, attempts)
+    except HTTPException as exc:
+        await _tell(trigger, attempts, 'failed', run_id, getattr(exc, 'detail', None))
+        raise
+    await _tell(trigger, attempts, result['status'], run_id, result.get('reason'))
+    return result
+
+
+async def _tell(trigger, attempts, what, run_id, reason=None):
+    if trigger != 'scheduled':
+        return
+    if what != 'succeeded' and attempts > 1:
+        return            # one notice per failing week, not one per retry
+    try:
+        import marketing_desk
+        await marketing_desk.tell_owner_about_plan(what, run_id, reason)
+    except Exception:
+        log.warning('marketing engine: could not tell the owner about the plan', exc_info=True)
+
+
+async def _plan(run_id, week_of, times, now, attempts):
+    import llm_call
+    import spend_guard
     prefix = f'{attempts}:' if attempts > 1 else ''
     try:
         cfg = await marketing.config()
@@ -693,9 +741,9 @@ async def run_week(trigger, now=None, replan=False):
                 row.update(play_id=slot['play_id'], run_id=str(run_id))
                 rows.append(row)
         if not rows:
-            await _finish(run_id, status='skipped', dropped=dropped, design=design, **record,
-                          error='Only Instagram is connected, and no flyer could be made for it this week.')
-            return {'status': 'skipped', 'reason': 'no pictures for Instagram', 'run': await get_run(run_id)}
+            reason = 'Only Instagram is connected, and no flyer could be made for it this week.'
+            await _finish(run_id, status='skipped', dropped=dropped, design=design, **record, error=reason)
+            return {'status': 'skipped', 'reason': reason, 'run': await get_run(run_id)}
         saved = await marketing.db('POST', '/platform_marketing_posts', rows)
         await _finish(run_id, status='succeeded', post_ids=[r['id'] for r in saved], dropped=dropped,
                       design=design, **record)
@@ -712,24 +760,36 @@ async def run_week(trigger, now=None, replan=False):
 
 
 def next_run(now):
+    """When the next week's plan is written: Thursday at RUN_HOUR."""
     local = now.astimezone(TZ)
     monday = local.date() - timedelta(days=local.weekday())
-    at = datetime.combine(monday, time(RUN_HOUR), TZ)
+    at = datetime.combine(monday + timedelta(days=PLAN_AHEAD_DAY), time(RUN_HOUR), TZ)
     return (at if at > local else at + timedelta(days=7)).isoformat()
 
 
+def relation(week_of, now):
+    """'this week' or 'next week' for a planned week, in the owner's time."""
+    if not week_of:
+        return None
+    local = now.astimezone(TZ)
+    monday = local.date() - timedelta(days=local.weekday())
+    week = week_of if not isinstance(week_of, str) else datetime.fromisoformat(week_of).date()
+    return 'next week' if week > monday else 'this week' if week == monday else 'an earlier week'
+
+
 async def engine_tick():
-    """Hourly. Plans the week on Monday morning; retries (a capped number of
-    times, in the claim) through Thursday if Monday could not."""
+    """Hourly. From Thursday morning it plans next week; Monday to Wednesday it
+    plans the rest of this week only if this week was never planned. A planned
+    week is not redone, and a failing week stops after a capped number of
+    attempts (the claim counts them) and says so on Today."""
     if not enabled():
         return
-    local = marketing.now().astimezone(TZ)
-    if local.weekday() > 3 or (local.weekday() == 0 and local.hour < RUN_HOUR):
-        return
+    if marketing.now().astimezone(TZ).hour < RUN_HOUR:
+        return            # never overnight: a plan (and its push) lands in the morning
     try:
         await run_week('scheduled')
     except Exception:
-        log.warning('marketing engine: scheduled run did not finish')
+        log.warning('marketing engine: scheduled run did not finish', exc_info=True)
 
 
 def library():
@@ -741,29 +801,48 @@ def library():
 
 @router.get('')
 async def overview():
-    """The latest plan, its drafts, and when the next one runs."""
+    """The latest plan, its drafts, when the next one runs, and the desk's own
+    read of where things stand (marketing_desk): Chief's note, the masthead,
+    and what needs a look."""
     try:
         runs = await marketing.db('GET', '/platform_marketing_runs?order=week_of.desc&limit=6')
     except HTTPException as exc:
         raise HTTPException(503, MIGRATION) if exc.status_code == 503 else exc from None
+    now = marketing.now()
     latest = runs[0] if runs else None
     posts = []
     if latest:
         posts = await marketing.db('GET', f'/platform_marketing_posts?run_id=eq.{latest["id"]}'
                                           '&order=run_at.asc&limit=60')
     import marketing_design
+    import marketing_desk
     try:
         budget = await marketing_design.budget_state()
     except HTTPException:
         budget = None       # shown as unavailable, never as $0 spent
-    return {'enabled': enabled(), 'next_run': next_run(marketing.now()), 'latest': latest,
+    try:
+        desk = marketing_desk.desk(await marketing_desk.read_state(now, runs=runs))
+    except Exception:
+        log.warning('marketing engine: the desk read failed', exc_info=True)
+        desk = {}           # the plan still shows; the read and the attention list do not
+    return {'enabled': enabled(), 'next_run': next_run(now), 'latest': latest,
             'recent': [{k: r.get(k) for k in ('id', 'week_of', 'status', 'diagnosis', 'plays')} for r in runs],
-            'posts': posts, 'budget': budget, 'planning': bool(_running), **library()}
+            'posts': posts, 'budget': budget, 'planning': is_planning(latest, now) or bool(_running),
+            'relation': relation(latest['week_of'], now) if latest else None, **desk, **library()}
+
+
+def is_planning(run, now):
+    """A run is being written while it is claimed and younger than the claim's
+    own 15-minute reclaim window. Read from the row, so every server agrees."""
+    if not run or run.get('status') != 'running':
+        return False
+    started = _stamp(run.get('created_at'))
+    return bool(started and started > now - timedelta(minutes=15))
 
 
 @router.get('/preview')
 async def preview():
-    """What Monday would say right now. Reads only: no model, no writes."""
+    """What the next plan would say right now. Reads only: no model, no writes."""
     now = marketing.now()
     signals = await read_signals(now)
     diagnosis = diagnose(signals)
@@ -788,7 +867,7 @@ def start_week(replan=False):
         try:
             await run_week('manual', replan=replan)
         except Exception:
-            log.warning('marketing engine: manual run did not finish')
+            log.warning('marketing engine: manual run did not finish', exc_info=True)
     task = asyncio.create_task(job())
     _running.add(task)
     task.add_done_callback(_running.discard)
@@ -823,19 +902,23 @@ async def set_budget(req: Budget):
 
 
 async def snapshot_summary():
-    """This week's plan, for Chief to explain in its own words."""
+    """The newest plan (this week's or next week's: which_week says), for Chief to explain."""
     import marketing_design
     runs = await marketing.db('GET', '/platform_marketing_runs?order=week_of.desc&limit=1')
     try:
         budget = await marketing_design.budget_state()
     except HTTPException:
         budget = 'unavailable'
+    now = marketing.now()
     if not runs:
-        return {'status': 'none', 'next_run': next_run(marketing.now()), 'design_budget': budget}
+        return {'status': 'none', 'next_run': next_run(now), 'design_budget': budget,
+                'planning_now': bool(_running)}
     r = runs[0]
     design = r.get('design') or {}
-    return {'week_of': r['week_of'], 'status': r['status'], 'diagnosis': r.get('diagnosis'),
+    return {'week_of': r['week_of'], 'which_week': relation(r['week_of'], now), 'status': r['status'],
+            'diagnosis': r.get('diagnosis'),
             'plays': r.get('plays'), 'drafts_saved': len(r.get('post_ids') or []),
-            'dropped': r.get('dropped'), 'note': r.get('error'), 'next_run': next_run(marketing.now()),
+            'dropped': r.get('dropped'), 'note': r.get('error'), 'next_run': next_run(now),
             'flyers_made': len(design.get('flyers') or {}), 'hero_image': bool(design.get('hero_id')),
-            'budget_request': design.get('request'), 'design_budget': budget, 'planning_now': bool(_running)}
+            'budget_request': design.get('request'), 'design_budget': budget,
+            'planning_now': is_planning(r, now) or bool(_running)}

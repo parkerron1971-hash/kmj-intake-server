@@ -29,6 +29,7 @@ Reuses the same envs lead_admin.py needs:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -1762,6 +1763,14 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Solutionist's own marketing: what the weekly plan is waiting on, so
+    # "what needs me?" includes it without opening the marketing drawer.
+    try:
+        import marketing_desk
+        snap["marketing"] = await asyncio.wait_for(marketing_desk.digest(), 8)
+    except Exception as e:
+        snap["marketing_error"] = str(e)[:200] or "unavailable"
+
     # Derived, not hand-kept: the old literal list went stale the week
     # Sentry landed and kept telling Chief there was no error reporter.
     from platform_today import coverage as _coverage
@@ -1797,8 +1806,9 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
 
     snapshot = await _build_snapshot(headers)
     import json as _json
+    import marketing_desk
     system = (
-        PLATFORM_CHIEF_SYSTEM + authority.POLICY_PROMPT
+        PLATFORM_CHIEF_SYSTEM + authority.POLICY_PROMPT + marketing_desk.DIGEST_PROMPT
         + platform_chief_creative.PROMPT
         + "\n\nCURRENT PLATFORM SNAPSHOT:\n```json\n"
         + _json.dumps(snapshot, indent=2, default=str)

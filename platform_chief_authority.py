@@ -26,10 +26,11 @@ current_authorization = ContextVar('platform_chief_authorization', default=None)
 # New action types are denied until explicitly classified here.
 GROUPS = {
     'find_images': 'read',
-    'marketing_save_draft': 'drafts', 'marketing_run_week': 'drafts',
+    'marketing_save_draft': 'drafts', 'marketing_run_week': 'drafts', 'marketing_edit_slot': 'drafts',
     'generate_image': 'creative', 'create_video': 'creative', 'compose_flyer': 'creative', 'design_flyer': 'creative',
     'log_platform_note': 'notes', 'resolve_platform_note': 'notes',
     'marketing_pause': 'marketing_stop', 'marketing_cancel_post': 'marketing_stop',
+    'marketing_skip_slot': 'marketing_stop', 'marketing_replan_week': 'marketing_stop',
     'send_practitioner_email': 'review', 'resend_invite': 'review',
     'extend_trial': 'review', 'mark_lead_status': 'review',
     'queue_build': 'review', 'send_to_solution_space': 'review',
