@@ -480,8 +480,9 @@ class _SentenceStreamer:
     A rejection/action tag still holds the remainder for the final review.
     """
 
-    def __init__(self, sink, prover, review=None) -> None:
+    def __init__(self, sink, prover, review=None, *, message="") -> None:
         self._sink = sink
+        self._message = message
         self._prover = prover
         self._review = review
         self._filt = _ActionTagFilter()
@@ -522,6 +523,13 @@ class _SentenceStreamer:
             if not m:
                 break
             sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
+            import chief_speech_boundary as _speech
+            if _speech.internal_scaffolding(sentence, self._message):
+                # Factual review cannot approve authoring instructions for
+                # speech, even when they make no factual/action claim.
+                _speech.note_block("sentence")
+                self.close()
+                return
             import chief_truth as _truth
             accepted = not sentence.strip() or _truth.streamable_sentence(self._prover, sentence)
             candidate = {"sentence": sentence, "accepted": True if accepted else None}
@@ -14619,7 +14627,8 @@ async def chief_chat(
 
                 _sentence_streamer = (_SentenceStreamer(
                     _STREAM_SINK.get(), _prover,
-                    review=_review_stream_prefix if chief_truth.continuous_stream_enabled() else None)
+                    review=_review_stream_prefix if chief_truth.continuous_stream_enabled() else None,
+                    message=req.message)
                     if _prover is not None else (lambda _piece: None))
             # The two-track reply (chief_fast_track): the practitioner has
             # already seen the opening the first track wrote, so this answer
@@ -14646,7 +14655,9 @@ async def chief_chat(
                 if _hl.eligible(req.message or "", _prior_reply, lane=lane,
                                 is_greeting=is_greeting, is_coach_mode=is_coach_mode):
                     _voice_bridge = _vb.VoiceBridge(
-                        _STREAM_SINK.get(), _prover, _SentenceStreamer, prefix=PROSE_PREFIX)
+                        _STREAM_SINK.get(), _prover,
+                        lambda sink, prover: _SentenceStreamer(sink, prover, message=req.message),
+                        prefix=PROSE_PREFIX)
                     _sentence_streamer._sink = _voice_bridge.main
                     _voice_bridge.start(req.message or "", _evidence,
                                         history=api_messages[:-1], business_id=biz.get("id"))
@@ -14902,6 +14913,8 @@ async def chief_chat(
             # replies. Only checked prose may enter history, learning or speech.
             _t.mark("actions")
             _turn_status("checking the answer")
+            import chief_speech_boundary as _speech
+            clean = _speech.final_reply(clean or _scrub_response_text(raw or ''), req.message)
             clean, grounding = await chief_truth.finalize_reply(
                 client, clean or _scrub_response_text(raw or ''), ctx=ctx,
                 view_detail=_format_view_block(req.current_context, view_detail),
@@ -14981,6 +14994,7 @@ async def chief_chat(
                 response_text = _stitch_after_stream(_sentence_streamer.text, response_text)
             if _voice_bridge is not None and _voice_bridge.text:
                 response_text = _voice_bridge.stitch(response_text)
+            response_text = _speech.final_reply(response_text, req.message)
 
             # The turn goes on file (2026-09-04) — every turn, every
             # surface, no model call — so recall_conversation reads a
@@ -15146,6 +15160,11 @@ async def chief_chat_stream(
         if not (piece.startswith(STATUS_PREFIX) or piece.startswith(STEP_PREFIX)
                 or piece.startswith(PROSE_PREFIX)):
             return
+        if piece.startswith(PROSE_PREFIX):
+            import chief_speech_boundary as _speech
+            if _speech.internal_scaffolding(piece[len(PROSE_PREFIX):], req.message):
+                _speech.note_block("checked_wire", request_id=track.rec.request_id if track else req.request_id)
+                return
         try:
             if track is not None and piece.startswith(PROSE_PREFIX):
                 track.holder.answer_ready.set()
@@ -15300,6 +15319,11 @@ async def chief_chat_stream(
                     yield _evt({"type": "error", "detail": "turn failed"})
                     return
                 final_text = payload.get("response")
+                if isinstance(final_text, str):
+                    import chief_speech_boundary as _speech
+                    final_text = _speech.final_reply(final_text, req.message,
+                        request_id=track.rec.request_id if track else req.request_id)
+                    payload = {**payload, "response": final_text}
                 already = "".join(sent)
                 if isinstance(final_text, str) and final_text:
                     if already:

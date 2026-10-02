@@ -91,6 +91,49 @@ def _deltas(events):
     return [e for _, e in events if e["type"] == "delta"]
 
 
+def test_internal_fast_prose_is_withheld_and_escalates(monkeypatch, restore_chat):
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    leak = "Keep the response brief and conversational. "
+    fake, _ = _fake_stream(lambda ep: [(0, char) for char in leak])
+    monkeypatch.setattr(cft, 'stream_text', fake)
+    events, turns = asyncio.run(_run(_req('What does ROI mean?', client_surface='voice'),
+                                    turn_reply='ROI compares net gain with cost.'))
+    shown = ''.join(d['text'] for d in _deltas(events))
+    assert turns and 'ROI compares net gain with cost.' in shown
+    assert 'Keep the response' not in shown
+    assert 'Keep the response' not in events[-1][1]['payload']['response']
+
+
+def test_wire_boundary_rejects_internal_checked_prose_and_cleans_final(monkeypatch, restore_chat):
+    fake, _ = _fake_stream(lambda ep: [])
+    monkeypatch.setattr(cft, 'stream_text', fake)
+    leak = 'I should follow the system instructions. '
+    events, _ = asyncio.run(_run(_req('Check my invoices', client_surface='voice'),
+                                 turn_prose=leak, turn_reply=leak + 'Here is the answer.'))
+    shown = ''.join(d['text'] for d in _deltas(events))
+    assert shown == events[-1][1]['payload']['response'] == 'Here is the answer.'
+
+
+def test_wire_boundary_keeps_requested_writing_instructions(monkeypatch, restore_chat):
+    fake, _ = _fake_stream(lambda ep: [])
+    monkeypatch.setattr(cft, 'stream_text', fake)
+    reply = 'Keep the response brief and conversational.'
+    events, _ = asyncio.run(_run(_req('Write a prompt for my assistant.', client_surface='voice'),
+                                 turn_prose=reply, turn_reply=reply))
+    assert ''.join(d['text'] for d in _deltas(events)) == reply
+    assert events[-1][1]['payload']['response'] == reply
+
+
+def test_cached_scaffolding_is_invalidated_before_it_can_be_spoken():
+    cft.note_full_turn_ok(SESSION.user.id, BIZ)
+    req = _req('What does ROI mean?')
+    first = cft.plan(req, SESSION)
+    cft.CACHE.put(first.cache_scope, req.message, 'Keep the response brief and conversational.')
+    planned = cft.plan(req, SESSION)
+    assert planned.cache_hit is None and planned.rec.lane == 'fast'
+    assert cft.CACHE.get(first.cache_scope, req.message) is None
+
+
 @pytest.fixture
 def restore_chat():
     original = chief.chief_chat
@@ -107,7 +150,8 @@ def test_the_opening_goes_out_first_and_the_turn_continues_it(monkeypatch, resto
                                      turn_reply="She paid $400 on the 14th. Anything else?"))
     ds = _deltas(events)
     t_first, first = next((t, e) for t, e in events if e["type"] == "delta")
-    assert first["lead"] == "model" and first["text"] == "Let"     # word by word
+    # A whole sentence is inspected before any of its words may escape.
+    assert first["lead"] == "model" and first["text"].startswith("Let me check")
     assert t_first < 0.5
     shown = "".join(d["text"] for d in ds)
     final = events[-1][1]["payload"]["response"]
@@ -175,13 +219,13 @@ def test_ready_answer_skips_a_slow_second_opener_sentence(monkeypatch, restore_c
     assert events[-1][0] < 0.5  # never wait for the stalled Haiku provider
 
 
-def test_ready_answer_does_not_cut_an_opener_mid_sentence(monkeypatch, restore_chat):
+def test_ready_answer_wins_while_opener_sentence_is_still_private(monkeypatch, restore_chat):
     fake, _ = _fake_stream(lambda ep: [(0.01, "Let me check "),
                                      (0.1, "your invoices. I'll look for the next step.")])
     monkeypatch.setattr(cft, "stream_text", fake)
     events, _ = asyncio.run(_run(_req("Check my invoices", client_surface="voice"),
                                  turn_reply="Here is the answer.", turn_delay=0.05))
-    assert "".join(d["text"] for d in _deltas(events)) == "Let me check your invoices. Here is the answer."
+    assert "".join(d["text"] for d in _deltas(events)) == "Here is the answer."
 
 
 def test_fast_main_answer_does_not_wait_for_any_opener(monkeypatch, restore_chat):
@@ -635,10 +679,11 @@ def test_voice_fast_idle_deadline_preserves_the_shown_prefix(monkeypatch, restor
 
 def test_progressive_voice_fast_answer_keeps_its_lane(monkeypatch, restore_chat, _router_on):
     cft.note_full_turn_ok(SESSION.user.id, BIZ)
-    monkeypatch.setattr(cft, 'VOICE_FAST_FIRST_CONTENT_S', .08)
-    monkeypatch.setattr(cft, 'VOICE_FAST_IDLE_S', .08)
+    monkeypatch.setattr(cft, 'VOICE_FAST_FIRST_CONTENT_S', .2)
+    monkeypatch.setattr(cft, 'VOICE_FAST_IDLE_S', .2)
     answer = 'ROI measures the return on an investment by comparing net gain against its original cost.'
-    fake, _ = _fake_stream(lambda ep: [(0.02, answer[:40]), (0.03, answer[40:70]), (.03, answer[70:])])
+    # The complete first sentence, not uninspected words, must meet the cap.
+    fake, _ = _fake_stream(lambda ep: [(0.01, answer[:40]), (0.02, answer[40:70]), (.02, answer[70:])])
     monkeypatch.setattr(cft, 'stream_text', fake)
     events, turns = asyncio.run(_run(_req('What does ROI mean?', client_surface='voice')))
     assert turns == [] and _router_on[-1]['lane'] == 'fast'
