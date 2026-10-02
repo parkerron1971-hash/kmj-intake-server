@@ -15,6 +15,7 @@ import route_ledger
 
 @pytest.mark.parametrize('message', [
     'You can hear the background too.', 'Okay, I heard it twice.',
+    'Um...', 'UH!', 'Erm', 'hmm', 'This is', 'This is.',
     'Can you hear me?', 'Let me end that one.', 'Dobrý den.',
 ])
 @pytest.mark.parametrize('allowed', [True, False])
@@ -80,9 +81,46 @@ def test_other_modes_and_images_keep_their_normal_path():
         assert feedback.for_request(req) is None
 
 
-def test_call_feedback_has_no_model_opening():
-    req = chief.ChatRequest(business_id='business', message='You can hear the background too.', client_surface='voice')
+@pytest.mark.parametrize('message', ['You can hear the background too.', 'Um...', 'This is'])
+def test_call_feedback_has_no_model_opening(message):
+    req = chief.ChatRequest(business_id='business', message=message, client_surface='voice')
     rec = route_ledger.RouteRecord(arrived=time.perf_counter(), business_id='business', user_id='owner')
     complexity = model_router.score(req.message)
     track = fast.TwoTrack(req, 'owner', rec, complexity, model_router.Route(model_router.LANE_FULL, 'fixture'))
     assert not track.model_opener
+
+
+@pytest.mark.parametrize('message,expected', [
+    ('Um...', 'Take your time.'), ('  UH!  ', 'Take your time.'),
+    ('Erm', 'Take your time.'), ('hmm', 'Take your time.'),
+    ('This is', "I'm listening."), ('This is.', "I'm listening."),
+])
+def test_fragment_ack_is_voice_only_and_contains_no_business_claim(message, expected):
+    assert feedback.reply_for(message, voice=True) == expected
+    assert feedback.reply_for(message, voice=False) is None
+    req = SimpleNamespace(message=message, client_surface='voice')
+    assert feedback.for_request(req) == expected
+    for changes in ({'client_surface': 'chat'}, {'mode': 'strategy_coach'}, {'image_ids': ['image']}):
+        values = {'message': message, 'client_surface': 'voice', **changes}
+        assert feedback.for_request(SimpleNamespace(**values)) is None
+
+
+@pytest.mark.parametrize('message', [
+    'yes', 'no', 'stop', 'my friends.', 'Kevin', 'Monica', 'And then?',
+    'Um, show my invoices', 'This is my friend', 'This is a request to list invoices',
+    'hmm, cancel that invoice', 'erm book tomorrow', 'uh yes',
+    '\u4f60\u597d', '\u0645\u0631\u062d\u0628\u0627', '\u0414\u0430',
+])
+def test_short_answers_names_languages_and_mixed_requests_are_not_fragment_acks(message):
+    assert feedback.for_request(SimpleNamespace(message=message, client_surface='voice')) is None
+
+
+@pytest.mark.parametrize('message', ['Um...', 'This is', 'I heard it twice'])
+def test_feedback_never_emits_waiting_local_lead(message):
+    req = chief.ChatRequest(business_id='business', message=message, client_surface='voice')
+    rec = route_ledger.RouteRecord(arrived=time.perf_counter(), business_id='business', user_id='owner')
+    track = fast.TwoTrack(req, 'owner', rec, model_router.score(message),
+        model_router.Route(model_router.LANE_FULL, 'fixture'))
+    async def expired_lead():
+        return [event async for event in track._lead_while(None, time.perf_counter() - 1)]
+    assert asyncio.run(expired_lead()) == []

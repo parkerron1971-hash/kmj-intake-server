@@ -206,6 +206,8 @@ Every executed action claim needs a matching receipt: a draft/queued/running/hel
 does NOT establish sent/published/completed. Navigation and reads do not prove a write.
 A view: receipt records a web page Chief looked at: it supports "I looked at / I can see"
 that page, and its "What the screenshot shows" text is the evidence for how the page looks.
+A show_plan receipt proves only that a proposed plan was displayed, not its factual premises.
+Imperative plan steps and suggested scheduling are proposals, not claims of executed work.
 Earlier assistant prose is NEVER evidence of execution. Receipts override older context.
 Conversation sources establish what was said, requested or reported in this chat only.
 They can support references to the discussion (including back-and-forth messages),
@@ -576,7 +578,7 @@ def _display_claim(text):
     # "I opened an account" or a mixed display-and-payment completion claim.
     target = (r"(?:(?:the|your|our|an?)\s+)?"
               r"(?:(?:invoice|contact|session|product|paid|open|overdue|draft)\s+)?"
-              r"(?:view|chart|list|table|timeline|invoices?|contacts?|sessions?|products?)")
+              r"(?:view|chart|list|table|timeline|plan|invoices?|contacts?|sessions?|products?)")
     return bool(re.fullmatch(
         rf"(?:{target} (?:is|are) (?:now )?(?:on (?:your|the) screen|displayed|shown)"
         rf"|(?:I(?:'ve| have)?|we(?:'ve| have)?) (?:pulled up|opened|displayed|shown) {target}"
@@ -1669,13 +1671,16 @@ def evidence_for_review(ctx, view_detail, taken):
         displayed = (item.get('type') == 'show_view' and not item.get('failed')
                      and isinstance(item.get('rows'), list) and isinstance(item.get('columns'), list))
         kind = 'receipt' if displayed or effect in (action_registry.WRITE, action_registry.UI) else 'record'
-        text = json.dumps({k: v for k, v in item.items()
-                           if k not in ('frontend_event', 'nav', 'toast')}, default=str, ensure_ascii=False)
+        from chief_plan_recovery import plan_receipt_evidence
+        plan_evidence = plan_receipt_evidence(item)
+        evidence = plan_evidence if plan_evidence is not None else {
+            k: v for k, v in item.items() if k not in ('frontend_event', 'nav', 'toast')}
+        text = json.dumps(evidence, default=str, ensure_ascii=False)
         sources[f'result:{index}'] = {'kind': kind, 'effect': effect or 'read',
                                      'text': text[:MAX_SOURCE_CHARS],
                                      'complete': kind == 'receipt' and len(text) <= MAX_SOURCE_CHARS
                                                  and not (displayed and item.get('limit_reached')),
-                                     **({'display_only': True} if displayed else {})}
+                                     **({'display_only': True} if displayed or plan_evidence is not None else {})}
     # Latest results first, then context, then earlier reads. Excluded evidence
     # is unavailable to the review; it cannot be cited by guessing its ID.
     bounded, remaining = {}, MAX_EVIDENCE_CHARS
@@ -2458,6 +2463,10 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):
         return chief._deterministic_fallback_reply(receipts), {'status': 'receipts', 'sources': []}
+    from chief_invoice_readout import direct_invoice_answer
+    invoice_answer = direct_invoice_answer(message, receipts)
+    if invoice_answer is not None:
+        return invoice_answer, {'status': 'records', 'sources': ['result:0']}
     if receipts and all(r.get('type') == 'link_wallet_pilot' for r in receipts):
         # This private payment rehearsal has only validated server states/URLs.
         # Its required connection/approval link must survive unavailable prose
@@ -2564,6 +2573,10 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     invoice_answer = invoice_view_answer(receipts)
     if invoice_answer:
         return invoice_answer, {'status': 'records', 'sources': ['result:0']}
+    from chief_plan_recovery import proposed_plan_answer
+    plan_answer = proposed_plan_answer(receipts, message, sources)
+    if plan_answer:
+        return plan_answer, {'status': 'proposed', 'sources': ['result:0']}
     import mailbox_policy
     email_answer = mailbox_policy.client_email_today_reply(message, ctx or {})
     gaps = unconfirmed_claims(raw, reason) if verdict == 'unsupported' else []
