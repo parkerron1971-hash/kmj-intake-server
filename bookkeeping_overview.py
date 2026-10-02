@@ -1084,8 +1084,11 @@ def resolve_linked_twice(body: ResolveTwiceBody,
         # entries, and a retry could never find it again.
         settled = [t["transaction_id"] for t in plan["_rows"]]
         for chunk in _chunks(settled, 200):
+            # op is NOT NULL on gl_sync_queue (the drain re-derives every row
+            # from its source and ignores it; "update" is what the trigger writes).
             if sb_clients.sb_post_as_service("/gl_sync_queue", [
-                    {"business_id": biz, "source_table": "plaid_transactions", "source_id": tid}
+                    {"business_id": biz, "source_table": "plaid_transactions", "source_id": tid,
+                     "op": "update"}
                     for tid in chunk]) is None:
                 raise HTTPException(502, "The ledger couldn't be told. Nothing was switched off; try again.")
         if sb_clients.sb_patch_as_service(
