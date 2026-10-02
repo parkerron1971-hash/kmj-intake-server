@@ -2467,6 +2467,13 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     invoice_answer = direct_invoice_answer(message, receipts)
     if invoice_answer is not None:
         return invoice_answer, {'status': 'records', 'sources': ['result:0']}
+    from chief_plan_recovery import direct_plan_readout
+    plan = direct_plan_readout(message, receipts, ctx)
+    if plan is not None:
+        answer, normalized = plan
+        receipts[0].clear()
+        receipts[0].update(normalized)
+        return answer, {'status': 'proposed', 'sources': ['result:0']}
     if receipts and all(r.get('type') == 'link_wallet_pilot' for r in receipts):
         # This private payment rehearsal has only validated server states/URLs.
         # Its required connection/approval link must survive unavailable prose

@@ -27,7 +27,8 @@ def test_rejected_narration_recovers_proposed_two_day_plan_without_record_warnin
     repairer = AsyncMock(side_effect=AssertionError('No extra model call is needed for safe proposals'))
     answer, meta = asyncio.run(truth.finalize_reply(None,
         'The goal is to prepare for the November 24 launch. Nothing has been deleted.',
-        ctx={}, view_detail='', taken=[receipt], message=MESSAGE, business_id='fixture',
+        ctx={}, view_detail='', taken=[receipt],
+        message='Help me decide what to work on for the next two days.', business_id='fixture',
         reviewer=reviewer, repairer=repairer))
     assert 'suggested steps for the next two days' in answer
     assert 'Today: Review the invoice list' in answer

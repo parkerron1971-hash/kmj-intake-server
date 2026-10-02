@@ -12194,6 +12194,7 @@ async def _compose_post_action_reply(
     first_pass_clean: str,
     taken: List[Dict[str, Any]],
     business_id: Optional[str] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Recompose from execution results; failed calls use receipt-based text.
 
@@ -12210,6 +12211,13 @@ async def _compose_post_action_reply(
     invoice_answer = direct_invoice_answer(original_message, taken)
     if invoice_answer is not None:
         return invoice_answer
+    from chief_plan_recovery import direct_plan_readout
+    plan = direct_plan_readout(original_message, taken, context)
+    if plan is not None:
+        answer, normalized = plan
+        taken[0].clear()
+        taken[0].update(normalized)
+        return answer
 
     # C.1.5.4 B-fix-2 — when an action label carries a substitution
     # breadcrumb (the '<headline>  (<note>)' convention used by M9-B
@@ -15247,6 +15255,7 @@ async def chief_chat(
                         first_pass_clean=clean or "",
                         taken=taken,
                         business_id=biz.get("id"),
+                        context=ctx,
                     )
                     # C.1.5.3 F2b — defensive coercion on the return value
                     # so .strip() below can't blow up the chat handler.
