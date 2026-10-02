@@ -1311,6 +1311,10 @@ async def startup():
             import chief_quality as _chief_quality
             scheduler.add_job(g("chief_quality", _chief_quality.quality_tick), "cron",
                               hour=7, minute=0, id="chief_quality")
+            # Customer health (agent ops, Agent 9) — 14:00 UTC = 10 AM Eastern.
+            import customer_health as _customer_health
+            scheduler.add_job(g("customer_health", _customer_health.health_tick), "cron",
+                              hour=14, minute=0, id="customer_health")
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
