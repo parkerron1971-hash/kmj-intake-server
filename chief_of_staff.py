@@ -14393,6 +14393,7 @@ async def chief_chat(
 
             # Autopilot + escalations — needs the business row first so
             # we can read settings.autopilot. Fetch a minimal copy.
+            biz_lite = None
             try:
                 biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=id,name,type,settings,owner_id")
                 biz_lite = (biz_rows or [None])[0]
@@ -14428,6 +14429,17 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 print(f"[Chief] autopilot/escalation sweep error: {e}", flush=True)
             _t.mark("sweeps")
+
+            # A self-contained owner request to display invoices needs only
+            # its scoped card rows. Admission, recurrence and the action door
+            # still run; broad context, planning and discarded narration do not.
+            from chief_invoice_readout import serve_request as _serve_invoice_request
+            invoice_result = await _serve_invoice_request(client, req, user_session, biz_lite)
+            if invoice_result is not None:
+                _t.mark("invoice_readout")
+                _t.log(lane=chief_models.lane_for_chat(req.mode or "", req.client_surface or ""),
+                       streamed=_STREAM_SINK.get() is not None)
+                return invoice_result
 
             # Gather global context + view-specific detail in parallel
             _turn_status("reading your business")
