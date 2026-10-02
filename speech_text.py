@@ -53,6 +53,30 @@ _CENTS_RE = re.compile(r"(\d+)\s?¢")
 _PERCENT_RE = re.compile(r"(\d)\s?%")
 _WS_RE = re.compile(r"\s+")
 
+_MONTHS = dict(zip(
+    ("jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec"),
+    ("January", "February", "March", "April", "June", "July", "August",
+     "September", "September", "October", "November", "December")))
+_MONTH = r"(?:Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)"
+_MONTH_DATE = re.compile(
+    rf"\b({_MONTH})\.?(?=\s+\d{{1,4}}\b)(?!\s+\d+(?:\.\d+)?\s*(?:%|percent\b))", re.I)
+_DAY_MONTH = re.compile(rf"(\b\d{{1,2}}(?:st|nd|rd|th)?\s+)({_MONTH})\b", re.I)
+_RELATIVE_MONTH = re.compile(
+    rf"(\b(?:in|during|month of)\s+)({_MONTH})\b", re.I)
+
+
+def expand_speech_months(text: str) -> str:
+    """Expand dates without turning a person named Jan or an APR into a month.
+
+    Keep sentence punctuation; consume an abbreviation dot only before a date.
+    September's common short forms are unambiguous in our English speech path.
+    Mirrored in the browser's speechDates.ts for local speech and segmentation.
+    """
+    text = _MONTH_DATE.sub(lambda m: _MONTHS[m[1].lower()], text)
+    for pattern in (_DAY_MONTH, _RELATIVE_MONTH):
+        text = pattern.sub(lambda m: m[1] + _MONTHS[m[2].lower()], text)
+    return re.sub(r"\bSept?\b", "September", text, flags=re.I)
+
 
 _ONES = ("zero", "one", "two", "three", "four", "five", "six", "seven",
          "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
@@ -148,7 +172,7 @@ def normalize_for_speech(text: str) -> str:
     of "$1.5M" and strand the suffix."""
     if not text:
         return ""
-    out = text
+    out = expand_speech_months(text)
     # "$1.5M" -> "1.5 million dollars"
     out = _MAGNITUDE_RE.sub(_magnitude_sub, out)
     # "$79-$199" -> "$79 to $199"; a bare dash is read as "minus".

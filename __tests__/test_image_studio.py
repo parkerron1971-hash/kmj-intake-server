@@ -221,6 +221,25 @@ def test_cost_uses_image_and_text_modalities_and_cache():
     assert studio.image_cost({'input_tokens': 3000}) is None
 
 
+@pytest.mark.parametrize('mode', ['RGBA', 'P', 'RGB'])
+def test_normalize_preserves_alpha_including_png_transparency_metadata(mode):
+    source = Image.new(mode, (3, 1))
+    if mode == 'RGBA':
+        source.putdata([(10, 20, 30, 0), (50, 60, 70, 128), (255, 255, 255, 255)])
+    elif mode == 'P':
+        source.putpalette([10, 20, 30, 50, 60, 70, 255, 255, 255] + [0] * 759)
+        source.putdata([0, 1, 2])
+        source.info['transparency'] = bytes([0, 128, 255])
+    else:
+        source.putdata([(10, 20, 30), (50, 60, 70), (255, 255, 255)])
+        source.info['transparency'] = (10, 20, 30)
+    raw = io.BytesIO(); source.save(raw, 'PNG')
+    expected = Image.open(io.BytesIO(raw.getvalue())).convert('RGBA')
+    result = Image.open(io.BytesIO(studio.normalize_image(raw.getvalue())))
+    assert result.mode == 'RGBA'
+    assert list(result.getdata()) == list(expected.getdata())
+
+
 def test_no_service_role_fallback():
     with patch.object(studio.sb_clients, 'get_current_user_jwt', return_value=None):
         with pytest.raises(HTTPException) as exc:

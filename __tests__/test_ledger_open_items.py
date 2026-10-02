@@ -229,6 +229,7 @@ class _FakePostgrest:
                 "target_type": "contacts", "target_id": "c1", "sequence": 7,
                 "authorized_by": "rls", "subject_refs": [], "verb_registered": True,
                 "prev_hash": "aa", "row_hash": "bb", "redacted_at": None,
+                "hash_version": 2,
                 # The two that must never come back.
                 "payload": {"after": {"name": "Jane Doe",
                                       "email": "jane@example.com",
@@ -284,7 +285,7 @@ def test_the_export_still_carries_the_chain(exported):
     """Portability is the point: the practitioner should be able to hand
     this file to someone who can verify the chain without us."""
     row = exported["businesses"][0]["tables"]["audit_log"][0]
-    for col in ("sequence", "prev_hash", "row_hash", "verb", "created_at"):
+    for col in ("sequence", "prev_hash", "row_hash", "verb", "created_at", "hash_version"):
         assert col in row
 
 

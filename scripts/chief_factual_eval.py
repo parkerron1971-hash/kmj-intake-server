@@ -38,6 +38,28 @@ CASES = [
      'bad': 'You have zero open invoices.', 'quote': 'Invoice lookup failed: unavailable.',
      'expect': r'unavailable|could not verify|couldn.t verify|unknown',
      'reject': r'(?:^|[.!?\n]\s*)(?:you have\s+|there are\s+)?(?:zero|no)\s+open invoices\b'},
+    # The same question for a business that signed up today, against the
+    # context Chief really has (`ctx`, cited as `source`). The invoice read
+    # came back empty and under its limit, so "none yet" is the answer.
+    {'id': 'empty_invoices_read_in_full', 'message': 'How many invoices are open?',
+     'evidence': 'Open invoices read in full: none. This list is complete.',
+     'ctx': {'open_invoices': [], 'invoice_summary': [], 'open_invoices_complete': True},
+     'source': 'context:open_invoices',
+     'good': 'You have no open invoices yet.', 'bad': 'You have 3 open invoices.',
+     'quote': 'no open invoices: this list is complete',
+     'expect': r'\bno open invoices\b', 'reject': r'\b(?:3|three) open invoices\b'},
+    # The invoice read never came back. The bad draft cites the real empty
+    # rows (`bad_quote`), not fabricated evidence: an empty failed read
+    # must not become "none" even when the reviewer says it may.
+    {'id': 'failed_invoice_read_in_context', 'message': 'How many invoices are open?',
+     'evidence': 'Invoice lookup failed: unavailable. The count is unknown, not zero.',
+     'ctx': {'open_invoices': [], 'invoice_summary': [], 'open_invoices_complete': False},
+     'source': 'context:open_invoices',
+     'good': "I couldn't read your invoices just now, so the open count is unknown.",
+     'bad': 'You have no open invoices yet.',
+     'quote': 'this read failed: unknown, not none', 'bad_quote': '"rows": []',
+     'expect': r'unavailable|could not|couldn.t|unknown',
+     'reject': r'(?:^|[.!?\n]\s*)(?:you have\s+|there are\s+)?(?:zero|no)\s+open invoices\b'},
     {'id': 'conflicting_memories', 'message': 'What is my current rate?',
      'evidence': 'Historical memory: rate $100. Other historical memory: rate $150. No current rate verified.',
      'good': 'The memories conflict, so I cannot verify your current rate. Which rate applies?',
@@ -102,6 +124,10 @@ async def run_case(case, *, live=False, inject_bad=False):
     try:
         sid = 'fixture:' + case['id']
         truth.record(sid, case['evidence'], complete=True)
+        # A case with a context is reviewed against the evidence built from
+        # it, exactly as a chat turn's is, and its claims cite that record.
+        ctx = json.loads(json.dumps(case.get('ctx') or {}))
+        cite = case.get('source') or sid
         async with httpx.AsyncClient() as client:
             started = time.perf_counter()
             if live:
@@ -118,11 +144,12 @@ async def run_case(case, *, live=False, inject_bad=False):
                     # A bad draft is paired with an invalid citation to prove the
                     # implementation refuses it, even if the reviewer says supported.
                     claim = case['bad'] if inject_bad else case['good']
-                    quote = 'fabricated evidence that was never retrieved' if inject_bad else case['quote']
+                    quote = (case.get('bad_quote', 'fabricated evidence that was never retrieved')
+                             if inject_bad else case['quote'])
                     return json.dumps({'verdict': 'supported', 'claims': [
-                        {'text': claim, 'kind': 'fact', 'source_id': sid, 'quote': quote}]})
+                        {'text': claim, 'kind': 'fact', 'source_id': cite, 'quote': quote}]})
             generated = time.perf_counter()
-            reply, meta = await truth.finalize_reply(client, draft, ctx={}, view_detail={},
+            reply, meta = await truth.finalize_reply(client, draft, ctx=ctx, view_detail={},
                 taken=case.get('taken', []), message=case['message'], business_id=None, reviewer=reviewer)
             reviewed = time.perf_counter()
         checks = score(case, reply)

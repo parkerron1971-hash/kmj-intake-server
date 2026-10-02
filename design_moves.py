@@ -373,6 +373,47 @@ def builder_block(scope_hint: str = "your root class",
     return "\n".join(head + body).rstrip()
 
 
+def tinting_block(color_law: str = "hexes") -> str:
+    """The colour voice and the tinting rule, without the primitives.
+
+    builder_v2 (2026-10-01, the concept-layer plan): the full block put
+    all thirteen primitives, 8,300 characters, in front of every build,
+    though a blueprint commits to one or two. The rule nobody guesses
+    stays in the system prompt; the CSS for the moves a blueprint
+    actually names rides that build's own message (primitives_block)."""
+    head = builder_block(color_law=color_law).split("\n\n--- ", 1)[0]
+    return head.replace(
+        "When the spec names a move, you build it with the primitive below.",
+        "When the spec names a move, you build it with its primitive: the "
+        "primitives for the moves this blueprint names arrive with the "
+        "blueprint itself.").replace(
+        " Replace `.scope` with your root class. Adapt geometry to the "
+        "composition; keep the technique.", "")
+
+
+def primitives_block(names, scope_hint: str = "the element's own class") -> str:
+    """The working CSS for exactly the named moves, or '' when the spec
+    names none. Unknown names are ignored: a move with no primitive was
+    never in the vocabulary."""
+    wanted = set(names or ())
+    picked = [n for n in MOVE_NAMES if n in wanted]
+    if not picked:
+        return ""
+    lines = [
+        "== THE MOVES YOUR BLUEPRINT NAMES: WORKING PRIMITIVES ==",
+        "Build each named move with its primitive below. Replace `.scope` "
+        f"with {scope_hint}. Adapt geometry to the composition; keep the "
+        "technique.",
+        "",
+    ]
+    for name in picked:
+        m = MOVES[name]
+        lines.append(f"--- {name} — {m.intent}")
+        lines.append(m.css)
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def move_names_in(text: str) -> List[str]:
     """Which moves a spec document actually commits to. Used to check that
     what the Director named is what the page got."""

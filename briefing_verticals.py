@@ -583,14 +583,20 @@ async def _community(sb, client, biz: Dict[str, Any]) -> List[Dict[str, Any]]:
         title_f = p.get("title_field") or "title"
         date_f = p.get("date_field") or "date"
         signups_f = p.get("signups_field") or "signups"
-        roles = [r for r in (p.get("roles") or [])
-                 if isinstance(r, dict) and r.get("id")]
-        if not roles:
-            continue  # headcount-only RSVP modules have no roles to fill
+        module_roles = [r for r in (p.get("roles") or [])
+                        if isinstance(r, dict) and r.get("id")]
         for e in await _module_entries(sb, client, mod["id"]):
             data = e.get("data") or {}
             d = _parse_day(data.get(date_f))
             if d is None or d < today or (d - today).days > ROSTER_WINDOW_DAYS:
+                continue
+            # An occasion's own roles win over the module's default list
+            # (events_rsvp_router.occasion_roles — the app sets them per
+            # occasion). Headcount-only occasions have no roles to fill.
+            own = data.get("_roles")
+            roles = ([r for r in own if isinstance(r, dict) and r.get("id")]
+                     if isinstance(own, list) else module_roles)
+            if not roles:
                 continue
             signups = data.get(signups_f)
             signups = signups if isinstance(signups, list) else []

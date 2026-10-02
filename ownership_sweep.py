@@ -69,6 +69,11 @@ HINTS = (
     "owner_business",
     "authed_request",  # binds the JWT so RLS scopes the query itself
     "set_user_jwt",    # the same thing, called directly (chief_of_staff)
+    # A paired check-in station (kids_station.py): its device token names
+    # exactly one station row, and the business comes from that row —
+    # the caller never supplies it. Refuses (401) on an unknown, removed
+    # or re-paired token.
+    "station_from_token",
 )
 
 BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")
@@ -154,6 +159,12 @@ PUBLIC_BY_DESIGN = frozenset({
     ("stripe_payments_router", "booking_checkout"),
     ("stripe_proxy", "payments_connect"),
     ("stripe_proxy", "payments_providers"),
+    # The check-in tablet's first contact: it has no credential yet, only
+    # the one-time code a manager read out. Strict per-network limit, a
+    # 15-minute code that works once, and a conditional write so two
+    # tablets can't both pair on it. Every other station route resolves
+    # the device token (station_from_token, a HINT above).
+    ("kids_station", "pair"),
 })
 
 

@@ -15,8 +15,10 @@ from zoneinfo import ZoneInfo
 worker_scope = contextvars.ContextVar('chief_build_scope', default=None)
 turn_scope = contextvars.ContextVar('chief_build_turn', default=None)
 entity_id = contextvars.ContextVar('chief_build_entity', default=None)
-KINDS = {'event_setup', 'form_and_link', 'flyer', 'site_door'}
+KINDS = {'event_setup', 'form_and_link', 'flyer', 'site_door', 'plan'}
 MAX_STEPS = 8
+# A plan's steps are the mission engine's steps (chief_plans), whose cap is 12.
+MAX_PLAN_STEPS = 12
 
 
 def digest(value):
@@ -47,13 +49,18 @@ class WorkOrder:
 
     @classmethod
     def create(cls, payload, *, business_id, user_id, turn_id, surface, words, tainted=False,
-               conversation_id=''):
+               conversation_id='', slot='build'):
         kind = payload.get('kind')
         if kind not in KINDS:
-            raise ValueError('Choose an event, a form, a flyer, or an events page for this build.')
+            raise ValueError('Choose an event, a form, a flyer, an events page, or a plan for this build.')
         facts = payload.get('facts') or {}
         if not isinstance(facts, dict) or len(json.dumps(facts)) > 16000:
             raise ValueError('The build details are too large or invalid.')
+        if kind == 'plan':
+            # Steps are ordinary Chief actions; chief_plans holds them to the
+            # mission engine's rules before a row exists.
+            from chief_plans import normalize_facts
+            facts = normalize_facts(facts)
         string_fields = ('title','starts_at','timezone','location','name','description','prompt','website_url','send_to','channel','capability','form_type','link_module','confirmation_message','admission','flyer_url')
         for key in string_fields:
             if key in facts and facts[key] is not None and (not isinstance(facts[key],str) or len(facts[key])>4000):
@@ -68,7 +75,9 @@ class WorkOrder:
             facts={**facts,'reference_ids':[str(UUID(str(ref))) for ref in refs]}
         # Authority and identity are supplied only by the server, never the model.
         conversation_id = conversation_id if isinstance(conversation_id, str) else ''
-        return cls(stable_id(business_id, turn_id), kind, str(payload.get('brief') or '')[:4000],
+        # One message may start several orders; each has its own slot, and
+        # the first keeps the original 'build' slot so replays still match.
+        return cls(stable_id(business_id, turn_id, slot), kind, str(payload.get('brief') or '')[:4000],
                    dict(facts), str(UUID(str(user_id))), surface, words[:600], untrusted_taint=bool(tainted),
                    conversation_id=conversation_id if _CONVERSATION_ID.fullmatch(conversation_id) else '')
 
@@ -90,6 +99,9 @@ class Step:
     params: dict = field(default_factory=dict)
     requires: tuple = ()
     sensitive: bool = False
+    # Waits for the practitioner's go-ahead on any surface (a plan step they
+    # asked to review, or one Chief changed on its own at a stop).
+    gate: bool = False
 
 
 def question(order):
@@ -98,7 +110,7 @@ def question(order):
         ('starts_at', 'What date and time does it start?'), ('timezone', 'Which time zone is the workshop in?'),
         ('location', 'Where will the workshop take place?')],
         'form_and_link': [('name', 'What should the form be called?')],
-        'flyer': [('prompt', 'What should the flyer show?')], 'site_door': []}[order.kind]
+        'flyer': [('prompt', 'What should the flyer show?')], 'site_door': [], 'plan': []}[order.kind]
     for key, text in needed:
         if not f.get(key):
             return {'field': key, 'text': text}
@@ -133,8 +145,12 @@ def question(order):
     return None
 
 
-def plan(order):
+def plan(order, state=None):
     f = order.facts
+    if order.kind == 'plan':
+        # The current plan: as submitted, or as Chief rewrote it at a stop.
+        from chief_plans import steps_for
+        return steps_for(order, state)
     if order.kind == 'event_setup':
         steps = [Step('events_module', 'ensure_module', 'Events is ready in Build.',
             {'module_name': 'Events', 'archetype': 'event_roster'}),
@@ -189,8 +205,20 @@ def progress_note(steps, i, state, stage):
     return f'{lead}Now {now} ({i + 1} of {n}).' if finished else f'{stage} ({i + 1} of {n}).'
 
 
-def closing_note(state, total):
+def ordered_receipts(state):
+    """The receipts in the order the plan runs them. The checkpoint is saved
+    as jsonb, which keeps object keys in its own order (shortest first), so
+    after any save and resume the steps came back shuffled and the summary
+    read "Your workshop is saved" before "Events is ready" (first live
+    build, 2026-09-26). The plan's own order is saved beside them."""
     receipts = list(state.get('steps', {}).values())
+    order = state.get('order') or []
+    rank = {name: i for i, name in enumerate(order)}
+    return sorted(receipts, key=lambda r: rank.get(r.get('step'), len(order)))
+
+
+def closing_note(state, total):
+    receipts = ordered_receipts(state)
     waiting = [r for r in receipts if r.get('outcome') == 'queued']
     if waiting:
         return f'Almost done. Still waiting on this: {waiting[0].get("label", "").rstrip()}'
@@ -206,7 +234,7 @@ def receipt(step, outcome, label=None, *, ids=None, verified=None, detail=''):
 
 
 def finish(state):
-    receipts = list(state.get('steps', {}).values())
+    receipts = ordered_receipts(state)
     state['receipts'] = receipts
     bad = [r for r in receipts if r['outcome'] in ('failed','needs_hand','uncertain','blocked')]
     if state.get('question'):
@@ -236,9 +264,10 @@ async def run(order, adapter, previous=None):
     state['question'] = question(order)
     if state['question']:
         return finish(state)
-    steps = plan(order)
-    if not steps or len(steps) > MAX_STEPS:
+    steps = plan(order, state)
+    if not steps or len(steps) > (MAX_PLAN_STEPS if order.kind == 'plan' else MAX_STEPS):
         raise ValueError('Invalid build plan')
+    state['order'] = [s.name for s in steps]
     sensitive_count = int(state.get('sensitive_count', 0))
     for i, step in enumerate(steps):
         try:
@@ -251,8 +280,16 @@ async def run(order, adapter, previous=None):
             # Completed checkpoints replay. Existing resources on a NEW order
             # still go through verify below.
             continue
-        if any(not state['steps'].get(dep, {}).get('verified', {}).get('ok') for dep in step.requires):
-            state['steps'][step.name] = receipt(step, 'blocked', 'This part is waiting for an earlier step to be fixed.')
+        deps = [state['steps'].get(dep, {}) for dep in step.requires]
+        if any(not d.get('verified', {}).get('ok') for d in deps):
+            # Say what it is actually waiting on: a step still working (the
+            # next tick picks this up), the practitioner's go-ahead, or a fix.
+            if any(d.get('outcome') == 'queued' for d in deps):
+                state['steps'][step.name] = receipt(step, 'queued', 'Waiting for an earlier step to finish.')
+            elif any(d.get('outcome') == 'held' for d in deps):
+                state['steps'][step.name] = receipt(step, 'blocked', 'Waiting for your go-ahead on an earlier step.')
+            else:
+                state['steps'][step.name] = receipt(step, 'blocked', 'This part is waiting for an earlier step to be fixed.')
             continue
         try:
             params = await adapter.parameters(step, state)
@@ -268,15 +305,19 @@ async def run(order, adapter, previous=None):
             state['steps'][step.name] = checked
             await adapter.save(finish(state))
             continue
-        if step.sensitive and (order.untrusted_taint or
-                (order.surface == 'voice' and order.approvals.get(step.name) != fingerprint)):
+        approved = order.approvals.get(step.name) == fingerprint
+        if (step.sensitive and (order.untrusted_taint or (order.surface == 'voice' and not approved))) \
+                or (step.gate and not approved):
             label = await adapter.confirmation(step, params)
             state['held'] = {'step': step.name, 'fingerprint': fingerprint, 'say': 'go ahead', 'label': label}
             state['steps'][step.name] = receipt(step, 'held', label)
             # Independent steps may continue; dependent ones are blocked above.
             continue
-        if step.sensitive and sensitive_count >= 3:
-            state['steps'][step.name] = receipt(step, 'held', 'The sensitive-action limit was reached. Review the remaining work.')
+        if step.sensitive and sensitive_count >= 3 and not approved:
+            # Held like any other hold, so its go-ahead can release it.
+            label = 'The sensitive-action limit was reached. Review the remaining work.'
+            state['held'] = {'step': step.name, 'fingerprint': fingerprint, 'say': 'go ahead', 'label': label}
+            state['steps'][step.name] = receipt(step, 'held', label)
             continue
         if state['attempted'].get(step.name) and not adapter.retry_safe(step):
             state['steps'][step.name] = receipt(step, 'uncertain', 'This action may already have happened. Check its history before trying again.')

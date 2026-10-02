@@ -218,7 +218,7 @@ class _FakeResp:
 def plain_harness(monkeypatch):
     state = {"responses": [], "i": 0, "handler_runs": 0, "payloads": []}
 
-    async def fake_apost(client, payload, timeout=None, key=None, extra_headers=None):
+    async def fake_apost(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         state["payloads"].append(json.loads(json.dumps(payload)))
         r = state["responses"][min(state["i"], len(state["responses"]) - 1)]
         state["i"] += 1
@@ -269,7 +269,7 @@ def test_plain_branch_round_cap_holds(plain_harness):
 def test_tools_off_means_no_tools_in_payload(plain_harness, monkeypatch):
     state_payloads = []
 
-    async def spy_apost(client, payload, timeout=None, key=None, extra_headers=None):
+    async def spy_apost(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         state_payloads.append(payload)
         return _FakeResp(_final_response("plain"))
     monkeypatch.setattr(llm_call, "apost", spy_apost)
@@ -322,7 +322,7 @@ def stream_harness(monkeypatch):
     state = {"scripts": [], "i": 0, "handler_runs": 0, "sunk": []}
 
     @contextlib.asynccontextmanager
-    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None):
+    async def fake_astream(client, payload, timeout=None, key=None, extra_headers=None, task=None):
         script = state["scripts"][min(state["i"], len(state["scripts"]) - 1)]
         state["i"] += 1
         yield _StreamResp(script)
