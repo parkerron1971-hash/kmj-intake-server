@@ -4,7 +4,7 @@ date: 2026-10-02
 agent: Claude Code (Claude Opus 5.5)
 asked: 'check it out'
 status: shipped
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1188]
 migrations: []
 left_undone: []
 decisions: ['every backend agent writes a platform_agent_runs row on every pass, found or not']
