@@ -4,7 +4,7 @@ date: 2026-10-02
 agent: Claude Code (Claude Opus 5.5)
 asked: 'yes switch it to sonnet 5.5'
 status: shipped
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1194]
 migrations: []
 left_undone: []
 decisions: ['Business Chief stays on the API, not the subscription: $2/month, and a subscription login powering a server is a terms gray area', 'forced-tool creation turns and declines go to Sonnet 4.5']
