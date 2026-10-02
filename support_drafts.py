@@ -247,9 +247,10 @@ async def drafts_tick() -> Dict[str, Any]:
                     "draft_model": draft["model"],
                 })
                 made.append(item["id"])
-            summary = (f"drafted {len(made)} of {len(todo)} waiting"
+            needed = len(todo) - skipped_own
+            summary = (f"drafted {len(made)} of {needed} waiting"
                        + (f"; {failed} could not be drafted" if failed else "")
-                       if todo else "no tickets waiting on a draft")
+                       if needed > 0 else "no customer tickets waiting on a draft")
             await c.post(f"{SUPABASE_URL}/rest/v1/platform_agent_runs",
                          headers={**headers, "Prefer": "return=minimal"},
                          json={"agent": AGENT, "started_at": started.isoformat(),

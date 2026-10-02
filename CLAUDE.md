@@ -76,6 +76,20 @@ list with what breaks without each. The load-bearing ones:
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON`,
 `ANTHROPIC_API_KEY`, `PLATFORM_OWNER_EMAIL`.
 
+## Work log (every session, Claude Code and Codex)
+
+- **Before building**, read `worklog/` in BOTH repos (this one and
+  solutionist-studio) for the same or overlapping work, and say what you
+  found. Platform Chief and the unfinished-work watcher read it too.
+- **At the end of every session that changes code**, add or update one
+  `worklog/YYYY-MM-DD-slug.md` in the same PR: what Kevin asked, what you
+  built (PRs, migrations), status, decisions, and what you left undone.
+  Format: `worklog/README.md`.
+- **If you stop before shipping**, still open a draft PR with your log entry
+  saying what is unfinished and where. Uncommitted work on one machine is
+  invisible to every other session (the 2026-09-30 security audit sat
+  uncommitted for days because of exactly this).
+
 ## Conventions
 
 - End commit messages with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`,
