@@ -405,3 +405,76 @@ def test_a_sentence_names_rows_the_way_people_say_them():
     assert bc.display_name({"name": "STRIPE - TRANSFER ST-O8S1O5T2L6I7"}) == "a Stripe transfer"
     assert bc.display_name({"name": "RAILWAY CORPORATION"}) == "Railway Corporation"
     assert bc.display_name({"name": "Resend"}) == "Resend"
+
+
+# ─── Failure paths: a rejected write or a failed read is never "done" ─
+
+def test_a_rejected_save_is_an_error_not_a_silent_success(db, monkeypatch):
+    _as_manager(monkeypatch)
+    monkeypatch.setattr(bc, "checklist_supported", lambda: True)
+    monkeypatch.setattr(bo.sb_clients, "sb_patch_as_service", lambda p, b: None)
+    with pytest.raises(HTTPException) as e:
+        bc.save_reviewed(bc.ReviewedBody(business_id="biz", month="2026-08"), user=U())
+    assert e.value.status_code == 502
+
+
+def test_a_save_that_keeps_colliding_says_so_instead_of_overwriting(db, monkeypatch):
+    _as_manager(monkeypatch)
+    monkeypatch.setattr(bc, "checklist_supported", lambda: True)
+    db.tables["/accounting_periods"][0]["updated_at"] = "2026-10-02T15:00:00.123456+00:00"
+    tries = []
+    monkeypatch.setattr(bo.sb_clients, "sb_patch_as_service", lambda p, b: tries.append(p) or [])
+    with pytest.raises(HTTPException) as e:
+        bc.save_reviewed(bc.ReviewedBody(business_id="biz", month="2026-08"), user=U())
+    assert e.value.status_code == 409 and len(tries) == bc._SAVE_TRIES
+    # the guard rides in the URL with its '+' encoded (a raw '+' reads as a space)
+    assert "updated_at=eq.2026-10-02T15%3A00%3A00.123456%2B00%3A00" in tries[0]
+
+
+def test_a_save_merges_onto_what_another_save_just_wrote(db, monkeypatch):
+    _as_manager(monkeypatch)
+    monkeypatch.setattr(bc, "checklist_supported", lambda: True)
+    period = db.tables["/accounting_periods"][0]
+    calls = {"n": 0}
+
+    def patch(path, body):
+        calls["n"] += 1
+        if calls["n"] == 1:   # someone else saved a statement first
+            period["close_checklist"] = {"statements": {"a-tax": {"balance": 100.0}}}
+            return []
+        db.writes.append(("patch", path, body))
+        return [body]
+    monkeypatch.setattr(bo.sb_clients, "sb_patch_as_service", patch)
+    bc.save_reviewed(bc.ReviewedBody(business_id="biz", month="2026-08"), user=U())
+    saved = db.writes[-1][2]["close_checklist"]
+    assert saved["statements"] == {"a-tax": {"balance": 100.0}} and "reviewed" in saved
+
+
+def test_bank_rows_that_did_not_load_give_503_not_a_checklist(db, monkeypatch):
+    import plaid_router
+    monkeypatch.setattr(plaid_router, "_require_reader", lambda biz, user: {"id": biz})
+    db.tables["/businesses"] = [BIZ]
+    real = db.get
+    monkeypatch.setattr(bo.sb_clients, "sb_get_as_service",
+                        lambda p: None if p.startswith("/plaid_transactions") else real(p))
+    with pytest.raises(HTTPException) as e:
+        bc.close_view(biz="biz", month="2026-08", user=U())
+    assert e.value.status_code == 503
+
+
+def test_a_two_signature_close_is_pending_and_writes_no_note(db, monkeypatch):
+    _as_manager(monkeypatch)
+    monkeypatch.setattr(bc, "checklist_supported", lambda: True)
+    import accounting_periods_router
+    monkeypatch.setattr(accounting_periods_router, "close",
+                        lambda pid, user: {"ok": True, "pending_second_signature": True})
+    out = bc.lock_month(bc.LockBody(business_id="biz", month="2026-08", with_open=True), user=U())
+    assert out["pending_second_signature"] and db.writes == []
+
+
+def test_a_refused_lock_creates_nothing(db, monkeypatch):
+    _as_manager(monkeypatch)
+    db.tables["/accounting_periods"] = []
+    with pytest.raises(HTTPException) as e:
+        bc.lock_month(bc.LockBody(business_id="biz", month="2026-08"), user=U())
+    assert e.value.status_code == 409 and db.writes == []
