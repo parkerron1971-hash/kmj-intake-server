@@ -424,3 +424,45 @@ def test_packs_are_granted_from_the_same_table_they_are_sold_from():
     # And the two catalogues the UI can read agree.
     import usage_metering as um
     assert credit_ledger.credit_packs() == pricing_config.credit_packs()
+
+
+# ─── The World offer page is part of the build (2026-10-02) ──────────
+# Kevin: "charge 300 credits or figure out the best way to really fix
+# this so it seems a part of what is being built without add-on cost."
+# One build, one charge: the offer page makes that charge larger only
+# when it was actually built, and 0 makes it free.
+
+def test_the_offer_page_is_priced_inside_the_build(monkeypatch):
+    import pricing_config as pc
+    for k in ("OFFER_PAGE_PRICE", "PRICE_OFFER_PAGE_PRICE", "BUILD_BASE", "PRICE_BUILD_BASE",
+              "BUILD_PER_SECTION", "PRICE_BUILD_PER_SECTION",
+              "BUILD_INCLUDED_SECTIONS", "PRICE_BUILD_INCLUDED_SECTIONS"):
+        monkeypatch.delenv(k, raising=False)
+    assert pc.offer_page_price() == 300
+    assert pc.price_for_build(9) == 1200
+    assert pc.price_for_build(9, offer_page=True) == 1500
+    monkeypatch.setenv("OFFER_PAGE_PRICE", "0")
+    assert pc.price_for_build(9, offer_page=True) == 1200, "0 makes it free"
+    monkeypatch.setenv("PRICE_OFFER_PAGE_PRICE", "450")
+    assert pc.offer_page_price() == 450, "the namespaced dial wins"
+
+
+def test_one_build_one_charge_and_only_when_the_page_was_built(monkeypatch):
+    import site_composer
+    import pricing_config as pc
+    for k in ("OFFER_PAGE_PRICE", "PRICE_OFFER_PAGE_PRICE", "REVAMP_PRICE", "PRICE_REVAMP_PRICE"):
+        monkeypatch.delenv(k, raising=False)
+    assert site_composer.build_charge(9, refine=False, offer_built=True) == (1500, "site_build_marker")
+    assert site_composer.build_charge(9, refine=False, offer_built=False) == (1200, "site_build_marker")
+    assert site_composer.build_charge(9, refine=True, offer_built=True) == (
+        pc.revamp_price() + 300, "site_revamp")
+    assert site_composer.build_charge(9, refine=True, offer_built=False) == (pc.revamp_price(), "site_revamp")
+
+
+def test_the_offer_page_price_is_on_the_disclosed_price_list(monkeypatch):
+    import pricing_config as pc
+    import usage_metering as um
+    monkeypatch.delenv("OFFER_PAGE_PRICE", raising=False)
+    monkeypatch.delenv("PRICE_OFFER_PAGE_PRICE", raising=False)
+    assert um.price_list()["site_build_offer_page"] == 300
+    assert pc.snapshot()["prices"]["offer_page"] == 300

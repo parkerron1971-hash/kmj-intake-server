@@ -4341,8 +4341,10 @@ def compose_site(business_id: str, brief_notes: str = "",
     # THE OFFER PAGE: built after the home is live (it never delays it),
     # wearing the home's house style. A spec with no offer scope clears a
     # page an earlier build made. Best-effort.
+    _offer_built = False
     if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
-        build_offer_page(business_id, ctx, canvas_html, progress_cb=progress_cb)
+        _offer_built = bool(build_offer_page(business_id, ctx, canvas_html,
+                                             progress_cb=progress_cb))
 
     # Arc 19 weight-hole fix (2026-07-30): THE one billable row for this
     # build — the per-call authoring rows above it are priced 0, so one
@@ -4361,17 +4363,12 @@ def compose_site(business_id: str, brief_notes: str = "",
         try:
             import pricing_config
             from api_usage_logger import log_api_usage_sync
-            if refine:
-                _units = pricing_config.revamp_price()
-                _kind = "site_revamp"
-            else:
-                # len(spec) is the composed section count — the thing the
-                # practitioner actually receives. The arithmetic lives in
-                # pricing_config.price_for_build and NOWHERE else, so the
-                # included-sections allowance can't drift between the
-                # price the meter charges and the price the UI quotes.
-                _units = pricing_config.price_for_build(len(spec or []))
-                _kind = "site_build_marker"
+            # THE OFFER PAGE IS PART OF THE BUILD (2026-10-02): a build that
+            # also wrote a World offer page is still one build with one
+            # charge, offer_page_price() larger, and only when the page was
+            # actually built.
+            _units, _kind = build_charge(len(spec or []), refine, _offer_built)
+            if not refine:
                 # The trial's first build is free (2026-08-24). 600
                 # credits is 60% of the trial tank, and this build IS
                 # the pitch — charging the trial for it spent the tank
@@ -4391,7 +4388,8 @@ def compose_site(business_id: str, brief_notes: str = "",
                 input_tokens=0, output_tokens=0, business_id=business_id,
                 task_type=_kind, cost_cents_override=0.0, units=_units)
             logger.info(f"[composer] build marker for {business_id[:8]}: "
-                        f"{_kind} priced at {_units} credits")
+                        f"{_kind} priced at {_units} credits"
+                        + (" (with its offer page)" if _offer_built else ""))
         except Exception as _mk_e:
             logger.warning(f"[composer] build marker row failed "
                            f"(non-fatal): {_mk_e}")
@@ -6093,6 +6091,21 @@ def choose_direction(body: ChooseDirectionBody,
 
 
 # ─── Arc 28b — live refresh on catalog change ─────────────────────────
+
+def build_charge(sections: int, refine: bool, offer_built: bool) -> Tuple[int, str]:
+    """(credits, kind) for one finished build. A revamp is flat; a full
+    build is base + sections past the included ones (len(spec) is the
+    composed section count, the thing the practitioner receives). The
+    arithmetic lives in pricing_config, never re-derived here.
+    THE OFFER PAGE IS PART OF THE BUILD (2026-10-02): a build that also
+    wrote a World offer page is still one build with one charge,
+    offer_page_price() larger, and only when that page was built."""
+    import pricing_config
+    if refine:
+        return (pricing_config.revamp_price()
+                + (pricing_config.offer_page_price() if offer_built else 0)), "site_revamp"
+    return pricing_config.price_for_build(sections, offer_page=offer_built), "site_build_marker"
+
 
 def _offer_pages_enabled() -> bool:
     return (os.environ.get("SITE_OFFER_PAGE") or "on").strip().lower() not in (

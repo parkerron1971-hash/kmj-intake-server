@@ -133,13 +133,23 @@ def build_per_section() -> int:
     return _dial("BUILD_PER_SECTION", "PRICE_", 100)
 
 
-def price_for_build(sections: int) -> int:
-    """What a full site build costs, given its composed section count.
+def offer_page_price() -> int:
+    """The World concept's offer page, priced INSIDE the build that makes
+    it (Kevin, 2026-10-02: "so it seems a part of what is being built
+    without add-on cost"). A build that also writes an offer page is one
+    build with one charge; this is how much larger that charge is. It is
+    only added when the offer page was actually built. 0 makes it free."""
+    return _dial("OFFER_PAGE_PRICE", "PRICE_", 300)
+
+
+def price_for_build(sections: int, offer_page: bool = False) -> int:
+    """What a full site build costs, given its composed section count and
+    whether it also built a World offer page.
 
     The single place this arithmetic lives — call sites must not
     re-derive it, or the two copies drift the moment a dial moves."""
     extra = max(0, int(sections or 0) - build_included_sections())
-    return build_base() + extra * build_per_section()
+    return build_base() + extra * build_per_section() + (offer_page_price() if offer_page else 0)
 
 
 def revamp_price() -> int:
@@ -720,6 +730,7 @@ def snapshot() -> Dict[str, object]:
             "build_included_sections": build_included_sections(),
             "build_per_section": build_per_section(),
             "revamp": revamp_price(),
+            "offer_page": offer_page_price(),
             "section_rewrite": section_rewrite(),
             "small_edit": small_edit(),
             "hero_regen": hero_regen(),
