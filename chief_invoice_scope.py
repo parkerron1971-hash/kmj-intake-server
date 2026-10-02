@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import re
+from types import SimpleNamespace
 
 import chief_models
 import llm_call
@@ -24,14 +25,27 @@ _HARD = re.compile(
     r"|[$%]|\d", re.I)
 _QUALIFIER = re.compile(r"\b(?:only|except|exclude|excluding|without|avoid|never|instead of|rather than)\b", re.I)
 _EMAIL_ONLY = re.compile(r"only (?:read|show|check) (?:the |my )?emails? from (?:my |the )?contacts[.!? ]*", re.I)
+_EMAIL_VISIBILITY = re.compile(
+    r"(?:(?:I|you|we|they|it|Chief) )?can read (?:those |the |your |my )?emails? "
+    r"only if they are in (?:your|my|the) contacts", re.I)
 _ACK = re.compile(r"(?:yes|no|ok(?:ay)?|great|thanks|thank you|all right)[.!?, ]*", re.I)
 
 
 def ambiguous_followup(text):
-    # A complete, separate email-permission instruction does not narrow invoices.
-    # A mere topic word cannot excuse a named qualifier ("Only Ada, not emails").
-    return bool((_FOLLOWUP.search(text) or _QUALIFIER.search(text))
-                and not _EMAIL_ONLY.fullmatch(text))
+    # A whole existing short-plan request is a separate display operation. Clear
+    # history only for recognizing its grammar, never for deciding invoice scope.
+    from chief_quick_plan import eligible
+    if eligible(SimpleNamespace(message=text)):
+        return False
+    # Recognize complete email visibility clauses, not an arbitrary email topic
+    # word. Any separate named qualifier still declines before model planning.
+    for clause in re.split(r'[.!?;\n]+', text):
+        clause = clause.strip()
+        if _EMAIL_ONLY.fullmatch(clause) or _EMAIL_VISIBILITY.fullmatch(clause):
+            continue
+        if _FOLLOWUP.search(clause) or _QUALIFIER.search(clause):
+            return True
+    return False
 
 
 def _field(value, name, default=None):

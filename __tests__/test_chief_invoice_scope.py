@@ -218,3 +218,39 @@ def test_unclassified_history_must_pass_model_even_if_baseline_appears_plain(mon
     assert asyncio.run(readout.serve_request(None, query, SESSION, BIZ)) is None
     api.assert_awaited_once()
     env.db.assert_not_awaited()
+
+
+EMAIL_DESCRIPTION = ('can read those emails only if they are in your contacts. '
+    'They just cannot read random emails. That is why the last email it saw was a test email '
+    'from May. Other than that, it could not read it. That is why I established that rule.')
+READONLY_PLAN = ('Show me a short suggested plan for the next two days. '
+    'Only show the plan; do not create tasks, send messages, or change records.')
+
+
+@pytest.mark.parametrize('separate_topic', [EMAIL_DESCRIPTION, READONLY_PLAN])
+def test_separate_descriptive_email_or_pure_plan_keeps_invoice_scope(monkeypatch, separate_topic):
+    env = arrange(monkeypatch)
+    guard, api = provider(monkeypatch)
+    query = req([LONG_ALL, 'The background audio is loud.', 'What is the weather in Example Town?',
+                 'Yes.', separate_topic])
+    data = scope.planning_input(query)
+    assert data['required_filter'] == 'all' and data['requires_model'] is True
+    result = asyncio.run(chief.chief_chat(query, SESSION))
+    assert result['actions_taken'][0]['filter'] == 'all'
+    api.assert_awaited_once()
+    env.context.assert_not_awaited()
+    env.model.assert_not_awaited()
+
+
+@pytest.mark.parametrize('restriction', ['Show invoices for Ada Sample.', 'Only Ada.',
+    'For Acme.', 'Please only Ada.', 'Only Ada, not emails.'])
+def test_email_description_cannot_hide_invoice_or_named_restriction(monkeypatch, restriction):
+    guard, api = provider(monkeypatch)
+    query = req([LONG_ALL, EMAIL_DESCRIPTION + ' ' + restriction])
+    assert asyncio.run(scope.resolve(None, query, BIZ['id'])) is None
+    guard.assert_not_called()
+    api.assert_not_awaited()
+
+
+def test_constraint_heavy_plan_does_not_get_plain_plan_exception():
+    assert scope.planning_input(req([LONG_ALL, READONLY_PLAN + ' Only contact Ada.'])) is None
