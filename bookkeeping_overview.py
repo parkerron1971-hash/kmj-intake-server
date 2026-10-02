@@ -833,6 +833,7 @@ def build_review(biz: str, limit: int = 200) -> Dict[str, Any]:
         mate = partner.get(tid)
         rows.append({
             "transaction_id": tid, "date": t.get("date"), "name": tx_name(t),
+            "merchant_name": t.get("merchant_name"),   # what a category rule matches on
             "amount": _amt(t), "direction": "in" if _amt(t) < 0 else "out",
             "account": account_label(acct_by_id.get(t.get("account_id"))),
             "business_category": t.get("business_category"),
