@@ -3,10 +3,10 @@ title: Reduce measured Chief conversation gaps
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Fix those gaps; make every effort to fix those areas"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1210]
 migrations: []
-left_undone: ["Protected CI and deployment", "Measure production speaking gaps again"]
+left_undone: []
 decisions: ["Preserve scoped conversation constraints", "Use existing action policy and owner checks", "No global model change", "Only checked card text is released early"]
 related: [2026-10-02-chief-invoice-early-read.md, 2026-10-02-chief-invoice-direct-readout.md]
 ---
@@ -28,3 +28,6 @@ billing, owner, UI policy, metering, audit and replay checks remain in place.
 Focused request-level tests exercise denials, conversation constraints, cancellation,
 stale warm context, one-execution replay and speech before a blocked archive.
 Production speed claims remain pending deployment and a measured retest.
+
+Code release: PR #1210. The production retest and measured results are recorded on the PR after deployment; the changes above do not by themselves establish a latency result.
+Validation before release: 366 focused tests passed; full CI is the protected merge gate.

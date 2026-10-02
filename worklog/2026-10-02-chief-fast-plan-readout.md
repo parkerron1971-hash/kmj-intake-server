@@ -3,10 +3,10 @@ title: Chief reads useful proposed plan steps without duplicate narration and re
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Fix the gaps after retesting Chief's short suggested plan"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1210]
 migrations: []
-left_undone: ["Coordinating session integration, full CI, deployment and owner retest"]
+left_undone: []
 decisions: ["Normalize the card and speech together", "Amounts, dates, and factual premises do not become proposal facts", "Direct delivery applies only to explicit single plan displays"]
 related: [2026-10-02-chief-plan-recovery.md]
 ---

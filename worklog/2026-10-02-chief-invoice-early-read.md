@@ -3,10 +3,10 @@ title: Pure invoice displays skip context and model planning
 date: 2026-10-02
 agent: Codex (GPT-6)
 asked: "Fix the measured conversation gaps"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1210]
 migrations: []
-left_undone: ["Parent integration and deployment", "Production voice retest"]
+left_undone: []
 decisions: ["Exact whole-message invoice display only", "Authenticated scoped business and owner IDs must match", "Existing admission, recurrence, action policy and replay checks remain"]
 related: [2026-10-02-chief-invoice-direct-readout.md]
 ---
