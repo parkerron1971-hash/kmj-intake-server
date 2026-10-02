@@ -107,3 +107,35 @@ def test_a_rejected_github_token_is_said_plainly_and_quiet_runs_do_not_flood(mon
     snap = asyncio.run(al.snapshot(now=NOW))
     assert snap["warnings"] and "GITHUB_TOKEN" in snap["warnings"][0]
     assert sum(1 for e in snap["feed"] if e["agent"] == "support_desk") == 1
+
+
+class FakeBusyDesk(FakeAll):
+    """The newest 200 rows are all the five-minute support desk."""
+    async def get(self, url, headers=None, params=None):
+        params = params or {}
+        if "platform_agent_runs" in url:
+            agent = params.get("agent", "")
+            if agent == "eq.money_auditor":
+                return _Resp([{"agent": "money_auditor", "started_at": "2026-10-02T10:00:00Z",
+                               "ok": True, "findings": 0, "summary": "money rails look right"}])
+            if agent == "eq.support_desk":
+                return _Resp([{"agent": "support_desk", "started_at": f"2026-10-02T0{i}:00:00Z",
+                               "details": {"drafted": 2}} for i in range(1, 4)])
+            if agent:
+                return _Resp([])
+            return _Resp([{"agent": "support_desk", "started_at": "2026-10-02T14:55:00Z", "ok": True,
+                           "findings": 0, "summary": "no customer tickets waiting on a draft"}] * 200)
+        return _Resp({"workflow_runs": []})
+
+
+def test_a_daily_agent_keeps_its_card_when_a_busy_agent_fills_the_window(monkeypatch):
+    al._gh_cache.clear()
+    monkeypatch.setattr(al, "_service_headers", lambda: {})
+    monkeypatch.setattr(al.httpx, "AsyncClient", lambda **kw: FakeBusyDesk())
+    snap = asyncio.run(al.snapshot(now=NOW))
+    cards = {c["id"]: c for c in snap["agents"]}
+    assert cards["money_auditor"]["status"] == "clear", "fetched past the 200-row window"
+    assert cards["support_desk"]["status"] == "clear"
+    assert cards["customer_health"]["status"] == "never"
+    # Today's drafts come from their own read, not the window of quiet rows.
+    assert snap["today"]["drafts_written"] == 6
