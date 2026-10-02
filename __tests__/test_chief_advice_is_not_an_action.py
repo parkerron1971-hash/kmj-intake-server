@@ -82,7 +82,7 @@ def test_the_retry_is_told_advice_needs_no_operation():
     seen = {}
 
     async def model(client, system, messages, **kwargs):
-        seen['correction'] = messages[-1]['content']
+        seen['correction'] = system
         return ''
     with patch.object(cos, '_call_claude', side_effect=model):
         asyncio.run(cos._retry_missing_actions(None, 'system', [], 'How should I relaunch?',
