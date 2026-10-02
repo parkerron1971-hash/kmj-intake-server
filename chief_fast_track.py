@@ -672,7 +672,9 @@ class TwoTrack:
             rec.slo_applies = False
         # "Let me check…" in front of "thanks" or "bye" reads as a machine that
         # did not listen; those get the one-word lead at the deadline instead.
-        self.model_opener = complexity.kind not in ("social", "farewell") and not self.system_turn
+        import chief_call_feedback
+        self.model_opener = (complexity.kind not in ("social", "farewell") and not self.system_turn
+                             and chief_call_feedback.for_request(req) is None)
         self.holder.parallel_voice = (self.voice and self.model_opener and not passive
                                       and route.lane == mr.LANE_FULL and not route.ambiguous
                                       and not self.client_opener and _on("CHIEF_ROUTER_OPENER"))

@@ -14429,6 +14429,21 @@ async def chief_chat(
                     logger.info("Chief recovered completed stream result")
                     return recovered
 
+            # Call feedback cannot authorize a new action or an unrelated
+            # correction from old history. The scoped context/replay checks above
+            # still apply; answer these exact messages without another model pass.
+            import chief_call_feedback
+            feedback = chief_call_feedback.for_request(req)
+            if feedback is not None:
+                result = {"response": feedback, "actions_taken": [],
+                          "grounding": {"status": "acknowledged", "sources": []}}
+                await _archive_turn(client, biz, req.message, feedback, [])
+                if _STREAM_SINK.get() is not None:
+                    chief_stream_replay.remember(req, user_session.user.id, result)
+                _t.log(lane=chief_models.lane_for_chat(req.mode or "", req.client_surface or ""),
+                       streamed=_STREAM_SINK.get() is not None)
+                return result
+
             is_greeting = _is_greeting(req.message)
             # Room orientation turns (first visit / the door / the walk)
             # get their own instructions instead of the day-read.
