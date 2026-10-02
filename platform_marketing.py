@@ -483,7 +483,11 @@ async def next_open_slot(at=None):
     import marketing_engine
     at = at or now()
     since = at.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
-    rows = await db('GET', f'/platform_marketing_posts?select=run_at&status=neq.cancelled&run_at=gte.{since}&limit=500')
+    until = (at + timedelta(days=62)).astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+    rows = await db('GET', f'/platform_marketing_posts?select=run_at&status=neq.cancelled&run_at=gte.{since}'
+                           f'&run_at=lt.{until}&order=run_at.asc&limit=1000')
+    if len(rows) >= 1000:
+        raise HTTPException(503, 'The calendar is too full to find an open time. Choose a time for this post.')
     taken = {_ts(r['run_at']) for r in rows}
     local = at.astimezone(marketing_engine.TZ)
     for offset in range(60):
@@ -494,7 +498,7 @@ async def next_open_slot(at=None):
             slot = datetime.combine(day, time(hour), marketing_engine.TZ)
             if slot > at + timedelta(hours=1) and slot.timestamp() not in taken:
                 return slot
-    return at + timedelta(days=1)
+    raise HTTPException(422, 'There is no open weekday time in the next 60 days. Choose a time for this post.')
 
 
 SERVICE_NAMES = {'twitter': 'X', 'facebook': 'Facebook', 'instagram': 'Instagram', 'linkedin': 'LinkedIn'}

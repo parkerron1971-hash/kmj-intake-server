@@ -331,3 +331,12 @@ def test_chief_new_post_is_retry_safe_and_a_drafts_action():
 def test_chief_keeps_links_out_of_a_new_post(made):
     out = asyncio.run(m.new_post({'text': 'See mysolutionist.app today'}))
     assert out['ok'] is False and made == []
+
+
+def test_an_ordinary_refusal_comes_back_as_a_sentence(made, monkeypatch):
+    async def refuse(req):
+        raise HTTPException(422, 'Keep the X caption at 255 characters or fewer, leaving room for its link.')
+    monkeypatch.setattr(marketing, 'create_idea', refuse)
+    out = asyncio.run(m.new_post({'text': 'x' * 300}))
+    assert out == {'ok': False, 'label': 'Keep the X caption at 255 characters or fewer, leaving room for its link. '
+                                         'Nothing was saved.'}

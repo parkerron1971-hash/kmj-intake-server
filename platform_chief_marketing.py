@@ -345,7 +345,12 @@ async def new_post(action):
                              landing_url=action.get('landing_url') or 'https://mysolutionist.app/', ai_assisted=True)
     except ValidationError:
         return {'ok': False, 'label': 'That time or picture could not be read. Give the time with its timezone.'}
-    out = await marketing.create_idea(req)
+    try:
+        out = await marketing.create_idea(req)
+    except HTTPException as exc:
+        # An ordinary refusal (too long for X, Instagram alone with no picture, a time out of range)
+        # comes back as a sentence Chief can relay; nothing was saved on any channel.
+        return {'ok': False, 'label': f'{exc.detail} Nothing was saved.'}
     when = f"{day_name(out['run_at'])} {clock(out['run_at'])}"
     where = _join(out.get('channels') or sorted({r['payload']['service'] for r in out['posts']}))
     left = ''.join(f" {s['channel']} was left out: {s['reason'][0].lower() + s['reason'][1:]}" for s in out['skipped'])

@@ -555,3 +555,11 @@ def test_new_post_route_is_owner_only():
     client = TestClient(app)
     assert client.post('/platform/marketing/ideas', json={'text': 'x'}).status_code == 403
     assert client.get('/platform/marketing/ideas/next-slot').status_code == 403
+
+
+def test_a_full_calendar_refuses_rather_than_guessing(three):
+    friday = m.datetime(2026, 10, 2, 19, 10, tzinfo=m.timezone.utc)
+    three['taken'] = ['2026-10-05T15:00:00+00:00'] * 1000
+    with pytest.raises(HTTPException) as err:
+        run(m.next_open_slot(friday))
+    assert err.value.status_code == 503 and 'Choose a time' in err.value.detail
