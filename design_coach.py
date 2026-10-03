@@ -82,7 +82,7 @@ Every turn, extract anything learned into "saves". Use these dossier sections/fi
 - identity: one_liner, primary_action, brand_persona (list of up to 3 words), first_3s_feel
 - world: room, materials, light, sounds (free text, their words)
 - story: origin, craft, proof, voice, atmosphere
-- taste: each answered pair saved as its OWN field (field is one of ground/density/carrier/edges/era/tone/motion, value is the chosen word); plus admired (what and why, one string) and bans (the cringe answers, one string or list); plus THE GALLERY PICKS: look (the look KEY they tapped, e.g. "neon"), hero_shape (the layout key), motion (the motion key). THE PICK BINDS: a tapped card arrives as a message like "Neon, that's the one." Save it that same turn as {"section": "taste", "field": "look", "value": "neon"}; the build reads this field and speaks that language, so a pick that is not saved is a pick that is lost.
+- taste: each answered pair saved as its OWN field (field is one of ground/density/carrier/edges/era/tone/motion, value is the chosen word); plus admired (what and why, one string) and bans (the cringe answers, one string or list); plus THE GALLERY PICKS: look (the look KEY they tapped, e.g. "neon"), layout (the page layout they tapped, saved without its page- prefix, e.g. "editorial"), motion (the motion key). THE PICK BINDS: a tapped card arrives as a message like "Neon, that's the one." Save it that same turn as {"section": "taste", "field": "look", "value": "neon"}; the build reads this field and speaks that language, so a pick that is not saved is a pick that is lost.
 - signature: moment (their words), sharpened (your one-line phrasing of it)
 - taste (THE CONCEPT PICK): concept (the card KEY they tapped: plain, signature, world-offer or world-site), concept_idea (the idea in one line, your pitch or their correction of it), concept_offer (when world-offer: the offer's name, from KNOWN CONTEXT or their words). Save all that apply the same turn they tap.
 - truth: proven_stats (value is a list of {label, value, proof} objects)
@@ -104,11 +104,11 @@ OUTPUT — STRICT JSON, nothing else:
 THE GALLERIES (show, then ask — the Claude Design pattern): when the conversation reaches a LOOK, LAYOUT, or MOTION choice, set "gallery" instead of "pair" — the platform renders each option as a small designed card in the option's own style, tinted with their brand color, and their tap arrives as an ordinary message. Use ONLY these kinds and keys:
 - kind "looks" (the design language — the platform shows each as a real full-page design the system can build). The keys, what each is, and who it sings for:
 {LOOKS_CATALOG}
-- kind "layouts" (the hero's shape): split-stage (copy one side, portrait the other), poster (one full-bleed statement), editorial (a magazine column with a lead image), exhibition (the work itself leads, gallery-first), monument (the name at monumental scale, the work small beneath), corridor (a short headline over a filmstrip of the work), letter (a typed letter to the visitor — no image, the voice is the hero).
+- kind "page" (the PAGE LAYOUT: how the whole site is put together; the platform draws each as a wireframe, marks the best fit Recommended and writes each card's reason, so never describe them in words). Keys are page- plus a layout: page-split, page-editorial, page-fullscreen, page-statement, page-grid, page-magazine, page-bento, page-showcase, page-story, page-asymmetric, page-sidebar, page-minimal. Show it ONCE, in the taste station right after the look is chosen: the first three from KNOWN CONTEXT's LAYOUTS THAT FIT THIS BUSINESS, in that order. A layout the material cannot carry is never offered.
 - kind "concept" (how far the site's idea goes; the platform shows each as a real rendering of one section at that setting). Keys: plain (no concept: clear, calm, nothing renamed), signature (one object carries one moment, the rest stays plain), world-offer (the idea runs one offer page, a course or a launch, while the home stays calm), world-site (the idea runs the whole site). Add "notes": {"<key>": "one line, for THIS business"} so each card carries its pitch ("signature": "your price list as the felt letterboard on your wall"; "world-offer": "your six-week course as a college semester"). Show it ONCE, in the signature station, after the look is chosen. Put KNOWN CONTEXT's CONCEPT DEFAULT first and say it is the usual choice for their kind of business; offer world-site only alongside world-offer. Plain is always one of the cards. Never pick for them.
 - kind "motion" (how the page moves): kinetic-hero (the headline arrives line by masked line), the-thread (one drawn line walks the page and lights each section), depth (layers drift at different speeds as you scroll), quiet (almost still; one soft reveal), marquee (one band of the promise scrolls forever, everything else still), unfold (each section unfolds like paper as you reach it, once).
-Offer 3 to 6 looks (2 to 4 for layouts and motion), chosen for THIS business — never all eleven, never a default trio.
-CHOOSING THE LOOKS: the KNOWN CONTEXT carries LOOKS THAT FIT THIS BUSINESS, ranked by the platform from their trade, their photos and their words. Offer from the top of that list, best fit first, and include one that is a real alternative (a different ground or a different temperature), never six shades of the same thing. Keep the reply ONE short question ("Which of these feels like walking into your shop?") and never describe the options in words: the cards do that. If they say none of them fit, show "looks" ONE more time with the keys you have not shown yet; layouts and motion are shown at most once per session.
+Offer 3 to 6 looks, exactly 3 page layouts, and 2 to 4 motions, chosen for THIS business — never all eleven, never a default trio.
+CHOOSING THE LOOKS: the KNOWN CONTEXT carries LOOKS THAT FIT THIS BUSINESS, ranked by the platform from their trade, their photos and their words. Offer from the top of that list, best fit first, and include one that is a real alternative (a different ground or a different temperature), never six shades of the same thing. Keep the reply ONE short question ("Which of these feels like walking into your shop?") and never describe the options in words: the cards do that. If they say none of them fit, show "looks" ONE more time with the keys you have not shown yet; page layouts and motion are shown at most once per session (when none of the three layouts fit, show the next three from the list one more time).
 
 Rules: chips are answers THEY might tap, not questions. Use "pair" at most every third turn. When stage is "brief", "reply" asks them to confirm the reflect_back (or correct anything), and "done" stays false until they confirm; after their confirmation, respond with done true and a warm send-off saying the Director will draft their blueprint from this.
 NEVER write sentences spliced with dashes in reply or saves — use periods, commas, or colons (the owner's standing grammar rule)."""
@@ -242,8 +242,89 @@ def _store_has_products(business_id: str) -> bool:
         return False
 
 
+# THE PAGE LAYOUTS (2026-10-03, the hand-build plan): the rubric's ranking
+# for this business, kept a few minutes so the turn that shows the cards
+# writes their reasons and the Recommended mark from the same ranking the
+# coach was given. {business_id: (monotonic, rows)}
+_LAYOUT_RANK: Dict[str, Any] = {}
+_LAYOUT_RANK_TTL_S = 600
+
+
+def _layout_rank(business_id: str, biz: Optional[Dict[str, Any]],
+                 dossier: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """site_layouts.rank for this business from a light context: its trade,
+    its photos, its live offerings and products, and the dossier. Two small
+    reads; fail-open to []."""
+    if _site_layouts is None:
+        return []
+    import time
+    import sb_clients
+    st = (biz or {}).get("settings") or {}
+    gal = ((st.get("media_library") or {}).get("gallery")) or []
+    try:
+        offerings = sb_clients.sb_get_as_service(
+            f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
+            "&select=id&limit=40") or []
+    except Exception:
+        offerings = []
+    try:
+        products = sb_clients.sb_get_as_service(
+            f"/products?business_id=eq.{business_id}&status=eq.active"
+            "&display_on_website=eq.true&select=id&limit=40") or []
+    except Exception:
+        products = []
+    testimonials = ((st.get("website_content") or {}).get("testimonials")) or []
+    ctx = {"business": {"type": str((biz or {}).get("business_type") or "")},
+           "gallery": [g for g in gal if isinstance(g, dict)],
+           "offerings": offerings if isinstance(offerings, list) else [],
+           "testimonials": testimonials if isinstance(testimonials, list) else [],
+           "store": {"enabled": bool(products), "items": products if isinstance(products, list) else []},
+           "site": {"site_config": {"discovery_dossier": dossier or {}}}}
+    try:
+        import site_concept
+        recent = site_concept.recent_layouts(business_id)
+    except Exception:
+        recent = []
+    rows = _site_layouts.rank(_site_layouts.signals(ctx, recent))
+    _LAYOUT_RANK[business_id] = (time.monotonic(), rows)
+    return rows
+
+
+def layouts_that_fit_block(rows: List[Dict[str, Any]], n: int = 6) -> str:
+    if not rows or _site_layouts is None:
+        return ""
+    lines = ["LAYOUTS THAT FIT THIS BUSINESS (the page's structure, ranked by the platform "
+             "from what it actually has; offer the first three as gallery kind \"page\", "
+             "in this order):"]
+    for r in rows[:n]:
+        lines.append(f"- page-{r['key']}: {r['name']}. {_site_layouts.reason_line(r)}")
+    return "\n".join(lines)
+
+
+def _finish_page_gallery(gallery: Dict[str, Any], business_id: str) -> None:
+    """The cards' reasons and the Recommended mark come from the rubric,
+    not the model: the best-ranked option is Recommended, and each card
+    says why it fits in the platform's own words."""
+    if _site_layouts is None:
+        return
+    import time
+    cached = _LAYOUT_RANK.get(business_id)
+    rows = cached[1] if cached and time.monotonic() - cached[0] < _LAYOUT_RANK_TTL_S else []
+    if not rows:
+        return
+    order = {f"page-{r['key']}": i for i, r in enumerate(rows)}
+    by = {f"page-{r['key']}": r for r in rows}
+    opts = [o for o in gallery.get("options") or [] if o in by]
+    if not opts:
+        return
+    gallery["notes"] = {o: _site_layouts.reason_line(by[o]) for o in opts}
+    gallery["recommended"] = min(opts, key=lambda o: order[o])
+
+
 def _known_context(business_id: str) -> str:
     parts: List[str] = []
+    _biz_row: Optional[Dict[str, Any]] = None
+    _dossier: Optional[Dict[str, Any]] = None
     try:
         import sb_clients
         rows = sb_clients.sb_get_as_service(
@@ -251,6 +332,7 @@ def _known_context(business_id: str) -> str:
             "&select=name,business_type,settings&limit=1") or []
         if rows:
             b = rows[0]
+            _biz_row = b
             parts.append(f"BUSINESS: {b.get('name')} "
                          f"({b.get('business_type') or 'business'})")
             st = b.get("settings") or {}
@@ -293,6 +375,7 @@ def _known_context(business_id: str) -> str:
     try:
         import discovery
         d = discovery.get_dossier(business_id)
+        _dossier = d if isinstance(d, dict) else None
         digest = discovery.dossier_digest(d) if d else ""
         if digest:
             parts.append("THE DOSSIER SO FAR (already known — reference, "
@@ -325,6 +408,12 @@ def _known_context(business_id: str) -> str:
                          + "\n".join("- " + s for s in doors))
     except Exception as e:
         logger.info(f"[coach] connected-systems context skipped: {e}")
+    try:
+        block = layouts_that_fit_block(_layout_rank(business_id, _biz_row, _dossier))
+        if block:
+            parts.append(block)
+    except Exception as e:
+        logger.info(f"[coach] layouts-that-fit skipped: {e}")
     return "\n\n".join(parts) or "(nothing known yet — a fresh start)"
 
 
@@ -412,14 +501,23 @@ _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$", re.MULTILINE)
 # THE PICK BINDS (2026-09-04): a tapped gallery card is saved as the
 # owner's own answer, by KEY, so design_languages.resolve can read it.
 _PICK_FIELDS = {"look": "looks", "hero_shape": "layouts", "motion": "motion",
-                "concept": "concept"}
+                "concept": "concept", "layout": "page"}
 _PICK_KEYS = {
     "layouts": {"split-stage", "poster", "editorial", "exhibition",
                 "monument", "corridor", "letter"},
     "motion": {"kinetic-hero", "the-thread", "depth", "quiet",
                "marquee", "unfold"},
     "concept": {"plain", "signature", "world-offer", "world-site"},
+    # THE PAGE LAYOUTS (2026-10-03, the hand-build plan): site_layouts keys,
+    # shown on cards as page-<key> and saved bare.
+    "page": set(),
 }
+try:
+    import site_layouts as _site_layouts
+    _PICK_KEYS["page"] = set(_site_layouts.KEYS)
+except Exception:          # the coach still runs without the library
+    _site_layouts = None
+_PAGE_CARD_KEYS = {f"page-{k}" for k in _PICK_KEYS["page"]}
 
 
 def _normalize_concept(raw: Any) -> Optional[str]:
@@ -447,6 +545,12 @@ def _normalize_pick(field: str, raw: Any) -> Optional[str]:
         return None
     if kind == "concept":
         return _normalize_concept(raw)
+    if kind == "page":
+        if _site_layouts is None:
+            return None
+        text = re.sub(r"^\s*page-", "", str(raw or "").strip(), flags=re.IGNORECASE)
+        text = re.sub(r"[,.!].*$", "", text).strip()
+        return _site_layouts.normalize(text)
     keys = _look_keys() if kind == "looks" else _PICK_KEYS[kind]
     text = str(raw or "").strip().lower()
     text = re.sub(r"[,.!'’].*$", "", text).strip()          # drop the sentence tail
@@ -509,6 +613,7 @@ def parse_turn(raw: str) -> Optional[Dict[str, Any]]:
         "motion": {"kinetic-hero", "the-thread", "depth", "quiet",
                    "marquee", "unfold"},
         "concept": set(_PICK_KEYS["concept"]),
+        "page": set(_PAGE_CARD_KEYS),
     }
     out["gallery"] = None
     if isinstance(g, dict) and g.get("kind") in _G_KINDS:
@@ -680,6 +785,8 @@ def run_turn(business_id: str,
         turn = parse_turn(raw)
         if not turn:
             return {"error": "the coach lost the thread — try again"}
+        if (turn.get("gallery") or {}).get("kind") == "page":
+            _finish_page_gallery(turn["gallery"], business_id)
         applied = apply_saves(business_id, turn.pop("saves", []))
         turn["saves_applied"] = applied
         _persist_session(business_id, messages, turn)
