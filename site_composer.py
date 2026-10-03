@@ -6540,14 +6540,19 @@ def refine_section(business_id: str, section: str, instruction: str,
     instruction = str(instruction or "").strip()[:_REFINE_INSTRUCTION_CAP]
     if not instruction:
         return {"ok": False, "error": "tell me how the section should change"}
-    if not _atl.atelier_enabled():
-        return {"ok": False, "error": "refine is disabled on this server "
-                                      "(ATELIER_ENABLED=0)"}
 
     _report_progress(progress_cb, 10, "Reading the section")
     ctx = gather_context(business_id)
     site = ctx.get("site")
     cfg = ((site or {}).get("site_config") or {})
+    # A page from the new builder is its own document: rework the section
+    # inside it (2026-10-03). The atelier path below is for module pages.
+    if _is_builder_page(cfg):
+        return _refine_section_v2(business_id, section, instruction, ctx,
+                                  progress_cb=progress_cb)
+    if not _atl.atelier_enabled():
+        return {"ok": False, "error": "refine is disabled on this server "
+                                      "(ATELIER_ENABLED=0)"}
     spec_raw = cfg.get("page_spec")
     if not spec_raw:
         return {"ok": False, "error": "no composed page yet — compose first"}
@@ -6656,6 +6661,72 @@ def refine_section(business_id: str, section: str, instruction: str,
             "site_id": result.get("site_id"), "slug": result.get("slug"),
             "url": result.get("url"),
             "quality_report": result.get("quality_report")}
+
+
+def _is_builder_page(cfg: Dict[str, Any]) -> bool:
+    """A served page the new builder wrote: its stored canvas document is
+    the page, and refresh_if_composed re-renders it from that document."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    canvas = cfg.get("canvas") if isinstance(cfg.get("canvas"), dict) else {}
+    return ((cfg.get("canvas_report") or {}).get("engine") == "builder_v2"
+            and cfg.get("html_source") == "canvas"
+            and bool(str(canvas.get("html") or "").strip()))
+
+
+def _refine_section_v2(business_id: str, section: str, instruction: str,
+                       ctx: Dict[str, Any], progress_cb=None) -> Dict[str, Any]:
+    """REWORK ONE SECTION OF A NEW-BUILDER PAGE (2026-10-03).
+
+    builder_v2.refine_section_doc rebuilds the one section (laws held, the
+    rest of the page byte for byte); the result replaces the stored canvas
+    document and refresh_if_composed re-renders the served page from it,
+    the same road an Edit Mode save takes, so text and color overrides and
+    the secondary pages follow. Priced as a section rework (charged on the
+    model call, once). An honest {ok: False, error} leaves the page as it
+    was."""
+    import builder_v2 as _bv2
+    import pricing_config
+    import spec_author
+    rows = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        "&select=id,slug,site_config&limit=1") or []
+    if not rows:
+        return {"ok": False, "error": "no composed page yet — compose first"}
+    row = rows[0]
+    cfg = dict(row.get("site_config") or {})
+    canvas = dict(cfg.get("canvas") or {})
+    doc = str(canvas.get("html") or "")
+    spec_text = (spec_author.approved_spec_text(business_id)
+                 or str((cfg.get("design_spec") or {}).get("text") or ""))
+    _report_progress(progress_cb, 40, "Reworking it")
+    out = _bv2.refine_section_doc(doc, spec_text, ctx, business_id, section,
+                                  instruction, units=pricing_config.section_rewrite())
+    if not out.get("ok"):
+        return {k: v for k, v in out.items() if k in ("ok", "error", "sections")}
+
+    _report_progress(progress_cb, 80, "Putting it on the page")
+    from datetime import datetime, timezone
+    canvas["html"] = out["html"]
+    cfg["canvas"] = canvas
+    refines = [r for r in (cfg.get("canvas_refines") or []) if isinstance(r, dict)][-9:]
+    refines.append({"section": out["section"], "instruction": instruction,
+                    "at": datetime.now(timezone.utc).isoformat()})
+    cfg["canvas_refines"] = refines
+    sb_clients.sb_patch_as_service(f"/business_sites?id=eq.{row['id']}",
+                                   {"site_config": cfg})
+    try:
+        refresh_if_composed(business_id)
+    except Exception as e:
+        # the stored document already carries the rework; the next refresh
+        # (any Edit Mode save, any offering change) serves it
+        logger.warning(f"[composer.refine] v2 re-render failed (stored, not "
+                       f"served yet) for {business_id[:8]}: {e}")
+    _report_progress(progress_cb, 100, "Done")
+    slug = row.get("slug")
+    return {"ok": True, "section": out["section"], "instruction": instruction,
+            "site_id": row.get("id"), "slug": slug,
+            "url": f"https://{slug}.mysolutionist.app" if slug else None,
+            "notes": out.get("notes") or []}
 
 
 class RefineSectionBody(BaseModel):
