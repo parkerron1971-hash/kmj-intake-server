@@ -148,3 +148,13 @@ def test_an_unknown_layout_pick_saves_nothing(monkeypatch):
     monkeypatch.setattr(discovery, "save_dossier", lambda b, d: (_ for _ in ()).throw(AssertionError("saved")))
     assert chief_jobs.save_layout_pick("biz", "a spaceship") is None
     assert chief_jobs.save_layout_pick("biz", None) is None
+
+
+def test_the_quick_session_from_chief_shows_the_page_layouts():
+    """A session opened from the chat is always quick; it used to say
+    'No ... layouts or motion in a quick session', which would have kept
+    the twelve page layouts from every Chief-opened session."""
+    q = dc.QUICK_SESSION
+    assert "The PAGE gallery" in q and 'kind "page"' in q
+    assert "layouts or motion" not in q
+    assert q.index("The LOOKS gallery") < q.index("The PAGE gallery") < q.index("The CONCEPT gallery")
