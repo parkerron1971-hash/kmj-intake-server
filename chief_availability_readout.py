@@ -23,7 +23,10 @@ async def serve_request(client, req, session, biz):
         if recovered is not None:
             return recovered
 
-    result = await chief_availability.check_request(client, req, biz)
+    import chief_listening
+    prepared = chief_listening.consume(owner_id, req.business_id,
+        getattr(req, 'listening_turn_id', None), getattr(req, 'listening_revision', None), req.message)
+    result = await chief_availability.check_request(client, req, biz, prepared=prepared)
     if result is None:
         return None
     # This route cannot carry actions, including from a malformed result.

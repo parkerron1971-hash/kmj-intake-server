@@ -146,7 +146,7 @@ def test_cancellation_never_emits_unfinished_check(monkeypatch):
     env = arrange(monkeypatch)
     async def run():
         entered = asyncio.Event()
-        async def checking(*args):
+        async def checking(*args, **kwargs):
             entered.set()
             await asyncio.Future()
         env.checker.side_effect = checking
@@ -176,7 +176,9 @@ def test_readout_rejects_action_payload(monkeypatch):
 def test_stream_final_matches_checked_speech_without_generic_caveat(monkeypatch):
     env = arrange(monkeypatch)
     import chief_fast_track
-    monkeypatch.setattr(chief_fast_track, 'plan', lambda *args: None)
+    import route_ledger
+    monkeypatch.setattr(chief_fast_track, 'enabled', lambda: True)
+    monkeypatch.setattr(route_ledger, 'finish', Mock())
     async def run():
         stream = await chief.chief_chat_stream(request(client_surface='voice'), SESSION)
         frames = [frame async for frame in stream.body_iterator]
@@ -199,3 +201,37 @@ def test_appointment_question_never_routes_to_record_free_answer():
     import model_router
     decision = model_router.decide(model_router.score(TEXT))
     assert decision.lane == model_router.LANE_FULL
+
+
+def test_preparation_consumed_only_after_scope_and_passed_as_hint(monkeypatch):
+    import chief_listening
+    env = arrange(monkeypatch)
+    hint = {'business_id': BIZ['id'], 'offerings': []}
+    consume = Mock(return_value=hint)
+    monkeypatch.setattr(chief_listening, 'consume', consume)
+    req = request(listening_turn_id='prepared-turn', listening_revision=3)
+    asyncio.run(readout.serve_request(None, req, SESSION, {**BIZ, 'owner_id': 'other-owner'}))
+    consume.assert_not_called()
+    asyncio.run(readout.serve_request(None, req, SESSION, BIZ))
+    consume.assert_called_once_with(SESSION.user.id, BIZ['id'], 'prepared-turn', 3, TEXT)
+    assert env.checker.call_args.kwargs['prepared'] is hint
+
+
+def test_checked_route_does_not_wait_for_or_generate_an_opener(monkeypatch):
+    import chief_fast_track
+    import route_ledger
+    monkeypatch.setattr(chief_fast_track, 'enabled', lambda: True)
+    monkeypatch.setattr(route_ledger, 'finish', Mock())
+    track = chief_fast_track.plan(request(client_surface='voice'), SESSION)
+    assert track.passive and track.starts_turn_now()
+    assert track.rec.reason == 'checked_availability'
+    async def run():
+        assert [event async for event in track.lead(Mock())] == []
+    asyncio.run(run())
+
+
+def test_unsupported_scope_keeps_normal_voice_opening(monkeypatch):
+    import chief_fast_track
+    monkeypatch.setattr(chief_fast_track, 'enabled', lambda: True)
+    req = request(conversation_history=[{'role': 'user', 'content': 'Leave 30 minutes between sessions.'}])
+    assert not chief_fast_track.plan(req, SESSION).passive
