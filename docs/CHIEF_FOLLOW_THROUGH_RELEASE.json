@@ -1,0 +1,22 @@
+{
+  "verified_at": "2026-10-03T21:14:37.238582+00:00",
+  "backend_commit": "873fc9cdb305f520232f1b929c65d598097794b8",
+  "web_deployment": "33b4128a-1a13-4424-805b-96af1568784d",
+  "worker_deployment": "f1169a69-37ed-472d-ab01-a7495eccc992",
+  "web_and_worker_effective_flags": {
+    "chief_agent.enabled": true,
+    "chief_event_delivery.enabled": true
+  },
+  "flags_verified_by": "SSH using /opt/venv/bin/python on both running services",
+  "ready": true,
+  "scheduler_lease_fresh": true,
+  "unauthenticated_report_status": 401,
+  "owner_report": {
+    "sources_available": 6,
+    "items": 5,
+    "needs_you": 2,
+    "partial": false
+  },
+  "frontend_initial_commit": "1abbbc04d077c2bd630826fd58080d26f667d0fe",
+  "phone_shortcut_follow_up": "solutionist-studio#1122"
+}

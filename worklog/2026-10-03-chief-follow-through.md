@@ -3,10 +3,10 @@ title: Chief responsibilities, measurable goals and event recovery
 date: 2026-10-03
 agent: Codex (GPT-6)
 asked: "another agent is working mysite build right now. please build out these plans you shared"
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1239, solutionist-studio#1120]
 migrations: [supabase/APPLY-2026-10-03-chief-event-delivery.sql (applied)]
-left_undone: [merge and deploy, coordinated feature activation and production smoke check]
+left_undone: []
 decisions: ["Keep MySite build separate", "Unknown effects require review, never blind replay", "Use existing assignment permissions", "Observed business progress is not causal attribution"]
 related: [2026-09-30-agent-operations-plan.md]
 ---
@@ -44,3 +44,16 @@ all six live report sources loaded. Web and worker were restarted with
 CHIEF_AGENT=off to drain legacy runs, then CHIEF_DURABLE_EVENTS=on was staged
 without deploying. Trunk advanced during CI; merged its latest MySite changes
 without conflicts and reran the required gate before release.
+
+PR #1239 merged as 873fc9c and deployed on both Railway services. After both
+paused deployments replaced legacy processes, the temporary CHIEF_AGENT
+overrides were removed and both services explicitly redeployed. Verified
+chief_agent.enabled() and chief_event_delivery.enabled() are both True inside
+both running containers; health/readiness and the scheduler lease are healthy.
+Unsigned report requests return 401; the signed-in desktop shortcut returned
+all six sources, five fixture work items and two needing attention, without
+restarting work. Release receipt: docs/CHIEF_FOLLOW_THROUGH_RELEASE.json.
+
+Frontend #1120 is also live. Its phone-specific drawer needed a follow-up
+shortcut (solutionist-studio#1122); that correction and verification are tracked
+in the frontend worklog. No backend activation work remains.

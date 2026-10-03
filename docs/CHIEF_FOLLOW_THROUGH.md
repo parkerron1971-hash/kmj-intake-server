@@ -62,9 +62,12 @@ causal revenue attribution are not invented by these workflows.
 Production schema status: **applied 2026-10-03 20:43 UTC**, explicitly authorized
 by Kevin after the draft was prepared. A live rollback rehearsal and post-commit
 privilege/schema checks passed; see [receipt](CHIEF_EVENT_MIGRATION_VERIFICATION.json).
-The backend/frontend drafts are not yet merged and recovery was not activated.
-Step 2 below is complete for the production database; retain the full sequence
-for other environments.
+Backend #1239 and frontend #1120 are merged and deployed. Recovery is enabled
+on both Railway services; their runtime functions report event processing and
+durable recovery on, with healthy readiness and scheduler lease. The signed-in
+desktop report passed; the phone-specific shortcut correction is frontend
+#1122. See [release receipt](CHIEF_FOLLOW_THROUGH_RELEASE.json). The sequence
+below is retained for other environments and future rollouts.
 
 1. Merge/deploy the backend with `CHIEF_DURABLE_EVENTS=off`.
 2. Apply `supabase/APPLY-2026-10-03-chief-event-delivery.sql` in the shared
