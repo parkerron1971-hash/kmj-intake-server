@@ -4,7 +4,7 @@ date: 2026-10-03
 agent: Codex (GPT-6)
 asked: "another agent is working mysite build right now. please build out these plans you shared"
 status: waiting on Kevin
-prs: []
+prs: [kmj-intake-server#1239, solutionist-studio#1120]
 migrations: [supabase/APPLY-2026-10-03-chief-event-delivery.sql (pending)]
 left_undone: [merge and deploy, manual migration, coordinated feature activation and production smoke check]
 decisions: ["Keep MySite build separate", "Unknown effects require review, never blind replay", "Use existing assignment permissions", "Observed business progress is not causal attribution"]
