@@ -72,8 +72,11 @@ def test_known_context_mirrors_connected_systems():
              "booking_url": "https://kmj.example/book",
              "store_url": "https://kmj.example/store",
              "site_slug": "kmj", "stripe_connected": False}
+    # a store with something in it: the coach offers the STORE door only
+    # then (an empty shop is not a door; test_design_coach covers it)
     with mock.patch("offering_profiles.business_state",
-                    return_value=state):
+                    return_value=state), \
+         mock.patch.object(dc, "_store_has_products", return_value=True):
         ctx = dc._known_context("b1")
     assert "CONNECTED SYSTEMS" in ctx
     assert "https://kmj.example/book" in ctx

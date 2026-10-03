@@ -324,3 +324,45 @@ def test_run_turn_passes_the_mode_to_the_prompt():
         out = dc.run_turn("b1", [], mode="quick")
     assert seen["mode"] == "quick"
     assert "error" in out
+
+
+# ─── the empty shop (2026-10-03, live test on Vertical Test Coach) ───
+# Every business with a site gets a store_url, so the coach told an owner
+# with zero products "your store page is already live" and asked twice
+# whether to link it. The STORE door is offered only when the public
+# store page would show something.
+
+def _context_with(products, booking=False):
+    import offering_profiles
+    import sb_clients
+
+    def fake_get(path):
+        if path.startswith("/products"):
+            assert "status=eq.active" in path and "display_on_website=eq.true" in path
+            return products
+        return []
+
+    state = {"store_url": "https://x.mysolutionist.app/store",
+             "booking_enabled": booking,
+             "booking_url": "https://x.mysolutionist.app/book" if booking else ""}
+    with mock.patch.object(sb_clients, "sb_get_as_service", side_effect=fake_get), \
+         mock.patch.object(offering_profiles, "business_state", return_value=state), \
+         mock.patch.object(discovery, "get_dossier", return_value=None):
+        return dc._known_context("b1")
+
+
+def test_an_empty_shop_is_not_a_door():
+    ctx = _context_with([])
+    assert "STORE" not in ctx
+    assert "CONNECTED SYSTEMS" not in ctx
+
+
+def test_a_shop_with_something_in_it_is_a_door():
+    ctx = _context_with([{"id": "p1"}])
+    assert "STORE page exists at https://x.mysolutionist.app/store" in ctx
+
+
+def test_booking_still_rides_without_a_store():
+    ctx = _context_with([], booking=True)
+    assert "BOOKING is LIVE" in ctx
+    assert "STORE" not in ctx

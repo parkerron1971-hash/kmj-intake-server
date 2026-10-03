@@ -227,6 +227,21 @@ def _photo_context(settings: Dict[str, Any]) -> List[str]:
     return out
 
 
+def _store_has_products(business_id: str) -> bool:
+    """The store door is real only when the store page would show
+    something: the same filter the public /store page applies (active,
+    shown on the website). business_state hands every business with a
+    site a store_url, products or not."""
+    try:
+        import sb_clients
+        rows = sb_clients.sb_get_as_service(
+            f"/products?business_id=eq.{business_id}&status=eq.active"
+            "&display_on_website=eq.true&select=id&limit=1") or []
+        return bool(rows)
+    except Exception:
+        return False
+
+
 def _known_context(business_id: str) -> str:
     parts: List[str] = []
     try:
@@ -295,7 +310,13 @@ def _known_context(business_id: str) -> str:
         if state.get("booking_enabled") and state.get("booking_url"):
             doors.append("BOOKING is LIVE — customers can book at "
                          + state["booking_url"])
-        if state.get("store_url"):
+        # THE EMPTY SHOP (2026-10-03, live test on Vertical Test Coach):
+        # every business with a site gets a store_url, so the coach told
+        # an owner with zero products "your store page is already live"
+        # and asked twice whether to link it. The builder already refuses
+        # this door when the shop is empty (builder_v2._store_has_products);
+        # the coach now asks only about a store with something in it.
+        if state.get("store_url") and _store_has_products(business_id):
             doors.append("STORE page exists at " + state["store_url"])
         if doors:
             parts.append("CONNECTED SYSTEMS (the platform's truth — "
