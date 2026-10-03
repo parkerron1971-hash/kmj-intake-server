@@ -85,7 +85,7 @@ Every turn, extract anything learned into "saves". Use these dossier sections/fi
 - taste: each answered pair saved as its OWN field (field is one of ground/density/carrier/edges/era/tone/motion, value is the chosen word); plus admired (what and why, one string) and bans (the cringe answers, one string or list); plus THE GALLERY PICKS: look (the look KEY they tapped, e.g. "neon"), layout (the page layout they tapped, saved without its page- prefix, e.g. "editorial"), motion (the motion key). THE PICK BINDS: a tapped card arrives as a message like "Neon, that's the one." Save it that same turn as {"section": "taste", "field": "look", "value": "neon"}; the build reads this field and speaks that language, so a pick that is not saved is a pick that is lost.
 - signature: moment (their words), sharpened (your one-line phrasing of it)
 - taste (THE CONCEPT PICK): concept (the card KEY they tapped: plain, signature, world-offer or world-site), concept_idea (the idea in one line, your pitch or their correction of it), concept_offer (when world-offer: the offer's name, from KNOWN CONTEXT or their words). Save all that apply the same turn they tap.
-- truth: proven_stats (value is a list of {label, value, proof} objects)
+- truth: proven_stats (value is a list of {label, value, proof} objects); offers (what they sell, a list of {name, price, duration, note} objects, each only as they said it: never a price or a length they did not say); hours (when they are open, one line in their words)
 - capabilities: booking, store (value "on" or "off" — the owner's answer to whether the SITE carries that door)
 Save the practitioner's OWN PHRASING in values — verbatim quotes are design material. Only save what THIS turn established. Empty saves list is fine.
 
@@ -227,6 +227,28 @@ def _photo_context(settings: Dict[str, Any]) -> List[str]:
     return out
 
 
+# THE PHOTO ASK, GUARANTEED (2026-10-03, the first live test): the quick
+# session told the coach to ask for photos on the story turn when there
+# are none, and it never did, so the site was built with none. A hand-
+# build always asks. The server now sets "ask": "photos" itself, once per
+# session, when the business has no photos and the coach did not.
+# {business_id: {"photos": n, "asked": bool}}, written by _known_context.
+_PHOTO_STATE: Dict[str, Dict[str, Any]] = {}
+
+
+def _should_ask_photos(business_id: str, messages: List[Dict[str, str]],
+                       turn: Dict[str, Any]) -> bool:
+    st = _PHOTO_STATE.get(business_id)
+    if not st or st.get("photos", 1) > 0 or st.get("asked"):
+        return False
+    if turn.get("ask") == "photos" or turn.get("done") or turn.get("gallery") \
+            or turn.get("stage") == "brief":
+        return False
+    said = sum(1 for m in (messages or []) if m.get("role") == "user"
+               and str(m.get("content") or "").strip())
+    return turn.get("stage") == "story" or said >= 2
+
+
 def _store_has_products(business_id: str) -> bool:
     """The store door is real only when the store page would show
     something: the same filter the public /store page applies (active,
@@ -345,6 +367,12 @@ def _known_context(business_id: str) -> str:
                 parts.append("BRAND COLORS ON FILE: "
                              + json.dumps(cols)[:200])
             parts.extend(_photo_context(st))
+            _gal = ((st.get("media_library") or {}).get("gallery")) or []
+            _PHOTO_STATE[business_id] = {
+                "photos": len([g for g in _gal if isinstance(g, dict)
+                               and str(g.get("url") or "").strip()
+                               and g.get("show_on_website", True)]),
+                "asked": False}
             prefs = st.get("site_prefs") or {}
             if prefs:
                 parts.append("EARLIER STYLE ANSWERS (do not re-ask; "
@@ -376,6 +404,9 @@ def _known_context(business_id: str) -> str:
         import discovery
         d = discovery.get_dossier(business_id)
         _dossier = d if isinstance(d, dict) else None
+        if isinstance(d, dict) and business_id in _PHOTO_STATE:
+            _PHOTO_STATE[business_id]["asked"] = bool(
+                (d.get("session") or {}).get("photos_asked"))
         digest = discovery.dossier_digest(d) if d else ""
         if digest:
             parts.append("THE DOSSIER SO FAR (already known — reference, "
@@ -438,6 +469,10 @@ QUICK_SESSION = (
     "BUSINESS), right after the look: how the whole site is put together.\n"
     "- The CONCEPT gallery, right after the page layout.\n"
     "- One question about what they would never want (save it as bans).\n"
+    "- One TRUTH question: what people buy from them, what each costs, and "
+    "when they are open. Save what they say as truth offers and truth hours, "
+    "in their words. Skip it when the KNOWN CONTEXT already lists their "
+    "offers with prices.\n"
     "Skip any of these the KNOWN CONTEXT already answers, and never pad to "
     "reach five. No this-or-that pairs, hero shapes or motion in a quick "
     "session unless they ask for more. If they want to go deeper, follow "
@@ -683,6 +718,12 @@ def apply_saves(business_id: str, saves: List[Dict[str, Any]]) -> int:
             stats = s["value"] if isinstance(s["value"], list) else [s["value"]]
             patch.setdefault("truth", {})["proven_stats"] = [
                 st for st in stats if isinstance(st, dict)]
+        elif s["section"] == "truth" and s["field"] == "offers":
+            vals = s["value"] if isinstance(s["value"], list) else [s["value"]]
+            patch.setdefault("truth", {}).setdefault("offers", []).extend(
+                v for v in vals if isinstance(v, (dict, str)))
+        elif s["section"] == "truth" and s["field"] == "hours":
+            patch.setdefault("truth", {})["hours"] = str(s["value"])
         else:
             patch.setdefault(s["section"], {})[s["field"]] = {
                 "value": s["value"], "source": "asked"}
@@ -721,7 +762,10 @@ def _persist_session(business_id: str, messages: List[Dict[str, str]],
             if str(m.get("content") or "").strip()
         ]
         transcript.append({"role": "assistant", "content": turn["reply"]})
+        asked = bool((d.get("session") or {}).get("photos_asked")) \
+            or turn.get("ask") == "photos"
         d["session"] = {
+            "photos_asked": asked,
             "messages": transcript[-MAX_TURNS:],
             "stage": turn.get("stage"),
             "last": {k: turn.get(k) for k in
@@ -789,6 +833,10 @@ def run_turn(business_id: str,
             return {"error": "the coach lost the thread — try again"}
         if (turn.get("gallery") or {}).get("kind") == "page":
             _finish_page_gallery(turn["gallery"], business_id)
+        if _should_ask_photos(business_id, messages, turn):
+            turn["ask"] = "photos"
+        if turn.get("ask") == "photos" and business_id in _PHOTO_STATE:
+            _PHOTO_STATE[business_id]["asked"] = True
         applied = apply_saves(business_id, turn.pop("saves", []))
         turn["saves_applied"] = applied
         _persist_session(business_id, messages, turn)
