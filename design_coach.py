@@ -303,8 +303,42 @@ def _known_context(business_id: str) -> str:
     return "\n\n".join(parts) or "(nothing known yet — a fresh start)"
 
 
+# THE QUICK SESSION (2026-10-03). Kevin: when someone asks Chief for a
+# site, Chief brings the coach into the chat instead of building from
+# nothing (the blueprint exists so a site never comes out generic). A
+# practitioner who asked for a site from their phone came for a site, not
+# a sit-down: the quick session asks the few questions that move the
+# design most and leaves the whole territory one "tell me more" away.
+SESSION_MODES = ("deep", "quick")
+
+QUICK_SESSION = (
+    "QUICK SESSION. They asked Chief for a site from the chat, and Chief "
+    "brought you in. Respect their time: about five questions in all, then "
+    "the brief.\n"
+    "- One WORLD question: the room, the light, the sounds.\n"
+    "- One STORY question: the work they are proudest of, or what clients "
+    "say walking out. When the context says NO PHOTOS YET, this is the turn "
+    "that asks for photos (\"ask\": \"photos\").\n"
+    "- The LOOKS gallery.\n"
+    "- The CONCEPT gallery, right after the look.\n"
+    "- One question about what they would never want (save it as bans).\n"
+    "Skip any of these the KNOWN CONTEXT already answers, and never pad to "
+    "reach five. No this-or-that pairs, layouts or motion in a quick "
+    "session unless they ask for more. If they want to go deeper, follow "
+    "them: the whole territory is open the moment they ask. Then the brief: "
+    "reflect_back and their confirmation, as always. The send-off says "
+    "Chief has their blueprint next, back in the chat.")
+
+
+def session_mode(raw: Any) -> str:
+    """'quick' or 'deep' (the default, the full sit-down)."""
+    m = str(raw or "").strip().lower()
+    return m if m in SESSION_MODES else "deep"
+
+
 def build_turn_prompt(business_id: str,
-                      messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+                      messages: List[Dict[str, str]],
+                      mode: str = "deep") -> List[Dict[str, str]]:
     """The transcript as ladder messages. Two disciplines:
 
     1. KNOWN CONTEXT rides the first user message (system stays
@@ -322,8 +356,9 @@ def build_turn_prompt(business_id: str,
         if str(m.get("content") or "").strip()
     ]
     known = _known_context(business_id)
+    quick = ("\n\n" + QUICK_SESSION) if session_mode(mode) == "quick" else ""
     lead = ("KNOWN CONTEXT (the platform already knows this — never "
-            "re-ask any of it):\n" + known
+            "re-ask any of it):\n" + known + quick
             + "\n\nRun the session. EVERY reply is the strict JSON of "
               "the contract — no prose outside the JSON, ever.")
     out: List[Dict[str, str]] = [{"role": "user", "content": lead}]
@@ -580,10 +615,12 @@ def _model() -> str:
 
 
 def run_turn(business_id: str,
-             messages: List[Dict[str, str]]) -> Dict[str, Any]:
+             messages: List[Dict[str, str]],
+             mode: str = "deep") -> Dict[str, Any]:
     """One coach turn: transcript in → {reply, chips, pair, saves_applied,
     stage, done, reflect_back} out. Loud failures — the frontend shows a
-    retry, never a blank."""
+    retry, never a blank. mode 'quick' is the session Chief opens from the
+    chat (QUICK_SESSION); anything else is the full sit-down."""
     try:
         from anthropic import Anthropic
         import model_ladder
@@ -591,7 +628,8 @@ def run_turn(business_id: str,
         if not key:
             return {"error": "coach unavailable (no key)"}
         client = llm_call.sdk_client(key=key, timeout=120.0, max_retries=1)
-        turn_msgs = build_turn_prompt(business_id, messages)
+        turn_msgs = build_turn_prompt(business_id, messages,
+                                      mode=session_mode(mode))
 
         def _do(model: str, max_tokens: int, timeout: float):
             return client.messages.create(
