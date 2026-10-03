@@ -564,8 +564,8 @@ def context_block(business_id: str) -> str:
             bits.append("pages " + " / ".join(site["pages"]))
         if site.get("voice"):
             bits.append(f'voice: {site["voice"]}')
-        lines.append("  Site brief (if PRACTITIONER SITE says no site yet, offer enqueue_job rebuild_site "
-                     "with these as brief_notes): " + "; ".join(bits))
+        lines.append("  Site brief (if PRACTITIONER SITE says no site yet, offer the site; on yes, "
+                     "start_design_session with these as brief_notes): " + "; ".join(bits))
     rails = bp.get("rails") if isinstance(bp.get("rails"), dict) else {}
     gaps = [f"{k.replace('_', ' ')}: {v.get('gap')}" for k, v in rails.items()
             if isinstance(v, dict) and (v.get("gap") or "").strip()]

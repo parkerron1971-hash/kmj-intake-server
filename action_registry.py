@@ -246,6 +246,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "open_calendar":    _ui("opens the calendar panel"),
     "open_documents":   _ui("opens the documents panel"),
     "set_chat_window":  _ui("opens/closes the chat window; voice keep-alive"),
+    "start_design_session": _ui("opens the Design Coach from the chat; the Coach "
+                                "saves to the dossier through its own door"),
+    "show_blueprint":   _ui("shows the blueprint card; the build starts on the "
+                            "practitioner's tap, never on this verb"),
     "set_timer":        _ui("returns timer metadata; timerManager runs it client-side"),
 
     # ── writes, class A ──────────────────────────────────────────────

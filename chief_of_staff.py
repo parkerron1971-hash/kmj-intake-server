@@ -338,6 +338,8 @@ _ACTION_PHRASES = {
     "check_module": "starting the design check",
     "check_site": "starting the site check",
     "enqueue_job": "starting the job",
+    "start_design_session": "bringing in the Design Coach",
+    "show_blueprint": "pulling up your blueprint",
     "navigate": "opening the room",
     "remember": "saving that",
     "create_contact": "adding the contact",
@@ -3609,6 +3611,14 @@ def _format_site_info(ctx: Dict[str, Any]) -> str:
         lines.extend(site_adopt.describe_for_chief(site))
     except Exception as e:
         logger.info(f"[chief] hand-built site lines skipped: {e}")
+    # Where the design stands (blueprint none / drafted / approved) and the
+    # library photos the page does not carry yet.
+    try:
+        import chief_site_design
+        lines.extend(chief_site_design.site_design_lines(
+            site, (ctx.get("business") or {}).get("settings")))
+    except Exception as e:
+        logger.info(f"[chief] site design lines skipped: {e}")
     return "\n".join(lines)
 
 
@@ -11466,6 +11476,16 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
                     "result": f"Not started — {block}. Use edit_site_text for copy, "
                               "check_site to look at it",
                     "label": "Site is hand-built — no rebuild", "nav": None}
+    # THE BLUEPRINT COMES FIRST (2026-10-03, Kevin): the blueprint is where
+    # their style lives, and only an approved one reaches the new builder.
+    # Without it, Chief's rebuild built a generic site off the older ladder.
+    # The Studio's own Build button is not this path and is unaffected.
+    if kind == "rebuild_site":
+        import chief_site_design
+        gate = await asyncio.to_thread(chief_site_design.rebuild_gate, biz["id"])
+        if gate:
+            return {"type": "enqueue_job", "result": f"Not started — {gate}",
+                    "label": "Design session first", "nav": None}
     try:
         job = await chief_jobs.enqueue(
             client, user_id=owner, business_id=biz["id"], kind=kind,
@@ -11496,6 +11516,7 @@ from image_studio import handle_generate_image, handle_find_images, handle_captu
 from chief_reference_actions import handle_study_website
 
 from chief_build_runtime import handle_submit_work_order, handle_respond_work_order
+from chief_site_design import handle_start_design_session, handle_show_blueprint
 
 ACTION_HANDLERS = {
     'submit_work_order': handle_submit_work_order,
@@ -11583,6 +11604,11 @@ ACTION_HANDLERS = {
     "navigate":              handle_navigate,
     "search_ledger":         handle_search_ledger,
     "set_chat_window":       handle_set_chat_window,
+    # A site request goes to the Design Coach first (chief_site_design):
+    # the Coach opens from the chat, the blueprint comes back as a card,
+    # and the build starts on the practitioner's own tap.
+    "start_design_session":  handle_start_design_session,
+    "show_blueprint":        handle_show_blueprint,
     "create_course":         handle_create_course,
     "inspect_course":        handle_inspect_course,
     "save_course_content":   handle_save_course_content,
