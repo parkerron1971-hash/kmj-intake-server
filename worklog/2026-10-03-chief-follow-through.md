@@ -20,3 +20,6 @@ progress. The migration and activation runbook are in docs/CHIEF_FOLLOW_THROUGH.
 Worked in isolated checkouts after reading both worklogs. Existing operations
 watchdogs and MySite/voice work were not duplicated. The new recovery flag is
 off until the migration and coordinated rollout; this is not live yet.
+
+Validation: 435 backend tests passed, one expected failure; SQL migration and
+recovery checks passed in PGlite. No live business actions were performed.
