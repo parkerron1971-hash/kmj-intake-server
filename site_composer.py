@@ -6768,3 +6768,62 @@ async def start_refine_section(body: RefineSectionBody,
     if job.get("deduped"):
         out["deduped"] = True
     return out
+
+
+# ─── THE OWNER'S REVISION ROUND (2026-10-03) ─────────────────────────
+# The owner walks their finished page, marks the sections that are not
+# right, and the marked sections are fixed in one job. site_revisions.py
+# holds the rules and the price.
+
+@router.get("/revision/{business_id}")
+async def revision_state(business_id: str,
+                         session: UserSession = Depends(sb_clients.authed_request)
+                         ) -> Dict[str, Any]:
+    import asyncio
+    import site_revisions
+    await asyncio.to_thread(_require_owner, business_id, session.user.id)
+    return await asyncio.to_thread(site_revisions.state, business_id)
+
+
+class ReviseSectionsBody(BaseModel):
+    business_id: str
+    reactions: List[Dict[str, Any]]
+
+
+@router.post("/revise-sections")
+async def start_revise_sections(body: ReviseSectionsBody,
+                                session: UserSession = Depends(sb_clients.authed_request)
+                                ) -> Dict[str, Any]:
+    """Enqueue a 'revise_sections' job (one section rework per marked
+    section, ~1-2 min each). A round with fixes past the build's included
+    ones checks the credit gate first."""
+    import asyncio
+    import httpx
+    import chief_jobs
+    import site_revisions
+    uid = session.user.id
+    await asyncio.to_thread(_require_owner, body.business_id, uid)
+    reactions = site_revisions.clean_reactions(body.reactions)
+    if not reactions:
+        raise HTTPException(400, "mark a section and say what isn't right")
+    rows = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
+        f"/business_sites?business_id=eq.{body.business_id}&select=site_config&limit=1")
+    cfg = dict(((rows or [{}])[0] or {}).get("site_config") or {})
+    if not _is_builder_page(cfg):
+        raise HTTPException(409, "this page wasn't made by the site builder")
+    q = site_revisions.quote(cfg, len(reactions))
+    if q["paid"]:
+        import billing_limits
+        await asyncio.to_thread(billing_limits.require_units, body.business_id)
+    async with httpx.AsyncClient() as client:
+        job = await chief_jobs.enqueue(
+            client, user_id=uid, business_id=body.business_id,
+            kind="revise_sections", params={"reactions": reactions},
+            source="desktop")
+    if not job:
+        raise HTTPException(500, "could not start the fixes")
+    out = {"ok": True, "job_id": job.get("id"), "quote": q}
+    if job.get("deduped"):
+        out["deduped"] = True
+    return out
