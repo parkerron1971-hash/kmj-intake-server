@@ -45,6 +45,14 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _operating_profile(monkeypatch):
+    # This suite exercises the outcome ledger with synthetic business IDs.
+    # Fresh profile reads and correction changes have their own contracts.
+    import chief_operating_context
+    monkeypatch.setattr(chief_operating_context, 'current_context', lambda biz: '')
+
+
 def _at(days_ago: float) -> str:
     return (NOW - timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
 
