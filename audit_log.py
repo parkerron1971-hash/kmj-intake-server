@@ -92,7 +92,8 @@ def vocabulary() -> Dict[str, Dict[str, Any]]:
     for verb in ("rules:notify_practitioner", "rules:apply_tag",
                  "rules:create_task", "rules:send_template_email",
                  "job:rebuild_site", "job:compose_directions",
-                 "job:refine_section", "ledger:erasure", "ledger:selftest",
+                 "job:refine_section", "job:revise_sections",
+                 "ledger:erasure", "ledger:selftest",
                  # The ledger's OWN verbs. Missing these meant the
                  # feature's own rows landed with verb_registered=false
                  # — the vocabulary out of sync on ship day, with itself.
