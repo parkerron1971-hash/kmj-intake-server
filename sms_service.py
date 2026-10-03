@@ -295,14 +295,24 @@ async def sender_for(client: Optional[httpx.AsyncClient], business_id: Optional[
     the single seam, so every send (Chief, scheduler, broadcast, booking
     alerts, campaigns) inherits it. A DB blip on the lookup degrades to
     the platform number — the text still goes, from the shared line.
-    Empty string = unpinned (see twilio_sms.send_sms)."""
+    Empty string = unpinned (see twilio_sms.send_sms).
+
+    Because it is the single seam, it is also where a no-card trial's
+    texts stop (no_card_trial.py): broadcasts, campaign touches, booking
+    confirmations and reminders, pickup and sign-in codes all ask for a
+    sender here first. Raises no_card_trial.CardRequired; every caller
+    already treats a raise as a failed send. send_sms_core refuses
+    earlier, with a proper status, for the sends a person presses."""
     import twilio_sms
+    import no_card_trial
     own: Optional[str] = None
     if business_id:
         if client is None:
             async with httpx.AsyncClient() as c:
+                await no_card_trial.check_async(c, business_id, "texts")
                 own = await active_number_for(c, business_id)
         else:
+            await no_card_trial.check_async(client, business_id, "texts")
             own = await active_number_for(client, business_id)
     return own or twilio_sms.platform_number()
 
@@ -508,6 +518,15 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
     if not _twilio_configured():
         raise SmsSendError(
             "SMS is not configured. Set the TWILIO_* vars in Railway.", 503)
+
+    # No card on file yet (no_card_trial.py): texts wait for one. Here, and
+    # not only in sender_for, so the refusal is a 402 with its own words
+    # rather than a 502 "send failed".
+    import no_card_trial
+    try:
+        await no_card_trial.check_async(client, business_id, "texts")
+    except no_card_trial.CardRequired as e:
+        raise SmsSendError(e.message, 402)
 
     # Consent gate — never send to a number that opted out.
     if await is_opted_out(client, to_clean, business_id):

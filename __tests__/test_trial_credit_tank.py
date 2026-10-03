@@ -196,12 +196,12 @@ def test_both_access_gates_ask_about_the_tank():
 
 
 def test_the_locked_message_says_credits_not_cancellation():
-    import inspect
-
     import billing_limits
-    src = inspect.getsource(billing_limits.require_live_access)
-    assert "trial_credits_spent" in src
-    assert "used all the credits" in src
+    msg = billing_limits._locked_message("trial_credits_spent", _trialing())
+    assert "used all the credits" in msg
+    assert "subscription has ended" not in msg
+    assert "subscription has ended" not in billing_limits._locked_message(
+        "trial_expired", _trialing())
 
 
 # ─── The first build is on the house ─────────────────────────────────

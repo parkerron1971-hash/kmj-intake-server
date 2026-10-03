@@ -264,6 +264,13 @@ def access_state(business_row: Optional[Dict[str, Any]],
         return {"state": "full", "reason": "trialing"}
     if status in ("past_due", "unpaid", "incomplete"):
         return {"state": "grace", "reason": "payment_failed"}
+    if (status == "canceled" and (row.get("trial_ends_at") or "").strip()
+            and not (row.get("stripe_subscription_id") or "").strip()):
+        # A trial with no Stripe subscription behind it — a no-card trial
+        # or one Platform Chief gave — that trial_expiry closed on the
+        # calendar. Nothing was ever paid for, so "your subscription has
+        # ended" would be false; the trial ended.
+        return {"state": "locked", "reason": "trial_expired"}
     return {"state": "locked",
             "reason": "canceled" if status == "canceled" else "no_subscription"}
 

@@ -365,7 +365,10 @@ def usage_summary(business_id: str,
 
     allotment = None
     if on_trial:
-        allotment = pricing_config.trial_credits()
+        # A trial started without a card draws the smaller tank until a
+        # card is added (no_card_trial.py); the card trial the full one.
+        import no_card_trial
+        allotment = no_card_trial.tank(row)
     elif plan:
         allotment = feature_gates.monthly_credits(row, plan)
 
@@ -445,6 +448,15 @@ def price_list() -> Dict[str, Any]:
     }
 
 
+def _no_card_fields(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        import no_card_trial
+        return no_card_trial.describe(row)
+    except Exception as e:
+        logger.warning(f"[metering] no-card describe failed: {e}")
+        return {"no_card_trial": False}
+
+
 def credits_overview(business_id: str,
                      biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The CreditsCard read (GET /billing/credits/{business_id}) — the
@@ -505,6 +517,9 @@ def credits_overview(business_id: str,
         # they are told which kind of tank they are reading.
         "on_trial": s.get("on_trial", False),
         "trial_ends_at": (row or {}).get("trial_ends_at"),
+        # No card yet: the tank is the smaller one, and the app says what
+        # adding a card unlocks (no_card_trial.describe).
+        **_no_card_fields(row),
         "monthly": {
             "allowance": allowance,
             "used": monthly_used,
