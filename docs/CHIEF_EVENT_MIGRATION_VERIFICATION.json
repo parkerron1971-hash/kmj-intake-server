@@ -1,0 +1,66 @@
+{
+  "applied_at": "2026-10-03T20:43:09.122279+00:00",
+  "project": "brqjgbpzackdihgjsorf",
+  "migration": "supabase/APPLY-2026-10-03-chief-event-delivery.sql",
+  "sha256": "e85f8d4202a4c7b287ceaf00f7956dc90a386d5ccf94f07285f43bc87e2f0386",
+  "rollback_rehearsal": "passed",
+  "checks": {
+    "rls_enabled": true,
+    "anon_denied": true,
+    "authenticated_denied": true,
+    "service_access": true,
+    "no_work_started": true,
+    "business_delete_cascades": true
+  },
+  "functions": [
+    {
+      "name": "chief_event_checkpoint",
+      "security_definer": true,
+      "anon_denied": true,
+      "authenticated_denied": true,
+      "service_allowed": true,
+      "fixed_search_path": true
+    },
+    {
+      "name": "chief_event_claim",
+      "security_definer": true,
+      "anon_denied": true,
+      "authenticated_denied": true,
+      "service_allowed": true,
+      "fixed_search_path": true
+    },
+    {
+      "name": "chief_event_pending",
+      "security_definer": true,
+      "anon_denied": true,
+      "authenticated_denied": true,
+      "service_allowed": true,
+      "fixed_search_path": true
+    },
+    {
+      "name": "chief_event_recover",
+      "security_definer": true,
+      "anon_denied": true,
+      "authenticated_denied": true,
+      "service_allowed": true,
+      "fixed_search_path": true
+    },
+    {
+      "name": "chief_event_renew",
+      "security_definer": true,
+      "anon_denied": true,
+      "authenticated_denied": true,
+      "service_allowed": true,
+      "fixed_search_path": true
+    },
+    {
+      "name": "chief_event_resolve",
+      "security_definer": true,
+      "anon_denied": true,
+      "authenticated_denied": true,
+      "service_allowed": true,
+      "fixed_search_path": true
+    }
+  ],
+  "activation": "not changed"
+}

@@ -43,6 +43,12 @@ def _clean_taint():
     cos._UNTRUSTED_TAINT.set(0)
 
 
+@pytest.fixture(autouse=True)
+def _operating_profile(monkeypatch):
+    import chief_operating_context
+    monkeypatch.setattr(chief_operating_context, 'current_context', lambda biz: '')
+
+
 # ─── the door knows who is acting ────────────────────────────────────
 
 @pytest.fixture
@@ -171,7 +177,7 @@ def test_kill_switch(monkeypatch):
 def biz_io(monkeypatch):
     state = {"biz": dict(BIZ), "stamped": [], "ran": []}
     monkeypatch.setattr(ag, "_business", lambda b: state["biz"])
-    monkeypatch.setattr(ag, "stamp_handled", lambda ids: state["stamped"].extend(ids))
+    monkeypatch.setattr(ag, "stamp_handled", lambda ids: (state["stamped"].extend(ids), ids)[1])
 
     async def _run_(biz, events):
         state["ran"].append([e["id"] for e in events])
@@ -292,6 +298,26 @@ def test_each_run_starts_with_a_clean_taint(monkeypatch):
         await ag.run(BIZ, [{"id": "e1", "event_type": "payment_received", "data": {}}])
         return cos.untrusted_taint()
     assert _run(main()) == 0
+
+
+def test_owner_correction_during_planning_blocks_action_turn(monkeypatch):
+    import chief_operating_context, outcome_ledger, decision_service
+    versions = iter(['revision 1: Fridays open', 'revision 2: Fridays closed'])
+    monkeypatch.setattr(chief_operating_context, 'current_context', lambda biz: next(versions))
+    calls = []
+    async def plan(*args, **kwargs):
+        calls.append(kwargs)
+        return 'Prepare Friday appointments.'
+    async def no_digest(*args):
+        return []
+    async def unavailable(*args):
+        return decision_service.Decision(status='unavailable')
+    monkeypatch.setattr(cos, '_call_claude', plan)
+    monkeypatch.setattr(outcome_ledger, 'digest_async', no_digest)
+    monkeypatch.setattr(decision_service, 'assess_events', unavailable)
+    with pytest.raises(RuntimeError, match='rules changed'):
+        _run(ag.run(BIZ, [{'id':'e1','event_type':'booking_created','data':{}}]))
+    assert len(calls) == 1 and not calls[0].get('read_tools')
 
 
 def test_the_trace_lands_where_the_practitioner_looks(monkeypatch):

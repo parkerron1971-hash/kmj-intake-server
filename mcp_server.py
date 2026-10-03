@@ -225,6 +225,13 @@ from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHE
 from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
 
 TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "responsibility_status": (
+        "What Chief is handling across assignments, plans, builds, errands and approvals. "
+        "Returns what needs the owner, recorded next checks, observed outcomes and unavailable sources. "
+        "Use for 'what are you working on?' or 'what is waiting on me?'. Does not run or retry work. "
+        "Use source to narrow the report and next_offset to continue the result.",
+        _obj({'source': {'type':'string','enum':['assignments','missions','jobs','errands','approvals','events']},
+              'offset': {'type':'integer','minimum':0,'maximum':240}})),
     "inspect_course": ACADEMY_READ_SCHEMA,
     "recall_business_knowledge": (
         "Read this business's private operating profile, its revision, owner corrections, "

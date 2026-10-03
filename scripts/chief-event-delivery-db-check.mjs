@@ -1,0 +1,63 @@
+import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const { PGlite } = await import(process.env.PGLITE_MODULE ? pathToFileURL(process.env.PGLITE_MODULE).href : '@electric-sql/pglite');
+const db = new PGlite();
+await db.exec(`create role anon; create role authenticated; create role service_role;
+create table businesses(id uuid primary key);
+create table events(id uuid primary key,business_id uuid references businesses(id),event_type text,created_at timestamptz default now(),agent_handled_at timestamptz);`);
+const sql = await readFile('supabase/APPLY-2026-10-03-chief-event-delivery.sql','utf8');
+await db.exec(sql); await db.exec(sql);
+const b='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', other='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+const t='11111111-1111-1111-1111-111111111111', t2='22222222-2222-2222-2222-222222222222';
+const e='33333333-3333-3333-3333-333333333333', f='44444444-4444-4444-4444-444444444444';
+await db.query('insert into businesses values ($1),($2)',[b,other]);
+await db.query("insert into events(id,business_id,event_type) values ($1,$3,'booking_created'),($2,$3,'booking_created')",[e,f,b]);
+const claim = (bid,ids,token)=>db.query('select * from chief_event_claim($1,$2,$3)',[bid,ids,token]);
+const mark = async (ids,token,phase)=>(await db.query('select chief_event_checkpoint($1,$2,$3,$4) ok',[b,ids,token,phase])).rows[0].ok;
+assert.equal((await claim(other,[e],t)).rows.length,0);
+assert.equal((await claim(b,[e],t)).rows.length,1);
+assert.equal((await claim(b,[e],t2)).rows.length,0);
+assert.equal(await mark([e],t2,'acting'),false);
+assert.equal(await mark([e,f],t,'acting'),false,'batch checkpoint must be all or nothing');
+assert.equal((await db.query('select phase from chief_event_deliveries where event_id=$1',[e])).rows[0].phase,'planning');
+await db.query("update chief_event_deliveries set lease_until=now()-interval '1 second' where event_id=$1",[e]);
+await db.query("update events set created_at=now()-interval '2 days' where id=$1",[e]);
+assert.equal((await db.query("select * from chief_event_pending(array['booking_created'])")).rows.length,2,'claimed preparation survives the new-event lookback');
+assert.equal((await claim(b,[e],t2)).rows.length,1);
+assert.equal(await mark([e],t,'acting'),false,'old worker is fenced');
+assert.equal(await mark([e],t2,'acting'),true);
+assert.ok((await db.query('select agent_handled_at from events where id=$1',[e])).rows[0].agent_handled_at,'legacy rollback must not replay possible effects');
+assert.equal(await mark([e],t2,'planning'),false,'cannot move back across the effect boundary');
+await db.query("update chief_event_deliveries set lease_until=now()-interval '1 second' where event_id=$1",[e]);
+await db.query('select chief_event_recover()');
+assert.equal((await db.query('select phase from chief_event_deliveries where event_id=$1',[e])).rows[0].phase,'needs_review');
+assert.equal((await claim(b,[e],t)).rows.length,0,'uncertain effects never replay');
+assert.equal(await mark([e],t2,'completed'),false,'stale worker cannot announce success');
+const reviewedAt=(await db.query('select updated_at::text stamp from chief_event_deliveries where event_id=$1',[e])).rows[0].stamp;
+const resolve=async(bid,stamp)=>(await db.query('select chief_event_resolve($1,$2,$3) ok',[bid,e,stamp])).rows[0].ok;
+assert.equal(await resolve(other,reviewedAt),false,'other tenant cannot acknowledge');
+assert.equal(await resolve(b,'2000-01-01T00:00:00Z'),false,'stale review cannot acknowledge');
+assert.equal(await resolve(b,reviewedAt),true);
+assert.equal(await resolve(b,reviewedAt),false,'review is single use');
+assert.equal((await claim(b,[e],t)).rows.length,0,'acknowledgement never replays');
+assert.equal((await claim(b,[f],t)).rows.length,1);
+assert.equal(await mark([f],t,'completed'),true);
+assert.ok((await db.query('select agent_handled_at from events where id=$1',[f])).rows[0].agent_handled_at);
+assert.equal((await claim(b,[f],t2)).rows.length,0);
+const g='55555555-5555-5555-5555-555555555555';
+await db.query("insert into events(id,business_id,event_type) values ($1,$2,'booking_created')",[g,b]);
+for(let attempt=1;attempt<=3;attempt++) {
+  assert.equal((await claim(b,[g],t)).rows[0].attempts,attempt);
+  await db.query("update chief_event_deliveries set lease_until=now()-interval '1 second' where event_id=$1",[g]);
+}
+assert.equal((await claim(b,[g],t2)).rows.length,0,'preparation retries are bounded');
+await db.query('select chief_event_recover()');
+assert.equal((await db.query('select phase from chief_event_deliveries where event_id=$1',[g])).rows[0].phase,'needs_review');
+for (const role of ['anon','authenticated']) {
+  const grants=await db.query(`select has_table_privilege($1,'chief_event_deliveries','select') t,
+    has_function_privilege($1,'chief_event_claim(uuid,text[],uuid)','execute') f`,[role]);
+  assert.equal(grants.rows[0].t,false); assert.equal(grants.rows[0].f,false);
+}
+console.log('PASS: migration replay, tenant isolation, claims, stale-worker fencing, crash recovery, uncertain effects, atomic completion, privileges');
+await db.close();

@@ -163,7 +163,7 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # (title, due date, priority, the contact's name). Same class as
     # list_projects, which already shows client names; no message bodies.
     # Creating, completing and deleting tasks are writes and stay off.
-    assert len(tools) == 35, (
+    assert len(tools) == 36, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -587,6 +587,7 @@ SILENT_TOOLS = {
     # working on Thursday"); giving and stopping are writes off this
     # surface, so the result carries the progress and no verb.
     "assignment_status",
+    "responsibility_status",  # status only: never offer a generic retry of mixed work
 }
 
 

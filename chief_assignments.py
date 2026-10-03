@@ -235,13 +235,22 @@ def measure(business_id: str, target: Dict[str, Any], *, tz=None) -> Dict[str, A
     kind = target.get("kind")
     checked = _z(_now())
     bid = business_id
+    def checked_rows(query):
+        rows = sb_clients.sb_get_as_service(query)
+        if not isinstance(rows, list):
+            raise RuntimeError('Progress could not be measured; the previous measurement is unchanged.')
+        if len(rows) >= 1000:
+            raise RuntimeError('This measurement exceeds the supported record window; review the target range.')
+        return rows
     if kind == "manual":
         return {"value": None, "target": None, "met": False,
                 "label": "done when you say so", "checked_at": checked}
     if kind == "invoice_paid":
-        rows = sb_clients.sb_get_as_service(
+        rows = checked_rows(
             f"/invoices?id=eq.{target.get('invoice_id')}&business_id=eq.{bid}"
-            "&select=status,paid_at&limit=1") or []
+            "&select=status,paid_at&limit=1")
+        if not rows:
+            raise RuntimeError('The target invoice is no longer available; review the responsibility.')
         paid = bool(rows) and (rows[0].get("status") == "paid" or rows[0].get("paid_at"))
         return {"value": 1 if paid else 0, "target": 1, "met": paid,
                 "label": "paid" if paid else "not paid yet", "checked_at": checked}
@@ -252,9 +261,9 @@ def measure(business_id: str, target: Dict[str, Any], *, tz=None) -> Dict[str, A
     start, end = day_bounds(d_from, d_to, tz)
     lo, hi = _z(start), _z(end)
     if kind in ("sessions_scheduled", "sessions_completed"):
-        rows = sb_clients.sb_get_as_service(
+        rows = checked_rows(
             f"/sessions?business_id=eq.{bid}&scheduled_for=gte.{lo}&scheduled_for=lte.{hi}"
-            "&select=status&limit=1000") or []
+            "&select=status&limit=1000")
         if kind == "sessions_completed":
             value = sum(1 for r in rows if r.get("status") == "completed")
             noun = "completed"
@@ -265,16 +274,16 @@ def measure(business_id: str, target: Dict[str, Any], *, tz=None) -> Dict[str, A
         return {"value": value, "target": goal, "met": value >= goal,
                 "label": f"{value} of {goal} sessions {noun}", "checked_at": checked}
     if kind == "new_contacts":
-        rows = sb_clients.sb_get_as_service(
+        rows = checked_rows(
             f"/contacts?business_id=eq.{bid}&created_at=gte.{lo}&created_at=lte.{hi}"
-            "&select=id&limit=1000") or []
+            "&select=id&limit=1000")
         value, goal = len(rows), int(target.get("count") or 0)
         return {"value": value, "target": goal, "met": value >= goal,
                 "label": f"{value} of {goal} new contacts", "checked_at": checked}
     if kind == "revenue_collected":
-        rows = sb_clients.sb_get_as_service(
+        rows = checked_rows(
             f"/invoices?business_id=eq.{bid}&status=eq.paid&paid_at=gte.{lo}&paid_at=lte.{hi}"
-            "&select=total&limit=1000") or []
+            "&select=total&limit=1000")
         value = 0.0
         for r in rows:
             try:
@@ -324,6 +333,8 @@ def due_rows(now: Optional[datetime] = None) -> List[Dict[str, Any]]:
 
 
 def save(row_id: str, patch: Dict[str, Any]) -> bool:
+    if 'progress' in patch and 'report' not in patch:
+        patch = {**patch, 'report': ''}
     patch = {**patch, "updated_at": _z(_now())}
     res = sb_clients.sb_patch_as_service(f"{TABLE}?id=eq.{row_id}", patch)
     return res is not None
@@ -475,8 +486,14 @@ async def check_one(row: Dict[str, Any], now: Optional[datetime] = None) -> Dict
         await asyncio.to_thread(save, rid, {"next_check_at": _z(now + timedelta(minutes=CHECK_EVERY_MIN))})
         return {"did": "skipped", "why": "no business"}
 
-    progress = await asyncio.to_thread(measure, bid, row.get("target") or {})
     next_check = _z(now + timedelta(minutes=CHECK_EVERY_MIN))
+    try:
+        progress = await asyncio.to_thread(measure, bid, row.get("target") or {})
+    except Exception:
+        await asyncio.to_thread(save, rid, {
+            'next_check_at': next_check,
+            'report': 'Progress could not be checked. The last measurement is unchanged; Chief will check again.'})
+        return {'did': 'skipped', 'why': 'measurement unavailable'}
 
     if progress.get("met"):
         await finish(biz, row, "completed", progress)
@@ -661,6 +678,9 @@ async def work(biz: Dict[str, Any], row: Dict[str, Any], now: Optional[datetime]
     moves = list(row.get("moves") or []) if isinstance(row.get("moves"), list) else []
     pending = await asyncio.to_thread(_pending_proposals, moves)
     the_brief = brief(row, now, pending)
+    from chief_operating_context import current_context
+    operating_rules = await asyncio.to_thread(current_context, biz)
+    the_brief += operating_rules
     import outcome_ledger
     digest = await outcome_ledger.digest_async(bid)
     if digest:
@@ -687,7 +707,9 @@ async def work(biz: Dict[str, Any], row: Dict[str, Any], now: Optional[datetime]
                 [{"role": "user", "content": the_brief + "\n\nWrite your plan for this look."}],
                 max_tokens=300, enable_web_search=False, business_id=bid, model=model)
             _, reasoning = cos._extract_actions_and_clean(raw_plan or "")
-            reasoning = (reasoning or "").strip()[:800] or "No plan written."
+            reasoning = (reasoning or "").strip()[:800]
+            if not reasoning:
+                raise RuntimeError('Chief did not return an assignment plan. No actions were started.')
             idle = reasoning.lower().startswith("nothing")
 
             # Written down before the act turn: a crash between the two
@@ -700,6 +722,8 @@ async def work(biz: Dict[str, Any], row: Dict[str, Any], now: Optional[datetime]
             recap = ""
             tags = 0
             if not idle:
+                if await asyncio.to_thread(current_context, biz) != operating_rules:
+                    raise RuntimeError('Business rules changed while Chief was preparing this assignment. Prepare again.')
                 ctl.reset_turn(writes_allowed=True, surface=SURFACE, prompted=False)
                 tools = ctl.tool_definitions_for_turn(True)
                 raw = await cos._call_claude(
@@ -709,6 +733,8 @@ async def work(biz: Dict[str, Any], row: Dict[str, Any], now: Optional[datetime]
                     max_tokens=chief_models.max_tokens_for("chat", default=900),
                     enable_web_search=False, business_id=bid, model=model,
                     read_tools=tools, tool_biz=biz)
+                if not raw:
+                    raise RuntimeError('Chief did not return an assignment result. Check the recorded move.')
                 taken = ctl.writes_this_turn()
                 tag_actions, recap = cos._extract_actions_and_clean(raw or "")
                 tags = len(tag_actions)
@@ -890,7 +916,8 @@ async def handle_create_assignment(client, biz, action) -> Dict[str, Any]:
         "target": row.get("target"),
         "deadline": row.get("deadline"),
         "agent_enabled": on,
-        "speak": f"I'll work on {row['title']} until {str(row.get('deadline'))[:10]}.",
+        "speak": (f"I'll work on {row['title']} until {str(row.get('deadline'))[:10]}." if on else
+                  f"I'm tracking {row['title']}. Turn on work between conversations for me to act on it."),
     }
 
 

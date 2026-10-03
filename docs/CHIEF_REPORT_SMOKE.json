@@ -1,0 +1,32 @@
+{
+  "sources": {
+    "assignments": {
+      "available": true,
+      "limited": false
+    },
+    "missions": {
+      "available": true,
+      "limited": false
+    },
+    "jobs": {
+      "available": true,
+      "limited": false
+    },
+    "errands": {
+      "available": true,
+      "limited": false
+    },
+    "approvals": {
+      "available": true,
+      "limited": false
+    },
+    "events": {
+      "available": true,
+      "limited": false
+    }
+  },
+  "items": 5,
+  "needs_you": 2,
+  "partial": false,
+  "checked_at": "2026-10-03T20:52:30.475207+00:00"
+}

@@ -1029,8 +1029,14 @@ async def retry_job(req: _RetryReq, user_session: UserSession = Depends(require_
             raise HTTPException(409, 'Continue this build from its review card.')
         if job.get("kind") == "connected_ai_follow_up":
             raise HTTPException(409, "Retry connected work from Connect your AI.")
-        await _sb(client, "PATCH", f"/chief_jobs?id=eq.{req.job_id}",
+        if job.get('kind') == 'errand':
+            raise HTTPException(409, 'Review the errand and check the supplier before planning another attempt.')
+        if job.get('status') != 'failed':
+            raise HTTPException(409, 'This job is not waiting for a retry. Refresh its progress.')
+        claimed = await _sb(client, "PATCH", f"/chief_jobs?id=eq.{req.job_id}&user_id=eq.{uid}&status=eq.failed",
                   {"status": "queued", "error": None, "started_at": None, "finished_at": None})
+        if not isinstance(claimed, list) or not claimed:
+            raise HTTPException(409, 'This job changed or could not be claimed. Refresh its progress.')
     asyncio.create_task(_run(job["id"], uid, job["business_id"], job["kind"], job.get("params") or {}))
     return {"ok": True}
 

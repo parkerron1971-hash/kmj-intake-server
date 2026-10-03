@@ -103,7 +103,7 @@ def test_stamping_returns_only_what_this_process_stamped(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: [{"id": "e1"}])
     assert ca.stamp_handled(["e1", "e2"]) == ["e1"]
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: None)
-    assert ca.stamp_handled(["e1", "e2"]) == ["e1", "e2"], "a silent helper keeps the old behaviour"
+    assert ca.stamp_handled(["e1", "e2"]) == [], "an unverified claim must never run"
     assert ca.stamp_handled([]) == []
 
 
