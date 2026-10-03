@@ -202,7 +202,10 @@ def test_opus_5_5_is_told_to_finish_without_a_forced_tool_choice(monkeypatch):
     assert forced["messages"][-1]["content"][-1]["text"] == bl.FINISH_NOW
     assert all(b.get("text") != bl.FINISH_NOW for t in client.seen[0]["messages"]
                for b in (t["content"] if isinstance(t["content"], list) else []))
-    assert all(kw["output_config"] == {"effort": "high"} for kw in client.seen)
+    # through the SDK the effort rides extra_body (the pinned SDK 0.34.2
+    # TypeErrors on an output_config keyword); see test_sdk_effort_contract
+    assert all(kw["extra_body"]["output_config"] == {"effort": "high"} for kw in client.seen)
+    assert not any("output_config" in kw for kw in client.seen)
     assert all("temperature" not in kw for kw in client.seen)
 
 
