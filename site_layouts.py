@@ -663,3 +663,139 @@ def reason_from_sheet(sheet: Optional[Dict[str, str]]) -> str:
     raw = str((sheet or {}).get("layout") or "")
     m = re.split(r"\s*(?:—|–|:|\s-\s)\s*", raw, maxsplit=1)
     return (m[1].strip() if len(m) > 1 else "")[:240]
+
+
+# ─── the render check (the hand-build "does it look like the sketch?") ─
+#
+# Measured at 1440px on the page the eyes already open, so it costs no
+# extra render. Only CLEAR misses become findings (a sidebar layout with
+# no side column, a minimal page with nine sections); a free
+# interpretation of a layout is design, not a defect.
+
+RENDER_JS = r"""
+(() => {
+  const W = innerWidth, H = innerHeight;
+  const vis = el => { if (!el) return false; const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+    return r.width > 2 && r.height > 2 && cs.visibility !== 'hidden' && cs.display !== 'none' && +cs.opacity > 0.05; };
+  const tops = [...document.querySelectorAll('section')].filter(s => !s.parentElement.closest('section') && vis(s));
+  const first = tops[0] || null;
+  const out = {layout_measured: true, sections: tops.length, hero_cols: 1, hero_img_ratio: 0,
+               hero_height_ratio: 0, h1_px: 0, sidebar: false, row_max: 1, tall_sections: 0,
+               narrow_text_ratio: 0, overlap_ok: 0, rotated: 0, bento_grids: 0, big_images: 0, mixed_cols: 0};
+  const h1 = document.querySelector('h1');
+  if (h1 && vis(h1)) out.h1_px = Math.round(parseFloat(getComputedStyle(h1).fontSize) || 0);
+  if (first) {
+    const fr = first.getBoundingClientRect(); const area = Math.max(1, fr.width * Math.min(fr.height, H));
+    out.hero_height_ratio = +(fr.height / H).toFixed(2);
+    let img = 0;
+    for (const el of [first, ...first.querySelectorAll('*')]) {
+      if (!vis(el)) continue;
+      const tag = el.tagName; const bg = getComputedStyle(el).backgroundImage || '';
+      if (tag === 'IMG' || tag === 'VIDEO' || tag === 'PICTURE' || bg.includes('url(')) {
+        const r = el.getBoundingClientRect();
+        const w = Math.max(0, Math.min(r.right, fr.right) - Math.max(r.left, fr.left));
+        const h = Math.max(0, Math.min(r.bottom, fr.top + H) - Math.max(r.top, fr.top));
+        img = Math.max(img, w * h);
+      }
+    }
+    out.hero_img_ratio = +(img / area).toFixed(2);
+    for (const c of [first, ...first.querySelectorAll('div,header,article,figure,aside')]) {
+      const kids = [...c.children].filter(vis).map(k => k.getBoundingClientRect()).filter(r => r.width > W * 0.2);
+      let cols = 1;
+      for (let i = 1; i < kids.length; i++)
+        if (kids[i].top < kids[i - 1].bottom - 10 && Math.abs(kids[i].left - kids[i - 1].left) > W * 0.15) cols++;
+      if (cols > out.hero_cols) out.hero_cols = cols;
+      if (out.hero_cols >= 2) break;
+    }
+  }
+  for (const el of document.querySelectorAll('body *')) {
+    const cs = getComputedStyle(el);
+    if ((cs.position === 'fixed' || cs.position === 'sticky') && vis(el)) {
+      const r = el.getBoundingClientRect();
+      if (r.height > H * 0.7 && r.width < W * 0.35 && el.querySelectorAll('a').length >= 3) out.sidebar = true;
+    }
+    if (cs.transform && cs.transform !== 'none' && vis(el)) {
+      const m = cs.transform.match(/matrix\(([^)]+)\)/);
+      if (m) { const v = m[1].split(',').map(Number); if (Math.abs(v[1]) > 0.02 && Math.abs(v[0]) > 0.5) out.rotated++; }
+    }
+    if (cs.display === 'grid' && vis(el)) {
+      const kids = [...el.children].filter(vis).map(k => { const r = k.getBoundingClientRect(); return r.width * r.height; }).filter(a => a > 400);
+      if (kids.length >= 5 && Math.max(...kids) / Math.max(1, Math.min(...kids)) > 2.2) out.bento_grids++;
+    }
+  }
+  out.overlap_ok = document.querySelectorAll('[data-overlap-ok]').length;
+  for (const parent of document.querySelectorAll('section *')) {
+    const kids = [...parent.children].filter(vis).map(k => k.getBoundingClientRect()).filter(r => r.width > 120 && r.height > 80);
+    if (kids.length < 2) continue;
+    const rows = {};
+    for (const r of kids) { const k = Math.round(r.top / 12); (rows[k] = rows[k] || []).push(r); }
+    for (const row of Object.values(rows)) {
+      if (row.length < 2) continue;
+      const ws = row.map(r => r.width); const max = Math.max(...ws), min = Math.min(...ws);
+      if (row.length >= 3 && max / min < 1.25) out.row_max = Math.max(out.row_max, row.length);
+      if (max / min >= 1.6) out.mixed_cols++;
+    }
+  }
+  out.tall_sections = tops.filter(s => s.getBoundingClientRect().height >= H * 0.8).length;
+  const ps = [...document.querySelectorAll('p')].filter(p => vis(p) && (p.textContent || '').trim().length >= 60);
+  if (ps.length) out.narrow_text_ratio = +(ps.filter(p => p.getBoundingClientRect().width <= 780).length / ps.length).toFixed(2);
+  out.big_images = [...document.querySelectorAll('img')].filter(i => vis(i) && i.getBoundingClientRect().width >= W * 0.45).length;
+  return out;
+})()
+"""
+
+
+def _desktop(measures: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The widest measured width (1024px or more) that carries layout metrics."""
+    best: Dict[str, Any] = {}
+    for width, m in sorted((measures or {}).items(), key=lambda kv: int(kv[0])):
+        if isinstance(m, dict) and m.get("layout_measured") and int(width) >= 1024:
+            best = m
+    return best
+
+
+def render_findings(key: Optional[str], measures: Optional[Dict[str, Any]]) -> List[str]:
+    """Clear misses between the rendered page and its chosen layout, in the
+    builder's words. [] when there is no layout, no measurement, or the
+    page reads as the layout."""
+    k = normalize(key)
+    m = _desktop(measures)
+    if not k or not m:
+        return []
+    miss: Optional[str] = None
+    if k == "split" and m.get("hero_cols", 1) < 2:
+        miss = ("the first screen is one column; the split puts the words on one "
+                "side and the photo on the other")
+    elif k == "editorial" and (m.get("narrow_text_ratio", 1) < 0.6 or m.get("row_max", 1) >= 3):
+        miss = ("the text runs wider than a reading column or sits in card rows; hold "
+                "running text to a 60 to 72ch column and set offerings as typeset lines")
+    elif k == "fullscreen" and (m.get("hero_height_ratio", 0) < 0.85 or m.get("hero_img_ratio", 0) < 0.6):
+        miss = ("the opening is not a full-screen photo; make the first section at "
+                "least 90vh with the photo across it")
+    elif k == "statement" and (m.get("h1_px", 0) < 64 or m.get("hero_img_ratio", 0) > 0.25):
+        miss = ("the headline is not the picture; set it at monumental size and keep "
+                "photos out of the first screen")
+    elif k == "grid" and m.get("row_max", 1) < 3:
+        miss = "there is no row of three or more same-size tiles; give the offerings a real grid"
+    elif k == "magazine" and m.get("mixed_cols", 0) < 1:
+        miss = ("no band sets a large lead block beside smaller ones; build the front "
+                "page with a lead story and side stories")
+    elif k == "bento" and m.get("bento_grids", 0) < 1:
+        miss = ("there is no board of boxes in different sizes; build one grid with "
+                "deliberately different spans")
+    elif k == "showcase" and m.get("big_images", 0) < 3:
+        miss = "the photos are small; let at least three of them run at half the width or more"
+    elif k == "story" and m.get("tall_sections", 0) < 4:
+        miss = "the chapters are short bands; give each chapter its own full-height section"
+    elif k == "asymmetric" and (m.get("overlap_ok", 0) + m.get("rotated", 0)) < 2:
+        miss = ("nothing overlaps or breaks the grid; offset and overlap the pieces on "
+                "purpose (mark them data-overlap-ok)")
+    elif k == "sidebar" and not m.get("sidebar"):
+        miss = ("no side column stays put while the page scrolls; build the sticky side "
+                "column with the name, the links and the action")
+    elif k == "minimal" and m.get("sections", 0) > 5:
+        miss = f"the page has {m.get('sections')} sections; a minimal page holds three or four"
+    if not miss:
+        return []
+    return [f"THE LAYOUT is {LAYOUTS[k]['name']}, but at 1440px {miss}. "
+            "Rebuild to the layout's STRUCTURE."]

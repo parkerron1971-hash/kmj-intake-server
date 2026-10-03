@@ -144,14 +144,14 @@ THE FILLED-SPACE LAW (the owner's standing rule, 2026-07-25 — emptiness is a d
 - REVEAL GRAMMAR VARIETY: arrivals are designed per section family, not defaulted. Grids and galleries cascade with a short per-item stagger; ordered things (steps, threads, stations) light in sequence as the visitor reaches them; at most ONE copy moment may ignite (a one-time glint or self-drawing underline) as it enters view. A page where every section arrives with the identical fade-up has defaulted, not designed. This is arrival grammar, not extra signature moments — the one-signature-motion law stands.
 
 THE GENEROSITY RULE (learned the hard way — the first live spec produced an austere concept poster and the owner rejected it on sight):
-A business site is GENEROUS. Rich sections executed cleanly beat austere concept pages, every time. Restraint disciplines COLOR and MOTION — never CONTENT. A visitor should always have something to look at, and every piece of the business should have a home. If the finished page could be described as "minimal," you have failed this business. Your concept is the thread that runs THROUGH a full site — never a substitute for one.
+A business site is GENEROUS. Rich sections executed cleanly beat austere concept pages, every time. Restraint disciplines COLOR and MOTION — never CONTENT. A visitor should always have something to look at, and every piece of the business should have a home. If the finished page could be described as "minimal," you have failed this business, unless the business genuinely has little on file and THE LAYOUT is minimal for that reason: then the page is small and complete, never empty, and nothing real is left out. Your concept is the thread that runs THROUGH a full site — never a substitute for one.
 
 {CONCEPT_LAW}
 
 THE COVERAGE LAW (equal in force to the truth law):
 Every real asset in the dossier gets a home on the page. Omitting real material is a violation exactly as serious as inventing fake material.
 - A fixed NAVIGATION with the business name and section links. Always.
-- EVERY real service/offering appears — each with its own cell/card and copy, its price, and its duration when the inventory carries duration_min (a service menu that says $45 and not 45 minutes is half a menu).
+- EVERY real service/offering appears — each with its own home in the layout's form (a tile in a grid, a card, a typeset line in an editorial page) with its copy, its price, and its duration when the inventory carries duration_min (a service menu that says $45 and not 45 minutes is half a menu).
 - EVERY real portfolio/gallery image appears, referenced by its exact url — real work is the strongest thing on any business site. Never ban imagery when real imagery exists. AUTHOR a proper display caption for each piece (a caption describes what the piece is — it is copy, yours to write; a raw filename is data and must never render as a caption). CAPTION TRUTH: describe only what the labeled image actually shows — a caption bound to the wrong url is a truth violation. NO CONDITIONAL ENTRIES: the inventory is definitive; never write "(if provided — otherwise omit)" rows. Spec what exists, exactly.
 - The owner's PORTRAIT appears if provided (about section).
 - Every real testimonial/quote appears.
@@ -160,14 +160,13 @@ Every real asset in the dossier gets a home on the page. Omitting real material 
 - A FOOTER. Always.
 - Real stats/proof points if provided (never invented — mark a confirm-then-publish placeholder only when the owner has signaled a number exists).
 
-THE DENSITY SKELETON — the default shape of a complete business site (deviate creatively in STYLE, never by omission of FUNCTION; where the WHAT A SITE OF THIS KIND MUST DECIDE block below names a different shape or a feature, that block wins). Aim for 8-11 sections:
-nav → full-viewport hero (display headline + real proof stats) → a brand moment (ticker/marquee/band) → services grid (all of them) → a second-family strip (method/studio/values) → portfolio with the real work (filters if 5+ pieces) → process steps → about with portrait → contact with form → footer.
+THE LAYOUT LAW (2026-10-03; it replaces the one density skeleton every site used to get): the page's structure is ONE of twelve layouts. THE LAYOUT block below ranks them for this business from what it actually has (its photos, offerings, story and proof), or names the owner's own pick. Decide the layout BEFORE writing a section, the way a designer sketches the page before drawing it: write it as section 0's LAYOUT line with the reason, then build section 3 on that layout's skeleton, its order, its section count and its shape. Use the owner's pick when there is one; otherwise take the first ranked layout unless the idea clearly calls for another of the twelve, and say why in the LAYOUT line. Never choose a layout the material cannot carry (no photo-led layout without photos). THE COVERAGE LAW holds inside every layout: each function it lists has a home in that layout's own form. A page whose sections could belong to any layout has not chosen one. Where the WHAT A SITE OF THIS KIND MUST DECIDE block below names a feature, give it a home inside the layout.
 
 STRUCTURE — output the document in exactly this anatomy, plain text with section rules (=====) and numbered sections:
-0. THE CONCEPT — the labeled sheet THE CONCEPT LAW defines, at the intensity THE CONCEPT block sets. Always present, even when it says INTENSITY: plain.
+0. THE CONCEPT — the labeled sheet THE CONCEPT LAW defines, at the intensity THE CONCEPT block sets, with its LAYOUT line (THE LAYOUT LAW). Always present, even when it says INTENSITY: plain.
 1. OVERVIEW — what this site is, one paragraph. The page's single memorable move, named.
 2. BRAND IDENTITY — fonts (role each), full color palette as CSS-variable-style roles with hexes.
-3. LAYOUT & SECTIONS (top to bottom) — every section numbered, each with: composition decided, the REAL copy written out, which words carry accents, what imagery goes where (only real provided images or clearly-labeled slots). When the composition WANTS an image the inventory doesn't carry, spec an art-directed DROP SLOT with one line of shot direction in plain words ("DROP SLOT hero_portrait: you at the chair, mid-cut, warm light") — the builder renders it as a fillable frame the owner can click to upload, and your shot directions become the owner's photo shot list. Never fake imagery; real, or a directed drop slot.
+3. LAYOUT & SECTIONS (top to bottom, on the skeleton of section 0's LAYOUT) — every section numbered, each with: composition decided, the REAL copy written out, which words carry accents, what imagery goes where (only real provided images or clearly-labeled slots). When the composition WANTS an image the inventory doesn't carry, spec an art-directed DROP SLOT with one line of shot direction in plain words ("DROP SLOT hero_portrait: you at the chair, mid-cut, warm light") — the builder renders it as a fillable frame the owner can click to upload, and your shot directions become the owner's photo shot list. Never fake imagery; real, or a directed drop slot.
 4. INTERACTIONS & ANIMATIONS — the definitive list, honoring the INTERACTION GRAMMAR: with 5+ portfolio pieces the gallery opens each piece larger on click (a lightbox with the piece's title; closes on backdrop, button, and Escape) and filters actually filter with a worded empty state; the contact form confirms in words after submit; every clickable answers hover and keyboard focus; scroll reveals are scroll-position driven so fast scrolling can never skip a section.
 5. DESIGN RULES (do / don't) — the taste laws for THIS page, including every learned ban from the judge's notes.
 6. THE OFFER PAGE — ONLY when section 0 says SCOPE: offer. The offer's own page at WORLD intensity, wearing section 2's identity exactly: its sections top to bottom with the real copy written out (what it is, who it is for, what happens week by week or step by step, what it costs and how to pay, proof, questions, the one action), the objects that hold each part, and its in-world vocabulary with every plain word kept. The home page (section 3) stays at SIGNATURE and links to this page from the navigation and from the offer's own moment.
@@ -204,8 +203,8 @@ def _digest_plan(spec_plan: List[Dict[str, Any]]) -> str:
     the Director decides content AROUND this structure (data sections
     render from real rows; creative sections are fully authorable)."""
     if not spec_plan:
-        return ("(no composed plan yet — propose a section list yourself, "
-                "following THE DENSITY SKELETON: 8-11 sections)")
+        return ("(no composed plan yet — propose the section list yourself, "
+                "on the skeleton of the layout you chose)")
     lines = []
     for i, s in enumerate(spec_plan, 1):
         mid = str(s.get("module") or "?")
@@ -284,7 +283,7 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
                       prior_spec: str = "", feedback: str = "",
                       inventory: str = "", discovery: str = "",
                       facts: str = "", vertical: str = "",
-                      concept: str = "") -> str:
+                      concept: str = "", layout: str = "") -> str:
     """Pure prompt assembly (testable, no IO). `dossier` is the canvas
     brief — everything the system knows, already compiled; `inventory`
     is the itemized asset list the coverage law binds to; `discovery`
@@ -331,8 +330,13 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
         # THE CONCEPT (2026-10-01): how far this site's idea goes, set by
         # the owner's Design Coach pick or the trade's default.
         parts += [concept.strip(), ""]
+    if layout.strip():
+        # THE LAYOUT (2026-10-03, the hand-build plan): the twelve layouts
+        # ranked for this business, or the owner's pick (site_layouts).
+        parts += [layout.strip(), ""]
     parts += [
-        "== THE CURRENT SECTION PLAN (the page's chapters, in order) ==",
+        "== THE CURRENT SECTION PLAN (the content on file, by section; THE "
+        "LAYOUT decides the page's order and shape) ==",
         _digest_plan(spec_plan),
         "",
     ]
@@ -617,10 +621,19 @@ def author_spec(business_id: str, ctx: Dict[str, Any],
                 concept_block = concept_block + "\n\n" + recent
     except Exception as e:
         logger.info(f"[spec] concept skipped: {e}")
+    # THE LAYOUT (2026-10-03, the hand-build plan): decide the page's
+    # structure from what the business has, before a section is written.
+    layout_block = ""
+    try:
+        import site_layouts
+        layout_block = site_layouts.director_block(
+            site_layouts.signals(ctx, _concept.recent_layouts(business_id)))
+    except Exception as e:
+        logger.info(f"[spec] layout ranking skipped: {e}")
     user = build_user_prompt(dossier, spec_plan, prior_spec, feedback,
                              inventory=inventory, discovery=disc,
                              facts=facts_text, vertical=vertical_block,
-                             concept=concept_block)
+                             concept=concept_block, layout=layout_block)
     marks = _brand_mark_urls(ctx, business_id)
     work = [u for u in _image_urls(ctx) if u not in marks]
     text = (_call_llm(_SYSTEM, user, business_id,
