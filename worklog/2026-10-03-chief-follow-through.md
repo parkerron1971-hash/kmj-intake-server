@@ -23,3 +23,5 @@ off until the migration and coordinated rollout; this is not live yet.
 
 Validation: 435 backend tests passed, one expected failure; SQL migration and
 recovery checks passed in PGlite. No live business actions were performed.
+Final source-contract review confirmed approvals use the existing draft state
+and failed errands remain actionable in the report; all 26 follow-through tests pass.

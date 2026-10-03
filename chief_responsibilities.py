@@ -32,8 +32,8 @@ def source_queries(bid):
         'assignments': f'/chief_assignments?business_id=eq.{bid}&or=(status.eq.active,updated_at.gte.{since})&select=id,title,status,target,progress,deadline,next_check_at,last_worked_at,report,updated_at&order=updated_at.desc&limit={LIMIT}',
         'missions': f'/chief_missions?business_id=eq.{bid}&status=in.(draft,active,awaiting_approval,paused)&select=id,title,status,steps,updated_at&order=updated_at.desc&limit={LIMIT}',
         'jobs': f'/chief_jobs?business_id=eq.{bid}&or=(status.in.(queued,running,failed),result->>status.in.(held,needs_answer,needs_hand,done_with_gaps),created_at.gte.{since})&select=id,kind,status,params,result,created_at,finished_at&order=created_at.desc&limit={LIMIT}',
-        'errands': f'/chief_errands?business_id=eq.{bid}&status=in.(planned,approved,running,needs_you,paused,interrupted)&select=id,job_id,title,status,created_at&order=created_at.desc&limit={LIMIT}',
-        'approvals': f'/agent_queue?business_id=eq.{bid}&status=eq.pending&select=id,subject,channel,created_at&order=created_at.desc&limit={LIMIT}',
+        'errands': f'/chief_errands?business_id=eq.{bid}&status=in.(planned,approved,running,needs_you,paused,interrupted,failed)&select=id,job_id,title,status,created_at&order=created_at.desc&limit={LIMIT}',
+        'approvals': f'/agent_queue?business_id=eq.{bid}&status=eq.draft&select=id,subject,channel,created_at&order=created_at.desc&limit={LIMIT}',
     }
 
 
@@ -71,8 +71,8 @@ def normalize(source, row):
                                   ('Work stopped; review the result before trying again.' if state == 'failed' else state)),
                     conversation_id=params.get('conversation_id'))
     elif source == 'errands':
-        item.update(needs_you=status in ('planned','needs_you','paused','interrupted'),
-                    summary='Check the supplier before starting again.' if status == 'interrupted' else status.replace('_',' '))
+        item.update(needs_you=status in ('planned','needs_you','paused','interrupted','failed'),
+                    summary='Check the supplier before starting again.' if status in ('interrupted','failed') else status.replace('_',' '))
     elif source == 'approvals':
         item.update(status='awaiting_approval', needs_you=True, summary='Waiting for your decision; not sent.')
     elif source == 'events':

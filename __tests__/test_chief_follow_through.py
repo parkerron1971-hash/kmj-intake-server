@@ -118,6 +118,21 @@ def test_held_build_does_not_read_as_completed():
     assert item['conversation_id'] == IID
 
 
+def test_report_reads_real_draft_approval_state_and_preserves_failed_errands(monkeypatch):
+    def read(query):
+        if query.startswith('/agent_queue'):
+            assert 'status=eq.draft' in query
+            return [{'id':'approval','subject':'Review reminder','created_at':'2026-10-03T12:00:00Z'}]
+        if query.startswith('/chief_errands'):
+            assert 'interrupted,failed)' in query
+            return [{'id':'errand','status':'failed','title':'Supplier order'}]
+        return []
+    monkeypatch.setattr(responsibilities.sb_clients,'sb_get_as_service',read)
+    result=run(responsibilities.snapshot(BID))
+    assert result['needs_you']==2
+    assert {i['status'] for i in result['items']}=={'awaiting_approval','failed'}
+
+
 def test_saved_measurement_is_not_causal_credit():
     item = responsibilities.normalize('assignments', {'id':'one','status':'completed',
         'progress':{'value':6, 'target':6, 'label':'6 appointments'}, 'next_check_at':None})
