@@ -287,11 +287,16 @@ def vision_findings(page: Dict[str, Any], business_id: str) -> List[Dict[str, An
                 "type": "base64", "media_type": "image/jpeg",
                 "data": base64.b64encode(jpeg).decode()}})
         content.append({"type": "text", "text": "Review per the rubric. JSON only."})
+        from vision_grader import judge_kwargs
         client = llm_call.sdk_client(key=key)
+        model = (os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip()
         msg = client.messages.create(
-            model=(os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip(),
-            max_tokens=900, system=_VISION_RUBRIC,
-            messages=[{"role": "user", "content": content}], timeout=90.0)
+            model=model,
+            # 900 → 2000 (2026-10-03): a judge that thinks spends from this
+            # cap, and an empty answer reads as "no findings".
+            max_tokens=2000, system=_VISION_RUBRIC,
+            messages=[{"role": "user", "content": content}], timeout=90.0,
+            **judge_kwargs(model))
         try:
             from vision_grader import _meter
             _meter(business_id, getattr(msg, "model", "") or "",

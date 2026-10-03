@@ -1301,12 +1301,16 @@ def _self_review(html: str, brief: str,
                                 + brief[:6000]
                                 + "\n\nSHIP, or your revision notes:"})
         client = llm_call.sdk_client(key=key)
+        model = (os.environ.get("CANVAS_REVIEW_MODEL")
+                 or os.environ.get("VISION_JUDGE_MODEL")
+                 or "claude-sonnet-4-5-20250929").strip()
         msg = client.messages.create(
-            model=(os.environ.get("CANVAS_REVIEW_MODEL")
-                   or os.environ.get("VISION_JUDGE_MODEL")
-                   or "claude-sonnet-4-5-20250929").strip(),
-            max_tokens=500, system=_SELF_REVIEW_PROMPT,
-            messages=[{"role": "user", "content": content}], timeout=90.0)
+            model=model,
+            # 500 → 1500 (2026-10-03): a reviewer that thinks spends from
+            # this cap, and an empty answer reads as SHIP.
+            max_tokens=1500, system=_SELF_REVIEW_PROMPT,
+            messages=[{"role": "user", "content": content}], timeout=90.0,
+            **_vg.judge_kwargs(model))
         try:
             from api_usage_logger import log_api_usage_sync
             u = getattr(msg, "usage", None)

@@ -74,6 +74,26 @@ def _enabled() -> bool:
     return (os.environ.get("VISION_GRADER") or "on").strip().lower() not in ("off", "0", "false")
 
 
+def judge_effort() -> str:
+    """How hard the vision judge thinks before answering, on models that
+    think (VISION_JUDGE_EFFORT: low / medium / high; default medium).
+
+    2026-10-03: Sonnet 5.5 thinks adaptively at HIGH unless told
+    otherwise, and the thinking counts against the call's max_tokens. An
+    unbounded judge can spend a small cap thinking and hand back no text,
+    which every caller reads as "nothing wrong" (no verdict, no findings,
+    SHIP). Every call that reads VISION_JUDGE_MODEL rides this."""
+    e = (os.environ.get("VISION_JUDGE_EFFORT") or "medium").strip().lower()
+    return e if e in ("low", "medium", "high") else "medium"
+
+
+def judge_kwargs(model: str) -> Dict[str, Any]:
+    """The effort field for one judge call, only where the model takes it
+    (Sonnet 4.5 400s on it, so it gets nothing)."""
+    import model_ladder
+    return model_ladder.effort_kwargs(model, judge_effort())
+
+
 def gate_enforced() -> bool:
     """Arc C2 (2026-07-21): the ship gate ENFORCES by default — a failing
     vision verdict blocks the build and the bounded quality regen retries
@@ -271,10 +291,15 @@ def _grade_anthropic(shots: List[bytes], business_id: str = "",
         "type": "base64", "media_type": "image/jpeg",
         "data": base64.b64encode(shot).decode()}})
     client = llm_call.sdk_client(key=key)
+    model = (os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip()
     msg = client.messages.create(
-        model=(os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip(),
-        max_tokens=800, system=_rubric(standard),
-        messages=[{"role": "user", "content": content}], timeout=90.0)
+        model=model,
+        # 800 → 2000 (2026-10-03): Sonnet 5.5 thinks adaptively and the
+        # thinking counts against this cap; the whole-page verdict is longer
+        # than the first-screen one was.
+        max_tokens=2000, system=_rubric(standard),
+        messages=[{"role": "user", "content": content}], timeout=90.0,
+        **judge_kwargs(model))
     _meter(business_id, getattr(msg, "model", "") or "",
            getattr(getattr(msg, "usage", None), "input_tokens", 0) or 0,
            getattr(getattr(msg, "usage", None), "output_tokens", 0) or 0)
