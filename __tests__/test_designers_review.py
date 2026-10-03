@@ -72,8 +72,18 @@ def test_the_inspector_grades_the_judged_canon():
 
 # ─── the run ─────────────────────────────────────────────────────────
 
-def _wire(monkeypatch, verdict, section_reply=NEW_PRICES):
+def _wire(monkeypatch, verdict, section_reply=NEW_PRICES, rounds=1):
+    """verdict: one dict for every look, or a list (one per look; the last
+    repeats). rounds pins LOOK_FIX_ROUNDS: 1 is the single look these
+    older tests were written for."""
     calls = []
+    monkeypatch.setenv("LOOK_FIX_ROUNDS", str(rounds))
+    looks = list(verdict) if isinstance(verdict, list) else [verdict]
+    seen = {"n": 0}
+
+    def _inspect(doc, spec, biz, why=None):
+        seen["n"] += 1
+        return looks[min(seen["n"], len(looks)) - 1]
 
     def _fake_call(system, user, business_id, spend=None):
         calls.append((system, user))
@@ -85,7 +95,7 @@ def _wire(monkeypatch, verdict, section_reply=NEW_PRICES):
     monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
     monkeypatch.setattr(v2, "contact_endpoint", lambda b: EP)
     monkeypatch.setattr(v2, "eyes_enabled", lambda: True)
-    monkeypatch.setattr(v2, "inspect_with_eyes", lambda doc, spec, biz, why=None: verdict)
+    monkeypatch.setattr(v2, "inspect_with_eyes", _inspect)
     return calls
 
 
@@ -101,7 +111,7 @@ def test_section_defects_rebuild_only_those_sections(monkeypatch):
     assert 'the <section id="prices">' in user and "a flat list" in user
     assert "Rebuilt as a letterboard." in out["html"]
     assert "Opened in the spring." in out["html"]
-    assert out["report"]["vision"]["section_repairs"] == [{"section": "prices", "applied": True}]
+    assert out["report"]["vision"]["section_repairs"] == [{"section": "prices", "applied": True, "round": 1}]
     assert out["report"]["vision"]["repaired"] is True
 
 
@@ -111,7 +121,7 @@ def test_a_bad_section_reply_leaves_the_page_alone(monkeypatch):
     _wire(monkeypatch, verdict, section_reply="<div>oops</div>")
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert "Old flat list." in out["html"]
-    assert out["report"]["vision"]["section_repairs"] == [{"section": "prices", "applied": False}]
+    assert out["report"]["vision"]["section_repairs"] == [{"section": "prices", "applied": False, "round": 1}]
 
 
 def test_a_low_scoring_weakest_section_is_rebuilt_even_on_ship(monkeypatch):
@@ -132,4 +142,65 @@ def test_a_page_wide_defect_takes_one_whole_page_pass(monkeypatch):
     assert len(calls) == 2
     assert not calls[1][1].startswith("SECTION REPAIR")
     assert "palette drifts" in calls[1][1] and "flat" in calls[1][1]
-    assert "section_repairs" not in out["report"]["vision"]
+    assert out["report"]["vision"]["section_repairs"] == []
+
+
+# ─── THE LOOK-AND-FIX LOOP (2026-10-03, phase 3 of the hand-build plan) ─
+# Look, fix the weakest sections, look again, until it is right, a round
+# changes nothing, the round cap, or the spending cap.
+
+_PRICES_FLAT = {"verdict": "repair", "violations": [
+    {"where": "1440 middle", "section": "prices", "what": "a flat list", "fix": "a letterboard"}],
+    "weakest": None}
+_CLEAN = {"verdict": "ship", "violations": [], "weakest": None}
+
+
+def test_the_second_look_finds_it_right_and_the_loop_ends(monkeypatch):
+    calls = _wire(monkeypatch, [_PRICES_FLAT, _CLEAN], rounds=3)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert len(calls) == 2                       # the author, one section rebuild
+    assert out["report"]["vision"]["looks"] == 2
+    assert out["report"]["vision"]["rounds"][1]["verdict"] == "ship"
+
+
+def test_the_loop_stops_at_its_round_cap(monkeypatch):
+    calls = _wire(monkeypatch, _PRICES_FLAT, rounds=3)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["report"]["vision"]["looks"] == 3
+    assert sum(1 for c in calls if c[1].startswith("SECTION REPAIR")) == 3
+    assert [r["round"] for r in out["report"]["vision"]["section_repairs"]] == [1, 2, 3]
+
+
+def test_a_round_that_changes_nothing_ends_the_loop(monkeypatch):
+    calls = _wire(monkeypatch, _PRICES_FLAT, section_reply="<div>oops</div>", rounds=3)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["report"]["vision"]["looks"] == 1 and len(calls) == 2
+
+
+def test_the_whole_page_pass_runs_once(monkeypatch):
+    wide = {"verdict": "repair", "violations": [
+        {"where": "all", "section": "page", "what": "palette drifts", "fix": "tokens"}], "weakest": None}
+    calls = _wire(monkeypatch, wide, rounds=3)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert len(calls) == 2                       # the author, one whole-page pass
+    assert [r["page_repair"] for r in out["report"]["vision"]["rounds"]] == [True, False]
+
+
+def test_the_spending_cap_stops_the_later_looks(monkeypatch):
+    calls = _wire(monkeypatch, _PRICES_FLAT, rounds=3)
+    monkeypatch.setattr(v2, "look_fix_max_cents", lambda: 0)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["report"]["vision"]["looks"] == 1 and len(calls) == 2
+    assert any(sk.startswith("look-fix:round-2:cap") for sk in out["report"]["spend"]["skipped"])
+
+
+def test_the_loop_dials_read_the_environment_within_bounds(monkeypatch):
+    monkeypatch.setenv("LOOK_FIX_ROUNDS", "99")
+    monkeypatch.setenv("LOOK_FIX_SECTIONS", "0")
+    monkeypatch.setenv("LOOK_FIX_MAX_CENTS", "abc")
+    assert v2.look_fix_rounds() == 6 and v2.look_fix_sections() == 1
+    assert v2.look_fix_max_cents() == 150
+
+
+def test_the_inspector_judges_the_layout():
+    assert "THE LAYOUT: when THE LAYOUT is given" in v2._INSPECTOR
