@@ -92,6 +92,16 @@ def test_tick_splits_the_windows_records_and_flags(monkeypatch):
     import spend_guard
     monkeypatch.setattr(spend_guard, "today_spend_cents", lambda *a, **k: 100.0)
     monkeypatch.setattr(spend_guard, "_cap_cents", lambda: 5000.0)
+    # quality_tick reads the real clock; the fixtures sit around NOW. Without
+    # this the test passed for one day and then every PR's CI failed, the
+    # fixture turns having aged out of the tick's "last day" window.
+
+    class _FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW if tz is None else NOW.astimezone(tz)
+
+    monkeypatch.setattr(cq, "datetime", _FrozenClock)
     r = asyncio.run(cq.report(db, {}, now=NOW))
     assert r["day"]["turns"] == 40 and r["week_before"]["turns"] == 300
     out = asyncio.run(cq.quality_tick())
