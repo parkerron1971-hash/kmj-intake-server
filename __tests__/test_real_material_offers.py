@@ -83,6 +83,19 @@ def test_the_server_asks_for_photos_once_when_there_are_none(monkeypatch):
     assert dc._should_ask_photos("biz", msgs, story_turn) is False
 
 
+def test_a_returning_owners_short_session_still_gets_the_photo_ask(monkeypatch):
+    """The second live test (2026-10-03): a returning owner picked a page
+    layout (a gallery turn) and answered the truth question; the next turn
+    was the brief. Waiting for a second answer meant no ask at all."""
+    monkeypatch.setitem(dc._PHOTO_STATE, "biz", {"photos": 0, "asked": False})
+    msgs = [{"role": "user", "content": "Editorial, that's the one."}]
+    truth_turn = {"reply": "What do people come to you for, and what does each cost?",
+                  "stage": "truth"}
+    assert dc._should_ask_photos("biz", msgs, truth_turn) is True
+    # not before they have said anything
+    assert dc._should_ask_photos("biz", [], truth_turn) is False
+
+
 def test_the_photo_ask_is_remembered_for_the_session(monkeypatch):
     saved = {}
     monkeypatch.setattr(discovery, "get_dossier", lambda b: {"session": {"photos_asked": False}})

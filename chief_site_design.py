@@ -137,12 +137,20 @@ async def handle_start_design_session(client, biz, action) -> Dict[str, Any]:
                 "result": f"Not opened — {block}. Use edit_site_text for copy, "
                           "check_site to look at it",
                 "label": "Site is hand-built — no design session", "nav": None}
+    # WHAT WAS HANDED OVER, ON THE RECEIPT (2026-10-03, the second live
+    # test): Chief told the owner "the only thing I passed along is what
+    # you told me", the answer check had nothing to check it against, and
+    # the owner read "I couldn't confirm this claim: ..." instead. The
+    # receipt now carries the words handed to the Coach, so the claim is
+    # checkable and the owner can see exactly what went.
+    handed = (f" Handed the Coach these notes: \"{brief}\"." if brief
+              else " Handed the Coach no notes; it starts from what is on file.")
     return {
         "type": "start_design_session",
         "result": ("Opened the design session: the Design Coach is with them now "
-                   f"({mode} session). When it ends the blueprint is drafted and "
-                   "comes back to this chat as a card with the price and a Build it "
-                   "button. Do not start a build yourself."),
+                   f"({mode} session).{handed} When it ends the blueprint is drafted "
+                   "and comes back to this chat as a card with the price and a Build "
+                   "it button. Do not start a build yourself."),
         "label": "Design session with the Coach",
         "nav": None,
         "frontend_event": {"name": SESSION_EVENT,

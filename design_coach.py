@@ -244,9 +244,13 @@ def _should_ask_photos(business_id: str, messages: List[Dict[str, str]],
     if turn.get("ask") == "photos" or turn.get("done") or turn.get("gallery") \
             or turn.get("stage") == "brief":
         return False
+    # The first turn after they have said anything (2026-10-03, the second
+    # live test): a returning owner's session was two answers long, a
+    # gallery and then the truth question, and waiting for a second
+    # answer meant the brief came first and the ask never did.
     said = sum(1 for m in (messages or []) if m.get("role") == "user"
                and str(m.get("content") or "").strip())
-    return turn.get("stage") == "story" or said >= 2
+    return turn.get("stage") == "story" or said >= 1
 
 
 def _store_has_products(business_id: str) -> bool:
