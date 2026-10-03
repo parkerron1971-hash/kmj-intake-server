@@ -96,6 +96,14 @@ def test_render_tool_returns_laws_and_screenshots_and_remembers_the_draft(monkey
     assert "No law broken" in clean[0]["text"]
 
 
+def test_render_tool_names_a_photo_used_twice(monkeypatch):
+    box = _box(monkeypatch)
+    twice = ('<section id="work"><img src="https://x/a.jpg" alt="a"></section>'
+             '<section id="about"><img src="https://x/a.jpg" alt="b"></section>')
+    text = box.render(_doc(twice))[0]["text"]
+    assert "REPEATED PHOTO" in text and "#work and #about" in text
+
+
 def test_look_only_sees_what_the_real_data_names(monkeypatch):
     box = _box(monkeypatch)
     ok = box.look("https://x/a.jpg")

@@ -205,7 +205,7 @@ class ToolBox:
                 + v2.check_interactions(armored)
                 + v2.check_connected(armored, self.real_data)
                 + v2.armor_violations(dropped, self.endpoint))
-        standins = v2.check_stand_ins(armored)
+        standins = v2.check_stand_ins(armored) + v2.check_repeated_photos(armored)
         self.last_render = doc
         self.last_findings = laws + standins
         out: List[Dict[str, Any]] = []
