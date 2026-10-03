@@ -5235,16 +5235,38 @@ def get_design_spec(business_id: str,
     """The current design spec document (draft or approved), or null —
     plus READINESS (build quality 5/6): what the next build will and
     will not have, in plain lines, with revision chips. Read-only, no
-    model call; never fatal to the spec read."""
+    model call; never fatal to the spec read.
+
+    CARD (2026-10-03): the blueprint in a few plain lines plus the price,
+    for the card Chief shows in the chat after a design session
+    (blueprint_card.summary). Null when there is no blueprint."""
     _require_owner(business_id, session.user.id)
     import spec_author
+    spec = spec_author.get_spec(business_id)
     readiness = None
+    card = None
+    try:
+        ctx = gather_context(business_id)
+    except Exception as e:
+        # no context, no readiness or card: lines read from an empty
+        # context would tell them they have nothing, which is false
+        logger.info(f"[composer] spec context skipped: {e}")
+        return {"spec": spec, "readiness": None, "card": None}
     try:
         import build_readiness
-        readiness = build_readiness.spec_readiness(gather_context(business_id))
+        readiness = build_readiness.spec_readiness(ctx)
     except Exception as e:
         logger.info(f"[composer] readiness skipped: {e}")
-    return {"spec": spec_author.get_spec(business_id), "readiness": readiness}
+    try:
+        import blueprint_card
+        cfg = ((ctx.get("site") or {}).get("site_config") or {})
+        plan = sanitize_spec(cfg["page_spec"], ctx) if cfg.get("page_spec") else []
+        card = blueprint_card.summary(spec, ctx, business_id,
+                                      plan_sections=len(plan or []),
+                                      offer_pages_on=_offer_pages_enabled())
+    except Exception as e:
+        logger.info(f"[composer] blueprint card skipped: {e}")
+    return {"spec": spec, "readiness": readiness, "card": card}
 
 
 @router.post("/spec/author")
@@ -5412,6 +5434,9 @@ def discovery_derive(body: DiscoveryDeriveBody,
 class CoachTurnBody(BaseModel):
     business_id: str
     messages: List[Dict[str, str]] = []
+    # 'quick' = the session Chief opens from the chat (2026-10-03);
+    # anything else is the full sit-down
+    mode: Optional[str] = None
 
 
 class CoachFinishBody(BaseModel):
@@ -5430,7 +5455,8 @@ def coach_turn(body: CoachTurnBody,
     as {error} for a visible retry, never a 500 blank."""
     _require_owner(body.business_id, session.user.id)
     import design_coach
-    return design_coach.run_turn(body.business_id, body.messages or [])
+    return design_coach.run_turn(body.business_id, body.messages or [],
+                                 mode=design_coach.session_mode(body.mode))
 
 
 @router.post("/coach/finish")
