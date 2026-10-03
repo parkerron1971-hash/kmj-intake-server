@@ -127,6 +127,11 @@ async def handle_responsibility_status(client, biz, action):
         raise ValueError('Choose a work report offset between 0 and 240.')
     count = len(out['items'])
     out['needs_you'] = sum(1 for i in out['items'] if i['needs_you'])
+    out['scope'] = source or 'all'
+    out['source_counts'] = {
+        name: {'found': sum(i['source'] == name for i in out['items']),
+               'needs_you': sum(i['source'] == name and i['needs_you'] for i in out['items'])}
+        for name in out['sources'] if not source or name == source}
     summary = f'{count} work item(s) found; {out["needs_you"]} need your attention.'
     if out['partial']:
         summary += ' Some work could not be checked; this is not a complete account.'
@@ -139,9 +144,13 @@ async def handle_responsibility_status(client, biz, action):
         out['items'].pop()
     out['more_items'] = max(0, count - offset - len(out['items']))
     out['next_offset'] = offset + len(out['items']) if out['more_items'] else None
+    out['offset'] = offset
+    out['page_count'] = len(out['items'])
     return {'type': 'responsibility_status', 'label': 'Chief responsibilities', 'result': summary,
             'responsibilities': out, 'nav': None,
             'for_chief': 'Report current work, what needs the owner, and recorded next checks. '
+                         'total_found and source_counts cover the scope; page_count covers only this page. '
+                         'Source counts with unavailable or limited sources are not complete totals. '
                          'Do not restart work, promise missing check times, or call partial data an empty queue.'}
 
 

@@ -438,6 +438,13 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     _calls_this_turn.set(_calls_this_turn.get() + 1)
     action = dict(args or {})
     action["type"] = name
+    # Responsibility reads page and filter the same report. Keeping only the
+    # last call under tool:<name> discarded the earlier records before review.
+    # Scope this exception to the paged report; other reads still replace an
+    # earlier value so a post-write lookup remains authoritative.
+    evidence_id = 'tool:' + name
+    if name == 'responsibility_status':
+        evidence_id += ':' + str(action.get('source') or 'all') + ':' + str(action.get('offset', 0))
     # A read is a step on the stream too; the door does this for writes.
     step = chief_of_staff._turn_step_start(name)
     try:
@@ -446,17 +453,17 @@ async def execute_tool_use(client, biz: Dict[str, Any],
         logger.warning(f"[tool-loop] {name} raised: {e}")
         chief_of_staff._turn_step_end(step, None)
         import chief_truth
-        chief_truth.record('tool:' + name, None)
+        chief_truth.record(evidence_id, None)
         return True, (f"'{name}' failed: {type(e).__name__}. This data is unavailable. "
                       "Say you could not verify it; do not guess or report zero results.")
     chief_of_staff._turn_step_end(step, result)
     import chief_truth
     if result is None or (isinstance(result, dict) and chief_of_staff._action_failed(result)):
-        chief_truth.record('tool:' + name, None)
+        chief_truth.record(evidence_id, None)
         if result is None:
             return True, 'Lookup unavailable. Do not infer zero results or invent an answer.'
         return True, _shrink(result)
-    chief_truth.record('tool:' + name, result)
+    chief_truth.record(evidence_id, result)
     text = _shrink(result)
     _reads_this_turn.set({**seen, seen_key: text})
     return False, text
