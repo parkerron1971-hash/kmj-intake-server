@@ -4,7 +4,7 @@ date: 2026-10-03
 agent: Claude Code (Claude Opus 5.5)
 asked: "ok build the no card 500 credit version" / "make sure the cost aligns right with the usage. we saying 500 tokens can build a site and still talk with chief. make sure that is true."
 status: in progress
-prs: [solutionist-studio#1110]
+prs: [kmj-intake-server#1216, kmj-intake-server#1215, solutionist-studio#1110]
 migrations: []
 left_undone: ["marketing site copy (marketing_pages.py, marketing_home_v2.html + scripts/build_home_v2_template.py) still says the card is not charged until the trial ends; follow-up PR once this merges, behind no_card_trial_enabled()"]
 decisions: ["no-card tank 500 (PRICE_TRIAL_CREDITS_NO_CARD); a card keeps the trial end date and lifts it to 1,000", "the first site build stays free; a second build, texts, phone numbers and bulk email wait for a card", "one no-card trial per person, never for grandfathered or comped accounts, only while BILLING_ENFORCE is on", "the no-card trial shows the Professional plan (NO_CARD_TRIAL_PLAN)"]
