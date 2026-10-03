@@ -118,6 +118,12 @@ def test_held_build_does_not_read_as_completed():
     assert item['conversation_id'] == IID
 
 
+@pytest.mark.parametrize('kind,label', [('author_spec','Blueprint'),('revise_spec','Blueprint revision'),('unknown_internal_kind','Background work')])
+def test_report_uses_user_facing_job_labels(kind,label):
+    item=responsibilities.normalize('jobs', {'id':'one','kind':kind,'status':'done'})
+    assert item['title']==label
+
+
 def test_report_reads_real_draft_approval_state_and_preserves_failed_errands(monkeypatch):
     def read(query):
         if query.startswith('/agent_queue'):

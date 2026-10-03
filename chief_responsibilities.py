@@ -60,10 +60,12 @@ def normalize(source, row):
         item.update(needs_you=status in ('draft', 'awaiting_approval', 'paused'),
                     summary=f'{done} of {len(steps)} steps completed.')
     elif source == 'jobs':
+        from chief_jobs import KIND_META
         result, params = _dict(row.get('result')), _dict(row.get('params'))
         facts = _dict(params.get('facts'))
+        job_label = KIND_META.get(row.get('kind'), {}).get('label') or 'Background work'
         state = status if status in ('queued', 'running') else _text(result.get('status') or status)
-        item.update(title=_text(facts.get('title') or facts.get('name') or row.get('kind'), 160),
+        item.update(title=_text(facts.get('title') or facts.get('name') or job_label, 160),
                     status=state, needs_you=state in ('held','needs_answer','needs_hand','failed','done_with_gaps'),
                     summary=_text(_dict(result.get('question')).get('text') or
                                   _dict(result.get('held')).get('label') or result.get('summary_label') or
