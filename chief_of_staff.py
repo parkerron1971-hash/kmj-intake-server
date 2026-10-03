@@ -13841,6 +13841,10 @@ class ChatRequest(BaseModel):
     business_id: str
     message: str
     request_id: Optional[str] = None
+    # A voice preparation hint is never an instruction or a completed check.
+    # Its owner-scoped, revisioned snapshot may only help resolve the final text.
+    listening_turn_id: Optional[str] = None
+    listening_revision: Optional[int] = None
     image_ids: List[str] = []
     image_preferences: Optional[ImagePreferences] = None
     conversation_history: Optional[List[ChatMessage]] = None
@@ -14418,6 +14422,8 @@ async def chief_chat(
         _t.mark("billing_gates")
 
         async with httpx.AsyncClient() as client, _PreparationTasks() as preparation:
+            import chief_availability
+            availability_request = chief_availability.request_shape(req)
             prep_biz = None
             warm = None
             prep_names = []
@@ -14427,7 +14433,8 @@ async def chief_chat(
             # before we load context so they show up this turn. Cheap
             # in steady-state (zero rows the vast majority of the time).
             try:
-                created = await _generate_missing_recurring_instances(client, req.business_id)
+                created = ([] if availability_request else
+                           await _generate_missing_recurring_instances(client, req.business_id))
                 if created:
                     print(f"[Chief] auto-generated {created} recurring invoice(s)", flush=True)
             except Exception as e:  # pragma: no cover
@@ -14470,10 +14477,21 @@ async def chief_chat(
                     # critical path. The task gets its OWN http client —
                     # the request's client closes when the turn returns,
                     # while the sweep may still be working.
-                    _spawn_turn_sweeps(biz_lite)
+                    if not availability_request:
+                        _spawn_turn_sweeps(biz_lite)
             except Exception as e:  # pragma: no cover
                 print(f"[Chief] autopilot/escalation sweep error: {e}", flush=True)
             _t.mark("sweeps")
+
+            # Availability is a fresh, read-only calculation. Once checked,
+            # speak its result directly instead of generating and repairing a
+            # second account of the same dates, times and capacity.
+            from chief_availability_readout import serve_request as _serve_availability
+            availability_result = await _serve_availability(client, req, user_session, biz_lite)
+            if availability_result is not None:
+                _t.mark("availability")
+                _t.log(lane="availability", streamed=_STREAM_SINK.get() is not None)
+                return availability_result
 
             # A self-contained owner request to display invoices needs only
             # its scoped card rows. Admission, recurrence and the action door

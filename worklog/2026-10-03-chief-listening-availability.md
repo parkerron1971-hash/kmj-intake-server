@@ -1,0 +1,13 @@
+---
+title: Chief prepares during speech and checks appointment capacity directly
+date: 2026-10-03
+agent: Codex (GPT-6)
+asked: "ok great. this will work."
+status: in progress
+prs: []
+migrations: []
+left_undone: ["Focused and full validation", "Production rollout and live verification"]
+decisions: ["Partial speech only permits scoped read preparation", "Final availability uses fresh authoritative capacity", "Checked scheduling prose avoids repeated model repair", "No recurring invoice or autopilot writes on the dedicated availability route"]
+related: [2026-10-02-chief-conversation-gaps.md, 2026-10-02-chief-context-flow-release.md]
+---
+Both repositories' existing voice worklogs were reviewed before implementation. The observed appointment turn preserved the full transcript, but failed a lookup and spent about eighteen seconds reviewing, repairing and rechecking its answer. This change adds a dedicated read-only scheduling calculation and revisioned voice preparation. Final answers retain owner checks, admission gates, checked speech boundaries and retry recovery. Unsupported requests retain the general path rather than silently dropping constraints.
