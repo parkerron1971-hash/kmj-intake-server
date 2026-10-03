@@ -202,6 +202,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 11. INVENTORY-SHAPED LAYOUT: compose the gallery/grid to the number of images that actually exist. Two images get a two-image composition; never a grid with holes, never a repeated image as filler.
 11b. ART-DIRECTED DROP SLOTS: when the composition WANTS an image the inventory doesn't have (a hero portrait, a third gallery piece), author a placeholder the owner can fill: <div class="sx-drop" data-sx-slot="short_name">…</div> containing ONE line of shot direction in plain words ("You at the chair, mid-cut, warm light" — you are telling them what to photograph). Style: a dashed 1px frame in the accent color at low opacity, the design's crop and position already decided, so a dropped-in photo inherits your intention. Your CSS MUST include `.sx-drop{display:none}` and `body.sx-studio .sx-drop{display:flex;…}` — the public page never shows an empty frame; the owner's Studio reveals them. Never fake an image, never leave a hole: real, or an art-directed drop slot.
 11c. NO VISIBLE STAND-INS: a photo the inventory lacks is INVISIBLE to the visitor. Never author a "filled" or "art-directed" placeholder that reads as intentional — no tinted or textured box, no framed panel, no caption-only frame, no italic line describing the photograph that should be there. The hidden .sx-drop of 11b is the ONLY stand-in; its shot direction never appears outside it. HERO without a hero photo: a typographic hero — display type carries the composition and rule 15's presence is a ghost word or the signature motif, never an empty frame. WORK/GALLERY with fewer than two real photos: no photo grid at all — say what you make and how it feels in words, with drop slots the Studio reveals. A visitor must never be able to tell a photo is missing.
+11d. ONE PLACE PER PHOTO: each real photo appears once on the page (the lightbox copy doesn't count). When more places want a photo than the inventory has, the extra places get a hidden .sx-drop (11b) or a typographic treatment — never the same photo twice.
 12. ALIGNMENT LAW: photographic subjects fill their frames (cover-fit, deliberate crop anchor); edges align to the type they sit beside; nothing floats small inside an oversized border. LAYERING ON PURPOSE: when you overlap elements deliberately (a cut-out crossing a section edge, a nameplate over a photo, an object breaking its frame, ghost type behind a headline), put data-overlap-ok on the outer element of the layered piece. The render is measured, and any other overlap of text on text counts as a collision.
 13. HEAD + SHARE: a real <title>, a meta description written from the data, and og:title / og:description / og:image (the strongest image url from the data) so a shared link looks intentional.
 14. CONNECTED DOORS: the data's CONNECTED SYSTEMS block lists working doors the owner turned on (booking, store, events) with their exact urls — each appears on the page as a REAL link twice over: in the navigation, and as a devoted moment styled to the spec (a Book action, a shop section, an Upcoming Events moment that invites the visitor to see the dates and RSVP). Use the exact url given. Never invent a door the block doesn't carry; never render a dead placeholder for one it does.
@@ -586,6 +587,113 @@ def _outside_pieces(lo: int, hi: int,
     if cur < hi:
         pieces.append((cur, hi))
     return pieces
+
+
+# ─── the repeated-photo law (2026-10-03, the real test build) ─────────
+# The first real build after the concept layer shipped the same photo of
+# the chair by the window twice: once in the gallery and again as the
+# About portrait. The eyes caught the hero photo repeated in the gallery
+# and rebuilt that section, but nothing deterministic counts photos, so
+# the second repeat walked through. Each photo appears once; a place that
+# wants a photo the inventory cannot spare gets a hidden .sx-drop (11b)
+# or a typographic treatment. Soft tier: a repeat is a quality defect,
+# never a fallback.
+
+_IMG_SRC_RE = re.compile(r"<img\b[^>]*?\bsrc\s*=\s*([\"'])(.*?)\1", re.IGNORECASE | re.DOTALL)
+_STYLE_ATTR_RE = re.compile(r"\bstyle\s*=\s*(\"[^\"]*\"|'[^']*')", re.IGNORECASE)
+_STYLE_BLOCK_RE = re.compile(r"<style\b[^>]*>(.*?)</style>", re.IGNORECASE | re.DOTALL)
+_CSS_URL_RE = re.compile(r"url\(\s*[\"']?(https?://[^\"')\s]+)", re.IGNORECASE)
+# a copy no visitor sees as a second use: the lightbox, a dialog, anything
+# aria-hidden, a template or a noscript fallback
+_HIDDEN_HOST_RE = re.compile(
+    r"<(?!(?:img|input|br|hr|meta|link|source|area|col|embed|wbr|track|param)\b)"
+    r"(\w+)\b(?=[^>]*(?:\brole\s*=\s*[\"']dialog[\"']|\bid\s*=\s*[\"']lightbox[\"']"
+    r"|\baria-hidden\s*=\s*[\"']true[\"']))[^>]*>"
+    r"|<(template|noscript)\b[^>]*>",
+    re.IGNORECASE)
+
+
+def _hidden_spans(html: str) -> List[Tuple[int, int]]:
+    """(start, end) of every element a visitor never sees as a second use
+    of a photo, nesting-aware (same walk as _drop_spans)."""
+    spans: List[Tuple[int, int]] = []
+    for m in _HIDDEN_HOST_RE.finditer(html):
+        tag = (m.group(1) or m.group(2)).lower()
+        depth, pos = 1, m.end()
+        tag_re = re.compile(rf"</?{tag}\b", re.IGNORECASE)
+        while depth and pos < len(html):
+            n = tag_re.search(html, pos)
+            if not n:
+                pos = len(html)
+                break
+            depth += -1 if html[n.start() + 1] == "/" else 1
+            pos = n.end()
+        spans.append((m.start(), pos))
+    return spans
+
+
+def _photo_name(url: str) -> str:
+    tail = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1] or url
+    return tail[:48]
+
+
+def check_repeated_photos(html: str) -> List[str]:
+    """Deterministic: a real photo used more than once on the visible page.
+    Counts every <img src> and inline style url() outside a hidden host
+    (lightbox, dialog, aria-hidden, template, noscript); a url in a
+    <style> block counts once however many rules repeat it (a phone
+    @media override is one picture, not two). data: URIs (the library
+    grain) never count. One finding per repeated photo, capped at three,
+    naming the sections it sits in so the repair knows where to look."""
+    import html as _html_mod
+    hidden = _hidden_spans(html)
+    uses: Dict[str, List[int]] = {}
+
+    def _add(raw: str, at: int) -> None:
+        url = _html_mod.unescape((raw or "").strip())
+        if not url or url.lower().startswith("data:"):
+            return
+        uses.setdefault(url, []).append(at)
+
+    for m in _IMG_SRC_RE.finditer(html):
+        if not _in_spans(m.start(), hidden):
+            _add(m.group(2), m.start())
+    for m in _STYLE_ATTR_RE.finditer(html):
+        if _in_spans(m.start(), hidden):
+            continue
+        for u in _CSS_URL_RE.finditer(_html_mod.unescape(m.group(1))):
+            _add(u.group(1), m.start())
+    css_urls: Dict[str, int] = {}
+    for b in _STYLE_BLOCK_RE.finditer(html):
+        for u in _CSS_URL_RE.finditer(b.group(1)):
+            css_urls.setdefault(u.group(1), b.start())
+    for url, at in css_urls.items():
+        _add(url, at)
+
+    sections = section_spans(html)
+
+    def _where(at: int) -> str:
+        return next((f"#{sid}" for sid, a, z in sections if a <= at < z), "")
+
+    problems: List[str] = []
+    for url, ats in uses.items():
+        if len(ats) < 2:
+            continue
+        places = []
+        for at in ats:
+            w = _where(at)
+            if w and w not in places:
+                places.append(w)
+        where = f" (in {' and '.join(places)})" if places else ""
+        problems.append(
+            f"REPEATED PHOTO: the same photo ({_photo_name(url)}) appears "
+            f"{len(ats)} times on the page{where}. Each photo appears once. "
+            "Keep it in the place it serves best; where another place wants a "
+            "photo the inventory cannot spare, use a hidden .sx-drop slot "
+            "(rule 11b) or a typographic treatment instead of reusing it.")
+        if len(problems) >= 3:
+            break
+    return problems
 
 
 def check_connected(html: str, real_data: str) -> List[str]:
@@ -1714,7 +1822,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         # never the fallback: visible stand-ins (11c), the craft floor
         # (one h1, alt text, type families, likely typos) and the page
         # held to its concept sheet (objects, the plain-word rule).
-        out = (check_stand_ins(d) + _craft().check_html(d, real_data)
+        out = (check_stand_ins(d) + check_repeated_photos(d)
+               + _craft().check_html(d, real_data)
                + _concept_findings(d, sheet))
         if page == "home" and offer.get("path"):
             try:
@@ -1789,6 +1898,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                                         "detail": "stand-in repair unparseable "
                                                   "— keeping the document"})
     report["stand_ins"] = check_stand_ins(doc)
+    report["repeated_photos"] = check_repeated_photos(doc)
     report["craft"] = _craft().check_html(doc, real_data)
 
     # THE EYES (Arc 2): the builder looks at its own rendered work and
