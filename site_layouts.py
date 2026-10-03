@@ -145,7 +145,7 @@ def _fit_statement(s: Signals) -> Points:
         p.append((1, "type can lead while photos are still coming"))
     if s["idea"]:
         p.append((2, "a sharp idea is strong enough to set at full size"))
-    if s["offerings"] <= 2:
+    if 1 <= s["offerings"] <= 2:
         p.append((2, "one offer suits one big message"))
     if s["action"]:
         p.append((1, "one message leads to one action"))

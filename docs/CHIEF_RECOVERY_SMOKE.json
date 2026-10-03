@@ -1,0 +1,17 @@
+{
+  "checked_at": "2026-10-03T20:51:19.069869+00:00",
+  "mode": "live transaction rolled back",
+  "checks": [
+    "claim exclusion",
+    "preparation recovery",
+    "stale worker fence",
+    "legacy replay fence",
+    "uncertain effects held",
+    "tenant isolation",
+    "review revision",
+    "acknowledgement",
+    "idle completion"
+  ],
+  "fixture_events_remaining": 0,
+  "model_or_external_actions": 0
+}

@@ -479,6 +479,7 @@ def _execute_kind(kind: str, business_id: str, params: dict,
         result = author_spec_work(
             business_id,
             notes=str((params or {}).get("notes") or ""),
+            chief_notes=str((params or {}).get("chief_notes") or ""),
             revise=(kind == "revise_spec"),
             progress_cb=progress)
         return result if isinstance(result, dict) else {}
@@ -935,6 +936,34 @@ class _SpecJobReq(BaseModel):
     business_id: str
     notes: Optional[str] = None      # owner's words; REQUIRED when revising
     revise: bool = False
+    # CHIEF'S HANDOFF NOTES (2026-10-03): what Chief heard in chat before
+    # the design session. Never the owner's words: they reach the Director
+    # labeled as Chief's, and never the builder.
+    chief_notes: Optional[str] = None
+    # THE LAYOUT (2026-10-03): the owner picked a page layout on the
+    # blueprint card; saved as their own answer so the Director is told
+    # "THE OWNER PICKED" when it redrafts.
+    layout: Optional[str] = None
+
+
+def save_layout_pick(business_id: str, raw: Optional[str]) -> Optional[str]:
+    """Save the owner's layout pick into the dossier (taste.layout, source
+    asked). Returns the key saved, or None for no pick or an unknown one.
+    Fail-soft: a pick that cannot be saved still rides the notes."""
+    try:
+        import site_layouts
+        key = site_layouts.normalize(raw)
+        if not key:
+            return None
+        import discovery
+        d = discovery.get_dossier(business_id) or discovery._empty_dossier()
+        d = discovery.apply_practitioner_patch(
+            d, {"taste": {"layout": {"value": key, "source": "asked"}}})
+        discovery.save_dossier(business_id, d)
+        return key
+    except Exception as e:
+        logger.warning(f"[chief_jobs] layout pick not saved for {business_id[:8]}: {e}")
+        return None
 
 
 @router.post("/jobs/spec")
@@ -968,9 +997,13 @@ async def author_spec_endpoint(req: _SpecJobReq,
         # before it can run one — or drafts would be the free build's back
         # door, one ~16c call at a time.
         await _no_card_gate(no_card_build=False, business_id=req.business_id)
+        if req.layout:
+            await asyncio.to_thread(save_layout_pick, req.business_id, req.layout)
         params: Dict[str, Any] = {}
         if notes:
             params["notes"] = notes[:2000]
+        if (req.chief_notes or "").strip():
+            params["chief_notes"] = req.chief_notes.strip()[:1200]
         job = await enqueue(client, user_id=uid, business_id=req.business_id,
                             kind=("revise_spec" if req.revise else "author_spec"),
                             params=params, source="desktop")

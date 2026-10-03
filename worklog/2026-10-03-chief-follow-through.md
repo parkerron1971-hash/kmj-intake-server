@@ -36,3 +36,11 @@ no feature flags were changed and no customer work was started.
 Kevin authorized continuing deployment. Full CI found two outcome-ledger
 fixtures missing a mock for the newly required profile lookup (12,359 other
 tests passed). Added the scoped fixture; deployment remains gated on full CI.
+
+The corrected full CI passed: 12,372 tests, 17 skipped, one expected failure,
+plus browser sabotage and SQL migration checks. Production rollback-only
+recovery rehearsal passed nine checks with zero remaining fixture events;
+all six live report sources loaded. Web and worker were restarted with
+CHIEF_AGENT=off to drain legacy runs, then CHIEF_DURABLE_EVENTS=on was staged
+without deploying. Trunk advanced during CI; merged its latest MySite changes
+without conflicts and reran the required gate before release.

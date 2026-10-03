@@ -202,6 +202,20 @@ def _compile(ctx: Dict[str, Any], dro: Optional[Dict[str, Any]],
         A(owner[:OWNER_BRIEF_MAX_CHARS])
         A("")
 
+    # ── CHIEF'S HANDOFF NOTES (2026-10-03) ──
+    # What Chief heard in chat before the design session. In the first live
+    # test Chief's notes ("warm, professional, polished"; "no services on
+    # file") rode in as THE OWNER'S WORDS and the page said "there's no
+    # package menu" over prices the owner had given the Coach. They are
+    # context, labeled as Chief's, and the dossier wins.
+    chief = str(ctx.get("chief_notes") or "").strip()
+    if chief:
+        A("== CHIEF'S HANDOFF NOTES (what Chief heard in chat before the design "
+          "session: context only, NOT the owner's words and never a fact for the "
+          "page; where they differ from the discovery dossier, the dossier wins) ==")
+        A(chief[:1200])
+        A("")
+
     # ── OVERVIEW: offer, audience, verbs ──
     A("== OVERVIEW ==")
     A(f"- what they offer: {_offer_line(ctx)}")
