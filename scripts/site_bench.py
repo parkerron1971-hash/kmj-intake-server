@@ -236,6 +236,10 @@ def validate(ctx: Dict[str, Any], html: str, spec_text: str = "") -> Dict[str, A
         except Exception as e:
             out[name] = [f"(validator error: {e!r})"]
     try:
+        out["repeated_photos"] = builder_v2.check_repeated_photos(doc)
+    except Exception as e:
+        out["repeated_photos"] = [f"(repeat check error: {e!r})"]
+    try:
         import craft_laws
         _, out["typography_fixes"] = craft_laws.typographer(doc)
         out["craft_floor"] = craft_laws.check_html(doc, rd)
@@ -254,7 +258,8 @@ def validate(ctx: Dict[str, Any], html: str, spec_text: str = "") -> Dict[str, A
     out["violations_total"] = sum(len(v) for k, v in out.items()
                                   if k.startswith("check_") or k == "armor_violations")
     out["soft_total"] = (len(out.get("check_stand_ins") or []) + len(out.get("craft_floor") or [])
-                         + len(out.get("concept_floor") or []))
+                         + len(out.get("concept_floor") or [])
+                         + len(out.get("repeated_photos") or []))
     return out
 
 

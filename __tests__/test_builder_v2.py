@@ -377,6 +377,85 @@ def test_stand_ins_cost_a_repair_but_never_the_fallback(monkeypatch):
     assert out2["html"] and out2["report"]["stand_ins"] == []
 
 
+# ─── the repeated-photo law (2026-10-03, the real test build) ─────────
+
+_CHAIR = "https://images.example/photo-chair?w=1600&amp;q=80"
+_FADE = "https://images.example/photo-fade?w=1600&amp;q=80"
+
+
+def test_a_photo_used_twice_is_flagged_with_its_sections():
+    page = (f'<section id="work"><img src="{_FADE}" alt="a"><img src="{_CHAIR}" alt="b">'
+            f'</section><section id="about"><img src="{_CHAIR}" alt="c"></section>')
+    found = v2.check_repeated_photos(page)
+    assert len(found) == 1
+    assert "REPEATED PHOTO" in found[0] and "photo-chair" in found[0]
+    assert "#work and #about" in found[0] and "2 times" in found[0]
+    assert ".sx-drop" in found[0]
+
+
+def test_the_lightbox_copy_and_hidden_hosts_are_not_a_second_use():
+    page = (f'<section id="work"><img src="{_CHAIR}" alt="b"></section>'
+            '<div id="lightbox" role="dialog" aria-hidden="true"><figure>'
+            f'<img src="{_CHAIR}" alt=""></figure></div>'
+            f'<div aria-hidden="true"><div><img src="{_CHAIR}" alt=""></div></div>'
+            f'<noscript><img src="{_CHAIR}" alt=""></noscript>'
+            f'<img aria-hidden="true" src="{_FADE}" alt=""><p>after</p>')
+    assert v2.check_repeated_photos(page) == []
+
+
+def test_an_aria_hidden_img_is_still_a_visible_use():
+    # a void element can't host anything: an aria-hidden <img> is still seen
+    page = (f'<img aria-hidden="true" src="{_CHAIR}" alt="">'
+            f'<section id="about"><img src="{_CHAIR}" alt="c"></section>')
+    assert v2.check_repeated_photos(page)
+
+
+def test_single_uses_data_uris_and_css_overrides_are_not_flagged():
+    grain = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'/>"
+    page = (f'<style>.hero{{background-image:url("{_FADE}")}}'
+            f'@media (max-width:760px){{.hero{{background-image:url("{_FADE}")}}}}'
+            f'.sxo{{--_grain:url("{grain}")}}</style>'
+            f'<section id="top" class="hero"></section>'
+            f'<section id="work"><img src="{_CHAIR}" alt="b"></section>'
+            f'<img src="{grain}" alt=""><img src="{grain}" alt="">')
+    assert v2.check_repeated_photos(page) == []
+
+
+def test_a_css_photo_and_an_img_of_it_are_two_uses():
+    page = (f'<style>.hero{{background-image:url({_FADE})}}</style>'
+            f'<section id="top" class="hero"></section>'
+            f'<section id="work"><div style="background-image:url(&quot;{_CHAIR}&quot;)"></div>'
+            f'<img src="{_CHAIR}" alt="b"><img src="{_FADE}" alt="c"></section>')
+    found = v2.check_repeated_photos(page)
+    assert len(found) == 2
+
+
+def test_one_place_per_photo_rides_the_prompt():
+    assert "11d. ONE PLACE PER PHOTO" in v2._SYSTEM
+    assert v2._SYSTEM.index("11c. NO VISIBLE STAND-INS") < v2._SYSTEM.index("11d. ONE PLACE")
+
+
+def test_a_repeated_photo_costs_a_repair_but_never_the_fallback(monkeypatch):
+    endpoint = "https://api.example/contact/biz-1"
+    twice = (f'<section id="work"><img src="{_CHAIR}" alt="The chair"></section>'
+             f'<section id="about"><img src="{_CHAIR}" alt="The chair again"></section>')
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        return _law_passing_doc(endpoint, twice)
+
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: endpoint)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert out["html"] is not None                 # never the fallback
+    assert len(calls) == 2 and "REPEATED PHOTO" in calls[1]
+    assert out["report"]["repeated_photos"]
+    assert not out["report"]["fallbacks"]
+
+
 # ─── the dead shop door (2026-08-28, MaCnificent Hair Co) ────────────
 
 def test_store_off_is_said_out_loud_and_a_shop_on_the_page_is_a_violation(monkeypatch):
