@@ -209,6 +209,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
 16. THE TYPE FLOOR (measured on the render; a miss costs a repair round): exactly one <h1> (the hero headline), headings stepping down one level at a time. Set a type scale with clamp() and keep to it. Display sizes tighten their tracking (-0.01em to -0.03em); uppercase labels open theirs (0.08em or more). Running text is 16px or larger on a phone and never under 14px; nothing a visitor reads is under 11px. Body copy holds a 45 to 75 character measure (max-width in ch). Headings get text-wrap: balance and paragraphs text-wrap: pretty. Digits that line up (prices, hours, durations, stats) get font-variant-numeric: tabular-nums. When a face offers an optical-size axis, request it in the Google Fonts url (opsz) and set font-optical-sizing: auto. Buttons, inputs and selects inherit the page's fonts (font: inherit). No paragraph longer than three lines is centered. At most two type families, three with a utility face. Write straight quotes freely: a typographer pass sets real quotes, apostrophes and ranges after you.
 17. THE CONCEPT: the blueprint's section 0 sets how far the page's idea goes, and the page obeys it. PLAIN: nothing renamed, no objects. SIGNATURE: the one object and the one or two renamed labels it names, nothing more. WORLD: the navigation and section names use its VOCABULARY, its OBJECTS hold the content, its LIVING DETAIL moves once. Every in-world label keeps its plain word, visible beneath it (a small line) or in the link's aria-label, so a first-time visitor never has to guess. A concept never hides what a thing is or what it costs. When section 0 says SCOPE: offer, this page is the home: it stays at SIGNATURE and links to the offer page.
+18. THE LAYOUT: section 0's LAYOUT line names one of twelve page layouts, and THE LAYOUT block in the build message gives its skeleton, structure and phone plan. Build that architecture: it decides how the page is put together (columns, the size of the opening, how the sections stack), while the spec decides what goes in it and the design language how it looks. The render is measured against the layout, and a clear miss costs a repair round.
 
 CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold. ONE PHOTO TREATMENT: every content photo wears one treatment defined once from the tokens (a grade, a tint, or a duotone through filter or a mix-blend overlay in the accent), applied by one class, so photos taken on different days read as one shoot. The brand mark is never treated.
 
@@ -277,6 +278,11 @@ def build_user_prompt(spec_text: str, real_data: str,
         objects = ""
     if objects:
         parts += [objects, ""]
+    # THE LAYOUT (2026-10-03, the hand-build plan): the architecture the
+    # blueprint's concept sheet chose, with its working recipe.
+    layout = layout_block_for(spec_text)
+    if layout:
+        parts += [layout, ""]
     parts += [
         "== THE REAL DATA (the only facts you may render; every image url "
         "listed here must appear on the page) ==",
@@ -285,6 +291,36 @@ def build_user_prompt(spec_text: str, real_data: str,
         "Build the complete page now.",
     ]
     return "\n".join(parts)
+
+
+def layout_key_for(spec_text: str) -> Optional[str]:
+    """The layout the blueprint's concept sheet names, or None."""
+    try:
+        import site_concept
+        import site_layouts
+        return site_layouts.key_from_sheet(site_concept.parse_sheet(spec_text or ""))
+    except Exception as e:
+        logger.info(f"[v2] layout unreadable: {e}")
+        return None
+
+
+def layout_block_for(spec_text: str) -> str:
+    try:
+        import site_layouts
+        return site_layouts.builder_block(layout_key_for(spec_text))
+    except Exception as e:
+        logger.info(f"[v2] layout block skipped: {e}")
+        return ""
+
+
+def layout_findings(spec_text: str, measures: Optional[Dict[str, Any]]) -> List[str]:
+    """Clear misses between the render and the blueprint's layout."""
+    try:
+        import site_layouts
+        return site_layouts.render_findings(layout_key_for(spec_text), measures)
+    except Exception as e:
+        logger.info(f"[v2] layout check skipped: {e}")
+        return []
 
 
 # ─── real data assembly ──────────────────────────────────────────────
@@ -1077,6 +1113,11 @@ def _measure_page(page: Any, html: str, width: int) -> None:
         _record_measure(html, width, page.evaluate(craft_laws.RENDER_JS))
     except Exception as e:
         logger.info(f"[v2:eyes] craft measure skipped at {width}px: {e}")
+    try:
+        import site_layouts
+        _record_measure(html, width, page.evaluate(site_layouts.RENDER_JS))
+    except Exception as e:
+        logger.info(f"[v2:eyes] layout measure skipped at {width}px: {e}")
 
 
 def walk_measurements(html: str) -> Optional[Dict[str, Any]]:
@@ -1770,6 +1811,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         sheet = dict(sheet, scope="site", intensity="world") if sheet else sheet
     report["concept"] = {k: sheet.get(k) for k in ("intensity", "scope", "idea", "objects")
                          if sheet.get(k)}
+    _layout = layout_key_for(spec_text) if page == "home" else None
+    if _layout:
+        report["concept"]["layout"] = _layout
     _progress(48, "One mind builds the whole page")
     # THE BUILDER WITH TOOLS (2026-08-29): when the loop is on, the
     # authoring step can look at the owner's images, pull whole sections
@@ -1914,6 +1958,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             report["vision"]["reason"] = why["reason"]
         _m = walk_measurements(doc)
         measured = render_findings(_m) + _craft().render_findings(_m)
+        if page == "home":
+            measured += layout_findings(spec_text, _m)
         report["vision"]["measured"] = measured
         if verdict:
             report["vision"]["ran"] = True

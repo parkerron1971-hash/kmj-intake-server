@@ -229,10 +229,32 @@ class ToolBox:
             for label, jpeg in shots:
                 out.append({"type": "text", "text": f"View — {label}:"})
                 out.append(_jpeg_block(jpeg))
+            measured = self.measured_findings(armored)
+            if measured:
+                out.append({"type": "text", "text": "MEASURED IN THIS RENDER (fix before "
+                                                    "finishing):\n" + "\n".join(
+                                                        f"- {m}" for m in measured)})
         else:
             out.append({"type": "text", "text": "(No screenshots available in this "
                                                 "environment — judge from the laws.)"})
         return out
+
+    def measured_findings(self, armored: str) -> List[str]:
+        """What the walk of this draft measured: page-width overflow, text
+        collisions, the craft floor, and the layout check. [] when the
+        walk measured nothing (a stubbed screenshotter, no playwright)."""
+        try:
+            m = v2.walk_measurements(armored)
+            if not m:
+                return []
+            out = v2.render_findings(m) + v2._craft().render_findings(m)
+            spec = getattr(self, "spec_text", "") or ""
+            if spec:
+                out += v2.layout_findings(spec, m)
+            return out[:8]
+        except Exception as e:
+            logger.info(f"[loop] measured findings skipped: {e}")
+            return []
 
     def data(self, section: str) -> List[Dict[str, Any]]:
         s = (section or "").strip().lower()
@@ -354,6 +376,9 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
     real_data = v2.assemble_real_data(ctx, business_id)
     endpoint = v2.contact_endpoint(business_id)
     box = toolbox or ToolBox(ctx, business_id, real_data, endpoint)
+    # THE LAYOUT (2026-10-03): each draft render is measured against the
+    # layout the blueprint chose, so drift is fixed while drafting.
+    box.spec_text = spec_text
     model = model or v2._model()
     report: Dict[str, Any] = {"tool_calls": 0, "renders": 0, "looks": 0,
                               "forced_finish": None, "tools_used": []}

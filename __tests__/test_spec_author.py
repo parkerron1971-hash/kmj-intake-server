@@ -27,7 +27,8 @@ def test_recalibration_generosity_and_coverage_laws():
     s = spec_author._SYSTEM
     assert "GENEROSITY RULE" in s
     assert "COVERAGE LAW" in s
-    assert "DENSITY SKELETON" in s
+    # 2026-10-03: the one density skeleton gave way to THE LAYOUT LAW
+    assert "THE LAYOUT LAW" in s and "DENSITY SKELETON" not in s
     # restraint disciplines color/motion, never content
     assert "never CONTENT" in s
     # minimal = failure, stated plainly
@@ -106,7 +107,7 @@ def test_build_user_prompt_revision_mode():
 
 def test_empty_plan_asks_for_proposal():
     p = spec_author.build_user_prompt("D", [])
-    assert "propose a section list" in p
+    assert "propose the section list" in p
 
 
 # ─── the spec leads the canvas brief ─────────────────────────────────
@@ -574,10 +575,13 @@ def test_approve_route_handles_a_failed_write_as_503_not_500(monkeypatch):
     assert ei2.value.status_code == 409
 
 
-def test_one_section_count_when_no_plan_is_composed():
-    """The skeleton said 8-11 and the no-plan line said 6-9 (2026-10-01)."""
+def test_the_no_plan_line_defers_to_the_chosen_layout():
+    """The skeleton said 8-11 and the no-plan line said 6-9 (2026-10-01).
+    Since THE LAYOUT LAW (2026-10-03) the count belongs to the layout the
+    Director chose, so the line names none of its own."""
     line = spec_author._digest_plan([])
-    assert "8-11" in line and "6-9" not in line
+    assert "layout you chose" in line
+    assert "8-11" not in line and "6-9" not in line
 
 
 # ─── THE CONCEPT LAYER (2026-10-01, the concept-layer plan) ───────────

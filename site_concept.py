@@ -140,8 +140,8 @@ def brief_block(c: Optional[Dict[str, str]]) -> str:
 
 
 DIRECTOR_LAW = """THE CONCEPT LAW (2026-10-01; the dial is set per business and shown in THE CONCEPT block below):
-A design language decides how the site LOOKS. A concept decides what the site is ABOUT: one sentence the whole page obeys, taken from the business's own world and grounded in true facts about it ("the course is a college semester" for a real five-week cohort; "the shop is a take-a-number counter" for a walk-in barbershop). The concept sets the words, the objects and the photo list. The design language still owns color, type and layout. Three intensities:
-- PLAIN: no concept. Nothing is renamed, no objects (a shaped seam or one underlined word at most). Clarity and craft carry the page. Write section 0 with INTENSITY: plain and nothing else but STAYS PLAIN: everything.
+A design language decides how the site LOOKS. A concept decides what the site is ABOUT: one sentence the whole page obeys, taken from the business's own world and grounded in true facts about it ("the course is a college semester" for a real five-week cohort; "the shop is a take-a-number counter" for a walk-in barbershop). The concept sets the words, the objects and the photo list. The design language still owns color and type, and THE LAYOUT owns the page's structure. Three intensities:
+- PLAIN: no concept. Nothing is renamed, no objects (a shaped seam or one underlined word at most). Clarity and craft carry the page. Write section 0 with INTENSITY: plain, its LAYOUT line, and nothing else but STAYS PLAIN: everything.
 - SIGNATURE: one object carries one moment (the price list as a letterboard, the welcome as a letter), two renamed labels at most, everything else plain.
 - WORLD: the idea runs the page. The navigation and section names use the concept's vocabulary, two to four objects hold the content, one living detail moves. When SCOPE is offer, the home page stays at SIGNATURE and the World concept is written for the offer page in section 6.
 THE PLAIN-WORD RULE: every in-world label keeps its plain word beside it ("Tuition" over a small "Pricing"), so a first-time visitor never has to guess and search still reads what the thing is. A concept never hides what something is or what it costs.
@@ -152,6 +152,7 @@ Ground it: every line of the sheet traces to the dossier. Never invent a credent
 
 SECTION 0, THE CONCEPT, is written FIRST, as labeled lines exactly in this form (one line each; omit a line that does not apply):
 INTENSITY: plain | signature | world
+LAYOUT: one of the twelve layout keys from THE LAYOUT block, then a dash and the reason in one plain sentence (always present)
 SCOPE: site | offer (and the offer's name, when offer)
 IDEA: the one sentence
 GROUNDED IN: the true facts it rests on
@@ -162,7 +163,7 @@ LIVING DETAIL: the one thing that moves
 PHOTO LIST: what the owner should photograph, in the concept's own terms, one shot per item
 STAYS PLAIN: what deliberately does not wear the concept"""
 
-_SHEET_KEYS = ("INTENSITY", "SCOPE", "IDEA", "GROUNDED IN", "VOCABULARY",
+_SHEET_KEYS = ("INTENSITY", "LAYOUT", "SCOPE", "IDEA", "GROUNDED IN", "VOCABULARY",
                "OBJECTS", "MARKS", "LIVING DETAIL", "PHOTO LIST", "STAYS PLAIN")
 _SHEET_LINE_RE = re.compile(
     r"^\s*[-*•]?\s*(" + "|".join(re.escape(k) for k in _SHEET_KEYS)
@@ -240,6 +241,27 @@ def recent_concepts(exclude_business: str = "", limit: int = RECENT_LIMIT) -> Li
         if sheet.get("intensity") in ("signature", "world") and sheet.get("idea"):
             out.append({"intensity": sheet["intensity"], "idea": sheet["idea"][:160],
                         "objects": (sheet.get("objects") or "")[:120]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def recent_layouts(exclude_business: str = "", limit: int = 6) -> List[str]:
+    """The layouts the platform's most recent OTHER blueprints chose, newest
+    first, from the same cached rows as recent_concepts (the variety signal
+    of site_layouts.rank). Fail-open: no rows, no layouts."""
+    try:
+        recent_concepts(exclude_business)          # fills the cache when stale
+        import site_layouts
+    except Exception:
+        return []
+    out: List[str] = []
+    for r in _recent_cache.get("rows") or []:
+        if str(r.get("business_id") or "") == exclude_business:
+            continue
+        k = site_layouts.key_from_sheet(parse_sheet(str(r.get("spec") or "")))
+        if k:
+            out.append(k)
         if len(out) >= limit:
             break
     return out

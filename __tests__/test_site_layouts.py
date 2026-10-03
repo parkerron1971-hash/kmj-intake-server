@@ -196,3 +196,122 @@ def test_the_concept_sheet_line_gives_key_and_reason():
     assert sl.key_from_sheet(sheet) == "editorial"
     assert sl.reason_from_sheet(sheet).startswith("your story carries the site")
     assert sl.key_from_sheet({}) is None
+
+
+# ─── the blueprint (2026-10-03, step 1b) ─────────────────────────────
+
+def test_the_concept_sheet_reads_the_layout_line():
+    import site_concept as sc
+    sheet = sc.parse_sheet("=====\n0. THE CONCEPT\n=====\nINTENSITY: signature\n"
+                           "LAYOUT: editorial — your story carries the site\n"
+                           "IDEA: a used book\n=====\n1. OVERVIEW\n")
+    assert sl.key_from_sheet(sheet) == "editorial"
+    assert sheet["intensity"] == "signature"
+
+
+def test_the_concept_law_puts_the_layout_on_every_sheet():
+    import site_concept as sc
+    assert "LAYOUT: one of the twelve layout keys" in sc.DIRECTOR_LAW
+    assert "its LAYOUT line" in sc.DIRECTOR_LAW          # even a plain sheet
+    assert "THE LAYOUT owns the page's structure" in sc.DIRECTOR_LAW
+
+
+def test_the_director_law_replaces_the_one_skeleton():
+    import spec_author
+    s = spec_author._SYSTEM
+    assert "THE LAYOUT LAW" in s
+    assert "full-viewport hero (display headline" not in s   # the old fixed path is gone
+    assert "unless the business genuinely has little on file" in s
+    assert "in the layout's form" in s
+
+
+def test_the_layout_block_rides_the_brief_before_the_section_plan():
+    import spec_author
+    user = spec_author.build_user_prompt("DOSSIER", [], concept="== THE CONCEPT ==",
+                                         layout="== THE LAYOUT (decide) ==")
+    assert user.index("THE CONCEPT") < user.index("== THE LAYOUT") < user.index("CURRENT SECTION PLAN")
+    assert "== THE LAYOUT" not in spec_author.build_user_prompt("DOSSIER", [])
+
+
+def test_the_director_is_handed_the_ranked_layouts(monkeypatch):
+    import site_concept as sc
+    import spec_author
+    seen = {}
+    monkeypatch.setattr(spec_author, "_call_llm",
+                        lambda system, user, bid, image_urls=None, mark_urls=None:
+                        seen.setdefault("user", user) and "0. THE CONCEPT\nINTENSITY: signature")
+    monkeypatch.setattr(sc, "recent_concepts", lambda bid, limit=12: [])
+    monkeypatch.setattr(sc, "recent_layouts", lambda bid, limit=6: ["editorial"])
+    ctx = {"business": {"name": "Vertical Test Coach", "type": "coach"},
+           "site": {"site_config": {"discovery_dossier": {
+               "story": {k: {"value": "x", "source": "asked"}
+                         for k in ("proof", "voice", "origin", "atmosphere")}}}}}
+    spec_author.author_spec("biz-1", ctx, None, [])
+    assert "== THE LAYOUT" in seen["user"] and "RANKED FOR THIS BUSINESS" in seen["user"]
+    assert "ALL TWELVE LAYOUTS" in seen["user"]
+
+
+def test_recent_layouts_come_from_other_businesses_blueprints(monkeypatch):
+    import site_concept as sc
+    import sb_clients
+    rows = [{"business_id": "me", "spec": "INTENSITY: plain\nLAYOUT: grid — mine"},
+            {"business_id": "b2", "spec": "INTENSITY: signature\nLAYOUT: showcase — photos\nIDEA: x"},
+            {"business_id": "b3", "spec": "INTENSITY: plain\nLAYOUT: Long-scroll story — beats"},
+            {"business_id": "b4", "spec": "INTENSITY: plain"}]
+    monkeypatch.setattr(sc, "_recent_cache", {"at": None, "rows": []})
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: rows)
+    assert sc.recent_layouts("me") == ["showcase", "story"]
+
+
+# ─── the builder (2026-10-03, step 1b) ───────────────────────────────
+
+_SPEC_SIDEBAR = ("=====\n0. THE CONCEPT\n=====\nINTENSITY: plain\n"
+                 "LAYOUT: sidebar — a long menu is easier to move through from the side\n"
+                 "STAYS PLAIN: everything\n=====\n1. OVERVIEW\n=====\nA menu.")
+
+
+def test_the_builder_is_taught_to_build_the_layout():
+    import builder_v2
+    assert "18. THE LAYOUT" in builder_v2._SYSTEM
+
+
+def test_the_layout_recipe_rides_the_build_message_only_when_chosen():
+    import builder_v2
+    user = builder_v2.build_user_prompt(_SPEC_SIDEBAR, "REAL DATA")
+    assert "== THE LAYOUT: sidebar" in user and "STRUCTURE:" in user
+    assert user.index("== THE LAYOUT") < user.index("== THE REAL DATA")
+    plain = builder_v2.build_user_prompt("0. THE CONCEPT\nINTENSITY: plain", "REAL DATA")
+    assert "== THE LAYOUT" not in plain
+    # the surgical repair prompt is unchanged
+    repair = builder_v2.build_user_prompt(_SPEC_SIDEBAR, "REAL DATA", violations=["x"], prior_doc="<html>")
+    assert "== THE LAYOUT" not in repair
+
+
+def test_a_layout_miss_reaches_the_eyes_as_a_measured_finding():
+    import builder_v2
+    miss = builder_v2.layout_findings(_SPEC_SIDEBAR, {"1440": {"layout_measured": True, "sidebar": False}})
+    assert miss and "THE LAYOUT is Sidebar" in miss[0]
+    assert builder_v2.layout_findings(_SPEC_SIDEBAR, {"1440": {"layout_measured": True, "sidebar": True}}) == []
+    assert builder_v2.layout_findings("no sheet", {"1440": {"layout_measured": True}}) == []
+
+
+def test_the_loop_s_render_tool_reports_layout_drift(monkeypatch):
+    import builder_loop
+    import builder_v2
+    box = builder_loop.ToolBox({}, "biz", "REAL DATA", "https://x/submit",
+                               screenshots=lambda html: [("1440px top", b"jpeg")])
+    box.spec_text = _SPEC_SIDEBAR
+    monkeypatch.setattr(builder_v2, "walk_measurements",
+                        lambda html: {"1440": {"layout_measured": True, "sidebar": False}})
+    found = box.measured_findings("<html></html>")
+    assert any("THE LAYOUT is Sidebar" in f for f in found)
+
+
+def test_the_loop_stays_quiet_when_nothing_was_measured(monkeypatch):
+    import builder_loop
+    import builder_v2
+    box = builder_loop.ToolBox({}, "biz", "REAL DATA", "https://x/submit",
+                               screenshots=lambda html: [("1440px top", b"jpeg")])
+    box.spec_text = _SPEC_SIDEBAR
+    monkeypatch.setattr(builder_v2, "walk_measurements", lambda html: None)
+    assert box.measured_findings("<html></html>") == []
