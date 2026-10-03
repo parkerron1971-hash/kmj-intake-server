@@ -93,15 +93,47 @@ def free_left(cfg: Dict[str, Any]) -> int:
     return max(0, free_per_build() - used)
 
 
+def _plain(html: str) -> str:
+    """Visible words: tags out, spaces collapsed, no space left before the
+    punctuation an inline tag sat against ("stuck</em>." reads "stuck.")."""
+    t = re.sub(r"<(script|style)\b.*?</\1>", " ", html, flags=re.IGNORECASE | re.DOTALL)
+    t = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", t)).strip()
+    return re.sub(r"\s+([.,;:!?’”)])", r"\1", t)
+
+
+def _clip(text: str, cap: int) -> str:
+    if len(text) <= cap:
+        return text
+    cut = text[:cap].rsplit(" ", 1)[0].rstrip(",;:—-")
+    return cut + "…"
+
+
 def outline(doc: str) -> List[Dict[str, str]]:
     """The page's sections top to bottom, as the owner sees them: the id the
-    builder gave each one and its heading."""
+    builder gave each one and its heading. A section with no heading (a
+    quote band, a photo strip) is named by its first words, the way the
+    owner would point at it, never "Section 5" (the first live page had
+    two of nine with none)."""
     import builder_v2
     out = []
     for sid, a, z in builder_v2.section_spans(doc):
-        h = re.search(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]>", doc[a:z], re.IGNORECASE | re.DOTALL)
-        heading = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h.group(1))).strip() if h else ""
-        out.append({"id": sid, "heading": heading[:90]})
+        part = doc[a:z]
+        h = re.search(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]>", part, re.IGNORECASE | re.DOTALL)
+        label = _plain(h.group(1)) if h else ""
+        if not label:
+            # its quote, else its first real sentence, else whatever it says
+            for tag in ("blockquote", "p"):
+                for m in re.finditer(rf"<{tag}\b[^>]*>(.*?)</{tag}>", part, re.IGNORECASE | re.DOTALL):
+                    words = _plain(m.group(1))
+                    if len(words.split()) >= 4:
+                        label = _clip(words, 60)
+                        break
+                if label:
+                    break
+        if not label:
+            inner = re.sub(r"^<section\b[^>]*>", "", part, flags=re.IGNORECASE)
+            label = _clip(_plain(inner), 60)
+        out.append({"id": sid, "heading": _clip(label, 90)})
     return out[:24]
 
 
