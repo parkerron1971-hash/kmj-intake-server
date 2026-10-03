@@ -352,8 +352,14 @@ def test_a_builder_job_is_refused_for_a_hand_built_site(monkeypatch):
     # a job that is not a build still runs
     assert asyncio.run(cos.handle_enqueue_job(None, biz, {"kind": "author_spec"}))["job_id"] == "job-1"
     assert queued == ["author_spec"]
-    # a composed site builds as before
+    # a composed site with no approved blueprint goes to the Design Coach
+    # first (2026-10-03, chief_site_design.rebuild_gate)
     db.row["site_config"] = {"html_source": "module-composer"}
+    out = asyncio.run(cos.handle_enqueue_job(None, biz, {"kind": "rebuild_site"}))
+    assert "start_design_session" in out["result"] and "job_id" not in out
+    # with an approved blueprint it builds as before
+    db.row["site_config"] = {"html_source": "module-composer",
+                             "design_spec": {"text": "THE SPEC", "status": "approved"}}
     assert asyncio.run(cos.handle_enqueue_job(None, biz, {"kind": "rebuild_site"}))["job_id"] == "job-1"
 
 
