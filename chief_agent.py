@@ -22,8 +22,9 @@ WHAT IS REUSED, DELIBERATELY
   _execute_actions — the door: reference resolution, the gate, the
   policy engine, the undo log, _authorized_by.
   events — the spine event_spine.emit() already writes. One new column,
-  agent_handled_at, is the cursor. Stamped BEFORE the model call, so a
-  crash loses one run and never double-handles a booking.
+  agent_handled_at is the legacy cursor. CHIEF_DURABLE_EVENTS adds leased
+  preparation retries and a review fence before actions become possible.
+  Uncertain effects are never automatically replayed.
   chief_activity (source="system") — WhileYouWereAway renders it.
   audit_log + agent_runs — the ledger and the run record.
 
@@ -116,6 +117,9 @@ def _z(dt: datetime) -> str:
 # ─── The tick ─────────────────────────────────────────────────────────
 
 def unhandled_events() -> List[Dict[str, Any]]:
+    import chief_event_delivery
+    if chief_event_delivery.enabled():
+        return chief_event_delivery.pending(AGENT_EVENT_TYPES)
     since = _z(_now() - timedelta(hours=LOOKBACK_HOURS))
     types = ",".join(AGENT_EVENT_TYPES)
     try:
@@ -156,7 +160,7 @@ def stamp_handled(event_ids: List[str]) -> List[str]:
         {"agent_handled_at": _z(_now())})
     if isinstance(rows, list):
         return [str(r.get("id")) for r in rows if r.get("id")]
-    return list(event_ids)   # a helper that returned nothing: assume ours, as before
+    return []   # An unverified write is not an exclusive claim.
 
 
 def _business(business_id: str) -> Optional[Dict[str, Any]]:
@@ -208,14 +212,16 @@ async def handle_business(business_id: str, events: List[Dict[str, Any]]) -> Opt
         logger.info(f"[agent] {business_id[:8]} over budget — leaving events")
         return None
 
-    stamped = await asyncio.to_thread(stamp_handled, ids)
-    if stamped is None:   # a helper that says nothing (older contract, test doubles): assume ours
-        stamped = ids
-    mine = set(str(i) for i in stamped)
-    events = [e for e in events if str(e.get("id")) in mine]
-    if not events:
-        return None   # another replica got there first
-    record = await run(biz, events)
+    import chief_event_delivery
+    if chief_event_delivery.enabled():
+        record = await chief_event_delivery.execute(biz, events, run)
+    else:
+        stamped = await asyncio.to_thread(stamp_handled, ids)
+        mine = set(str(i) for i in (stamped or []))
+        events = [e for e in events if str(e.get("id")) in mine]
+        if not events:
+            return None
+        record = await run(biz, events)
     # An event changes the picture: have this business's open
     # assignments measured on the next assignments tick rather than
     # in half an hour. One cheap PATCH; never a model call here.
@@ -341,6 +347,9 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
         pass
     # Reset BEFORE defusing this run's input so its taint survives.
     user = "New since you last looked:\n" + _event_lines(events)
+    from chief_operating_context import current_context
+    operating_rules = await asyncio.to_thread(current_context, biz)
+    user += operating_rules
     started = _now()
     # What came of the last thirty days of moves (outcome_ledger): the
     # next move is shaped by what landed, not by nothing.
@@ -370,10 +379,16 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
                     [{"role": "user", "content": user + "\n\nWrite your plan for this look."}],
                     max_tokens=220, enable_web_search=False, business_id=business_id, model=model)
                 _, reasoning = cos._extract_actions_and_clean(raw_plan or "")
-            reasoning = (reasoning or "").strip()[:600] or "No plan written."
+            reasoning = (reasoning or "").strip()[:600]
+            if not reasoning:
+                raise RuntimeError('Chief did not return a plan. No actions were started.')
             idle = reasoning.lower().startswith("nothing")
             raw = ""
             if not idle:
+                if await asyncio.to_thread(current_context, biz) != operating_rules:
+                    raise RuntimeError('Business rules changed while Chief was preparing this work. Prepare again.')
+                from chief_event_delivery import before_actions
+                await before_actions()
                 ctl.reset_turn(writes_allowed=True, surface="agent", prompted=False)
                 tools = ctl.tool_definitions_for_turn(True)
                 raw = await cos._call_claude(
@@ -383,6 +398,8 @@ async def run(biz: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, An
                     max_tokens=chief_models.max_tokens_for("chat", default=900),
                     enable_web_search=False, business_id=business_id,
                     model=model, read_tools=tools, tool_biz=biz)
+                if not raw:
+                    raise RuntimeError('Chief did not return an action result. Review this follow-up.')
         taken = ctl.writes_this_turn() if not idle else []
         # Tags do nothing on this surface. If the model emitted any, they
         # are stripped from the recap and COUNTED, never executed — the

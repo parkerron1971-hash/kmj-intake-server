@@ -140,6 +140,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # ── reads ────────────────────────────────────────────────────────
     # Verified: each fetches and formats, and reaches nothing that writes.
     "catch_up":            _r("summarizes recent activity from reads only"),
+    "responsibility_status": _r("reads tenant-scoped work states and observed progress; no recovery or execution"),
+    "acknowledge_follow_up": _w("C", "owner acknowledges an uncertain event result with a revision check; never retries effects"),
+    "start_business_responsibility": _w("A", "creates a measurable assignment through the existing owner-requested assignment door; sends remain gated"),
     "check_goals":         _r("computes goal progress from business settings + live data"),
     "contact_deep_dive":   _r("assembles one contact's history"),
     "inspect_module":      _r("checks a built module against the renderer's contract; "

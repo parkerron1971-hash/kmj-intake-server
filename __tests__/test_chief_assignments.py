@@ -35,6 +35,12 @@ import chief_assignments as ca
 import chief_of_staff as cos
 import chief_tool_loop as ctl
 
+
+@pytest.fixture(autouse=True)
+def _operating_profile(monkeypatch):
+    import chief_operating_context
+    monkeypatch.setattr(chief_operating_context, 'current_context', lambda biz: '')
+
 BIZ = {"id": "biz-1", "name": "Bloom Studio", "type": "salon", "owner_id": "own-1",
        "settings": {"autonomy": {"agent_enabled": True}}}
 NOON = datetime(2026, 9, 8, 16, 0, tzinfo=timezone.utc)   # a Tuesday, inside waking hours

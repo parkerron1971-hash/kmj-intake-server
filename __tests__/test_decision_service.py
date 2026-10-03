@@ -40,6 +40,8 @@ def response(choice="lead_followup", confidence=0.97, sufficient=0.99, model="ty
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
+    import chief_operating_context
+    monkeypatch.setattr(chief_operating_context, 'current_context', lambda biz: '')
     monkeypatch.setenv("CHIEF_DECISIONS", "on")
     monkeypatch.setenv("CHIEF_DECISIONS_PROVIDER", "vercel")
     monkeypatch.setenv("CHIEF_DECISIONS_BUSINESSES", "biz-1")
