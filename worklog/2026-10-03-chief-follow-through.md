@@ -57,3 +57,8 @@ restarting work. Release receipt: docs/CHIEF_FOLLOW_THROUGH_RELEASE.json.
 Frontend #1120 is also live. Its phone-specific drawer needed a follow-up
 shortcut (solutionist-studio#1122); that correction and verification are tracked
 in the frontend worklog. No backend activation work remains.
+
+The final live report also exposed internal job-kind names in titles. The
+rollout follow-up now uses chief_jobs.KIND_META's existing business labels and
+a plain fallback, with coverage for known and unknown kinds. No job execution
+or MySite build behavior changes.
