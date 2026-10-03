@@ -63,9 +63,12 @@ def request_shape(req):
 
 _CLOCK = r'\d{1,2}(?::\d{2})?(?: ?[ap]m)?'
 _MAIN = re.compile(
-    r'^(?:(?:please )?(?:can you )?check (?:whether|if)|'
+    r'^(?:(?:please )?(?:(?:(?:can|could|would) you (?:please )?)|'
+    r"(?:i (?:just )?(?:want|need|would like) you to )|(?:i'd like you to ))?"
+    r'check (?:whether|if|to see if)|'
     r'(?:(?:i (?:want|need)(?: you)? )?to see if i have)) '
-    r'(?P<count>two|2|one|1|a) (?:(?P<service>[a-z][a-z -]{0,70}?) )?appointments?'
+    r'(?:(?:my|our) )?(?P<count>two|2|one|1|a) (?:(?:of )?(?:my|our|the) )?'
+    r'(?:(?P<service>[a-z][a-z -]{0,70}?) )?appointments?'
     r'(?: would fit| can fit| that i can fit in)? '
     r'(?P<day>next (?:week on )?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|'
     r'\d{4}-\d{2}-\d{2})[, ]+'
@@ -151,7 +154,8 @@ def _resolved_check(req, depth=0):
             or _field(history[-2], 'role') != 'user'):
         return None
     question = _field(history[-1], 'content')
-    period = 'am' if answer in ('morning', 'in the morning') else answer
+    natural_period = re.fullmatch(r'(?:yes,? )?(?:both )?(?:in the )?(morning|afternoon)(?:,? please)?', answer)
+    period = ('am' if natural_period[1] == 'morning' else 'pm') if natural_period else answer
     meridiem = period in ('am', 'pm') and _ampm_prompt(question)
     service_choice = _choice_prompt(question, answer)
     if not meridiem and not service_choice:
@@ -164,6 +168,10 @@ def _resolved_check(req, depth=0):
     check, scope = resolved
     if meridiem:
         if resolve_clocks(check.clocks) is not None or any(_clock_parts(c) is None or _clock_parts(c)[0] > 12 for c in check.clocks):
+            return None
+        # A reply about both times cannot silently disagree with an explicit
+        # original meridiem. Keep corrections on the full conversational path.
+        if any(_clock_parts(c)[2] not in (None, period) for c in check.clocks):
             return None
         check = Check(check.service, check.day, tuple(c if _clock_parts(c)[2] else c + ' ' + period for c in check.clocks))
     else:
@@ -195,6 +203,7 @@ def _history_supported(req):
     if any(_field(view, key) for key in ('viewing_contact_id', 'viewing_module_id', 'viewing_session_id')):
         return False
     current = _text(_field(req, 'message', ''))
+    current_check = parse_request(current)
     history = list(_field(req, 'conversation_history', []) or [])
     # Frontends may include this exact current user turn at the end of history.
     if history and _field(history[-1], 'role') == 'user' and _text(_field(history[-1], 'content')) == current:
@@ -212,6 +221,11 @@ def _history_supported(req):
                 continue
             if pending:
                 return False
+            # Retrying the same complete check adds no missing scope. Keep all
+            # other prior turns in this loop so an earlier constraint still
+            # prevents a shortcut; assistant prose supplies no availability facts.
+            if current_check is not None and parse_request(text) == current_check:
+                continue
             # Only complete known independent operations are proven unrelated.
             # Arbitrary prior prose can contain duration, buffers, timezones or
             # preferences without any scheduling keyword; keep its full context.
@@ -221,7 +235,7 @@ def _history_supported(req):
                 continue
             return False
 
-    return True
+    return not pending
 
 
 def _safe_name(value):
