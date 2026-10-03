@@ -110,7 +110,8 @@ KIND_META: Dict[str, Dict[str, Any]] = {
     "rebuild_site": {
         "label": "Site rebuild",
         "working": "rebuilding your site",
-        "done": "your site is ready",
+        "done": "your site is ready. Walk through it in My Site and mark "
+                "anything that isn't right; the first fixes are included",
         "nav": "build:mysite",
     },
     # Arc 6 "Creative Engine" — three candidate design directions
@@ -129,6 +130,14 @@ KIND_META: Dict[str, Dict[str, Any]] = {
         "label": "Section refine",
         "working": "reworking that section",
         "done": "your section rework is ready",
+        "nav": "build:mysite",
+    },
+    # 2026-10-03 — THE OWNER'S REVISION ROUND (site_revisions.py): the
+    # sections the owner marked on their finished page, fixed in one job.
+    "revise_sections": {
+        "label": "Site fixes",
+        "working": "fixing the sections you marked",
+        "done": "your fixes are on the site",
         "nav": "build:mysite",
     },
     # 2026-08-09 — THE BLUEPRINT. The longest single LLM call the product
@@ -452,6 +461,12 @@ def _execute_kind(kind: str, business_id: str, params: dict,
             business_id,
             section=str((params or {}).get("section") or ""),
             instruction=str((params or {}).get("instruction") or ""),
+            progress_cb=progress)
+        return result if isinstance(result, dict) else {}
+    if kind == "revise_sections":
+        import site_revisions
+        result = site_revisions.run_round(
+            business_id, list((params or {}).get("reactions") or []),
             progress_cb=progress)
         return result if isinstance(result, dict) else {}
     if kind == "module_check":

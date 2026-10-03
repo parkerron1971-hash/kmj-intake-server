@@ -11467,7 +11467,8 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
     # A hand-built site (site_adopt.py) is code: a builder job would
     # compose over it and be reinstalled on the next deploy. Refuse the
     # build with the reason, and name the verbs that DO apply.
-    if kind in ("rebuild_site", "compose_directions", "refine_section"):
+    if kind in ("rebuild_site", "compose_directions", "refine_section",
+                "revise_sections"):
         try:
             import site_adopt
             block = await asyncio.to_thread(site_adopt.hand_built_block_for, biz["id"])
