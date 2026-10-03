@@ -402,6 +402,13 @@ def no_card_free_builds_per_day() -> int:
     return _dial("NO_CARD_FREE_BUILDS_PER_DAY", "LIMIT_", 10)
 
 
+def no_card_free_workspace() -> bool:
+    """Whether a no-card trial that is over keeps a free workspace (no AI,
+    site still a preview) instead of the full-screen wall — the reverse
+    trial (feature_gates._free_workspace). 0 puts the wall back."""
+    return _dial("NO_CARD_FREE_WORKSPACE", "PRICE_", 1) != 0
+
+
 # ─── Does the tank pay for itself? ───────────────────────────────────
 
 # Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.

@@ -225,6 +225,10 @@ def access_state(business_row: Optional[Dict[str, Any]],
       'full'   — use the app normally
       'grace'  — payment failed; warn loudly, don't lock yet (Stripe
                  Smart Retries run during past_due/incomplete)
+      'free'   — a no-card trial that is over (its credits or its days):
+                 the workspace keeps working, Chief and the site wait for
+                 a card (the reverse trial, 2026-10-03). AI is held at
+                 the meter (usage_metering), not by a wall.
       'locked' — no live subscription, OR a trial that has run out of
                  credits; the frontend shows the paywall (data is never
                  deleted; export stays available)
@@ -238,6 +242,38 @@ def access_state(business_row: Optional[Dict[str, Any]],
     Dormant like everything else: enforcement_on() off → always full.
     Grandfathered users and comp_tier businesses never lock.
     """
+    state = _access_state(business_row, grandfathered, trial_spent)
+    return _free_workspace(state, business_row)
+
+
+# The trial reasons a no-card trial softens from 'locked' to 'free'.
+_TRIAL_OVER = ("trial_credits_spent", "trial_expired")
+
+
+def _free_workspace(state: Dict[str, Any],
+                    row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """THE REVERSE TRIAL (2026-10-03, Kevin: "build these"). A no-card
+    trial that ran out used to meet the same full-screen wall as a
+    cancelled subscription. Now it keeps a free workspace — contacts,
+    bookings, invoices, books — and loses only what costs money: Chief
+    and the other AI (held at the meter), and the live site (already a
+    preview until a card). Nothing about a card trial or a paid
+    subscription changes. Switch: PRICE_NO_CARD_FREE_WORKSPACE=0."""
+    if state.get("state") != "locked" or state.get("reason") not in _TRIAL_OVER:
+        return state
+    try:
+        import no_card_trial
+        import pricing_config
+        if pricing_config.no_card_free_workspace() and no_card_trial.is_no_card(row):
+            return {"state": "free", "reason": state["reason"]}
+    except Exception:
+        pass
+    return state
+
+
+def _access_state(business_row: Optional[Dict[str, Any]],
+                  grandfathered: bool,
+                  trial_spent: bool) -> Dict[str, Any]:
     if not enforcement_on():
         return {"state": "full", "reason": "enforcement_off"}
     if grandfathered:

@@ -80,8 +80,11 @@ def require_units(business_id: str) -> None:
         # A trial's tank is not a month, and a no-card trial's answer is a
         # card, not a top-up. Read only on the refusal path.
         import usage_metering
+        import no_card_trial
         row = usage_metering._biz_row(business_id)
-        if usage_metering.trial_window_start(row) is not None:
+        if no_card_trial.is_no_card(row) and not no_card_trial.is_running(row):
+            message = _locked_message("free_workspace", row)
+        elif usage_metering.trial_window_start(row) is not None:
             message = _locked_message("trial_credits_spent", row)
     except Exception as e:
         logger.warning(f"require_units trial wording skipped: {e}")
@@ -156,6 +159,13 @@ def _locked_message(reason: Optional[str], row: Optional[Dict[str, Any]]) -> str
         return ("Your free trial has ended. Pick a plan in Settings → Billing "
                 "to keep using AI features and campaigns — everything you "
                 "built is safe and exports stay open.")
+    if reason == "free_workspace":
+        # The reverse trial (feature_gates._free_workspace): the workspace
+        # still works; only Chief and the site wait for the card.
+        return ("Your free trial has ended, so Chief is off until there's a "
+                "card. Add one in Settings → Billing to bring Chief back and "
+                "put your site live — your contacts, bookings, invoices and "
+                "books keep working.")
     return ("This account's subscription has ended. Restart it in "
             "Settings → Billing to keep using AI features and "
             "campaigns — your data is safe and exports stay open.")
