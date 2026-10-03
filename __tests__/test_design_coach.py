@@ -279,3 +279,48 @@ def test_the_coach_is_taught_the_cards_and_the_rulings():
     assert 'kind "concept"' in s and "world-offer" in s and "world-site" in s
     assert "CONCEPT DEFAULT" in s and "Never pick for them" in s
     assert "concept_idea" in s and "concept_offer" in s
+
+
+# ─── the quick session (2026-10-03): Chief opens the coach from the chat ──
+
+def test_session_mode_defaults_to_the_full_sit_down():
+    assert dc.session_mode("quick") == "quick"
+    assert dc.session_mode(" QUICK ") == "quick"
+    for raw in (None, "", "deep", "fast", 3):
+        assert dc.session_mode(raw) == "deep"
+
+
+def test_quick_session_rides_the_lead_only_when_asked():
+    with mock.patch.object(dc, "_known_context", return_value="BUSINESS: X"):
+        quick = dc.build_turn_prompt("b1", [], mode="quick")
+        deep = dc.build_turn_prompt("b1", [])
+    assert "QUICK SESSION" in quick[0]["content"]
+    assert "QUICK SESSION" not in deep[0]["content"]
+    # the contract line still closes the lead, after the quick block
+    lead = quick[0]["content"]
+    assert lead.index("QUICK SESSION") < lead.index("Run the session")
+
+
+def test_quick_session_keeps_the_picture_cards_and_the_photo_ask():
+    """The quick session still shows the looks and concept cards and still
+    asks for photos when there are none: those are the choices that move
+    the design most, and the phone is where the photos are."""
+    q = dc.QUICK_SESSION
+    assert "LOOKS gallery" in q and "CONCEPT gallery" in q
+    assert '"ask": "photos"' in q and "NO PHOTOS YET" in q
+    assert "bans" in q
+
+
+def test_run_turn_passes_the_mode_to_the_prompt():
+    seen = {}
+
+    def fake_prompt(business_id, messages, mode="deep"):
+        seen["mode"] = mode
+        raise RuntimeError("stop here")
+
+    with mock.patch.object(dc, "build_turn_prompt", side_effect=fake_prompt), \
+            mock.patch.dict("os.environ", {"ANTHROPIC_API_KEY": "k"}), \
+            mock.patch.object(dc.llm_call, "sdk_client", return_value=object()):
+        out = dc.run_turn("b1", [], mode="quick")
+    assert seen["mode"] == "quick"
+    assert "error" in out
