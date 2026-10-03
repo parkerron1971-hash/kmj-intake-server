@@ -352,7 +352,8 @@ def test_checkout_subscription_data_for_each_case():
 
 def test_a_closed_no_card_trial_reads_as_a_trial_that_ended():
     ended = _no_card(days_left=-1, subscription_status="canceled")
-    assert fg.access_state(ended) == {"state": "locked", "reason": "trial_expired"}
+    # The reverse trial (test_reverse_trial.py): free, not locked.
+    assert fg.access_state(ended) == {"state": "free", "reason": "trial_expired"}
 
 
 def test_a_canceled_paid_subscription_still_reads_as_canceled():

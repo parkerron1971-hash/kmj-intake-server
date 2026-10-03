@@ -344,6 +344,7 @@ _WHAT = {
     "bulk_email": "Sending to a group of contacts at once turns on once there's a card on file.",
     "rebuild": "Your free trial includes one site build, and you've used it.",
     "builds_full": "Today's free site builds are all taken.",
+    "trial_over": "Your free trial has ended.",
 }
 
 
@@ -353,7 +354,8 @@ def card_message(what: str, row: Optional[Dict[str, Any]] = None) -> str:
     charged before the end date, and the tank grows."""
     lead = _WHAT.get(what, "That turns on once there's a card on file.")
     action = {"rebuild": "To build again, add a card",
-              "builds_full": "To build now, add a card"}.get(what, "Add a card")
+              "builds_full": "To build now, add a card",
+              "trial_over": "To build your site, add a card"}.get(what, "Add a card")
     msg = f"{lead} {action} in Settings → Billing"
     if row is not None and is_running(row):
         ends = _parse(row.get("trial_ends_at"))
@@ -463,6 +465,8 @@ def check_phone(business_id: str) -> None:
     """A no-card trial verifies its phone before any 0-credit AI step that
     leads to a build (drafting the blueprint). Fails open on a read error."""
     r = blocks(business_id)
+    if r is not None and not is_running(r):
+        raise CardRequired("trial_over", card_message("trial_over", r))
     if r is not None and not phone_verified(r):
         raise PhoneRequired("phone", PHONE_MESSAGE)
 
@@ -487,6 +491,10 @@ def check_build(business_id: str) -> None:
     r = blocks(business_id)
     if r is None:
         return
+    # The free build belongs to the trial: once it is over (its days, or a
+    # free workspace), building waits for a card like everything AI.
+    if not is_running(r):
+        raise CardRequired("trial_over", card_message("trial_over", r))
     try:
         prior = sb_clients.sb_get_as_service(
             f"/api_usage?business_id=eq.{business_id}"
