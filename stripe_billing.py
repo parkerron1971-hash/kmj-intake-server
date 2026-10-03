@@ -747,6 +747,28 @@ async def trial_phone_verify(body: TrialPhoneVerifyBody,
                                              "try again in a moment."})
 
 
+@router.get("/trial/preview-token")
+async def trial_preview_token(business_id: str,
+                              user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The editor's key to a no-card trial's site preview
+    (no_card_trial.preview_ok). The preview addresses need no sign-in, so
+    while the site is preview-only they show it only with this token;
+    the app adds it as ?pv=. Any seat on the business may preview its
+    site, so member+, like the credits card. `needed` says whether the
+    previews are gated right now — the app can skip the token when not."""
+    from business_users_router import require_role
+    require_role(business_id, str(user.id), "member")
+    import no_card_trial
+    try:
+        needed = no_card_trial.blocks(business_id) is not None
+        token = no_card_trial.preview_token(business_id) if needed else None
+    except Exception as e:
+        logger.warning(f"preview token failed open: {type(e).__name__}: {e}")
+        return {"ok": True, "needed": False, "token": None}
+    return {"ok": True, "needed": needed, "token": token,
+            "expires_in": no_card_trial.PREVIEW_TTL_SECONDS if needed else None}
+
+
 def _subscription_data(biz, user, skip_trial: bool = False):
     """Checkout subscription_data: metadata + a free trial for FIRST
     subscriptions only (re-subscribers do not get a second trial), and
