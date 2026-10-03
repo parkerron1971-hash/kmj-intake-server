@@ -340,6 +340,21 @@ def trial_window_start(biz_row: Optional[Dict[str, Any]]) -> Optional[str]:
     return start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _later_z(a_iso: str, b_iso: Optional[str]) -> str:
+    """The later of two timestamps, in the Z form a PostgREST URL needs
+    (a bare +00:00 decodes as a space; see _month_start_iso). Falls back
+    to the first when the second is missing or unreadable."""
+    try:
+        a = datetime.fromisoformat(a_iso.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(str(b_iso or "").replace("Z", "+00:00"))
+        if b.tzinfo is None:
+            b = b.replace(tzinfo=timezone.utc)
+        later = max(a, b)
+    except (ValueError, TypeError):
+        later = datetime.fromisoformat(a_iso.replace("Z", "+00:00"))
+    return later.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def usage_summary(business_id: str,
                   biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Everything the UI + enforcement need in one read. Allotment/credit
@@ -359,15 +374,33 @@ def usage_summary(business_id: str,
     # if the trial straddled the 1st. Now it draws a flat trial tank,
     # measured from the day the trial began. Same for every tier, so
     # trialing the dearest plan no longer buys the biggest free tank.
+    import no_card_trial
     trial_start = trial_window_start(row)
     on_trial = trial_start is not None
-    used = weighted_usage_since(business_id, trial_start) if on_trial         else weighted_usage_this_month(business_id)
+    # THE FREE WORKSPACE (2026-10-03): a no-card trial that is over keeps
+    # the app but not the AI. Its allowance is nothing, so every AI gate
+    # (can_interact → require_units / chief_can_send) holds — except
+    # against credits they bought, which they have paid for. Without this
+    # a closed trial has no plan, no allowance, and so no limit at all.
+    ended_no_card = no_card_trial.is_no_card(row) and not no_card_trial.is_running(row)
+    if ended_no_card:
+        # Measured from the trial's END, not the month: what the trial
+        # spent was the trial's, and a credit pack bought afterwards must
+        # not be drawn down to pay for it.
+        on_trial = False
+        used = weighted_usage_since(
+            business_id, _later_z(_month_start_iso(), (row or {}).get("trial_ends_at")))
+    elif on_trial:
+        used = weighted_usage_since(business_id, trial_start)
+    else:
+        used = weighted_usage_this_month(business_id)
 
     allotment = None
-    if on_trial:
+    if ended_no_card:
+        allotment = 0
+    elif on_trial:
         # A trial started without a card draws the smaller tank until a
         # card is added (no_card_trial.py); the card trial the full one.
-        import no_card_trial
         allotment = no_card_trial.tank(row)
     elif plan:
         allotment = feature_gates.monthly_credits(row, plan)
@@ -396,7 +429,7 @@ def usage_summary(business_id: str,
             # Practitioner chose "stop at my plan" — don't spend credits.
             blocked, reason = True, "hard_cap"
         elif used >= allotment and credits_balance <= 0:
-            blocked, reason = True, "out_of_units"
+            blocked, reason = True, ("trial_over" if ended_no_card else "out_of_units")
 
     return {
         "ok": True,
