@@ -105,6 +105,19 @@ def test_start_design_session_deep_and_brief_notes_ride_the_event():
     assert out["frontend_event"]["detail"]["brief_notes"] == "tagline: steady hands"
 
 
+def test_the_receipt_names_what_was_handed_to_the_coach():
+    """The second live test (2026-10-03): Chief said "the only thing I
+    passed along is what you told me" and the answer check could not
+    confirm it, because the receipt never said what was passed."""
+    with mock.patch.object(csd, "_hand_built_block", return_value=None):
+        out = asyncio.run(csd.handle_start_design_session(
+            None, BIZ, {"brief_notes": "it came out okay but doesn't feel like me yet"}))
+        none = asyncio.run(csd.handle_start_design_session(None, BIZ, {}))
+    assert ('Handed the Coach these notes: '
+            '"it came out okay but doesn\'t feel like me yet".') in out["result"]
+    assert "Handed the Coach no notes" in none["result"]
+
+
 def test_a_hand_built_site_gets_no_design_session():
     with mock.patch.object(csd, "_hand_built_block",
                            return_value="this site is the hand-built edition"):
