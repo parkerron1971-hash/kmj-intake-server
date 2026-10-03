@@ -127,6 +127,7 @@ def summary(spec: Optional[Dict[str, Any]], ctx: Dict[str, Any],
             offer_page = {"name": "your offer", "path": "/offer"}
     taste = dossier.get("taste") if isinstance(dossier.get("taste"), dict) else {}
     sig = dossier.get("signature") if isinstance(dossier.get("signature"), dict) else {}
+    layout, layout_options = _layout(sheet, ctx)
     return {
         "status": str(spec.get("status") or "draft"),
         "idea": str(sheet.get("idea") or "").strip()[:260],
@@ -136,4 +137,40 @@ def summary(spec: Optional[Dict[str, Any]], ctx: Dict[str, Any],
         "objects": _objects(text),
         "offer_page": offer_page,
         "price": price(business_id, plan_sections, offer_page is not None),
+        "layout": layout,
+        "layout_options": layout_options,
     }
+
+
+def _sentence(text: str) -> str:
+    t = " ".join(str(text or "").split()).strip(" .")
+    return (t[0].upper() + t[1:] + ".") if t else ""
+
+
+def _layout(sheet: Dict[str, Any], ctx: Dict[str, Any]):
+    """THE LAYOUT (2026-10-03): the layout the blueprint chose, with the
+    Director's own reason, and the three best fits for this business to
+    switch to (the rubric's best marked recommended). (None, []) when the
+    blueprint names no layout or the library is unavailable."""
+    try:
+        import site_layouts
+    except Exception:
+        return None, []
+    key = site_layouts.key_from_sheet(sheet)
+    layout = None
+    if key:
+        L = site_layouts.LAYOUTS[key]
+        layout = {"key": key, "name": L["name"],
+                  "reason": _sentence(site_layouts.reason_from_sheet(sheet))[:260]
+                  or _sentence(L["line"])}
+    try:
+        rows = site_layouts.rank(site_layouts.signals(ctx))
+    except Exception:
+        rows = []
+    if not rows:
+        return layout, []
+    best = max(rows, key=lambda r: r["score"])["key"]
+    options = [{"key": r["key"], "name": r["name"],
+                "reason": site_layouts.reason_line(r),
+                "recommended": r["key"] == best} for r in rows[:3]]
+    return layout, options

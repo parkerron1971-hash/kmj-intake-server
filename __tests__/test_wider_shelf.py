@@ -102,5 +102,10 @@ def test_the_coach_offers_the_new_cards_and_only_real_keys():
     out = dc.parse_turn('{"reply": "How should it move?", "stage": "taste", "done": false,'
                         ' "gallery": {"kind": "motion", "options": ["marquee", "unfold"]}}')
     assert out["gallery"]["options"] == ["marquee", "unfold"]
-    for word in ("broadsheet", "atelier", "glass", "runway", "arena", "monument", "corridor", "letter", "marquee", "unfold"):
+    for word in ("broadsheet", "atelier", "glass", "runway", "arena", "marquee", "unfold"):
         assert word in dc.SYSTEM if hasattr(dc, "SYSTEM") else word in dc._SYSTEM
+    # 2026-10-03: the hero-shape cards (monument, corridor, letter...) gave
+    # way to the twelve page layouts (gallery kind "page"); the parser
+    # still reads an older session's "layouts" cards, as above.
+    for word in ("page-editorial", "page-showcase", "page-minimal"):
+        assert word in dc._SYSTEM
