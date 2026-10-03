@@ -1282,6 +1282,7 @@ Measure against THE CHECKLIST (each item is a law, not a suggestion):
 - RHYTHM: no two neighboring sections share the same shape (the same heading-number-paragraph opening, the same three cards). A page where every section opens the same way has defaulted.
 - PHONE COMPOSITION: at 390px the headline survives, objects simplify, nothing collides or shrinks to unreadable.
 - CONCEPT CLARITY: when the page wears a concept, it never hides what a thing is or what it costs, and in-world labels keep their plain words.
+- THE LAYOUT: when THE LAYOUT is given, the page reads as that architecture (its columns, its opening, how its sections stack); a page that fell back to a generic stack of bands has missed it.
 
 Each violation names its "section": the id from SECTIONS ON THE PAGE, or "page" when it spans the page. Then name the WEAKEST section, the one a designer would rebuild first, with a score from 1 to 10 against everything above.
 
@@ -1353,6 +1354,15 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
         if outline:
             content.append({"type": "text", "text": "SECTIONS ON THE PAGE (id: "
                             "heading), top to bottom:\n" + outline})
+        try:
+            import site_layouts
+            _lk = layout_key_for(spec_text)
+            if _lk:
+                _L = site_layouts.LAYOUTS[_lk]
+                content.append({"type": "text", "text": f"THE LAYOUT: {_L['name']}. "
+                                f"{_L['structure']} PHONE: {_L['phone']}"})
+        except Exception:
+            pass
         for label, shot in shots:
             content.append({"type": "text", "text": f"View — {label}:"})
             content.append({"type": "image", "source": {
@@ -1511,7 +1521,35 @@ def _call(system: str, user: str, business_id: str,
 # stays byte for byte. A page-wide defect still gets the whole-page pass.
 
 WEAKEST_REBUILD_BELOW = 7        # the weakest section is rebuilt when it scores under this
-MAX_SECTION_REPAIRS = 2
+MAX_SECTION_REPAIRS = 2          # sections rebuilt per look (LOOK_FIX_SECTIONS overrides)
+
+# THE LOOK-AND-FIX LOOP (2026-10-03, the hand-build plan, phase 3). By
+# hand, a page is looked at, its weakest parts fixed, and looked at again
+# until it is right; the builder used to look once, fix at most two
+# sections, and stop. Now it looks up to LOOK_FIX_ROUNDS times, fixes the
+# weakest sections each round, and stops when a look finds nothing to
+# fix, when a round changes nothing, or when the rounds after the first
+# have spent LOOK_FIX_MAX_CENTS (so no build runs away). The whole-page
+# vision repair stays a once-per-build tool.
+
+
+def _dial_int(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(os.environ.get(name) or default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def look_fix_rounds() -> int:
+    return _dial_int("LOOK_FIX_ROUNDS", 3, 1, 6)
+
+
+def look_fix_sections() -> int:
+    return _dial_int("LOOK_FIX_SECTIONS", 3, 1, 6)
+
+
+def look_fix_max_cents() -> int:
+    return _dial_int("LOOK_FIX_MAX_CENTS", 150, 0, 2000)
 
 _SECTION_SYSTEM = ("THIS CALL REPAIRS ONE SECTION OF A FINISHED PAGE. Where the "
                    "rules below say document or page, read section: you output ONE "
@@ -1996,70 +2034,105 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     report["repeated_photos"] = check_repeated_photos(doc)
     report["craft"] = _craft().check_html(doc, real_data)
 
-    # THE EYES (Arc 2): the builder looks at its own rendered work and
-    # gets ONE surgical pass to fix what it sees. Quality violations are
-    # never fatal — if the eyes can't run, or the vision repair breaks a
-    # law, the law-passing document ships and the report says so.
-    report["vision"] = {"ran": False, "verdict": None, "violations": []}
+    # THE EYES (Arc 2), NOW A LOOP (2026-10-03, phase 3 of the hand-build
+    # plan): look, fix the weakest sections, look again. Quality violations
+    # are never fatal: if the eyes can't run, or a repair breaks a law, the
+    # law-passing document ships and the report says so.
+    report["vision"] = {"ran": False, "verdict": None, "violations": [],
+                        "rounds": [], "section_repairs": []}
     if eyes_enabled():
-        _progress(62, "The builder inspects its own work")
-        why: Dict[str, str] = {}
-        verdict = inspect_with_eyes(doc, spec_text, business_id, why=why)
-        if not verdict and why.get("reason"):
-            report["vision"]["reason"] = why["reason"]
-        _m = walk_measurements(doc)
-        measured = render_findings(_m) + _craft().render_findings(_m)
-        if page == "home":
-            measured += layout_findings(spec_text, _m)
-        report["vision"]["measured"] = measured
-        if verdict:
-            report["vision"]["ran"] = True
-            report["vision"]["verdict"] = verdict.get("verdict")
-            report["vision"]["violations"] = verdict.get("violations", [])
-            report["vision"]["weakest"] = verdict.get("weakest")
-        page_items, by_section = plan_vision_repair(
-            verdict, doc, [f"MEASURED IN THE RENDER: {m}" for m in measured])
-        if by_section and not page_items:
-            # THE DESIGNER'S REVIEW: only the named sections are rebuilt.
-            _progress(68, "Rebuilding the sections the eyes flagged")
-            done: List[Dict[str, Any]] = []
-            for sid, items in list(by_section.items())[:MAX_SECTION_REPAIRS]:
-                if not _budget_left(spend):
-                    spend["skipped"].append(f"section-repair:{sid}")
+        rounds = look_fix_rounds()
+        per_round = look_fix_sections()
+        cap_cents = look_fix_max_cents()
+        page_repair_used = False
+        cents_at_first_look = float(spend.get("cost_cents") or 0)
+        for rnd in range(1, rounds + 1):
+            if rnd > 1:
+                extra = float(spend.get("cost_cents") or 0) - cents_at_first_look
+                if extra >= cap_cents:
+                    spend["skipped"].append(f"look-fix:round-{rnd}:cap")
                     break
-                raw_s = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
-                              build_section_prompt(spec_text, real_data, doc, sid, items),
-                              business_id, spend=spend)
-                cand = splice_section(doc, sid, raw_s or "")
-                applied = False
-                if cand:
-                    cand = _mechanical(cand)
-                    if not _laws(cand):
-                        doc, applied = cand, True
-                done.append({"section": sid, "applied": applied})
-            report["vision"]["section_repairs"] = done
-            report["vision"]["repaired"] = any(d["applied"] for d in done)
-            if report["vision"]["repaired"]:
-                report["stand_ins"] = check_stand_ins(doc)
-                report["craft"] = _craft().check_html(doc, real_data)
-        wants_repair = bool(page_items)
-        if wants_repair:
-            if not _budget_left(spend):
-                spend["skipped"].append("vision-repair")
-                report["fallbacks"].append({
-                    "stage": "vision-repair",
-                    "detail": "output budget reached — keeping the law-passing document"})
+                if not _budget_left(spend):
+                    spend["skipped"].append(f"look-fix:round-{rnd}:budget")
+                    break
+            _progress(min(80, 62 + 6 * (rnd - 1)),
+                      "The builder inspects its own work" if rnd == 1
+                      else "The builder looks at the page again")
+            why: Dict[str, str] = {}
+            verdict = inspect_with_eyes(doc, spec_text, business_id, why=why)
+            _m = walk_measurements(doc)
+            measured = render_findings(_m) + _craft().render_findings(_m)
+            if page == "home":
+                measured += layout_findings(spec_text, _m)
+            weakest = (verdict or {}).get("weakest") if verdict else None
+            rec: Dict[str, Any] = {
+                "round": rnd, "verdict": (verdict or {}).get("verdict"),
+                "weakest": weakest, "measured": len(measured),
+                "violations": len((verdict or {}).get("violations") or []),
+                "sections": [], "page_repair": False}
+            report["vision"]["rounds"].append(rec)
+            if rnd == 1:
+                if not verdict and why.get("reason"):
+                    report["vision"]["reason"] = why["reason"]
+                report["vision"]["measured"] = measured
+                if verdict:
+                    report["vision"]["ran"] = True
+                    report["vision"]["verdict"] = verdict.get("verdict")
+                    report["vision"]["violations"] = verdict.get("violations", [])
+                    report["vision"]["weakest"] = weakest
+            if not verdict and not measured:
+                break                                  # nothing to look with
+            page_items, by_section = plan_vision_repair(
+                verdict, doc, [f"MEASURED IN THE RENDER: {m}" for m in measured])
+            if page_items and page_repair_used:
+                # the whole-page pass was spent: what is page-wide now
+                # rides along with the section rebuilds, or the look ends
+                if not by_section:
+                    break
+                page_items = []
+            if not page_items and not by_section:
+                break                                  # the look found it right
+            changed = False
+            if by_section and not page_items:
+                # THE DESIGNER'S REVIEW: only the named sections are rebuilt.
+                _progress(min(84, 66 + 6 * (rnd - 1)),
+                          "Rebuilding the sections the eyes flagged")
+                for sid, items in list(by_section.items())[:per_round]:
+                    if not _budget_left(spend):
+                        spend["skipped"].append(f"section-repair:{sid}")
+                        break
+                    raw_s = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
+                                  build_section_prompt(spec_text, real_data, doc, sid, items),
+                                  business_id, spend=spend)
+                    cand = splice_section(doc, sid, raw_s or "")
+                    applied = False
+                    if cand:
+                        cand = _mechanical(cand)
+                        if not _laws(cand):
+                            doc, applied = cand, True
+                    rec["sections"].append({"section": sid, "applied": applied})
+                    report["vision"]["section_repairs"].append(
+                        {"section": sid, "applied": applied, "round": rnd})
+                    changed = changed or applied
             else:
-                _progress(68, "Vision repair: fixing what the eyes found")
+                if not _budget_left(spend):
+                    spend["skipped"].append("vision-repair")
+                    report["fallbacks"].append({
+                        "stage": "vision-repair",
+                        "detail": "output budget reached — keeping the law-passing document"})
+                    break
+                _progress(min(84, 66 + 6 * (rnd - 1)), "Vision repair: fixing what the eyes found")
+                page_repair_used = True
+                rec["page_repair"] = True
                 # page-wide: one whole-page pass carries everything, the
                 # section items included
                 seen = list(page_items)
                 for items in by_section.values():
                     seen += items
                 # a stand-in or a craft miss the surgical round left behind
-                # rides the vision repair too — the eyes' round is the last chance
-                seen += [f"STILL ON THE PAGE: {s}" for s in report["stand_ins"]]
-                seen += [f"STILL ON THE PAGE: {s}" for s in report.get("craft") or []]
+                # rides the vision repair too
+                seen += [f"STILL ON THE PAGE: {x}" for x in report["stand_ins"]]
+                seen += [f"STILL ON THE PAGE: {x}" for x in report.get("craft") or []]
                 raw3 = _call(_SYSTEM,
                              build_user_prompt(spec_text, real_data,
                                                violations=seen,
@@ -2069,10 +2142,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                 if doc3:
                     doc3 = _mechanical(doc3)
                     if not _laws(doc3):
-                        doc = doc3
-                        report["vision"]["repaired"] = True
-                        report["stand_ins"] = check_stand_ins(doc)
-                        report["craft"] = _craft().check_html(doc, real_data)
+                        doc, changed = doc3, True
                     else:
                         report["fallbacks"].append({
                             "stage": "vision-repair",
@@ -2083,4 +2153,11 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                         "stage": "vision-repair",
                         "detail": "vision repair unparseable — keeping "
                                   "the law-passing document"})
+            if changed:
+                report["vision"]["repaired"] = True
+                report["stand_ins"] = check_stand_ins(doc)
+                report["craft"] = _craft().check_html(doc, real_data)
+            else:
+                break                                  # a round that changed nothing ends the loop
+        report["vision"]["looks"] = len(report["vision"]["rounds"])
     return {"html": doc, "report": report}
