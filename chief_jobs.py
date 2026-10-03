@@ -230,6 +230,15 @@ HEARTBEAT_STALE_MIN = 5
 # started_at with the older, longer threshold enqueue already uses.
 STARTED_STALE_MIN = 10
 INTERRUPTED_REASON = "interrupted by a server restart — safe to retry"
+# THE SILENT CALL (2026-10-03, Vertical Test Coach): the heartbeat used to
+# ride the progress pings, on the theory that a live build pings every
+# ~1.5s. A builder call on Opus 5.5 runs 5+ minutes with no stage
+# boundary inside it, so the row went quiet, the scheduler replica (which
+# cannot see the web process's _INFLIGHT) called it dead at 5.6 minutes
+# and marked a healthy, paid build "interrupted by a server restart".
+# The runner now stamps on a clock of its own for as long as the job
+# lives, well inside HEARTBEAT_STALE_MIN.
+HEARTBEAT_EVERY_S = 60
 
 # Flips to False after the first refused heartbeat PATCH (column not
 # migrated yet), so a missing column costs one warning, not one failed
@@ -527,10 +536,25 @@ async def _run(job_id: str, user_id: str, business_id: str, kind: str, params: d
     # Claim the in-process slot for the whole life of the runner, so the
     # stale sweep can tell a slow build from one orphaned by a restart.
     _INFLIGHT.add(job_id)
+    beat = asyncio.create_task(_heartbeat_while_running(job_id))
     try:
         await _run_inner(job_id, user_id, business_id, kind, params, meta)
     finally:
+        beat.cancel()
         _INFLIGHT.discard(job_id)
+
+
+async def _heartbeat_while_running(job_id: str) -> None:
+    """Stamp heartbeat_at every HEARTBEAT_EVERY_S until cancelled, so a
+    job inside one long model call still looks alive to a sweep on
+    another replica. The stamp is a sync PATCH, so it runs in a thread;
+    it is fail-soft (a missed beat is not an error)."""
+    while True:
+        await asyncio.sleep(HEARTBEAT_EVERY_S)
+        try:
+            await asyncio.to_thread(_stamp_heartbeat, job_id)
+        except Exception as e:
+            logger.debug(f"[chief_jobs] heartbeat skipped for {job_id}: {e}")
 
 
 async def _run_inner(job_id: str, user_id: str, business_id: str, kind: str,
