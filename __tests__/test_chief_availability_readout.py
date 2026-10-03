@@ -235,3 +235,52 @@ def test_unsupported_scope_keeps_normal_voice_opening(monkeypatch):
     monkeypatch.setattr(chief_fast_track, 'enabled', lambda: True)
     req = request(conversation_history=[{'role': 'user', 'content': 'Leave 30 minutes between sessions.'}])
     assert not chief_fast_track.plan(req, SESSION).passive
+
+
+@pytest.mark.parametrize('retry', [False, True])
+def test_actual_spoken_request_streams_only_time_clarification(monkeypatch, retry):
+    import chief_availability
+    import chief_fast_track
+    import route_ledger
+    message = ("I want you to check whether two of my consultation appointments would fit next Tuesday at 10 and 10:30, "
+               "using my business time zone. Check them together against my existing bookings and capacity. "
+               "Suggest alternatives if they conflict. Don't book or change anything.")
+    real_check = chief_availability.check_request
+    env = arrange(monkeypatch)
+    monkeypatch.setattr(chief_availability, 'check_request', real_check)
+    monkeypatch.setattr(chief_fast_track, 'enabled', lambda: True)
+    monkeypatch.setattr(route_ledger, 'finish', Mock())
+    history = [{'role': 'assistant', 'content': "Hey, good to hear from you. What's on your mind?"}]
+    if retry:
+        history += [{'role': 'user', 'content': message},
+                    {'role': 'assistant', 'content': "I couldn't confirm the rest of that from your records, so I stopped there."}]
+    req = chief.ChatRequest(business_id=BIZ['id'], message=message, mode='chief',
+                            client_surface='voice', request_id='spoken-clarification',
+                            conversation_history=history)
+    track = chief_fast_track.plan(req, SESSION)
+    assert track.passive and track.starts_turn_now()
+    assert track.rec.reason == 'checked_availability'
+
+    async def run():
+        assert [event async for event in track.lead(Mock())] == []
+        stream = await chief.chief_chat_stream(req, SESSION)
+        frames = [frame async for frame in stream.body_iterator]
+        events = [json.loads(frame.removeprefix('data: ').strip())
+                  for frame in frames if frame.startswith('data: ')]
+        spoken = ''.join(event['text'] for event in events if event['type'] == 'delta')
+        final = next(event['payload'] for event in events if event['type'] == 'final')
+        assert spoken == final['response'] == chief_availability.AMPM_QUESTION
+        assert final['availability_check']['status'] == 'clarification'
+        assert final['actions_taken'] == []
+    try:
+        asyncio.run(run())
+        # The authenticated door reads the owner once. Ambiguous clock times
+        # never trigger scheduling reads, an availability claim, or a model.
+        env.db.assert_awaited_once()
+        env.model.assert_not_awaited()
+        env.context.assert_not_awaited()
+        env.recurrence.assert_not_awaited()
+        env.sweeps.assert_not_called()
+        env.archive.assert_awaited_once()
+    finally:
+        replay._receipts.clear()
