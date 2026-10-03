@@ -222,3 +222,19 @@ def test_a_paid_round_checks_the_credit_gate_first(monkeypatch):
 def test_a_refusal_never_says_nothing_changed_when_the_round_changed_things():
     assert sr._why("the rework didn't come back. Nothing on the page changed; try again")         == "the rework didn't come back"
     assert sr._why(None).startswith("it couldn't be improved")
+
+
+def test_a_section_without_a_heading_is_named_by_its_own_words():
+    """The first live page (Vertical Test Coach) had two of nine sections
+    with no heading; the panel would have said "Section 2" and "Section 5"."""
+    doc = ("<html><body>"
+           "<section id=\"band\"><p>More like a study than an office.</p><p>Two armchairs</p></section>"
+           "<section id=\"story\"><span>4</span><blockquote>I came in thinking I needed a new job, "
+           "and I left knowing what I wanted from this one, which was the point</blockquote></section>"
+           "<section id=\"study\"><h2>I watched good people get <em>stuck</em>.</h2></section>"
+           "</body></html>")
+    assert sr.outline(doc) == [
+        {"id": "band", "heading": "More like a study than an office."},
+        {"id": "story", "heading": "I came in thinking I needed a new job, and I left knowing…"},
+        {"id": "study", "heading": "I watched good people get stuck."},
+    ]
