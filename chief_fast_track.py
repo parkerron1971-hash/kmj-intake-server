@@ -1171,6 +1171,15 @@ def plan(req: Any, user_session: Any) -> Optional[TwoTrack]:
         rec.lane, rec.reason = "off", "router_off"
         return TwoTrack(req, user_id, rec, c, mr.Route("off", "router_off"), passive=True)
 
+    # A bounded scheduling calculation supplies its own checked prose. Start
+    # it immediately and retain timing, without a second model's opening that
+    # delays a short clarification or changes the follow-up's question text.
+    import chief_availability
+    if chief_availability.eligible_request(req):
+        rec.lane, rec.reason = mr.LANE_FULL, "checked_availability"
+        return TwoTrack(req, user_id, rec, c,
+                        mr.Route(mr.LANE_FULL, "checked_availability"), passive=True)
+
     key = _convo_key(user_id, req)
     st = _CONVO.get(key) or {}
     unhappy = mr.dissatisfied(message)
