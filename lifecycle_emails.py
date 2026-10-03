@@ -139,6 +139,23 @@ def trial_ending_body(*, business_name: str, first_name: str,
 def trial_ended_body(*, business_name: str, first_name: str,
                      reason: str) -> str:
     app = app_base_url()
+    if reason == "no_card_trial_expired":
+        # The reverse trial: the workspace keeps working without a card;
+        # Chief and the live site wait for one.
+        return (
+            f"Hi {first_name},\n\n"
+            f"The free trial for {business_name} has ended, and your workspace "
+            f"keeps working: contacts, bookings, invoices and your books are all "
+            f"still yours to use.\n\n"
+            f"Chief and your website are what wait for a card. Add one and both "
+            f"come back where you left them:\n"
+            f"   {app}/?settings=billing\n\n"
+            f"If you would rather take your data with you, the export lives in "
+            f"Settings → Your Data.\n\n"
+            f"Questions, or a reason the trial didn't fit? Reply here.\n\n"
+            f"The Solutionist System\n"
+            f"{_support_email()}"
+        )
     if reason == "no_card_credits_spent":
         # The no-card trial's tank ran dry with days left. The trial has
         # NOT ended: a card keeps its end date and adds the rest of the
@@ -334,7 +351,7 @@ def _classify(row: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
             return None
         if now - ends > timedelta(days=ENDED_LOOKBACK_DAYS):
             return None
-        return {"kind": "trial_ended", "reason": "trial_expired"}
+        return {"kind": "trial_ended", "reason": _expired_reason(row)}
 
     if status == "canceled" and ends is not None:
         # Stripe's end_behavior=cancel: the trial closed without a card.
@@ -342,8 +359,21 @@ def _classify(row: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
             return None
         if ends > now or now - ends > timedelta(days=ENDED_LOOKBACK_DAYS):
             return None
-        return {"kind": "trial_ended", "reason": "trial_expired"}
+        return {"kind": "trial_ended", "reason": _expired_reason(row)}
     return None
+
+
+def _expired_reason(row: Dict[str, Any]) -> str:
+    """A no-card trial's calendar end keeps a free workspace (the reverse
+    trial), so its mail says what still works instead of "it ended"."""
+    try:
+        import no_card_trial
+        import pricing_config
+        if pricing_config.no_card_free_workspace() and no_card_trial.is_no_card(row):
+            return "no_card_trial_expired"
+    except Exception:
+        pass
+    return "trial_expired"
 
 
 async def sweep_tick() -> Dict[str, Any]:
@@ -411,6 +441,8 @@ async def sweep_tick() -> Dict[str, Any]:
                     to_email=to, to_name=None,
                     subject=(f"Your {name} trial credits are used up. Add a card to keep going"
                              if need["reason"] == "no_card_credits_spent" else
+                             f"Your {name} trial has ended. Your workspace keeps working"
+                             if need["reason"] == "no_card_trial_expired" else
                              f"Your {name} trial has ended. Your work is still here"),
                     body=trial_ended_body(business_name=name, first_name=first,
                                           reason=need["reason"]))
