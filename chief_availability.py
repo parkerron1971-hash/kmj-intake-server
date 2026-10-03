@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from availability import BusinessAvailability, is_open_default
 from availability_engine import compute_slots
 from chief_host import _sb
+import sb_clients
 
 PAGE_SIZE = 100
 MAX_ROWS = 500
@@ -231,17 +232,17 @@ def _safe_name(value):
     return not (internal_scaffolding(value) or detect_injection(value) or ACTION_TAGLIKE_RE.search(value))
 
 
-async def _rows(client, path):
-    rows = await _sb(client, 'GET', path)
+async def _rows(client, path, *, read=None):
+    rows = await (read or _sb)(client, 'GET', path)
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
         raise Unavailable('I could not read the current scheduling records reliably. Please try the check again.')
     return rows
 
 
-async def _pages(client, path, *, cap=MAX_ROWS):
+async def _pages(client, path, *, cap=MAX_ROWS, read=None):
     rows, seen = [], set()
     while True:
-        page = await _rows(client, f'{path}&order=id.asc&limit={PAGE_SIZE}&offset={len(rows)}')
+        page = await _rows(client, f'{path}&order=id.asc&limit={PAGE_SIZE}&offset={len(rows)}', read=read)
         if not page:
             return rows
         for row in page:
@@ -252,6 +253,16 @@ async def _pages(client, path, *, cap=MAX_ROWS):
         rows.extend(page)
         if len(rows) > cap:
             raise Unavailable('There are too many scheduling records for this quick check. Please use the calendar.')
+
+
+async def _busy_get(client, method, path, body=None):
+    # Calendar busy blocks are service-owned by the calendar-feeds migration:
+    # authenticated users have no SELECT privilege. The caller enters here only
+    # after the fresh exact business/owner check below. Keep every other table
+    # on the user's existing RLS path, and never read private calendar feed URLs.
+    if method != 'GET' or body is not None or not path.startswith('/calendar_busy_blocks?'):
+        raise ValueError('Invalid server-owned calendar read')
+    return await sb_clients.sb_as_service(client, 'GET', path)
 
 
 async def load_offerings(client, business_id):
@@ -445,10 +456,11 @@ async def _check_request(client, req, biz, *, now=None, prepared=None):
         return _reply('clarification', 'Which service should I use for these appointments?')
     try:
         bid = str(UUID(str(biz['id'])))
+        owner_id = str(UUID(str(biz['owner_id'])))
         if str(_field(req, 'business_id', bid)) != bid:
             return None
         rows = await _rows(client, f'/businesses?id=eq.{bid}&select=id,owner_id,settings&limit=1')
-        if len(rows) != 1 or rows[0].get('id') != bid or rows[0].get('owner_id') != biz.get('owner_id'):
+        if len(rows) != 1 or rows[0].get('id') != bid or rows[0].get('owner_id') != owner_id:
             raise Unavailable('I could not verify the current business scheduling settings.')
         settings = rows[0].get('settings')
         if not isinstance(settings, dict):
@@ -487,7 +499,7 @@ async def _check_request(client, req, biz, *, now=None, prepared=None):
             bookings_task = tasks.create_task(_pages(client, f'/module_entries?business_id=eq.{bid}&status=eq.active&appointment_at=not.is.null'
                 '&select=id,business_id,status,appointment_at,duration_min_at_booking'))
             busy_task = tasks.create_task(_pages(client, f'/calendar_busy_blocks?business_id=eq.{bid}&starts_at=lt.{quote(hi.isoformat(), safe="")}'
-                f'&ends_at=gt.{quote(lo.isoformat(), safe="")}&select=id,business_id,starts_at,ends_at'))
+                f'&ends_at=gt.{quote(lo.isoformat(), safe="")}&select=id,business_id,starts_at,ends_at', read=_busy_get))
         offerings, bookings, busy = catalog_task.result(), bookings_task.result(), busy_task.result()
         _validate_offerings(offerings, bid)
         exact = [o for o in offerings if _text(o['name']) == check.service]

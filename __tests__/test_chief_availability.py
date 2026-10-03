@@ -44,6 +44,7 @@ def fixture(monkeypatch, *, biz=None, offerings=None, bookings=None, busy=None):
         offset=int(query.get('offset',['0'])[0])
         return deepcopy(tables[url.path][offset:offset+100])
     monkeypatch.setattr(ca,'_sb',read)
+    monkeypatch.setattr(ca,'_busy_get',read)
     return calls,tables
 
 
@@ -250,6 +251,7 @@ def test_failed_parallel_read_cancels_siblings_before_reply(monkeypatch):
             finally: active.remove('calendar')
         return await original(client,method,path,body)
     monkeypatch.setattr(ca,'_sb',reader)
+    monkeypatch.setattr(ca,'_busy_get',reader)
     result=run()
     assert result['availability_check']['status']=='unavailable'
     assert 'not been checked' in result['response'] and not active
