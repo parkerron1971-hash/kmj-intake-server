@@ -62,6 +62,10 @@ def _normalized(text: str) -> str:
     return ' '.join(re.findall(r'\w+', text.casefold()))
 
 
+def _extends(text: str, prefix: str) -> bool:
+    return bool(prefix and (text == prefix or text.startswith(prefix + ' ')))
+
+
 def _prune(now: float) -> None:
     for key, entry in list(_entries.items()):
         if now - entry.at >= TTL_SECONDS:
@@ -97,7 +101,7 @@ def consume(user_id: str, business_id: str, turn_id: str | None,
         entry.terminal = True
         prefix = _normalized(entry.text)
         if (time.monotonic() - entry.at >= TTL_SECONDS or revision != entry.revision
-                or not prefix or not _normalized(final_text).startswith(prefix)):
+                or not _extends(_normalized(final_text), prefix)):
             return None
         return deepcopy(payload)
 
@@ -145,8 +149,8 @@ async def prepare_listening(req: ListeningRequest,
         # completed/in-flight work to the latest revision without sliding its
         # TTL. A correction or cancellation creates a different lineage.
         prefix = _normalized(prior.text) if prior else ''
-        extending = bool(prior and prefix and not req.cancel
-                         and _normalized(req.text).startswith(prefix))
+        extending = bool(prior and not req.cancel
+                         and _extends(_normalized(req.text), prefix))
         if extending and (prior.payload is not None or prior.fetching):
             entry.at = prior.at
             entry.lineage = prior.lineage

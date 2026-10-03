@@ -126,6 +126,16 @@ class ListeningTests(IsolatedAsyncioTestCase):
             await listening.prepare_listening(req, SESSION)
         self.assertIsNone(listening.consume(USER, BIZ, str(req.turn_id), 1, 'Cancel that, send me a note'))
 
+    async def test_word_replacement_is_not_an_extending_prefix(self):
+        req = revised(request(), text='Check appointment ten')
+        changed = revised(req, revision=2, text='Check appointment tenth')
+        with patch.object(listening, '_fetch', AsyncMock(return_value={'offerings': ['catalog']})) as fetch:
+            await listening.prepare_listening(req, SESSION)
+            self.assertEqual((await listening.prepare_listening(changed, SESSION))['status'], 'throttled')
+            self.assertEqual(fetch.call_count, 1)
+        self.assertIsNone(listening.consume(USER, BIZ, str(req.turn_id), 2, changed.text))
+        self.assertFalse(listening._extends(listening._normalized(changed.text), listening._normalized(req.text)))
+
     async def test_ready_catalog_survives_extension_inside_throttle_window(self):
         req = request()
         extended = revised(req, revision=2, text=req.text + ' at noon')
