@@ -88,10 +88,11 @@ def judge_effort() -> str:
 
 
 def judge_kwargs(model: str) -> Dict[str, Any]:
-    """The effort field for one judge call, only where the model takes it
-    (Sonnet 4.5 400s on it, so it gets nothing)."""
+    """The effort field for one judge call (an SDK call, so it rides
+    extra_body), only where the model takes it (Sonnet 4.5 400s on it,
+    so it gets nothing)."""
     import model_ladder
-    return model_ladder.effort_kwargs(model, judge_effort())
+    return model_ladder.sdk_effort_kwargs(model, judge_effort())
 
 
 def gate_enforced() -> bool:

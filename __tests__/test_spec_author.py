@@ -697,7 +697,10 @@ def test_a_thinking_model_gets_a_bounded_effort_and_room(monkeypatch):
     msgs = _wire_call(monkeypatch, "claude-opus-5-5")
     assert spec_author._call_llm("sys", "user", "biz") == "SPEC DOCUMENT"
     kw = msgs.calls[0]
-    assert kw["output_config"] == {"effort": "medium"}
+    # through the SDK the effort rides extra_body (the pinned SDK 0.34.2
+    # TypeErrors on an output_config keyword); see test_sdk_effort_contract
+    assert kw["extra_body"]["output_config"] == {"effort": "medium"}
+    assert "output_config" not in kw
     assert kw["max_tokens"] == spec_author.SPEC_MAX_TOKENS == 32000
     # above the SDK's non-streaming ceiling: only a streamed call may ask
     # for this much (the fake's create() is a trap)
@@ -717,6 +720,7 @@ def test_a_model_without_effort_gets_none(monkeypatch):
     msgs = _wire_call(monkeypatch, "claude-sonnet-4-5-20250929")
     spec_author._call_llm("sys", "user", "biz")
     assert "output_config" not in msgs.calls[0]
+    assert "extra_body" not in msgs.calls[0]
 
 
 def test_an_unreachable_photo_falls_back_to_text_only(monkeypatch):
@@ -729,4 +733,4 @@ def test_an_unreachable_photo_falls_back_to_text_only(monkeypatch):
     assert len(msgs.calls) == 2
     assert isinstance(msgs.calls[0]["messages"][0]["content"], list)   # with images
     assert msgs.calls[1]["messages"][0]["content"] == "user text"      # text only
-    assert msgs.calls[1]["output_config"] == {"effort": "medium"}
+    assert msgs.calls[1]["extra_body"]["output_config"] == {"effort": "medium"}
