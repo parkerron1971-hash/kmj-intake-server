@@ -1564,7 +1564,7 @@ router = APIRouter(tags=["public_site"])
 
 
 @router.get("/public/site/{slug}")
-async def get_site_html(slug: str):
+async def get_site_html(slug: str, pv: Optional[str] = None):
     """Return the full generated site HTML for hosting/preview."""
     if not _check_rate(slug):
         raise HTTPException(429, "Rate limit exceeded")
@@ -1578,6 +1578,11 @@ async def get_site_html(slug: str):
             raise HTTPException(404, "Site not found")
         site = sites[0]
         biz_id = site.get("business_id")
+        # A no-card trial's site is a preview only its own team may see
+        # (no_card_trial.preview_blocked): the app adds ?pv=<token>.
+        import no_card_trial
+        if await no_card_trial.preview_blocked(client, biz_id, pv):
+            return await _render_offline_page(client, biz_id, coming_soon=True)
 
         # Pass 3: Smart Sites flag-gate. ANY failure falls through to legacy.
         if _use_smart_sites(site) and biz_id:
@@ -1787,19 +1792,22 @@ async def _news_site_row(client: httpx.AsyncClient, slug: str):
 # use is slug.mysolutionist.app/news, handled in the subdomain router
 # further down; both go through _news_identity + _news_response.
 @router.get("/public/site/{slug}/news")
-async def get_site_news_index(slug: str):
+async def get_site_news_index(slug: str, pv: Optional[str] = None):
     """The archive page. Indexable, and the one marketing surface no
     platform can revoke — see site_news.py for why it exists."""
     if not _check_rate(slug):
         raise HTTPException(429, "Rate limit exceeded")
     async with httpx.AsyncClient() as client:
         biz_id, custom_domain = await _news_site_row(client, slug)
+        import no_card_trial
+        if await no_card_trial.preview_blocked(client, biz_id, pv):
+            return await _render_offline_page(client, biz_id, coming_soon=True)
         posts, name, brand = await _news_identity(client, biz_id)
     return _news_response(posts, name, _public_origin(slug, custom_domain), brand)
 
 
 @router.get("/public/site/{slug}/news/{post_slug}")
-async def get_site_news_post(slug: str, post_slug: str):
+async def get_site_news_post(slug: str, post_slug: str, pv: Optional[str] = None):
     """One post at its own stable URL, carrying its own title, meta
     description, canonical and Article schema. The stable URL is the
     entire point: it is still earning search traffic long after the
@@ -1808,12 +1816,15 @@ async def get_site_news_post(slug: str, post_slug: str):
         raise HTTPException(429, "Rate limit exceeded")
     async with httpx.AsyncClient() as client:
         biz_id, custom_domain = await _news_site_row(client, slug)
+        import no_card_trial
+        if await no_card_trial.preview_blocked(client, biz_id, pv):
+            return await _render_offline_page(client, biz_id, coming_soon=True)
         posts, name, brand = await _news_identity(client, biz_id)
     return _news_response(posts, name, _public_origin(slug, custom_domain), brand, post_slug)
 
 
 @router.get("/public/site/{slug}/{page_path}")
-async def get_site_page_html(slug: str, page_path: str):
+async def get_site_page_html(slug: str, page_path: str, pv: Optional[str] = None):
     """Serve a secondary page of a multi-page site (About/Services/Contact)
     from site_config.generated_pages. Registered AFTER /data so it never
     shadows it. Unknown sub-paths or single-page sites fall back to home."""
@@ -1826,13 +1837,19 @@ async def get_site_page_html(slug: str, page_path: str):
             f"&select=business_id,site_config")
         if not sites:
             raise HTTPException(404, "Site not found")
+        biz_id = sites[0].get("business_id")
+        # A no-card trial's site is a preview only its own team may see
+        # (no_card_trial.preview_blocked): the app adds ?pv=<token>.
+        import no_card_trial
+        if await no_card_trial.preview_blocked(client, biz_id, pv):
+            return await _render_offline_page(client, biz_id, coming_soon=True)
         cfg = sites[0].get("site_config") or {}
         pages = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
         page_id = _preview_page_id(cfg, page_path)
         html = (pages or {}).get(page_id) or ""
         if not html:
             # Home, unknown page, or a single-page site → serve the main page.
-            return await get_site_html(slug)
+            return await get_site_html(slug, pv)
         manual = _is_manual_source(cfg)
         if manual:
             biz_id = sites[0].get("business_id")
@@ -2790,7 +2807,8 @@ async def decoration_status_endpoint(business_id: str):
 # ?v={timestamp} query string so the browser cannot serve a stale copy.
 
 @router.get("/sites/{business_id}/preview")
-async def preview_site_endpoint(business_id: str, v: Optional[int] = None):
+async def preview_site_endpoint(business_id: str, v: Optional[int] = None,
+                                pv: Optional[str] = None):
     """Render the full site through the fallback chain.
 
     Same output as the live URL would serve. Accessible by business_id so
@@ -2807,6 +2825,10 @@ async def preview_site_endpoint(business_id: str, v: Optional[int] = None):
     biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=id&limit=1") or []
     if not biz_rows:
         raise HTTPException(404, "Business not found")
+    async with httpx.AsyncClient() as client:
+        import no_card_trial
+        if await no_card_trial.preview_blocked(client, business_id, pv):
+            return await _render_offline_page(client, business_id, coming_soon=True)
 
     try:
         from smart_sites import render_full_site_html
@@ -2835,6 +2857,7 @@ async def preview_site_endpoint(business_id: str, v: Optional[int] = None):
 @router.get("/sites/{business_id}/preview-page/{page_id}")
 async def preview_page_endpoint(
     business_id: str, page_id: str, v: Optional[int] = None,
+    pv: Optional[str] = None,
 ):
     """Preview a specific page (home, about, services, contact) from a
     multi-page site. Same cache-busting headers + iframe-friendly behavior
@@ -2848,6 +2871,10 @@ async def preview_page_endpoint(
     biz_rows = be_get(f"/businesses?id=eq.{business_id}&select=id&limit=1") or []
     if not biz_rows:
         raise HTTPException(404, "Business not found")
+    async with httpx.AsyncClient() as client:
+        import no_card_trial
+        if await no_card_trial.preview_blocked(client, business_id, pv):
+            return await _render_offline_page(client, business_id, coming_soon=True)
 
     site_rows = be_get(
         f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"

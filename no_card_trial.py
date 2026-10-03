@@ -659,3 +659,57 @@ async def site_hidden(client, business_id: Optional[str]) -> bool:
     hidden = (await blocks_async(client, key)) is not None
     _hidden_cache[key] = (now + _HIDDEN_TTL_SECONDS, hidden)
     return hidden
+
+
+# ─── Owner-only previews ─────────────────────────────────────────────
+# The editor's preview addresses (/public/site/{slug} on the API host, and
+# /sites/{id}/preview) needed no sign-in, so a no-card site that was
+# "coming soon" at its public address could still be shared from there.
+# Now they show it only with a short-lived token the app mints for the
+# signed-in team (GET /billing/trial/preview-token). Anyone else gets
+# "coming soon", the same as the public address.
+
+PREVIEW_TTL_SECONDS = 12 * 3600
+
+
+def _preview_sig(business_id: str, exp: int) -> str:
+    import hashlib
+    import hmac
+    from customer_token import derive_key
+    return hmac.new(derive_key("site-preview", str(business_id)),
+                    str(exp).encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def preview_token(business_id: str, now: Optional[int] = None) -> str:
+    import time
+    exp = int(now if now is not None else time.time()) + PREVIEW_TTL_SECONDS
+    return f"{exp}.{_preview_sig(business_id, exp)}"
+
+
+def preview_ok(business_id: Optional[str], token: Optional[str],
+               now: Optional[int] = None) -> bool:
+    import hmac
+    import time
+    if not business_id or not token:
+        return False
+    try:
+        exp_s, sig = str(token).split(".", 1)
+        exp = int(exp_s)
+    except ValueError:
+        return False
+    if exp < int(now if now is not None else time.time()):
+        return False
+    try:
+        return hmac.compare_digest(_preview_sig(business_id, exp), sig)
+    except Exception:
+        return False
+
+
+async def preview_blocked(client, business_id: Optional[str],
+                          token: Optional[str]) -> bool:
+    """True when a preview address must show "coming soon" instead of the
+    site: a no-card trial, seen without a valid owner token. Fails OPEN
+    like site_hidden — a read error shows the site."""
+    if not await site_hidden(client, business_id):
+        return False
+    return not preview_ok(business_id, token)
