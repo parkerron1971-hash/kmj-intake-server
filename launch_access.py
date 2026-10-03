@@ -366,7 +366,8 @@ def create_business(body: CreateBusinessBody,
     # its settings write cannot race theirs. Never raises: a business
     # that could not get the trial meets the paywall, as before.
     import no_card_trial
-    trial = no_card_trial.start(row, source="signup")
+    trial = no_card_trial.start(row, source="signup",
+                                email=getattr(user, "email", None))
     # Day one for everyone who never reaches Stripe. Comped, invited and
     # grandfathered accounts have no subscription and so no `trialing`
     # webhook ever fires — an arc that only opened from Stripe would skip

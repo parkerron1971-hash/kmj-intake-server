@@ -11467,14 +11467,21 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
                               "check_site to look at it",
                     "label": "Site is hand-built — no rebuild", "nav": None}
     if kind == "rebuild_site":
-        # A no-card trial's one free build is spent: say so now, instead
-        # of starting a job that can only come back refused.
+        # A no-card trial earns its free build (no_card_trial.check_build):
+        # say what it needs now, instead of starting a job that can only
+        # come back refused. The phone check itself lives in the app, on
+        # the Build my site button, so Chief points there.
         import no_card_trial
         try:
-            await asyncio.to_thread(no_card_trial.check_rebuild, biz["id"])
-        except no_card_trial.CardRequired as e:
+            await asyncio.to_thread(no_card_trial.check_build, biz["id"])
+        except no_card_trial.PhoneRequired as e:
+            return {"type": "enqueue_job",
+                    "result": (f"Not started — {e.message} Press Build my site in "
+                               "My Site and it will ask for the code."),
+                    "label": "Free build: verify your phone first", "nav": None}
+        except no_card_trial.TrialGate as e:
             return {"type": "enqueue_job", "result": f"Not started — {e.message}",
-                    "label": "Rebuild waits for a card", "nav": None}
+                    "label": "Build waits for a card", "nav": None}
     try:
         job = await chief_jobs.enqueue(
             client, user_id=owner, business_id=biz["id"], kind=kind,

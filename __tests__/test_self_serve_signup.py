@@ -253,7 +253,10 @@ def test_open_is_public(client):
     assert r.status_code == 200, r.text[:200]
     body = r.json()
     assert body["ok"] is True
-    assert set(body) == {"ok", "invite_only", "trial_days"}
+    # Only public facts: the doors, the trial length, and whether (and with
+    # how many credits) the trial starts without a card (no_card_trial.py).
+    assert {"ok", "invite_only", "trial_days", "no_card_trial"} <= set(body)
+    assert set(body) <= {"ok", "invite_only", "trial_days", "no_card_trial", "trial_credits"}
 
 
 def test_open_reports_the_doors(client, monkeypatch):

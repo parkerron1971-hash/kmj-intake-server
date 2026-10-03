@@ -417,10 +417,11 @@ def _execute_kind(kind: str, business_id: str, params: dict,
                                   # Refine mode: keep the current design
                                   # direction, regenerate the execution.
                                   refine=bool((params or {}).get("refine")))
-        except no_card_trial.CardRequired as e:
-            # A no-card trial's second build: a finished job with an honest
-            # answer, not a failure that offers "tap to retry".
-            return {"ok": False, "error": e.message, "card_required": True}
+        except no_card_trial.TrialGate as e:
+            # A no-card trial reached the build without earning it (a job
+            # queued before the gate, or a retry): a finished job with an
+            # honest answer, not a failure that offers "tap to retry".
+            return {"ok": False, "error": e.message, e.error: True}
         return result if isinstance(result, dict) else {}
     if kind == "compose_directions":
         # Arc 6 — authors + stores the three direction drafts; the result
@@ -859,6 +860,11 @@ async def rebuild_site_endpoint(req: _RebuildReq,
         block = await asyncio.to_thread(_hand_built_block, req.business_id)
         if block:
             raise HTTPException(409, f"This site is hand-built: {block}")
+        # A no-card trial EARNS its free build (no_card_trial.check_build):
+        # a verified phone, today's ceiling, one build. Refused here as a
+        # 402 the app turns into the phone prompt or the card ask — not a
+        # queued job that could only come back failed.
+        await _no_card_gate(no_card_build=True, business_id=req.business_id)
         params: Dict[str, Any] = {}
         if req.refine:
             params["refine"] = True
@@ -878,6 +884,19 @@ async def rebuild_site_endpoint(req: _RebuildReq,
     if (job or {}).get("deduped"):
         out["deduped"] = True
     return out
+
+
+async def _no_card_gate(*, no_card_build: bool, business_id: str) -> None:
+    """The no-card trial's door on the job endpoints, as a 402 whose
+    detail is {error: phone_required | card_required, what, message}."""
+    import no_card_trial
+    try:
+        if no_card_build:
+            await asyncio.to_thread(no_card_trial.check_build, business_id)
+        else:
+            await asyncio.to_thread(no_card_trial.check_phone, business_id)
+    except no_card_trial.TrialGate as e:
+        raise HTTPException(402, e.detail())
 
 
 def _hand_built_block(business_id: str) -> Optional[str]:
@@ -920,6 +939,11 @@ async def author_spec_endpoint(req: _SpecJobReq,
                           "&select=id&limit=1")
         if not owned:
             raise HTTPException(403, "not your business")
+        # Drafting a blueprint is a real model call priced at 0 credits (it
+        # is a build's first step), so a no-card trial verifies its phone
+        # before it can run one — or drafts would be the free build's back
+        # door, one ~16c call at a time.
+        await _no_card_gate(no_card_build=False, business_id=req.business_id)
         params: Dict[str, Any] = {}
         if notes:
             params["notes"] = notes[:2000]

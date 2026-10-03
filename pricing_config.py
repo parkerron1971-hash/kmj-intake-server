@@ -393,6 +393,15 @@ def no_card_trial_enabled() -> bool:
     return _dial("NO_CARD_TRIAL", "PRICE_", 1) != 0
 
 
+def no_card_free_builds_per_day() -> int:
+    """The most free site builds no-card trials may start in one UTC day,
+    across the whole platform (Kevin, 2026-10-03: "this is my own money").
+    A build costs ~$1.70-3.25 of AI with the offer page skipped, so the
+    default caps a flood of signups at ~$30 a day. Past it, the build
+    waits for a card or for tomorrow. 0 = no free builds without a card."""
+    return _dial("NO_CARD_FREE_BUILDS_PER_DAY", "LIMIT_", 10)
+
+
 # ─── Does the tank pay for itself? ───────────────────────────────────
 
 # Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.

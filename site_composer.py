@@ -3808,15 +3808,18 @@ def compose_site(business_id: str, brief_notes: str = "",
     imagery_priority/boldness/notes) is sanitized and persisted to
     businesses.settings.site_prefs BEFORE composing, so gather_context reads
     it back; recomposes without fresh prefs reuse the stored ones."""
-    # A no-card trial's free build is its only one (no_card_trial.py): the
-    # next is charged 1,000+ credits against a 500 tank, and the AI gate
-    # only asks whether ANY credit is left. Checked here, in the one entry
-    # every paid build passes through — the /compose endpoint, Chief's
-    # rebuild job and the director all call this. Raises CardRequired,
-    # whose message is the practitioner's answer.
+    # A no-card trial earns its one free build (no_card_trial.check_build):
+    # a verified phone first, within the platform's daily ceiling, and the
+    # next build waits for a card (1,000+ credits against a 500 tank, and
+    # the AI gate only asks whether ANY credit is left). Checked here, in
+    # the one entry every paid build passes through — the /compose
+    # endpoint, Chief's rebuild job and the director all call this.
+    # Raises a TrialGate whose message is the practitioner's answer.
+    _no_card = False
     if use_llm:
         import no_card_trial
-        no_card_trial.check_rebuild(business_id)
+        no_card_trial.check_build(business_id)
+        _no_card = no_card_trial.blocks(business_id) is not None
     # CANVAS PROTECTION (2026-07-25, the 05:00 incident): a retired
     # Smart Sites banner's click rerouted into compose_site(use_llm=
     # False) and a SUB-SECOND deterministic module compose silently
@@ -4350,8 +4353,12 @@ def compose_site(business_id: str, brief_notes: str = "",
     # THE OFFER PAGE: built after the home is live (it never delays it),
     # wearing the home's house style. A spec with no offer scope clears a
     # page an earlier build made. Best-effort.
+    # A no-card trial's free build skips it: the offer page is a whole
+    # extra builder pass (~a third of a build's cost), and the free build
+    # is the pitch, not the finished site. A card, then a rebuild, adds it.
     _offer_built = False
-    if use_llm and canvas_html and (canvas_report or {}).get("engine") == "builder_v2":
+    if (use_llm and not _no_card and canvas_html
+            and (canvas_report or {}).get("engine") == "builder_v2"):
         _offer_built = bool(build_offer_page(business_id, ctx, canvas_html,
                                              progress_cb=progress_cb))
 
@@ -4732,9 +4739,8 @@ def compose(body: ComposeBody,
     try:
         result = compose_site(body.business_id, body.brief_notes or "", body.use_llm,
                               design_prefs=body.design_prefs, refine=body.refine)
-    except no_card_trial.CardRequired as e:
-        raise HTTPException(status_code=402, detail={
-            "error": "card_required", "what": e.what, "message": e.message})
+    except no_card_trial.TrialGate as e:
+        raise HTTPException(status_code=402, detail=e.detail())
     return {"ok": True, **result}
 
 

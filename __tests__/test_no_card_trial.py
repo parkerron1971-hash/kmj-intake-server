@@ -397,31 +397,307 @@ def test_the_refusal_says_what_adding_a_card_does():
     assert "500 more credits" in msg
 
 
+def _verified(**over):
+    m = {"started_at": _iso(NOW), "plan": "professional", "credits": 500,
+         "phone_hash": "h", "phone_verified_at": _iso(NOW)}
+    return _no_card(settings={nct.MARKER: m}, **over)
+
+
+class _BuildDb:
+    """api_usage markers for THIS business, and today's free builds."""
+
+    def __init__(self, own_markers=(), today=(), today_biz=()):
+        self.own, self.today, self.today_biz = list(own_markers), list(today), list(today_biz)
+
+    def get(self, path):
+        if path.startswith("/api_usage?business_id="):
+            return self.own
+        if path.startswith("/api_usage?task_type=eq.site_build_marker&units=eq.0"):
+            return self.today
+        if path.startswith("/businesses?id=in."):
+            return self.today_biz
+        return []
+
+
+def _build_env(monkeypatch, row, db):
+    monkeypatch.setattr(um, "_biz_row", lambda biz: row)
+    monkeypatch.setattr(nct.sb_clients, "sb_get_as_service", db.get)
+
+
 def test_the_second_build_waits_for_a_card(monkeypatch):
-    monkeypatch.setattr(um, "_biz_row", lambda biz: _no_card())
-    monkeypatch.setattr(nct.sb_clients, "sb_get_as_service", lambda path: [{"id": "m1"}])
+    _build_env(monkeypatch, _verified(), _BuildDb(own_markers=[{"id": "m1"}]))
     with pytest.raises(nct.CardRequired) as ei:
-        nct.check_rebuild("biz1")
+        nct.check_build("biz1")
     assert ei.value.what == "rebuild"
     assert "one site build" in ei.value.message
 
 
-def test_the_first_build_does_not(monkeypatch):
+def test_the_free_build_waits_for_a_verified_phone(monkeypatch):
+    _build_env(monkeypatch, _no_card(), _BuildDb())
+    with pytest.raises(nct.PhoneRequired) as ei:
+        nct.check_build("biz1")
+    assert ei.value.detail()["error"] == "phone_required"
+
+
+def test_a_verified_phone_gets_the_free_build(monkeypatch):
+    _build_env(monkeypatch, _verified(), _BuildDb())
+    nct.check_build("biz1")
+
+
+def test_the_daily_ceiling_holds_free_builds(monkeypatch):
+    monkeypatch.setenv("LIMIT_NO_CARD_FREE_BUILDS_PER_DAY", "2")
+    others = [{"business_id": f"b{i}"} for i in range(2)]
+    others_rows = [_no_card(id=f"b{i}") for i in range(2)]
+    _build_env(monkeypatch, _verified(), _BuildDb(today=others, today_biz=others_rows))
+    with pytest.raises(nct.CardRequired) as ei:
+        nct.check_build("biz1")
+    assert ei.value.what == "builds_full"
+    assert "try again tomorrow" in ei.value.message
+
+
+def test_card_trials_free_builds_do_not_count_against_the_ceiling(monkeypatch):
+    monkeypatch.setenv("LIMIT_NO_CARD_FREE_BUILDS_PER_DAY", "1")
+    carded = [_no_card(id="b0", stripe_subscription_id="sub_1")]
+    _build_env(monkeypatch, _verified(),
+               _BuildDb(today=[{"business_id": "b0"}], today_biz=carded))
+    nct.check_build("biz1")
+
+
+def test_an_unreadable_count_fails_closed(monkeypatch):
+    """The one gate that fails CLOSED: an unreadable count must not
+    become unlimited free builds on Kevin's money."""
+    class _Db(_BuildDb):
+        def get(self, path):
+            if "units=eq.0" in path:
+                return None
+            return super().get(path)
+    _build_env(monkeypatch, _verified(), _Db())
+    with pytest.raises(nct.CardRequired):
+        nct.check_build("biz1")
+
+
+def test_zero_free_builds_means_the_build_waits_for_a_card(monkeypatch):
+    monkeypatch.setenv("LIMIT_NO_CARD_FREE_BUILDS_PER_DAY", "0")
+    _build_env(monkeypatch, _verified(), _BuildDb())
+    with pytest.raises(nct.CardRequired):
+        nct.check_build("biz1")
+
+
+def test_a_card_trial_builds_as_before(monkeypatch):
+    _build_env(monkeypatch, _no_card(stripe_subscription_id="sub_1"),
+               _BuildDb(own_markers=[{"id": "m1"}]))
+    nct.check_build("biz1")
+
+
+def test_blueprint_drafts_wait_for_the_phone_too(monkeypatch):
     monkeypatch.setattr(um, "_biz_row", lambda biz: _no_card())
-    monkeypatch.setattr(nct.sb_clients, "sb_get_as_service", lambda path: [])
-    nct.check_rebuild("biz1")
+    with pytest.raises(nct.PhoneRequired):
+        nct.check_phone("biz1")
+    monkeypatch.setattr(um, "_biz_row", lambda biz: _verified())
+    nct.check_phone("biz1")
 
 
-def test_a_card_trial_rebuilds_as_before(monkeypatch):
-    monkeypatch.setattr(um, "_biz_row", lambda biz: _no_card(stripe_subscription_id="sub_1"))
-    monkeypatch.setattr(nct.sb_clients, "sb_get_as_service", lambda path: [{"id": "m1"}])
-    nct.check_rebuild("biz1")
-
-
-def test_every_paid_build_passes_the_rebuild_check():
+def test_every_paid_build_passes_the_build_check():
     import site_composer
     src = inspect.getsource(site_composer.compose_site)
-    assert "check_rebuild" in src.split("CANVAS PROTECTION")[0]
+    assert "check_build" in src.split("CANVAS PROTECTION")[0]
+
+
+def test_the_free_build_skips_the_offer_page():
+    import site_composer
+    src = inspect.getsource(site_composer.compose_site)
+    offer = src[src.index("_offer_built = False"):src.index("build_offer_page(")]
+    assert "not _no_card" in offer
+
+
+def test_the_app_build_door_refuses_up_front():
+    """The app starts every build through /agents/chief/jobs/rebuild; the
+    refusal must be a 402 there, not a queued job that fails later."""
+    import chief_jobs
+    assert "_no_card_gate(no_card_build=True" in inspect.getsource(chief_jobs.rebuild_site_endpoint)
+    assert "_no_card_gate(no_card_build=False" in inspect.getsource(chief_jobs.author_spec_endpoint)
+
+
+# ─── The phone check ─────────────────────────────────────────────────
+
+class _PhoneDb:
+    def __init__(self, row, taken=False):
+        self.row, self.taken, self.patches = row, taken, []
+
+    def get(self, path):
+        if "phone_hash=eq." in path:
+            return [{"id": "other"}] if self.taken else []
+        if path.startswith("/businesses?id=eq."):
+            return [{"settings": self.row.get("settings")}]
+        return []
+
+    def patch(self, path, body):
+        self.patches.append(body)
+        return [body]
+
+
+@pytest.fixture
+def phone_env(monkeypatch):
+    import rate_limit
+    import twilio_sms
+    sent = []
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda bucket, key: True)
+    monkeypatch.setattr(twilio_sms, "send_sms",
+                        lambda to, body, from_number=None: sent.append((to, body)) or "SM1")
+    monkeypatch.setattr(twilio_sms, "platform_number", lambda: "+12165550000")
+    monkeypatch.setenv("CUSTOMER_TOKEN_SECRET", "test-root-secret")
+    return sent
+
+
+def _code_from(sent):
+    import re
+    return re.search(r"(\d{6})", sent[-1][1]).group(1)
+
+
+def _phone_db(monkeypatch, row, taken=False):
+    db = _PhoneDb(row, taken=taken)
+    monkeypatch.setattr(um, "_biz_row", lambda biz: row)
+    monkeypatch.setattr(nct.sb_clients, "sb_get_as_service", db.get)
+    monkeypatch.setattr(nct.sb_clients, "sb_patch_as_service", db.patch)
+    return db
+
+
+def test_a_code_texts_and_verifies(monkeypatch, phone_env):
+    db = _phone_db(monkeypatch, _no_card())
+    out = nct.send_phone_code("biz1", "(216) 555-0100")
+    assert out["ok"] and out["token"] and phone_env[-1][0] == "+12165550100"
+    code = _code_from(phone_env)
+    assert nct.verify_phone_code("biz1", "216-555-0100", code, out["token"])["verified"]
+    saved = db.patches[-1]["settings"][nct.MARKER]
+    assert saved["phone_hash"] == nct.phone_hash("+12165550100")
+    assert saved["phone_verified_at"]
+    assert saved["credits"] == 500          # the marker around it survives
+
+
+def test_a_wrong_code_is_refused(monkeypatch, phone_env):
+    db = _phone_db(monkeypatch, _no_card())
+    out = nct.send_phone_code("biz1", "2165550100")
+    wrong = "000000" if _code_from(phone_env) != "000000" else "111111"
+    with pytest.raises(nct.PhoneError):
+        nct.verify_phone_code("biz1", "2165550100", wrong, out["token"])
+    assert db.patches == []
+
+
+def test_a_code_for_one_number_does_not_verify_another(monkeypatch, phone_env):
+    _phone_db(monkeypatch, _no_card())
+    out = nct.send_phone_code("biz1", "2165550100")
+    with pytest.raises(nct.PhoneError):
+        nct.verify_phone_code("biz1", "2165550199", _code_from(phone_env), out["token"])
+
+
+def test_an_expired_code_is_refused(monkeypatch, phone_env):
+    _phone_db(monkeypatch, _no_card())
+    code, exp = "123456", 1000
+    token = f"{exp}.{nct._code_sig('biz1', '+12165550100', code, exp)}"
+    with pytest.raises(nct.PhoneError) as ei:
+        nct.verify_phone_code("biz1", "2165550100", code, token)
+    assert "expired" in str(ei.value)
+
+
+def test_us_and_canada_numbers_only(monkeypatch, phone_env):
+    """OTP forms are the SMS-pumping target; premium international
+    numbers are how it pays."""
+    _phone_db(monkeypatch, _no_card())
+    for bad in ("+447700900123", "+2348012345678", "12345", ""):
+        with pytest.raises(nct.PhoneError):
+            nct.send_phone_code("biz1", bad)
+    assert phone_env == []
+
+
+def test_one_phone_one_free_build_across_the_platform(monkeypatch, phone_env):
+    _phone_db(monkeypatch, _no_card(), taken=True)
+    with pytest.raises(nct.PhoneError) as ei:
+        nct.send_phone_code("biz1", "2165550100")
+    assert "another account" in str(ei.value)
+    assert phone_env == []
+
+
+def test_sending_is_rate_limited(monkeypatch, phone_env):
+    import rate_limit
+    _phone_db(monkeypatch, _no_card())
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda bucket, key: False)
+    with pytest.raises(nct.PhoneError):
+        nct.send_phone_code("biz1", "2165550100")
+    assert phone_env == []
+
+
+def test_the_phone_buckets_are_registered():
+    """An unregistered bucket silently falls to the 60-a-minute default."""
+    import rate_limit
+    assert rate_limit._LIMITS["trial_phone_send"][0] <= 5
+    assert rate_limit._LIMITS["trial_phone_check"][0] <= 10
+
+
+def test_the_endpoints_are_owner_only():
+    import stripe_billing
+    for fn in (stripe_billing.trial_phone_send, stripe_billing.trial_phone_verify):
+        assert "_require_owner_of(user, biz)" in inspect.getsource(fn)
+
+
+# ─── Throwaway emails ────────────────────────────────────────────────
+
+def test_throwaway_inboxes_get_no_free_trial(db):
+    assert nct.eligible(_fresh(), "someone@mailinator.com") == "disposable_email"
+    assert nct.eligible(_fresh(), "ana@gmail.com") is None
+
+
+def test_more_throwaway_domains_from_railway(monkeypatch, db):
+    monkeypatch.setenv("DISPOSABLE_EMAIL_DOMAINS", "junk.example, other.test")
+    assert nct.eligible(_fresh(), "x@junk.example") == "disposable_email"
+
+
+# ─── Preview-only until a card ───────────────────────────────────────
+
+def test_a_no_card_site_is_hidden_and_a_carded_one_is_live(monkeypatch):
+    nct._hidden_cache.clear()
+    monkeypatch.setattr(nct.sb_clients, "sb_as_service", _async_rows(_no_card()))
+    assert asyncio.run(nct.site_hidden(object(), "biz1")) is True
+    nct.forget("biz1")
+    monkeypatch.setattr(nct.sb_clients, "sb_as_service",
+                        _async_rows(_no_card(stripe_subscription_id="sub_1")))
+    assert asyncio.run(nct.site_hidden(object(), "biz1")) is False
+
+
+def test_the_hidden_answer_is_cached_briefly(monkeypatch):
+    nct._hidden_cache.clear()
+    calls = []
+
+    async def _count(client, method, path, body=None):
+        calls.append(path)
+        return [_no_card()]
+    monkeypatch.setattr(nct.sb_clients, "sb_as_service", _count)
+    for _ in range(3):
+        asyncio.run(nct.site_hidden(object(), "biz1"))
+    assert len(calls) == 1
+
+
+def test_both_public_doors_show_coming_soon():
+    import public_site
+    for fn in (public_site._serve_site_by_slug, public_site._serve_site_by_custom_domain):
+        assert "site_hidden" in inspect.getsource(fn), fn.__name__
+
+
+def test_the_coming_soon_page_says_so(monkeypatch):
+    import public_site
+
+    async def _no_rows(client, path):
+        return []
+    monkeypatch.setattr(public_site, "_sb", _no_rows)
+    resp = asyncio.run(public_site._render_offline_page(object(), None, coming_soon=True))
+    body = resp.body.decode("utf-8")
+    assert "Coming soon" in body and "right back" not in body
+    assert resp.status_code == 503
+
+
+def test_a_card_lifts_the_preview_at_once():
+    import stripe_billing
+    assert "no_card_trial.forget(business_id)" in inspect.getsource(
+        stripe_billing._apply_subscription_state)
 
 
 def _async_rows(row):
@@ -489,5 +765,7 @@ def test_access_open_says_no_card_only_when_signup_will_start_one(monkeypatch):
 
 def test_describe_tells_the_app_what_a_card_adds():
     assert nct.describe(_no_card()) == {"no_card_trial": True, "trial_credits": 500,
-                                        "card_trial_credits": 1000}
+                                        "card_trial_credits": 1000,
+                                        "phone_verified": False, "site_live": False}
+    assert nct.describe(_verified())["phone_verified"] is True
     assert nct.describe(_fresh()) == {"no_card_trial": False}

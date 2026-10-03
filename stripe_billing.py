@@ -370,7 +370,11 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
         # load skips this without a read.
         if not grandfathered and not (business.get("subscription_status") or "").strip():
             import asyncio
-            if await asyncio.to_thread(no_card_trial.start, business, "access"):
+            # The email is only the owner's to vouch for: a team member
+            # opening the app says nothing about who signed up.
+            owner_email = (user.email if str(user.id) == str(business.get("owner_id") or "")
+                           else None)
+            if await asyncio.to_thread(no_card_trial.start, business, "access", owner_email):
                 business = await _load_business(business_id)
         # A trial ends on whichever runs out first, the calendar or the
         # tank. access_state is pure, so the tank half is read here.
@@ -476,8 +480,6 @@ async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user
     except Exception:
         out["grandfathered"] = False
     out["comp_tier"] = (business.get("comp_tier") or None)
-    import no_card_trial
-    out.update(no_card_trial.describe(business))
     import service_profile
     out["service_profile"] = service_profile.describe(business, out)
     return out
@@ -689,6 +691,60 @@ async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> D
     s["credits"] = credit_ledger.summary(biz)
     s["packs"] = credit_ledger.credit_packs()
     return s
+
+
+# ─── The no-card trial's phone check (no_card_trial.py) ──────────────
+# A verified phone unlocks the free site build. Owner only: it is the
+# owner's own phone, and the one free build per person rides on it.
+
+class TrialPhoneSendBody(BaseModel):
+    business_id: str
+    phone: str = Field(..., max_length=32)
+
+
+class TrialPhoneVerifyBody(BaseModel):
+    business_id: str
+    phone: str = Field(..., max_length=32)
+    code: str = Field(..., max_length=12)
+    token: str = Field(..., max_length=200)
+
+
+@router.post("/trial/phone/send")
+async def trial_phone_send(body: TrialPhoneSendBody,
+                           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import asyncio
+    import no_card_trial
+    biz = await _load_business(body.business_id)
+    _require_owner_of(user, biz)
+    try:
+        return await asyncio.to_thread(no_card_trial.send_phone_code,
+                                       body.business_id, body.phone)
+    except no_card_trial.PhoneError as e:
+        raise HTTPException(400, {"error": "phone_check", "message": str(e)})
+    except Exception as e:
+        logger.warning(f"trial phone send failed: {type(e).__name__}: {e}")
+        raise HTTPException(503, {"error": "phone_check",
+                                  "message": "The phone check isn't available just now — "
+                                             "try again in a moment."})
+
+
+@router.post("/trial/phone/verify")
+async def trial_phone_verify(body: TrialPhoneVerifyBody,
+                             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import asyncio
+    import no_card_trial
+    biz = await _load_business(body.business_id)
+    _require_owner_of(user, biz)
+    try:
+        return await asyncio.to_thread(no_card_trial.verify_phone_code, body.business_id,
+                                       body.phone, body.code, body.token)
+    except no_card_trial.PhoneError as e:
+        raise HTTPException(400, {"error": "phone_check", "message": str(e)})
+    except Exception as e:
+        logger.warning(f"trial phone verify failed: {type(e).__name__}: {e}")
+        raise HTTPException(503, {"error": "phone_check",
+                                  "message": "The phone check isn't available just now — "
+                                             "try again in a moment."})
 
 
 def _subscription_data(biz, user, skip_trial: bool = False):
@@ -1142,6 +1198,13 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         patch.pop("tier", None)
         await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
+    # A card arrived: a no-card trial's "coming soon" lifts now, not when
+    # this process's cache expires (other replicas follow within a minute).
+    try:
+        import no_card_trial
+        no_card_trial.forget(business_id)
+    except Exception:
+        pass
 
     # Day one starts HERE. A subscription entering `trialing` is the only
     # place the system learns a trial has begun, and until now nothing
