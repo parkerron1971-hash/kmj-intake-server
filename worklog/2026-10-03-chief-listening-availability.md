@@ -3,10 +3,10 @@ title: Chief prepares during speech and checks appointment capacity directly
 date: 2026-10-03
 agent: Codex (GPT-6)
 asked: "ok great. this will work."
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1217, solutionist-studio#1111]
 migrations: []
-left_undone: ["Focused and full validation", "Production rollout and live verification"]
+left_undone: ["Owner microphone retest for end-to-end acoustic timing"]
 decisions: ["Partial speech only permits scoped read preparation", "Final availability uses fresh authoritative capacity", "Checked scheduling prose avoids repeated model repair", "No recurring invoice or autopilot writes on the dedicated availability route"]
 related: [2026-10-02-chief-conversation-gaps.md, 2026-10-02-chief-context-flow-release.md]
 ---

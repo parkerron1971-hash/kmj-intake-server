@@ -1,12 +1,12 @@
-﻿---
+---
 title: Prepare scheduling catalog reads while the owner is speaking
 date: 2026-10-03
 agent: Codex (GPT-6)
 asked: "Start preparing Chief's request while I am still speaking"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1217, solutionist-studio#1111]
 migrations: []
-left_undone: [Integrated review and CI, coordinated backend and frontend release, live voice latency verification]
+left_undone: ["Owner microphone retest for end-to-end acoustic timing"]
 decisions: ["Unfinished speech performs only owner-scoped catalog reads", "Final availability always refreshes selected services and scheduling capacity", "Corrections and abandoned turns cannot restore stale preparation"]
 related: [2026-10-03-chief-listening-availability.md]
 ---

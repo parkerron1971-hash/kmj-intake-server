@@ -3,10 +3,10 @@ title: Deterministic read-only appointment availability checks
 date: 2026-10-03
 agent: Codex (GPT-6)
 asked: "Prepare while speaking and eliminate scheduling repair loops"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1217, solutionist-studio#1111]
 migrations: []
-left_undone: ["Protected release and production voice retest"]
+left_undone: ["Owner microphone retest for end-to-end acoustic timing"]
 decisions: ["No model calls or booking writes", "Use canonical joint capacity rules", "Fresh calendar and offering validation at final check", "Unknown historical constraints defer"]
 related: [2026-10-02-chief-invoice-history-scope.md]
 ---
