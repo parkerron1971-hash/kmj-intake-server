@@ -81,7 +81,7 @@ def _gen_kwargs(model: str, temperature: Optional[float]) -> Dict[str, Any]:
     model accepts it (a rejected one is a 400, not a no-op)."""
     import model_ladder
     return {**model_ladder.sampling_kwargs(model, temperature),
-            **model_ladder.effort_kwargs(model, BUILDER_EFFORT)}
+            **model_ladder.sdk_effort_kwargs(model, BUILDER_EFFORT)}
 # 2026-10-01 (Kevin, the concept-layer plan): 300 KB sent richer pages to
 # the fallback engine whole. Library objects (letters, seals, tickets,
 # boarding passes) carry real markup, so the ceiling is 450 KB.

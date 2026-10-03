@@ -489,7 +489,7 @@ def _call_llm(system: str, user: str, business_id: str,
                     messages=[{"role": "user", "content": content}],
                     timeout=timeout,
                     **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE),
-                    **model_ladder.effort_kwargs(model, _effort()))
+                    **model_ladder.sdk_effort_kwargs(model, _effort()))
             except Exception as e:
                 # An unfetchable image url 400s the whole request —
                 # the spec must never die for a broken image link. The
@@ -505,7 +505,7 @@ def _call_llm(system: str, user: str, business_id: str,
                         messages=[{"role": "user", "content": user}],
                         timeout=timeout,
                         **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE),
-                        **model_ladder.effort_kwargs(model, _effort()))
+                        **model_ladder.sdk_effort_kwargs(model, _effort()))
                 raise
 
         _started_ms = int(time.monotonic() * 1000)

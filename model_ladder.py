@@ -176,6 +176,23 @@ def effort_kwargs(model: str, effort: Optional[str]) -> dict:
     return {"output_config": {"effort": effort}}
 
 
+def sdk_effort_kwargs(model: str, effort: Optional[str]) -> dict:
+    """effort_kwargs for a call made THROUGH THE ANTHROPIC SDK.
+
+    The SDK is pinned at 0.34.2 (requirements.txt), which predates
+    `output_config`: passed as a keyword it is a TypeError before any
+    request leaves (`Messages.create() got an unexpected keyword argument
+    'output_config'`, and the same for stream()). Found live 2026-10-03:
+    the Director's first blueprint on Opus 5.5 died in seven seconds, and
+    the builder's own effort (BUILDER_V2_EFFORT, default high) would have
+    killed every builder run on Railway the same way. Local runs on a
+    newer SDK accepted the keyword, which is how it hid. `extra_body`
+    merges into the request JSON on every SDK version, so the field
+    reaches the API either way. Raw-HTTP payloads keep effort_kwargs."""
+    kw = effort_kwargs(model, effort)
+    return {"extra_body": kw} if kw else {}
+
+
 def thinking_off_kwargs(model: str) -> dict:
     """The lowest thinking setting a model accepts, as request fields, or
     `{}` where thinking cannot be turned off (the caller then bounds it

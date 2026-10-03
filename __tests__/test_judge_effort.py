@@ -35,7 +35,8 @@ def test_the_judge_effort_reads_its_dial(monkeypatch):
 
 def test_only_a_model_that_takes_effort_gets_it(monkeypatch):
     monkeypatch.delenv("VISION_JUDGE_EFFORT", raising=False)
-    assert vg.judge_kwargs("claude-sonnet-5-5") == {"output_config": {"effort": "medium"}}
+    # an SDK call: the effort rides extra_body (see test_sdk_effort_contract)
+    assert vg.judge_kwargs("claude-sonnet-5-5") == {"extra_body": {"output_config": {"effort": "medium"}}}
     # Sonnet 4.5 400s on the field, so the old default judge gets nothing
     assert vg.judge_kwargs("claude-sonnet-4-5-20250929") == {}
 
@@ -50,7 +51,7 @@ def test_the_grader_bounds_a_thinking_judge(monkeypatch):
     with mock.patch.object(vg, "_meter"):
         vg._grade_anthropic([b"a", b"b", b"c"], "biz-1", None, [])
     assert sent["model"] == "claude-sonnet-5-5"
-    assert sent["output_config"] == {"effort": "medium"}
+    assert sent["extra_body"]["output_config"] == {"effort": "medium"}
     assert sent["max_tokens"] >= 2000
 
 
@@ -62,7 +63,7 @@ def test_the_grader_on_the_old_default_sends_no_effort(monkeypatch):
                         lambda key=None: _fake_client(sent, json.dumps({"balance": 9})))
     with mock.patch.object(vg, "_meter"):
         vg._grade_anthropic([b"a", b"b", b"c"], "biz-1", None, [])
-    assert "output_config" not in sent
+    assert "output_config" not in sent and "extra_body" not in sent
 
 
 def test_the_site_check_vision_pass_bounds_a_thinking_judge(monkeypatch):
@@ -76,7 +77,7 @@ def test_the_site_check_vision_pass_bounds_a_thinking_judge(monkeypatch):
                         lambda key=None: _fake_client(sent, '{"findings": []}'))
     with mock.patch.object(vg, "_meter"):
         site_check.vision_findings({"url": "https://x.example/", "shots": {390: b"a"}}, "biz-1")
-    assert sent["output_config"] == {"effort": "medium"}
+    assert sent["extra_body"]["output_config"] == {"effort": "medium"}
     assert sent["max_tokens"] >= 2000
 
 
@@ -93,5 +94,5 @@ def test_the_canvas_self_review_bounds_a_thinking_judge(monkeypatch):
     monkeypatch.setattr(vg.llm_call, "sdk_client",
                         lambda key=None: _fake_client(sent, "SHIP"))
     assert canvas._self_review("<html></html>", "brief", "biz-1") is None
-    assert sent["output_config"] == {"effort": "medium"}
+    assert sent["extra_body"]["output_config"] == {"effort": "medium"}
     assert sent["max_tokens"] >= 1500
