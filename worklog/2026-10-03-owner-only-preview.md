@@ -3,8 +3,8 @@ title: A no-card trial's site preview is only its own team's
 date: 2026-10-03
 agent: Claude Code (Claude Opus 5.5)
 asked: 'build these (the reverse trial, owner-only previews, preview-only site cards)'
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1229, solutionist-studio#1115]
 migrations: []
 left_undone: []
 decisions: ["the preview addresses (/public/site/{slug}[/page|/news], /sites/{id}/preview[-page]) show a no-card site only with ?pv=<token>; the token is HMAC over business and expiry (12h), minted by GET /billing/trial/preview-token for member+ seats", "merge the app side (which adds the token) BEFORE this, or owners see coming soon in their own preview"]

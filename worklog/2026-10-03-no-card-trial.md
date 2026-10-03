@@ -4,9 +4,9 @@ date: 2026-10-03
 agent: Claude Code (Claude Opus 5.5)
 asked: 'build the no card 500 credit version; make sure 500 credits can build a site and still talk with Chief; protect my own money but give them something to test; check against best business practice'
 status: shipped
-prs: [kmj-intake-server#1216, kmj-intake-server#1215, solutionist-studio#1110, kmj-intake-server marketing copy (no-card-marketing-copy)]
+prs: [kmj-intake-server#1216, kmj-intake-server#1215, kmj-intake-server#1227, solutionist-studio#1110]
 migrations: []
-left_undone: ["the un-authed editor preview /public/site/{slug} on the API host still shows a no-card site; only the public address shows coming soon", "a reverse trial (workspace stays usable without AI after the trial) was recommended, not built"]
+left_undone: []
 decisions: ["no-card tank 500 (PRICE_TRIAL_CREDITS_NO_CARD); a card keeps the trial end date and lifts it to 1,000", "the free site build is earned: a verified US/Canada phone (stateless signed code, one phone per platform), at most LIMIT_NO_CARD_FREE_BUILDS_PER_DAY (10) a day platform-wide, no offer page", "a no-card site is a preview: its public address shows coming soon until a card (AI site builders generate free and charge to publish)", "texts, phone numbers, bulk email and a second build wait for a card", "one no-card trial per person; never grandfathered, comped, throwaway-email, or while BILLING_ENFORCE is off"]
 related: [2026-10-03-trial-row-reads-the-trial.md, 2026-10-02-agent-operations-wave-3-and-more.md]
 ---
