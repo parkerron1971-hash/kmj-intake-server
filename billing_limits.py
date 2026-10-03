@@ -86,6 +86,10 @@ def require_units(business_id: str) -> None:
             message = _locked_message("free_workspace", row)
         elif usage_metering.trial_window_start(row) is not None:
             message = _locked_message("trial_credits_spent", row)
+        elif usage_metering.plan_ended(row):
+            message = _locked_message(
+                "canceled" if (row or {}).get("subscription_status") == "canceled"
+                else "no_plan", row)
     except Exception as e:
         logger.warning(f"require_units trial wording skipped: {e}")
     raise HTTPException(status_code=402, detail={
@@ -159,6 +163,10 @@ def _locked_message(reason: Optional[str], row: Optional[Dict[str, Any]]) -> str
         return ("Your free trial has ended. Pick a plan in Settings → Billing "
                 "to keep using AI features and campaigns — everything you "
                 "built is safe and exports stay open.")
+    if reason == "no_plan":
+        return ("Chief and the other AI features need a plan. Pick one in "
+                "Settings → Billing — your data is safe, and credit packs "
+                "work meanwhile.")
     if reason == "free_workspace":
         # The reverse trial (feature_gates._free_workspace): the workspace
         # still works; only Chief and the site wait for the card.

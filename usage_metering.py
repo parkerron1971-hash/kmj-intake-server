@@ -266,7 +266,7 @@ def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
         f"&select=id,owner_id,settings,subscription_status,subscription_plan,"
-        f"stripe_subscription_id,trial_ends_at,comp_tier&limit=1") or []
+        f"stripe_subscription_id,trial_ends_at,current_period_end,comp_tier&limit=1") or []
     if rows:
         return rows[0]
     # comp_tier column absent (launch-ops migration not applied yet) —
@@ -274,7 +274,7 @@ def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
         f"&select=id,owner_id,settings,subscription_status,subscription_plan,"
-        f"stripe_subscription_id,trial_ends_at&limit=1") or []
+        f"stripe_subscription_id,trial_ends_at,current_period_end&limit=1") or []
     return rows[0] if rows else None
 
 
@@ -340,6 +340,19 @@ def trial_window_start(biz_row: Optional[Dict[str, Any]]) -> Optional[str]:
     return start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# Statuses with no plan behind them. Grace statuses (past_due, unpaid,
+# incomplete) are deliberately absent — access_state warns, it does not
+# lock — and so are active/trialing, even on a price we do not recognise.
+_PLAN_ENDED = frozenset({"", "canceled", "paused", "incomplete_expired"})
+
+
+def plan_ended(row: Optional[Dict[str, Any]]) -> bool:
+    """No subscription in good standing and none on the way: a cancelled
+    plan, or a business that never had one."""
+    return (((row or {}).get("subscription_status") or "").strip().lower()
+            in _PLAN_ENDED)
+
+
 def _later_z(a_iso: str, b_iso: Optional[str]) -> str:
     """The later of two timestamps, in the Z form a PostgREST URL needs
     (a bare +00:00 decodes as a space; see _month_start_iso). Falls back
@@ -394,9 +407,24 @@ def usage_summary(business_id: str,
         used = weighted_usage_since(business_id, trial_start)
     else:
         used = weighted_usage_this_month(business_id)
+    # NO PLAN, NO AI (2026-10-03, Kevin: "make the small change"). A
+    # subscription that ended (or a business that never had one) has no
+    # plan, so no allowance — and an allowance of None meant NO LIMIT: only
+    # the app's wall stood between it and Chief on the API. Now it is held
+    # like an ended no-card trial: allowance 0, bought credits still work,
+    # usage measured from when the plan or trial ended so a pack never pays
+    # for paid-period usage. Grace (payment failed), comped, grandfathered,
+    # and a paying status whose price we do not recognise are untouched.
+    no_plan = (enforce and not grandfathered and not on_trial and not ended_no_card
+               and not plan and plan_ended(row))
+    if no_plan:
+        r = row or {}
+        since = _later_z(_later_z(_month_start_iso(), r.get("current_period_end")),
+                         r.get("trial_ends_at"))
+        used = weighted_usage_since(business_id, since)
 
     allotment = None
-    if ended_no_card:
+    if ended_no_card or no_plan:
         allotment = 0
     elif on_trial:
         # A trial started without a card draws the smaller tank until a
@@ -429,7 +457,8 @@ def usage_summary(business_id: str,
             # Practitioner chose "stop at my plan" — don't spend credits.
             blocked, reason = True, "hard_cap"
         elif used >= allotment and credits_balance <= 0:
-            blocked, reason = True, ("trial_over" if ended_no_card else "out_of_units")
+            blocked, reason = True, ("trial_over" if ended_no_card
+                                     else "no_plan" if no_plan else "out_of_units")
 
     return {
         "ok": True,
