@@ -323,6 +323,52 @@ def layout_findings(spec_text: str, measures: Optional[Dict[str, Any]]) -> List[
         return []
 
 
+def _stated_truth(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    dd = (((ctx.get("site") or {}).get("site_config") or {})
+          .get("discovery_dossier")) if isinstance(ctx.get("site"), dict) else None
+    truth = (dd or {}).get("truth") if isinstance(dd, dict) else None
+    return truth if isinstance(truth, dict) else {}
+
+
+def stated_offers_block(ctx: Dict[str, Any]) -> str:
+    """WHAT THE OWNER SAID THEY OFFER (2026-10-03, the hand-build plan):
+    the offers, prices and hours the owner gave the Design Coach. Real
+    facts in their words, so the page lists them the way a hand-build
+    would, instead of "there's no package menu"."""
+    truth = _stated_truth(ctx)
+    lines: List[str] = []
+    for o in (truth.get("offers") or [])[:12]:
+        if not isinstance(o, dict) or not str(o.get("name") or "").strip():
+            continue
+        bits = [str(o.get(k)).strip() for k in ("price", "duration") if str(o.get(k) or "").strip()]
+        note = str(o.get("note") or "").strip()
+        lines.append(f"- {o['name']}" + (f": {', '.join(bits)}" if bits else "")
+                     + (f" ({note})" if note else ""))
+    hours = truth.get("hours")
+    hv = str((hours.get("value") if isinstance(hours, dict) else hours) or "").strip()
+    out: List[str] = []
+    if lines:
+        out.append("WHAT THE OWNER SAID THEY OFFER (in the design session, in their "
+                   "words; real: give each its own home with its price and length "
+                   "exactly as stated, and never a price they did not say):\n"
+                   + "\n".join(lines))
+    if hv:
+        out.append(f"HOURS THE OWNER STATED: {hv}")
+    return "\n\n".join(out)
+
+
+def check_stated_offers(html: str, ctx: Dict[str, Any]) -> List[str]:
+    """Each offer the owner named has a home on the page (soft tier)."""
+    text = _visible_text(html).lower()
+    out: List[str] = []
+    for o in (_stated_truth(ctx).get("offers") or [])[:12]:
+        name = str((o or {}).get("name") or "").strip() if isinstance(o, dict) else ""
+        if name and name.lower() not in text:
+            out.append(f"the owner's offer '{name}' is not on the page; give it a home "
+                       "with its price and length exactly as they said them")
+    return out[:4]
+
+
 # ─── real data assembly ──────────────────────────────────────────────
 
 def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
@@ -407,6 +453,9 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
                          + digest)
     except Exception:
         pass
+    stated = stated_offers_block(ctx)
+    if stated:
+        parts.append(stated)
     block = connected_systems_block(business_id, ctx)
     if block:
         parts.append(block)
@@ -1869,6 +1918,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         out = (check_stand_ins(d) + check_repeated_photos(d)
                + _craft().check_html(d, real_data)
                + _concept_findings(d, sheet))
+        if page == "home":
+            out += check_stated_offers(d, ctx)
         if page == "home" and offer.get("path"):
             try:
                 import site_pages

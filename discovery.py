@@ -401,6 +401,33 @@ def apply_practitioner_patch(existing: Dict[str, Any],
              "proof": str(s.get("proof") or "")[:160]}
             for s in truth["proven_stats"][:8]
             if isinstance(s, dict) and s.get("label") and s.get("value")]
+    # WHAT THEY SELL AND WHEN THEY ARE OPEN (2026-10-03, the first live
+    # test): the owner told the Coach "$1,200 for six weeks, $150 a
+    # session, Tuesday to Saturday 9 to 6" and the dossier had nowhere to
+    # keep it, so the page said "there's no package menu". Offers merge by
+    # name (a later answer about one offer never wipes the others).
+    if isinstance(truth.get("offers"), list):
+        merged = {}
+        for o in (out.get("truth", {}).get("offers") or []):
+            if isinstance(o, dict) and str(o.get("name") or "").strip():
+                merged[str(o["name"]).strip().lower()] = o
+        for o in truth["offers"][:12]:
+            if isinstance(o, str) and o.strip():
+                o = {"name": o}
+            if not isinstance(o, dict) or not str(o.get("name") or "").strip():
+                continue
+            clean = {"source": "asked"}
+            for k, cap in (("name", 80), ("price", 40), ("duration", 40), ("note", 160)):
+                v = str(o.get(k) or "").strip()
+                if v:
+                    clean[k] = v[:cap]
+            merged[clean["name"].lower()] = clean
+        if merged:
+            out.setdefault("truth", {})["offers"] = list(merged.values())[:12]
+    hours = truth.get("hours")
+    hv = hours.get("value") if isinstance(hours, dict) else hours
+    if isinstance(hv, str) and hv.strip():
+        out.setdefault("truth", {})["hours"] = {"value": hv.strip()[:160], "source": "asked"}
     if isinstance(truth.get("colors_avoid"), list):
         keep = [a for a in (out.get("truth", {}).get("colors_avoid") or [])
                 if _src_of(a) == "recon"]
