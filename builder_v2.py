@@ -1639,6 +1639,72 @@ def splice_section(doc: str, sid: str, raw: str) -> Optional[str]:
     return doc[:span[0]] + new + doc[span[1]:]
 
 
+# ─── EVERY SECTION IS WRITTEN (2026-10-03, the second live test) ──────
+# The Director's blueprint carried a line from the older canvas pipeline's
+# section plan: "Position the immutable token exactly here:
+# <!--SX_BLOCK:process-->". That pipeline splices a pre-built block into
+# the token; this builder writes the whole page and splices nothing, so it
+# copied the token and "How it works" shipped as 372px of blank paper,
+# with the nav link and the hero's "Read how it works" landing on it. By
+# hand, that section is simply written. The builder's copy of the
+# blueprint now says so, and an empty section is a finding that earns a
+# section rebuild.
+
+_BLOCK_TOKEN = re.compile(r"<!--\s*SX_BLOCK:([\w-]+)(?::\d+)?\s*-->")
+_TOKEN_INSTRUCTION = re.compile(
+    r"(?:Position|Place|Put|Keep)\s+the\s+immutable\s+(?:token|block)[^\n<]*?"
+    r"<!--\s*SX_BLOCK:[\w:-]+\s*-->", re.IGNORECASE)
+_NO_RESTATING = re.compile(r"^[ \t]*-?[ \t]*No rewriting, wrapping or restating of the[^\n]*\n?",
+                           re.IGNORECASE | re.MULTILINE)
+WRITES_EVERY_SECTION = (
+    "THIS BUILDER WRITES EVERY SECTION: the blueprint's section plan may speak "
+    "of immutable blocks or placeholder tokens from an older pipeline that "
+    "spliced pre-built blocks in. Nothing is spliced here. Write every section "
+    "in the plan yourself, complete, from THE REAL DATA, and never leave a "
+    "placeholder or an HTML comment where content belongs.")
+EMPTY_SECTION_FIX = (
+    "THIS SECTION IS EMPTY: a placeholder sat where its content belongs and "
+    "the links to it land on blank space. Write it complete from THE REAL DATA "
+    "and its brief in the blueprint, in the page's own look.")
+
+
+def spec_for_builder(spec_text: str) -> str:
+    """The blueprint as this builder must read it: no block tokens, no
+    "do not restate the blocks" line, and the note that it writes every
+    section. A blueprint without tokens passes through unchanged."""
+    t = spec_text or ""
+    if "SX_BLOCK" not in t:
+        return t
+    t = _TOKEN_INSTRUCTION.sub("Write this section yourself, complete, from THE REAL DATA.", t)
+    t = _BLOCK_TOKEN.sub(lambda m: f"(the {m.group(1)} section, which you write)", t)
+    t = _NO_RESTATING.sub("", t)
+    return t.rstrip() + "\n\n" + WRITES_EVERY_SECTION
+
+
+def empty_sections(html: str) -> List[str]:
+    """Top-level sections a visitor sees as blank: a block token left in
+    them, or no words and no picture, form or drawing at all."""
+    out: List[str] = []
+    for sid, a, z in section_spans(html or ""):
+        part = html[a:z]
+        if "SX_BLOCK" in part:
+            out.append(sid)
+            continue
+        if re.search(r"<(img|svg|video|picture|iframe|form|canvas)\b", part, re.IGNORECASE):
+            continue
+        text = re.sub(r"<(script|style)\b.*?</\1>|<!--.*?-->", " ", part,
+                      flags=re.IGNORECASE | re.DOTALL)
+        if len(re.sub(r"<[^>]+>", " ", text).split()) < 3:
+            out.append(sid)
+    return out
+
+
+def check_unfilled(html: str) -> List[str]:
+    return [f"section #{sid} is empty (a placeholder sat where its content "
+            "belongs): write it complete from THE REAL DATA, or every link to it "
+            "lands on blank space" for sid in empty_sections(html)]
+
+
 def plan_vision_repair(verdict: Optional[Dict[str, Any]], doc: str,
                        page_items: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
     """(page-wide items, {section id: items}). Anything the eyes could not
@@ -1722,6 +1788,7 @@ def refine_section_doc(doc: str, spec_text: str, ctx: Dict[str, Any],
     add a law violation or a visible stand-in the page did not already
     have; anything else is a refusal that leaves the page unchanged.
     `units` is the price, charged on the one model call."""
+    spec_text = spec_for_builder(spec_text)
     sid = resolve_section(doc, section)
     if not sid:
         return {"ok": False, "error": f"section '{section}' isn't on the page",
@@ -1878,6 +1945,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                               "repaired": False, "fallbacks": [],
                               "spend": new_spend()}
     spend = report["spend"]
+    if "SX_BLOCK" in (spec_text or ""):
+        report["block_tokens_rewritten"] = True
+    spec_text = spec_for_builder(spec_text)
 
     def _progress(pct: int, stage: str):
         try:
@@ -1954,6 +2024,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         # (one h1, alt text, type families, likely typos) and the page
         # held to its concept sheet (objects, the plain-word rule).
         out = (check_stand_ins(d) + check_repeated_photos(d)
+               + check_unfilled(d)
                + _craft().check_html(d, real_data)
                + _concept_findings(d, sheet))
         if page == "home":
@@ -2084,6 +2155,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                 break                                  # nothing to look with
             page_items, by_section = plan_vision_repair(
                 verdict, doc, [f"MEASURED IN THE RENDER: {m}" for m in measured])
+            for sid in empty_sections(doc):
+                by_section.setdefault(sid, []).insert(0, EMPTY_SECTION_FIX)
             if page_items and page_repair_used:
                 # the whole-page pass was spent: what is page-wide now
                 # rides along with the section rebuilds, or the look ends
