@@ -85,6 +85,14 @@ class FakeDB:
 
 
 def test_tick_splits_the_windows_records_and_flags(monkeypatch):
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+
+    # The route fixtures are anchored to NOW. The scheduled entry point must
+    # use the same clock; otherwise these "today" turns age out after 24h.
+    monkeypatch.setattr(cq, "datetime", FixtureClock)
     route = turns(40, cost=2.0) + turns(300, cost=1.0, hours_ago=72)
     db = FakeDB(route, [{"endpoint": "/chief/backend", "cost_cents": 80, "business_id": "b1"}])
     monkeypatch.setattr(cq, "_service_headers", lambda: {})
@@ -100,6 +108,7 @@ def test_tick_splits_the_windows_records_and_flags(monkeypatch):
     assert tables.count("platform_changelog") == 1
     run = [j for t, j in db.posts if t == "platform_agent_runs"][0]
     assert run["agent"] == "chief_quality" and "40 turns" in run["summary"]
+    assert run["started_at"] == NOW.isoformat()
 
 
 def test_kill_switch(monkeypatch):
