@@ -237,6 +237,51 @@ def test_the_free_build_check_fails_closed(monkeypatch):
     assert um.trial_first_build_is_free("biz1", _trialing()) is False
 
 
+class _FakeDb:
+    """A businesses table that honours `select=`: a column the query does
+    not name does not come back, exactly as PostgREST behaves. The old
+    _biz_row never named trial_ends_at, and every test above passed a
+    hand-built row, so none of them could see that."""
+
+    def __init__(self, row, markers=()):
+        self.row, self.markers = row, list(markers)
+
+    def get(self, path):
+        if path.startswith("/businesses?"):
+            cols = path.split("select=", 1)[1].split("&", 1)[0].split(",")
+            return [{k: v for k, v in self.row.items() if k in cols}]
+        if path.startswith("/api_usage?") and "site_build_marker" in path:
+            return self.markers
+        return []
+
+
+def test_the_free_build_works_when_the_composer_passes_no_row(monkeypatch):
+    """THE PRODUCTION PATH. site_composer asks with the business id alone,
+    so the row comes from _biz_row. Without trial_ends_at in its select
+    the trial was invisible and the free first build never happened."""
+    db = _FakeDb(_trialing())
+    monkeypatch.setattr(um.sb_clients, "sb_get_as_service", db.get)
+    assert um.trial_first_build_is_free("biz1") is True
+
+
+def test_the_ai_gate_measures_a_trial_against_the_trial_tank(monkeypatch):
+    """can_interact() reads the row through _biz_row too. A trial that
+    has spent its tank must be blocked there, not handed the plan's whole
+    monthly allowance."""
+    db = _FakeDb(_trialing())
+    monkeypatch.setattr(um.sb_clients, "sb_get_as_service", db.get)
+    monkeypatch.setattr(um, "weighted_usage_since",
+                        lambda biz, since: pc.trial_credits() + 1)
+    monkeypatch.setattr(um, "grant_units_this_month", lambda biz: 0)
+    monkeypatch.setattr(um, "is_grandfathered_business", lambda biz, row=None: False)
+    monkeypatch.setattr(um.credit_ledger, "sync_burn", lambda biz, n: 0)
+    monkeypatch.setattr(um.credit_ledger, "balance", lambda biz: 0)
+    s = um.usage_summary("biz1")
+    assert s["on_trial"] is True
+    assert s["allotment"] == pc.trial_credits()
+    assert um.can_interact("biz1") is False
+
+
 def test_the_composer_asks_before_charging_for_a_build():
     src = pathlib.Path("site_composer.py").read_text(encoding="utf-8")
     assert "trial_first_build_is_free" in src
