@@ -238,3 +238,21 @@ def test_a_section_without_a_heading_is_named_by_its_own_words():
         {"id": "story", "heading": "I came in thinking I needed a new job, and I left knowing…"},
         {"id": "study", "heading": "I watched good people get stuck."},
     ]
+
+
+def test_an_empty_section_is_named_by_the_link_that_points_at_it():
+    doc = ("<html><body><nav><a href=\"#process\">How it works</a></nav>"
+           "<section id=\"top\"><h1>Not a new job.</h1></section>"
+           "<section id=\"process\"><div class=\"col\"><!--SX_BLOCK:process--></div></section>"
+           "</body></html>")
+    assert sr.outline(doc)[1] == {"id": "process", "heading": "How it works (empty right now)"}
+
+
+def test_sections_the_builder_left_for_the_owner_are_suggested_until_fixed(wired):
+    wired["row"]["site_config"] = _cfg(canvas_report={"engine": "builder_v2", "vision": {
+        "for_the_owner": [{"section": "top", "what": "the hero"},
+                          {"section": "ghost", "what": "not on the page"}]}})
+    assert sr.state("biz-1")["suggested"] == ["top"]
+    wired["row"]["site_config"]["revisions"] = {"build": BUILT, "free_used": 1,
+                                                "rounds": [{"fixed": ["top"]}]}
+    assert sr.state("biz-1")["suggested"] == []

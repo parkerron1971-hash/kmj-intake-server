@@ -1167,6 +1167,11 @@ def _measure_page(page: Any, html: str, width: int) -> None:
         _record_measure(html, width, page.evaluate(site_layouts.RENDER_JS))
     except Exception as e:
         logger.info(f"[v2:eyes] layout measure skipped at {width}px: {e}")
+    if width >= 1024:
+        try:
+            _record_measure(html, width, page.evaluate(VISITOR_JS))
+        except Exception as e:
+            logger.info(f"[v2:eyes] visitor walk skipped at {width}px: {e}")
 
 
 def walk_measurements(html: str) -> Optional[Dict[str, Any]]:
@@ -1266,6 +1271,10 @@ def _screenshot_walk(html: str) -> Optional[List[Tuple[str, bytes]]]:
 
 _INSPECTOR = """You are the builder of this page inspecting your own rendered work before it ships. You are looking for DEFECTS a paying owner would see, not restating taste. Screenshots show the page as a visitor scrolls it, at phone and desktop widths plus one ultrawide look.
 
+FIRST, WALK IT AS THE VISITOR. From the spec, decide who this page is for. Read the views top to bottom as that person and answer three questions: what did they come for; did they get it, and where on the page; what do they do next, and does that path work. Where they would get stuck or turn away is a violation in that section, and it outranks anything cosmetic.
+
+THEN NAME THE BIGGEST PROBLEM: the one thing that most hurts this page for that visitor, the one a designer would fix before anything else. Judge it by what it costs the visitor, not by how easy it is to name. It is also one of the violations.
+
 Measure against THE CHECKLIST (each item is a law, not a suggestion):
 - ALIGNMENT: photographic subjects fill their frames; nothing floats small inside an oversized border; edges line up with neighboring type; nothing overlaps, collides, or gets cut off.
 - COMPLETENESS: no blank/empty sections at any scroll stop (a section that never appeared = the reveal-skip bug). No grid holes, no dead space where content should be.
@@ -1287,8 +1296,8 @@ Measure against THE CHECKLIST (each item is a law, not a suggestion):
 Each violation names its "section": the id from SECTIONS ON THE PAGE, or "page" when it spans the page. Then name the WEAKEST section, the one a designer would rebuild first, with a score from 1 to 10 against everything above.
 
 Output STRICT JSON only:
-{"verdict":"ship"|"repair","violations":[{"where":"<section/breakpoint>","section":"<id or page>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}],"weakest":{"section":"<id>","score":<1-10>,"why":"<one sentence>","fix":"<what the rebuilt section does instead>"}}
-Rules: at most 6 violations, ranked by owner-visible damage. Cosmetic taste differences are NOT violations. An empty violations list means verdict "ship". JSON only, no commentary."""
+{"verdict":"ship"|"repair","visitor":{"who":"<who the page is for>","came_for":"<what they came for>","got_it":"<yes, partly or no, and where>","next":"<their next step, and whether it works>","stuck":"<section id where they get stuck, or null>"},"biggest":{"section":"<id or page>","what":"<the problem>","why":"<what it costs the visitor>","fix":"<the fix>"},"violations":[{"where":"<section/breakpoint>","section":"<id or page>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}],"weakest":{"section":"<id>","score":<1-10>,"why":"<one sentence>","fix":"<what the rebuilt section does instead>"}}
+Rules: at most 6 violations, ranked by what they cost the visitor. Cosmetic taste differences are NOT violations. An empty violations list means verdict "ship", and then "biggest" is null. JSON only, no commentary."""
 
 
 def _parse_inspector(raw: str) -> Optional[Dict[str, Any]]:
@@ -1322,6 +1331,24 @@ def _parse_inspector(raw: str) -> Optional[Dict[str, Any]]:
                           "fix": str(w.get("fix") or "")[:240]}
     else:
         out["weakest"] = None
+    vis = out.get("visitor")
+    if isinstance(vis, dict):
+        stuck = str(vis.get("stuck") or "").strip().lstrip("#")
+        out["visitor"] = {k: str(vis.get(k) or "")[:240]
+                          for k in ("who", "came_for", "got_it", "next")}
+        out["visitor"]["stuck"] = (stuck if stuck and stuck.lower() not in ("null", "none")
+                                   else None)
+    else:
+        out["visitor"] = None
+    big = out.get("biggest")
+    if isinstance(big, dict) and str(big.get("what") or "").strip() \
+            and out["verdict"] == "repair":
+        out["biggest"] = {"section": str(big.get("section") or "page").strip().lstrip("#") or "page",
+                          "what": str(big.get("what") or "")[:240],
+                          "why": str(big.get("why") or "")[:240],
+                          "fix": str(big.get("fix") or "")[:240]}
+    else:
+        out["biggest"] = None
     return out
 
 
@@ -1705,28 +1732,171 @@ def check_unfilled(html: str) -> List[str]:
             "lands on blank space" for sid in empty_sections(html)]
 
 
+# ─── THE JUDGMENT PLAN (2026-10-03, after the second live test) ──────
+# The system had the hand-build process and not yet the judgment: its
+# eyes passed an empty "How it works" three times (the menu link and
+# the hero's "Read how it works" landed on blank paper), the loop rebuilt
+# the hero twice the same way, and five small notes were weighed alike.
+# Three questions a designer asks while looking now ride every look:
+#   J1 THE VISITOR WALK: click everything (free, below) and read the page
+#      as the customer it is for (the inspector's "visitor" answer).
+#   J2 BIGGEST PROBLEM FIRST: the one thing that most hurts the page for
+#      that visitor is fixed first, and a round never drops it.
+#   J3 CHANGE THE APPROACH ON A SECOND TRY: a section flagged again after
+#      a rebuild is rethought, not polished; flagged a third time, the
+#      builder stops spending on it and leaves it for the owner's walk.
+
+# Every link and form on the page, followed the way a visitor would: does
+# it go somewhere, and does it land on something with words? Runs in the
+# eyes' open page at desktop width; free, no model call. Buttons are left
+# alone (a script may own them, which a static read cannot see), and so
+# are links to other pages, sites, mail and phone.
+VISITOR_JS = r"""() => {
+  const words = (el) => ((el && el.innerText) || '').trim().split(/\s+/).filter(Boolean).length;
+  const media = (el) => !!(el && el.querySelector('img,svg,video,picture,iframe,canvas,form'));
+  const where = (el) => {
+    let s = el.closest('section[id]');
+    while (s && s.parentElement && s.parentElement.closest('section[id]')) s = s.parentElement.closest('section[id]');
+    if (s) return s.id;
+    if (el.closest('footer')) return 'footer';
+    if (el.closest('header,nav')) return 'nav';
+    return '';
+  };
+  const out = [], seen = new Set();
+  for (const a of document.querySelectorAll('a[href]')) {
+    const label = ((a.innerText || a.getAttribute('aria-label') || '').trim()).slice(0, 60);
+    const href = (a.getAttribute('href') || '').trim();
+    if (!label || seen.has(label + '|' + href)) continue;
+    seen.add(label + '|' + href);
+    const from = where(a);
+    if (!href || href === '#' || /^javascript:/i.test(href)) {
+      out.push({label, from, to: href, problem: 'nowhere'});
+      continue;
+    }
+    if (href.charAt(0) !== '#') continue;
+    const id = decodeURIComponent(href.slice(1));
+    const t = document.getElementById(id);
+    if (!t) { out.push({label, from, to: id, problem: 'missing'}); continue; }
+    const sec = t.closest('section') || t;
+    if (words(t) < 3 && !media(t) && words(sec) < 3 && !media(sec)) {
+      out.push({label, from, to: sec.id || id, problem: 'blank'});
+    }
+  }
+  for (const f of document.querySelectorAll('form')) {
+    if (!f.querySelector('button, input[type=submit], input[type=image]')) {
+      out.push({label: 'a form', from: where(f), to: '', problem: 'unsendable'});
+    }
+  }
+  return {visitor_walk: out.slice(0, 12)};
+}"""
+
+
+def visitor_walk_findings(measures: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """What the click-through found, as repair items: {section, what, fix}.
+    A link that lands on a blank section is fixed IN that section (write
+    it so the link delivers); a link that goes nowhere or points at
+    nothing is fixed where the link lives."""
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for _w, m in sorted((measures or {}).items(), key=lambda kv: int(kv[0])):
+        for w in ((m or {}).get("visitor_walk") or []) if isinstance(m, dict) else []:
+            if not isinstance(w, dict):
+                continue
+            label = str(w.get("label") or "a link")[:60]
+            src = str(w.get("from") or "")
+            to = str(w.get("to") or "")
+            where = f"#{src}" if src and src not in ("nav", "footer") else (src or "the page")
+            kind = w.get("problem")
+            if kind == "blank":
+                item = {"section": to, "what": f'"{label}" (in {where}) lands on #{to}, which is blank',
+                        "fix": "write that section so the link delivers what it promises"}
+            elif kind == "missing":
+                item = {"section": src, "what": f'"{label}" (in {where}) points at #{to}, which is not on the page',
+                        "fix": "point it at the section that answers it, or remove the link"}
+            elif kind == "nowhere":
+                item = {"section": src, "what": f'"{label}" (in {where}) goes nowhere',
+                        "fix": "give it a real destination on the page, or remove it"}
+            elif kind == "unsendable":
+                item = {"section": src, "what": f"a form in {where} has no button to send it",
+                        "fix": "give the form a send button"}
+            else:
+                continue
+            key = (item["section"], item["what"])
+            if key not in seen:
+                seen.add(key)
+                out.append(item)
+    return out[:8]
+
+
+def second_try_line(before: List[str]) -> str:
+    """J3: what a second rebuild of the same section is told."""
+    was = "; ".join(str(b) for b in before)[:420]
+    return ("SECOND TRY: this section was already rebuilt once, for: " + was + ". "
+            "The eyes still flag it, so polishing the same composition did not "
+            "work. Rethink it: a different arrangement, a different place for the "
+            "eye to land first, a different scale or order of its parts. Keep "
+            "every fact, the page's look and the section's job.")
+
+
 def plan_vision_repair(verdict: Optional[Dict[str, Any]], doc: str,
-                       page_items: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
-    """(page-wide items, {section id: items}). Anything the eyes could not
-    place in a section on this page is page-wide."""
+                       page_items: List[str],
+                       walk: Optional[List[Dict[str, str]]] = None,
+                       empty: Optional[List[str]] = None) -> Tuple[List[str], Dict[str, List[str]]]:
+    """(page-wide items, {section id: items}), in the order a designer
+    fixes them (J2): the biggest problem first, then whatever stops the
+    visitor (where they get stuck, a link that lands on nothing, an empty
+    section), then the rest. A round that can afford only some sections
+    takes them in this order, so it never drops the biggest. Anything the
+    eyes could not place in a section on this page is page-wide."""
     ids = {sid for sid, _, _ in section_spans(doc)}
     page = list(page_items)
-    by_section: Dict[str, List[str]] = {}
-    if verdict and verdict.get("verdict") == "repair":
-        for v in verdict.get("violations") or []:
-            item = (f"SEEN IN THE RENDER ({v.get('where', 'page')}): {v.get('what')} "
-                    f"— FIX: {v.get('fix', 'minimal edit')}")
-            sid = str(v.get("section") or "").strip().lstrip("#")
+    v = verdict or {}
+    repair = v.get("verdict") == "repair"
+    first: Dict[str, List[str]] = {}
+    blockers: Dict[str, List[str]] = {}
+    rest: Dict[str, List[str]] = {}
+    big = v.get("biggest") if repair and isinstance(v.get("biggest"), dict) else None
+    if big:
+        item = (f"THE BIGGEST PROBLEM ON THE PAGE (fix this first): {big.get('what')} "
+                f"— WHAT IT COSTS THE VISITOR: {big.get('why')} — FIX: {big.get('fix')}")
+        if big.get("section") in ids:
+            first.setdefault(big["section"], []).append(item)
+        else:
+            page.insert(0, item)
+    vis = v.get("visitor") if repair and isinstance(v.get("visitor"), dict) else None
+    if vis and vis.get("stuck") in ids:
+        blockers.setdefault(vis["stuck"], []).append(
+            f"THE VISITOR GETS STUCK HERE: {vis.get('who') or 'the visitor'} came for "
+            f"{vis.get('came_for') or 'what the page offers'}; got it: {vis.get('got_it')}; "
+            f"next step: {vis.get('next')}. Make this section get them there.")
+    for sid in empty or []:
+        if sid in ids:
+            blockers.setdefault(sid, []).insert(0, EMPTY_SECTION_FIX)
+    for w in walk or []:
+        item = f"THE VISITOR WALK: {w.get('what')} — FIX: {w.get('fix')}"
+        if w.get("section") in ids:
+            blockers.setdefault(w["section"], []).append(item)
+        else:
+            page.append(item)
+    if repair:
+        for x in v.get("violations") or []:
+            item = (f"SEEN IN THE RENDER ({x.get('where', 'page')}): {x.get('what')} "
+                    f"— FIX: {x.get('fix', 'minimal edit')}")
+            sid = str(x.get("section") or "").strip().lstrip("#")
             if sid in ids:
-                by_section.setdefault(sid, []).append(item)
+                rest.setdefault(sid, []).append(item)
             else:
                 page.append(item)
-    w = (verdict or {}).get("weakest")
+    w = v.get("weakest")
     if isinstance(w, dict) and w.get("section") in ids and isinstance(w.get("score"), int) \
             and w["score"] < WEAKEST_REBUILD_BELOW:
-        by_section.setdefault(w["section"], []).append(
+        rest.setdefault(w["section"], []).append(
             f"THE WEAKEST SECTION (scored {w['score']}/10): {w.get('why')} "
             f"— REBUILD IT SO: {w.get('fix')}")
+    by_section: Dict[str, List[str]] = {}
+    for group in (first, blockers, rest):
+        for sid, items in group.items():
+            by_section.setdefault(sid, []).extend(items)
     return page, by_section
 
 
@@ -2110,12 +2280,14 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     # are never fatal: if the eyes can't run, or a repair breaks a law, the
     # law-passing document ships and the report says so.
     report["vision"] = {"ran": False, "verdict": None, "violations": [],
-                        "rounds": [], "section_repairs": []}
+                        "rounds": [], "section_repairs": [], "for_the_owner": []}
     if eyes_enabled():
         rounds = look_fix_rounds()
         per_round = look_fix_sections()
         cap_cents = look_fix_max_cents()
         page_repair_used = False
+        # J3: what each section was already rebuilt for (applied rebuilds)
+        tried: Dict[str, List[List[str]]] = {}
         cents_at_first_look = float(spend.get("cost_cents") or 0)
         for rnd in range(1, rounds + 1):
             if rnd > 1:
@@ -2135,11 +2307,15 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             measured = render_findings(_m) + _craft().render_findings(_m)
             if page == "home":
                 measured += layout_findings(spec_text, _m)
+            walk = visitor_walk_findings(_m)
             weakest = (verdict or {}).get("weakest") if verdict else None
             rec: Dict[str, Any] = {
                 "round": rnd, "verdict": (verdict or {}).get("verdict"),
                 "weakest": weakest, "measured": len(measured),
                 "violations": len((verdict or {}).get("violations") or []),
+                "biggest": (verdict or {}).get("biggest"),
+                "stuck": ((verdict or {}).get("visitor") or {}).get("stuck"),
+                "walk": [w["what"] for w in walk],
                 "sections": [], "page_repair": False}
             report["vision"]["rounds"].append(rec)
             if rnd == 1:
@@ -2151,12 +2327,12 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                     report["vision"]["verdict"] = verdict.get("verdict")
                     report["vision"]["violations"] = verdict.get("violations", [])
                     report["vision"]["weakest"] = weakest
-            if not verdict and not measured:
+                    report["vision"]["visitor"] = verdict.get("visitor")
+            if not verdict and not measured and not walk:
                 break                                  # nothing to look with
             page_items, by_section = plan_vision_repair(
-                verdict, doc, [f"MEASURED IN THE RENDER: {m}" for m in measured])
-            for sid in empty_sections(doc):
-                by_section.setdefault(sid, []).insert(0, EMPTY_SECTION_FIX)
+                verdict, doc, [f"MEASURED IN THE RENDER: {m}" for m in measured],
+                walk=walk, empty=empty_sections(doc))
             if page_items and page_repair_used:
                 # the whole-page pass was spent: what is page-wide now
                 # rides along with the section rebuilds, or the look ends
@@ -2170,12 +2346,26 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                 # THE DESIGNER'S REVIEW: only the named sections are rebuilt.
                 _progress(min(84, 66 + 6 * (rnd - 1)),
                           "Rebuilding the sections the eyes flagged")
-                for sid, items in list(by_section.items())[:per_round]:
+                rebuilt_here = 0
+                for sid, items in by_section.items():
+                    if rebuilt_here >= per_round:
+                        break
+                    if len(tried.get(sid) or []) >= 2:
+                        # J3: rethought once already and still flagged —
+                        # stop spending on it; it is the owner's to look at
+                        if sid not in [o["section"] for o in report["vision"]["for_the_owner"]]:
+                            report["vision"]["for_the_owner"].append(
+                                {"section": sid, "what": str(items[0])[:240]})
+                        continue
                     if not _budget_left(spend):
                         spend["skipped"].append(f"section-repair:{sid}")
                         break
+                    asked = list(items)
+                    if tried.get(sid):
+                        asked = [second_try_line(tried[sid][-1])] + asked
+                    rebuilt_here += 1
                     raw_s = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
-                                  build_section_prompt(spec_text, real_data, doc, sid, items),
+                                  build_section_prompt(spec_text, real_data, doc, sid, asked),
                                   business_id, spend=spend)
                     cand = splice_section(doc, sid, raw_s or "")
                     applied = False
@@ -2183,7 +2373,10 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                         cand = _mechanical(cand)
                         if not _laws(cand):
                             doc, applied = cand, True
-                    rec["sections"].append({"section": sid, "applied": applied})
+                    if applied:
+                        tried.setdefault(sid, []).append([str(i)[:200] for i in items[:2]])
+                    rec["sections"].append({"section": sid, "applied": applied,
+                                            "second_try": len(tried.get(sid) or []) >= 2})
                     report["vision"]["section_repairs"].append(
                         {"section": sid, "applied": applied, "round": rnd})
                     changed = changed or applied

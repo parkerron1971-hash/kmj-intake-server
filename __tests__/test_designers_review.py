@@ -163,12 +163,17 @@ def test_the_second_look_finds_it_right_and_the_loop_ends(monkeypatch):
     assert out["report"]["vision"]["rounds"][1]["verdict"] == "ship"
 
 
-def test_the_loop_stops_at_its_round_cap(monkeypatch):
+def test_the_same_section_flagged_every_look_is_rethought_then_left_for_the_owner(monkeypatch):
+    """(J3, the judgment plan, 2026-10-03) it used to be rebuilt three times
+    the same way; now: rebuilt, rethought, then handed to the owner."""
     calls = _wire(monkeypatch, _PRICES_FLAT, rounds=3)
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out["report"]["vision"]["looks"] == 3
-    assert sum(1 for c in calls if c[1].startswith("SECTION REPAIR")) == 3
-    assert [r["round"] for r in out["report"]["vision"]["section_repairs"]] == [1, 2, 3]
+    repairs = [c[1] for c in calls if c[1].startswith("SECTION REPAIR")]
+    assert len(repairs) == 2
+    assert "SECOND TRY" not in repairs[0] and "SECOND TRY" in repairs[1]
+    assert [r["round"] for r in out["report"]["vision"]["section_repairs"]] == [1, 2]
+    assert out["report"]["vision"]["for_the_owner"][0]["section"] == "prices"
 
 
 def test_a_round_that_changes_nothing_ends_the_loop(monkeypatch):

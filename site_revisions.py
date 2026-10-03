@@ -133,8 +133,30 @@ def outline(doc: str) -> List[Dict[str, str]]:
         if not label:
             inner = re.sub(r"^<section\b[^>]*>", "", part, flags=re.IGNORECASE)
             label = _clip(_plain(inner), 60)
+        if not label:
+            # a section with no words at all is named by the link that points
+            # at it, the way the owner meets it ("How it works"), and said to
+            # be empty, never "Section 5" (the second live test)
+            m = re.search(rf'<a\b[^>]*href=["\']#{re.escape(sid)}["\'][^>]*>(.*?)</a>',
+                          doc, re.IGNORECASE | re.DOTALL)
+            named = _plain(m.group(1)) if m else ""
+            label = f"{_clip(named, 50)} (empty right now)" if named else ""
         out.append({"id": sid, "heading": _clip(label, 90)})
     return out[:24]
+
+
+def suggested(cfg: Dict[str, Any], section_ids: List[str]) -> List[str]:
+    """Sections the builder rethought once and still could not get right,
+    left for the owner (the judgment plan, J3): the walk-through opens on
+    them, the way a designer says "let's look at this one together"."""
+    rep = cfg.get("canvas_report") if isinstance(cfg.get("canvas_report"), dict) else {}
+    owed = ((rep.get("vision") or {}).get("for_the_owner") or []) if isinstance(rep, dict) else []
+    out = []
+    for o in owed:
+        sid = str((o or {}).get("section") or "") if isinstance(o, dict) else ""
+        if sid in section_ids and sid not in out:
+            out.append(sid)
+    return out
 
 
 def clean_reactions(raw: Any, section_ids: Optional[List[str]] = None) -> List[Dict[str, str]]:
@@ -187,8 +209,14 @@ def state(business_id: str) -> Dict[str, Any]:
         return {"ok": True, "ready": False, "sections": [], "free_left": 0, **base}
     doc = str((cfg.get("canvas") or {}).get("html") or "")
     rev = cfg.get("revisions") if isinstance(cfg.get("revisions"), dict) else {}
-    last = (rev.get("rounds") or [])[-1:] if rev.get("build") == build_key(cfg) else []
-    return {"ok": True, "ready": True, "sections": outline(doc),
+    this_build = rev.get("build") == build_key(cfg)
+    last = (rev.get("rounds") or [])[-1:] if this_build else []
+    sections = outline(doc)
+    # what the owner already had fixed since this build is not suggested again
+    done = {sid for r in ((rev.get("rounds") or []) if this_build else [])
+            if isinstance(r, dict) for sid in (r.get("fixed") or [])}
+    worth = [s for s in suggested(cfg, [x["id"] for x in sections]) if s not in done]
+    return {"ok": True, "ready": True, "sections": sections, "suggested": worth,
             "free_left": free_left(cfg), "last_round": last[0] if last else None, **base}
 
 
