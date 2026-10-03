@@ -1221,7 +1221,13 @@ def _stream_message(client, *, model: str, max_tokens: int, system: str,
 
 
 def _call(system: str, user: str, business_id: str,
-          spend: Optional[Dict[str, Any]] = None) -> Optional[str]:
+          spend: Optional[Dict[str, Any]] = None,
+          units: Optional[int] = None,
+          task_type: str = "builder_v2") -> Optional[str]:
+    """One authoring call. `units` is the credit price written onto the
+    first usage row (None lets usage_metering price it from the endpoint,
+    which is 0: build-internal calls ride the build's own marker). A
+    standalone, billable call (refine_section_doc) passes its price."""
     try:
         from anthropic import Anthropic
         import model_ladder
@@ -1253,7 +1259,7 @@ def _call(system: str, user: str, business_id: str,
                 endpoint="/composer/builder-v2", model=used_model or "",
                 input_tokens=getattr(u, "input_tokens", 0) or 0,
                 output_tokens=getattr(u, "output_tokens", 0) or 0,
-                business_id=business_id, task_type="builder_v2")
+                business_id=business_id, task_type=task_type, units=units)
         except Exception:
             pass
         text = "".join(b.text for b in msg.content
@@ -1420,6 +1426,125 @@ def plan_vision_repair(verdict: Optional[Dict[str, Any]], doc: str,
             f"THE WEAKEST SECTION (scored {w['score']}/10): {w.get('why')} "
             f"— REBUILD IT SO: {w.get('fix')}")
     return page, by_section
+
+
+# ─── REWORK ONE SECTION ON THE OWNER'S WORD (2026-10-03) ─────────────
+# site_composer.refine_section (the Chief job and the Studio's "rework
+# this section") only knew module-composed pages, so on a page from this
+# builder an owner could not ask for one section to change, and photos
+# added after the build had no way onto the page short of a full rebuild.
+# Same machinery as the designer's review: one section rebuilt, the rest
+# of the page byte for byte, every law held.
+
+_SECTION_SYNONYMS = {
+    "hero": ("top", "hero", "intro", "home"),
+    "work": ("work", "gallery", "portfolio", "photos", "projects"),
+    "gallery": ("gallery", "work", "portfolio", "photos"),
+    "photos": ("gallery", "work", "portfolio", "photos"),
+    "about": ("about", "story", "team", "us"),
+    "prices": ("prices", "services", "menu", "offerings", "pricing"),
+    "services": ("services", "prices", "offerings", "menu"),
+    "offerings": ("offerings", "services", "prices", "menu"),
+    "reviews": ("reviews", "testimonials", "quotes", "praise"),
+    "testimonials": ("testimonials", "reviews", "quotes"),
+    "contact": ("contact", "visit", "find", "location", "hours"),
+    "cta": ("cta", "book", "join", "start"),
+}
+
+
+def resolve_section(doc: str, key: str) -> Optional[str]:
+    """The id of the top-level <section> the owner means: the exact id,
+    then a friendly name ('gallery' finds id="work"), then an id that
+    contains the word, then a section whose heading carries it."""
+    spans = section_spans(doc)
+    ids = [sid for sid, _, _ in spans]
+    k = re.sub(r"[^a-z0-9-]", "", str(key or "").strip().lower().lstrip("#"))
+    if not k or not ids:
+        return None
+    if k in ids:
+        return k
+    for alias in _SECTION_SYNONYMS.get(k, ()):
+        if alias in ids:
+            return alias
+    for sid in ids:
+        if k in sid.lower():
+            return sid
+    for sid, a, z in spans:
+        h = re.search(r"<h[1-3]\b[^>]*>(.*?)</h[1-3]>", doc[a:z], re.IGNORECASE | re.DOTALL)
+        if h and k in re.sub(r"<[^>]+>", " ", h.group(1)).lower():
+            return sid
+    return None
+
+
+def refine_section_doc(doc: str, spec_text: str, ctx: Dict[str, Any],
+                       business_id: str, section: str, instruction: str,
+                       units: Optional[int] = None) -> Dict[str, Any]:
+    """Rework ONE section of a finished page under the owner's instruction.
+
+    {ok: True, html, section, notes[]} or {ok: False, error[, sections]}.
+    The candidate wears the same mechanical armor as a build and must not
+    add a law violation or a visible stand-in the page did not already
+    have; anything else is a refusal that leaves the page unchanged.
+    `units` is the price, charged on the one model call."""
+    sid = resolve_section(doc, section)
+    if not sid:
+        return {"ok": False, "error": f"section '{section}' isn't on the page",
+                "sections": [s for s, _, _ in section_spans(doc)]}
+    real_data = assemble_real_data(ctx, business_id)
+    endpoint = contact_endpoint(business_id)
+    mech: Dict[str, Any] = {}
+
+    def _mechanical(d: str) -> str:
+        d, dropped = armor_scripts(d, allowed_fetch=endpoint)
+        d, _stripped = armor_external(d)
+        d, _typeset = _craft().typographer(d)
+        d, _added = annotate_editability(d)
+        mech["scripts_dropped"] = dropped
+        return d
+
+    def _laws(d: str) -> List[str]:
+        return (check_truth(d, real_data) + check_tenure(d, real_data)
+                + check_coverage(d, real_data, page="home")
+                + check_grammar(d) + check_head(d) + check_interactions(d)
+                + check_connected(d, real_data)
+                + armor_violations(mech.get("scripts_dropped") or [], endpoint))
+
+    issues = [f"THE OWNER'S REQUEST, IN THEIR WORDS: {instruction}",
+              "Change what they asked for and nothing else: keep the section's "
+              "job on the page, every real fact, and the page's look.",
+              "Photos: use only image urls in THE REAL DATA, each photo once on "
+              "the page; never a visible box standing in for one."]
+    raw = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
+                build_section_prompt(spec_text, real_data, doc, sid, issues),
+                business_id, spend=new_spend(), units=units,
+                task_type="builder_v2_refine")
+    if not raw:
+        return {"ok": False, "error": "the rework didn't come back. Nothing on "
+                                      "the page changed; try again"}
+    cand = splice_section(doc, sid, raw)
+    if not cand:
+        return {"ok": False, "error": "the reworked section didn't fit the page. "
+                                      "Nothing on the page changed"}
+    cand = _mechanical(cand)
+    before = set(_laws(doc))
+    broke = [v for v in _laws(cand) if v not in before]
+    if broke:
+        logger.warning(f"[v2-refine] {sid} rework refused: {broke[:3]}")
+        return {"ok": False, "error": "the rework broke one of the page's rules, "
+                                      "so nothing on the page changed",
+                "violations": broke[:5]}
+    stand_before = set(check_stand_ins(doc))
+    if [s for s in check_stand_ins(cand) if s not in stand_before]:
+        return {"ok": False, "error": "the rework drew a box where a photo should "
+                                      "be, so nothing on the page changed"}
+    soft = _craft().check_html(cand, real_data)
+    # the repeated-photo law (#1218) joins the notes wherever it is present
+    repeated = globals().get("check_repeated_photos")
+    if callable(repeated):
+        soft += repeated(cand)
+    soft_before = set(_craft().check_html(doc, real_data))
+    return {"ok": True, "html": cand, "section": sid,
+            "notes": [s for s in soft if s not in soft_before][:5]}
 
 
 def _concept_sheet(spec_text: str) -> Dict[str, str]:
