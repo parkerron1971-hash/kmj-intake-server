@@ -623,3 +623,110 @@ def test_the_language_block_tells_the_director_how_objects_wear_it(monkeypatch):
     assert spec_author.attach_language(ctx, None) == "ledger"
     assert "OBJECTS IN THIS LANGUAGE" in ctx["language_brief_text"]
     assert 'data-finish="metal"' in ctx["language_brief_text"]
+
+
+# ─── models that think (2026-10-03) ──────────────────────────────────
+# A probe on Opus 5.5 spent ~10K of the 14K cap thinking and cut the
+# blueprint off mid-section; at 20K the next one finished at 17,455. The
+# call now bounds the thinking with an effort setting (models that take
+# one), STREAMS, and has 32K of room; and an unreachable photo ("Unable
+# to download the file") no longer kills the blueprint: the text-only
+# retry catches it.
+
+class _FakeStream:
+    def __init__(self, msg):
+        self._msg = msg
+        self.text_stream = iter([b.text for b in msg.content])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def get_final_message(self):
+        return self._msg
+
+
+class _FakeMessages:
+    def __init__(self, fail_first=None):
+        self.calls = []
+        self.fail_first = fail_first
+
+    def create(self, **kw):
+        raise AssertionError("the Director must stream, not create()")
+
+    def stream(self, **kw):
+        return _FakeStream(self._answer(**kw))
+
+    def _answer(self, **kw):
+        self.calls.append(kw)
+        if self.fail_first and len(self.calls) == 1:
+            raise RuntimeError(self.fail_first)
+
+        class _Block:
+            type = "text"
+            text = "SPEC DOCUMENT"
+
+        class _Usage:
+            input_tokens = 1
+            output_tokens = 1
+
+        class _Msg:
+            content = [_Block()]
+            usage = _Usage()
+            stop_reason = "end_turn"
+
+        return _Msg()
+
+
+def _wire_call(monkeypatch, model, fail_first=None):
+    import model_ladder
+    msgs = _FakeMessages(fail_first)
+    client = type("C", (), {"messages": msgs})()
+    monkeypatch.setattr(spec_author.llm_call, "sdk_client", lambda **kw: client)
+    monkeypatch.setattr(model_ladder, "call_with_ladder",
+                        lambda fn, model, task, business_id, max_tokens:
+                        (fn(model, max_tokens, 60.0), model))
+    monkeypatch.setattr(spec_author, "_model", lambda: model)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-real")
+    return msgs
+
+
+def test_a_thinking_model_gets_a_bounded_effort_and_room(monkeypatch):
+    msgs = _wire_call(monkeypatch, "claude-opus-5-5")
+    assert spec_author._call_llm("sys", "user", "biz") == "SPEC DOCUMENT"
+    kw = msgs.calls[0]
+    assert kw["output_config"] == {"effort": "medium"}
+    assert kw["max_tokens"] == spec_author.SPEC_MAX_TOKENS == 32000
+    # above the SDK's non-streaming ceiling: only a streamed call may ask
+    # for this much (the fake's create() is a trap)
+    assert spec_author.SPEC_MAX_TOKENS > 21333
+    # the char slice never cuts a document the model finished
+    assert spec_author.SPEC_MAX_CHARS >= spec_author.SPEC_MAX_TOKENS * 3.7
+
+
+def test_spec_effort_reads_the_dial(monkeypatch):
+    monkeypatch.setenv("SPEC_EFFORT", "HIGH")
+    assert spec_author._effort() == "high"
+    monkeypatch.setenv("SPEC_EFFORT", "extreme")
+    assert spec_author._effort() == "medium"
+
+
+def test_a_model_without_effort_gets_none(monkeypatch):
+    msgs = _wire_call(monkeypatch, "claude-sonnet-4-5-20250929")
+    spec_author._call_llm("sys", "user", "biz")
+    assert "output_config" not in msgs.calls[0]
+
+
+def test_an_unreachable_photo_falls_back_to_text_only(monkeypatch):
+    msgs = _wire_call(monkeypatch, "claude-opus-5-5",
+                      fail_first="Error code: 400 - Unable to download the file. "
+                                 "Please verify the URL and try again.")
+    out = spec_author._call_llm("sys", "user text", "biz",
+                                image_urls=["https://example.com/gone.jpg"])
+    assert out == "SPEC DOCUMENT"
+    assert len(msgs.calls) == 2
+    assert isinstance(msgs.calls[0]["messages"][0]["content"], list)   # with images
+    assert msgs.calls[1]["messages"][0]["content"] == "user text"      # text only
+    assert msgs.calls[1]["output_config"] == {"effort": "medium"}

@@ -36,16 +36,46 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("spec_author")
 
-SPEC_MAX_TOKENS = 14000  # room to FINISH: both live drafts died
+SPEC_MAX_TOKENS = 32000  # room to FINISH: both live drafts died
                          # mid-sentence in section 4 at the 6K cap;
                          # 2026-10-01: +2K for the concept sheet (section
-                         # 0) and an offer page (section 6)
+                         # 0) and an offer page (section 6);
+                         # 2026-10-03: Opus 5.5 THINKS (adaptive, it cannot
+                         # be turned off) and thinking counts against this
+                         # cap. At 14K a probe cut the blueprint off
+                         # mid-section; at 20K the next one finished at
+                         # 17,455 (7,134 thinking + a 24.6K-char document,
+                         # 5.5 writes far longer than 4.8's ~14.5K). The
+                         # call STREAMS, so the cap can clear the SDK's
+                         # non-streaming ceiling (~21.3K); SPEC_EFFORT
+                         # bounds the thinking. Unused room costs nothing.
 SPEC_TEMPERATURE = 0.7
+
+
+def _effort() -> str:
+    """How hard the Director thinks before writing, on models that think
+    (SPEC_EFFORT: low / medium / high; default medium). Older models that
+    take no effort setting ignore it."""
+    e = (os.environ.get("SPEC_EFFORT") or "medium").strip().lower()
+    return e if e in ("low", "medium", "high") else "medium"
 # The spec leads the canvas brief — cap what rides downstream so the
 # builder's context stays sane even if a model over-writes. Sized
 # above the token budget so the char slice never truncates a document
-# the model completed (14K tokens ≈ 52K chars worst case).
-SPEC_MAX_CHARS = 56000
+# the model completed (32K tokens ≈ 120K chars worst case).
+SPEC_MAX_CHARS = 120000
+
+
+def _stream(client, **kw):
+    """One STREAMING generation, returned as the final Message (the same
+    shape create() returned, so the ladder, the usage log and the text
+    join are untouched). Streaming is what lets SPEC_MAX_TOKENS sit above
+    the SDK's non-streaming ceiling; the builder and the DRL stream for
+    the same reason. A 400 (an unfetchable photo) still raises on entry,
+    so the text-only retry below catches it as before."""
+    with client.messages.stream(**kw) as s:
+        for _ in s.text_stream:
+            pass
+        return s.get_final_message()
 
 
 def _model() -> str:
@@ -453,22 +483,29 @@ def _call_llm(system: str, user: str, business_id: str,
 
         def _do(model: str, max_tokens: int, timeout: float):
             try:
-                return client.messages.create(
+                return _stream(
+                    client,
                     model=model, max_tokens=max_tokens, system=system,
                     messages=[{"role": "user", "content": content}],
                     timeout=timeout,
-                    **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE))
+                    **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE),
+                    **model_ladder.effort_kwargs(model, _effort()))
             except Exception as e:
                 # An unfetchable image url 400s the whole request —
-                # the spec must never die for a broken image link.
-                if content is not user and "image" in str(e).lower():
+                # the spec must never die for a broken image link. The
+                # API words it "Unable to download the file", with no
+                # "image" in it (found 2026-10-03), so both count.
+                _err = str(e).lower()
+                if content is not user and ("image" in _err or "download" in _err):
                     logger.warning(f"[spec] image blocks rejected "
                                    f"({type(e).__name__}) — text-only retry")
-                    return client.messages.create(
+                    return _stream(
+                        client,
                         model=model, max_tokens=max_tokens, system=system,
                         messages=[{"role": "user", "content": user}],
                         timeout=timeout,
-                        **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE))
+                        **model_ladder.sampling_kwargs(model, SPEC_TEMPERATURE),
+                        **model_ladder.effort_kwargs(model, _effort()))
                 raise
 
         _started_ms = int(time.monotonic() * 1000)

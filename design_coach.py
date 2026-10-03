@@ -39,7 +39,11 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("design_coach")
 
-COACH_MAX_TOKENS = 1400
+# 2026-10-03: 1400 → 2400. Opus 5.5 thinks a little before each turn
+# (77-158 tokens in a probe) and thinking counts against this cap; the
+# brief turn (reflect_back + saves) is the longest reply. Unused room
+# costs nothing.
+COACH_MAX_TOKENS = 2400
 COACH_TEMPERATURE = 0.7
 MAX_TURNS = 60          # transcript cap (user+coach messages)
 MAX_MSG_CHARS = 1200    # per-message cap before the prompt
