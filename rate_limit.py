@@ -57,6 +57,12 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # Web-form SMS consent: writes the A2P audit trail, and was limited
     # only per PHONE, which the caller chooses. Per IP too, strict.
     "sms_opt_in": (int(os.environ.get("RL_SMS_OPT_IN_PER_HOUR", "10")), 3600),
+    # The no-card trial's phone check (no_card_trial.py). Sending a code
+    # costs a text and is the classic SMS-pumping target, so few per
+    # business per hour; checking a code is the brute-force target for a
+    # six-digit number, so few per business per ten minutes. Strict.
+    "trial_phone_send": (int(os.environ.get("RL_TRIAL_PHONE_SEND_PER_HOUR", "3")), 3600),
+    "trial_phone_check": (int(os.environ.get("RL_TRIAL_PHONE_CHECK_PER_10MIN", "8")), 600),
     # The traffic beacon: keyed only on a caller-supplied session id,
     # which the anon-spend audit's own words call decorative. A per-IP
     # courtesy bucket beside it — fail-open, because a tracking endpoint

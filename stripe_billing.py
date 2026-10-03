@@ -359,9 +359,23 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
     import feature_gates
     try:
         import usage_metering
+        import no_card_trial
         business = await _load_business(business_id)
         grandfathered = usage_metering.is_grandfathered_user(
             str(business.get("owner_id") or ""))
+        # The no-card trial's second door. Signup starts it; a business
+        # that missed it there (created before it existed, or the start
+        # failed) gets it the first time the app shell asks. Only a
+        # business with no status at all can qualify, so every other
+        # load skips this without a read.
+        if not grandfathered and not (business.get("subscription_status") or "").strip():
+            import asyncio
+            # The email is only the owner's to vouch for: a team member
+            # opening the app says nothing about who signed up.
+            owner_email = (user.email if str(user.id) == str(business.get("owner_id") or "")
+                           else None)
+            if await asyncio.to_thread(no_card_trial.start, business, "access", owner_email):
+                business = await _load_business(business_id)
         # A trial ends on whichever runs out first, the calendar or the
         # tank. access_state is pure, so the tank half is read here.
         trial_spent = usage_metering.trial_credits_exhausted(
@@ -374,6 +388,7 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
             "trial_ends_at": business.get("trial_ends_at"),
             "plan": feature_gates.plan_of(business),
             "enforce": feature_gates.enforcement_on(),
+            **no_card_trial.describe(business),
         }
     except HTTPException:
         raise
@@ -678,6 +693,60 @@ async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> D
     return s
 
 
+# ─── The no-card trial's phone check (no_card_trial.py) ──────────────
+# A verified phone unlocks the free site build. Owner only: it is the
+# owner's own phone, and the one free build per person rides on it.
+
+class TrialPhoneSendBody(BaseModel):
+    business_id: str
+    phone: str = Field(..., max_length=32)
+
+
+class TrialPhoneVerifyBody(BaseModel):
+    business_id: str
+    phone: str = Field(..., max_length=32)
+    code: str = Field(..., max_length=12)
+    token: str = Field(..., max_length=200)
+
+
+@router.post("/trial/phone/send")
+async def trial_phone_send(body: TrialPhoneSendBody,
+                           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import asyncio
+    import no_card_trial
+    biz = await _load_business(body.business_id)
+    _require_owner_of(user, biz)
+    try:
+        return await asyncio.to_thread(no_card_trial.send_phone_code,
+                                       body.business_id, body.phone)
+    except no_card_trial.PhoneError as e:
+        raise HTTPException(400, {"error": "phone_check", "message": str(e)})
+    except Exception as e:
+        logger.warning(f"trial phone send failed: {type(e).__name__}: {e}")
+        raise HTTPException(503, {"error": "phone_check",
+                                  "message": "The phone check isn't available just now — "
+                                             "try again in a moment."})
+
+
+@router.post("/trial/phone/verify")
+async def trial_phone_verify(body: TrialPhoneVerifyBody,
+                             user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    import asyncio
+    import no_card_trial
+    biz = await _load_business(body.business_id)
+    _require_owner_of(user, biz)
+    try:
+        return await asyncio.to_thread(no_card_trial.verify_phone_code, body.business_id,
+                                       body.phone, body.code, body.token)
+    except no_card_trial.PhoneError as e:
+        raise HTTPException(400, {"error": "phone_check", "message": str(e)})
+    except Exception as e:
+        logger.warning(f"trial phone verify failed: {type(e).__name__}: {e}")
+        raise HTTPException(503, {"error": "phone_check",
+                                  "message": "The phone check isn't available just now — "
+                                             "try again in a moment."})
+
+
 def _subscription_data(biz, user, skip_trial: bool = False):
     """Checkout subscription_data: metadata + a free trial for FIRST
     subscriptions only (re-subscribers do not get a second trial), and
@@ -692,7 +761,17 @@ def _subscription_data(biz, user, skip_trial: bool = False):
         trial_days = int(os.environ.get("BILLING_TRIAL_DAYS") or "7")
     except ValueError:
         trial_days = 7
-    if trial_days > 0 and not biz.get("stripe_subscription_id") and not skip_trial:
+    # A business on (or past) a no-card trial already HAS its trial. A card
+    # added mid-trial keeps the same end date — the card unlocks the rest
+    # of the tank, it does not restart the week; once that trial is over,
+    # Checkout is a plain subscription. (no_card_trial.checkout_trial)
+    import no_card_trial
+    no_card = None if skip_trial else no_card_trial.checkout_trial(biz)
+    if no_card is not None:
+        if no_card.get("trial_end"):
+            data["trial_end"] = no_card["trial_end"]
+        data["metadata"]["from_no_card_trial"] = "true"
+    elif trial_days > 0 and not biz.get("stripe_subscription_id") and not skip_trial:
         data["trial_period_days"] = trial_days
     if skip_trial:
         data["metadata"]["skipped_trial"] = "true"
@@ -1119,6 +1198,13 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         patch.pop("tier", None)
         await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
+    # A card arrived: a no-card trial's "coming soon" lifts now, not when
+    # this process's cache expires (other replicas follow within a minute).
+    try:
+        import no_card_trial
+        no_card_trial.forget(business_id)
+    except Exception:
+        pass
 
     # Day one starts HERE. A subscription entering `trialing` is the only
     # place the system learns a trial has begun, and until now nothing

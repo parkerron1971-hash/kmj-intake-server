@@ -73,11 +73,21 @@ def require_units(business_id: str) -> None:
     all live inside usage_metering.can_interact()."""
     if chief_can_send(business_id):
         return
+    message = ("You're out of AI actions for this month. Top up "
+               "credits in Settings → Billing to keep going — "
+               "bookings, invoices, and bookkeeping never stop.")
+    try:
+        # A trial's tank is not a month, and a no-card trial's answer is a
+        # card, not a top-up. Read only on the refusal path.
+        import usage_metering
+        row = usage_metering._biz_row(business_id)
+        if usage_metering.trial_window_start(row) is not None:
+            message = _locked_message("trial_credits_spent", row)
+    except Exception as e:
+        logger.warning(f"require_units trial wording skipped: {e}")
     raise HTTPException(status_code=402, detail={
         "error": "out_of_units",
-        "message": ("You're out of AI actions for this month. Top up "
-                    "credits in Settings → Billing to keep going — "
-                    "bookings, invoices, and bookkeeping never stop."),
+        "message": message,
     })
 
 
@@ -121,19 +131,62 @@ def require_live_access(business_id: str) -> None:
     if (state or {}).get("state") != "locked":
         return
     _reason = (state or {}).get("reason")
-    _spent = _reason == "trial_credits_spent"
     raise HTTPException(status_code=402, detail={
         "error": "subscription_locked",
         "reason": _reason,
-        "message": (
-            ("You've used all the credits in your free trial. Pick a plan in "
-             "Settings → Billing to keep going — your work is safe, and "
-             "bookings, invoices and bookkeeping never stop.")
-            if _spent else
-            ("This account's subscription has ended. Restart it in "
-             "Settings → Billing to keep using AI features and "
-             "campaigns — your data is safe and exports stay open.")),
+        "message": _locked_message(_reason, biz_row),
     })
+
+
+def _locked_message(reason: Optional[str], row: Optional[Dict[str, Any]]) -> str:
+    import no_card_trial
+    if reason == "trial_credits_spent":
+        if no_card_trial.is_running(row):
+            # The no-card tank ran dry with days left: a card is the whole
+            # answer, and the trial's own end date still holds.
+            extra = max(0, _trial_credits() - _no_card_credits())
+            return (f"You've used the free credits in your trial. Add a card in "
+                    f"Settings → Billing for {extra:,} more — nothing is charged "
+                    f"until your trial ends. Your work is safe, and bookings, "
+                    f"invoices and bookkeeping never stop.")
+        return ("You've used all the credits in your free trial. Pick a plan in "
+                "Settings → Billing to keep going — your work is safe, and "
+                "bookings, invoices and bookkeeping never stop.")
+    if reason == "trial_expired":
+        return ("Your free trial has ended. Pick a plan in Settings → Billing "
+                "to keep using AI features and campaigns — everything you "
+                "built is safe and exports stay open.")
+    return ("This account's subscription has ended. Restart it in "
+            "Settings → Billing to keep using AI features and "
+            "campaigns — your data is safe and exports stay open.")
+
+
+def _trial_credits() -> int:
+    import pricing_config
+    return pricing_config.trial_credits()
+
+
+def _no_card_credits() -> int:
+    import pricing_config
+    return pricing_config.trial_credits_no_card()
+
+
+def require_card(business_id: str, what: str) -> None:
+    """The 402 for something a no-card trial waits on (no_card_trial.py):
+    texts, phone numbers, bulk email, a second site build.
+
+    NOT dormant behind BILLING_ENFORCE: no-card trials only begin while
+    enforcement is on, and once one exists its sends stay held until a
+    card arrives — they cost real money and ride shared reputation
+    whether or not credits are being enforced. Fails open on a read
+    error, like every gate here. The detail shape matches the other
+    402s: {error, what, message}."""
+    import no_card_trial
+    try:
+        no_card_trial.check(business_id, what)
+    except no_card_trial.CardRequired as e:
+        raise HTTPException(status_code=402, detail={
+            "error": "card_required", "what": e.what, "message": e.message})
 
 
 def _month_start_iso() -> str:

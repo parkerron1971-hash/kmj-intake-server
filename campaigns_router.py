@@ -307,6 +307,10 @@ def launch_campaign_core(biz: Dict[str, Any], camp: Dict[str, Any],
     # spend on a dead subscription. Dormant behind BILLING_ENFORCE.
     import billing_limits
     billing_limits.require_live_access(camp["business_id"])
+    # Campaigns are bulk email and texts on our accounts: they wait for a
+    # card (no_card_trial.py). Drafting one stays open — it is how a
+    # practitioner sees what Chief would send.
+    billing_limits.require_card(camp["business_id"], "bulk_email")
     if camp.get("status") not in ("draft", "paused"):
         raise HTTPException(409, f"Campaign is {camp.get('status')}.")
     touches = _clean_touches(camp.get("touches"))

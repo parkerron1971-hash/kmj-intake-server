@@ -28,8 +28,12 @@ TRIAL_ENDING_DAYS = 2
 # "Your trial ended" is only sent within this many days AFTER the end.
 ENDED_LOOKBACK_DAYS = 3
 
+# stripe_subscription_id is load-bearing: a trial that began without a
+# card and has since added one still carries the no-card marker, and only
+# this column tells the two apart (no_card_trial.is_no_card) — without it
+# the tank check would measure a carded trial against the no-card tank.
 _BIZ_SELECT = ("id,name,type,owner_id,subscription_status,trial_ends_at,"
-               "comp_tier,settings,created_at")
+               "stripe_subscription_id,comp_tier,settings,created_at")
 
 
 # ─── Config ──────────────────────────────────────────────────────────
@@ -135,6 +139,27 @@ def trial_ending_body(*, business_name: str, first_name: str,
 def trial_ended_body(*, business_name: str, first_name: str,
                      reason: str) -> str:
     app = app_base_url()
+    if reason == "no_card_credits_spent":
+        # The no-card trial's tank ran dry with days left. The trial has
+        # NOT ended: a card keeps its end date and adds the rest of the
+        # full tank (no_card_trial.py), so this mail asks for the card.
+        import pricing_config
+        extra = max(0, pricing_config.trial_credits()
+                    - pricing_config.trial_credits_no_card())
+        more = f" and {extra:,} more credits" if extra else ""
+        return (
+            f"Hi {first_name},\n\n"
+            f"You've used the free credits in the trial for {business_name} "
+            f"before the week was out.\n\n"
+            f"Add a card and Chief keeps going: the rest of your trial{more}, "
+            f"and nothing is charged until the trial ends.\n"
+            f"   {app}/?settings=billing\n\n"
+            f"Everything you built is still there: contacts, bookings, "
+            f"invoices, your site and Chief's notes.\n\n"
+            f"Questions, or a reason the trial didn't fit? Reply here.\n\n"
+            f"The Solutionist System\n"
+            f"{_support_email()}"
+        )
     why = ("You used the trial's full allowance of Chief work before the "
            "calendar ran out."
            if reason == "trial_credits_spent" else
@@ -291,7 +316,10 @@ def _classify(row: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
             if _tank_spent(row):
                 if stamps.get("trial_ended_at"):
                     return None
-                return {"kind": "trial_ended", "reason": "trial_credits_spent"}
+                import no_card_trial
+                return {"kind": "trial_ended",
+                        "reason": ("no_card_credits_spent" if no_card_trial.is_no_card(row)
+                                   else "trial_credits_spent")}
             if stamps.get("trial_ending_at"):
                 return None
             days_left = (ends - now).total_seconds() / 86400.0
@@ -381,7 +409,9 @@ async def sweep_tick() -> Dict[str, Any]:
                 await _send(
                     delivery_key=f"business/{row['id']}/{need['kind']}",
                     to_email=to, to_name=None,
-                    subject=f"Your {name} trial has ended. Your work is still here",
+                    subject=(f"Your {name} trial credits are used up. Add a card to keep going"
+                             if need["reason"] == "no_card_credits_spent" else
+                             f"Your {name} trial has ended. Your work is still here"),
                     body=trial_ended_body(business_name=name, first_name=first,
                                           reason=need["reason"]))
                 _stamp(str(row["id"]), "trial_ended_at")

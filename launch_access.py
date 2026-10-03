@@ -360,6 +360,14 @@ def create_business(body: CreateBusinessBody,
             background_tasks.add_task(seed_custom_business, row)
     except Exception as e:
         logger.warning(f"[access] seed schedule failed: {e}")
+    # The trial starts here, without a card (no_card_trial.py, 2026-10-03).
+    # Before this the app met a new business with the card paywall the
+    # moment onboarding finished. Runs BEFORE the background seeding, so
+    # its settings write cannot race theirs. Never raises: a business
+    # that could not get the trial meets the paywall, as before.
+    import no_card_trial
+    trial = no_card_trial.start(row, source="signup",
+                                email=getattr(user, "email", None))
     # Day one for everyone who never reaches Stripe. Comped, invited and
     # grandfathered accounts have no subscription and so no `trialing`
     # webhook ever fires — an arc that only opened from Stripe would skip
@@ -402,7 +410,7 @@ def create_business(body: CreateBusinessBody,
     except Exception as e:
         logger.warning(f"[access] welcome email schedule failed: {e}")
 
-    return {"ok": True, "business": row}
+    return {"ok": True, "business": row, "trial": trial}
 
 
 @router.post("/onboarding-started")
@@ -440,7 +448,15 @@ def access_open() -> Dict[str, Any]:
         trial_days = max(0, int(os.environ.get("BILLING_TRIAL_DAYS") or "7"))
     except ValueError:
         trial_days = 7
-    return {"ok": True, "invite_only": invite_only(), "trial_days": trial_days}
+    # Whether the trial starts without a card — the front door says "no
+    # card needed" only when signup will really start one.
+    import feature_gates
+    import pricing_config
+    no_card = bool(trial_days and pricing_config.no_card_trial_enabled()
+                   and feature_gates.enforcement_on())
+    return {"ok": True, "invite_only": invite_only(), "trial_days": trial_days,
+            "no_card_trial": no_card,
+            **({"trial_credits": pricing_config.trial_credits_no_card()} if no_card else {})}
 
 
 @router.get("/status")

@@ -11486,6 +11486,21 @@ async def handle_enqueue_job(client, biz, action) -> Dict:
         if gate:
             return {"type": "enqueue_job", "result": f"Not started — {gate}",
                     "label": "Design session first", "nav": None}
+        # A no-card trial earns its free build (no_card_trial.check_build):
+        # say what it needs now, instead of starting a job that can only
+        # come back refused. The phone check itself lives in the app, on
+        # the Build button, so Chief points there.
+        import no_card_trial
+        try:
+            await asyncio.to_thread(no_card_trial.check_build, biz["id"])
+        except no_card_trial.PhoneRequired as e:
+            return {"type": "enqueue_job",
+                    "result": (f"Not started — {e.message} Press Build on your "
+                               "blueprint and it will ask for the code."),
+                    "label": "Free build: verify your phone first", "nav": None}
+        except no_card_trial.TrialGate as e:
+            return {"type": "enqueue_job", "result": f"Not started — {e.message}",
+                    "label": "Build waits for a card", "nav": None}
     try:
         job = await chief_jobs.enqueue(
             client, user_id=owner, business_id=biz["id"], kind=kind,
@@ -12442,6 +12457,18 @@ async def _queue_batch_email_drafts(client, biz, action: Dict[str, Any]) -> Dict
     }
 
 
+# Verbs a no-card trial waits on (no_card_trial.py) → which refusal it
+# reads. Texts and numbers cost real money on our Twilio account; bulk
+# email rides the sending reputation every paying customer shares.
+_CARD_GATED_VERBS: Dict[str, str] = {
+    "send_sms": "texts",
+    "provision_sms_number": "number",
+    "batch_email": "bulk_email",
+    "bulk_approve": "bulk_email",
+    "launch_campaign": "bulk_email",
+}
+
+
 async def _gate_class_c(client, biz, atype: str, action: Dict[str, Any],
                         executed_c: int) -> Tuple[str, Optional[Dict[str, Any]]]:
     """Consult action_registry before dispatching a chat action.
@@ -12748,6 +12775,23 @@ async def _execute_actions(client, biz, actions: List[Dict],
             resolved = dict(resolved)
             resolved["_owner_text"] = (owner_text or "") if (
                 prompted and str(user_id) == str(biz.get("owner_id"))) else ""
+        # ── No card on file yet (no_card_trial.py) ──
+        # Before the trust gate on purpose: a held bulk send becomes one
+        # draft per contact, approved one at a time, and would no longer
+        # look like the bulk send it is. The sends themselves refuse too
+        # (send_sms_core, launch_campaign_core); this says it in the turn.
+        _card_what = _CARD_GATED_VERBS.get(atype)
+        if _card_what:
+            import no_card_trial
+            _nc_row = await no_card_trial.blocks_async(client, str(biz.get("id") or ""))
+            if _nc_row is not None:
+                results.append({
+                    "type": atype,
+                    "result": "Failed: " + no_card_trial.card_message(_card_what, _nc_row),
+                    "label": f"Waits for a card: {_humanize_action_type(atype)}",
+                    "nav": None, "failed": True,
+                })
+                continue
         # ── Class-C trust gate (see _gate_class_c above) ──
         try:
             verdict, gate_res = await _gate_class_c(client, biz, atype, resolved,

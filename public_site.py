@@ -5920,10 +5920,14 @@ async def _serve_sermons_page(client, biz_id: Optional[str], slug: str, path: st
 
 
 async def _render_offline_page(client: httpx.AsyncClient,
-                               biz_id: Optional[str]) -> HTMLResponse:
+                               biz_id: Optional[str],
+                               coming_soon: bool = False) -> HTMLResponse:
     """A calm, branded 'temporarily offline' page shown while the practitioner
     has taken their public site down to work on it. Returns 503 so search
     engines treat it as temporary and don't de-index the site.
+
+    coming_soon: the same page for a site that is not live YET — a no-card
+    trial's site is a preview until a card is on file (no_card_trial.py).
 
     Name + accent come from the business row (businesses.name +
     settings.brand_kit.primary_color) — site_config never carried those keys.
@@ -5945,11 +5949,17 @@ async def _render_offline_page(client: httpx.AsyncClient,
     except Exception:
         pass
     name = _html.escape(name)
+    if coming_soon:
+        title_tail, headline = "coming soon", "Coming soon"
+        line = f"{name} is getting its new site ready. Please check back soon."
+    else:
+        title_tail, headline = "back soon", "We'll be right back"
+        line = f"{name} is making a few updates. Please check back in a little while."
     html = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
-<title>{name} — back soon</title>
+<title>{name} — {title_tail}</title>
 <style>
   :root {{ color-scheme: light dark; }}
   * {{ box-sizing: border-box; }}
@@ -5969,8 +5979,8 @@ async def _render_offline_page(client: httpx.AsyncClient,
 </style></head>
 <body><div class="wrap">
   <span class="dot"></span>
-  <h1>We'll be right back</h1>
-  <p>{name} is making a few updates. Please check back in a little while.</p>
+  <h1>{headline}</h1>
+  <p>{line}</p>
 </div></body></html>"""
     return HTMLResponse(content=html, status_code=503, media_type="text/html",
                         headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
@@ -6640,6 +6650,12 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         _cfg = site.get("site_config") or {}
         if _cfg.get("offline"):
             return await _render_offline_page(client, biz_id)
+        # A no-card trial's site is a preview until a card is on file
+        # (no_card_trial.site_hidden). Same rule: the editor preview is
+        # unaffected; the public address says "coming soon".
+        import no_card_trial
+        if await no_card_trial.site_hidden(client, biz_id):
+            return await _render_offline_page(client, biz_id, coming_soon=True)
 
         # ─── Phase D.2.1 — hosted booking page routing ─────────────
         # /book always serves the booking page (overrides MySite for
@@ -6804,6 +6820,9 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         _cfg = site.get("site_config") or {}
         if _cfg.get("offline"):
             return await _render_offline_page(client, biz_id)
+        import no_card_trial
+        if await no_card_trial.site_hidden(client, biz_id):
+            return await _render_offline_page(client, biz_id, coming_soon=True)
 
         # Academy subpaths work on custom domains too (parity with the
         # subdomain path).
