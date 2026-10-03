@@ -162,7 +162,7 @@ def test_a_new_build_brings_new_included_fixes(wired):
 
 def test_a_fix_that_could_not_land_costs_nothing_and_says_why(wired):
     wired["row"]["site_config"] = _cfg(revisions={"build": BUILT, "free_used": 4})
-    wired["replies"]["offers"] = "the rework broke one of the page's rules"
+    wired["replies"]["offers"] = "the rework broke one of the page's rules, so nothing on the page changed"
     out = sr.run_round("biz-1", [{"section": "top", "reaction": "plain"},
                                  {"section": "offers", "reaction": "wordy"}])
     assert [f["section"] for f in out["fixed"]] == ["top"]
@@ -217,3 +217,8 @@ def test_a_paid_round_checks_the_credit_gate_first(monkeypatch):
     monkeypatch.setattr(pricing_config, "section_rewrite", lambda: 120)
     out, seen = _start(monkeypatch, _cfg(revisions={"build": BUILT, "free_used": 4}), 2)
     assert seen["gate"] == 1 and out["quote"]["credits"] == 240
+
+
+def test_a_refusal_never_says_nothing_changed_when_the_round_changed_things():
+    assert sr._why("the rework didn't come back. Nothing on the page changed; try again")         == "the rework didn't come back"
+    assert sr._why(None).startswith("it couldn't be improved")

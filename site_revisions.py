@@ -212,8 +212,7 @@ def run_round(business_id: str, reactions: List[Dict[str, str]],
                           "reaction": r["reaction"], "note": r["note"]})
         else:
             unchanged.append({"section": r["section"], "heading": name,
-                              "why": str(out.get("error") or "it couldn't be improved "
-                                         "without breaking one of the page's rules")[:160]})
+                              "why": _why(out.get("error"))})
 
     if not fixed:
         return {"ok": False, "fixed": [], "unchanged": unchanged, "free_used": 0,
@@ -255,6 +254,17 @@ def run_round(business_id: str, reactions: List[Dict[str, str]],
             "free_used": q["free"], "credits": q["credits"],
             "free_left": max(0, free_per_build() - rev["free_used"]),
             "url": f"https://{slug}.mysolutionist.app" if slug else None}
+
+
+def _why(error: Any) -> str:
+    """A refusal in the round's words. The one-section refine's errors end
+    "so nothing on the page changed", which is false in a round where the
+    other marked sections did change: the section is named as unchanged
+    instead, so the clause goes."""
+    why = str(error or "").strip()
+    why = re.sub(r"[.,;]?\s*(so\s+)?nothing on the page changed[.;]?(\s*try again)?\.?$", "",
+                 why, flags=re.IGNORECASE).strip().rstrip(".")
+    return (why or "it couldn't be improved without breaking one of the page's rules")[:160]
 
 
 def _charge(business_id: str, credits: int, fixed: int) -> None:
