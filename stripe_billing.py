@@ -359,9 +359,19 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
     import feature_gates
     try:
         import usage_metering
+        import no_card_trial
         business = await _load_business(business_id)
         grandfathered = usage_metering.is_grandfathered_user(
             str(business.get("owner_id") or ""))
+        # The no-card trial's second door. Signup starts it; a business
+        # that missed it there (created before it existed, or the start
+        # failed) gets it the first time the app shell asks. Only a
+        # business with no status at all can qualify, so every other
+        # load skips this without a read.
+        if not grandfathered and not (business.get("subscription_status") or "").strip():
+            import asyncio
+            if await asyncio.to_thread(no_card_trial.start, business, "access"):
+                business = await _load_business(business_id)
         # A trial ends on whichever runs out first, the calendar or the
         # tank. access_state is pure, so the tank half is read here.
         trial_spent = usage_metering.trial_credits_exhausted(
@@ -374,6 +384,7 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
             "trial_ends_at": business.get("trial_ends_at"),
             "plan": feature_gates.plan_of(business),
             "enforce": feature_gates.enforcement_on(),
+            **no_card_trial.describe(business),
         }
     except HTTPException:
         raise
@@ -465,6 +476,8 @@ async def billing_entitlements(biz: str, user: AuthedUser = Depends(require_user
     except Exception:
         out["grandfathered"] = False
     out["comp_tier"] = (business.get("comp_tier") or None)
+    import no_card_trial
+    out.update(no_card_trial.describe(business))
     import service_profile
     out["service_profile"] = service_profile.describe(business, out)
     return out
@@ -692,7 +705,17 @@ def _subscription_data(biz, user, skip_trial: bool = False):
         trial_days = int(os.environ.get("BILLING_TRIAL_DAYS") or "7")
     except ValueError:
         trial_days = 7
-    if trial_days > 0 and not biz.get("stripe_subscription_id") and not skip_trial:
+    # A business on (or past) a no-card trial already HAS its trial. A card
+    # added mid-trial keeps the same end date — the card unlocks the rest
+    # of the tank, it does not restart the week; once that trial is over,
+    # Checkout is a plain subscription. (no_card_trial.checkout_trial)
+    import no_card_trial
+    no_card = None if skip_trial else no_card_trial.checkout_trial(biz)
+    if no_card is not None:
+        if no_card.get("trial_end"):
+            data["trial_end"] = no_card["trial_end"]
+        data["metadata"]["from_no_card_trial"] = "true"
+    elif trial_days > 0 and not biz.get("stripe_subscription_id") and not skip_trial:
         data["trial_period_days"] = trial_days
     if skip_trial:
         data["metadata"]["skipped_trial"] = "true"

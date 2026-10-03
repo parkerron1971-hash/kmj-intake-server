@@ -249,10 +249,24 @@ def chat_fair_use_ok(business_id: str) -> bool:
 
 
 def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:
+    """The row every metering gate reads when the caller has none.
+
+    trial_ends_at IS LOAD-BEARING (2026-10-03). It was missing from this
+    select, and trial_window_start() needs it, so every caller that came
+    through here read a trialing business as NOT on a trial:
+      · trial_first_build_is_free() — site_composer asks it with no row —
+        always said no, so the trial's free first build never happened
+        and a real build (1,000-1,300 credits) emptied the trial tank;
+      · can_interact() / require_units() gave a trial its plan's whole
+        MONTHLY allowance instead of the trial tank — the hole the
+        2026-08-24 tank closed, reopened at every AI gate;
+      · require_live_access() never saw a trial's tank or its calendar.
+    Only paths that loaded the full row themselves (/billing/access,
+    /billing/usage) saw the trial."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
         f"&select=id,owner_id,settings,subscription_status,subscription_plan,"
-        f"stripe_subscription_id,comp_tier&limit=1") or []
+        f"stripe_subscription_id,trial_ends_at,comp_tier&limit=1") or []
     if rows:
         return rows[0]
     # comp_tier column absent (launch-ops migration not applied yet) —
@@ -260,7 +274,7 @@ def _biz_row(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
         f"&select=id,owner_id,settings,subscription_status,subscription_plan,"
-        f"stripe_subscription_id&limit=1") or []
+        f"stripe_subscription_id,trial_ends_at&limit=1") or []
     return rows[0] if rows else None
 
 
@@ -351,7 +365,10 @@ def usage_summary(business_id: str,
 
     allotment = None
     if on_trial:
-        allotment = pricing_config.trial_credits()
+        # A trial started without a card draws the smaller tank until a
+        # card is added (no_card_trial.py); the card trial the full one.
+        import no_card_trial
+        allotment = no_card_trial.tank(row)
     elif plan:
         allotment = feature_gates.monthly_credits(row, plan)
 
@@ -431,6 +448,15 @@ def price_list() -> Dict[str, Any]:
     }
 
 
+def _no_card_fields(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        import no_card_trial
+        return no_card_trial.describe(row)
+    except Exception as e:
+        logger.warning(f"[metering] no-card describe failed: {e}")
+        return {"no_card_trial": False}
+
+
 def credits_overview(business_id: str,
                      biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The CreditsCard read (GET /billing/credits/{business_id}) — the
@@ -491,6 +517,9 @@ def credits_overview(business_id: str,
         # they are told which kind of tank they are reading.
         "on_trial": s.get("on_trial", False),
         "trial_ends_at": (row or {}).get("trial_ends_at"),
+        # No card yet: the tank is the smaller one, and the app says what
+        # adding a card unlocks (no_card_trial.describe).
+        **_no_card_fields(row),
         "monthly": {
             "allowance": allowance,
             "used": monthly_used,

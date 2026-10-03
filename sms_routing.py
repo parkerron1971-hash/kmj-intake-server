@@ -520,6 +520,10 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
     # outbound to the whole list.
     import business_access
     business_access.assert_access(str(body.business_id), user, "admin")
+    # No card on file yet (no_card_trial.py): refuse once, up front, rather
+    # than fail at sender_for once per contact.
+    import billing_limits
+    billing_limits.require_card(str(body.business_id), "texts")
     msg = (body.message or "").strip()
     if not msg:
         return JSONResponse({"error": "Message body required"}, 400)

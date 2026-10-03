@@ -3808,6 +3808,15 @@ def compose_site(business_id: str, brief_notes: str = "",
     imagery_priority/boldness/notes) is sanitized and persisted to
     businesses.settings.site_prefs BEFORE composing, so gather_context reads
     it back; recomposes without fresh prefs reuse the stored ones."""
+    # A no-card trial's free build is its only one (no_card_trial.py): the
+    # next is charged 1,000+ credits against a 500 tank, and the AI gate
+    # only asks whether ANY credit is left. Checked here, in the one entry
+    # every paid build passes through — the /compose endpoint, Chief's
+    # rebuild job and the director all call this. Raises CardRequired,
+    # whose message is the practitioner's answer.
+    if use_llm:
+        import no_card_trial
+        no_card_trial.check_rebuild(business_id)
     # CANVAS PROTECTION (2026-07-25, the 05:00 incident): a retired
     # Smart Sites banner's click rerouted into compose_site(use_llm=
     # False) and a SUB-SECOND deterministic module compose silently
@@ -4719,8 +4728,13 @@ def compose(body: ComposeBody,
     if body.use_llm:
         import billing_limits
         billing_limits.require_units(body.business_id)
-    result = compose_site(body.business_id, body.brief_notes or "", body.use_llm,
-                          design_prefs=body.design_prefs, refine=body.refine)
+    import no_card_trial
+    try:
+        result = compose_site(body.business_id, body.brief_notes or "", body.use_llm,
+                              design_prefs=body.design_prefs, refine=body.refine)
+    except no_card_trial.CardRequired as e:
+        raise HTTPException(status_code=402, detail={
+            "error": "card_required", "what": e.what, "message": e.message})
     return {"ok": True, **result}
 
 

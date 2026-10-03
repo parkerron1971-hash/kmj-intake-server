@@ -406,15 +406,21 @@ def _execute_kind(kind: str, business_id: str, params: dict,
         # then composes concept-threaded copy that obeys it.
         from site_composer import compose_site
         notes = (params or {}).get("brief_notes") or ""
+        import no_card_trial
         # Arc 2 "Ask the Owner": compose_site sanitizes + persists the prefs
         # to businesses.settings.site_prefs before composing; when absent it
         # reuses the stored site_prefs automatically.
-        result = compose_site(business_id, brief_notes=notes, use_llm=True,
-                              design_prefs=(params or {}).get("design_prefs"),
-                              progress_cb=progress,
-                              # Refine mode: keep the current design
-                              # direction, regenerate the execution.
-                              refine=bool((params or {}).get("refine")))
+        try:
+            result = compose_site(business_id, brief_notes=notes, use_llm=True,
+                                  design_prefs=(params or {}).get("design_prefs"),
+                                  progress_cb=progress,
+                                  # Refine mode: keep the current design
+                                  # direction, regenerate the execution.
+                                  refine=bool((params or {}).get("refine")))
+        except no_card_trial.CardRequired as e:
+            # A no-card trial's second build: a finished job with an honest
+            # answer, not a failure that offers "tap to retry".
+            return {"ok": False, "error": e.message, "card_required": True}
         return result if isinstance(result, dict) else {}
     if kind == "compose_directions":
         # Arc 6 — authors + stores the three direction drafts; the result

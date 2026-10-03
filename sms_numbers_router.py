@@ -196,6 +196,10 @@ async def provision_core(client: httpx.AsyncClient, business_id: str, *,
                          friendly_label: Optional[str] = None) -> Dict[str, Any]:
     """Buy → attach → active. Raises HTTPException with a practitioner-
     readable {error, message} detail; returns the public row."""
+    # A number is bought on our Twilio account: it waits for a card
+    # (no_card_trial.py). Chief's handler passes the message through.
+    import billing_limits
+    billing_limits.require_card(business_id, "number")
     required_plan = _plan_allows(business_id)
     if required_plan:
         raise HTTPException(402, {"error": "feature_locked", "feature": FEATURE,

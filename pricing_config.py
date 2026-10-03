@@ -363,6 +363,36 @@ def trial_build_free() -> bool:
     return _dial("TRIAL_BUILD_FREE", "PRICE_", 1) != 0
 
 
+def trial_credits_no_card() -> int:
+    """The tank of a trial started WITHOUT a card (no_card_trial.py).
+
+    Half the card trial's, on Kevin's ruling (2026-10-03): no card to get
+    in, a card for the rest. Adding a card lifts the tank to
+    trial_credits() for the same trial window, so the card is worth
+    trial_credits() - this, in credits, and nothing is charged before
+    the trial's end date.
+
+    WHAT 500 BUYS, measured in production on 2026-10-03:
+      · a site build is charged 1,000-1,300 credits and costs ~$1.69-3.25
+        of AI, so 500 can never pay for one — the build is in this trial
+        ONLY because trial_build_free() makes the FIRST one free;
+      · a Chief turn is chat_price() (12) credits and costs ~8.2c on
+        average, so the rest is ~41 turns, ~$3.40 of AI;
+      · setup work a new business triggers on its own costs 0 credits.
+    Worst case per no-card signup is therefore ~$6-7 of AI, against
+    ~$10 for the card trial. Real new businesses spent 0-264 credits in
+    their first week; one heavy user spent 956, and would meet the
+    add-a-card wall around day three, which is the point of it."""
+    return _dial("TRIAL_CREDITS_NO_CARD", "PRICE_", 500)
+
+
+def no_card_trial_enabled() -> bool:
+    """Whether a new business starts its trial without a card. 0 sends
+    new signups back to the card paywall; trials already running are
+    untouched either way."""
+    return _dial("NO_CARD_TRIAL", "PRICE_", 1) != 0
+
+
 # ─── Does the tank pay for itself? ───────────────────────────────────
 
 # Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.
