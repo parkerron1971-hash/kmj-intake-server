@@ -59,6 +59,13 @@ causal revenue attribution are not invented by these workflows.
 
 ## Deployment and verification
 
+Production schema status: **applied 2026-10-03 20:43 UTC**, explicitly authorized
+by Kevin after the draft was prepared. A live rollback rehearsal and post-commit
+privilege/schema checks passed; see [receipt](CHIEF_EVENT_MIGRATION_VERIFICATION.json).
+The backend/frontend drafts are not yet merged and recovery was not activated.
+Step 2 below is complete for the production database; retain the full sequence
+for other environments.
+
 1. Merge/deploy the backend with `CHIEF_DURABLE_EVENTS=off`.
 2. Apply `supabase/APPLY-2026-10-03-chief-event-delivery.sql` in the shared
    Supabase database. The script is repeatable, grants RPC access only to the
