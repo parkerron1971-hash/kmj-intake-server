@@ -77,6 +77,18 @@ def _founded_year(settings: Dict[str, Any], profile: Dict[str, Any],
 _STATED_YEARS_RE = re.compile(r"\b(\d{1,2})\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
 
 
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20, "twenty-five": 25, "thirty": 30, "forty": 40,
+    "fifty": 50,
+}
+_WORD_YEARS_RE = re.compile(
+    r"\b(" + "|".join(sorted((re.escape(w) for w in _NUMBER_WORDS), key=len, reverse=True))
+    + r")\+?\s*(?:years?|yrs?)\b", re.IGNORECASE)
+
+
 def stated_years(ctx: Dict[str, Any], dossier: Dict[str, Any]) -> List[int]:
     """THE OWNER'S OWN TENURE (2026-09-04, the barbershop bench). The
     tenure law only knew the founding year, so an owner who typed "I've
@@ -98,6 +110,23 @@ def stated_years(ctx: Dict[str, Any], dossier: Dict[str, Any]) -> List[int]:
     out: List[int] = []
     for t in texts:
         for m in _STATED_YEARS_RE.finditer(t):
+            n = int(m.group(1))
+            if 1 <= n <= 80 and n not in out:
+                out.append(n)
+        # "six years ago I started this practice" (2026-10-03, the first
+        # live test): the owner's own words, spelled out
+        for m in _WORD_YEARS_RE.finditer(t):
+            n = _NUMBER_WORDS[m.group(1).lower()]
+            if n not in out:
+                out.append(n)
+    # a proven stat the Coach saved ("6 · years running the practice") is
+    # a tenure the owner stated, not only a number
+    for stat in (((dossier or {}).get("truth") or {}).get("proven_stats") or []):
+        if not isinstance(stat, dict):
+            continue
+        label = str(stat.get("label") or stat.get("stat") or "")
+        m = re.fullmatch(r"\s*(\d{1,2})\+?\s*", str(stat.get("value") or ""))
+        if m and re.search(r"\byears?\b|\byrs?\b", label, re.IGNORECASE):
             n = int(m.group(1))
             if 1 <= n <= 80 and n not in out:
                 out.append(n)
