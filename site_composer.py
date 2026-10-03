@@ -5186,7 +5186,7 @@ def _spec_inputs(business_id: str):
 
 
 def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
-                     progress_cb=None) -> Dict[str, Any]:
+                     progress_cb=None, chief_notes: str = "") -> Dict[str, Any]:
     """THE blueprint authoring work — one place, called by the background
     job and by the legacy synchronous route.
 
@@ -5216,6 +5216,8 @@ def author_spec_work(business_id: str, notes: str = "", revise: bool = False,
     ctx, dro, plan = _spec_inputs(business_id)
     if (notes or "").strip() and not revise:
         ctx["owner_brief"] = notes.strip()[:_owner_brief_cap()]
+    if (chief_notes or "").strip():
+        ctx["chief_notes"] = chief_notes.strip()[:1200]
 
     _report_progress(progress_cb, 25,
                      "Revising the blueprint" if revise else "Drafting the blueprint")

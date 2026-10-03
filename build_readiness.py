@@ -41,6 +41,14 @@ def spec_readiness(ctx: Dict[str, Any]) -> Dict[str, Any]:
          .get("value")))
     store = ctx.get("store") if isinstance(ctx.get("store"), dict) else {}
     store_items = _n(store.get("items")) if store.get("enabled") else 0
+    # THE SESSION COUNTS (2026-10-03, the first live test): the card said
+    # "no testimonials" over the client story the owner had just told the
+    # Coach, and "no services" over the offers and prices they named.
+    truth = dossier.get("truth") if isinstance(dossier.get("truth"), dict) else {}
+    story = dossier.get("story") if isinstance(dossier.get("story"), dict) else {}
+    stated_offers = [o for o in (truth.get("offers") or []) if isinstance(o, dict) and o.get("name")]
+    proof = story.get("proof")
+    told_story = bool((proof.get("value") if isinstance(proof, dict) else proof) or "")
 
     notes: List[str] = []
     chips: List[str] = []
@@ -61,7 +69,12 @@ def spec_readiness(ctx: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("No logo on file — the header will carry a typographic "
                      "wordmark. Add your mark in Brand to change that.")
         chips.append("Give the wordmark real presence in the header")
-    if offerings == 0:
+    if offerings == 0 and stated_offers:
+        named = ", ".join(str(o["name"]) for o in stated_offers[:3])
+        notes.append(f"The page lists what you told the Coach you offer ({named}), "
+                     "as you described it. Add them as services to take bookings "
+                     "or payments for them.")
+    elif offerings == 0:
         notes.append("No services or offerings on file — the page cannot "
                      "list what you sell. Add at least one before building.")
         chips.append("Write the services section from what I tell you here")
@@ -71,7 +84,10 @@ def spec_readiness(ctx: Dict[str, Any]) -> Dict[str, Any]:
         chips.append("Give each service its own moment instead of a list")
     else:
         notes.append(f"{offerings} offerings on file.")
-    if testimonials == 0:
+    if testimonials == 0 and told_story:
+        notes.append("No written testimonials yet. The client story you told "
+                     "the Coach carries the proof, told in your words.")
+    elif testimonials == 0:
         notes.append("No testimonials yet — there will be no proof section "
                      "until clients leave words.")
         chips.append("Replace the testimonials section with a promise in my "
