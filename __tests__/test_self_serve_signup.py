@@ -82,6 +82,7 @@ def test_no_token_survives_into_the_page(path):
     html = PAGES[path]()
     assert mp.TRIAL_TOKEN not in html
     assert mp.CONTACT_TOKEN not in html
+    assert mp.CARD_TOKEN not in html and mp.CARD_NOTE_TOKEN not in html
 
 
 def test_each_price_card_opens_its_own_tier():

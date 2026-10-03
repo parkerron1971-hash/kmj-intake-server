@@ -77,6 +77,33 @@ def _trial_free_phrase() -> str:
     return f"{days} days free" if days else "No setup fee"
 
 
+def _no_card_trial_offered() -> bool:
+    """Whether signup really starts the trial without a card — the SAME
+    test /access/open answers (no_card_trial.py), so the site can never
+    promise a door the app is not opening. Fails to False: the card-trial
+    wording is true in both worlds."""
+    try:
+        import feature_gates
+        import pricing_config
+        return bool(_trial_days() and pricing_config.no_card_trial_enabled()
+                    and feature_gates.enforcement_on())
+    except Exception:
+        return False
+
+
+def _trial_card_phrase() -> str:
+    """What `__TRIAL_CARD__` becomes: the card half of the trial promise,
+    mid-sentence ("7 days free, <phrase>, and ...")."""
+    return ("no card needed to start" if _no_card_trial_offered()
+            else "no card charged until the trial ends")
+
+
+def _trial_card_note() -> str:
+    """What `__TRIAL_CARD_NOTE__` becomes in a "· "-separated fine print:
+    " · no card needed" while the no-card trial is on, otherwise nothing."""
+    return " · no card needed" if _no_card_trial_offered() else ""
+
+
 def _public_contact_email() -> str:
     """The address the public site prints — resolver in
     `platform_addresses`, which the legal pages now share.
@@ -114,6 +141,11 @@ CONTACT_TOKEN = "__CONTACT_EMAIL__"
 # five pages, and every one of them has to say what checkout actually
 # grants — so none of them hardcodes a number.
 TRIAL_TOKEN = "__TRIAL_FREE__"
+# And the card half of it: "no card needed to start" while the no-card
+# trial is on, "no card charged until the trial ends" otherwise; the NOTE
+# form is a "· no card needed" suffix for fine print, empty when off.
+CARD_TOKEN = "__TRIAL_CARD__"
+CARD_NOTE_TOKEN = "__TRIAL_CARD_NOTE__"
 # Plan prices in prose (2026-09-04): two sentences on /compare and one in
 # the FAQ had "$199" and "$399" typed in, and survived a repricing. They
 # carry these tokens now and read the same dials the price cards do.
@@ -144,6 +176,12 @@ def _fill_trial(html: str) -> str:
         prices = pricing_config.tier_price_cents()
         for token, plan in PRICE_TOKENS.items():
             html = html.replace(token, f"${prices.get(plan, 0) // 100}")
+    # The card half of the promise (2026-10-03): it follows the same switch
+    # signup does, so "no card needed" appears only while it is true.
+    if CARD_TOKEN in html:
+        html = html.replace(CARD_TOKEN, _html.escape(_trial_card_phrase()))
+    if CARD_NOTE_TOKEN in html:
+        html = html.replace(CARD_NOTE_TOKEN, _html.escape(_trial_card_note()))
     if TRIAL_TOKEN not in html:
         return html
     return html.replace(TRIAL_TOKEN, _html.escape(_trial_free_phrase()))
@@ -3683,7 +3721,7 @@ def render_home_v1() -> str:
         </div>
         <div class="hero-meta reveal reveal-delay-3">
           <span class="stat-block"><span class="big">7</span><span>business types it already knows</span></span>
-          <span class="hero-note">__TRIAL_FREE__ &middot; Every action logged and reversible</span>
+          <span class="hero-note">__TRIAL_FREE____TRIAL_CARD_NOTE__ &middot; Every action logged and reversible</span>
         </div>
       </div>
 
@@ -6295,7 +6333,7 @@ def render_get_started() -> str:
 <section class="page-hero">
   <span class="orb orb-1" aria-hidden></span>
   <div class="container">
-    <span class="eyebrow reveal">__TRIAL_FREE__ &middot; no application, no waiting list</span>
+    <span class="eyebrow reveal">__TRIAL_FREE____TRIAL_CARD_NOTE__ &middot; no application, no waiting list</span>
     <h1 class="reveal reveal-delay-1">Start it yourself in about <span class="gradient-text">two minutes.</span></h1>
     <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">Create your account, name your business, and the whole workspace arrives already speaking your trade. Pick yours below and see exactly what you would be handed.</p>
     <p class="reveal reveal-delay-3" style="margin-top:22px;">
@@ -6377,7 +6415,7 @@ def render_get_started() -> str:
           </li>
           <li>
             <span class="num">3</span>
-            <span class="text"><strong>Pick a plan.</strong> Starter, Professional or Solutionist &mdash; __TRIAL_FREE__ on any of them, and the card is not charged until the trial ends.</span>
+            <span class="text"><strong>Pick a plan.</strong> Starter, Professional or Solutionist &mdash; __TRIAL_FREE__ on any of them, __TRIAL_CARD__.</span>
           </li>
           <li>
             <span class="num">4</span>
