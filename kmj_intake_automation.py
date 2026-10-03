@@ -31,6 +31,7 @@ from payment_agent import router as payment_router
 from growth_engine import router as growth_router
 from module_agent import router as module_router
 from chief_of_staff import router as chief_router
+from chief_listening import router as chief_listening_router
 from notification_engine import router as notification_router
 from whisper_proxy import router as whisper_router
 from voice_stream import router as voice_stream_router
@@ -238,6 +239,7 @@ app.include_router(payment_router)
 app.include_router(growth_router)
 app.include_router(module_router)
 app.include_router(chief_router)
+app.include_router(chief_listening_router)
 from chief_jobs import router as chief_jobs_router  # Feature 2 — queued desk jobs
 app.include_router(chief_jobs_router)
 from chief_errands import router as chief_errands_router
