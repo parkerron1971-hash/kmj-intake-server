@@ -5503,26 +5503,96 @@ _DROP_SLOT_RE_TMPL = (
     r'(?:(?!</?div\b).)*?</div>')
 
 
-def fill_drop_slot(html: str, slot: str, url: str) -> Optional[str]:
+_DROP_ALT_MAX = 140
+
+
+def _drop_slot_pattern(slot: str) -> "re.Pattern[str]":
+    return re.compile(_DROP_SLOT_RE_TMPL.format(slot=re.escape(slot)),
+                      re.DOTALL | re.IGNORECASE)
+
+
+def drop_slot_direction(html: str, slot: str) -> str:
+    """The shot direction the builder wrote inside an empty slot ("You at
+    the chair, mid-cut, warm light"), as plain text: tags dropped,
+    entities decoded, whitespace collapsed, cut at a word near 140
+    characters. '' when the slot is missing or already filled."""
+    import html as _html
+    m = _drop_slot_pattern(slot).search(html or "")
+    if not m:
+        return ""
+    inner = re.sub(r"^<div\b[^>]*>|</div>$", "", m.group(0), flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", inner))).strip()
+    if not text:
+        # a slot filled before keeps the description it was given
+        prior = re.search(r'<img\b[^>]*\balt="([^"]*)"', inner, re.IGNORECASE)
+        text = _html.unescape(prior.group(1)).strip() if prior else ""
+    if len(text) > _DROP_ALT_MAX:
+        text = text[:_DROP_ALT_MAX].rsplit(" ", 1)[0].rstrip(",;:.") + "…"
+    return text
+
+
+def fill_drop_slot(html: str, slot: str, url: str,
+                   alt: Optional[str] = None) -> Optional[str]:
     """Deterministic placeholder → image swap (the claude.ai Design
     Labs move, 2026-07-25). The builder authored the frame and the
     crop; the owner's photo inherits that intention. Pure; None when
     the slot isn't found. The inline display:block outranks the
     authored `.sx-drop{display:none}` so a FILLED slot shows on the
-    public page while empty ones stay hidden."""
-    safe_slot = re.escape(slot)
-    pat = re.compile(_DROP_SLOT_RE_TMPL.format(slot=safe_slot),
-                     re.DOTALL | re.IGNORECASE)
+    public page while empty ones stay hidden.
+
+    THE PHOTO IS DESCRIBED (2026-10-03): the image used to go in with
+    alt="", a photo with no description for screen readers or search.
+    The builder already wrote one, the slot's own shot direction, so
+    that is the alt unless one is given."""
+    import html as _html
+    pat = _drop_slot_pattern(slot)
     if not pat.search(html):
         return None
+    if alt is None:
+        alt = drop_slot_direction(html, slot)
     esc_url = url.replace('"', "%22")
+    esc_alt = _html.escape(alt or "", quote=True)
     replacement = (
         f'<div class="sx-drop sx-filled" data-sx-slot="{slot}" '
         f'style="display:block;padding:0">'
-        f'<img src="{esc_url}" alt="" loading="lazy" '
+        f'<img src="{esc_url}" alt="{esc_alt}" loading="lazy" '
         f'style="width:100%;height:100%;object-fit:cover;display:block">'
         f'</div>')
-    return pat.sub(replacement, html, count=1)
+    return pat.sub(lambda _m: replacement, html, count=1)
+
+
+def add_photo_to_library(business_id: str, url: str, alt: str = "",
+                         slot: str = "") -> bool:
+    """Put a photo the owner dropped into a slot into the photo library
+    (businesses.settings.media_library.gallery), the inventory every build
+    reads. True when it was added, False when it was already there.
+
+    WHY (2026-10-03): a filled slot used to live only in the page. The
+    next full rebuild read the library, did not know the photo existed,
+    and the photo vanished from the site. Same entry shape as the app's
+    own gallery upload (galleryUpload.ts), plus the slot it filled."""
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+    if not rows:
+        return False
+    settings = dict(rows[0].get("settings") or {})
+    lib = dict(settings.get("media_library") or {})
+    gallery = [g for g in (lib.get("gallery") or []) if isinstance(g, dict)]
+    if any(str(g.get("url") or "").strip() == url for g in gallery):
+        return False
+    from datetime import datetime, timezone
+    gallery.append({
+        "id": f"gal-{int(time.time() * 1000)}-{uuid4().hex[:5]}",
+        "url": url, "alt": alt or "", "caption": "",
+        "show_on_website": True, "sort_order": 0,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "slot": slot, "source": "photo_holder",
+    })
+    lib["gallery"] = gallery
+    settings["media_library"] = lib
+    sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
+                                   {"settings": settings})
+    return True
 
 
 @router.post("/drop/fill")
@@ -5543,13 +5613,14 @@ def drop_fill(body: DropFillBody,
         raise HTTPException(404, "site not found")
     row = rows[0]
     html = row.get("html_content") or ""
-    filled = fill_drop_slot(html, body.slot, url)
+    alt = drop_slot_direction(html, body.slot)
+    filled = fill_drop_slot(html, body.slot, url, alt=alt)
     if filled is None:
         raise HTTPException(404, f"drop slot '{body.slot}' not on the page")
     cfg = dict(row.get("site_config") or {})
     canvas = cfg.get("canvas") if isinstance(cfg.get("canvas"), dict) else None
     if canvas and str(canvas.get("html") or "").strip():
-        c_filled = fill_drop_slot(str(canvas["html"]), body.slot, url)
+        c_filled = fill_drop_slot(str(canvas["html"]), body.slot, url, alt=alt)
         if c_filled is not None:
             canvas = dict(canvas)
             canvas["html"] = c_filled
@@ -5562,7 +5633,16 @@ def drop_fill(body: DropFillBody,
         {"html_content": filled, "site_config": cfg})
     logger.info(f"[composer] drop slot '{body.slot}' filled for "
                 f"{body.business_id[:8]}")
-    return {"ok": True, "slot": body.slot}
+    # The photo joins the library so the next rebuild keeps it. The fill
+    # already landed; a library write that fails is logged, never fatal.
+    in_library = False
+    try:
+        add_photo_to_library(body.business_id, url, alt=alt, slot=body.slot)
+        in_library = True
+    except Exception as e:
+        logger.warning(f"[composer] drop photo not added to the library for "
+                       f"{body.business_id[:8]}: {e}")
+    return {"ok": True, "slot": body.slot, "in_library": in_library}
 
 
 _DROP_UPLOAD_MIMES = {"image/jpeg": "jpg", "image/jpg": "jpg",
