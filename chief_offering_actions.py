@@ -813,6 +813,68 @@ async def handle_set_availability_day(client, biz, action) -> Dict:
         "frontend_event": _AVAILABILITY_FRONTEND_EVENT,
     }
 
+
+# ─────────────────────────────────────────────────────────────────────
+# THE BOOKING PAGE, FROM THE CHAT (2026-10-04, Kevin: "what about
+# booking? if someone wants to book, why haven't I seen that?")
+# ─────────────────────────────────────────────────────────────────────
+# Chief could create services and set hours, but the last step, putting
+# the booking page live, was only the Embed tab's toggle. So an owner
+# who told the Design Coach "a discovery call, $1,200 for six weeks,
+# $150 a session, Tuesday to Saturday 9 to 6" got a site whose every
+# button opened a note form. The same gate as the toggle
+# (booking_page_router.publish_blockers): a page that can't take a
+# booking is never put live; the refusal names what is missing. Live,
+# the site re-renders and its book buttons open the booking page
+# (site_composer.wire_booking_doors).
+
+
+def _publish_booking_page_sync(biz: Dict[str, Any], published: bool) -> Dict[str, Any]:
+    import booking_page_router
+    from business_sites_helpers import booking_url_for_site, ensure_business_site
+    if published:
+        blockers = booking_page_router.publish_blockers(biz["id"])
+        if blockers:
+            return _fail("publish_booking_page",
+                         "The booking page can't take a booking yet, so I didn't put "
+                         "it live: " + " ".join(blockers))
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz['id']}&select=id,name,settings&limit=1") or []
+    if not rows:
+        return _fail("publish_booking_page", "I couldn't find this business.")
+    business = rows[0]
+    settings = dict(business.get("settings") or {})
+    page = dict(settings.get("booking_page") or {}) \
+        if isinstance(settings.get("booking_page"), dict) else {}
+    page["published"] = published
+    settings["booking_page"] = page
+    sb_clients.sb_patch_as_service(f"/businesses?id=eq.{biz['id']}", {"settings": settings})
+    site, _created = ensure_business_site(business)
+    url = booking_url_for_site(site)
+    try:
+        # the page's book buttons follow the booking page (wire_booking_doors)
+        import site_composer
+        site_composer.refresh_if_composed(biz["id"])
+    except Exception as e:
+        logger.info(f"[chief] site refresh after booking publish skipped: {e}")
+    return {
+        "type": "publish_booking_page",
+        "result": (f"Booking page is live at {url}. The site's book and "
+                   "discovery-call buttons now open it." if published
+                   else "Booking page taken down. The site's book buttons go back "
+                        "to the note form."),
+        "label": "📅 Booking page live" if published else "📅 Booking page off",
+        "url": url,
+        "nav": _nav("build"),
+    }
+
+
+async def handle_publish_booking_page(client, biz, action) -> Dict:
+    """Put the booking page live (or "published": false to take it down)."""
+    want = action.get("published")
+    published = True if want is None else bool(want)
+    return await asyncio.to_thread(_publish_booking_page_sync, biz, published)
+
 async def handle_set_availability_override(client, biz, action) -> Dict:
     """Set a date-specific override that replaces the weekly schedule
     for that date. action: {date, hours}. hours=[] means closed."""

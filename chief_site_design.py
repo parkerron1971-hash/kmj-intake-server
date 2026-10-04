@@ -90,8 +90,73 @@ def photos_not_on_site(settings: Dict[str, Any], site_config: Dict[str, Any]) ->
     return sum(1 for g in _gallery(settings) if str(g["url"]).strip() not in html)
 
 
+def _stated_offers_line(cfg: Dict[str, Any]) -> str:
+    """What the owner told the Design Coach they sell and when they are open
+    (discovery truth), in their words, or ""."""
+    dd = cfg.get("discovery_dossier") if isinstance(cfg.get("discovery_dossier"), dict) else {}
+    truth = dd.get("truth") if isinstance(dd.get("truth"), dict) else {}
+    said = []
+    for o in (truth.get("offers") or [])[:6]:
+        if not isinstance(o, dict) or not str(o.get("name") or "").strip():
+            continue
+        bits = [str(o.get(k)).strip() for k in ("price", "duration") if str(o.get(k) or "").strip()]
+        said.append(str(o["name"]).strip() + (f" ({', '.join(bits)})" if bits else ""))
+    hours = truth.get("hours")
+    hv = str((hours.get("value") if isinstance(hours, dict) else hours) or "").strip()
+    if not said and not hv:
+        return ""
+    return ("They told the Design Coach"
+            + (f" they offer: {'; '.join(said)}" if said else "")
+            + (f"{';' if said else ''} hours: {hv}" if hv else "") + ".")
+
+
+def booking_lines(cfg: Dict[str, Any], settings: Optional[Dict[str, Any]],
+                  modules: Optional[List[Dict[str, Any]]] = None,
+                  offerings: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """THE BOOKING DOOR, IN CHIEF'S VIEW (2026-10-04, Kevin: "what about
+    booking? if someone wants to book, why haven't I seen that?"). The
+    Design Coach heard the services, the prices and the hours; the
+    blueprint card said "add them as services"; nothing set booking up,
+    so every button on the page opened a note form. Chief now sees
+    whether booking is live and, when it is not, exactly what is missing
+    and what the owner already said, so it can offer to set it up from
+    their own words and ask only for what they did not say."""
+    s = settings if isinstance(settings, dict) else {}
+    page = s.get("booking_page") if isinstance(s.get("booking_page"), dict) else {}
+    calendar = any(str((m or {}).get("archetype") or "") == "booking_calendar"
+                   for m in (modules or []) if isinstance(m, dict))
+    bookable = any(str((o or {}).get("category") or "") in ("service", "session")
+                   and int((o or {}).get("duration_min") or 0) > 0
+                   for o in (offerings or []) if isinstance(o, dict))
+    if page.get("published") and calendar:
+        return ["  Booking: live. The site's book and discovery-call buttons open the "
+                "booking page."]
+    missing = []
+    if not calendar:
+        missing.append("no booking calendar yet")
+    if not bookable:
+        missing.append("no service with a length in minutes")
+    if not page.get("published"):
+        missing.append("the booking page is not published")
+    lines = [f"  Booking: off ({'; '.join(missing)}). Visitors can only leave a note."]
+    said = _stated_offers_line(cfg)
+    if said and not bookable:
+        lines.append(
+            f"  {said} When booking comes up, or before or after a site build, "
+            "offer once to let visitors book from those words: ask only for what "
+            "they did not say (a length for each bookable service; never guess "
+            "one), then create_offering for each (\"show_price_to_customer\": false "
+            "for any they gave no price), set_availability_day for each day and "
+            "the hours they said, and publish_booking_page.")
+    elif bookable and calendar and not page.get("published"):
+        lines.append("  Everything booking needs is on file: offer publish_booking_page.")
+    return lines
+
+
 def site_design_lines(site: Optional[Dict[str, Any]],
-                      settings: Optional[Dict[str, Any]]) -> List[str]:
+                      settings: Optional[Dict[str, Any]],
+                      modules: Optional[List[Dict[str, Any]]] = None,
+                      offerings: Optional[List[Dict[str, Any]]] = None) -> List[str]:
     """Lines for Chief's PRACTITIONER SITE block. [] for a hand-built site
     (site_adopt describes those) and when nothing applies."""
     site = site if isinstance(site, dict) else {}
@@ -118,6 +183,10 @@ def site_design_lines(site: Optional[Dict[str, Any]],
             "in: enqueue_job refine_section with params {\"section\": \"work\", "
             "\"instruction\": \"Use the new photos from their library in this "
             "section\"} (one section, priced as a section rework).")
+    try:
+        lines.extend(booking_lines(cfg, settings, modules, offerings))
+    except Exception as e:
+        logger.info(f"[site-design] booking lines skipped: {e}")
     return lines
 
 
