@@ -116,7 +116,7 @@ they do not establish live model selection, user experience, or dollar savings.
   loop and rehearsal handler with scripted model responses. These verify transport
   and execution, not the model's ability to choose the right tool unprompted.
 - Testing found and fixed numeric-string timestamps bypassing the explicit-offset
-  requirement, and MCP recording structured read failures as successful calls.
+  requirement, and MCP recording structured rehearsal failures as successful calls.
 - Five offline scenarios passed. A 30-run local CPU benchmark checking eight
   proposals against 500 synthetic prior bookings measured median 25.821 ms and
   p95 31.219 ms. This excludes database/network/model latency and is not a Railway

@@ -1798,8 +1798,9 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
                     error=f"{type(e).__name__}")
             raise
 
-        if not writing and isinstance(result, dict) and result.get("failed") is True:
-            # Structured read failures must not be recorded as successful checks.
+        if name == "rehearse_booking_plan" and isinstance(result, dict) and result.get("failed") is True:
+            # A rehearsal that could not check its evidence is not a successful
+            # preview. Preserve existing failure/handoff semantics for other tools.
             _ledger(business_id, name, caller, allowed=True, ok=False,
                     reason=getattr(verdict, "reason", None), error="read handler failed")
             return True, False, result, business_id
