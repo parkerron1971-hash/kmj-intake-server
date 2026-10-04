@@ -71,6 +71,53 @@ router = APIRouter(tags=["twilio-sms"])
 EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
 
+# ─── Plain-text encoding ───────────────────────────────────────────────
+# A text is billed per segment. In the GSM-7 alphabet a segment holds 160
+# characters (153 when the message is split). ONE character outside that
+# alphabet switches the whole message to UCS-2, where a segment holds 70
+# (67 split) — so a single em dash turned the 173-character appointment
+# reminder from 2 segments into 3, on every reminder. The usual culprits
+# are typography (dashes, curly quotes, an ellipsis) that has an exact
+# plain stand-in, so those are swapped right before a text leaves.
+# Emoji and anything without an unambiguous stand-in are left alone: a
+# sender who chose them meant them.
+
+_GSM_BASIC = frozenset(
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
+    "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà")
+_GSM_EXTENDED = frozenset("^{}\\[~]|€")  # allowed; each counts as two characters
+
+_PLAIN_STAND_INS = str.maketrans({
+    "—": "-", "–": "-", "‒": "-", "‐": "-", "‑": "-", "−": "-",
+    "‘": "'", "’": "'", "‚": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "″": '"',
+    "…": "...",
+    " ": " ", " ": " ", " ": " ", " ": " ", " ": " ",
+    "•": "*",
+})
+
+
+def gsm_safe(text: str) -> str:
+    """The same words, with typography that has an exact plain stand-in
+    swapped for it, so the text stays in GSM-7 when nothing else needs
+    UCS-2."""
+    return (text or "").translate(_PLAIN_STAND_INS)
+
+
+def is_gsm7(text: str) -> bool:
+    return all(c in _GSM_BASIC or c in _GSM_EXTENDED for c in (text or ""))
+
+
+def segments(text: str) -> int:
+    """How many billable segments Twilio will count for this body."""
+    text = text or ""
+    if is_gsm7(text):
+        n = sum(2 if c in _GSM_EXTENDED else 1 for c in text)
+        return 1 if n <= 160 else -(-n // 153)
+    n = sum(2 if ord(c) > 0xFFFF else 1 for c in text)  # astral chars take two UTF-16 units
+    return 1 if n <= 70 else -(-n // 67)
+
+
 # ─── Service layer ─────────────────────────────────────────────────────
 
 def _require_env(name: str) -> str:
@@ -126,7 +173,7 @@ def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
     global _warned_unpinned
     messaging_service_sid = _require_env("TWILIO_MESSAGING_SERVICE_SID")
     sender = (from_number or "").strip() or platform_number()
-    kwargs = dict(to=to, body=body, messaging_service_sid=messaging_service_sid)
+    kwargs = dict(to=to, body=gsm_safe(body), messaging_service_sid=messaging_service_sid)
     if sender:
         kwargs["from_"] = sender
     elif not _warned_unpinned:
@@ -318,7 +365,7 @@ async def twilio_inbound_sms(request: Request):
                 from xml.sax.saxutils import escape
                 twiml = (
                     '<?xml version="1.0" encoding="UTF-8"?>'
-                    f"<Response><Message>{escape(reply)}</Message></Response>"
+                    f"<Response><Message>{escape(gsm_safe(reply))}</Message></Response>"
                 )
                 return Response(content=twiml, media_type="application/xml")
         except Exception as e:
