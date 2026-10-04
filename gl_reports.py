@@ -108,7 +108,11 @@ def _pl_window(lines: List[Dict[str, Any]], start: _date, end: _date) -> Dict[st
 
     invoiced, refunds = round(invoiced, 2), round(refunds, 2)
     plaid_income = round(plaid_income, 2)
-    gross = round(invoiced - refunds + plaid_income, 2)
+    # Bookings, tips and store/counter sales settle at once — their income
+    # lines are the cash revenue (gl_engine.sale_revenue, shared with H.3a).
+    sales = gl_engine.sale_revenue(lines, start, end)
+    gross = round(invoiced - refunds + plaid_income
+                  + sales["bookings"] + sales["tips"] + sales["store_sales"], 2)
     total_expenses = round(sum(b["total"] for b in buckets.values()), 2)
 
     breakdown = []
@@ -125,7 +129,7 @@ def _pl_window(lines: List[Dict[str, Any]], start: _date, end: _date) -> Dict[st
         })
     return {
         "revenue": {"invoiced": invoiced, "refunds": refunds,
-                    "plaid_other_income": plaid_income, "gross_revenue": gross},
+                    "plaid_other_income": plaid_income, **sales, "gross_revenue": gross},
         "expenses": {"total": total_expenses, "by_bucket": breakdown},
         "net_income": round(gross - total_expenses, 2),
     }
@@ -137,6 +141,7 @@ def _pl_window_accrual(lines: List[Dict[str, Any]], start: _date, end: _date) ->
     expense lines net (bills at ISSUE, expenses/bank at date). Closing
     entries excluded (structural). Same response shape as the cash window."""
     invoiced = refunds = plaid_income = 0.0
+    sales = {"bookings": 0.0, "tips": 0.0, "store_sales": 0.0}
     buckets: Dict[str, Dict[str, Any]] = {
         b: {"bucket": b, "label": BUCKET_LABELS[b], "total": 0.0, "lines": {}}
         for b in BUCKET_ORDER
@@ -150,7 +155,10 @@ def _pl_window_accrual(lines: List[Dict[str, Any]], start: _date, end: _date) ->
         code = l["account_code"]
         cr, dr = float(l["credit"]), float(l["debit"])
         if l.get("account_type") == "income":
-            if st.startswith("invoice_refund"):
+            sale_key = gl_engine.sale_revenue_key(st, code)
+            if sale_key:
+                sales[sale_key] += cr - dr
+            elif st.startswith("invoice_refund"):
                 refunds += dr - cr
             elif st.startswith("invoice_issue"):
                 invoiced += cr - dr
@@ -165,7 +173,9 @@ def _pl_window_accrual(lines: List[Dict[str, Any]], start: _date, end: _date) ->
 
     invoiced, refunds = round(invoiced, 2), round(refunds, 2)
     plaid_income = round(plaid_income, 2)
-    gross = round(invoiced - refunds + plaid_income, 2)
+    sales = {k: round(v, 2) for k, v in sales.items()}
+    gross = round(invoiced - refunds + plaid_income
+                  + sales["bookings"] + sales["tips"] + sales["store_sales"], 2)
     total_expenses = round(sum(b["total"] for b in buckets.values()), 2)
     breakdown = []
     for b in BUCKET_ORDER:
@@ -177,7 +187,7 @@ def _pl_window_accrual(lines: List[Dict[str, Any]], start: _date, end: _date) ->
         })
     return {
         "revenue": {"invoiced": invoiced, "refunds": refunds,
-                    "plaid_other_income": plaid_income, "gross_revenue": gross},
+                    "plaid_other_income": plaid_income, **sales, "gross_revenue": gross},
         "expenses": {"by_bucket": breakdown, "total": total_expenses},
         "net_income": round(gross - total_expenses, 2),
     }

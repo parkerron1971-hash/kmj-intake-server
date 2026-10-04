@@ -341,6 +341,12 @@ def _pl_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, Tabl
     rrows = [(Paragraph("Invoiced (paid)", s["row"]), money_cell(rev.get("invoiced")))]
     if float(rev.get("refunds") or 0) > 0:
         rrows.append((Paragraph("Less refunds", s["rowind"]), money_cell(-float(rev.get("refunds") or 0))))
+    # Booking, tip and store-sale lines show only when there is money in
+    # them, so a business that takes none of these reads as before.
+    for key, label in (("bookings", "Bookings paid online"), ("tips", "Tips"),
+                       ("store_sales", "Store & counter sales")):
+        if float(rev.get(key) or 0) != 0:
+            rrows.append((Paragraph(label, s["row"]), money_cell(rev.get(key))))
     rrows.append((Paragraph("Other (non-Stripe) income", s["row"]), money_cell(rev.get("plaid_other_income"))))
     rrows.append((Paragraph("Gross Revenue", s["totlbl"]),
                   money_cell(rev.get("gross_revenue"), bold=True)))

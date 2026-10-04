@@ -533,6 +533,7 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
                           "amount_paid_cents": session.get("amount_total")}
                          if (session.get("metadata") or {}).get("discount_checkout_v1") == "true" else {})},
             stripe_customer_id=session.get("customer"),
+            amount_charged_cents=_int_or_none(session.get("amount_total")),
         )
     elif source_type == "invoice":
         _mark_invoice_paid(source_id)
@@ -647,6 +648,7 @@ def _handle_payment_intent_succeeded(pi: Dict[str, Any]) -> None:
         # The PI knows which payment method paid — recorded so the
         # no-show charge can reuse the exact card without a PM listing.
         payment_method_id=pi.get("payment_method"),
+        amount_charged_cents=_int_or_none(pi.get("amount_received")),
     )
 
 
@@ -799,8 +801,19 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
             return
         refund_biz = rows[0].get("business_id")
         data = dict(rows[0].get("data") or {})
-        data["refunded_amount_cents"] = refunded_cents
-        data["fully_refunded"] = bool(charge.get("refunded"))
+        # Two different charges point at the same booking: the service
+        # payment and the no-show fee. A refunded fee is not a refund of
+        # the haircut, so it lands on its own keys. The dates are what the
+        # books post the refund on (gl_engine.desired_for_booking).
+        if ((charge.get("metadata") or {}).get("payment_kind") == "no_show_fee"):
+            if data.get("no_show_fee_refunded_cents") != refunded_cents:
+                data["no_show_fee_refunded_cents"] = refunded_cents
+                data["no_show_fee_refunded_at"] = _now_iso()
+        else:
+            if data.get("refunded_amount_cents") != refunded_cents:
+                data["refunded_at"] = _now_iso()
+            data["refunded_amount_cents"] = refunded_cents
+            data["fully_refunded"] = bool(charge.get("refunded"))
         sb_clients.sb_patch_as_service(
             f"/module_entries?id=eq.{source_id}", {"data": data},
         )
@@ -925,6 +938,7 @@ def _mark_booking_paid(
     metadata: Optional[Dict[str, Any]] = None,
     stripe_customer_id: Optional[str] = None,
     payment_method_id: Optional[str] = None,
+    amount_charged_cents: Optional[int] = None,
 ) -> None:
     """Idempotent: only sets paid_at if it's currently NULL.
 
@@ -932,7 +946,12 @@ def _mark_booking_paid(
     doesn't (session → customer id; PI → payment_method id), so the
     data-side facts (deposit state, tip, card-on-file refs) are merged
     EVEN when paid_at is already set — whichever event lands second
-    still contributes its half."""
+    still contributes its half.
+
+    amount_charged_cents is what Stripe actually took (session
+    amount_total / PI amount_received): the books post THAT, so a
+    Stripe-side promotion code can't leave revenue at the list price.
+    First writer wins; both channels report the same number."""
     rows = sb_clients.sb_get_as_service(
         f"/module_entries?id=eq.{booking_id}"
         f"&select=id,paid_at,business_id,contact_id,data&limit=1"
@@ -969,6 +988,9 @@ def _mark_booking_paid(
     tip_cents = _int_or_none(md.get("tip_cents"))
     if tip_cents and not data.get("tip_cents"):
         updates["tip_cents"] = tip_cents
+    if amount_charged_cents is not None and amount_charged_cents >= 0 \
+            and data.get("amount_charged_cents") is None:
+        updates["amount_charged_cents"] = amount_charged_cents
     if md.get("payment_kind") == "deposit" and not data.get("deposit_paid_at"):
         # Deposit-paid state; remainder_due derivable and denormalized.
         updates["deposit_paid_at"] = _now_iso()

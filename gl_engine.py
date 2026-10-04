@@ -49,6 +49,9 @@ COA_SEED: List[Tuple[str, str, str, str, Optional[str], bool]] = [
     ("3900", "Retained Earnings",     "equity",    "credit", None, False),
     ("4000", "Service Revenue",       "income",    "credit", None, False),
     ("4100", "Product Revenue",       "income",    "credit", None, False),
+    # Tips a client adds at online checkout. Kept apart from 4000 because
+    # the owner (and their accountant) need the figure on its own.
+    ("4300", "Tips",                  "income",    "credit", None, False),
     ("4900", "Other Income",          "income",    "credit", None, False),
     ("5000", "Operating Expenses",    "expense",   "debit",  "operating", False),
     ("5100", "Owner Pay",             "expense",   "debit",  "owner_pay", False),
@@ -78,7 +81,7 @@ _BUCKET_TO_EXPENSE = {
 _ACCOUNT_TYPE = {c[0]: c[2] for c in (COA_SEED + COA_LAWYER_EXTRA + COA_NONPROFIT_EXTRA)}
 _ACCOUNT_BUCKET = {c[0]: c[4] for c in (COA_SEED + COA_LAWYER_EXTRA + COA_NONPROFIT_EXTRA)}
 
-_INCOME_CODES = {"4000", "4100", "4200", "4900"}
+_INCOME_CODES = {"4000", "4100", "4200", "4300", "4900"}
 _EXPENSE_CODES = set(_BUCKET_TO_EXPENSE.values())
 _INVOICE_ISSUE_STATUSES = ("sent", "viewed", "paid", "overdue")
 _NON_STRIPE_PAYMENT_HINTS = ("cash", "check", "bank", "manual", "ach", "venmo", "zelle")
@@ -190,15 +193,9 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
     trust_cash = round(sum(float(a.get("last_balance") or 0) for a in trust_accts), 2)
     # Arc 27 — store orders (soft-fails to [] until the orders table
     # migration is applied; PostgREST 404/400 → empty list path).
-    try:
-        orders = sb_clients.sb_get_as_service(
-            f"/orders?business_id=eq.{biz}"
-            f"&select=id,status,subtotal_cents,tax_cents,shipping_cents,total_cents,"
-            f"paid_at,refund_amount_cents,refunded_at&limit=10000") or []
-    except Exception:
-        orders = []
     return {"invoices": invoices, "expenses": expenses, "bills": bills,
-            "plaid": plaid, "orders": orders, "cash_on_hand": cash_on_hand,
+            "plaid": plaid, "orders": fetch_orders(biz), "bookings": fetch_booking_money(biz),
+            "cash_on_hand": cash_on_hand,
             "trust_ids": set(_trust_account_ids(biz)), "trust_cash": trust_cash}
 
 
@@ -435,18 +432,186 @@ def desired_for_order(o: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _cents(v: Any) -> Optional[int]:
+    try:
+        return int(v) if v is not None and str(v).strip() != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _booking_service_cents(e: Dict[str, Any], tip: int) -> int:
+    """What the client paid for the SERVICE online (tip excluded).
+
+    `amount_charged_cents` is what Stripe actually took, recorded by the
+    webhook (stripe_connect_router._mark_booking_paid), so a Stripe-side
+    promotion code or any other adjustment is already in it. Older rows
+    without it fall back to what checkout charged: the deposit when one
+    was taken, the discounted amount, else the frozen booking price."""
+    data = e.get("data") or {}
+    charged = _cents(data.get("amount_charged_cents"))
+    if charged is not None:
+        return max(charged - tip, 0)
+    for key in ("deposit_paid_cents", "amount_paid_cents"):
+        c = _cents(data.get(key))
+        if c is not None:
+            return max(c, 0)
+    price = data.get("price_at_booking", data.get("price"))
+    try:
+        return max(int(round(float(price) * 100)), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def desired_for_booking(e: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Booking money: what a client paid online for an appointment.
+
+    Only bookings Stripe settled (a payment intent on the row) post here.
+    Money taken in person never went through Stripe, so it can't sit in
+    Stripe Clearing; it reaches the books when it is logged as income.
+
+      booking_payment   Dr 1150 Stripe Clearing (service + tip)
+                        Cr 4000 Service Revenue, Cr 4300 Tips
+      booking_refund    reverses service first, then tip, against 1150
+      booking_no_show_fee        Dr 1150 / Cr 4900 Other Income
+      booking_no_show_fee_refund Dr 4900 / Cr 1150
+
+    The payout that later lands in the bank clears 1150 (desired_for_plaid
+    'Payout deposit'), so the money is counted once: as revenue here, as
+    cash when it arrives. Before this, a payout deposit cleared a 1150 that
+    nothing had ever charged, and booking income appeared nowhere."""
+    out: List[Dict[str, Any]] = []
+    data = e.get("data") or {}
+    bid = e.get("id")
+    label = (data.get("service_name_at_booking") or data.get("service_name") or "Booking")[:80]
+    tip = 0
+    service = 0
+    if e.get("paid_at") and e.get("stripe_payment_intent_id"):
+        tip = max(_cents(data.get("tip_cents")) or 0, 0)
+        service = _booking_service_cents(e, tip)
+        total = service + tip
+        if total > 0:
+            lines = [_line("1150", debit=total / 100.0)]
+            if service > 0:
+                lines.append(_line("4000", credit=service / 100.0, memo=label))
+            if tip > 0:
+                lines.append(_line("4300", credit=tip / 100.0, memo=label))
+            out.append(_entry(_d(e.get("paid_at")), "booking_payment", bid,
+                              "Booking paid online", lines))
+        refunded = min(max(_cents(data.get("refunded_amount_cents")) or 0, 0), total)
+        if refunded > 0:
+            from_service = min(refunded, service)
+            from_tip = refunded - from_service
+            lines = []
+            if from_service > 0:
+                lines.append(_line("4000", debit=from_service / 100.0, memo=label))
+            if from_tip > 0:
+                lines.append(_line("4300", debit=from_tip / 100.0, memo=label))
+            lines.append(_line("1150", credit=refunded / 100.0))
+            out.append(_entry(_d(data.get("refunded_at")) or _d(e.get("paid_at")),
+                              "booking_refund", bid, "Booking refunded", lines))
+    fee = max(_cents(data.get("no_show_fee_charged_cents")) or 0, 0)
+    if data.get("no_show_fee_charged_at") and fee > 0:
+        out.append(_entry(_d(data.get("no_show_fee_charged_at")), "booking_no_show_fee", bid,
+                          "No-show fee charged",
+                          [_line("1150", debit=fee / 100.0),
+                           _line("4900", credit=fee / 100.0, memo="No-show fee")]))
+        fee_back = min(max(_cents(data.get("no_show_fee_refunded_cents")) or 0, 0), fee)
+        if fee_back > 0:
+            out.append(_entry(_d(data.get("no_show_fee_refunded_at"))
+                              or _d(data.get("no_show_fee_charged_at")),
+                              "booking_no_show_fee_refund", bid, "No-show fee refunded",
+                              [_line("4900", debit=fee_back / 100.0, memo="No-show fee"),
+                               _line("1150", credit=fee_back / 100.0)]))
+    return out
+
+
+# ─── Sales revenue: ONE classifier for every P&L that reads the books ──
+# Bookings, tips and store/counter sales settle at once (no receivable),
+# so their income lines ARE the cash revenue. The ledger P&L (gl_reports)
+# and the source-table P&L (reports_engine) both sum through this, so they
+# can't drift apart on what a sale is.
+BOOKING_SOURCE_TYPES = ("booking_payment", "booking_refund",
+                        "booking_no_show_fee", "booking_no_show_fee_refund")
+ORDER_SOURCE_TYPES = ("order_payment", "order_refund")
+SALE_SOURCE_TYPES = BOOKING_SOURCE_TYPES + ORDER_SOURCE_TYPES
+
+
+def sale_revenue_key(source_type: str, account_code: str) -> Optional[str]:
+    """Which revenue line an income line belongs to: 'bookings', 'tips',
+    'store_sales', or None when it isn't a sale."""
+    if account_code not in _INCOME_CODES:
+        return None
+    if source_type in BOOKING_SOURCE_TYPES:
+        return "tips" if account_code == "4300" else "bookings"
+    if source_type in ORDER_SOURCE_TYPES:
+        return "store_sales"
+    return None
+
+
+def sale_revenue(lines: List[Dict[str, Any]], start: _date, end: _date) -> Dict[str, float]:
+    """Net bookings / tips / store sales from ledger-shaped lines in a window."""
+    out = {"bookings": 0.0, "tips": 0.0, "store_sales": 0.0}
+    for l in lines:
+        ed = _d(l.get("entry_date"))
+        if not ed or ed < start or ed > end:
+            continue
+        key = sale_revenue_key(str(l.get("source_type")), l.get("account_code"))
+        if key:
+            out[key] += float(l.get("credit") or 0) - float(l.get("debit") or 0)
+    return {k: round(v, 2) for k, v in out.items()}
+
+
+def fetch_orders(biz: str) -> List[Dict[str, Any]]:
+    """Store orders and counter sales. payment_method decides where the
+    money landed (_order_cash_account): without it a cash counter sale
+    read as a Stripe sale and sat in Stripe Clearing, which no payout
+    would ever clear. Soft-fails to [] until the orders table exists."""
+    try:
+        return sb_clients.sb_get_as_service(
+            f"/orders?business_id=eq.{biz}"
+            f"&select=id,status,subtotal_cents,tax_cents,shipping_cents,total_cents,"
+            f"paid_at,refund_amount_cents,refunded_at,payment_method&limit=10000") or []
+    except Exception:
+        return []
+
+
+def sale_revenue_from_sources(biz: str, start: _date, end: _date) -> Dict[str, float]:
+    """The same figures as sale_revenue over the ledger, computed straight
+    from the source rows (the H.3a / no-ledger path), through the same
+    generators — so both P&Ls agree by construction."""
+    specs: List[Dict[str, Any]] = []
+    for bk in fetch_booking_money(biz):
+        specs += desired_for_booking(bk)
+    for o in fetch_orders(biz):
+        specs += desired_for_order(o)
+    return sale_revenue(_lines_from_specs(specs), start, end)
+
+
+def fetch_booking_money(biz: str) -> List[Dict[str, Any]]:
+    """The bookings that carry money: paid online, or charged a no-show fee.
+    Soft-fails to [] like orders, so a read problem never stops the books."""
+    try:
+        return sb_clients.sb_get_as_service(
+            f"/module_entries?business_id=eq.{biz}"
+            f"&or=(stripe_payment_intent_id.not.is.null,data->>no_show_fee_charged_at.not.is.null)"
+            f"&select=id,paid_at,stripe_payment_intent_id,data&limit=10000") or []
+    except Exception:
+        return []
+
+
 # Source table → its GL source_types (for live reconciliation of one row).
 _TABLE_SOURCE_TYPES = {
     "invoices": ("invoice_issue", "invoice_payment", "invoice_refund"),
     "business_expenses": ("expense",),
     "bills": ("bill_issue", "bill_payment"),
     "plaid_transactions": ("plaid_transaction",),
-    "orders": ("order_payment", "order_refund"),
+    "orders": ORDER_SOURCE_TYPES,
+    "module_entries": BOOKING_SOURCE_TYPES,
 }
 _TABLE_DESIRED = {
     "invoices": desired_for_invoice, "business_expenses": desired_for_expense,
     "bills": desired_for_bill, "plaid_transactions": desired_for_plaid,
-    "orders": desired_for_order,
+    "orders": desired_for_order, "module_entries": desired_for_booking,
 }
 
 
@@ -497,6 +662,8 @@ def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
         specs += desired_for_plaid(t, trust_ids)
     for o in sources.get("orders") or []:
         specs += desired_for_order(o)
+    for bk in sources.get("bookings") or []:
+        specs += desired_for_booking(bk)
     opening = _opening_spec(sources["cash_on_hand"], _cash_net(specs))
     if opening:
         specs.append(opening)
@@ -559,6 +726,9 @@ def gl_pl_cash_basis(lines: List[Dict[str, Any]], start: _date, end: _date) -> D
        revenue = invoice cash receipts (Cr AR on invoice_payment)
                  + Plaid other income (Cr income on plaid_transaction)
                  − refunds (Dr income on invoice_refund)
+                 + bookings, tips and store/counter sales, net of their
+                   refunds (income lines of SALE_SOURCE_TYPES; they settle
+                   at once, so their income IS the cash revenue)
        expenses = Dr to expense accounts from manual expense + plaid (NOT bills).
 
     All sums are NET (credit−debit or debit−credit) with reversal-aware
@@ -576,6 +746,8 @@ def gl_pl_cash_basis(lines: List[Dict[str, Any]], start: _date, end: _date) -> D
             revenue += cr - dr                    # non-Stripe income (net)
         elif _st_matches(st, "invoice_refund") and code in _INCOME_CODES:
             revenue -= dr - cr                    # refund (net)
+        elif any(_st_matches(st, s) for s in SALE_SOURCE_TYPES) and code in _INCOME_CODES:
+            revenue += cr - dr                    # booking / tip / store sale (net of refunds)
         elif (_st_matches(st, "expense") or _st_matches(st, "plaid_transaction")) \
                 and code in _EXPENSE_CODES:
             expenses += dr - cr                   # cash-paid expense (net; excludes bills)
@@ -665,7 +837,11 @@ _SOURCE_FETCH = {
     # Arc 28b — store orders live-sync (queue trigger in
     # 2026_06_12_arc28b_orders_gl_trigger.sql).
     "orders": ("/orders?id=eq.{id}&select=id,status,subtotal_cents,tax_cents,"
-               "shipping_cents,total_cents,paid_at,refund_amount_cents,refunded_at&limit=1"),
+               "shipping_cents,total_cents,paid_at,refund_amount_cents,refunded_at,"
+               "payment_method&limit=1"),
+    # Booking money (queue trigger in APPLY-2026-10-04-booking-money-gl.sql).
+    "module_entries": ("/module_entries?id=eq.{id}"
+                       "&select=id,paid_at,stripe_payment_intent_id,data&limit=1"),
 }
 
 
