@@ -441,8 +441,8 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
         return _fail("reschedule_booking",
                      f"{_pretty(new_when)} is already booked — pick another time.")
 
-    # appointment_at is DB-maintained from `data`, so the write goes to the
-    # jsonb. Patch every date key the entry actually carries, or the module's
+    # The live schema stores appointment_at separately from data. Patch both,
+    # and every date key the entry carries, or the module's
     # primary_date_field and the canonical key can drift apart.
     for key in ("appointment_at", "starts_at", "scheduled_for"):
         if key in data:
@@ -462,20 +462,19 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
     # as success would report a reschedule that never happened.
     updated = sb_clients.sb_patch_as_service(
         f"/module_entries?id=eq.{booking['id']}&business_id=eq.{business_id}",
-        {"data": data})
+        {"data": data, "appointment_at": new_when, "duration_min_at_booking": duration})
     if not updated:
         return _fail("reschedule_booking",
                      "I couldn't move that booking just now — try again in a moment.")
 
-    # Move the mirrored session too. Cancel the stale one, then re-mirror:
-    # _mirror_booking_session is idempotent on the [booking:{id}] marker, so
-    # cancelling first is what lets it write the new time.
+    # Move the existing mirror in place. Cancelling and re-mirroring does not
+    # work: the marker lookup intentionally includes cancelled sessions.
     try:
         marker = f"[booking:{booking['id']}]"
         sb_clients.sb_patch_as_service(
             f"/sessions?business_id=eq.{business_id}"
             f"&notes=like.*{marker}*&status=eq.scheduled",
-            {"status": "cancelled"})
+            {"scheduled_for": new_when, "duration_minutes": duration})
         fresh = sb_clients.sb_get_as_service(
             f"/module_entries?id=eq.{booking['id']}&select=*&limit=1") or []
         if fresh:
