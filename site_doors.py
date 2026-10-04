@@ -61,22 +61,24 @@ DOORS: List[Door] = [
          "in Settings, which Chief cannot do for them",
          True),
     Door("giving", "Giving", "/give", "Give",
-         "the owner turns giving on in its settings after connecting Stripe; Chief "
-         "has no verb for it on purpose (giving_router)",
-         False),
+         "set_giving {\"on\": true} once card payments are connected (connecting "
+         "Stripe is the owner's, in Settings); owner only",
+         True),
     Door("courses", "Courses", "/academy", "Courses",
-         "create_course and save_course_content draft it; the owner publishes it in "
-         "Course Studio, Chief does not publish courses",
-         False),
+         "create_course and save_course_content draft it, then publish_course with its "
+         "title once Course Studio's checklist passes",
+         True),
     Door("sermons", "Sermons", "/sermons", "Sermons",
-         "the owner publishes a sermon in Sermons",
-         False),
+         "publish_sermon with its title (or the latest) once it has a video, audio or "
+         "summary",
+         True),
     Door("news", "News", "/news", "News",
          "publish_to_site with the post",
          True),
     Door("members", "Member app", "/my", "Members",
-         "the owner switches the member app on in its settings",
-         False),
+         "set_member_app {\"on\": true}, owner only; refused while sign-in codes can't "
+         "be sent by email or text",
+         True),
 ]
 BY_KEY: Dict[str, Door] = {d.key: d for d in DOORS}
 
