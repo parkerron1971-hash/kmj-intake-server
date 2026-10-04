@@ -4,7 +4,7 @@ date: 2026-10-04
 agent: Codex (GPT-6)
 asked: "let's make it happen; vertical websites, logins and packages"
 status: in progress
-prs: []
+prs: [kmj-intake-server#1257 (draft)]
 migrations: [supabase/APPLY-2026-10-04-acuity-migration.sql (not applied)]
 left_undone: [UI design selection and implementation, end-to-end booking rehearsal, concurrent standalone session review, customer identity and retention review, full CI, merge and coordinated deployment, staff and class and prepaid migration support]
 decisions: ["First release targets solo providers", "Review before atomic import", "Imported reminders start paused", "One shared platform with proposed vertical presets and separate package entitlements"]
