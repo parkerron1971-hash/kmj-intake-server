@@ -2,8 +2,11 @@
 
 Status: backend draft; not deployed, schema not applied, customer UI not built.
 
-This release is for one provider with individual appointments. It does not yet
-establish Acuity feature parity or readiness for every industry.
+Import belongs to the shared platform and is available across business types.
+People-only imports do not depend on the business's scheduling complexity.
+The Acuity appointment adapter currently supports one provider with individual
+appointments. It does not yet establish Acuity feature parity or readiness for
+every industry's full operating workflow.
 
 ## Supported workflow
 
@@ -57,7 +60,7 @@ from standalone sessions, source/customer identity conflicts, and retention of
 expired prepared plans. The current database guard serializes booking-entry
 writes and imports; it does not yet serialize standalone session writes.
 
-UI design awaiting owner selection:
+UI design approved by Kevin on 2026-10-04; implementation remains next:
 https://p.superdesign.dev/draft/ce180ae5-1598-4c3e-bc87-ccfb5f00d7fb
 
 The next UI work belongs inside the existing Bring a file over flow, using the
@@ -80,6 +83,22 @@ workflows, Chief context and connector/migration readiness. Paid packages should
 declare entitlements independently of the vertical. Chief actions remain bounded
 by the business's enabled capabilities, permissions and configured integrations.
 These are design proposals, not implemented product claims.
+
+Kevin clarified that import must serve every vertical, including churches,
+barbers and lawyers. Scope readiness by record type and source capability, never
+by the business label. Use the vertical's terminology in the UI, while preserving
+canonical contacts/appointments underneath. Map other records through the
+existing structure importer where supported; matters, donations, staff calendars
+and financial balances each need explicit destination and validation rules.
+
+Chief-assisted import is proposed, not yet implemented. After Solutionist login,
+Chief should identify the source, open file selection or the source's authorized
+connection, prepare a review through the same migration service, explain issues,
+and execute the exact reviewed batch after owner approval. Acuity OAuth can supply
+the connected-account path without putting source passwords in Chief chat.
+Login alone does not authorize a source connection or transfer. Preserve tenant
+scoping, source permissions, duplicate checks, durable receipts and separate
+reminder cutover. Never ask a model to fabricate missing operational records.
 
 Deliver each vertical when its core workflows are proven. Church/member and
 ministry workflows, barber/client and appointment workflows, and legal/client and

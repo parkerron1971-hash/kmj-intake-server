@@ -22,6 +22,13 @@ begin
     values(b,'Migration rollback service','acuity-rollback-service','service',60) returning id into offering;
   update businesses set settings=jsonb_set(coalesce(settings,'{}'),'{availability}',
     coalesce(settings->'availability','{}')||'{"concurrent_capacity":1}'::jsonb) where id=b;
+  -- Importing only people must not change a business's calendar policy.
+  insert into acuity_migration_batches(business_id,owner_id,plan,state)
+    values(b,owner,'{"appointments":[]}', 'imported') returning id into second_batch;
+  insert into module_entries(business_id,module_id,data,status,created_by)
+    values(b,module,'{}','active','acuity_rollback_test') returning id into appt;
+  delete from module_entries where id=appt;
+  delete from acuity_migration_batches where id=second_batch;
   plan:=jsonb_build_object('ready',true,'issues','[]'::jsonb,'module_id',module,
     'clients',jsonb_build_array(jsonb_build_object('name','Migration rollback fixture','email','acuity-rollback@example.invalid','phone','', 'source','{}'::jsonb)),
     'appointments',jsonb_build_array(jsonb_build_object('source_id','987654321009999','source_hash','fixture-v1',
@@ -88,4 +95,4 @@ assert remaining == 0
 print(json.dumps({'checked_at':datetime.now(timezone.utc).isoformat(),'mode':'transaction rolled back',
     'checks':['schema compatibility','owner isolation','atomic import','durable retry receipt','source deduplication',
               'changed source rejection','calendar mirror','reminders paused','owner-only reminder cutover','no fabricated payment','overlap guard',
-              'partial failure rollback','browser grants denied'], 'fixture_records_remaining':remaining},indent=2))
+              'partial failure rollback','browser grants denied','people-only import preserves calendar policy'], 'fixture_records_remaining':remaining},indent=2))

@@ -182,7 +182,7 @@ def preview(business: UUID, req: Review, user: AuthedUser = Depends(require_user
     unsupported = {"uses_staff_calendars": "separate staff calendars", "uses_classes": "group classes",
                    "uses_subscriptions": "active recurring memberships", "has_prepaid_balances": "unused prepaid packages or gift balances"}
     for field, label in unsupported.items():
-        if getattr(req, field):
+        if plan["inventory"]["appointment_rows"] and getattr(req, field):
             plan["issues"].append({"file": "readiness", "row": 0,
                 "message": f"Your business uses {label}. This needs a migration review before a full switch; the first release does not transfer it."})
     capacity = ((biz.get("settings") or {}).get("availability") or {}).get("concurrent_capacity", 1)

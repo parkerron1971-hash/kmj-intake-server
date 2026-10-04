@@ -34,7 +34,8 @@ declare s timestamptz; mins integer; cap integer; occupied integer;
 begin
   if new.status<>'active' or not exists(select 1 from custom_modules where id=new.module_id and business_id=new.business_id and archetype='booking_calendar') then return new; end if;
   perform pg_advisory_xact_lock(hashtextextended('acuity-calendar:'||new.business_id::text,0));
-  if not exists(select 1 from acuity_migration_batches where business_id=new.business_id and state='imported') then return new; end if;
+  if not exists(select 1 from acuity_migration_batches where business_id=new.business_id and state='imported'
+    and jsonb_array_length(plan->'appointments')>0) then return new; end if;
   s:=coalesce((new.data->>'appointment_at')::timestamptz,new.appointment_at);
   mins:=coalesce((new.data->>'duration_min_at_booking')::integer,new.duration_min_at_booking,60);
   if s is null or mins not between 1 and 1440 then raise exception 'A migrated calendar needs a valid appointment time and duration'; end if;

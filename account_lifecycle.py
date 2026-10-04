@@ -98,6 +98,8 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "acuity_migration_batches": "internal import reviews and execution receipts bound to original owner and record IDs; imported business records and source fields remain in their normal exports, cascade on business deletion",
+    "acuity_migration_records": "internal source replay fences bound to original booking IDs; source provenance remains on exported booking entries, cascade on business deletion",
     "chief_event_deliveries": "internal worker leases and replay fences; not portable, cascade on business deletion",
     "agentcard_wallets": "encrypted customer OAuth credentials and wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_purchases": "encrypted wallet-bound purchase journal; never portable, cascade on user/business deletion",

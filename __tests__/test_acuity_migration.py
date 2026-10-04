@@ -169,6 +169,23 @@ def test_readiness_reports_real_dependencies_and_does_not_save_ready_review(db, 
     assert not out['ready'] and not out['batch_id'] and not db[0]
 
 
+@pytest.mark.parametrize('vertical', ['church', 'barber', 'lawyer'])
+def test_people_only_import_is_available_across_verticals_even_with_complex_scheduling(db, monkeypatch, vertical):
+    _, original = db
+    def get(path):
+        rows = original(path)
+        if path.startswith('/businesses?'):
+            rows[0]['vertical'] = vertical
+            rows[0]['settings'] = {'availability': {'concurrent_capacity': 4}}
+        return rows
+    monkeypatch.setattr(ar.sb_clients, 'sb_get_as_service', get)
+    out = ar.preview(BIZ, request(clients_csv='Name,Email\nAlex,alex@example.com',
+        appointments_csv='', uses_staff_calendars=True, uses_classes=True,
+        uses_subscriptions=True, has_prepaid_balances=True), SimpleNamespace(id=OWNER))
+    assert out['ready'] and out['batch_id'] and len(out['clients']) == 1
+    assert not out['appointments']
+
+
 def test_foreign_owner_cannot_even_inspect_file(db):
     with pytest.raises(HTTPException) as exc:
         ar.inspect(BIZ, ar.Files(clients_csv='Name,Email\nA,a@example.com'), SimpleNamespace(id=BIZ))
