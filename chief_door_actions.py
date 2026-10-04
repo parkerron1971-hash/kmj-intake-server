@@ -11,7 +11,8 @@ never open a door the app itself would refuse:
                   Owner only, as in the app.
   set_member_app  member_portal PATCH: churches and nonprofits only; turning
                   it on starts a fresh sign-in epoch. Refused while members
-                  could not receive a sign-in code. Owner only.
+                  could not receive a sign-in code. "sign_in" pauses or
+                  resumes new sign-ins, the panel's own switch. Owner only.
   publish_course  Course Studio's Publish: the same checklist (a description,
                   at least one lesson, each lesson with a title and something
                   to read, watch or do, links complete). Through the owner's
@@ -29,7 +30,6 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -134,52 +134,72 @@ async def handle_set_giving(client, biz, action) -> Dict[str, Any]:
 def sign_in_can_be_delivered() -> bool:
     """A member signs in with a code sent by email or text: the page is no
     use while neither can go out."""
-    if (os.environ.get("RESEND_API_KEY") or "").strip():
-        return True
-    try:
-        import sms_service
-        return sms_service._twilio_configured()
-    except Exception:
-        return False
+    from member_portal import codes_can_go_out
+    return codes_can_go_out()
 
 
-def _set_member_app_sync(biz: Dict[str, Any], on: bool) -> Dict[str, Any]:
+_PAUSED_NOTE = (" Member sign-in is paused right now, so no one new can sign in until "
+                "you switch it back on.")
+
+
+def _set_member_app_sync(biz: Dict[str, Any], on: Optional[bool],
+                         sign_in: Optional[bool] = None) -> Dict[str, Any]:
+    """`on` switches the app (None leaves it); `sign_in` pauses or resumes
+    new sign-ins (member_portal.sign_in_open; None leaves it)."""
     from member_portal import portal_eligible, portal_settings
     row = _fresh_settings(biz["id"])
     if row is None:
         return _fail("set_member_app", "That change didn't save. Please try again.")
-    if on and not portal_eligible({**biz, **row}):
+    if (on or sign_in is not None) and not portal_eligible({**biz, **row}):
         return _fail("set_member_app", "The member app is for churches and nonprofits.")
-    if on and not sign_in_can_be_delivered():
+    if (on or sign_in) and not sign_in_can_be_delivered():
         return _fail("set_member_app",
                      "Members sign in with a code by email or text, and neither can be sent "
                      "yet, so no one could get in. Email or text sending has to be set up first.")
     settings = dict(row.get("settings") or {})
     cfg = dict(portal_settings(settings))
     was_on = bool(cfg.get("enabled"))
-    cfg["enabled"] = on
+    if on is not None:
+        cfg["enabled"] = on
     if on and not was_on:
         # the app's own rule: switching on starts a fresh sign-in epoch, so
         # old sessions never come back to life
         cfg["epoch"] = int(time.time())
+    if sign_in is not None:
+        cfg["sign_in"] = sign_in
     settings["member_portal"] = cfg
     sb_clients.sb_patch_as_service(f"/businesses?id=eq.{biz['id']}", {"settings": settings})
     _forget_doors(biz["id"])
     url = _site_origin(biz["id"]) + "/my"
+    paused = cfg.get("sign_in") is False
+    if on is None:
+        app_off = "" if cfg.get("enabled") else " The member app itself is still off."
+        return {"type": "set_member_app",
+                "result": ((f"Member sign-in is back on at {url}: members get a 6-digit code "
+                            "by email or text." if sign_in else
+                            "Member sign-in is paused: no codes go out and no one new can sign "
+                            "in. Anyone already signed in stays in.") + app_off),
+                "label": "📱 Member sign-in on" if sign_in else "📱 Member sign-in paused",
+                "url": url, "nav": _nav("operate")}
     return {"type": "set_member_app",
-            "result": (f"The member app is on at {url}. Members sign in with the email or "
-                       "mobile number the church has for them." if on
-                       else "The member app is off. Everyone signed in is signed out."),
+            "result": ((f"The member app is on at {url}. Members sign in with the email or "
+                        "mobile number the church has for them." + (_PAUSED_NOTE if paused else ""))
+                       if on else "The member app is off. Everyone signed in is signed out."),
             "label": "📱 Member app on" if on else "📱 Member app off",
             "url": url, "nav": _nav("operate")}
 
 
 async def handle_set_member_app(client, biz, action) -> Dict[str, Any]:
-    """Switch the member app on (or "on": false to switch it off)."""
+    """Switch the member app on (or "on": false to switch it off); "sign_in":
+    false pauses new member sign-ins without switching the app off, true
+    resumes them."""
     refused = _owner_only(biz, "set_member_app", "the member app")
     if refused:
         return refused
-    return await asyncio.to_thread(_set_member_app_sync, biz, _on(action, "on"))
+    sign_in = action.get("sign_in")
+    sign_in = sign_in if isinstance(sign_in, bool) else None
+    on = None if (sign_in is not None and "on" not in action) else _on(action, "on")
+    return await asyncio.to_thread(_set_member_app_sync, biz, on, sign_in)
 
 
 # ─── courses ─────────────────────────────────────────────────────────

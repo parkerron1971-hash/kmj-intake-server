@@ -176,6 +176,26 @@ def portal_active(biz: Dict[str, Any]) -> bool:
     return portal_eligible(biz) and bool(portal_settings(biz.get("settings")).get("enabled"))
 
 
+def sign_in_open(biz: Dict[str, Any]) -> bool:
+    """The owner's sign-in switch (Settings → Member page; Kevin 10/04: "a
+    turn on and off switch for member sign in"). On unless the owner paused
+    it. While paused no code is sent and no code is accepted; anyone already
+    signed in stays in ("sign everyone out" is the separate control)."""
+    return portal_settings(biz.get("settings")).get("sign_in") is not False
+
+
+def codes_can_go_out() -> bool:
+    """A member signs in with a code sent by email (Resend) or text
+    (Twilio): False while neither is set up."""
+    if (os.environ.get("RESEND_API_KEY") or "").strip():
+        return True
+    try:
+        import sms_service
+        return bool(sms_service._twilio_configured())
+    except Exception:
+        return False
+
+
 def _previewing(request: Request, biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The owner's live preview claims on this church, or None
     (member_portal_preview.py)."""
@@ -561,6 +581,14 @@ def render_unavailable(biz: Dict[str, Any], site=None) -> str:
 <p class="mp-muted">Member sign-in isn't turned on for this church. If you were expecting it, ask the church office.</p></div>""")
 
 
+def render_signin_paused(biz: Dict[str, Any], site=None) -> str:
+    return _shell(biz, site, "Sign-in paused", f"""
+<div class="mp-card"><h1>Sign-in is paused for now</h1>
+<p class="mp-muted">{_e(biz.get('name') or 'The church')} has paused new sign-ins to this page, so no code will be sent.
+If you're already signed in on another phone or computer, you're still in there.</p>
+<p class="mp-muted">Ask the church office when it's back on.</p></div>""")
+
+
 def render_signin(biz: Dict[str, Any], site=None, *, error: str = "", email: str = "") -> str:
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
     return _shell(biz, site, "Sign in", f"""
@@ -837,6 +865,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if not sess:
         if sub != "/my":
             return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        if not sign_in_open(biz):
+            return _page(render_signin_paused(biz, site))
         return _page(render_signin(biz, site))
     if not sess["me"]:
         return _page(render_choose(biz, site, sess["people"]))
@@ -1046,6 +1076,8 @@ async def _issue_and_send(biz: Dict[str, Any], email: str) -> None:
 async def request_code(request: Request):
     church = await _church_or_404(request)
     biz, site = church["business"], church["site"]
+    if not sign_in_open(biz):
+        return _page(render_signin_paused(biz, site))
     import rate_limit
     form = await request.form()
     email = norm_ident(form.get("email"))
@@ -1076,6 +1108,9 @@ async def request_code(request: Request):
 async def verify_code(request: Request):
     church = await _church_or_404(request)
     biz, site = church["business"], church["site"]
+    if not sign_in_open(biz):
+        # a code sent before the pause is not spent, and does not sign in
+        return _page(render_signin_paused(biz, site))
     import rate_limit
     form = await request.form()
     email = norm_ident(form.get("email"))
@@ -1169,6 +1204,8 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
                     and vertical_scope.client_surface_allowed(biz.get("type")),
         "enabled": bool(portal_settings(biz.get("settings")).get("enabled")),
         "active": portal_active(biz),
+        "sign_in": sign_in_open(biz),
+        "codes_ready": codes_can_go_out(),
         "url": f"https://{host}/my",
     }
 
@@ -1210,20 +1247,23 @@ def create_member_preview(business_id: str, body: Dict[str, Any], user: AuthedUs
 @router.patch("/member-portal/{business_id}")
 def patch_member_portal_config(business_id: str, body: Dict[str, Any],
                                user: AuthedUser = Depends(require_user)):
-    """Owner-gated. Body: { enabled?: bool, sign_out_all?: true }.
+    """Owner-gated. Body: { enabled?: bool, sign_in?: bool, sign_out_all?: true }.
 
     Turning the page ON, or "sign everyone out", moves the epoch to now:
     every session issued before it ends (a page switched off and on again
-    must not revive six-month-old sessions)."""
+    must not revive six-month-old sessions). `sign_in` pauses or resumes
+    new sign-ins (sign_in_open) and leaves the epoch alone."""
     from business_sites_helpers import ensure_business_site
     body = body or {}
     want = body.get("enabled")
     if "enabled" in body and not isinstance(want, bool):
         raise HTTPException(400, "enabled must be true or false")
+    if "sign_in" in body and not isinstance(body.get("sign_in"), bool):
+        raise HTTPException(400, "sign_in must be true or false")
     sign_out_all = body.get("sign_out_all") is True
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
-    if "enabled" in body or sign_out_all:
+    if "enabled" in body or "sign_in" in body or sign_out_all:
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -1241,6 +1281,8 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
         was_on = bool(cfg.get("enabled"))
         if "enabled" in body:
             cfg["enabled"] = want
+        if "sign_in" in body:
+            cfg["sign_in"] = body["sign_in"]
         if sign_out_all or (want is True and not was_on):
             cfg["epoch"] = int(time.time())
         settings["member_portal"] = cfg

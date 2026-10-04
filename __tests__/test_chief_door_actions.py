@@ -110,6 +110,26 @@ def test_switching_the_member_app_on_starts_a_fresh_sign_in_epoch():
     assert seen["body"]["settings"]["member_portal"]["epoch"] == 5, "already on: sessions kept"
 
 
+def test_chief_pauses_and_resumes_member_sign_in_without_switching_the_app():
+    row = {"type": "church", "settings": {"member_portal": {"enabled": True, "epoch": 5}}}
+    out, seen = _member(row, action={"sign_in": False})
+    assert seen["body"]["settings"]["member_portal"] == {"enabled": True, "epoch": 5, "sign_in": False}
+    assert "paused" in out["result"] and not out.get("failed")
+    out, seen = _member(row, action={"sign_in": True}, deliver=False)
+    assert out["failed"] and not seen, "resuming waits for codes that can go out"
+    off = {"type": "church", "settings": {"member_portal": {"enabled": False, "epoch": 5}}}
+    out, seen = _member(off, action={"sign_in": False})
+    assert seen["body"]["settings"]["member_portal"]["enabled"] is False, "pausing never opens the app"
+    assert "still off" in out["result"]
+    out, seen = _member({"type": "consultant", "settings": {}}, action={"sign_in": False}, eligible=False)
+    assert out["failed"] and not seen
+
+
+def test_turning_the_app_on_while_paused_says_sign_in_is_paused():
+    out, _ = _member({"type": "church", "settings": {"member_portal": {"sign_in": False}}})
+    assert "sign-in is paused" in out["result"]
+
+
 # ─── courses ────────────────────────────────────────────────────────
 
 COURSES = [{"id": "c1", "title": "Six-Week Reset", "description": "Find the next direction.",
