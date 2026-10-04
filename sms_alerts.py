@@ -205,9 +205,10 @@ def confirmation_text(first_name: str, business_name: str,
 
 
 def reminder_text(business_name: str, day_str: str, time_str: str) -> str:
-    """Campaign sample #2 shape."""
+    """Campaign sample #2 shape. Plain hyphen on purpose: an em dash
+    is outside GSM-7 and bills the reminder as 3 segments, not 2."""
     return (
-        f"{sender_brand()}: Reminder from {business_name} — your appointment "
+        f"{sender_brand()}: Reminder from {business_name} - your appointment "
         f"is {day_str} at {time_str}. Reply to this message if you need to "
         f"make a change. Reply STOP to unsubscribe."
     )
