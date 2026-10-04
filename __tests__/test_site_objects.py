@@ -15,8 +15,8 @@ from site_objects import OBJECTS, OBJECT_KEYS
 
 # ─── 1. the contract every object keeps ──────────────────────────────
 
-def test_there_are_sixteen_objects_each_with_every_part():
-    assert len(OBJECTS) == 16
+def test_there_are_twenty_six_objects_each_with_every_part():
+    assert len(OBJECTS) == 26
     for key, o in OBJECTS.items():
         assert o.key == key
         assert o.intent.strip() and o.use_when.strip() and o.phone.strip(), key
@@ -99,8 +99,13 @@ def test_every_example_is_balanced_html():
 
 def test_every_phone_rule_exists_where_layout_changes():
     for key in ("letter", "card-id", "ticket", "schedule-card", "frame",
-                "boarding-pass", "installments", "edge", "index-card", "polaroid"):
+                "boarding-pass", "installments", "edge", "index-card", "polaroid",
+                "marquee", "times-strip", "hours-card", "panels", "mosaic", "pull-quote",
+                "dock", "faq", "stat-strip"):
         assert "@media (max-width:" in OBJECTS[key].css, f"{key} has no phone version"
+    # the timeline answers to its own column, so a narrow column anywhere
+    # (every phone included) gets the vertical line
+    assert "@container (max-width:" in OBJECTS["timeline"].css
 
 
 # ─── 2. naming: only the concept sheet's OBJECTS line commits ────────
@@ -197,3 +202,71 @@ def test_the_metal_finish_does_more_than_the_seal():
 
 def test_the_director_is_told_where_inverse_belongs():
     assert "light ground only" in so.director_block()
+
+
+# ─── the library grows (2026-10-04): what I reached for by hand ───────
+# Kevin: "grow the builder's own layout and object library". Ten objects
+# from the sites I built myself (Rivers, MaCnificent, the marketing site),
+# and a fifth edge shape.
+
+GROWN = ("marquee", "times-strip", "hours-card", "timeline", "panels", "mosaic",
+         "pull-quote", "dock", "faq", "stat-strip")
+
+
+def test_the_grown_objects_are_in_the_catalog_and_built_from_source():
+    block = so.director_block()
+    for key in GROWN:
+        assert f"- {key}:" in block, key
+    assert OBJECTS["times-strip"].js in so.builder_block(["times-strip"])
+
+
+def test_a_plain_word_on_the_objects_line_never_names_a_grown_object():
+    """Keys are names too, so a grown object never takes a word the
+    Director uses in passing: 'the hours', 'a quote', 'the stats'."""
+    assert so.object_names_in("OBJECTS: a letterboard with the hours, times and stats") == ["letterboard"]
+    assert so.object_names_in("OBJECTS: a letter that quotes the owner") == ["letter"]
+    assert so.object_names_in("OBJECTS: hours card, times strip, pull quote, stat strip") ==         ["hours-card", "times-strip", "pull-quote", "stat-strip"]
+    assert so.object_names_in("OBJECTS: photo panels and a photo mosaic, then a marquee band") ==         ["panels", "mosaic", "marquee"]
+
+
+def test_the_times_and_the_hours_tell_the_business_s_time_or_nothing():
+    for key in ("times-strip", "hours-card"):
+        o = OBJECTS[key]
+        assert 'data-tz="' in o.html and "timeZone" in o.js, key
+        assert "data-day" in o.use_when and "0 Sunday" in o.use_when, key
+    # the open-now light starts hidden and only shows once it can tell the truth
+    hours = OBJECTS["hours-card"]
+    assert '<span class="sxo-hours-now" hidden>' in hours.html
+    assert ".sxo-hours-now[hidden]{display:none}" in hours.css
+    assert "light.hidden=false" in hours.js and "hasAttribute('data-closed')" in hours.js
+
+
+def test_motion_in_the_grown_objects_has_a_still_state():
+    assert "animation:none" in OBJECTS["marquee"].css.split("prefers-reduced-motion:reduce", 1)[1]
+    assert "prefers-reduced-motion: reduce" in OBJECTS["stat-strip"].js
+    marquee = OBJECTS["marquee"].html
+    assert 'class="sxo-sr"' in marquee and 'aria-hidden="true"' in marquee,         "readers get the list once; the looping copies are hidden from them"
+
+
+def test_the_page_holds_the_real_figure_before_any_count_up():
+    html = OBJECTS["stat-strip"].html
+    for m in re.finditer(r'data-count="(\d+)">([^<]+)<', html):
+        assert m.group(1) in m.group(2), "the figure at rest is the real one"
+    assert "el.textContent=txt" in OBJECTS["stat-strip"].js, "the count-up lands on the original text"
+
+
+def test_panels_and_the_dock_never_strand_content():
+    panels = OBJECTS["panels"]
+    # without the page's js class every panel is open; only the script collapses them
+    assert ".sxo-panel:not(.is-open) .sxo-panel-body{opacity:0" in panels.css
+    assert ".js .sxo-panel:not(.is-open) .sxo-panel-body" in panels.css
+    assert "aria-expanded" in panels.html and "setAttribute('aria-expanded'" in panels.js
+    dock = OBJECTS["dock"].css
+    assert dock.startswith(".sxo-dock{display:none}"), "never on a desktop"
+    assert "body:has(.sxo-dock){padding-bottom" in dock, "the dock never covers the footer"
+    assert "visibility:hidden" in dock, "a hidden dock is out of the tab order too"
+
+
+def test_the_edge_has_a_wave():
+    edge = OBJECTS["edge"]
+    assert '.sxo-edge[data-edge="wave"]' in edge.css and "wave" in edge.intent

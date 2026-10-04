@@ -596,11 +596,11 @@ _add(_o(
 # ── 16. THE SHAPED EDGE ──────────────────────────────────────────────
 _add(_o(
     key="edge", name="Shaped section edge",
-    intent="a section whose bottom edge is an arc, a scallop, a tear or a slant",
+    intent="a section whose bottom edge is an arc, a wave, a scallop, a tear or a slant",
     use_when="one or two seams between big color fields, never every section. "
              "Put the classes on a <section>; the next section's background "
              "shows through the shape.",
-    aliases=("edge", "shaped edge", "arc edge", "wave edge", "torn edge", "slant edge", "curved seam"),
+    aliases=("edge", "shaped edge", "arc edge", "wave edge", "wavy edge", "torn edge", "slant edge", "curved seam"),
     html="""<section class="sxo sxo-edge" data-sx-object="edge" data-edge="arc" data-overlap-ok>
   <div class="sxo-edge-inner"><h2>The section above the seam</h2><p>Its bottom edge curves into the next section.</p></div>
 </section>""",
@@ -613,9 +613,425 @@ _add(_o(
 .sxo-edge[data-edge="torn"]{
   -webkit-mask:linear-gradient(rgba(0,0,0,1) 0 0) top/100% calc(100% - 14px) no-repeat,conic-gradient(from -40deg at bottom,rgba(0,0,0,0),rgba(0,0,0,1) 1deg 79deg,rgba(0,0,0,0) 80deg) bottom/23px 14px repeat-x;
           mask:linear-gradient(rgba(0,0,0,1) 0 0) top/100% calc(100% - 14px) no-repeat,conic-gradient(from -40deg at bottom,rgba(0,0,0,0),rgba(0,0,0,1) 1deg 79deg,rgba(0,0,0,0) 80deg) bottom/23px 14px repeat-x}
+.sxo-edge[data-edge="wave"]{--s:clamp(12px,2.2vw,24px);--R:calc(var(--s) * 1.118);
+  -webkit-mask:radial-gradient(var(--R) at 50% calc(100% - var(--s) * 1.5),rgba(0,0,0,1) 99%,rgba(0,0,0,0) 101%) calc(50% - 2 * var(--s)) 0/calc(4 * var(--s)) 100%,
+               radial-gradient(var(--R) at 50% calc(100% + var(--s) * .5),rgba(0,0,0,0) 99%,rgba(0,0,0,1) 101%) 50% calc(100% - var(--s))/calc(4 * var(--s)) 100% repeat-x;
+          mask:radial-gradient(var(--R) at 50% calc(100% - var(--s) * 1.5),rgba(0,0,0,1) 99%,rgba(0,0,0,0) 101%) calc(50% - 2 * var(--s)) 0/calc(4 * var(--s)) 100%,
+               radial-gradient(var(--R) at 50% calc(100% + var(--s) * .5),rgba(0,0,0,0) 99%,rgba(0,0,0,1) 101%) 50% calc(100% - var(--s))/calc(4 * var(--s)) 100% repeat-x}
 .sxo-edge+*{padding-top:calc(var(--d,48px) + 2rem)}
 @media (max-width:600px){.sxo-edge[data-edge="arc"]{clip-path:ellipse(110% 100% at 50% 0)}}""",
     phone="the arc flattens so it never cuts into text on a narrow screen",
+))
+
+
+# ═════════════════════════════════════════════════════════════════════
+# THE LIBRARY GROWS (2026-10-04, Kevin: "grow the builder's own layout
+# and object library"). Each object below is one I reached for by hand on
+# the sites I built myself and the builder had no source for:
+#   marquee   Rivers' photo strip, MaCnificent's style band, the
+#             marketing site's trade ticker (all three sites)
+#   times     Rivers' "when we gather" strip, the next one lit
+#   hours     MaCnificent's hours table, today marked, the open-now light
+#   timeline  MaCnificent's aftercare stops; the numbered steps on
+#             Rivers and the marketing site
+#   panels    Rivers' expanding photo panels (ministries)
+#   mosaic    Rivers' journey mosaic, one tall photo and three small
+#   quote     Rivers' pull quote with the giant mark
+#   dock      MaCnificent's phone booking dock; the marketing site's
+#             floating action
+#   faq       the questions on Rivers' give page and the marketing site
+#   stats     the marketing site's count-up strip
+# The times and the hours tell the time in the business's own timezone
+# (data-tz), never the visitor's guess, and say nothing when they can't.
+# ═════════════════════════════════════════════════════════════════════
+
+# A small clock read in the business's timezone: {day: 0-6 (Sunday 0),
+# min: minutes since midnight}. Shared by the times strip and the hours.
+_CLOCK_JS = ("function now(tz){var o={weekday:'short',hour:'2-digit',minute:'2-digit',hourCycle:'h23'},p;"
+             "try{if(tz)o.timeZone=tz;p=new Intl.DateTimeFormat('en-US',o).formatToParts(new Date());}"
+             "catch(e){delete o.timeZone;p=new Intl.DateTimeFormat('en-US',o).formatToParts(new Date());}"
+             "var g=function(t){for(var i=0;i<p.length;i++)if(p[i].type===t)return p[i].value;return '';};"
+             "return {day:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(g('weekday')),"
+             "min:(+g('hour'))%24*60+(+g('minute'))};}"
+             "function mins(s){var p=String(s||'').split(':');return p.length<2?null:(+p[0])*60+(+p[1]);}")
+
+# ── 17. THE MARQUEE ──────────────────────────────────────────────────
+_add(_o(
+    key="marquee", name="Drifting marquee band",
+    intent="a band of words drifting sideways across the page, a mark between each",
+    use_when="the names of real services, styles, ministries or classes from the "
+             "data, five to ten short ones, as a seam between two big sections. "
+             "Once a page. The visible run is repeated twice for the loop and "
+             "hidden from readers; the full list is in the sxo-sr line.",
+    aliases=("marquee band", "ticker band", "scrolling band", "drifting band"),
+    html="""<div class="sxo sxo-marquee" data-sx-object="marquee">
+  <p class="sxo-sr">Wheel throwing, hand building, glaze nights, open studio, kids' clay camp</p>
+  <div class="sxo-marquee-track" aria-hidden="true">
+    <ul class="sxo-marquee-run"><li>Wheel throwing</li><li>Hand building</li><li>Glaze nights</li><li>Open studio</li><li>Kids' clay camp</li></ul>
+    <ul class="sxo-marquee-run"><li>Wheel throwing</li><li>Hand building</li><li>Glaze nights</li><li>Open studio</li><li>Kids' clay camp</li></ul>
+  </div>
+</div>""",
+    css=""".sxo-marquee{position:relative;overflow:hidden;padding:clamp(.9rem,1.6vw,1.3rem) 0;background:var(--_accent);color:var(--_paper);
+  -webkit-mask:linear-gradient(90deg,rgba(0,0,0,0),rgba(0,0,0,1) 5%,rgba(0,0,0,1) 95%,rgba(0,0,0,0));
+          mask:linear-gradient(90deg,rgba(0,0,0,0),rgba(0,0,0,1) 5%,rgba(0,0,0,1) 95%,rgba(0,0,0,0))}
+.sxo-marquee-track{display:flex;width:max-content;animation:sxo-drift var(--speed,46s) linear infinite}
+.sxo-marquee:hover .sxo-marquee-track{animation-play-state:paused}
+.sxo-marquee-run{display:flex;align-items:center;flex-shrink:0;list-style:none;margin:0;padding:0}
+.sxo-marquee-run li{display:flex;align-items:center;white-space:nowrap;font-family:var(--_display);font-size:clamp(22px,2.6vw,38px);line-height:1.1}
+.sxo-marquee-run li::after{content:"\\2726";font-size:.45em;margin:0 clamp(1rem,2.4vw,2rem);opacity:.7}
+@keyframes sxo-drift{to{transform:translateX(-50%)}}
+@media (max-width:600px){.sxo-marquee-run li{font-size:21px}}
+@media (prefers-reduced-motion:reduce){.sxo-marquee{-webkit-mask:none;mask:none}
+  .sxo-marquee-track{animation:none;width:auto;justify-content:center;padding:0 1rem}
+  .sxo-marquee-run{flex-wrap:wrap;justify-content:center;row-gap:.6rem}
+  .sxo-marquee-run+.sxo-marquee-run{display:none}}""",
+    phone="the words drop to 21px and keep drifting; with reduced motion the band stands still and wraps",
+))
+
+# ── 18. THE TIMES STRIP ──────────────────────────────────────────────
+_add(_o(
+    key="times-strip", name="Weekly times strip",
+    intent="a ruled row of the regular weekly times, the next one lit",
+    use_when="gatherings, services, classes or open hours that repeat every "
+             "week: the day, the time and what happens, exactly as the data "
+             "or the owner states them. Two to six items. Each item carries "
+             "data-day (0 Sunday to 6 Saturday) and data-time (24-hour HH:MM) "
+             "so the strip can light the next one; data-tz on the root is the "
+             "business's timezone from THE REAL DATA, or leave it off.",
+    aliases=("times strip", "service times", "gathering times", "weekly times",
+             "class times", "schedule strip", "weekly schedule"),
+    html="""<div class="sxo sxo-times" data-sx-object="times-strip" data-tz="America/Chicago">
+  <p class="sxo-times-head sxo-label">Every week at the studio</p>
+  <ol class="sxo-times-row">
+    <li class="sxo-times-item" data-day="2" data-time="17:00"><span class="sxo-label">Tuesday</span><b>5:00<small>pm</small></b><span class="sxo-times-name">Open studio</span><span class="sxo-times-next"></span></li>
+    <li class="sxo-times-item" data-day="4" data-time="18:00"><span class="sxo-label">Thursday</span><b>6:00<small>pm</small></b><span class="sxo-times-name">Wheel class</span><span class="sxo-times-next"></span></li>
+    <li class="sxo-times-item" data-day="6" data-time="10:00"><span class="sxo-label">Saturday</span><b>10:00<small>am</small></b><span class="sxo-times-name">Family clay</span><span class="sxo-times-next"></span></li>
+    <li class="sxo-times-item" data-day="0" data-time="12:00"><span class="sxo-label">Sunday</span><b>12:00<small>pm</small></b><span class="sxo-times-name">Open studio</span><span class="sxo-times-next"></span></li>
+  </ol>
+</div>""",
+    css=""".sxo-times-head{margin:0 0 .9rem;color:color-mix(in srgb,currentColor 65%,transparent)}
+.sxo-times-row{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));
+  border-top:1.5px solid currentColor;border-bottom:1px solid color-mix(in srgb,currentColor 25%,transparent)}
+.sxo-times-item{display:flex;flex-direction:column;gap:.35rem;padding:1.1rem 1.2rem 1.2rem;border-left:1px solid color-mix(in srgb,currentColor 18%,transparent);transition:background-color .4s}
+.sxo-times-item:first-child{border-left:0}
+.sxo-times-item b{font-family:var(--_display);font-weight:inherit;font-size:clamp(34px,3.6vw,52px);line-height:1;font-variant-numeric:tabular-nums}
+.sxo-times-item small{font-size:.36em;margin-left:.2em;letter-spacing:.08em;text-transform:uppercase}
+.sxo-times-name{font-size:15px}
+.sxo-times-next{min-height:1.2em;font-family:var(--_label);font-size:11px;letter-spacing:.14em;text-transform:uppercase}
+.sxo-times-item.is-next{background:var(--_accent);color:var(--_paper)}
+.sxo-times-item.is-next .sxo-label{color:inherit}
+@media (max-width:600px){.sxo-times-row{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sxo-times-item{border-top:1px solid color-mix(in srgb,currentColor 18%,transparent);padding:.9rem .9rem 1rem}
+  .sxo-times-item:nth-child(odd){border-left:0}
+  .sxo-times-item:nth-child(-n+2){border-top:0}}
+@media (prefers-reduced-motion:reduce){.sxo-times-item{transition:none}}""",
+    js="(function(){" + _CLOCK_JS + "document.querySelectorAll('.sxo-times').forEach(function(el){"
+       "var tz=el.getAttribute('data-tz'),n=now(tz),best=null,wait=1e9;if(n.day<0)return;"
+       "el.querySelectorAll('.sxo-times-item[data-day][data-time]').forEach(function(it){"
+       "var m=mins(it.getAttribute('data-time'));if(m===null)return;"
+       "var a=((+it.getAttribute('data-day')-n.day+7)%7)*1440+m-n.min;if(a<0)a+=10080;"
+       "if(a<wait){wait=a;best=it;}});if(!best)return;best.classList.add('is-next');"
+       "var tag=best.querySelector('.sxo-times-next');if(!tag)return;var d=Math.floor((n.min+wait)/1440),o={month:'short',day:'numeric'};"
+       "try{if(tz)o.timeZone=tz;tag.textContent=d===0?'Next \\u00b7 today':d===1?'Next \\u00b7 tomorrow':"
+       "'Next \\u00b7 '+new Intl.DateTimeFormat('en-US',o).format(new Date(Date.now()+d*864e5));}catch(e){tag.textContent='Next';}});})();",
+    phone="the row becomes two columns of two; the next one stays lit",
+))
+
+# ── 19. THE HOURS ────────────────────────────────────────────────────
+_add(_o(
+    key="hours-card", name="Hours card with an open-now light",
+    intent="a week of opening hours on a card, today marked, a light that says open now",
+    use_when="the business's opening hours. Every row is a real day from THE "
+             "REAL DATA's weekly hours (or the hours the owner stated); "
+             "data-day is 0 Sunday to 6 Saturday, an open day carries "
+             "data-open and data-close (24-hour HH:MM), a closed day carries "
+             "data-closed. data-tz on the root is the business's timezone. "
+             "The light stays hidden until it can tell the truth.",
+    aliases=("hours card", "hours table", "opening hours", "open-now light", "open now light"),
+    html="""<div class="sxo sxo-hours sxo-paper" data-sx-object="hours-card" data-tz="America/Chicago">
+  <p class="sxo-hours-head"><span class="sxo-label">Studio hours</span><span class="sxo-hours-now" hidden><i aria-hidden="true"></i><span></span></span></p>
+  <table class="sxo-hours-table">
+    <caption class="sxo-sr">Studio hours, by day</caption>
+    <tbody>
+      <tr data-day="1" data-closed><th scope="row">Monday</th><td>Closed</td></tr>
+      <tr data-day="2" data-open="17:00" data-close="21:00"><th scope="row">Tuesday</th><td>5 to 9 pm</td></tr>
+      <tr data-day="3" data-closed><th scope="row">Wednesday</th><td>Closed</td></tr>
+      <tr data-day="4" data-open="17:00" data-close="21:00"><th scope="row">Thursday</th><td>5 to 9 pm</td></tr>
+      <tr data-day="5" data-closed><th scope="row">Friday</th><td>Closed</td></tr>
+      <tr data-day="6" data-open="10:00" data-close="16:00"><th scope="row">Saturday</th><td>10 am to 4 pm</td></tr>
+      <tr data-day="0" data-open="12:00" data-close="17:00"><th scope="row">Sunday</th><td>12 to 5 pm</td></tr>
+    </tbody>
+  </table>
+</div>""",
+    css=""".sxo-hours{max-width:26rem;padding:clamp(1.2rem,3vw,1.8rem);border-radius:14px;box-shadow:var(--_lift)}
+.sxo-hours-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin:0 0 .7rem}
+.sxo-hours-now{display:inline-flex;align-items:center;gap:.45rem;font-family:var(--_label);font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+.sxo-hours-now[hidden]{display:none}
+.sxo-hours-now i{width:9px;height:9px;border-radius:50%;background:color-mix(in srgb,var(--_ink) 35%,transparent)}
+.sxo-hours-now.is-open i{background:var(--_accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--_accent) 25%,transparent)}
+.sxo-hours-table{width:100%;border-collapse:collapse;font-size:15px}
+.sxo-hours-table th,.sxo-hours-table td{padding:.55rem 0;border-bottom:1px dashed var(--_line);text-align:left;font-weight:400}
+.sxo-hours-table tr:last-child th,.sxo-hours-table tr:last-child td{border-bottom:0}
+.sxo-hours-table td{text-align:right;font-variant-numeric:tabular-nums}
+.sxo-hours-table tr.is-today th,.sxo-hours-table tr.is-today td{font-weight:700;color:var(--_accent)}
+.sxo-hours-table tr.is-today th::after{content:"Today";margin-left:.6rem;padding:.12rem .45rem;border-radius:999px;vertical-align:.12em;
+  font-family:var(--_label);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;background:var(--_accent);color:var(--_paper)}
+@media (max-width:600px){.sxo-hours{max-width:none}}""",
+    js="(function(){" + _CLOCK_JS + "document.querySelectorAll('.sxo-hours').forEach(function(el){"
+       "var n=now(el.getAttribute('data-tz'));if(n.day<0)return;"
+       "var row=el.querySelector('tr[data-day=\"'+n.day+'\"]');if(!row)return;row.classList.add('is-today');"
+       "var light=el.querySelector('.sxo-hours-now'),o=mins(row.getAttribute('data-open')),c=mins(row.getAttribute('data-close'));"
+       "if(!light||((o===null||c===null)&&!row.hasAttribute('data-closed')))return;"
+       "var open=o!==null&&c!==null&&(c>o?(n.min>=o&&n.min<c):(n.min>=o||n.min<c));"
+       "light.querySelector('span').textContent=open?'Open now':(o===null?'Closed today':'Closed now');"
+       "light.classList.toggle('is-open',open);light.hidden=false;});})();",
+    phone="the card spans the screen; the rows stay one per day",
+))
+
+# ── 20. THE TIMELINE ─────────────────────────────────────────────────
+_add(_o(
+    key="timeline", name="Stops on a line",
+    intent="three to five stops on one glowing line, each with a ringed dot",
+    use_when="how it works, what happens after a visit (aftercare), a "
+             "program's phases, the path from first visit to belonging. Real "
+             "steps in the owner's order; the small label is a time or a step "
+             "word, never an invented date.",
+    aliases=("timeline", "process line", "steps on a line", "aftercare timeline", "stops on a line"),
+    html="""<div class="sxo sxo-line" data-sx-object="timeline"><ol class="sxo-line-stops">
+  <li><span class="sxo-line-dot" aria-hidden="true"></span><p class="sxo-label">First night</p><h3>Find center</h3><p>Wedge your clay and feel it settle under your hands on the wheel.</p></li>
+  <li><span class="sxo-line-dot" aria-hidden="true"></span><p class="sxo-label">Week three</p><h3>Trim and foot</h3><p>Turn your leather-hard pots and carve the feet they will stand on.</p></li>
+  <li><span class="sxo-line-dot" aria-hidden="true"></span><p class="sxo-label">Week five</p><h3>Glaze night</h3><p>Dip, pour and layer. The kiln does the rest while you sleep.</p></li>
+  <li><span class="sxo-line-dot" aria-hidden="true"></span><p class="sxo-label">Last night</p><h3>The kiln opens</h3><p>Take home four pieces you made with your own hands.</p></li>
+</ol></div>""",
+    css=""".sxo-line{container-type:inline-size}
+.sxo-line-stops{position:relative;list-style:none;margin:0;padding:0;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:clamp(1.2rem,2.4vw,2rem)}
+.sxo-line-stops::before{content:"";position:absolute;left:12px;right:0;top:11px;height:2px;
+  background:linear-gradient(90deg,var(--_accent),color-mix(in srgb,var(--_accent) 25%,transparent))}
+.sxo-line-stops>li{position:relative;padding-top:2.5rem}
+.sxo-line-dot{position:absolute;top:0;left:0;width:24px;height:24px;border-radius:50%;background:var(--_accent);
+  box-shadow:0 0 0 5px color-mix(in srgb,var(--_accent) 22%,transparent),0 0 18px color-mix(in srgb,var(--_accent) 40%,transparent)}
+.sxo-line-stops>li>.sxo-label{margin:0 0 .35rem;color:var(--_accent)}
+.sxo-line h3{font-family:var(--_display);font-size:clamp(20px,1.8vw,26px);line-height:1.1;margin:0 0 .4rem}
+.sxo-line-stops>li>p:last-child{margin:0;font-size:15px;line-height:1.55;color:color-mix(in srgb,currentColor 82%,transparent)}
+@container (max-width:640px){.sxo-line-stops{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:1fr;gap:1.6rem;padding-left:2.6rem}
+  .sxo-line-stops::before{left:11px;right:auto;top:6px;bottom:6px;width:2px;height:auto;
+    background:linear-gradient(180deg,var(--_accent),color-mix(in srgb,var(--_accent) 25%,transparent))}
+  .sxo-line-stops>li{padding-top:0}
+  .sxo-line-dot{left:-2.6rem}}""",
+    phone="in any column narrower than 640px (every phone) the line runs down the left and the stops stack beside it",
+))
+
+# ── 21. THE PANELS ───────────────────────────────────────────────────
+_add(_o(
+    key="panels", name="Expanding photo panels",
+    intent="tall photo panels side by side; the open one widens and tells its story",
+    use_when="three to five real things that each have a real photo: "
+             "ministries, rooms, services, programs. Each panel's name is its "
+             "button; one short paragraph and a link inside. Needs a real photo "
+             "per panel. Without the page's js class every panel shows open.",
+    aliases=("photo panels", "expanding panels", "accordion panels", "photo accordion"),
+    html="""<div class="sxo sxo-panels" data-sx-object="panels">
+  <article class="sxo-panel is-open">
+    <img src="https://example.com/wheel.jpg" alt="Hands pulling up the wall of a cylinder on the wheel" width="900" height="1200">
+    <button class="sxo-panel-tab" type="button" aria-expanded="true"><span>Wheel classes</span></button>
+    <div class="sxo-panel-body"><h3>Wheel classes</h3><p>Six Thursdays from centering to the kiln, with a wheel of your own each night.</p><a href="#classes">See the classes</a></div>
+  </article>
+  <article class="sxo-panel">
+    <img src="https://example.com/handbuild.jpg" alt="Coils of clay stacked into a tall vase" width="900" height="1200">
+    <button class="sxo-panel-tab" type="button" aria-expanded="false"><span>Hand building</span></button>
+    <div class="sxo-panel-body"><h3>Hand building</h3><p>Pinch, coil and slab at the long table. No wheel needed.</p><a href="#handbuilding">How it works</a></div>
+  </article>
+  <article class="sxo-panel">
+    <img src="https://example.com/kiln.jpg" alt="Glazed bowls cooling on a kiln shelf" width="900" height="1200">
+    <button class="sxo-panel-tab" type="button" aria-expanded="false"><span>Open studio</span></button>
+    <div class="sxo-panel-body"><h3>Open studio</h3><p>Sunday afternoons for anyone who has taken a class.</p><a href="#hours">See the hours</a></div>
+  </article>
+</div>""",
+    css=""".sxo-panels{display:grid;gap:.75rem}
+.sxo-panel{position:relative;overflow:hidden;min-height:340px;border-radius:18px;background:var(--_ink)}
+.sxo-panel img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.sxo-panel::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(0,0,0,0) 35%,rgba(0,0,0,.8))}
+.sxo-panel-body{position:absolute;left:0;right:0;bottom:0;z-index:2;padding:clamp(1.2rem,2.4vw,2rem);color:rgba(255,255,255,1)}
+.sxo-panel-body h3{font-family:var(--_display);font-size:clamp(24px,2.4vw,36px);line-height:1.05;margin:0 0 .5rem}
+.sxo-panel-body p{margin:0 0 .9rem;max-width:42ch;font-size:15px;line-height:1.5}
+.sxo-panel-body a{color:inherit;font-family:var(--_label);font-size:12px;letter-spacing:.14em;text-transform:uppercase;text-underline-offset:.35em}
+.sxo-panel-tab{display:none}
+.js .sxo-panels{display:flex;gap:.75rem;height:clamp(420px,62vh,620px)}
+.js .sxo-panel{flex:1 1 0;min-width:0;min-height:0}
+.js .sxo-panels.is-ready .sxo-panel{transition:flex-grow .6s cubic-bezier(.6,0,.2,1)}
+.js .sxo-panel.is-open{flex-grow:4.2}
+.js .sxo-panel-tab{position:absolute;inset:0;z-index:3;display:flex;align-items:flex-end;justify-content:center;width:100%;padding:1.4rem 0;
+  border:0;background:none;color:rgba(255,255,255,1);cursor:pointer;font:inherit}
+.js .sxo-panel-tab span{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;font-family:var(--_label);font-size:13px;letter-spacing:.16em;text-transform:uppercase}
+.js .sxo-panel.is-open .sxo-panel-tab{display:none}
+.js .sxo-panels.is-ready .sxo-panel-body{transition:opacity .4s .25s}
+.js .sxo-panel:not(.is-open) .sxo-panel-body{opacity:0;visibility:hidden}
+.sxo-panel-tab:focus-visible{outline:2px solid rgba(255,255,255,1);outline-offset:-8px}
+@media (max-width:800px){.js .sxo-panels{flex-direction:column;height:auto}
+  .js .sxo-panel{flex:none;height:78px}
+  .js .sxo-panels.is-ready .sxo-panel{transition:height .5s cubic-bezier(.6,0,.2,1)}
+  .js .sxo-panel.is-open{height:390px}
+  .js .sxo-panel-tab{align-items:center;justify-content:flex-start;padding:0 1.2rem}
+  .js .sxo-panel-tab span{writing-mode:horizontal-tb;transform:none}}
+@media (prefers-reduced-motion:reduce){.js .sxo-panels.is-ready .sxo-panel,.js .sxo-panels.is-ready .sxo-panel-body{transition:none}}""",
+    js="(function(){document.querySelectorAll('.sxo-panels').forEach(function(g){"
+       "var ps=[].slice.call(g.querySelectorAll('.sxo-panel'));function open(p){ps.forEach(function(q){"
+       "var on=q===p;q.classList.toggle('is-open',on);var b=q.querySelector('.sxo-panel-tab');"
+       "if(b)b.setAttribute('aria-expanded',on?'true':'false');});}"
+       "var hover=window.matchMedia('(hover:hover) and (min-width:801px)').matches;"
+       "ps.forEach(function(p){var b=p.querySelector('.sxo-panel-tab');if(!b)return;"
+       "b.addEventListener('click',function(){open(p);var a=p.querySelector('.sxo-panel-body a');if(a)a.focus({preventScroll:true});});"
+       "if(hover)p.addEventListener('mouseenter',function(){open(p);});});"
+       "requestAnimationFrame(function(){requestAnimationFrame(function(){g.classList.add('is-ready');});});});})();",
+    phone="the panels stack as 78px bars with their names; the open one grows to 390px",
+))
+
+# ── 22. THE MOSAIC ───────────────────────────────────────────────────
+_add(_o(
+    key="mosaic", name="Photo mosaic",
+    intent="one tall photo beside three smaller ones, fitted into one block",
+    use_when="four real photos that belong together: the room, the work, the "
+             "people at one gathering. The lead photo is the strongest one. "
+             "Captions only from the data.",
+    aliases=("photo mosaic", "photo cluster"),
+    html="""<div class="sxo sxo-mosaic" data-sx-object="mosaic">
+  <figure class="sxo-mosaic-lead"><img src="https://example.com/studio.jpg" alt="The studio at dusk, six wheels under hanging lights" width="900" height="1200"><figcaption>The studio on a Thursday</figcaption></figure>
+  <figure><img src="https://example.com/hands.jpg" alt="Clay-covered hands cupping a bowl" width="800" height="800"></figure>
+  <figure><img src="https://example.com/shelf.jpg" alt="Greenware drying on wooden shelves" width="800" height="800"></figure>
+  <figure><img src="https://example.com/glaze.jpg" alt="Buckets of glaze in a row" width="1200" height="600"></figure>
+</div>""",
+    css=""".sxo-mosaic{display:grid;grid-template-columns:1.25fr 1fr 1fr;grid-template-rows:repeat(2,clamp(160px,18vw,260px));gap:clamp(.5rem,1vw,.8rem)}
+.sxo-mosaic figure{position:relative;margin:0;overflow:hidden;border-radius:14px;background:color-mix(in srgb,currentColor 8%,transparent)}
+.sxo-mosaic img{display:block;width:100%;height:100%;object-fit:cover;transition:transform .8s cubic-bezier(.2,.7,.2,1)}
+.sxo-mosaic figure:hover img{transform:scale(1.04)}
+.sxo-mosaic-lead{grid-row:span 2}
+.sxo-mosaic figure:last-child{grid-column:span 2}
+.sxo-mosaic figcaption{position:absolute;left:.75rem;bottom:.75rem;max-width:calc(100% - 1.5rem);padding:.35rem .6rem;border-radius:6px;
+  background:rgba(0,0,0,.58);color:rgba(255,255,255,1);font-family:var(--_label);font-size:12px;letter-spacing:.06em}
+@media (max-width:600px){.sxo-mosaic{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:none}
+  .sxo-mosaic-lead{grid-row:auto;grid-column:1/-1;aspect-ratio:4/3}
+  .sxo-mosaic figure:not(.sxo-mosaic-lead){grid-column:auto;aspect-ratio:1}}
+@media (prefers-reduced-motion:reduce){.sxo-mosaic img{transition:none}}""",
+    phone="the lead photo runs full width; the other three sit under it as squares",
+))
+
+# ── 23. THE PULL QUOTE ───────────────────────────────────────────────
+_add(_o(
+    key="pull-quote", name="Pull quote with a giant mark",
+    intent="one client's words set large, a giant quotation mark behind them",
+    use_when="one real testimonial in the client's own words, with their name "
+             "as the data gives it. Never a quote the data does not hold, never "
+             "edited into new claims. One or two a page.",
+    aliases=("pull quote", "testimonial quote", "big quote", "giant quote mark"),
+    html="""<figure class="sxo sxo-quote" data-sx-object="pull-quote">
+  <span class="sxo-quote-mark" aria-hidden="true">&ldquo;</span>
+  <blockquote><p>I came in to make one mug. Six weeks later I have a shelf of bowls and a Thursday night I will not give up.</p></blockquote>
+  <figcaption><b>June Reyes</b><span class="sxo-label">Fall term student</span></figcaption>
+</figure>""",
+    css=""".sxo-quote{position:relative;max-width:52rem;margin:0;padding:clamp(1.5rem,4vw,3rem) 0 0 clamp(1.2rem,3vw,2.4rem);border-left:3px solid var(--_accent)}
+.sxo-quote-mark{position:absolute;left:clamp(.4rem,1.5vw,1rem);top:-.16em;font-family:var(--_display);font-size:clamp(120px,14vw,220px);line-height:1;
+  color:color-mix(in srgb,var(--_accent) 32%,transparent);pointer-events:none;user-select:none}
+.sxo-quote blockquote{position:relative;margin:0}
+.sxo-quote blockquote p{margin:0;font-family:var(--_display);font-size:clamp(24px,2.8vw,40px);line-height:1.2;text-wrap:balance}
+.sxo-quote figcaption{display:flex;flex-direction:column;gap:.25rem;margin-top:1.2rem}
+.sxo-quote figcaption b{font-size:16px}
+.sxo-quote figcaption .sxo-label{color:color-mix(in srgb,currentColor 65%,transparent)}
+@media (max-width:600px){.sxo-quote{padding-left:1rem}.sxo-quote blockquote p{font-size:22px}}""",
+    phone="the words drop to 22px; the mark scales with them",
+))
+
+# ── 24. THE PHONE DOCK ───────────────────────────────────────────────
+_add(_o(
+    key="dock", name="Phone action dock",
+    intent="a frosted bar fixed to the bottom of a phone screen: one line and the one action",
+    use_when="the page's one action on a phone (book, visit, call, order), "
+             "once the opening has scrolled away. The line is a real fact "
+             "(the next time, the price, the hours); the action links where the "
+             "page's main action links. Phones only; once a page.",
+    aliases=("phone dock", "booking dock", "action dock", "sticky action bar"),
+    html="""<div class="sxo sxo-dock" data-sx-object="dock">
+  <p class="sxo-dock-line"><b>Fall term</b><span>Thursdays, 6 to 9 pm</span></p>
+  <a class="sxo-dock-go" href="#book">Book a seat</a>
+</div>""",
+    css=""".sxo-dock{display:none}
+.sxo-dock-line{display:flex;flex-direction:column;min-width:0;margin:0;font-size:13px;line-height:1.3}
+.sxo-dock-line b{font-family:var(--_display);font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sxo-dock-line span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:color-mix(in srgb,var(--_ink) 72%,transparent)}
+.sxo-dock-go{flex-shrink:0;display:inline-flex;align-items:center;min-height:44px;padding:0 1.1rem;border-radius:12px;
+  background:var(--_accent);color:var(--_paper);font-weight:700;font-size:15px;text-decoration:none}
+@media (max-width:768px){
+  .sxo-dock{position:fixed;left:.6rem;right:.6rem;bottom:calc(.6rem + env(safe-area-inset-bottom,0px));z-index:60;display:flex;align-items:center;
+    justify-content:space-between;gap:.8rem;padding:.55rem .55rem .55rem 1rem;border-radius:16px;color:var(--_ink);
+    background:color-mix(in srgb,var(--_paper) 84%,transparent);-webkit-backdrop-filter:blur(14px) saturate(1.4);backdrop-filter:blur(14px) saturate(1.4);
+    box-shadow:0 12px 30px -10px rgba(0,0,0,.45),0 0 0 1px var(--_line);transition:transform .45s cubic-bezier(.2,.8,.2,1),opacity .3s,visibility 0s}
+  .js .sxo-dock:not(.is-shown){transform:translateY(calc(100% + 1.5rem));opacity:0;visibility:hidden;
+    transition:transform .45s cubic-bezier(.2,.8,.2,1),opacity .3s,visibility 0s .45s}
+  body:has(.sxo-dock){padding-bottom:calc(5.5rem + env(safe-area-inset-bottom,0px))}}
+@media (prefers-reduced-motion:reduce){.sxo-dock,.js .sxo-dock:not(.is-shown){transition:none}}""",
+    js="(function(){var d=document.querySelector('.sxo-dock');if(!d)return;"
+       "function f(){d.classList.toggle('is-shown',window.scrollY>window.innerHeight*0.6);}"
+       "window.addEventListener('scroll',f,{passive:true});f();})();",
+    phone="this is the phone: it rises once the opening scrolls away; on a desktop it is not shown",
+))
+
+# ── 25. THE QUESTIONS ────────────────────────────────────────────────
+_add(_o(
+    key="faq", name="Questions that open",
+    intent="questions in a ruled list; each opens to its answer, a plus that turns to a cross",
+    use_when="real questions with real answers: THE REAL DATA's faq rows, or "
+             "what the owner said. Three to eight. Never an answer the data "
+             "does not support (no invented policies, prices or guarantees).",
+    aliases=("faq", "faqs", "questions and answers", "question accordion"),
+    html="""<div class="sxo sxo-faq" data-sx-object="faq">
+  <details open><summary>Do I need any experience?</summary><p>None. The first night starts with wedging and centering, and the wheel is yours for three hours.</p></details>
+  <details><summary>What should I wear?</summary><p>Clothes you do not mind getting clay on, and short nails if you can.</p></details>
+  <details><summary>Can I miss a week?</summary><p>Yes. Make it up at open studio on Sunday afternoon.</p></details>
+</div>""",
+    css=""".sxo-faq{max-width:48rem;border-top:1.5px solid currentColor}
+.sxo-faq details{border-bottom:1px solid color-mix(in srgb,currentColor 22%,transparent)}
+.sxo-faq summary{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:1.15rem 0;cursor:pointer;list-style:none;
+  font-family:var(--_display);font-size:clamp(18px,1.6vw,22px);line-height:1.25}
+.sxo-faq summary::-webkit-details-marker{display:none}
+.sxo-faq summary::after{content:"";flex-shrink:0;width:28px;height:28px;border-radius:50%;border:1.5px solid color-mix(in srgb,currentColor 40%,transparent);
+  background:linear-gradient(currentColor,currentColor) center/11px 1.5px no-repeat,linear-gradient(currentColor,currentColor) center/1.5px 11px no-repeat;
+  transition:transform .3s,background-color .3s,border-color .3s}
+.sxo-faq details[open] summary::after{transform:rotate(45deg);border-color:var(--_accent);background-color:color-mix(in srgb,var(--_accent) 18%,transparent)}
+.sxo-faq summary:focus-visible{outline:2px solid var(--_accent);outline-offset:4px}
+.sxo-faq details p{max-width:62ch;margin:0 0 1.2rem;font-size:16px;line-height:1.6;color:color-mix(in srgb,currentColor 85%,transparent)}
+@media (max-width:600px){.sxo-faq summary{font-size:17px;padding:1rem 0}}
+@media (prefers-reduced-motion:reduce){.sxo-faq summary::after{transition:none}}""",
+    phone="the questions drop to 17px; every one stays a full-width tap target",
+))
+
+# ── 26. THE STATS ────────────────────────────────────────────────────
+_add(_o(
+    key="stat-strip", name="Count-up figures",
+    intent="three or four big figures in a ruled row, each counting up as it comes into view",
+    use_when="only the owner's proven stats or counts THE REAL DATA gives, "
+             "verbatim (the truth law checks every number). The page holds the "
+             "real figure; the count-up only plays toward it. data-count is "
+             "the figure's whole number.",
+    aliases=("stat strip", "count-up figures", "count-up", "stat row"),
+    html="""<dl class="sxo sxo-stats" data-sx-object="stat-strip">
+  <div><dt>Wheels in the studio</dt><dd data-count="12">12</dd></div>
+  <div><dt>Weeks in a term</dt><dd data-count="6">6</dd></div>
+  <div><dt>Firings each term</dt><dd data-count="2">2</dd></div>
+</dl>""",
+    css=""".sxo-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:0 clamp(1rem,2vw,2rem);margin:0;border-top:1.5px solid currentColor}
+.sxo-stats>div{display:flex;flex-direction:column-reverse;justify-content:flex-end;gap:.4rem;padding-top:1.2rem}
+.sxo-stats dd{margin:0;font-family:var(--_display);font-size:clamp(44px,5.4vw,80px);line-height:.95;font-variant-numeric:tabular-nums;color:var(--_accent)}
+.sxo-stats dt{max-width:22ch;font-size:14px;line-height:1.4;color:color-mix(in srgb,currentColor 80%,transparent)}
+@media (max-width:600px){.sxo-stats{grid-template-columns:repeat(2,minmax(0,1fr));row-gap:1rem}.sxo-stats dd{font-size:44px}}""",
+    js="(function(){if(window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;"
+       "var els=[].slice.call(document.querySelectorAll('.sxo-stats dd[data-count]'));"
+       "function run(el){var end=+el.getAttribute('data-count'),txt=el.textContent,t0=null;"
+       "if(!(end>0)||!/\\d/.test(txt))return;function step(t){if(t0===null)t0=t;var k=Math.min(1,(t-t0)/1200),"
+       "v=Math.round(end*(1-Math.pow(1-k,3)));el.textContent=txt.replace(/[\\d,]+/,String(v));"
+       "if(k<1)requestAnimationFrame(step);else el.textContent=txt;}requestAnimationFrame(step);}"
+       "function check(){els=els.filter(function(el){if(el.getBoundingClientRect().top<window.innerHeight*0.85){run(el);return false;}return true;});"
+       "if(!els.length)window.removeEventListener('scroll',check);}"
+       "window.addEventListener('scroll',check,{passive:true});check();})();",
+    phone="two figures to a row at 44px",
 ))
 
 

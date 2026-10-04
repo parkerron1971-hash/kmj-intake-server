@@ -1,6 +1,8 @@
 """site_layouts.py — THE LAYOUT LIBRARY (2026-10-03, the hand-build plan).
 
-Kevin, 2026-10-03: "give it all 12 layouts to choose from." The new
+Kevin, 2026-10-03: "give it all 12 layouts to choose from." (2026-10-04,
+"grow the builder's own layout and object library": two more, bulletin and
+booking, the structures I built by hand for the church and the salon.) The new
 builder had no layout menu: every business got the Director's one DENSITY
 SKELETON (nav, full-viewport hero, band, services grid, strip, portfolio,
 steps, about, contact, footer), so the look changed and the skeleton never
@@ -9,7 +11,7 @@ business has and how people buy from it, decide the page's structure, say
 why, then build that structure on purpose.
 
 This module is that decision, in code:
-- LAYOUTS: twelve layouts, each with when it fits, what it needs, its page
+- LAYOUTS: fourteen layouts, each with when it fits, what it needs, its page
   skeleton (the Director's section order), its structure (the builder's
   recipe) and its phone plan.
 - signals(ctx): what the business actually has, read from the gathered
@@ -51,6 +53,23 @@ _PLACE_TRADE_RE = re.compile(
     r"restaurant|cafe|coffee|bar\b|brewer|winery|venue|event space|hotel|inn\b|"
     r"resort|spa\b|gym|studio|church|ministr|camp|museum|theat|club",
     re.IGNORECASE)
+# People come at set times: the weekly times are the first thing they need.
+_GATHERING_TRADE_RE = re.compile(
+    r"church|ministr|worship|chapel|parish|congregation|temple|mosque|synagogue|"
+    r"gym|fitness|yoga|pilates|barre|dance|martial|karate|jiu|boxing|crossfit|"
+    r"choir|league|camp\b|recovery|support group|bible study|meetup|swim",
+    re.IGNORECASE)
+# People book a time before they come: the visit is planned, then booked.
+_APPOINTMENT_TRADE_RE = re.compile(
+    r"hair|barber|salon|braid|loc(s|tician)\b|nail|lash|brow|makeup|beauty|wax|"
+    r"spa\b|massage|esthetic|facial|skin|tattoo|piercing|groom|detail(ing)?\b|"
+    r"chiro|physio|acupunct|dental|dentist|clinic|therap|counsel|tutor|lesson|"
+    r"personal train|photo session|portrait session",
+    re.IGNORECASE)
+# A clock time in what the owner said: "9am", "10:30 a.m.", "17:00".
+_CLOCK_RE = re.compile(
+    r"\b((?:[01]?\d|2[0-3])(?::[0-5]\d)?)\s*(a\.?m\.?|p\.?m\.?)(?![a-z])|\b((?:[01]?\d|2[0-3]):[0-5]\d)\b",
+    re.IGNORECASE)
 _IDEA_WORDS = {
     "story": re.compile(r"book|chapter|journal|diary|letter|story|stor(y|ies)|"
                         r"journey|road|path|season|margin|notebook|novel", re.I),
@@ -63,6 +82,8 @@ _IDEA_WORDS = {
     "grid": re.compile(r"menu|board|catalog|shelf|shelves|counter|price list", re.I),
     "sidebar": re.compile(r"index|directory|menu|catalog|table of contents", re.I),
     "statement": re.compile(r"manifesto|sign|poster|banner|declar|promise", re.I),
+    "bulletin": re.compile(r"bulletin|calendar|schedule|timetable|noticeboard|sunday", re.I),
+    "booking": re.compile(r"appointment|chair|booking|reservation|planner", re.I),
 }
 
 
@@ -267,6 +288,48 @@ def _fit_minimal(s: Signals) -> Points:
     return p
 
 
+def _fit_bulletin(s: Signals) -> Points:
+    p: Points = []
+    if s["gathering_trade"]:
+        p.append((3, "people come at set times, so the times come first"))
+        if s["times"] >= 2:
+            p.append((3, "your weekly times are on file to lead the page"))
+        elif s["times"] == 0:
+            p.append((-1, "the weekly times are not on file yet"))
+        if s["offerings"] >= 3:
+            p.append((1, "your programs read like a weekly bulletin"))
+    else:
+        p.append((-4, "people do not gather at set times here"))
+    if s["events"]:
+        p.append((1, "what is coming up has its own place"))
+    if _IDEA_WORDS["bulletin"].search(s["idea"]):
+        p.append((1, "it matches the idea of the site"))
+    return p
+
+
+def _fit_booking(s: Signals) -> Points:
+    p: Points = []
+    if s["action"] == "book":
+        p.append((3, "people come to book, so booking runs down the page"))
+    if s["booking_live"]:
+        p.append((2, "your booking page is live, so every service books in one tap"))
+    elif s["action"] == "book":
+        p.append((-1, "booking is not switched on yet (Chief can set it up)"))
+    else:
+        p.append((-4, "visitors do not book with you online"))
+    if s["timed_offers"] >= 3:
+        p.append((2, "each service has its price and length to plan by"))
+    elif s["offerings"] < 2:
+        p.append((-3, "there are not enough services to plan a visit around"))
+    if s["appointment_trade"]:
+        p.append((2, "your clients plan their visit before they come"))
+    if s["visual_trade"] and s["photos"] >= 6:
+        p.append((-2, "with this many photos, the work should lead"))
+    if _IDEA_WORDS["booking"].search(s["idea"]):
+        p.append((1, "it matches the idea of the site"))
+    return p
+
+
 LAYOUTS: Dict[str, Dict[str, Any]] = {
     "split": {
         "name": "Split", "line": "Words on one side, a picture on the other.",
@@ -426,6 +489,44 @@ LAYOUTS: Dict[str, Dict[str, Any]] = {
         "phone": "Natural fit; keep the space generous rather than shrinking it.",
         "fit": _fit_minimal,
     },
+    # The church I built by hand (Rivers) opened on the times: a visitor's
+    # first question is "when?", and the strip answered it under the hero.
+    "bulletin": {
+        "name": "Bulletin", "line": "The weekly times first, then what's on and how to join.",
+        "best_for": "Churches, gyms, studios and classes that meet at set times",
+        "needs": "Regular weekly times",
+        "skeleton": "an opening with the weekly times right under it → what is coming up → "
+                    "the programs or ministries, each with when it meets → what to expect on "
+                    "a first visit → how to join or plan a visit → contact and directions → "
+                    "footer. 6 to 9 sections.",
+        "structure": "The weekly times sit inside the first screen or straight under it, in "
+                     "one ruled row a visitor reads at a glance (the times-strip object fits; "
+                     "it lights the next one). Every program below says when it meets. The "
+                     "page runs in the order a newcomer asks: when, what, what is it like, "
+                     "how do I come.",
+        "phone": "The times strip becomes two columns right under the opening; the next one stays lit.",
+        "fit": _fit_bulletin,
+    },
+    # The salon I built by hand (MaCnificent) ran on booking: pick a style,
+    # see its time and price, book it, with the dock keeping Book in reach.
+    "booking": {
+        "name": "Booking desk", "line": "Every service ready to book, with booking down the middle.",
+        "best_for": "Salons, barbers, spas and anything by appointment",
+        "needs": "Live booking and services with a price and a length",
+        "skeleton": "a compact opening with the book action → the services as a menu, each "
+                    "with its price, its length and its own book link → how booking works "
+                    "(the hours, any deposit or policy the data states, the book button) → "
+                    "the person behind the work → proof → hours and contact → what to expect "
+                    "after → footer. 6 to 9 sections.",
+        "structure": "Booking is the spine. Every service carries its own book link to the "
+                     "booking page; a booking band sits in the middle of the page with the "
+                     "hours beside it (the hours-card object fits); on a phone the dock "
+                     "object keeps Book one tap away. The opening stays compact so the menu "
+                     "starts in the first scroll.",
+        "phone": "Services become a one-column menu with price and length showing; the dock "
+                 "carries Book once the opening scrolls away.",
+        "fit": _fit_booking,
+    },
 }
 
 KEYS: Tuple[str, ...] = tuple(LAYOUTS)
@@ -443,6 +544,8 @@ _ALIASES = {
     "long-scroll story": "story", "long scroll story": "story", "long-scroll": "story",
     "storytelling": "story", "single column": "editorial", "broken grid": "asymmetric",
     "cards": "grid", "modular": "bento", "portfolio": "showcase",
+    "booking desk": "booking", "booking-led": "booking", "appointment": "booking",
+    "times first": "bulletin", "schedule first": "bulletin", "weekly bulletin": "bulletin",
 }
 
 
@@ -539,6 +642,15 @@ def signals(ctx: Dict[str, Any], recent: Optional[List[str]] = None) -> Signals:
         calm = bool(site_concept._PLAIN_TRADE_RE.search(btype))
     except Exception:
         calm = False
+    hours = truth.get("hours")
+    said = " ".join(_leaf(h) for h in hours) if isinstance(hours, list) else _leaf(hours)
+    times = {(m.group(1) or m.group(3) or "") + (m.group(2) or "").lower().replace(".", "")
+             for m in _CLOCK_RE.finditer(said)}
+    rows = [o for o in (ctx.get("offerings") or []) if isinstance(o, dict)]
+    timed = sum(1 for o in rows if any(o.get(k) for k in ("duration_min", "duration_minutes", "duration")))
+    timed = max(timed, sum(1 for o in stated if isinstance(o, dict) and _leaf(o.get("duration"))))
+    booking = ctx.get("booking") if isinstance(ctx.get("booking"), dict) else {}
+    events = ctx.get("events_door") if isinstance(ctx.get("events_door"), dict) else {}
     return {
         "photos": _photo_count(ctx),
         "offerings": offerings,
@@ -550,6 +662,12 @@ def signals(ctx: Dict[str, Any], recent: Optional[List[str]] = None) -> Signals:
         "visual_trade": bool(_VISUAL_TRADE_RE.search(btype)),
         "place_trade": bool(_PLACE_TRADE_RE.search(btype)),
         "action": _action(dossier, ctx),
+        "gathering_trade": bool(_GATHERING_TRADE_RE.search(btype)),
+        "appointment_trade": bool(_APPOINTMENT_TRADE_RE.search(btype)),
+        "times": len(times),
+        "timed_offers": timed,
+        "booking_live": bool(booking.get("enabled")),
+        "events": bool(events.get("enabled")),
         "idea": idea[:400],
         "owner_pick": normalize(_leaf(taste.get("layout"))),
         "hero_shape": _leaf(taste.get("hero_shape")).lower(),
@@ -607,7 +725,7 @@ def reason_line(row: Dict[str, Any]) -> str:
 # ─── what the Director and the builder read ───────────────────────────
 
 def catalog_block() -> str:
-    """All twelve, one line each, for the Director."""
+    """Every layout, one line each, for the Director."""
     lines = []
     for k, L in LAYOUTS.items():
         lines.append(f"- {k}: {L['name']}. {L['line']} Best for {L['best_for'].lower()}; "
@@ -625,13 +743,13 @@ def director_block(sig: Signals) -> str:
         head.append(f"THE OWNER PICKED: {rows[0]['key']} ({rows[0]['name']}). Use it.")
     else:
         head.append("RANKED FOR THIS BUSINESS (from what it actually has; take the "
-                    "first unless the idea clearly calls for another of the twelve, "
+                    "first unless the idea clearly calls for another layout, "
                     "and say why):")
     for i, r in enumerate(top, 1):
         why = "; ".join(r["why"]) or "fits the material"
         against = f" (against: {'; '.join(r['against'])})" if r["against"] else ""
         head.append(f"{i}. {r['key']} ({r['name']}): {why}{against}")
-    head += ["", "ALL TWELVE LAYOUTS:", catalog_block()]
+    head += ["", f"ALL {len(LAYOUTS)} LAYOUTS:", catalog_block()]
     return "\n".join(head)
 
 
@@ -681,7 +799,8 @@ RENDER_JS = r"""
   const first = tops[0] || null;
   const out = {layout_measured: true, sections: tops.length, hero_cols: 1, hero_img_ratio: 0,
                hero_height_ratio: 0, h1_px: 0, sidebar: false, row_max: 1, tall_sections: 0,
-               narrow_text_ratio: 0, overlap_ok: 0, rotated: 0, bento_grids: 0, big_images: 0, mixed_cols: 0};
+               narrow_text_ratio: 0, overlap_ok: 0, rotated: 0, bento_grids: 0, big_images: 0, mixed_cols: 0,
+               times_top: 0, book_links: 0};
   const h1 = document.querySelector('h1');
   if (h1 && vis(h1)) out.h1_px = Math.round(parseFloat(getComputedStyle(h1).fontSize) || 0);
   if (first) {
@@ -740,6 +859,15 @@ RENDER_JS = r"""
   const ps = [...document.querySelectorAll('p')].filter(p => vis(p) && (p.textContent || '').trim().length >= 60);
   if (ps.length) out.narrow_text_ratio = +(ps.filter(p => p.getBoundingClientRect().width <= 780).length / ps.length).toFixed(2);
   out.big_images = [...document.querySelectorAll('img')].filter(i => vis(i) && i.getBoundingClientRect().width >= W * 0.45).length;
+  const clock = /\b(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s?(?:am|pm|a\.m\.|p\.m\.)|\b(?:[01]?\d|2[0-3]):[0-5]\d\b/gi;
+  const seen = new Set(); const tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+    const el = n.parentElement; if (!el || !vis(el)) continue;
+    if (el.getBoundingClientRect().top + scrollY > H * 1.6) continue;
+    for (const m of (n.textContent || '').matchAll(clock)) seen.add(m[0].toLowerCase().replace(/[\s.]/g, ''));
+  }
+  out.times_top = seen.size;
+  out.book_links = [...document.querySelectorAll('a[href]')].filter(a => vis(a) && /\/book\b|#book|booking/i.test(a.getAttribute('href') || '')).length;
   return out;
 })()
 """
@@ -795,6 +923,12 @@ def render_findings(key: Optional[str], measures: Optional[Dict[str, Any]]) -> L
                 "column with the name, the links and the action")
     elif k == "minimal" and m.get("sections", 0) > 5:
         miss = f"the page has {m.get('sections')} sections; a minimal page holds three or four"
+    elif k == "bulletin" and m.get("times_top", 0) < 2:
+        miss = ("the weekly times are not near the top; set them in one row inside the "
+                "first screen or straight under it")
+    elif k == "booking" and m.get("book_links", 0) < 3:
+        miss = (f"only {m.get('book_links', 0)} links lead to booking; give every service its "
+                "own book link and put a booking band in the middle of the page")
     if not miss:
         return []
     return [f"THE LAYOUT is {LAYOUTS[k]['name']}, but at 1440px {miss}. "

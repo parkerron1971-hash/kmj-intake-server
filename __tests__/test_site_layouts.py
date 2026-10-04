@@ -1,6 +1,7 @@
 """THE LAYOUT LIBRARY (2026-10-03, the hand-build plan).
 
-Twelve layouts and the rubric that ranks them for a business from what it
+Fourteen layouts (twelve, then bulletin and booking on 2026-10-04) and the
+rubric that ranks them for a business from what it
 actually has. The scenario tests are the hand-build check: each business
 gets the layout a designer would pick by hand, for the reason a designer
 would give.
@@ -11,16 +12,21 @@ import site_layouts as sl
 
 
 def _ctx(btype, photos=0, offerings=0, story=None, stats=0, action="", idea="",
-         store_items=0, testimonials=0, taste=None, slots=None):
+         store_items=0, testimonials=0, taste=None, slots=None, hours="",
+         booking=False, durations=False, events=False):
     d = {"story": story or {}, "taste": taste or {},
          "identity": {"primary_action": {"value": action}} if action else {},
-         "truth": {"proven_stats": [{"value": str(i)} for i in range(stats)]}}
+         "truth": {"proven_stats": [{"value": str(i)} for i in range(stats)],
+                   **({"hours": {"value": hours}} if hours else {})}}
     cfg = {"discovery_dossier": d}
     if slots:
         cfg["slots"] = slots
     return {"business": {"type": btype},
             "gallery": [{"url": f"https://x/{i}.jpg"} for i in range(photos)],
-            "offerings": [{"name": f"o{i}"} for i in range(offerings)],
+            "offerings": [{"name": f"o{i}", **({"duration_min": 60} if durations else {})}
+                          for i in range(offerings)],
+            "booking": {"enabled": booking},
+            "events_door": {"enabled": events},
             "testimonials": [{"q": "x"}] * testimonials,
             "store": {"enabled": store_items > 0, "items": [{}] * store_items},
             "concept": {"idea": idea},
@@ -37,13 +43,13 @@ def _top(ctx, n=1, recent=None):
 
 # ─── the catalog ─────────────────────────────────────────────────────
 
-def test_there_are_twelve_complete_layouts():
-    assert len(sl.LAYOUTS) == 12
+def test_there_are_fourteen_complete_layouts():
+    assert len(sl.LAYOUTS) == 14
     for k, L in sl.LAYOUTS.items():
         for field in ("name", "line", "best_for", "needs", "skeleton", "structure", "phone", "fit"):
             assert L.get(field), (k, field)
         assert callable(L["fit"])
-    assert len({L["name"] for L in sl.LAYOUTS.values()}) == 12
+    assert len({L["name"] for L in sl.LAYOUTS.values()}) == 14
 
 
 def test_every_layout_has_a_phone_plan_and_a_section_range():
@@ -173,7 +179,7 @@ def test_the_card_reason_is_one_plain_sentence():
     assert "—" not in line and " - " not in line          # the dash law
 
 
-def test_the_director_sees_the_ranking_and_all_twelve():
+def test_the_director_sees_the_ranking_and_every_layout():
     block = sl.director_block(sl.signals(_ctx("coach", story=_RICH_STORY)))
     assert "THE LAYOUT" in block and "RANKED FOR THIS BUSINESS" in block
     for k in sl.LAYOUTS:
@@ -248,7 +254,7 @@ def test_the_director_is_handed_the_ranked_layouts(monkeypatch):
                          for k in ("proof", "voice", "origin", "atmosphere")}}}}}
     spec_author.author_spec("biz-1", ctx, None, [])
     assert "== THE LAYOUT" in seen["user"] and "RANKED FOR THIS BUSINESS" in seen["user"]
-    assert "ALL TWELVE LAYOUTS" in seen["user"]
+    assert "ALL 14 LAYOUTS" in seen["user"]
 
 
 def test_recent_layouts_come_from_other_businesses_blueprints(monkeypatch):
@@ -315,3 +321,71 @@ def test_the_loop_stays_quiet_when_nothing_was_measured(monkeypatch):
     box.spec_text = _SPEC_SIDEBAR
     monkeypatch.setattr(builder_v2, "walk_measurements", lambda html: None)
     assert box.measured_findings("<html></html>") == []
+
+
+# ─── the two I built by hand (2026-10-04, the library grows) ──────────
+
+def test_the_owner_s_stated_times_are_counted_once_each():
+    sig = sl.signals(_ctx("church", hours="Sundays 9am and 11 a.m., Wednesdays 7pm; Sunday 9 AM"))
+    assert sig["times"] == 3
+    assert sig["gathering_trade"] and not sig["appointment_trade"]
+    assert sl.signals(_ctx("church", hours="Tuesdays 18:30"))["times"] == 1
+
+
+def test_a_church_that_said_its_times_leads_with_them():
+    ctx = _ctx("church", photos=2, offerings=4, story=_RICH_STORY, stats=2,
+               action="visit on Sunday", hours="Sundays 9am and 11am, Wednesdays 7pm", events=True)
+    rows = sl.rank(sl.signals(ctx))
+    assert rows[0]["key"] == "bulletin"
+    assert "people come at set times, so the times come first" in rows[0]["why"]
+
+
+def test_a_gym_leads_with_its_class_times():
+    assert _top(_ctx("yoga studio", photos=3, offerings=5, hours="Mon-Fri 6am, 12pm, 6pm")) == ["bulletin"]
+
+
+def test_a_business_nobody_visits_at_set_times_never_gets_a_bulletin():
+    for btype in ("law firm", "coach", "candle shop", "hair salon"):
+        rows = {r["key"]: r for r in sl.rank(sl.signals(_ctx(btype, offerings=4, hours="9am to 5pm")))}
+        assert rows["bulletin"]["score"] < 0, btype
+
+
+def test_a_salon_with_live_booking_gets_the_booking_desk():
+    ctx = _ctx("hair salon", photos=3, offerings=5, action="book a chair", booking=True, durations=True)
+    rows = sl.rank(sl.signals(ctx))
+    assert rows[0]["key"] == "booking"
+    assert "your booking page is live, so every service books in one tap" in rows[0]["why"]
+
+
+def test_the_booking_desk_waits_for_booking_and_never_buries_great_work():
+    # a barber with eight strong photos still leads with the work
+    assert _top(_ctx("barber shop", photos=8, offerings=6, action="book a chair",
+                     booking=True, durations=True)) == ["showcase"]
+    # nobody books online: the booking desk stays off the list
+    rows = {r["key"]: r for r in sl.rank(sl.signals(_ctx("consulting", offerings=3)))}
+    assert rows["booking"]["score"] < 0
+    assert "visitors do not book with you online" in rows["booking"]["against"]
+    # they book, but booking is not on yet: it says so, and Chief can fix it
+    off = {r["key"]: r for r in sl.rank(sl.signals(_ctx("nail salon", offerings=4, action="book")))}
+    assert "booking is not switched on yet (Chief can set it up)" in off["booking"]["against"]
+
+
+def test_the_new_layouts_normalize_from_the_director_s_words():
+    assert sl.normalize("Booking desk: every service books in one tap") == "booking"
+    assert sl.normalize("BULLETIN — the times come first") == "bulletin"
+    assert sl.normalize("times first") == "bulletin"
+
+
+def test_the_render_check_knows_the_new_shapes():
+    m = lambda **kw: {"1440": {"layout_measured": True, **kw}}
+    assert "weekly times are not near the top" in sl.render_findings("bulletin", m(times_top=0))[0]
+    assert sl.render_findings("bulletin", m(times_top=3)) == []
+    assert "only 1 links lead to booking" in sl.render_findings("booking", m(book_links=1))[0]
+    assert sl.render_findings("booking", m(book_links=5)) == []
+    assert "times_top" in sl.RENDER_JS and "book_links" in sl.RENDER_JS
+
+
+def test_the_builder_reads_the_new_recipes():
+    assert "times-strip object" in sl.builder_block("bulletin")
+    block = sl.builder_block("booking")
+    assert "hours-card object" in block and "dock object" in block
