@@ -371,8 +371,10 @@ def compose_outbound_body(business_name: Optional[str], message: str,
 
     # Long names would eat the segment; the recipient only needs enough to
     # recognise who this is.
+    # Plain dots, not "…": the ellipsis character is outside GSM-7 and
+    # would bill every text this business sends at the UCS-2 rate.
     if len(name) > MAX_BRAND_PREFIX:
-        name = name[:MAX_BRAND_PREFIX - 1].rstrip() + "…"
+        name = name[:MAX_BRAND_PREFIX - 3].rstrip() + "..."
 
     # Already self-identified? Compare on letters/digits only so
     # "Craft & Co" matches "Craft and Co" poorly but "Craft & Co:" exactly.

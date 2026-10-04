@@ -290,7 +290,7 @@ async def route_inbound(
         if first_word in HELP_WORDS:
             logger.info(f"[ROUTE] HELP from {phone}")
             return {"action": "help", "reply": (
-                f"{sender_brand()}: We're here — email "
+                f"{sender_brand()}: We're here - email "
                 f"{os.environ.get('SUPPORT_EMAIL', 'kmjcreativesolution@gmail.com')}. "
                 f"Msg & data rates may apply. Reply STOP to opt out."
             )}
@@ -365,7 +365,7 @@ async def route_inbound(
                 name = await _biz_name(client, chosen)
                 logger.info(f"[ROUTE] multi-bound {phone} selected {int(body)} → biz {chosen[:8]}")
                 return {"action": "selected", "business_id": chosen, "reply": (
-                    f"{sender_brand()}: Connected with {name} — send your message."
+                    f"{sender_brand()}: Connected with {name} - send your message."
                 )}
 
             # Undecidable — never route silently to the wrong one.
