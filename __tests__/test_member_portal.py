@@ -14,6 +14,9 @@
 #      read says "try again" and never burns a code or shows $0; a
 #      cross-site POST is refused; the limiter's per-address cooldown
 #   7. the owner switch: a real boolean, turning on moves the epoch
+#   8. the sign-in switch (Kevin 10/04): paused, no code is sent and none
+#      is accepted (nor spent); a member already signed in stays in;
+#      pausing never moves the epoch
 
 import pathlib
 import sys
@@ -432,3 +435,67 @@ def test_owner_switch_needs_a_real_boolean_and_moves_the_epoch(monkeypatch):
     time.sleep(1.01)
     mp.patch_member_portal_config(BIZ, {"sign_out_all": True}, user)
     assert stored["settings"]["member_portal"]["epoch"] > first
+
+
+# ─── 8. the sign-in switch ───────────────────────────────────────────
+
+
+def _paused(monkeypatch, paused=True):
+    cfg = {"enabled": True, "sign_in": False} if paused else {"enabled": True}
+    monkeypatch.setattr(mp, "_church_for_request",
+                        lambda req: {"business": _biz(settings={"member_portal": cfg}),
+                                     "site": {"slug": "first-light"}})
+
+
+def test_sign_in_is_on_unless_the_owner_paused_it():
+    assert mp.sign_in_open(_biz())
+    assert mp.sign_in_open(_biz(settings={"member_portal": {"enabled": True, "sign_in": True}}))
+    assert not mp.sign_in_open(_biz(settings={"member_portal": {"enabled": True, "sign_in": False}}))
+
+
+def test_paused_sign_in_sends_no_code_and_accepts_none(fake, monkeypatch):
+    c = _client()
+    code = _ask(c, fake)                                    # sent before the pause
+    _paused(monkeypatch)
+    page = c.get("/my")
+    assert page.status_code == 200 and "Sign-in is paused" in page.text
+    assert 'action="/my/code"' not in page.text
+    r = c.post("/my/code", data={"email": "ana@example.com"}, headers=ORIGIN)
+    assert "Sign-in is paused" in r.text and len(fake.mailed) == 1 and len(fake.codes) == 1
+    r = _verify(c, code)
+    assert "Sign-in is paused" in r.text and mp.SESSION_COOKIE not in r.cookies
+    assert fake.codes[0]["consumed_at"] is None, "a paused verify must not spend the code"
+    _paused(monkeypatch, paused=False)
+    assert _verify(c, code).status_code == 303
+
+
+def test_a_member_already_signed_in_stays_in_while_paused(fake, monkeypatch):
+    c = _client()
+    _verify(c, _ask(c, fake))
+    _paused(monkeypatch)
+    assert "Hi, Ana" in c.get("/my").text
+
+
+def test_owner_pauses_sign_in_without_moving_the_epoch(monkeypatch):
+    from types import SimpleNamespace
+    stored = {"settings": {"member_portal": {"enabled": True, "epoch": 7}, "giving": {"enabled": True}}}
+    monkeypatch.setattr(mp, "_require_owner", lambda b, u: {**_biz(), "settings": {}})
+    import business_sites_helpers
+    monkeypatch.setattr(business_sites_helpers, "ensure_business_site",
+                        lambda biz: ({"slug": "first-light", "site_config": {}}, False))
+    monkeypatch.setattr(mp.sb_clients, "sb_get_as_service", lambda p: [{"settings": dict(stored["settings"])}])
+
+    def _patch(path, body):
+        stored["settings"] = body["settings"]
+        return [{"id": BIZ}]
+    monkeypatch.setattr(mp.sb_clients, "sb_patch_as_service", _patch)
+    user = SimpleNamespace(id="owner")
+    with pytest.raises(mp.HTTPException) as e:
+        mp.patch_member_portal_config(BIZ, {"sign_in": "no"}, user)
+    assert e.value.status_code == 400
+    out = mp.patch_member_portal_config(BIZ, {"sign_in": False}, user)
+    assert out["sign_in"] is False and out["enabled"] is True
+    assert stored["settings"]["member_portal"] == {"enabled": True, "epoch": 7, "sign_in": False}
+    assert stored["settings"]["giving"] == {"enabled": True}
+    out = mp.patch_member_portal_config(BIZ, {"sign_in": True}, user)
+    assert out["sign_in"] is True and stored["settings"]["member_portal"]["epoch"] == 7
