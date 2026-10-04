@@ -193,6 +193,12 @@ from chief_module_actions import (
 # Offerings, the wired-site contract, live site copy, availability
 # (2026-09-04, fourth slice). _site_text_plain is used by _site_text_targets.
 from booking_rehearsal import handle_rehearse_booking_plan
+from chief_door_actions import (
+    handle_publish_course,
+    handle_publish_sermon,
+    handle_set_giving,
+    handle_set_member_app,
+)
 from chief_offering_actions import (
     _VALID_OFFERING_CATEGORIES,  # test_module_vocabulary pins it against the vocabulary through cos
     _site_text_plain,
@@ -11807,6 +11813,10 @@ ACTION_HANDLERS = {
     "what_undo":                       handle_what_undo,
     "set_availability_day":       handle_set_availability_day,
     "publish_booking_page":       handle_publish_booking_page,
+    "set_giving":                 handle_set_giving,
+    "set_member_app":             handle_set_member_app,
+    "publish_course":             handle_publish_course,
+    "publish_sermon":             handle_publish_sermon,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
     "remove_block_range":         handle_remove_block_range,
