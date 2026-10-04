@@ -203,6 +203,7 @@ from chief_offering_actions import (
     handle_list_availability,
     handle_list_offerings,
     handle_offering_readiness,
+    handle_publish_booking_page,
     handle_remove_block_range,
     handle_revert_site_text,
     handle_set_availability_day,
@@ -2313,7 +2314,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # saw the offerings table, withheld the answer as "no evidence".
         _sb(client, "GET",
             f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
-            f"&select=name,current_price,category&order=name.asc&limit={_LIST_LIMITS['offerings']}"),
+            f"&select=name,current_price,category,duration_min&order=name.asc&limit={_LIST_LIMITS['offerings']}"),
     ]
     context_unavailable = []
 
@@ -2532,7 +2533,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "strategy_track": (strategy_rows or [None])[0] if strategy_rows else None,
         # Active offerings as the owner sells them: name, price, kind.
         "offerings": [
-            {"name": r.get("name"), "price": r.get("current_price"), "category": r.get("category")}
+            {"name": r.get("name"), "price": r.get("current_price"), "category": r.get("category"),
+             "duration_min": r.get("duration_min")}
             for r in (offering_rows or []) if isinstance(r, dict) and r.get("name")
         ],
         "business_track": (business_track_rows or [None])[0] if business_track_rows else None,
@@ -3618,7 +3620,8 @@ def _format_site_info(ctx: Dict[str, Any]) -> str:
     try:
         import chief_site_design
         lines.extend(chief_site_design.site_design_lines(
-            site, (ctx.get("business") or {}).get("settings")))
+            site, (ctx.get("business") or {}).get("settings"),
+            modules=ctx.get("modules"), offerings=ctx.get("offerings")))
     except Exception as e:
         logger.info(f"[chief] site design lines skipped: {e}")
     return "\n".join(lines)
@@ -11797,6 +11800,7 @@ ACTION_HANDLERS = {
     "undo_last":                       handle_undo_last,
     "what_undo":                       handle_what_undo,
     "set_availability_day":       handle_set_availability_day,
+    "publish_booking_page":       handle_publish_booking_page,
     "set_availability_override":  handle_set_availability_override,
     "add_block_range":            handle_add_block_range,
     "remove_block_range":         handle_remove_block_range,

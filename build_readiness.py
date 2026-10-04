@@ -71,9 +71,13 @@ def spec_readiness(ctx: Dict[str, Any]) -> Dict[str, Any]:
         chips.append("Give the wordmark real presence in the header")
     if offerings == 0 and stated_offers:
         named = ", ".join(str(o["name"]) for o in stated_offers[:3])
+        # (2026-10-04, Kevin: "what about booking?") the line used to end
+        # in "add them as services", a sentence with no door. Chief now
+        # sets booking up from these same words (chief_site_design).
         notes.append(f"The page lists what you told the Coach you offer ({named}), "
-                     "as you described it. Add them as services to take bookings "
-                     "or payments for them.")
+                     "as you described it. Visitors can't book yet: ask Chief to "
+                     "set up booking from what you told the Coach, and the "
+                     "page's book buttons will open it.")
     elif offerings == 0:
         notes.append("No services or offerings on file — the page cannot "
                      "list what you sell. Add at least one before building.")
