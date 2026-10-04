@@ -33,3 +33,6 @@ Review retained the documented full-calendar ceiling rather than filtering out
 unknown historical durations, and narrowed the MCP failure change to this tool.
 All 147 capability/MCP regressions passed after that adjustment. The release PR
 records CI and post-merge Railway verification separately from the local tests.
+CI exposed a local-only pytest-asyncio dependency in the new tests. They now use
+the standard-library event-loop runner; all 147 checks also pass with that plugin
+disabled. Production dependencies are unchanged.

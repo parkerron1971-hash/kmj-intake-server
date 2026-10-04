@@ -1,4 +1,6 @@
 """Layer-two scheduling capability: complete evidence, no writes, one tool round."""
+import asyncio
+from functools import wraps
 from copy import deepcopy
 from datetime import datetime, timezone
 import json
@@ -8,6 +10,14 @@ import pytest
 from pydantic import ValidationError
 
 import booking_rehearsal as br
+
+
+def run_async(test):
+    """Use the repository's stdlib event-loop runner, with no pytest plugin."""
+    @wraps(test)
+    def run(*args, **kwargs):
+        return asyncio.run(test(*args, **kwargs))
+    return run
 
 BID = "11111111-1111-4111-8111-111111111111"
 OID = "22222222-2222-4222-8222-222222222222"
@@ -177,7 +187,7 @@ def fake_reads(monkeypatch, *, rows=None, override=None):
     return calls
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_handler_pages_to_exhaustion_and_ignores_stale_context(monkeypatch):
     calls = fake_reads(monkeypatch, rows=[booking(), booking("2030-01-07T16:00:00Z", id="bk2")])
     result = await br.handle_rehearse_booking_plan(None, {"id": BID, "owner_id": OWNER, "settings": {}},
@@ -186,7 +196,7 @@ async def test_handler_pages_to_exhaustion_and_ignores_stale_context(monkeypatch
     assert len([p for _, p in calls if p.startswith("/module_entries")]) == 3
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_grouped_plan_loads_one_snapshot_instead_of_eight(monkeypatch):
     calls = fake_reads(monkeypatch)
     args = plan(*(["2030-01-07T14:00:00Z"] * 8)).model_dump(mode="json")
@@ -199,7 +209,7 @@ async def test_grouped_plan_loads_one_snapshot_instead_of_eight(monkeypatch):
     assert len(calls) == 32  # controlled empty-calendar comparison, not production savings
 
 
-@pytest.mark.asyncio
+@run_async
 @pytest.mark.parametrize("bad_path", ["/businesses", "/offerings", "/module_entries", "/calendar_busy_blocks"])
 async def test_read_failure_is_unavailable_not_empty(monkeypatch, bad_path):
     fake_reads(monkeypatch, override=lambda path, result: None if path == bad_path else result)
@@ -209,7 +219,7 @@ async def test_read_failure_is_unavailable_not_empty(monkeypatch, bad_path):
     assert "appointments" not in result
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_caller_cannot_override_business(monkeypatch):
     calls = fake_reads(monkeypatch)
     result = await br.handle_rehearse_booking_plan(None, {"id": BID, "owner_id": OWNER}, {
@@ -218,7 +228,7 @@ async def test_caller_cannot_override_business(monkeypatch):
     assert calls == []
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_inspection_limit_returns_review(monkeypatch):
     fake_reads(monkeypatch, rows=[booking(id=str(i)) for i in range(3)])
     monkeypatch.setattr(br, "MAX_BOOKINGS", 2)
@@ -226,7 +236,7 @@ async def test_inspection_limit_returns_review(monkeypatch):
     assert result["status"] == "needs_review"
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_chief_tool_path_returns_complete_evidence_without_model_calls(monkeypatch):
     import chief_of_staff as cos
     import chief_tool_loop as loop
@@ -271,7 +281,7 @@ def test_unverified_outside_calendar_never_means_free(busy):
         check(busy=busy)
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_owner_change_blocks_server_owned_calendar_read(monkeypatch):
     calls = fake_reads(monkeypatch, override=lambda path, rows:
                        [{**rows[0], "owner_id": OTHER}] if path == "/businesses" else rows)
@@ -281,7 +291,7 @@ async def test_owner_change_blocks_server_owned_calendar_read(monkeypatch):
     assert len(calls) == 1 and calls[0][1].startswith("/businesses?")
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_timeout_cancels_read_without_returning_partial_availability(monkeypatch):
     import asyncio
     finished = []
@@ -298,7 +308,7 @@ async def test_timeout_cancels_read_without_returning_partial_availability(monke
     assert finished == [True] and "appointments" not in result
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_live_schema_and_credential_selection_with_http_transport(monkeypatch):
     import httpx
     import sb_clients
@@ -331,7 +341,7 @@ async def test_live_schema_and_credential_selection_with_http_transport(monkeypa
     assert calls.count("calendar_busy_blocks") == 2
 
 
-@pytest.mark.asyncio
+@run_async
 async def test_repeated_rehearsal_refreshes_changed_state_in_same_turn(monkeypatch):
     import chief_tool_loop as loop
     calls = fake_reads(monkeypatch)
@@ -378,7 +388,7 @@ def test_randomized_plans_never_claim_over_capacity():
                 assert valid(alt_start)
 
 
-@pytest.mark.asyncio
+@run_async
 @pytest.mark.parametrize("policy_allowed,read_failed", [(True, False), (False, False), (True, True)])
 async def test_mcp_dispatch_honors_policy_and_records_actual_outcome(monkeypatch, policy_allowed, read_failed):
     from types import SimpleNamespace
@@ -407,7 +417,7 @@ async def test_mcp_dispatch_honors_policy_and_records_actual_outcome(monkeypatch
         assert result["status"] == "fits"
 
 
-@pytest.mark.asyncio
+@run_async
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_complete_model_tool_round_with_real_rehearsal(monkeypatch, streaming):
     """Scripted model, real Chief loop and capability; proves transport, not model judgment."""
