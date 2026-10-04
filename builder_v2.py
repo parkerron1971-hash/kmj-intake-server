@@ -232,6 +232,37 @@ _SYSTEM = _SYSTEM + chr(10)*2 + _dm.tinting_block(color_law="hexes").replace(
     "grain, inside data-sx-object elements).")
 _SYSTEM = _SYSTEM + "\n\n== TWO HARD RULES ON WHAT THE PAGE DOES WITHOUT HELP ==\n\n1. THE PAGE MUST SURVIVE WITHOUT JAVASCRIPT.\nScroll-reveal is the classic way to ship a blank page. If you write\n`.reveal{opacity:0}` and clear it from script, then ANY script error, a\nblocked asset, or a crawler that does not execute JS sees your nav and a\nblack rectangle. On the live site this hid 14 elements below the hero.\nSo: gate every reveal on a class the script itself adds, and give a\nno-script escape.\n\n   <script>document.documentElement.className+=' js'</script>  (put it in <head>)\n   .js .reveal{opacity:0;transform:translateY(14px)}\n   .js .reveal.in{opacity:1;transform:none}\n   <noscript><style>.reveal{opacity:1!important;transform:none!important}</style></noscript>\n\nNever write a bare `.reveal{opacity:0}`. Content is visible by default and\nJS may only take it away.\n\n2. THE BRAND MARK IS NOT A PORTFOLIO PIECE.\nUse the BRAND MARK url from the real-data block for the header logo, and\nnothing else. If no mark was supplied, set a typographic wordmark. A\ngallery image in the header is a broken brand: it shipped once as a\n1200x675 campaign flyer squashed into a 59x34 box. Give the mark its own\nbox with object-fit: contain so it keeps its aspect ratio.\n"
 
+# THE BLUEPRINT IS SETTLED (2026-10-03, the proof build): the page matched
+# 28 of the blueprint's 32 promises, and two of the misses came from the
+# builder's own review overriding a decision it could not see. The eyes
+# read the first 2,400 characters of a 19,000-character blueprint, the
+# section rebuilder the first 6,000, and the whole-page repair none at
+# all, so "No length or price shown: neither is on file" became "Fee on
+# request", and the struck "new job" the blueprint saved for the story was
+# copied into the hero. A designer reviewing a page knows what was agreed
+# with the client: every look and every repair now carries the whole
+# blueprint, and a note never undoes one of its decisions.
+BLUEPRINT_CAP = 24000
+BLUEPRINT_SETTLED = (
+    "THE BLUEPRINT IS SETTLED: the owner approved it. Its concept, its section "
+    "plan, what it decided and declined, and its rules are decisions, not "
+    "suggestions. A repair note never undoes one: if a note asks for something "
+    "the blueprint declined or placed elsewhere (a price or length it chose not "
+    "to show, an object it put in one section copied into another, a ghost word "
+    "on the other edge), keep the blueprint and fix only how well the page "
+    "carries it out.")
+
+
+def _blueprint(spec_text: str) -> str:
+    return (spec_text or "").strip()[:BLUEPRINT_CAP]
+
+
+def eyes_blueprint_block(spec_text: str) -> str:
+    """What the eyes read first: the whole approved blueprint, settled."""
+    return ("THE APPROVED BLUEPRINT (agreed with the owner; its decisions are "
+            "settled, judge how well the page carries them out):\n" + _blueprint(spec_text))
+
+
 def build_user_prompt(spec_text: str, real_data: str,
                       violations: Optional[List[str]] = None,
                       prior_doc: str = "", page_brief: str = "") -> str:
@@ -247,6 +278,11 @@ def build_user_prompt(spec_text: str, real_data: str,
             "",
             "VIOLATIONS:",
             *[f"- {v}" for v in violations[:12]],
+            "",
+            BLUEPRINT_SETTLED,
+            "",
+            "THE APPROVED BLUEPRINT (settled; the law of the page):",
+            _blueprint(spec_text),
             "",
             "THE REAL DATA (the only source of facts):",
             real_data.strip()[:12000],
@@ -1271,6 +1307,8 @@ def _screenshot_walk(html: str) -> Optional[List[Tuple[str, bytes]]]:
 
 _INSPECTOR = """You are the builder of this page inspecting your own rendered work before it ships. You are looking for DEFECTS a paying owner would see, not restating taste. Screenshots show the page as a visitor scrolls it, at phone and desktop widths plus one ultrawide look.
 
+THE BLUEPRINT IS SETTLED. It was agreed with the owner: its concept, its section plan (what each section holds, and where its objects, marks and ghost words go), what it decided and declined, and its rules. Judge how faithfully and how well the page carries it out. Never propose a fix that undoes one of its decisions (a price or length it chose not to show, an object it placed in one section moved or copied into another, a ghost word on the other edge). Where the page departs from the blueprint, the fix is to bring it back. When you believe a decision itself costs the visitor, do not fix it: ask the owner one short question in "ask_owner".
+
 FIRST, WALK IT AS THE VISITOR. From the spec, decide who this page is for. Read the views top to bottom as that person and answer three questions: what did they come for; did they get it, and where on the page; what do they do next, and does that path work. Where they would get stuck or turn away is a violation in that section, and it outranks anything cosmetic.
 
 THEN NAME THE BIGGEST PROBLEM: the one thing that most hurts this page for that visitor, the one a designer would fix before anything else. Judge it by what it costs the visitor, not by how easy it is to name. It is also one of the violations.
@@ -1285,7 +1323,7 @@ Measure against THE CHECKLIST (each item is a law, not a suggestion):
 - LEGIBILITY: text readable against its ground at every width; small type not lost.
 - MOBILE (390px): nothing crowded, cropped, or broken; rhythm holds.
 - ULTRAWIDE: the page keeps an intentional measure; nothing stretches thin or drifts.
-- SPEC FIDELITY: the named signature move is visible and executed; the spec's palette and type are what actually rendered.
+- SPEC FIDELITY: the named signature move is visible and executed; the spec's palette and type are what actually rendered; each section holds what the section plan gives it, with its objects, marks and ghost words where the plan puts them.
 - THE IDEA: the hero says what this business is; a stranger knows in five seconds.
 - ONE SIGNATURE MOMENT: it is visible, and the sections around it are quiet enough to let it lead.
 - RHYTHM: no two neighboring sections share the same shape (the same heading-number-paragraph opening, the same three cards). A page where every section opens the same way has defaulted.
@@ -1296,7 +1334,7 @@ Measure against THE CHECKLIST (each item is a law, not a suggestion):
 Each violation names its "section": the id from SECTIONS ON THE PAGE, or "page" when it spans the page. Then name the WEAKEST section, the one a designer would rebuild first, with a score from 1 to 10 against everything above.
 
 Output STRICT JSON only:
-{"verdict":"ship"|"repair","visitor":{"who":"<who the page is for>","came_for":"<what they came for>","got_it":"<yes, partly or no, and where>","next":"<their next step, and whether it works>","stuck":"<section id where they get stuck, or null>"},"biggest":{"section":"<id or page>","what":"<the problem>","why":"<what it costs the visitor>","fix":"<the fix>"},"violations":[{"where":"<section/breakpoint>","section":"<id or page>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}],"weakest":{"section":"<id>","score":<1-10>,"why":"<one sentence>","fix":"<what the rebuilt section does instead>"}}
+{"verdict":"ship"|"repair","visitor":{"who":"<who the page is for>","came_for":"<what they came for>","got_it":"<yes, partly or no, and where>","next":"<their next step, and whether it works>","stuck":"<section id where they get stuck, or null>"},"biggest":{"section":"<id or page>","what":"<the problem>","why":"<what it costs the visitor>","fix":"<the fix>"},"ask_owner":"<one short question for the owner about a decision, or null>","violations":[{"where":"<section/breakpoint>","section":"<id or page>","what":"<the defect, concrete>","fix":"<the minimal surgical fix>"}],"weakest":{"section":"<id>","score":<1-10>,"why":"<one sentence>","fix":"<what the rebuilt section does instead>"}}
 Rules: at most 6 violations, ranked by what they cost the visitor. Cosmetic taste differences are NOT violations. An empty violations list means verdict "ship", and then "biggest" is null. JSON only, no commentary."""
 
 
@@ -1349,6 +1387,8 @@ def _parse_inspector(raw: str) -> Optional[Dict[str, Any]]:
                           "fix": str(big.get("fix") or "")[:240]}
     else:
         out["biggest"] = None
+    ask = str(out.get("ask_owner") or "").strip()
+    out["ask_owner"] = ask[:200] if ask and ask.lower() not in ("null", "none") else None
     return out
 
 
@@ -1375,8 +1415,7 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
             _why("no ANTHROPIC_API_KEY")
             return None
         content: List[Dict[str, Any]] = [
-            {"type": "text", "text": "THE APPROVED SPEC (what the page "
-             "promised):\n" + (spec_text or "").strip()[:2400]}]
+            {"type": "text", "text": eyes_blueprint_block(spec_text)}]
         outline = section_outline(doc)
         if outline:
             content.append({"type": "text", "text": "SECTIONS ON THE PAGE (id: "
@@ -1623,13 +1662,15 @@ def build_section_prompt(spec_text: str, real_data: str, doc: str, sid: str,
         "WHAT TO FIX IN THIS SECTION:",
         *[f"- {x}" for x in issues[:6]],
         "",
+        BLUEPRINT_SETTLED,
+        "",
         f"Return ONLY the complete replacement element: it starts with <section, keeps "
         f"id=\"{sid}\", uses the page's existing classes, tokens and fonts, keeps every "
         "data-override-target it already has, and ends with </section>. New styles go in a "
         "<style> element inside the section. No commentary, no code fences.",
         "",
-        "THE APPROVED SPEC (excerpt):",
-        (spec_text or "").strip()[:6000],
+        "THE APPROVED BLUEPRINT (settled; this section's plan is in it):",
+        _blueprint(spec_text),
         "",
         "THE REAL DATA (the only source of facts):",
         (real_data or "").strip()[:10000],
@@ -2280,7 +2321,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     # are never fatal: if the eyes can't run, or a repair breaks a law, the
     # law-passing document ships and the report says so.
     report["vision"] = {"ran": False, "verdict": None, "violations": [],
-                        "rounds": [], "section_repairs": [], "for_the_owner": []}
+                        "rounds": [], "section_repairs": [], "for_the_owner": [],
+                        "questions": []}
     if eyes_enabled():
         rounds = look_fix_rounds()
         per_round = look_fix_sections()
@@ -2318,6 +2360,12 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                 "walk": [w["what"] for w in walk],
                 "sections": [], "page_repair": False}
             report["vision"]["rounds"].append(rec)
+            # a decision the eyes doubt is the owner's to answer, not theirs
+            # to undo; the walk-through shows it (site_revisions.state)
+            ask = (verdict or {}).get("ask_owner")
+            if ask and ask not in report["vision"]["questions"] \
+                    and len(report["vision"]["questions"]) < 3:
+                report["vision"]["questions"].append(ask)
             if rnd == 1:
                 if not verdict and why.get("reason"):
                     report["vision"]["reason"] = why["reason"]
