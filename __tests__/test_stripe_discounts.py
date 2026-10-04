@@ -334,6 +334,8 @@ def test_platform_checkout_enables_entry_or_applies_code_but_never_both(monkeypa
     monkeypatch.setattr(discounts, "resolve_code", AsyncMock(return_value=promo()))
     post = AsyncMock(return_value={"id": "cs_1", "url": "https://checkout.stripe.com/example"})
     monkeypatch.setattr(billing, "_stripe_post", post)
+    # Checkout only takes catalog prices (test_checkout_known_prices).
+    monkeypatch.setenv("STRIPE_PRICE_ID_STARTER", "price_example")
     run(billing.create_checkout(billing.CheckoutBody(business_id=biz_id, price_id="price_example", promotion_code=code),
                                 SimpleNamespace(id="user_1", email="owner@example.com")))
     form = post.call_args.args[1]

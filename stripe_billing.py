@@ -523,6 +523,16 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     if not price_id:
         raise HTTPException(409, "Pricing is not configured yet (no Stripe price ids set). "
                                  "Everything stays free until pricing is locked.")
+    # An explicit price must be one of OUR plan prices. The platform's
+    # Stripe account can hold other recurring prices, and a subscription
+    # on a price the catalog doesn't know resolves to no plan, which
+    # limit_for answers with Starter's limits — so a raw price id from
+    # the client was a way to buy Starter at any price in the account.
+    # The app only ever sends `plan`; this closes the side door.
+    if body.price_id:
+        import feature_gates
+        if price_id not in feature_gates.price_to_plan():
+            raise HTTPException(400, "That isn't one of our plan prices.")
 
     # Founding-member cap: once the seats are gone, they're gone. Checked
     # against real subscriptions at session-creation time. (A race between
@@ -1355,17 +1365,21 @@ async def seats_endpoint(biz: str,
 
 BOOTSTRAP_CATALOG = [
     # (env_key, lookup_key, product_name, unit_amount_cents, interval)
+    # Amounts follow the 2026-09-04 ladder ($79 / $149 / $299, Founder
+    # $99); annual = two months free. A lookup key that still points at
+    # a price with a DIFFERENT amount is left out of the env block (see
+    # bootstrap_prices) — it must never hand back a stale price to paste.
     ("STRIPE_PRICE_ID_STARTER",             "solutionist_starter_monthly",      "Solutionist Starter",       7900,   "month"),
     ("STRIPE_PRICE_ID_STARTER_ANNUAL",      "solutionist_starter_annual",       "Solutionist Starter",       79000,  "year"),
-    ("STRIPE_PRICE_ID_PROFESSIONAL",        "solutionist_professional_monthly", "Solutionist Professional",  19900,  "month"),
-    ("STRIPE_PRICE_ID_PROFESSIONAL_ANNUAL", "solutionist_professional_annual",  "Solutionist Professional",  199000, "year"),
+    ("STRIPE_PRICE_ID_PROFESSIONAL",        "solutionist_professional_monthly", "Solutionist Professional",  14900,  "month"),
+    ("STRIPE_PRICE_ID_PROFESSIONAL_ANNUAL", "solutionist_professional_annual",  "Solutionist Professional",  149000, "year"),
     # Display name "The Solutionist" (Kevin's 2026-08-19 rename ruling:
     # the top tier is the brand's namesake) — plan key + lookup_key stay
     # `practice`; only what the checkout page shows changed.
-    ("STRIPE_PRICE_ID_PRACTICE",            "solutionist_practice_monthly",     "The Solutionist",           39900,  "month"),
-    ("STRIPE_PRICE_ID_PRACTICE_ANNUAL",     "solutionist_practice_annual",      "The Solutionist",           399000, "year"),
-    ("STRIPE_PRICE_ID_FOUNDER",             "solutionist_founder_monthly",      "Solutionist Professional — Founding Member", 14900,  "month"),
-    ("STRIPE_PRICE_ID_FOUNDER_ANNUAL",      "solutionist_founder_annual",       "Solutionist Professional — Founding Member", 149000, "year"),
+    ("STRIPE_PRICE_ID_PRACTICE",            "solutionist_practice_monthly",     "The Solutionist",           29900,  "month"),
+    ("STRIPE_PRICE_ID_PRACTICE_ANNUAL",     "solutionist_practice_annual",      "The Solutionist",           299000, "year"),
+    ("STRIPE_PRICE_ID_FOUNDER",             "solutionist_founder_monthly",      "Solutionist Professional — Founding Member", 9900,  "month"),
+    ("STRIPE_PRICE_ID_FOUNDER_ANNUAL",      "solutionist_founder_annual",       "Solutionist Professional — Founding Member", 99000, "year"),
 ]
 
 
@@ -1411,8 +1425,19 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
     created: list = []
     reused: list = []
     renamed: list = []
+    mismatched: list = []
     for env_key, lookup_key, product_name, amount, interval in BOOTSTRAP_CATALOG:
         price = existing.get(lookup_key)
+        if price and (price.get("unit_amount") != amount
+                      or (price.get("recurring") or {}).get("interval") != interval):
+            # The key still names an OLD price (the ladder moved after it
+            # was created). Pasting it would put every new checkout back
+            # on that price, so it stays out of the block; the live env
+            # value is left as it is. Nothing is created over it either.
+            mismatched.append({"lookup_key": lookup_key,
+                               "found_cents": price.get("unit_amount"),
+                               "catalog_cents": amount})
+            continue
         if price:
             env[env_key] = price["id"]
             reused.append(lookup_key)
@@ -1484,6 +1509,7 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
                    if v and (os.environ.get(k) or "").strip() != v]
     return {"ok": True, "env": env, "railway_block": railway_block,
             "created": created, "reused": reused, "renamed": renamed,
+            "mismatched": mismatched,
             "ministry_promo": promo_state, "env_pending": env_pending}
 
 
