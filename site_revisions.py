@@ -216,7 +216,13 @@ def state(business_id: str) -> Dict[str, Any]:
     done = {sid for r in ((rev.get("rounds") or []) if this_build else [])
             if isinstance(r, dict) for sid in (r.get("fixed") or [])}
     worth = [s for s in suggested(cfg, [x["id"] for x in sections]) if s not in done]
+    # what the builder chose to ask instead of overriding the blueprint
+    # (builder_v2, BLUEPRINT_SETTLED): the owner answers in a note
+    rep = cfg.get("canvas_report") if isinstance(cfg.get("canvas_report"), dict) else {}
+    asks = [str(q)[:200] for q in ((rep.get("vision") or {}).get("questions") or [])
+            if str(q or "").strip()][:3]
     return {"ok": True, "ready": True, "sections": sections, "suggested": worth,
+            "questions": asks,
             "free_left": free_left(cfg), "last_round": last[0] if last else None, **base}
 
 
