@@ -14498,6 +14498,16 @@ async def chief_chat(
         _t.mark("billing_gates")
 
         async with httpx.AsyncClient() as client, _PreparationTasks() as preparation:
+            # The work-report shortcut is a readout of scoped records, like
+            # scheduling below. No model rewrite, recurrence or action sweep.
+            import chief_responsibility_readout
+            if chief_responsibility_readout.request_shape(req):
+                report_biz_rows = await _sb(client, "GET", f"/businesses?id=eq.{req.business_id}&select=id,owner_id&limit=1")
+                report_result = await chief_responsibility_readout.serve_request(
+                    client, req, user_session, (report_biz_rows or [None])[0])
+                _t.mark("responsibility_readout")
+                _t.log(lane="responsibility_readout", streamed=_STREAM_SINK.get() is not None)
+                return report_result
             import chief_availability
             availability_request = chief_availability.request_shape(req)
             prep_biz = None
