@@ -424,6 +424,8 @@ app.include_router(contacts_import_router)
 # and the run builds it. Kills "I'd have to rebuild everything".
 from structure_import_router import router as structure_import_router
 app.include_router(structure_import_router)
+from acuity_migration_router import router as acuity_migration_router
+app.include_router(acuity_migration_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)

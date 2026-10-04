@@ -190,7 +190,7 @@ def test_unknown_contact_name_is_not_fatal(monkeypatch):
 
 # ─── reschedule_booking ───────────────────────────────────────────────
 
-def test_reschedule_writes_time_into_data_not_the_column(monkeypatch):
+def test_reschedule_keeps_booking_columns_and_session_time_in_sync(monkeypatch):
     import booking_widget_router as bwr
     import sb_clients
 
@@ -211,10 +211,12 @@ def test_reschedule_writes_time_into_data_not_the_column(monkeypatch):
 
     assert out["result"] and out["label"] == "Maria"
     entry_patch = next(b for p, b in patches if "module_entries" in p)
-    # The write goes to the jsonb; the generated column follows. Patching the
-    # top-level column directly would be rejected by Postgres.
+    # These are stored columns in the live schema, not generated columns.
     assert entry_patch["data"]["appointment_at"] == "2026-08-06T16:00:00Z"
-    assert set(entry_patch.keys()) == {"data"}
+    assert entry_patch["appointment_at"] == "2026-08-06T16:00:00Z"
+    assert entry_patch["duration_min_at_booking"] == 60
+    session_patch = next(b for p, b in patches if "/sessions?" in p)
+    assert session_patch == {"scheduled_for": "2026-08-06T16:00:00Z", "duration_minutes": 60}
 
 
 def test_reschedule_reports_failure_when_nothing_matched(monkeypatch):

@@ -1384,11 +1384,13 @@ def _mirror_booking_session(business_id: str, entry: Dict[str, Any]) -> None:
             "business_id": business_id,
             "contact_id": d.get("contact_id"),
             "title": title,
-            "session_type": "booking",
+            "session_type": "other",
             "status": "scheduled",
             "scheduled_for": appt,
             "duration_minutes": dur,
             "notes": f"Booked online. {marker}",
+            "metadata": {"source": "booking", "migration_reminders_paused":
+                         d.get("migration_reminders_paused") is True},
         })
     except Exception as e:  # pragma: no cover
         logger.warning(f"booking->session mirror failed soft: {e}")
@@ -1454,6 +1456,8 @@ def _create_appointment(
         "business_id": business_id,
         "module_id": module_id,
         "data": data,
+        "appointment_at": data.get("appointment_at") or data.get("starts_at") or data.get("scheduled_for"),
+        "duration_min_at_booking": data.get("duration_min_at_booking") or data.get("duration_min"),
         "status": "active",
         "created_by": created_by,
     })

@@ -323,7 +323,7 @@ async def reminder_sweep() -> Dict[str, int]:
                 client,
                 f"/sessions?scheduled_for=gte.{lo}&scheduled_for=lte.{hi}"
                 f"&status=eq.scheduled&contact_id=not.is.null"
-                f"&select=id,business_id,contact_id,scheduled_for,title,session_type"
+                f"&select=id,business_id,contact_id,scheduled_for,title,session_type,metadata"
                 f"&order=scheduled_for.asc&limit=500",
             ) or []
             if not sessions:
@@ -366,6 +366,9 @@ async def reminder_sweep() -> Dict[str, int]:
 
             for s in sessions:
                 sid = str(s.get("id"))
+                if (s.get("metadata") or {}).get("migration_reminders_paused") is True:
+                    stats["skipped_toggled_off"] += 1
+                    continue
                 if sid in already:
                     stats["deduped"] += 1
                     continue
