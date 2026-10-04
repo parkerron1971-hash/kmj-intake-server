@@ -163,7 +163,8 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # (title, due date, priority, the contact's name). Same class as
     # list_projects, which already shows client names; no message bodies.
     # Creating, completing and deleting tasks are writes and stay off.
-    assert len(tools) == 36, (
+    # Booking rehearsal is a read-only preview with no new booking authority.
+    assert len(tools) == 37, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -571,6 +572,7 @@ def test_migration_revokes_the_table_grants():
 # derived: a newly exposed verb should make a human decide whether it can
 # end in work, and a derived list would quietly answer "no" forever.
 SILENT_TOOLS = {
+    "rehearse_booking_plan",  # preview only; execution uses the booking path
     "recall_business_knowledge",  # pure recall; no navigation or external handoff
     "catch_up", "check_balance", "check_goals", "check_inventory",
     "inspect_module", "list_availability", "list_expenses",

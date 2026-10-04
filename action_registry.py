@@ -150,6 +150,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "summarize_module":    _r("counts and totals a module's own rows; arithmetic "
                               "over data the caller can already read row by row"),
     "list_availability":   _r("reads the availability configuration"),
+    "rehearse_booking_plan": _r("checks proposed new bookings against this business's current schedule; no writes or reservations"),
     "list_module_entries": _r("lists rows of a custom module"),
     "list_offerings":      _r("lists offerings"),
     "list_products":       _r("lists products"),

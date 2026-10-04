@@ -224,7 +224,10 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
 from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA
 from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
 
+from booking_rehearsal import READ_SCHEMA as BOOKING_REHEARSAL_SCHEMA
+
 TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
+    "rehearse_booking_plan": BOOKING_REHEARSAL_SCHEMA,
     "responsibility_status": (
         "What Chief is handling across assignments, plans, builds, errands and approvals. "
         "Returns what needs the owner, recorded next checks, observed outcomes and unavailable sources. "
@@ -1794,6 +1797,12 @@ async def _call_tool(name: str, arguments: Dict[str, Any],
                     reason=getattr(verdict, "reason", None),
                     error=f"{type(e).__name__}")
             raise
+
+        if not writing and isinstance(result, dict) and result.get("failed") is True:
+            # Structured read failures must not be recorded as successful checks.
+            _ledger(business_id, name, caller, allowed=True, ok=False,
+                    reason=getattr(verdict, "reason", None), error="read handler failed")
+            return True, False, result, business_id
 
         if writing:
             # A handler that declined ("Contact not found", "no fields to
