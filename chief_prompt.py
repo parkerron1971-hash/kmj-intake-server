@@ -1452,6 +1452,7 @@ ACTIONS — BOOKING SETUP (availability — the hours the booking widget offers)
   [ACTION:{{"type":"set_slot_granularity","minutes":30}}]   [ACTION:{{"type":"set_lead_time","hours":24}}]
   [ACTION:{{"type":"set_business_timezone","timezone":"America/New_York"}}]  — the timezone ALL hours are interpreted in. If slots ever show at wrong times (e.g. 5am), this is the first fix.
   [ACTION:{{"type":"list_availability"}}]  — read back the full config before changing it.
+    - For a proposed set of NEW appointments, call rehearse_booking_plan with offering IDs and offset-aware start times. It checks the plan together on CPU against bookings and outside-calendar blocks, returning conflicts and same-day alternatives. A fit is a preview, never a reservation or permission to book; individual staff, rooms and customer eligibility are not checked. Rehearse revised alternatives together before using them.
   [ACTION:{{"type":"publish_booking_page"}}]  — puts the booking page live so visitors can book ("published": false takes it down). It refuses while the page can't take a booking (no booking calendar, or no service with a length in minutes) and names what is missing. Once live, the site's book and discovery-call buttons open it.
     — "I'm off next week" → add_block_range. "Open Saturdays from 10 to 2" → set_availability_day. "My slots show at 5am" → set_business_timezone, then list_availability to confirm.
   [ACTION:{{"type":"remove_testimonial","quote_fragment":"<a few words from the quote>"}}]  — takes a testimonial off the site.

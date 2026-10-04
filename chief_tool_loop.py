@@ -434,7 +434,9 @@ async def execute_tool_use(client, biz: Dict[str, Any],
 
     seen_key = name + " " + json.dumps(args or {}, sort_keys=True, default=str)[:2000]
     seen = _reads_this_turn.get()
-    if seen_key in seen:
+    # Rehearsals must observe writes and calendar changes within the same turn.
+    fresh_read = name == "rehearse_booking_plan"
+    if seen_key in seen and not fresh_read:
         return False, ("Same lookup as earlier this turn; the result is unchanged: "
                        + seen[seen_key] + " Answer from it; do not look it up again.")
 
@@ -468,7 +470,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
         return True, _shrink(result)
     chief_truth.record(evidence_id, result)
     text = _shrink(result)
-    _reads_this_turn.set({**seen, seen_key: text})
+    if not fresh_read:
+        _reads_this_turn.set({**seen, seen_key: text})
     return False, text
 
 

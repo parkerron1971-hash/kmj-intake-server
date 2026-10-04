@@ -192,6 +192,7 @@ from chief_module_actions import (
 )
 # Offerings, the wired-site contract, live site copy, availability
 # (2026-09-04, fourth slice). _site_text_plain is used by _site_text_targets.
+from booking_rehearsal import handle_rehearse_booking_plan
 from chief_offering_actions import (
     _VALID_OFFERING_CATEGORIES,  # test_module_vocabulary pins it against the vocabulary through cos
     _site_text_plain,
@@ -11808,6 +11809,7 @@ ACTION_HANDLERS = {
     "set_lead_time":              handle_set_lead_time,
     "set_business_timezone":      handle_set_business_timezone,
     "list_availability":          handle_list_availability,
+    "rehearse_booking_plan":      handle_rehearse_booking_plan,
     "generate_payment_link":      handle_generate_payment_link,
     # Conversation recall
     "recall_conversation":        handle_recall_conversation,
