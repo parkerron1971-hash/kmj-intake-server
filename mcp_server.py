@@ -229,7 +229,9 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "What Chief is handling across assignments, plans, builds, errands and approvals. "
         "Returns what needs the owner, recorded next checks, observed outcomes and unavailable sources. "
         "Use for 'what are you working on?' or 'what is waiting on me?'. Does not run or retry work. "
-        "Use source to narrow the report and next_offset to continue the result.",
+        "Use source to narrow the report. For a full responsibility check, follow next_offset "
+        "until more_items is zero before answering; do not stop at the first page. "
+        "If the reading budget runs out, explicitly name what remains unread.",
         _obj({'source': {'type':'string','enum':['assignments','missions','jobs','errands','approvals','events']},
               'offset': {'type':'integer','minimum':0,'maximum':240}})),
     "inspect_course": ACADEMY_READ_SCHEMA,

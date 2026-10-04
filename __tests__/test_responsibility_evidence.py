@@ -49,13 +49,13 @@ def test_six_report_reads_preserve_earlier_evidence_and_exact_counts(report):
                          {'source': 'missions'}):
                 failed, text = await loop.execute_tool_use(None, BIZ, 'responsibility_status', args)
                 assert not failed
-                assert len(text) <= loop.MAX_RESULT_CHARS
+                assert len(text) <= reports.REPORT_MAX_RESULT_CHARS
                 pages.append(json.loads(text)['responsibilities'])
             # Force the real production evidence budget to compete with large
             # unrelated business context, as it did for the KMJ report.
             sources = truth.evidence_for_review({k: 'x' * 10000 for k in
                 ('blueprint_block', 'brand_block', 'playbook_block', 'voice_block', 'foundation_block')}, {}, [])
-            assert pages[0]['page_count'] == 6
+            assert pages[0]['page_count'] == 12
             assert pages[0]['total_found'] == 12
             assert pages[0]['source_counts']['approvals']['found'] == 11
             sid = 'tool:responsibility_status:all:0'
@@ -77,6 +77,42 @@ def test_six_report_reads_preserve_earlier_evidence_and_exact_counts(report):
             assert not truth.evidence_for_review({}, {}, [])
         finally:
             truth.end(token)
+    asyncio.run(scenario())
+
+
+def test_32_item_account_fits_read_rounds_without_losing_review_evidence(report):
+    for n in range(20):
+        report['items'].append(reports.normalize('jobs', {
+            'id': f'job-{n}', 'kind': 'build', 'status': 'failed',
+            'created_at': '2026-10-03T12:00:00Z',
+            'params': {'facts': {'title': f'Business work {n}'}},
+            'result': {'summary_label': 'This work needs review before another attempt.'}}))
+    report['needs_you'] = 32
+
+    async def scenario():
+        token = truth.begin('owner', 'Check all your responsibilities')
+        loop.reset_turn()
+        try:
+            offset, ids, pages = 0, set(), 0
+            while offset is not None:
+                failed, text = await loop.execute_tool_use(None, BIZ, 'responsibility_status', {'offset': offset})
+                assert not failed
+                data = json.loads(text)['responsibilities']
+                assert data['total_found'] == 32
+                ids.update(item['id'] for item in data['items'])
+                offset = data['next_offset']
+                pages += 1
+                assert pages < loop.MAX_TOOL_ROUNDS
+            assert len(ids) == 32
+            sources = truth.evidence_for_review({}, {}, [])
+            assert len(sources) == pages
+            for source in sources.values():
+                # No transport or review truncation: every source remains JSON.
+                json.loads(source['text'])
+            assert all(any(item_id in s['text'] for s in sources.values()) for item_id in ids)
+        finally:
+            truth.end(token)
+            loop.reset_turn()
     asyncio.run(scenario())
 
 

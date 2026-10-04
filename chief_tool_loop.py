@@ -385,6 +385,9 @@ def _shrink(result: Any) -> str:
     # A single Growth action can contain 200 audience IDs and result notes.
     # Its handler pages lists; retain the complete explicitly recalled record.
     limit = 32000 if isinstance(result, dict) and result.get('type') in ('growth_report', 'save_growth_record') else MAX_RESULT_CHARS
+    if isinstance(result, dict) and result.get('type') == 'responsibility_status':
+        from chief_responsibilities import REPORT_MAX_RESULT_CHARS
+        limit = REPORT_MAX_RESULT_CHARS
     if isinstance(result, dict) and result.get('type') in ('connected_agent_assignments', 'list_connected_agents'):
         # Targeted lookups include the entire bounded brief and result for review.
         limit = 48000

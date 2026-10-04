@@ -229,7 +229,7 @@ def test_native_report_pages_whole_json_within_transport_budget(monkeypatch):
         return {'items':items,'needs_you':40,'partial':False,'sources':{},'errors':[]}
     monkeypatch.setattr(responsibilities,'snapshot',snapshot)
     first=run(responsibilities.handle_responsibility_status(None,BIZ,{}))
-    assert len(json.dumps(first)) < 6000
+    assert len(json.dumps(first)) < responsibilities.REPORT_MAX_RESULT_CHARS
     offset=first['responsibilities']['next_offset']
     assert 0 < offset < 40
     second=run(responsibilities.handle_responsibility_status(None,BIZ,{'offset':offset}))
