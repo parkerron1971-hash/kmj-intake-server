@@ -4,7 +4,7 @@ date: 2026-10-03
 agent: Codex (GPT-6)
 asked: "so are you going to fix it?"
 status: in progress
-prs: [kmj-intake-server#1249]
+prs: [kmj-intake-server#1249, kmj-intake-server#1250]
 migrations: []
 left_undone: [production deployment and signed-in KMJ report replay]
 decisions: ["Keep every report page as read evidence", "Do not weaken the answer checker or turn reads into action receipts", "Distinguish page counts from source totals"]
@@ -38,3 +38,22 @@ The follow-up uses bounded 16-item pages below the reviewer's per-source cap and
 directs full reports to follow next_offset before answering. A 32-item regression
 checks that all rows fit the native reading rounds and remain intact review
 evidence. The normal tool budgets and unsupported-claim checks remain enforced.
+
+PR #1250 passed 12,426 tests and deployed as a clean ecb19dc archive. The live
+account probe read all 32 items in two pages, but a second chat replay still
+withheld the model summary over ungrounded date/ordinal claims. Preserving the
+evidence alone is insufficient to make this fixed report dependable.
+
+The final route renders the exact report shortcut directly from a fresh,
+owner-scoped snapshot, following the existing scheduling-readout pattern.
+It runs after admission and JWT binding but before recurrence, sweeps, general
+context or a prose model. Typed record counts/statuses determine the answer;
+missing sources, limits and next-check uncertainty remain explicit. Titles are
+literal, bounded text; action-like/instruction-like titles are omitted. Normal
+and mixed requests retain the ordinary model and answer checker. Stream replay
+remains owner-scoped and the returned report is archived normally.
+
+Validation: 91 integration/report/scheduling/invoice tests passed, including
+cross-business denial before reads/replay, all 32 rows, partial/unavailable
+sources, unsafe titles, no model/housekeeping/actions, and stream/final equality.
+A read-only live-data probe produced all 32 KMJ rows in a 2,023-character report.
