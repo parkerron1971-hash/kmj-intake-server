@@ -209,7 +209,7 @@ HARD RULES (a validator checks each; violations cost a repair round):
 15. FILLED SPACE: the hero's off-axis half holds a presence (real work in the light, a ghost word, the signature motif) — never bare ground beside the headline. Gaps between sections carry the page's connective architecture; no featureless band taller than half a viewport. Execution notes: staggered cascades via transition-delay stepped by item index on the same scroll-driven reveal class; sequential fills (steps, thread stations) keyed to scroll position; ghost type is aria-hidden and never traps selection; a marquee is CSS-only, slow, and frozen under prefers-reduced-motion; a cursor-following glow is desktop-only, subtle, transform-based.
 16. THE TYPE FLOOR (measured on the render; a miss costs a repair round): exactly one <h1> (the hero headline), headings stepping down one level at a time. Set a type scale with clamp() and keep to it. Display sizes tighten their tracking (-0.01em to -0.03em); uppercase labels open theirs (0.08em or more). Running text is 16px or larger on a phone and never under 14px; nothing a visitor reads is under 11px. Body copy holds a 45 to 75 character measure (max-width in ch). Headings get text-wrap: balance and paragraphs text-wrap: pretty. Digits that line up (prices, hours, durations, stats) get font-variant-numeric: tabular-nums. When a face offers an optical-size axis, request it in the Google Fonts url (opsz) and set font-optical-sizing: auto. Buttons, inputs and selects inherit the page's fonts (font: inherit). No paragraph longer than three lines is centered. At most two type families, three with a utility face. Write straight quotes freely: a typographer pass sets real quotes, apostrophes and ranges after you.
 17. THE CONCEPT: the blueprint's section 0 sets how far the page's idea goes, and the page obeys it. PLAIN: nothing renamed, no objects. SIGNATURE: the one object and the one or two renamed labels it names, nothing more. WORLD: the navigation and section names use its VOCABULARY, its OBJECTS hold the content, its LIVING DETAIL moves once. Every in-world label keeps its plain word, visible beneath it (a small line) or in the link's aria-label, so a first-time visitor never has to guess. A concept never hides what a thing is or what it costs. When section 0 says SCOPE: offer, this page is the home: it stays at SIGNATURE and links to the offer page.
-18. THE LAYOUT: section 0's LAYOUT line names one of twelve page layouts, and THE LAYOUT block in the build message gives its skeleton, structure and phone plan. Build that architecture: it decides how the page is put together (columns, the size of the opening, how the sections stack), while the spec decides what goes in it and the design language how it looks. The render is measured against the layout, and a clear miss costs a repair round.
+18. THE LAYOUT: section 0's LAYOUT line names one of the page layouts, and THE LAYOUT block in the build message gives its skeleton, structure and phone plan. Build that architecture: it decides how the page is put together (columns, the size of the opening, how the sections stack), while the spec decides what goes in it and the design language how it looks. The render is measured against the layout, and a clear miss costs a repair round.
 
 CRAFT FLOOR: generous, complete pages beat austere concepts; restraint disciplines color and motion, never content. Light the stage (glow, texture, gradient depth) — never a flat rectangle. One signature moment, executed exactly as the spec draws it. POLISH: a themed ::selection color, :focus-visible states, honest alt text on every image, aspect-ratio reserved on media so nothing jumps while loading, loading="lazy" below the fold. ONE PHOTO TREATMENT: every content photo wears one treatment defined once from the tokens (a grade, a tint, or a duotone through filter or a mix-blend overlay in the accent), applied by one class, so photos taken on different days read as one shoot. The brand mark is never treated.
 
@@ -393,6 +393,40 @@ def stated_offers_block(ctx: Dict[str, Any]) -> str:
     return "\n\n".join(out)
 
 
+_WEEK = (("sun", "Sunday"), ("mon", "Monday"), ("tue", "Tuesday"), ("wed", "Wednesday"),
+         ("thu", "Thursday"), ("fri", "Friday"), ("sat", "Saturday"))
+
+
+def weekly_hours_block(ctx: Dict[str, Any]) -> str:
+    """THE WEEKLY HOURS (2026-10-04, the library grows): the hours clients
+    can book, day by day, with the business's timezone, from its own
+    availability settings. The hours card and the times strip are filled
+    from these exactly (data-day, data-open, data-close, data-tz), so
+    "Open now" is the business's clock, never a guess. Nothing when the
+    owner never set hours: the open-all-week default is not a real week."""
+    settings = ctx.get("settings") if isinstance(ctx.get("settings"), dict) else {}
+    av = settings.get("availability") if isinstance(settings.get("availability"), dict) else {}
+    weekly = av.get("weekly") if isinstance(av.get("weekly"), dict) else {}
+    lines: List[str] = []
+    for n, (key, day) in enumerate(_WEEK):
+        spans = [sp for sp in (weekly.get(key) or []) if isinstance(sp, dict)
+                 and re.match(r"^\d{2}:\d{2}$", str(sp.get("start") or ""))
+                 and re.match(r"^\d{2}:\d{2}$", str(sp.get("end") or ""))]
+        lines.append(f"- {day} (data-day {n}): "
+                     + (", ".join(f"{sp['start']} to {sp['end']}" for sp in spans) if spans else "closed"))
+    if all(line.endswith("closed") for line in lines):
+        return ""
+    try:
+        import availability
+        tz = availability.normalize_tz(av.get("timezone"))
+    except Exception:
+        tz = None
+    head = ("WEEKLY HOURS (when clients can come or book, from the business's own "
+            "settings, 24-hour clock" + (f"; timezone {tz}, the hours card's and times "
+                                         f"strip's data-tz" if tz else "") + "):")
+    return head + "\n" + "\n".join(lines)
+
+
 def check_stated_offers(html: str, ctx: Dict[str, Any]) -> List[str]:
     """Each offer the owner named has a home on the page (soft tier)."""
     text = _visible_text(html).lower()
@@ -492,6 +526,9 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
     stated = stated_offers_block(ctx)
     if stated:
         parts.append(stated)
+    week = weekly_hours_block(ctx)
+    if week:
+        parts.append(week)
     block = connected_systems_block(business_id, ctx)
     if block:
         parts.append(block)
