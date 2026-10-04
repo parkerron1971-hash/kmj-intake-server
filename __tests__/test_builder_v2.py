@@ -462,11 +462,16 @@ def test_store_off_is_said_out_loud_and_a_shop_on_the_page_is_a_violation(monkey
     """With no products the store line was simply ABSENT from the
     connected block, and the author invented "The shop — browse and
     order online" linking to /store on the site's own origin."""
-    import offering_profiles
-    monkeypatch.setattr(offering_profiles, "business_state", lambda b: {
-        "booking_enabled": False, "booking_url": "",
-        "store_url": "https://macnificent-hair-co.mysolutionist.app/store"})
-    monkeypatch.setattr(v2, "_store_has_products", lambda ctx: False)
+    import site_doors
+
+    def _doors(store):
+        return [{"key": d.key, "name": d.name, "path": d.path,
+                 "url": "https://macnificent-hair-co.mysolutionist.app" + d.path,
+                 "nav_label": d.nav_label, "live": d.key == "store" and store,
+                 "missing": [] if (d.key == "store" and store) else ["an item with a price"],
+                 "near": False, "opens_with": d.opens_with,
+                 "chief_can_open": d.chief_can_open} for d in site_doors.DOORS]
+    monkeypatch.setattr(site_doors, "site_doors", lambda b: _doors(False))
     block = v2.connected_systems_block("biz-1", {})
     assert "- STORE: OFF" in block and "/store" in block
     page = ('<html><body><nav><a href="#store">Shop</a></nav>'
@@ -479,7 +484,7 @@ def test_store_off_is_said_out_loud_and_a_shop_on_the_page_is_a_violation(monkey
     # a page that simply has no shop passes; a store that is ON keeps
     # the existing MISSING-door law and never trips the dead-door one
     assert v2.check_connected("<html><body>braids</body></html>", block) == []
-    monkeypatch.setattr(v2, "_store_has_products", lambda ctx: True)
+    monkeypatch.setattr(site_doors, "site_doors", lambda b: _doors(True))
     on = v2.connected_systems_block("biz-1", {})
     assert "- STORE: ON" in on
     assert v2.check_connected(page, on) == []

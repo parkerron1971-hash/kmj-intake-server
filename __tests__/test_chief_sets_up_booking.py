@@ -127,12 +127,13 @@ def test_book_worded_note_links_open_booking_and_nothing_else_moves():
 
 
 def test_the_buttons_follow_booking_on_every_render():
-    with mock.patch("offering_profiles.business_state",
-                    return_value={"booking_enabled": False, "booking_url": "u"}):
+    with mock.patch("site_doors.live_doors", return_value=[]):
         assert sc.wire_booking_doors(PAGE, "b1") == PAGE
-    with mock.patch("offering_profiles.business_state",
-                    return_value={"booking_enabled": True, "booking_url": "https://b/book"}):
-        assert 'href="https://b/book"' in sc.wire_booking_doors(PAGE, "b1")
+    booking = {"key": "booking", "name": "Booking", "path": "/book", "nav_label": "Book",
+               "live": True}
+    with mock.patch("site_doors.live_doors", return_value=[booking]):
+        # root-relative, so the page stays right on whichever host serves it
+        assert 'href="/book" data-sx-door="booking">Start with a discovery call'             in sc.wire_booking_doors(PAGE, "b1")
 
 
 def test_the_blueprint_card_points_to_chief_for_booking():

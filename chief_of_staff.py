@@ -2375,6 +2375,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
                                 "context_block", biz_id), ""),
         # Counts use PostgREST's exact aggregate, independently of sampled rows.
         _sb_count(client, f'/contacts?business_id=eq.{biz_id}&select=id'),
+        # Every door the site can open, live or not, and what each needs
+        # (site_doors, 2026-10-04): Chief connects them to the site.
+        _soft(asyncio.to_thread(_lazy_sync, "site_doors", "site_doors", biz_id), []),
     )]
 
     # Start each dependent read as soon as its own scoped prerequisite is
@@ -2438,7 +2441,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     practitioner_block, practitioner_profile_raw, voice_block = owner_values
     (foundation_block, business_profile_block, _mat_block, _growth_block,
      business_profile_raw, brand_block, playbook_block, _semantic_hits,
-     blueprint_block, exact_contact_total) = early_values
+     blueprint_block, exact_contact_total, site_door_rows) = early_values
 
     contacts_available = contacts is not None
     # A server-side row cap can be lower than our requested limit. Even a
@@ -2539,6 +2542,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             for r in (offering_rows or []) if isinstance(r, dict) and r.get("name")
         ],
         "business_track": (business_track_rows or [None])[0] if business_track_rows else None,
+        "site_doors": site_door_rows or [],
         "products": products or [],
         # THE WIRE. Storage and prompt-eligibility are two different
         # questions, so they are two different keys: the Email Hub reads
@@ -3622,7 +3626,8 @@ def _format_site_info(ctx: Dict[str, Any]) -> str:
         import chief_site_design
         lines.extend(chief_site_design.site_design_lines(
             site, (ctx.get("business") or {}).get("settings"),
-            modules=ctx.get("modules"), offerings=ctx.get("offerings")))
+            modules=ctx.get("modules"), offerings=ctx.get("offerings"),
+            doors=ctx.get("site_doors")))
     except Exception as e:
         logger.info(f"[chief] site design lines skipped: {e}")
     return "\n".join(lines)
