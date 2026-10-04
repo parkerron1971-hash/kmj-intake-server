@@ -16,6 +16,11 @@ from auth_supabase import AuthedUser, require_user
 
 router = APIRouter(prefix='/agents/chief', tags=['chief-responsibilities'])
 LIMIT = 40
+# A normal owner report should fit inside the three available read rounds.
+# Stay below the reviewer's per-source cap, including the result envelope.
+REPORT_PAGE_SIZE = 16
+REPORT_PAGE_MAX_CHARS = 8200
+REPORT_MAX_RESULT_CHARS = 10000
 
 
 def _text(value, limit=240):
@@ -139,8 +144,8 @@ async def handle_responsibility_status(client, biz, action):
     # report rather than letting the transport cut JSON in the middle of a row.
     out['total_found'] = count
     out['items'] = [{k: item[k] for k in ('id','source_id','title','status','needs_you','summary','next_check_at','deadline','observed_at')}
-                    for item in out['items'][offset:offset+6]]
-    while len(out['items']) > 1 and len(json.dumps(out)) > 4600:
+                    for item in out['items'][offset:offset+REPORT_PAGE_SIZE]]
+    while len(out['items']) > 1 and len(json.dumps(out)) > REPORT_PAGE_MAX_CHARS:
         out['items'].pop()
     out['more_items'] = max(0, count - offset - len(out['items']))
     out['next_offset'] = offset + len(out['items']) if out['more_items'] else None
@@ -151,6 +156,8 @@ async def handle_responsibility_status(client, biz, action):
             'for_chief': 'Report current work, what needs the owner, and recorded next checks. '
                          'total_found and source_counts cover the scope; page_count covers only this page. '
                          'Source counts with unavailable or limited sources are not complete totals. '
+                         'For a full report, follow next_offset while more_items is nonzero before answering. '
+                         'If the reading budget runs out, identify what remains unread. '
                          'Do not restart work, promise missing check times, or call partial data an empty queue.'}
 
 
