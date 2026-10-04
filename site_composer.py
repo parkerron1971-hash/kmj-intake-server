@@ -2031,55 +2031,33 @@ def _apply_quality_fixes(spec: List[Dict[str, Any]], ctx: Dict[str, Any],
     return new_spec if changed else None
 
 
-# THE BOOKING DOOR (2026-10-04, Kevin: "what about booking?"): a page built
-# before booking was live sends its book buttons to the note form
-# (#contact), because the wired-site contract only links what is live at
-# build time. Once the owner turns booking on (Chief's publish_booking_page
-# or the Embed tab), those buttons open the booking page instead, on every
-# render, without a rebuild; turning booking off sends them back, since the
-# stored document is never changed. Only a link that points at #contact AND
-# says book, schedule, appointment, reserve or discovery call is moved; the
-# note form keeps every other link ("Leave a note", a price row without a
-# booking word).
-_BOOK_WORDS_RE = re.compile(r"\b(book|booking|schedule|appointment|reserve|discovery call)\b",
-                            re.IGNORECASE)
-_CONTACT_HREF_RE = re.compile(r"""href=(["'])/?#contact\1""", re.IGNORECASE)
-_ANCHOR_RE = re.compile(r"(<a\b[^>]*>)(.*?)</a>", re.IGNORECASE | re.DOTALL)
-
-
+# THE SITE'S DOORS ON THE PAGE (2026-10-04): the booking rewire and the nav
+# link for every live door live in site_doors.py, shared with the serve-time
+# check in public_site. These names stay for their callers.
 def rewire_booking_links(html: str, booking_url: str) -> str:
-    """Pure: point the book-worded #contact links at booking_url."""
-    if not html or not booking_url:
+    import site_doors
+    return site_doors.rewire_booking_links(html, booking_url)
+
+
+def add_door_links(html: str, doors: List[Dict[str, Any]]) -> str:
+    import site_doors
+    return site_doors.add_door_links(html, doors)
+
+
+def wire_site_doors(html: str, business_id: str) -> str:
+    """Every live door reachable from a builder page, on each render. Never
+    raises; a failed read leaves the page as it was."""
+    try:
+        import site_doors
+        return site_doors.wire_html(html, site_doors.live_doors(business_id))
+    except Exception as e:
+        logger.info(f"[composer] site doors check skipped: {e}")
         return html
-    import html as _html
-    url = _html.escape(booking_url, quote=True)
-
-    def _swap(m: "re.Match[str]") -> str:
-        tag, inner = m.group(1), m.group(2)
-        if not _CONTACT_HREF_RE.search(tag):
-            return m.group(0)
-        if not _BOOK_WORDS_RE.search(re.sub(r"<[^>]+>", " ", inner)):
-            return m.group(0)
-        tag = _CONTACT_HREF_RE.sub(f'href="{url}"', tag, count=1)
-        if "data-sx-door" not in tag:
-            tag = tag[:-1] + ' data-sx-door="booking">'
-        return tag + inner + "</a>"
-
-    return _ANCHOR_RE.sub(_swap, html)
 
 
 def wire_booking_doors(html: str, business_id: str) -> str:
-    """rewire_booking_links when booking is live for this business. Never
-    raises; a failed read leaves the page as it was."""
-    try:
-        import offering_profiles
-        state = offering_profiles.business_state(business_id)
-    except Exception as e:
-        logger.info(f"[composer] booking door check skipped: {e}")
-        return html
-    if not (state.get("booking_enabled") and state.get("booking_url")):
-        return html
-    return rewire_booking_links(html, str(state["booking_url"]))
+    """Kept for callers of the booking-only name; every door now."""
+    return wire_site_doors(html, business_id)
 
 
 def _inject_missing_head_meta(html: str, ctx: Dict[str, Any]) -> str:
@@ -2482,7 +2460,7 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
     if _canvas_html:
         html = _mark(_canvas_html)
         html = _inject_missing_head_meta(html, ctx)
-        html = wire_booking_doors(html, business_id)
+        html = wire_site_doors(html, business_id)
         # AUDIT FIX (2026-07-24): canvas/v2 documents bypass page_shell,
         # which is the ONLY place the Studio select-to-talk bridge was
         # emitted — so every v2 page shipped with Edit Mode's tap-to-

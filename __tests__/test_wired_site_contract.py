@@ -105,10 +105,19 @@ def _ctx(caps=None):
     return {"site": {"site_config": {"discovery_dossier": dossier}}}
 
 
+def _doors(booking=True, store=True, origin="https://kmj.example"):
+    """site_doors rows (2026-10-04: the builder reads every door from there)."""
+    import site_doors
+    live_keys = {"booking": booking, "store": store}
+    return [{"key": d.key, "name": d.name, "path": d.path, "url": origin + d.path,
+             "nav_label": d.nav_label, "live": bool(live_keys.get(d.key)),
+             "missing": [] if live_keys.get(d.key) else ["something"],
+             "near": bool(live_keys.get(d.key)), "opens_with": d.opens_with,
+             "chief_can_open": d.chief_can_open} for d in site_doors.DOORS]
+
+
 def test_connected_block_lists_live_doors_and_honors_owner_off():
-    with mock.patch("offering_profiles.business_state",
-                    return_value=dict(_STATE)), \
-         mock.patch.object(v2, "_store_has_products", return_value=True):
+    with mock.patch("site_doors.site_doors", return_value=_doors()):
         on = v2.connected_systems_block("b1", _ctx())
         assert "BOOKING: ON" in on and "https://kmj.example/book" in on
         assert "STORE: ON" in on
@@ -119,9 +128,7 @@ def test_connected_block_lists_live_doors_and_honors_owner_off():
 
 
 def test_connected_block_skips_empty_store():
-    with mock.patch("offering_profiles.business_state",
-                    return_value=dict(_STATE)), \
-         mock.patch.object(v2, "_store_has_products", return_value=False):
+    with mock.patch("site_doors.site_doors", return_value=_doors(store=False)):
         block = v2.connected_systems_block("b1", _ctx())
     # 2026-08-28 (build quality 3/6): an empty store is no longer silent —
     # the block says OFF out loud so the author never invents a shop door.

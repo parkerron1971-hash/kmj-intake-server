@@ -5670,6 +5670,19 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
         _render_products_section(products, slug, brand_color, biz_settings),
         _render_gallery_section(gallery),
     )
+    # EVERY DOOR, REACHABLE (2026-10-04, site_doors): a builder page links
+    # each live door (booking, events, the shop, giving, courses, sermons,
+    # news, the member app), including one opened after the page was built
+    # and switched on from the app, where no backend hook sees it. Cached
+    # per business; never raises.
+    if biz_id and not manual:
+        try:
+            import site_doors
+            if site_doors.is_builder_page(html):
+                live = await asyncio.to_thread(site_doors.live_doors_cached, biz_id)
+                html = site_doors.wire_html(html, live)
+        except Exception as _dr_e:
+            logger.info(f"[doors] serve-time wiring skipped: {_dr_e}")
     # LAST — after every section that could add an <img> (products and
     # gallery are injected above), so nothing escapes the rewrite.
     html = _optimize_images(html)

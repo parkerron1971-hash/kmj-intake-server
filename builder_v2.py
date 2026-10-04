@@ -516,7 +516,8 @@ def assemble_real_data(ctx: Dict[str, Any], business_id: str) -> str:
 
 
 _CONNECTED_LINE_RE = re.compile(
-    r"^- (BOOKING|STORE|EVENTS): ON — .*?(https://\S+)", re.MULTILINE)
+    r"^- (BOOKING|STORE|EVENTS|GIVING|COURSES|SERMONS|NEWS|MEMBERS): ON — .*?(https://\S+)",
+    re.MULTILINE)
 _STORE_OFF_LINE_RE = re.compile(r"^- STORE: OFF\b", re.MULTILINE)
 # a link to a shop that is not there: /store or /shop as a path on any
 # origin (the author invents it on the site's own), or a bare #store
@@ -535,10 +536,17 @@ def connected_systems_block(business_id: str,
     turned it off in the dossier (silence defaults to wired — a working
     system unreachable from the site is the dead-weight rule violated
     at platform scale). Format is law: check_connected parses these
-    exact lines."""
+    exact lines.
+
+    EVERY DOOR (2026-10-04, site_doors.py): the builder knew three doors
+    and its store check could never say OFF (it asked a data helper that
+    always answers), so every page with an address was told to link a
+    shop that could be empty. The doors, live or not, now come from the
+    one place that knows them all: giving, courses, sermons, news and the
+    member app join booking, events and the shop."""
     try:
-        import offering_profiles
-        state = offering_profiles.business_state(business_id)
+        import site_doors
+        doors = site_doors.site_doors(business_id)
     except Exception as e:
         logger.info(f"[v2] connected-systems probe skipped: {e}")
         return ""
@@ -556,33 +564,39 @@ def connected_systems_block(business_id: str,
             str(leaf.get("value")).strip().lower() == "off"
 
     lines: List[str] = []
-    if state.get("booking_enabled") and state.get("booking_url") \
-            and not _off("booking"):
-        lines.append(f"- BOOKING: ON — every book/schedule action links "
-                     f"to {state['booking_url']}")
-    if state.get("store_url") and not _off("store") \
-            and _store_has_products(ctx):
-        lines.append(f"- STORE: ON — the shop moment links to "
-                     f"{state['store_url']}")
-    elif state.get("store_url"):
-        # THE DEAD DOOR (2026-08-28, MaCnificent Hair Co): with no
-        # products the store line was simply absent, and the author
-        # invented "The shop — browse and order online" linking to
-        # /store on the site's own origin — a shop with nothing in it.
-        # Say OFF out loud; check_connected enforces it.
-        lines.append("- STORE: OFF — there is nothing in the shop yet. "
-                     "No shop section, no shop link, no /store url "
-                     "anywhere on the page.")
-    if state.get("events_enabled") and state.get("events_url") \
-            and not _off("events"):
-        lines.append(f"- EVENTS: ON — the Upcoming Events moment and an Events "
-                     f"link in the navigation link to {state['events_url']} "
-                     f"— visitors see the dates and RSVP there")
+    for d in doors:
+        key, url = d["key"], d["url"]
+        if not d["live"] or _off(key):
+            if key == "store" and not d["live"]:
+                # THE DEAD DOOR (2026-08-28, MaCnificent Hair Co): an absent
+                # store line let the author invent a shop linking to /store
+                # on the site's own origin. Say OFF out loud;
+                # check_connected enforces it.
+                lines.append("- STORE: OFF — the shop can't sell yet ("
+                             + "; ".join(d["missing"] or ["nothing in it"]) + "). "
+                             "No shop section, no shop link, no /store url "
+                             "anywhere on the page.")
+            continue
+        lines.append(f"- {key.upper()}: ON — {_DOOR_MOMENTS[key].format(url=url)}")
     if not lines:
         return ""
     return ("CONNECTED SYSTEMS (working doors the owner turned on — "
             "each url below MUST appear on the page as a real link; "
             "never invent a door not listed here):\n" + "\n".join(lines))
+
+
+# what each live door gets on the page (the builder's instruction)
+_DOOR_MOMENTS: Dict[str, str] = {
+    "booking": "every book/schedule action links to {url}",
+    "events": ("the Upcoming Events moment and an Events link in the navigation link "
+               "to {url} — visitors see the dates and RSVP there"),
+    "store": "the shop moment links to {url}",
+    "giving": "a Give link in the navigation and the giving moment link to {url}",
+    "courses": "a Courses link in the navigation and the courses moment link to {url}",
+    "sermons": "a Sermons link in the navigation links to {url}",
+    "news": "a News link in the navigation links to {url}",
+    "members": "a Members link in the navigation links to {url} (the member app)",
+}
 
 
 def _store_has_products(ctx: Optional[Dict[str, Any]]) -> bool:

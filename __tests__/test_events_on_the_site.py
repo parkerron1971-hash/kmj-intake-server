@@ -193,11 +193,17 @@ def test_set_site_capability_events_switches_the_page_on_and_names_the_url(monke
 
 def test_the_builder_lists_the_events_door_and_the_checker_enforces_it(monkeypatch):
     import builder_v2
-    import offering_profiles
-    state = {"booking_enabled": True, "booking_url": "https://kmj.example/book",
-             "store_url": "", "events_enabled": True,
-             "events_url": "https://kmj.example/events"}
-    monkeypatch.setattr(offering_profiles, "business_state", lambda biz_id: dict(state))
+    import site_doors
+
+    def _doors(events_live):
+        # site_doors rows (2026-10-04: the builder reads every door there)
+        live = {"booking": True, "events": events_live}
+        return [{"key": d.key, "name": d.name, "path": d.path,
+                 "url": "https://kmj.example" + d.path, "nav_label": d.nav_label,
+                 "live": bool(live.get(d.key)), "missing": [], "near": False,
+                 "opens_with": d.opens_with, "chief_can_open": d.chief_can_open}
+                for d in site_doors.DOORS]
+    monkeypatch.setattr(site_doors, "site_doors", lambda biz_id: _doors(True))
     block = builder_v2.connected_systems_block("biz-1", {})
     assert "EVENTS: ON" in block and "https://kmj.example/events" in block
     assert "Upcoming Events" in block
@@ -207,8 +213,7 @@ def test_the_builder_lists_the_events_door_and_the_checker_enforces_it(monkeypat
     ok = builder_v2.check_connected(
         "<html><a href='https://kmj.example/book'>Book</a><a href='https://kmj.example/events'>Events</a></html>", block)
     assert not any("EVENTS" in m for m in ok)
-    monkeypatch.setattr(offering_profiles, "business_state",
-                        lambda biz_id: {**state, "events_enabled": False, "events_url": ""})
+    monkeypatch.setattr(site_doors, "site_doors", lambda biz_id: _doors(False))
     assert "EVENTS" not in builder_v2.connected_systems_block("biz-1", {})
 
 

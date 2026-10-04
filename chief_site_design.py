@@ -153,10 +153,39 @@ def booking_lines(cfg: Dict[str, Any], settings: Optional[Dict[str, Any]],
     return lines
 
 
+def doors_lines(doors: Optional[List[Dict[str, Any]]]) -> List[str]:
+    """THE SITE'S OTHER DOORS (2026-10-04, Kevin: "what about events as well?
+    all the things that are needed that chief can connect to the site?").
+    site_doors.py knows every door; booking keeps its own detailed line
+    (booking_lines). Here: the other doors that are live, and the ones close
+    to opening (something is on file for them), each with what it needs and
+    who opens it: Chief with its verbs, or the owner where Chief has none on
+    purpose."""
+    rows = [d for d in (doors or []) if isinstance(d, dict) and d.get("key") != "booking"]
+    if not rows:
+        return []
+    lines: List[str] = []
+    live = [d for d in rows if d.get("live")]
+    if live:
+        lines.append("  Also live on the site: "
+                     + "; ".join(f"{d.get('name')} ({d.get('path')})" for d in live)
+                     + ". A page built before a door opened gains a link to it in its "
+                       "navigation on the next refresh.")
+    for d in rows:
+        if d.get("live") or not d.get("near"):
+            continue
+        who = "Chief opens it with" if d.get("chief_can_open") else "The owner opens it:"
+        needs = ", ".join(d.get("missing") or []) or "nothing on file"
+        lines.append(f"  {d.get('name')}: off (needs {needs}). {who} "
+                     f"{d.get('opens_with')}. Offer it once when it comes up.")
+    return lines
+
+
 def site_design_lines(site: Optional[Dict[str, Any]],
                       settings: Optional[Dict[str, Any]],
                       modules: Optional[List[Dict[str, Any]]] = None,
-                      offerings: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+                      offerings: Optional[List[Dict[str, Any]]] = None,
+                      doors: Optional[List[Dict[str, Any]]] = None) -> List[str]:
     """Lines for Chief's PRACTITIONER SITE block. [] for a hand-built site
     (site_adopt describes those) and when nothing applies."""
     site = site if isinstance(site, dict) else {}
@@ -187,6 +216,10 @@ def site_design_lines(site: Optional[Dict[str, Any]],
         lines.extend(booking_lines(cfg, settings, modules, offerings))
     except Exception as e:
         logger.info(f"[site-design] booking lines skipped: {e}")
+    try:
+        lines.extend(doors_lines(doors))
+    except Exception as e:
+        logger.info(f"[site-design] door lines skipped: {e}")
     return lines
 
 
