@@ -1,0 +1,31 @@
+{
+  "verified_at": "2026-10-04T00:39:03Z",
+  "commit": "873125a1c920c97a9b4d31cfedcb4c4791465377",
+  "pull_requests": [1249, 1250, 1251],
+  "deployment_method": "Clean git archive of the merged tested commit; automatic deployment did not start",
+  "deployments": {
+    "web": "32460c5e-0111-44c9-8d89-98b8a0cfb810",
+    "worker": "a5b135e6-c971-4950-a511-1ddda48ee51f",
+    "both_success": true
+  },
+  "web_runtime_sha256": {
+    "chief_responsibility_readout.py": "a7dba27474821be252dcfc8397d8b7b0bde0a8635413d7374fe4050fc969cb45",
+    "chief_of_staff.py": "60ed37223c16bf8047796c2a2153ddb5e7f77baeae970b3863d199fc5b12b163",
+    "matches_release_archive": true
+  },
+  "ready": true,
+  "scheduler_lease_fresh": true,
+  "ci": {"passed": 12437, "skipped": 17, "expected_failures": 1},
+  "signed_in_owner_report": {
+    "account": "KMJ",
+    "listed_items": 32,
+    "background_work": 21,
+    "approvals": 11,
+    "recorded_next_checks": 0,
+    "blanket_verification_error": false,
+    "lane": "responsibility_readout",
+    "server_duration_ms": 1826,
+    "model_tool_calls": 0,
+    "business_actions": 0
+  }
+}

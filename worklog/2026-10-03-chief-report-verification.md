@@ -1,12 +1,12 @@
 ---
-title: Preserve paged Chief responsibility evidence for answer verification
+title: Reliable record-based Chief responsibility reports
 date: 2026-10-03
 agent: Codex (GPT-6)
 asked: "so are you going to fix it?"
-status: in progress
-prs: [kmj-intake-server#1249, kmj-intake-server#1250]
+status: shipped
+prs: [kmj-intake-server#1249, kmj-intake-server#1250, kmj-intake-server#1251]
 migrations: []
-left_undone: [production deployment and signed-in KMJ report replay]
+left_undone: []
 decisions: ["Keep every report page as read evidence", "Do not weaken the answer checker or turn reads into action receipts", "Distinguish page counts from source totals"]
 related: [2026-10-03-chief-follow-through.md]
 ---
@@ -57,3 +57,13 @@ Validation: 91 integration/report/scheduling/invoice tests passed, including
 cross-business denial before reads/replay, all 32 rows, partial/unavailable
 sources, unsafe titles, no model/housekeeping/actions, and stream/final equality.
 A read-only live-data probe produced all 32 KMJ rows in a 2,023-character report.
+
+Final verification: #1251 passed full CI (12,437 tests, 17 skipped, one expected
+failure, plus SQL checks) and merged as 873125a. Both Railway services deployed
+the clean archive successfully. The running web files match that commit's
+SHA-256 hashes; readiness and the scheduler lease are healthy. At 2026-10-04
+00:39 UTC the actual signed-in KMJ shortcut returned all 32 work items (21
+background records and 11 approvals), their statuses and no recorded next
+checks. The direct route completed in 1,826ms with zero model tool calls and no
+blanket verification error. No approvals, sends, retries or website work were
+performed. Receipt: docs/CHIEF_REPORT_FIX_RELEASE.json. No runtime work remains.
