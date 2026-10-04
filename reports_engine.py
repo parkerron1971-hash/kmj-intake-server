@@ -221,7 +221,12 @@ def _pl_for_window(biz: str, start: _date, end: _date) -> Dict[str, Any]:
         if bank_money.is_income(t):
             plaid_income += -a
     plaid_income = round(plaid_income, 2)
-    gross_revenue = round(invoiced - refunds + plaid_income, 2)
+    # Bookings, tips and store/counter sales — through the ledger's own
+    # generators, so this P&L and the ledger's agree by construction.
+    import gl_engine
+    sales = gl_engine.sale_revenue_from_sources(biz, start, end)
+    gross_revenue = round(invoiced - refunds + plaid_income
+                          + sales["bookings"] + sales["tips"] + sales["store_sales"], 2)
 
     # ── Expenses (hybrid: 5-bucket → subcategory line items) ──
     buckets: Dict[str, Dict[str, Any]] = {
@@ -269,7 +274,7 @@ def _pl_for_window(biz: str, start: _date, end: _date) -> Dict[str, Any]:
     return {
         "revenue": {
             "invoiced": invoiced, "refunds": refunds,
-            "plaid_other_income": plaid_income, "gross_revenue": gross_revenue,
+            "plaid_other_income": plaid_income, **sales, "gross_revenue": gross_revenue,
         },
         "expenses": {"total": total_expenses, "by_bucket": expense_breakdown},
         "net_income": net_income,
