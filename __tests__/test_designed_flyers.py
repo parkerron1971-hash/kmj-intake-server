@@ -110,6 +110,10 @@ def test_business_designs_answer_to_their_own_limits_not_the_platform_budget(mon
     assert calls == [('spend', BIZ), ('credits', BIZ)]
     with pytest.raises(AssertionError):
         run(d.guard(BIZ))  # Mission Control's jobs still answer to the platform budget
+    # Once the first render is paid, its free repair and review are never refused for credits.
+    calls.clear()
+    run(d.guard(BIZ, 'business', credits=False))
+    assert calls == [('spend', BIZ)]
     assert d.scope_of({'director': {'version': 1}}) == 'platform'
     assert d.scope_of({'director': {'scope': 'business'}}) == 'business'
 
@@ -276,3 +280,21 @@ def test_business_design_controls_need_the_business_owner(monkeypatch):
     monkeypatch.setattr(images, 'business', AsyncMock(side_effect=HTTPException(403, 'Business access denied.')))
     assert client.post(f'/ai/images/director/{uuid4()}/{uuid4()}/remember').status_code == 403
     assert client.get(f'/ai/images/director/{uuid4()}/{uuid4()}/master').status_code == 403
+
+
+def test_only_unpaid_steps_check_credits(monkeypatch):
+    """Planning and the first render check credits; the review and the repair
+    after a charged render do not, so the last 30 credits still buy a checked flyer."""
+    from creative_director_render import render
+    from creative_director_models import Plan, Review
+    seen = []
+    async def guard(business_id, scope='platform', *, credits=True):
+        seen.append(credits)
+        raise RuntimeError('stop before any provider call')
+    monkeypatch.setattr(d, 'guard', guard)
+    row = {'business_id': BIZ, 'director': {'scope': 'business'}, 'model': images.MODELS[0], 'quality': 'high', 'size': '1024x1536'}
+    for call in (d.structured(None, row, Plan, 'plan', []), d.structured(None, row, Review, 'review', []),
+                 render(None, row, 'draft', []), render(None, row, 'repair', [], charge=False)):
+        with pytest.raises(RuntimeError):
+            run(call)
+    assert seen == [True, False, True, False]

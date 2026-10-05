@@ -6,7 +6,7 @@ import image_studio as images
 
 async def render(client, row, prompt, raw_refs, *, charge=True):
     from creative_director import guard, scope_of
-    await guard(row['business_id'], scope_of(row))
+    await guard(row['business_id'], scope_of(row), credits=charge)
     payload = {k: row[k] for k in ('model', 'quality', 'size')}
     payload.update(prompt=prompt, n=1, output_format='png')
     headers = {'Authorization': 'Bearer ' + os.environ.get('OPENAI_API_KEY', '')}

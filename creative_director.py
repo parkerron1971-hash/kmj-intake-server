@@ -265,7 +265,11 @@ def scope_of(row):
     return (row.get('director') or {}).get('scope') or 'platform'
 
 
-async def guard(business_id, scope='platform'):
+async def guard(business_id, scope='platform', *, credits=True):
+    """Spend limits before every paid call. The credit check runs only before
+    work that is still unpaid (planning, the first render): once the first
+    render is charged, its free repair and review must not be refused for
+    the credits that render just used."""
     import spend_guard
     import billing_limits
     if scope == 'business':
@@ -276,7 +280,8 @@ async def guard(business_id, scope='platform'):
         if await asyncio.to_thread(spend_guard.over_budget):
             raise HTTPException(429, spend_guard.block_message())
         await require_budget()
-    await asyncio.to_thread(billing_limits.require_units, str(business_id))
+    if credits:
+        await asyncio.to_thread(billing_limits.require_units, str(business_id))
 
 
 def vision(raw):
@@ -290,7 +295,8 @@ def vision(raw):
 
 async def structured(client, row, schema, instruction, content):
     from chief_models import model_for
-    await guard(row['business_id'], scope_of(row))
+    # Planning precedes the first (charged) render; review follows it.
+    await guard(row['business_id'], scope_of(row), credits=schema is Plan)
     import model_ladder
     model = model_for('review')
     # Sonnet 5.5 / Opus 5.5 reject a forced tool_choice (400); there the
