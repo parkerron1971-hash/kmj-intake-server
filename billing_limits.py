@@ -30,7 +30,8 @@ logger = logging.getLogger("billing_limits")
 # "Solutionist" since the 8/19 rename. The flip test caught the 402
 # message still saying "Practice-plan feature".
 PLAN_DISPLAY = {"starter": "Starter", "professional": "Professional",
-                "practice": "Solutionist"}
+                "practice": "Solutionist",
+                "solo": "Solo", "booked": "Booked", "boss": "Boss"}
 
 
 def require_feature(business_id: str, feature: str) -> None:

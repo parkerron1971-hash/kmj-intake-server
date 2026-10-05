@@ -19,8 +19,21 @@ from typing import Any, Dict, Optional
 
 import pricing_config
 
-PLANS = ("starter", "professional", "practice")
-_PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3}
+PLANS = ("starter", "professional", "practice")   # the public ladder
+
+# Plans sold to ONE kind of business (2026-10-04): barbers and salons get
+# Solo $49 / Booked $79 / Boss $99. Each carries its own feature list
+# (AUDIENCE_PLAN_FEATURES): Boss has Professional's bookkeeping without
+# Professional's AI surfaces, which a single minimum-tier rank can't say.
+# PLANS stays the public ladder, so the site and the compare table are
+# untouched; ALL_PLANS is every key a subscription or comp can resolve to.
+AUDIENCE_PLANS = ("solo", "booked", "boss")
+ALL_PLANS = PLANS + AUDIENCE_PLANS
+
+# ORDERING only (the best-plan pick behind the business cap, the billing
+# rehearsal). Access comes from plan_features(), never from this number.
+_PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3,
+              "solo": 1, "booked": 1, "boss": 2}
 
 # Gate-ready map: feature → minimum tier. Working pricing hypothesis
 # (2026-06-09 review): Starter $79 / Professional $199 / Practice $399;
@@ -89,6 +102,67 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # until the full team experience ships
 }
 
+# ─── Plans for one kind of business ──────────────────────────────────
+# Solo = everything Starter carries (derived, so a new Starter feature
+# reaches Solo too). Booked adds the business's own texting line (the
+# front desk's number). Boss adds the books done for them: month-end
+# close, the full reports, Chief's bookkeeping, the accountant package
+# and 1099s for an assistant. Features the plan lists ship as they land
+# (missed-call text-back, posting) — a key here never sells a feature.
+_STARTER_FEATURES = frozenset(f for f, mp in FEATURE_MIN_PLAN.items() if mp == "starter")
+AUDIENCE_PLAN_FEATURES: Dict[str, frozenset] = {
+    "solo":   _STARTER_FEATURES,
+    "booked": _STARTER_FEATURES | {"dedicated_sms_number"},
+    "boss":   _STARTER_FEATURES | {"dedicated_sms_number", "period_close", "reports_full",
+                                   "chief_bookkeeping", "accountant_package",
+                                   "contractor_payments"},
+}
+
+# Who may buy each audience plan: canonical vertical keys
+# (vertical_registry.resolve — barber, salon, spa all land on
+# personal_services). Enforced at checkout; a comp ignores it on purpose
+# (the owner tries a plan on a test business).
+PLAN_AUDIENCE: Dict[str, frozenset] = {
+    "solo": frozenset({"personal_services"}),
+    "booked": frozenset({"personal_services"}),
+    "boss": frozenset({"personal_services"}),
+}
+
+
+def plan_features(plan: Optional[str]) -> frozenset:
+    """The features a plan includes. Public ladder: by minimum tier, as
+    always. Audience plans: their own list. Anything else: nothing."""
+    p = (plan or "").strip().lower()
+    if p in AUDIENCE_PLAN_FEATURES:
+        return AUDIENCE_PLAN_FEATURES[p]
+    if p not in PLANS:
+        return frozenset()
+    rank = _PLAN_RANK[p]
+    return frozenset(f for f, mp in FEATURE_MIN_PLAN.items() if rank >= _PLAN_RANK[mp])
+
+
+def audience_plans_for(business_type: Optional[str], *, offered_only: bool = True) -> list:
+    """The audience plans this kind of business may buy (in ladder order)."""
+    import vertical_registry
+    canon = vertical_registry.resolve(business_type or "")
+    return [p for p in AUDIENCE_PLANS
+            if canon in PLAN_AUDIENCE[p]
+            and (not offered_only or pricing_config.audience_plan_offered(p))]
+
+
+def upgrade_plan_for(feature: str, current_plan: Optional[str]) -> Optional[str]:
+    """The cheapest plan that unlocks `feature` from where this business
+    stands: within its audience ladder when it is on one, else the public
+    minimum. Upgrade prompts name THIS, so a barber on Solo is pointed at
+    Boss, not at Professional."""
+    p = (current_plan or "").strip().lower()
+    if p in AUDIENCE_PLANS:
+        for cand in AUDIENCE_PLANS[AUDIENCE_PLANS.index(p):]:
+            if feature in AUDIENCE_PLAN_FEATURES[cand]:
+                return cand
+    return FEATURE_MIN_PLAN.get(feature)
+
+
 # Numeric limits per tier. plaid_connections = connected bank account
 # limit per tier (F-A2); max_businesses needs an onboarding check.
 def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
@@ -122,7 +196,31 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
                          "chief_messages_monthly": credits["practice"],
                          "max_seats": 5, "plaid_connections": None,
                          "open_assignments": 10},
+        **_audience_limits(),
     }
+
+
+def _audience_limits() -> Dict[str, Dict[str, Optional[int]]]:
+    """Solo / Booked / Boss: one business, one seat (they are built for
+    the solo pro; shop seats come with per-staff calendars)."""
+    credits = pricing_config.audience_credits()
+    return {
+        "solo":   {"max_businesses": 1, "chief_messages_monthly": credits["solo"],
+                   "max_seats": 1, "plaid_connections": 2, "open_assignments": 1},
+        "booked": {"max_businesses": 1, "chief_messages_monthly": credits["booked"],
+                   "max_seats": 1, "plaid_connections": 2, "open_assignments": 2},
+        "boss":   {"max_businesses": 1, "chief_messages_monthly": credits["boss"],
+                   "max_seats": 1, "plaid_connections": 5, "open_assignments": 3},
+    }
+
+
+def _limits_of(plan: Optional[str]) -> Dict[str, Optional[int]]:
+    """A plan's limits, FAILING CLOSED: a plan key with no entry gets
+    Starter's limits, never none. `limits.get(plan, {})` read a missing
+    entry as None — unlimited — so a new plan key added without limits
+    would have granted unlimited AI."""
+    limits = plan_limits()
+    return limits.get((plan or "").strip().lower()) or limits["starter"]
 
 
 def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[int]:
@@ -130,13 +228,12 @@ def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[in
     (and unlimited) until BILLING_ENFORCE=on AND a plan exists."""
     if not enforcement_on():
         return None
-    limits = plan_limits()
     plan = plan_of(business_row)
     if not plan:
-        return limits["starter"].get(limit)
+        return plan_limits()["starter"].get(limit)
     if limit == "chief_messages_monthly":
         return monthly_credits(business_row, plan)
-    return limits.get(plan, {}).get(limit)
+    return _limits_of(plan).get(limit)
 
 
 def is_founder_price(business_row: Optional[Dict[str, Any]]) -> bool:
@@ -161,9 +258,9 @@ def monthly_credits(business_row: Optional[Dict[str, Any]],
     if not plan:
         return None
     comp = str((business_row or {}).get("comp_tier") or "").strip().lower()
-    if plan == "professional" and comp not in PLANS and is_founder_price(business_row):
+    if plan == "professional" and comp not in ALL_PLANS and is_founder_price(business_row):
         return pricing_config.founder_credits()
-    return (plan_limits().get(plan) or {}).get("chief_messages_monthly")
+    return _limits_of(plan).get("chief_messages_monthly")
 
 
 # Price-id env aliases → the tier they entitle (2026-07-21 pricing
@@ -181,6 +278,13 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "PRACTICE_ANNUAL":     "practice",
     "FOUNDER":             "professional",
     "FOUNDER_ANNUAL":      "professional",
+    # Audience plans (barbers and salons). Checkout enforces who may buy.
+    "SOLO":                "solo",
+    "SOLO_ANNUAL":         "solo",
+    "BOOKED":              "booked",
+    "BOOKED_ANNUAL":       "booked",
+    "BOSS":                "boss",
+    "BOSS_ANNUAL":         "boss",
 }
 
 
@@ -207,7 +311,7 @@ def plan_of(business_row: Optional[Dict[str, Any]]) -> Optional[str]:
     if not business_row:
         return None
     comp = (business_row.get("comp_tier") or "").strip().lower()
-    if comp in PLANS:
+    if comp in ALL_PLANS:
         return comp
     status = business_row.get("subscription_status")
     if status not in ("trialing", "active"):
@@ -337,26 +441,26 @@ def enforcement_on() -> bool:
 
 
 def has_feature(business_row: Optional[Dict[str, Any]], feature: str) -> bool:
-    """True unless enforcement is on AND the plan rank is insufficient.
-    Unknown features default to allowed (fail-open by design)."""
+    """True unless enforcement is on AND the plan doesn't include it.
+    Unknown features default to allowed (fail-open by design); an unknown
+    plan includes nothing (plan_features)."""
     if not enforcement_on():
         return True
-    min_plan = FEATURE_MIN_PLAN.get(feature)
-    if not min_plan:
+    if feature not in FEATURE_MIN_PLAN:
         return True
     plan = plan_of(business_row)
     if not plan:
         return False
-    # .get guards: an unknown tier name (future plan key, bad comp value)
-    # must read as rank 0, not crash the gate.
-    return _PLAN_RANK.get(plan, 0) >= _PLAN_RANK.get(min_plan, 99)
+    return feature in plan_features(plan)
 
 
 def entitlements(business_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Full entitlement picture for the frontend: what's allowed now, and
-    what WOULD be allowed per tier once enforcement turns on."""
+    what WOULD be allowed per tier once enforcement turns on. `min_plan`
+    is the plan to upgrade to from HERE: inside the audience ladder for a
+    business on one, the public minimum otherwise."""
     plan = plan_of(business_row)
-    rank = _PLAN_RANK.get(plan or "", 0)
+    included = plan_features(plan)
     return {
         "plan": plan,
         "subscription_status": (business_row or {}).get("subscription_status"),
@@ -364,8 +468,8 @@ def entitlements(business_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "features": {
             f: {
                 "allowed": has_feature(business_row, f),
-                "min_plan": mp,
-                "included_in_plan": rank >= _PLAN_RANK[mp],
+                "min_plan": upgrade_plan_for(f, plan) or mp,
+                "included_in_plan": f in included,
             } for f, mp in FEATURE_MIN_PLAN.items()
         },
     }

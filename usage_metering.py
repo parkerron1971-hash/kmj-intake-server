@@ -64,8 +64,10 @@ DEFAULT_WEIGHT = pricing_config.DEFAULT_WEIGHT
 OVERAGE_CENTS = {"starter": 40, "professional": 30, "practice": 25}
 # From the dials, not a second copy (2026-09-04): the ladder moved and
 # this table had said $199 / $399 since June.
-TIER_PRICE_CENTS = {k: v for k, v in pricing_config.tier_price_cents().items()
-                    if k in ("starter", "professional", "practice")}
+TIER_PRICE_CENTS = {**{k: v for k, v in pricing_config.tier_price_cents().items()
+                       if k in ("starter", "professional", "practice")},
+                    # Solo / Booked / Boss count toward MRR at their own price.
+                    **pricing_config.audience_price_cents()}
 
 # % of allotment that notifies, once each per month; 200 ≈ the cap
 # milestone. Read at import — Railway env is fixed for a process life.
