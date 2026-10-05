@@ -63,6 +63,10 @@ def fake_pipeline(monkeypatch, final=None, clips=2, spots=None):
         'length': 30.0, 'face_coverage': 0.9, 'poster_at': 2.0,
         'empty_spots': (spots or {}).get(path.name, [])})
     monkeypatch.setattr(svc, 'make_poster', lambda video, at, target: target.write_bytes(b'jpg'))
+    def make_frame(source, at, target):
+        seen.setdefault('frames', []).append((source.name, source.is_file(), at))
+        target.write_bytes(b'frame')
+    monkeypatch.setattr(svc, 'make_frame', make_frame)
     return seen
 
 
@@ -331,3 +335,43 @@ def test_service_reads_engine_progress_lines(monkeypatch, tmp_path):
     assert final == {'type': 'result', 'status': 'completed'}
     assert state['stage'] == 'framing' and state['clips_done'] == 3 and state['clips_total'] == 16
     assert state['percent'] == round(5 + 60 * 0.85, 1)
+
+
+def test_each_clip_gets_a_clean_frame_from_the_recording(client, monkeypatch):
+    """The cover is designed from the poster's moment in the recording itself:
+    no burned-in captions or title card. The recording is still deleted."""
+    seen = fake_pipeline(monkeypatch, clips=2)
+    job = uuid4()
+    client.post(f'/jobs/{job}', json={'source_url': SOURCE}, headers=AUTH)
+    body = wait_done(client, job)
+    clips = body['result']['clips']
+    assert [c['frame'] for c in clips] == ['clip_00_frame.jpg', 'clip_01_frame.jpg']
+    # start_time_ms / 1000 + poster_at, read while the recording still existed
+    assert seen['frames'] == [('source.mp4', True, 2.0), ('source.mp4', True, 3.0)]
+    assert client.get(f'/jobs/{job}/files/clip_01_frame.jpg', headers=AUTH).content == b'frame'
+    for name in ('clip_01_frame.mp4', 'clip_1_frame.jpg', 'source_frame.jpg'):
+        assert client.get(f'/jobs/{job}/files/{name}', headers=AUTH).status_code == 404
+    assert not (svc.ROOT / str(job) / 'source.mp4').exists()
+
+
+def test_a_frame_that_times_out_does_not_fail_the_job(tmp_path, monkeypatch):
+    def slow(*args, **kwargs):
+        raise svc.subprocess.TimeoutExpired('ffmpeg', 60)
+    monkeypatch.setattr(svc.subprocess, 'run', slow)
+    target = tmp_path / 'clip_00_frame.jpg'
+    svc.make_frame(tmp_path / 'source.mp4', 12.5, target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize('returncode,body', [(1, b''), (1, b'half'), (0, b'')])
+def test_a_failed_or_empty_still_is_never_advertised(tmp_path, monkeypatch, returncode, body):
+    """A seek past the end can exit non-zero or leave a 0-byte file; neither
+    may reach the API as a frame or a poster."""
+    def ffmpeg(args, **kwargs):
+        svc.Path(args[-1]).write_bytes(body)
+        return svc.subprocess.CompletedProcess(args, returncode)
+    monkeypatch.setattr(svc.subprocess, 'run', ffmpeg)
+    frame, poster = tmp_path / 'clip_00_frame.jpg', tmp_path / 'clip_00.jpg'
+    svc.make_frame(tmp_path / 'source.mp4', 9999.0, frame)
+    svc.make_poster(tmp_path / 'clip_00.mp4', 9999.0, poster)
+    assert not frame.exists() and not poster.exists()
