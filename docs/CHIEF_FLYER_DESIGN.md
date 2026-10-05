@@ -69,3 +69,41 @@ The live marketing snapshot includes the founder offer's Stripe amount and billi
 monthly credit allowance, seat limit and remaining seats. Failed availability reads produce
 unknown availability, never a fabricated full allocation. A lifetime-locked recurring rate must
 not be described as a one-time purchase, and prior assistant copy is not evidence for claims.
+
+## Every business (2026-10-05)
+
+The Creative Director is no longer Mission Control only. A practitioner's flyer
+build (`submit_work_order` kind `flyer`, or an event with `wants_flyer`) now runs
+`design_flyer` instead of one `generate_image` call: plan, draw, check the
+finished pixels, repair once. Switch: `PRACTITIONER_CREATIVE_DIRECTOR` (default
+on; `off` restores the single call).
+
+- **Words.** The Director prints only `exact_copy`. A flyer order without it asks
+  the practitioner "What should the flyer say, word for word?". A workshop
+  flyer without it prints the workshop's saved title, date, place and "Free"
+  when the price is zero, nothing else.
+- **References.** Owned gallery images only (`references: [{id, role, use}]`).
+  Unlabelled images: an earlier generated design is the revision target, an
+  upload is a photo to feature. A website URL is captured first; its
+  screenshot and logo are placed as they are, never redrawn.
+- **Facts.** `business_facts()` reads what the business's own site publishes
+  (`agent_site.bundle_for`): name, contact, website, booking link only when
+  booking is open, offerings with prices only where the price is shown, and
+  brand colours. No founder-offer arithmetic for tenants.
+- **Limits.** A business job (`director.scope == 'business'`) answers to its own
+  daily spend limit and credits, never the platform budget. Jobs without a
+  scope are Mission Control's and behave as before.
+- **Price.** 30 credits a design: the first render is charged; the repair render
+  and the planning/review calls are 0. This applies to Mission Control too.
+  Measured cost: a render is $0.04-0.06, a planning or review call about $0.03.
+- **Identity.** `design_flyer` uses `generate_image`'s request id, so the build
+  step's verify finds the row and a replay never pays twice. A designed flyer
+  gets 20 minutes before it is called interrupted (a single image, 10).
+- **Controls.** `POST /ai/images/director/{business_id}/{image_id}/remember` and
+  `GET .../master` are the business-owner versions of Mission Control's
+  Remember this style and layered master download.
+- **Sizes.** Image Studio and the Director accept `1088x1920` (phone story) and
+  `1920x1088` (widescreen) on the 2.5 models, both checked in a production call
+  on 2026-10-05. GPT Image 2 keeps square, portrait and landscape.
+
+`python -m pytest __tests__/test_designed_flyers.py __tests__/test_creative_director.py -q`

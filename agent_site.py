@@ -579,6 +579,12 @@ def inject_into_page(html: str, business_id: Optional[str]) -> str:
         return html
 
 
+def bundle_for(business_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The cached public facts + offerings, for in-process readers that must
+    say only what the site says (the Creative Director's flyer facts)."""
+    return _load_bundle(str(business_id or ""))
+
+
 def manifest_for(business_id: Optional[str]) -> Optional[Dict[str, Any]]:
     b = _load_bundle(str(business_id or ""))
     if not b:

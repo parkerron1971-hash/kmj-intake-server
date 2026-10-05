@@ -49,6 +49,16 @@ def model_qualities(model):
     return ('low', 'medium', 'high') if model == 'gpt-image-2' else ('low', 'medium', 'high', 'xhigh', 'max')
 
 
+# Phone (9:16) and widescreen (16:9) were accepted by both 2.5 models in a
+# production call on 2026-10-05; GPT Image 2 was not tried, so it keeps three.
+SIZES = ('1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088')
+Size = Literal['1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088']
+
+
+def model_sizes(model):
+    return SIZES[:3] if model == 'gpt-image-2' else SIZES
+
+
 def provider_error(response, model):
     try:
         code = (response.json().get('error') or {}).get('code', '')
@@ -78,7 +88,7 @@ async def config(session: UserSession = Depends(sb_clients.authed_request)):
     model = configured_model()
     qualities = model_qualities(model)
     return {'model': model, 'model_label': MODEL_LABELS[model], 'qualities': qualities,
-        'credits': {q: image_units(q) for q in qualities},
+        'sizes': model_sizes(model), 'credits': {q: image_units(q) for q in qualities},
         'default_quality': 'high', 'pricing_date': '2026-09-08', 'daily_limit': 20}
 
 
@@ -88,7 +98,7 @@ class CreateImage(BaseModel):
     prompt: str = Field(min_length=3, max_length=12000)
     model: Literal['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare', 'gpt-image-2'] = Field(default_factory=configured_model)
     quality: Literal['low', 'medium', 'high', 'xhigh', 'max'] = 'high'
-    size: Literal['1024x1024', '1536x1024', '1024x1536'] = '1024x1536'
+    size: Size = '1024x1536'
     reference_ids: list[UUID] = Field(default_factory=list, max_length=4)
 
 
@@ -321,6 +331,8 @@ async def create(req: CreateImage, client, *, director=None):
         raise HTTPException(503, 'Image generation needs the server OpenAI connection used by voice.')
     if req.quality not in model_qualities(req.model):
         raise HTTPException(422, f'{MODEL_LABELS[req.model]} supports Draft, Standard, and High quality. Choose High for its best quality.')
+    if req.size not in model_sizes(req.model):
+        raise HTTPException(422, f'{MODEL_LABELS[req.model]} makes square, portrait and landscape images. Choose one of those sizes.')
     record = {'id': str(req.request_id), 'business_id': str(req.business_id), 'prompt': req.prompt.strip(),
         'model': req.model, 'quality': req.quality, 'size': req.size, 'reference_ids': [str(i) for i in req.reference_ids]}
     existing = await db(client, 'GET', f'/image_artworks?id=eq.{req.request_id}&business_id=eq.{req.business_id}')
@@ -478,7 +490,7 @@ async def handle_generate_image(client, biz, action):
         # the owned-artwork lookup; never trust client-supplied dimensions.
         source = await artwork(client, biz['id'], references[0])
         size = source.get('size')
-        if size not in ('1024x1024', '1536x1024', '1024x1536'):
+        if size not in SIZES:
             raw = await original(client, source)
             with Image.open(io.BytesIO(raw)) as im:
                 width, height = im.size

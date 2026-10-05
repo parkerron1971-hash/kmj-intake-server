@@ -469,7 +469,7 @@ class Adapter:
     async def assert_authority(self, step):
         self.biz = await owned_business(self.client,self.bid,self.uid)
         import policy_engine
-        verb = {'verify_registration':'set_site_capability','connect_events':'enqueue_job',
+        verb = {'verify_registration':'set_site_capability','connect_events':'enqueue_job','design_flyer':'generate_image',
                 'send_form_link':'send_sms' if self.order.facts.get('channel')=='sms' else 'draft_and_send'}.get(step.verb,step.verb)
         verdict = await asyncio.to_thread(policy_engine.evaluate,self.bid,verb=verb,surface='chat',prompted=True,user_id=self.uid,biz_row=self.biz)
         if not verdict.allowed:
@@ -496,6 +496,14 @@ class Adapter:
                  'data':{fields['title_field']:f['title'],fields['date_field']:f['starts_at'],
                  fields['location_field']:f['location'],fields['capacity_field']:f.get('capacity'),
                  'description':f.get('description','')}}
+        elif step.name == 'flyer' and step.verb == 'design_flyer':
+            p = {'goal':f.get('prompt') or f'A flyer for the workshop {f.get("title","")}'.strip(),
+                 'exact_copy':f.get('exact_copy') or event_flyer_copy(f),
+                 'references':f.get('references') or await self.reference_roles(f.get('reference_ids',[])),
+                 'owner_request':self.order.practitioner_words or f.get('prompt',''),
+                 'owner_context':self.order.brief}
+            for key in ('size','website_url'):
+                if f.get(key): p[key]=f[key]
         elif step.name == 'flyer':
             prompt = f.get('prompt') or ('Create a workshop flyer using these exact facts: ' + json.dumps({k:f[k] for k in ('title','starts_at','timezone','location','price') if k in f}))
             p = {'prompt':prompt,'quality':f.get('quality','high'),'reference_ids':f.get('reference_ids',[])}
@@ -513,7 +521,24 @@ class Adapter:
                 p['contact_id']=contacts[0]['id']
         return p
 
+    async def reference_roles(self, ids):
+        """Images handed over without roles: an earlier generated design is
+        the one being revised; an upload is a photo to feature. Chief names
+        a logo or a screenshot itself, so it is placed as it is."""
+        if not ids:
+            return []
+        rows = {r['id']:r for r in await self.rows('image_artworks','&id=in.('+','.join(str(UUID(str(i))) for i in ids)+')&select=id,model')}
+        out, revising = [], False
+        for i in ids:
+            generated = bool((rows.get(str(i)) or {}).get('model'))
+            role = 'style' if generated and revising else 'edit_target' if generated else 'subject'
+            revising = revising or generated
+            out.append({'id':str(i),'role':role,'use':''})
+        return out
+
     async def confirmation(self, step, params):
+        if step.name == 'flyer' and step.verb == 'design_flyer':
+            return 'Your flyer is ready to design: planned, drawn and checked before you see it. Say “go ahead” to start.'
         if step.name == 'flyer':
             return 'Your flyer is waiting for approval to generate one image. Say “go ahead” to continue.'
         return f"Your form link is ready to send to {params['to']}. Say “go ahead” to send it."
@@ -671,7 +696,9 @@ class Adapter:
                     ok=row.get('status')=='ready' and bool(row.get('storage_path'))
                     if row.get('status') in ('queued','working'):
                         age=(datetime.now(timezone.utc)-datetime.fromisoformat(row['created_at'].replace('Z','+00:00'))).total_seconds()
-                        if age<600:
+                        # A designed flyer plans, draws, checks and may repair: give it the
+                        # same 20 minutes image_studio allows before calling it interrupted.
+                        if age<(1200 if row.get('director') else 600):
                             return receipt(step,'queued','Your flyer is generating. It will appear in Media Library.',ids=ids)
                     if ok:
                         import image_studio
@@ -770,6 +797,11 @@ def route_actions(actions):
         kind=action.get('type')
         if kind=='generate_image':
             out.append({'type':'submit_work_order','kind':'flyer','facts':{k:v for k,v in action.items() if k!='type'}})
+        elif kind=='design_flyer':
+            # The same flyer order; the build step runs the Director (or the switch's single call).
+            facts={'prompt':action.get('goal') or action.get('prompt') or ''}
+            facts.update({k:action[k] for k in ('exact_copy','references','size','website_url') if k in action})
+            out.append({'type':'submit_work_order','kind':'flyer','facts':facts})
         elif kind=='create_client_form':
             out.append({'type':'submit_work_order','kind':'form_and_link','facts':{k:v for k,v in action.items() if k!='type'}})
         elif kind=='set_site_capability' and action.get('capability')=='events' and action.get('on',True):
@@ -836,10 +868,37 @@ async def fetch_public_page(url):
         await fetcher.close()
 
 
+FLYER_FACTS = '- flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.'
+DESIGNED_FLYER_FACTS = ('- flyer: prompt (what it should show and how it should feel), exact_copy (every word that should appear, '
+    'as short lines: words the owner gave and facts they confirmed; never invent a price, date, offer or claim), '
+    'optional references [{"id","role","use"}] for images from this conversation or Media Library (role: logo; '
+    'subject = a photo to feature; style = inspiration; product = a screenshot shown as it is; edit_target = an earlier '
+    'flyer being revised), website_url, and size (1024x1536 flyer, 1024x1024 square, 1536x1024 landscape, '
+    '1088x1920 phone story, 1920x1088 widescreen). This is also the route for revising an existing flyer: give it as '
+    'edit_target with the complete new wording. The flyer is planned, drawn and checked before the owner sees it.')
+
+
+def event_flyer_copy(f):
+    """The words a workshop flyer may print when the owner gave none: the
+    workshop's own saved facts, nothing more. Free only when it is free."""
+    from event_form_details import date_label
+    lines = [f.get('title'), date_label(f) if f.get('starts_at') and f.get('timezone') else '', f.get('location')]
+    if f.get('price') == 0:
+        lines.append('Free')
+    return [str(line).strip()[:500] for line in lines if line and str(line).strip()]
+
+
 def routing_instructions():
     if not enabled():
         return ''
-    return '''CURRENT BUILD ROUTING POLICY (instructions, not business data):
+    from chief_code import flyer_verb
+    policy = ROUTING_POLICY
+    if flyer_verb() == 'design_flyer':
+        policy = policy.replace(FLYER_FACTS, DESIGNED_FLYER_FACTS)
+    return policy
+
+
+ROUTING_POLICY = '''CURRENT BUILD ROUTING POLICY (instructions, not business data):
 For workshops, forms, flyers and Events pages, these rules replace the earlier examples that call generate_image, create_client_form, or individual event setup actions.
 For those requested builds, call submit_work_order exactly once. Do not perform its component actions in this conversation turn. Put the user's known facts in facts, with one of these kinds:
 - event_setup: title, starts_at (ISO date and time), timezone (IANA name), location, price, capacity, wants_registration_form, wants_flyer. Workshop registration and the website link belong to this ONE order.
@@ -847,7 +906,7 @@ For those requested builds, call submit_work_order exactly once. Do not perform 
 - flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.
 - site_door: capability=events.
 - plan: a request that needs more than three changes, includes a long piece (an image), or is a job of dependent steps. Submit it FIRST, before doing any of it directly: a reply can make only three direct changes. Up to three quick changes are done directly instead. It runs in the background and the owner keeps talking. facts: title, goal, steps: [{"title": "...", "action": {"type": "<action>", ...the same fields that action takes in chat}}]. Steps run in order. A later step can use an earlier step's result with "@type.field" (for example "@create_contact.contact_id"), or repeat over a list with "for_each": "@show_view.rows" and {{item.field}}. Put "approval": true on a step the owner wants to review first. A plan may include one generate_image step. Workshops, forms with links and events pages are never plan steps: they are their own orders. A message with several pieces gets one order per piece (for example an event_setup for the workshop, a flyer, and one plan for everything else), up to four orders per turn; they run side by side. Sends, bookings and charges in a plan run on the owner's ask, exactly as in chat.
-Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form or generate_image for those build steps.
+Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form, generate_image or design_flyer for those build steps.
 Questions about a job in BUILDS IN PROGRESS are read-only: answer with its summary_label verbatim, without extra execution claims or follow-up offers. Never create another build to check progress.
 An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer; a plan's question is answered with field plan_answer.
 After submitting or responding, use the returned label for its execution status; queued work is not finished work. Still answer any question the owner asked alongside the work. A request to discuss, calculate, or explain a plan is not a request to save or queue it; use ordinary prose. Goal trackers use create_goal, milestone initiatives use create_growth_objective, and notes use save_note when requested; there is no goal_setup build kind.
