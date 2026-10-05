@@ -133,6 +133,17 @@ def test_pilot_gate(monkeypatch):
     assert not pfm.allowed_for(BIZ)
 
 
+def test_star_opens_every_business(monkeypatch):
+    monkeypatch.setenv("POST_FOR_ME_PILOT_BUSINESSES", "*")
+    assert pfm.allowed_for(BIZ) and pfm.allowed_for(OTHER)
+    assert not pfm.allowed_for("")
+    monkeypatch.setenv("POST_FOR_ME_PILOT_BUSINESSES", "")
+    assert not pfm.allowed_for(BIZ)
+    monkeypatch.setenv("POST_FOR_ME_PILOT_BUSINESSES", "*")
+    monkeypatch.setenv("POST_FOR_ME_API_KEY", "")
+    assert not pfm.allowed_for(OTHER)
+
+
 def test_start_refuses_outside_the_pilot_and_bad_networks():
     with pytest.raises(HTTPException) as e:
         run(scr.postforme_connect_start(OTHER, "instagram", biz={}, session=SESSION))

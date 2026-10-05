@@ -84,17 +84,20 @@ def configured() -> bool:
 
 
 def pilot_businesses() -> frozenset:
-    """Businesses allowed to connect while posting is a pilot (comma-
-    separated ids in POST_FOR_ME_PILOT_BUSINESSES). Posting becomes a
-    Booked / Boss feature when those plans go on sale; until then it is
-    on only where the owner switched it on, so it can't become a free
-    feature that would later have to be taken away."""
+    """Businesses allowed to connect and post (comma-separated ids in
+    POST_FOR_ME_PILOT_BUSINESSES), or "*" for every business. Kevin
+    opened it to every business on 2026-10-05; posting is in every
+    marketing level (Basics included), so "*" takes nothing away later.
+    Unset or empty = off everywhere."""
     raw = os.environ.get("POST_FOR_ME_PILOT_BUSINESSES") or ""
     return frozenset(x.strip() for x in raw.split(",") if x.strip())
 
 
 def allowed_for(business_id: str) -> bool:
-    return configured() and str(business_id) in pilot_businesses()
+    if not configured() or not business_id:
+        return False
+    allowed = pilot_businesses()
+    return "*" in allowed or str(business_id) in allowed
 
 
 def public_account(acct: Dict[str, Any]) -> Dict[str, Any]:
