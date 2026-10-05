@@ -2423,8 +2423,9 @@ _ALL = "__every_plan__"
 # Keys deliberately not sold as their own row. Same two the in-app cards
 # hide (BillingPanel.HIDDEN_FEATURES), for the same reasons: seats show
 # as a number, and chief_unlimited gates nothing an allowance row does
-# not already say honestly.
-_NOT_A_ROW = ("multi_seat", "chief_unlimited")
+# not already say honestly. ai_clips waits here until its screen ships
+# (Find my best clips in Video Clips); then it becomes a row.
+_NOT_A_ROW = ("multi_seat", "chief_unlimited", "ai_clips")
 
 _COMPARE_GROUPS = (
     ("The day-to-day work", (
