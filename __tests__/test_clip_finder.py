@@ -103,7 +103,7 @@ def test_upload_creates_a_private_slot_on_the_storage_host(monkeypatch, on):
     path, row = store.posts[0]
     assert path == '/media_assets' and row['status'] == 'uploading' and row['kind'] == 'source'
     assert row['configuration']['origin'] == 'upload' and row['configuration']['authorized_to_copy'] is True
-    assert out['upload']['endpoint'] == 'https://abcdefgh.storage.supabase.co/storage/v1/upload/resumable'
+    assert out['upload']['endpoint'] == 'https://abcdefgh.storage.supabase.co/storage/v1/upload/resumable/sign'
     assert out['upload']['chunk_size'] == 6 * 1024 * 1024 and out['upload']['bucket'] == 'program-media'
     assert out['upload']['object_name'] == f'{BIZ}/{NEW}.source' and out['upload']['token'].endswith('.source')
 
