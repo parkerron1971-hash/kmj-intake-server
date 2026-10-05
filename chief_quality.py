@@ -53,8 +53,9 @@ MIN_TURNS_BASE = 50
 # replaced with "couldn't verify" is an answer the owner never got. The
 # phrases are chief_truth's own (UNVERIFIED_REPLY, NO_ACTION_REPLY); a test
 # keeps them in step. Counted, never stored or quoted.
-WALL_PHRASES = ("couldn't verify the answer from the information available",
-                "couldn't verify my proposed answer")
+WALL_PREFIXES = ("Your request came through. I couldn't verify the answer",
+                 "No action ran in this request. I couldn't verify my proposed answer")
+MAX_REPLY_ROWS = 5000
 MIN_REPLIES_DAY = 10
 WALL_FLAG_RATE = 0.10
 
@@ -112,7 +113,9 @@ def wall_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not reply.strip():
             continue
         replies += 1
-        walled += any(p in reply for p in WALL_PHRASES)
+        # The wall IS the reply: a real answer that happens to say
+        # "couldn't verify" somewhere is not one (the eval's _walls() rule).
+        walled += reply.lstrip().startswith(WALL_PREFIXES)
     return {"replies": replies, "walled": walled,
             "wall_rate": round(walled / replies, 3) if replies else None}
 
@@ -217,10 +220,15 @@ async def report(c: httpx.AsyncClient, headers: Dict[str, str],
 
     convos = await _rows(c, headers, "chief_conversations", {
         "select": "messages,message_count,ended_at", "message_count": "eq.2",
-        "ended_at": f"gte.{base_start.isoformat()}", "limit": "5000"})
+        "ended_at": f"gte.{base_start.isoformat()}", "order": "ended_at.desc",
+        "limit": str(MAX_REPLY_ROWS)})
     if convos is None:
         unseen.append("Chief replies")
         convos = []
+    elif len(convos) >= MAX_REPLY_ROWS:
+        # Newest first, so the last 24 hours are whole; the week before is
+        # cut short, and the report says so.
+        unseen.append("Chief replies (week before truncated)")
     walls_day = wall_metrics([r for r in convos if (_when(r.get("ended_at")) or base_start) >= day_start])
     walls_base = wall_metrics([r for r in convos if (_when(r.get("ended_at")) or now) < day_start])
 

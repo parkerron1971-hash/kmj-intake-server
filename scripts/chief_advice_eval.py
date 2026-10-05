@@ -186,7 +186,8 @@ CASES: List[Dict[str, str]] = [
      "message": "Tuesdays and Wednesdays are dead. What should I do about it?",
      # The salon has no weekly hours set, so its booking page reads as
      # open around the clock: the cause is in the records.
-     "cause": r"\bhours\b"},
+     "cause": r"no (?:weekly |business |set |opening )?hours|hours (?:aren't|are not|haven't been|have not been|were never) set|"
+              r"(?:open|available) (?:24/7|24 hours|around the clock|all day and night)|24/7"},
     {"id": "salon_rebook", "biz": "salon_est",
      "message": "How do I get more clients to rebook before they leave the chair?"},
     {"id": "trades_leads", "biz": "trades_est",
@@ -203,16 +204,18 @@ CASES: List[Dict[str, str]] = [
     # tips. `cause` is what the reply must name.
     {"id": "hidden_no_bookings_new", "biz": "coach_new",
      "message": "Nobody is booking sessions with me. What's wrong?",
-     "cause": r"offering|nothing (?:to|they can) (?:book|buy)|no (?:services|packages|offers|prices)"},
+     "cause": r"no offerings|offerings? (?:set up|yet|listed)|haven't (?:set up|added|listed) (?:any )?(?:offerings|services)|"
+              r"nothing (?:to|they can|anyone can) (?:book|buy)|no (?:services|packages|offers|prices) (?:set up|yet|listed|to book)"},
     {"id": "hidden_busy_broke_trades", "biz": "trades_est",
      "message": "I'm busy every week but money is always tight. What's going on?",
-     "cause": r"7,000|\$7k|Tom Baker|Tom's|unpaid|outstanding"},
+     "cause": r"\$?7,000|\$7k|(?-i:\bTom\b)"},
     {"id": "hidden_flat_income_coach", "biz": "coach_est",
      "message": "I'm working all the time but my income is flat. Why?",
-     "cause": r"1,200|Monica|overdue"},
+     # Not "$1,200": the 3-Month package costs that too. Monica owes it.
+     "cause": r"(?-i:\bMonica\b)"},
     {"id": "hidden_thin_calendar_coach", "biz": "coach_est",
      "message": "My calendar is thin next week. What's the real problem?",
-     "cause": r"Ada|Sam|\bleads?\b"},
+     "cause": r"(?-i:\bAda\b|\bSam\b)"},
 ]
 
 # Verbs an advice turn may run without being asked: reads, and opening a

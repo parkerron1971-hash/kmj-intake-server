@@ -123,13 +123,13 @@ def _turn(reply, n=2, hours_ago=1):
             "messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": reply}]}
 
 
-def test_the_wall_phrases_are_the_answer_checks_own():
+def test_the_wall_prefixes_are_the_answer_checks_own():
     import chief_truth
     walls = (chief_truth.UNVERIFIED_REPLY, chief_truth.NO_ACTION_REPLY)
-    for phrase in cq.WALL_PHRASES:
-        assert any(phrase in w for w in walls), phrase
+    for prefix in cq.WALL_PREFIXES:
+        assert any(w.startswith(prefix) for w in walls), prefix
     for w in walls:
-        assert any(p in w for p in cq.WALL_PHRASES), w
+        assert w.startswith(cq.WALL_PREFIXES), w
 
 
 def test_wall_metrics_count_single_turns_only():
@@ -138,6 +138,9 @@ def test_wall_metrics_count_single_turns_only():
             _turn(chief_truth.UNVERIFIED_REPLY), _turn("x", n=8), _turn("")]
     m = cq.wall_metrics(rows)
     assert m == {"replies": 3, "walled": 2, "wall_rate": 0.667}
+    # An answer that merely mentions the phrase is an answer.
+    quoted = _turn("Earlier I said I couldn't verify my proposed answer; here it is: $175.")
+    assert cq.wall_metrics([quoted])["walled"] == 0
     assert cq.wall_metrics([])["wall_rate"] is None
 
 
@@ -169,4 +172,19 @@ def test_the_report_reads_the_live_wall_rate(monkeypatch):
     assert r["walls_24h"] == {"replies": 20, "walled": 2, "wall_rate": 0.1}
     assert r["walls_week_before"]["walled"] == 1
     assert "quality:walls" in [f["code"] for f in r["flags"]]
-    assert "10% withheld as unverified" in cq._summary(r) or not r["day"].get("turns")
+    assert "10% withheld as unverified" in cq._summary(r)
+
+
+def test_a_full_page_of_replies_is_marked_truncated(monkeypatch):
+    class FullDB(FakeDB):
+        async def get(self, url, headers=None, params=None):
+            if url.endswith("chief_conversations"):
+                assert params["order"] == "ended_at.desc"
+                return _Resp([_turn("fine")] * cq.MAX_REPLY_ROWS)
+            return await super().get(url, headers, params)
+
+    import spend_guard
+    monkeypatch.setattr(spend_guard, "today_spend_cents", lambda *a, **k: 0.0)
+    monkeypatch.setattr(spend_guard, "_cap_cents", lambda: 5000.0)
+    r = asyncio.run(cq.report(FullDB([], []), {}, now=NOW))
+    assert "Chief replies (week before truncated)" in r["unseen"]

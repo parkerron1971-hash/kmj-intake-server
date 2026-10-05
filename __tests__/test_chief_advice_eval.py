@@ -134,3 +134,27 @@ def test_the_summary_handles_mixed_checks_and_carries_the_si_score():
     assert line.startswith("SI score: answered 67%") and "named the hidden cause 50%" in line
     graded = ev.si_score(rep["rates"], {k: 2 for k in ev.GRADE_SCHEMA["required"]})
     assert graded["substance"] == 1.0
+
+
+GENERIC = {
+    "salon_slow_days": "Run a midweek discount, post on Instagram, and remind clients your hours are flexible.",
+    "hidden_no_bookings_new": "Post more on social, ask for referrals, and offer a free first session to build demand.",
+    "hidden_busy_broke_trades": "Track your expenses, raise prices a little, and make sure you have an outstanding reputation.",
+    "hidden_flat_income_coach": "Raise your rates, sell the $1,200 package more, and cut low-value work. Overdue for a price review.",
+    "hidden_thin_calendar_coach": "Reach out to past clients the same week, adapt your offer, and post about your leads magnet.",
+}
+NAMED = {
+    "salon_slow_days": "You have no weekly hours set, so the booking page shows you open 24/7.",
+    "hidden_no_bookings_new": "You have no offerings set up yet, so there is nothing anyone can book.",
+    "hidden_busy_broke_trades": "Tom Baker's $7,000 invoice is still unpaid; that's your cash.",
+    "hidden_flat_income_coach": "Monica owes $1,200 and it's overdue.",
+    "hidden_thin_calendar_coach": "Ada and Sam are leads who were never invited to a call.",
+}
+
+
+def test_a_generic_answer_never_scores_as_naming_the_cause():
+    cases = {c["id"]: c for c in ev.CASES if c.get("cause")}
+    assert set(cases) == set(GENERIC) == set(NAMED)
+    for cid, case in cases.items():
+        assert not ev.score_reply(GENERIC[cid], [], case["cause"])["checks"]["finds_cause"], cid
+        assert ev.score_reply(NAMED[cid], [], case["cause"])["checks"]["finds_cause"], cid
