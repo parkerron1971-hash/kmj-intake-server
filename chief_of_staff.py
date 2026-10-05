@@ -11557,6 +11557,7 @@ from chief_business_learning_actions import (
 )
 
 from image_studio import handle_generate_image, handle_find_images, handle_capture_website_references
+from creative_director import handle_design_flyer
 from chief_reference_actions import handle_study_website
 
 from chief_build_runtime import handle_submit_work_order, handle_respond_work_order
@@ -11569,6 +11570,7 @@ ACTION_HANDLERS = {
     "connected_agent_assignments": agent_coordination.chief_handler,
     "delegate_to_agent": agent_coordination.chief_handler,
     "generate_image": handle_generate_image,
+    "design_flyer": handle_design_flyer,
     "find_images": handle_find_images,
     "capture_website_references": handle_capture_website_references,
     "study_website": handle_study_website,
@@ -14252,7 +14254,7 @@ def _looks_like_completed_action(text: str) -> bool:
 def _image_action_summary(results):
     """Keep a real image job visible if the model's final narration fails."""
     for result in reversed(results):
-        if result.get('type') != 'generate_image':
+        if result.get('type') not in ('generate_image', 'design_flyer'):
             continue
         image = result.get('image') or {}
         if _action_failed(result) or image.get('status') == 'failed':

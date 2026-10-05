@@ -95,7 +95,7 @@ def _structured_payload(monkeypatch, model):
         sent.update(payload)
         return _Resp()
 
-    async def guard(_bid):
+    async def guard(_bid, _scope='platform'):
         return None
     monkeypatch.setattr(llm_call, "apost", apost)
     monkeypatch.setattr(cd, "guard", guard)

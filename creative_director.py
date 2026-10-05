@@ -12,7 +12,7 @@ import os
 import re
 import unicodedata
 from datetime import datetime, timezone
-from uuid import UUID, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,6 +28,9 @@ from creative_director_models import DesignRequest, Plan, Review, WORKFLOW
 from creative_director_render import render
 
 router = APIRouter(prefix='/platform/chief/director', tags=['creative-director'])
+# The same two controls for a practitioner's own designs, checked against the
+# business owner instead of the platform owner.
+business_router = APIRouter(prefix='/ai/images/director', tags=['creative-director'])
 VERSION = 1
 
 
@@ -67,12 +70,8 @@ async def prepare(action, body, owner):
                     raise HTTPException(422, 'Choose a reference attached to this conversation.') from None
                 selected.append((ref, catalog[index], None))
             elif ref.source.startswith('artwork:'):
-                try: iid = str(UUID(ref.source[8:]))
-                except ValueError: raise HTTPException(422, 'Choose a saved image from this business.') from None
-                source = await images.artwork(client, biz['id'], iid)
-                await images.original(client, source)
-                if ref.role == 'edit_target':
-                    inherited.extend(r for r in (source.get('director') or {}).get('references', []) if r['role'] in ('logo', 'product'))
+                iid, carried = await owned_reference(client, biz, ref)
+                inherited.extend(carried)
                 selected.append((ref, None, iid))
             else:
                 raise HTTPException(422, 'Use attached images or owned artwork, not remote image addresses.')
@@ -80,19 +79,7 @@ async def prepare(action, body, owner):
         for ref, attachment, iid in selected:
             iid = iid or await save_chat_reference(client, biz, attachment)
             refs.append({'id': iid, 'role': ref.role, 'use': ref.use})
-        explicit_roles = {r['role'] for r in refs}
-        for ref in inherited:
-            if ref['role'] in explicit_roles or ref['id'] in {r['id'] for r in refs}: continue
-            if len(refs) >= 4:
-                raise HTTPException(422, 'Keep space for the original logo/product assets when revising this design.')
-            await images.original(client, await images.artwork(client, biz['id'], ref['id']))
-            refs.append(ref)
-        # Explicit current logo always overrides remembered assets. Never add an
-        # unrelated style benchmark to a current reference.
-        if not any(r['role'] == 'logo' for r in refs) and saved.get('logo_id') and len(refs) < 4:
-            iid = str(UUID(saved['logo_id']))
-            await images.original(client, await images.artwork(client, biz['id'], iid))
-            refs.append({'id': iid, 'role': 'logo', 'use': 'Previously owner-approved original logo'})
+        refs = await settle_references(client, biz, saved, refs, inherited)
     facts = {'product': product_context(), 'founder_offer': await founder_offer()}
     # Exact arithmetic/interval guard in addition to the planner's claim review.
     combined = ' '.join(req.exact_copy).lower()
@@ -111,6 +98,152 @@ async def prepare(action, body, owner):
         'director': spec}
 
 
+async def owned_reference(client, biz, ref):
+    """An artwork:<id> reference: this business's own ready image. Revising a
+    director design carries its original logo/product layers forward."""
+    try: iid = str(UUID(ref.source[8:]))
+    except ValueError: raise HTTPException(422, 'Choose a saved image from this business.') from None
+    source = await images.artwork(client, biz['id'], iid)
+    await images.original(client, source)
+    carried = []
+    if ref.role == 'edit_target':
+        carried = [r for r in (source.get('director') or {}).get('references', []) if r['role'] in ('logo', 'product')]
+    return iid, carried
+
+
+async def settle_references(client, biz, saved, refs, inherited):
+    explicit_roles = {r['role'] for r in refs}
+    for ref in inherited:
+        if ref['role'] in explicit_roles or ref['id'] in {r['id'] for r in refs}: continue
+        if len(refs) >= 4:
+            raise HTTPException(422, 'Keep space for the original logo/product assets when revising this design.')
+        await images.original(client, await images.artwork(client, biz['id'], ref['id']))
+        refs.append(ref)
+    # Explicit current logo always overrides remembered assets. Never add an
+    # unrelated style benchmark to a current reference.
+    if not any(r['role'] == 'logo' for r in refs) and saved.get('logo_id') and len(refs) < 4:
+        iid = str(UUID(saved['logo_id']))
+        await images.original(client, await images.artwork(client, biz['id'], iid))
+        refs.append({'id': iid, 'role': 'logo', 'use': 'Previously owner-approved original logo'})
+    return refs
+
+
+def _price(o):
+    try:
+        value = float(o.get('price'))
+    except (TypeError, ValueError):
+        return None
+    text = str(int(value)) if value.is_integer() else f'{value:.2f}'
+    currency = o.get('currency') or 'USD'
+    return '$' + text if currency == 'USD' else f'{text} {currency}'
+
+
+def business_facts(business_id):
+    """What a practitioner's flyer may state as fact: the name, contact
+    details and prices their own website already publishes. A hidden price
+    stays hidden; nothing here is read from the conversation."""
+    import agent_site
+    bundle = agent_site.bundle_for(str(business_id)) or {}
+    facts = bundle.get('facts') or {}
+    out = {k: facts[k] for k in ('name', 'type', 'tagline', 'phone', 'email', 'address', 'city', 'region', 'origin') if facts.get(k)}
+    if bundle.get('booking_open') and facts.get('booking_url'):
+        out['booking_url'] = facts['booking_url']
+    offerings = []
+    for raw in (bundle.get('offerings') or [])[:20]:
+        o = agent_site.public_offering(raw)
+        item = {'name': o['name']}
+        if _price(o): item['price'] = _price(o)
+        if o.get('duration_min'): item['minutes'] = o['duration_min']
+        if item['name']: offerings.append(item)
+    if offerings:
+        out['offerings'] = offerings
+    kit = ((bundle.get('biz') or {}).get('settings') or {}).get('brand_kit') or {}
+    colors = kit.get('colors') if isinstance(kit.get('colors'), dict) else {}
+    colors = {k: v for k, v in colors.items() if isinstance(v, str) and re.fullmatch(r'#[0-9a-fA-F]{3,8}', v)}
+    if colors:
+        out['brand_colors'] = colors
+    return out
+
+
+async def prepare_for_business(client, biz, req, *, owner_request, owner_context=''):
+    """The Director for a practitioner's own business. References are images
+    already in its gallery; facts are what the business publishes. Spend is
+    held to this business's own daily limit and credits, not the platform's."""
+    check_copy(req.exact_copy)
+    biz = await images.business(client, biz['id'])
+    saved = await profile(client, biz)
+    refs, inherited = [], []
+    for ref in req.reference_inputs:
+        if not ref.source.startswith('artwork:'):
+            raise HTTPException(422, 'Use images saved in this business for the design.')
+        iid, carried = await owned_reference(client, biz, ref)
+        inherited.extend(carried)
+        if iid not in {r['id'] for r in refs}:
+            refs.append({'id': iid, 'role': ref.role, 'use': ref.use})
+    refs = await settle_references(client, biz, saved, refs, inherited)
+    facts = await asyncio.to_thread(business_facts, biz['id'])
+    spec = {'version': VERSION, 'scope': 'business', 'goal': req.goal, 'copy': req.exact_copy, 'references': refs,
+        'owner_request': owner_request[:5000], 'owner_context': owner_context[-5000:],
+        'facts': facts, 'preferences': saved, 'max_renders': 2,
+        'phase': 'queued', 'attempts': 0, 'review': None}
+    if len(json.dumps(spec)) > 19000:
+        raise HTTPException(422, 'Shorten this design request or its visible wording.')
+    return spec
+
+
+def flyer_request(action):
+    """A practitioner's flyer request as the Director's contract. Wording may
+    arrive as a list or as one answer typed into the build card."""
+    from chief_flyer_direction import ReferenceInput
+    copy = action.get('exact_copy')
+    if isinstance(copy, str):
+        copy = [line.strip(' -\u2022\t') for line in copy.splitlines()]
+    copy = [str(line).strip() for line in (copy or []) if str(line).strip()][:16]
+    refs = []
+    for ref in action.get('references') or []:
+        if isinstance(ref, dict) and ref.get('id'):
+            refs.append(ReferenceInput(source=f"artwork:{ref['id']}", role=ref.get('role') or 'subject',
+                                       use=str(ref.get('use') or '')[:400]))
+    try:
+        return DesignRequest(goal=str(action.get('goal') or action.get('prompt') or '')[:4000], exact_copy=copy,
+            reference_inputs=refs[:4], size=action.get('size') or '1024x1536', quality='high')
+    except ValidationError:
+        raise HTTPException(422, 'Describe the flyer and the words it should say, with at most four saved images.') from None
+
+
+async def handle_design_flyer(client, biz, action):
+    """Chief's flyer for a practitioner: planned, drawn, checked, repaired once.
+
+    The request identity is generate_image's, so a replayed turn, or a build
+    checking its own step, finds this one row instead of paying twice."""
+    identity = images.turn_id.get() or str(uuid4())
+    index = images.turn_image_index.get()
+    images.turn_image_index.set(index + 1)
+    request_id = uuid5(NAMESPACE_URL, f"{biz['id']}:{identity}:image:{index}")
+    existing = await images.db(client, 'GET', f"/image_artworks?id=eq.{request_id}&business_id=eq.{UUID(str(biz['id']))}")
+    if existing:
+        return {'type': 'design_flyer', 'result': 'This flyer is already in your gallery. The card shows where it stands.',
+            'label': 'Your flyer', 'image': await images.present(client, existing[0]), 'nav': None}
+    action = dict(action)
+    if action.get('website_url'):
+        # Capture before any paid step; the screenshot is placed as-is, never redrawn.
+        captured = await images.handle_capture_website_references(client, biz, {
+            'url': action['website_url'], 'include_logo': action.get('include_website_logo', True)})
+        if captured.get('warning'):
+            raise HTTPException(422, captured['warning'])
+        roles = {'website screenshot': ('product', 'The website, shown as it is'), 'website logo': ('logo', 'The website logo')}
+        found = [(row['id'], roles.get(str(row.get('prompt') or '').split(' from ')[0].lower())) for row in captured['images']]
+        action['references'] = list(action.get('references') or []) + [
+            {'id': iid, 'role': role[0], 'use': role[1]} for iid, role in found if role]
+    req = flyer_request(action)
+    spec = await prepare_for_business(client, biz, req, owner_request=str(action.get('owner_request') or req.goal),
+        owner_context=str(action.get('owner_context') or ''))
+    result = await images.create(images.CreateImage(business_id=biz['id'], request_id=request_id, prompt=req.goal,
+        quality=req.quality, size=req.size, reference_ids=[r['id'] for r in spec['references']]), client, director=spec)
+    return {'type': 'design_flyer', 'label': 'Designing your flyer', 'image': result, 'nav': None,
+        'result': 'Your flyer is being designed: planned, drawn, then checked before you see it. It lands in Media Library.'}
+
+
 async def start(client, biz, action, request_id):
     spec = action.get('director') or {}
     if spec.get('version') != VERSION or spec.get('max_renders') != 2:
@@ -127,13 +260,22 @@ def request_hash(spec):
     return hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-async def guard(business_id):
+def scope_of(row):
+    # Mission Control jobs predate the field; anything without it is the platform's.
+    return (row.get('director') or {}).get('scope') or 'platform'
+
+
+async def guard(business_id, scope='platform'):
     import spend_guard
     import billing_limits
-    from platform_chief_authority import require_budget
-    if await asyncio.to_thread(spend_guard.over_budget):
-        raise HTTPException(429, spend_guard.block_message())
-    await require_budget()
+    if scope == 'business':
+        if await asyncio.to_thread(spend_guard.over_budget, business_id=str(business_id)):
+            raise HTTPException(429, spend_guard.block_message())
+    else:
+        from platform_chief_authority import require_budget
+        if await asyncio.to_thread(spend_guard.over_budget):
+            raise HTTPException(429, spend_guard.block_message())
+        await require_budget()
     await asyncio.to_thread(billing_limits.require_units, str(business_id))
 
 
@@ -148,7 +290,7 @@ def vision(raw):
 
 async def structured(client, row, schema, instruction, content):
     from chief_models import model_for
-    await guard(row['business_id'])
+    await guard(row['business_id'], scope_of(row))
     import model_ladder
     model = model_for('review')
     # Sonnet 5.5 / Opus 5.5 reject a forced tool_choice (400); there the
@@ -161,8 +303,10 @@ async def structured(client, row, schema, instruction, content):
         'messages': [{'role': 'user', 'content': content}],
         'tools': [{'name': 'return_result', 'description': 'Return the structured design result.', 'input_schema': schema.model_json_schema()}],
         'tool_choice': {'type': 'tool', 'name': 'return_result'} if forced else {'type': 'auto'}}
-    response = await llm_call.apost(client, payload, key=os.environ.get('ANTHROPIC_API_KEY'), business_id=str(row['business_id']))
     # llm_call meters these planner/reviewer calls at the shared transport seam.
+    # They cost the customer nothing: a design is priced once, at its first render.
+    response = await llm_call.apost(client, payload, key=os.environ.get('ANTHROPIC_API_KEY'),
+                                    business_id=str(row['business_id']), units=0)
     if not response.is_success:
         raise HTTPException(502, 'The design planning or visual review service could not finish.')
     data = response.json()
@@ -336,7 +480,8 @@ async def run(client, row):
     for attempt in range(spec['max_renders']):
         await update('repairing' if attempt else 'generating', attempts=attempt+1)
         try:
-            raw, usage, cost = await render(client, row, render_prompt(plan, spec, repair), raw_refs)
+            # One price per design: the repair is the Director's own quality check.
+            raw, usage, cost = await render(client, row, render_prompt(plan, spec, repair), raw_refs, charge=attempt == 0)
         except Exception:
             if last_good is None: raise
             # A failed repair must not discard the already saved first draft.
@@ -396,14 +541,11 @@ async def local_context(owner):
         'product_facts': product_context(), 'founder_offer': await founder_offer()}
 
 
-@router.get('/{image_id}/master')
-async def master(image_id: UUID, owner=Depends(require_owner), session: UserSession=Depends(sb_clients.authed_request)):
+async def _master(business_id, image_id):
     from fastapi.responses import Response
-    from platform_chief_creative import platform_business
-    biz = await platform_business(owner)
     async with httpx.AsyncClient(timeout=60) as client:
-        await images.business(client, biz['id'])
-        row = await images.artwork(client, biz['id'], image_id)
+        await images.business(client, business_id)
+        row = await images.artwork(client, business_id, image_id)
         spec = row.get('director') or {}
         if row['status'] != 'ready' or not spec.get('art_path'):
             raise HTTPException(409, 'The layered design is not ready yet.')
@@ -415,12 +557,34 @@ async def master(image_id: UUID, owner=Depends(require_owner), session: UserSess
     return Response(svg, media_type='image/svg+xml', headers={'Content-Disposition': f'attachment; filename="design-{image_id}.svg"', 'Cache-Control':'private, no-store'})
 
 
+@router.get('/{image_id}/master')
+async def master(image_id: UUID, owner=Depends(require_owner), session: UserSession=Depends(sb_clients.authed_request)):
+    from platform_chief_creative import platform_business
+    biz = await platform_business(owner)
+    return await _master(biz['id'], image_id)
+
+
+@business_router.get('/{business_id}/{image_id}/master')
+async def business_master(business_id: UUID, image_id: UUID, session: UserSession=Depends(sb_clients.authed_request)):
+    # images.business() refuses anyone but this business's owner.
+    return await _master(business_id, image_id)
+
+
 @router.post('/{image_id}/remember')
 async def remember(image_id: UUID, owner=Depends(require_owner), session: UserSession=Depends(sb_clients.authed_request)):
     from platform_chief_creative import platform_business
     biz = await platform_business(owner)
+    return await _remember(biz['id'], image_id, owner.id)
+
+
+@business_router.post('/{business_id}/{image_id}/remember')
+async def business_remember(business_id: UUID, image_id: UUID, session: UserSession=Depends(sb_clients.authed_request)):
+    return await _remember(business_id, image_id, session.user.id)
+
+
+async def _remember(business_id, image_id, owner_id):
     async with httpx.AsyncClient(timeout=30) as client:
-        biz = await images.business(client, biz['id'])
+        biz = await images.business(client, business_id)
         row = await images.artwork(client, biz['id'], image_id)
         spec = row.get('director') or {}
         if row['status'] != 'ready' or not spec.get('plan'):
@@ -432,7 +596,7 @@ async def remember(image_id: UUID, owner=Depends(require_owner), session: UserSe
             await images.artwork(client, biz['id'], logos[0])
             preferences['logo_id'] = logos[0]
         saved = await client.post(sb_clients.sb_url() + '/rest/v1/creative_director_profiles?on_conflict=business_id',
-            json={'business_id': str(biz['id']), 'owner_id': str(owner.id), 'source_image_id': str(image_id),
+            json={'business_id': str(biz['id']), 'owner_id': str(owner_id), 'source_image_id': str(image_id),
              'preferences': preferences, 'updated_at': datetime.now(timezone.utc).isoformat()},
             headers=sb_clients.sb_headers_service(prefer='resolution=merge-duplicates,return=representation'))
         if not saved.is_success: raise HTTPException(503, 'Could not remember this design preference.')
