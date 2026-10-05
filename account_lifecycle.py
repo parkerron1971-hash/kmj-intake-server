@@ -288,6 +288,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Which social accounts the business connected through Post for Me —
     # display fields only, no tokens (social_connect_router).
     "social_connections",
+    # Posts the business sent through Post for Me, with how each went.
+    "social_publications",
     "design_rationales",
     "design_feedback",
     "goals",
@@ -651,6 +653,9 @@ _IMPORT_SKIP = {
     # account belongs to one business (unique provider id). A restored
     # business signs in to its networks again rather than copying pointers.
     "social_connections",
+    # Its posts point at those connections and at Post for Me post ids;
+    # they are history in the export, not something to re-send.
+    "social_publications",
 }
 
 # Columns the platform owns. Carrying them across would let an import
