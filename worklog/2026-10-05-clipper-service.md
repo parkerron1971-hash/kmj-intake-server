@@ -2,7 +2,7 @@
 title: Clip service for Find my best clips (sermon → short vertical clips)
 date: 2026-10-05
 agent: Claude Code (Claude Opus 5.5)
-asked: "use the engine, upload only, Growth level — start the rehearsal" / "let's go with that"
+asked: "use the engine, upload only, Growth level — start the rehearsal; then: let's go with that"
 status: in progress
 prs: [kmj-intake-server#1272]
 migrations: []
