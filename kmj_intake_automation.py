@@ -297,6 +297,11 @@ app.include_router(consent_router)
 # the platform account, attached to the one Messaging Service.
 from sms_numbers_router import router as sms_numbers_router
 app.include_router(sms_numbers_router)
+
+# A business connects its social accounts through Post for Me (part 1 of
+# practitioner posting; pilot until the Booked / Boss plans are on sale).
+from social_connect_router import router as social_connect_router
+app.include_router(social_connect_router)
 app.include_router(brand_engine_router)
 app.include_router(voice_depth_router)
 # THE OBSERVATORY — research a card (docs/STRATEGY_ROOM.md phase 3c)
