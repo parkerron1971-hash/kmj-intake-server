@@ -333,3 +333,76 @@ def test_chief_is_taught_the_design_flyer_tag():
     import inspect
     source = inspect.getsource(chief_prompt).replace('{{', '{').replace(' ', '')
     assert '[ACTION:{"type":"design_flyer"' in source
+
+
+# ── Remember this style ──────────────────────────────────────────────────
+
+def test_a_saved_style_leads_new_designs_instead_of_the_seven_directions():
+    saved = {'references': [], 'preferences': {'concept': 'Oversized type over a cutout portrait', 'typography': 'Condensed'}}
+    brief = d.direction_brief(saved)
+    assert 'SAVED STYLE' in brief and 'Choose the ONE direction' not in brief
+    # A current style reference still wins over the saved style.
+    style = {'references': [{'id': str(uuid4()), 'role': 'style'}], 'preferences': saved['preferences']}
+    assert d.direction_brief(style) == ''
+    assert 'Choose the ONE direction' in d.direction_brief({'references': [], 'preferences': {}})
+
+
+def _style_app(monkeypatch, rows):
+    import sb_clients
+    calls = []
+    async def service(client, method, path, body=None):
+        calls.append((method, path))
+        return rows if method == 'GET' else []
+    monkeypatch.setattr(sb_clients, 'sb_as_service', service)
+    monkeypatch.setattr(images, 'business', AsyncMock(return_value={'id': BIZ, 'owner_id': USER}))
+    app = FastAPI(); app.include_router(d.business_router)
+    app.dependency_overrides[sb_clients.authed_request] = lambda: SimpleNamespace(user=SimpleNamespace(id=USER))
+    return TestClient(app), calls
+
+
+def test_the_saved_style_can_be_seen_and_stopped(monkeypatch):
+    source = str(uuid4())
+    client, calls = _style_app(monkeypatch, [{'source_image_id': source, 'updated_at': '2026-10-05T23:00:00Z',
+                                             'preferences': {'concept': 'Textured poster, giant numeral'}}])
+    monkeypatch.setattr(images, 'artwork', AsyncMock(return_value={'id': source}))
+    monkeypatch.setattr(images, 'present', AsyncMock(return_value={'id': source, 'url': 'https://example.test/a.png'}))
+    body = client.get(f'/ai/images/director/{BIZ}/style').json()
+    assert body['saved'] is True and body['source_image_id'] == source and body['image']['url']
+    assert client.delete(f'/ai/images/director/{BIZ}/style').json()['saved'] is False
+    assert calls[-1][0] == 'DELETE' and f'business_id=eq.{BIZ}' in calls[-1][1]
+
+
+def test_no_saved_style_and_a_deleted_source_design_still_answer(monkeypatch):
+    client, _ = _style_app(monkeypatch, [])
+    assert client.get(f'/ai/images/director/{BIZ}/style').json() == {'saved': False}
+    client, _ = _style_app(monkeypatch, [{'source_image_id': str(uuid4()), 'preferences': {'concept': 'Bold'}}])
+    monkeypatch.setattr(images, 'artwork', AsyncMock(side_effect=HTTPException(404, 'gone')))
+    body = client.get(f'/ai/images/director/{BIZ}/style').json()
+    assert body['saved'] is True and body['image'] is None
+
+
+def test_only_the_owner_sees_or_clears_the_saved_style(monkeypatch):
+    client, calls = _style_app(monkeypatch, [])
+    monkeypatch.setattr(images, 'business', AsyncMock(side_effect=HTTPException(403, 'Business access denied.')))
+    assert client.get(f'/ai/images/director/{BIZ}/style').status_code == 403
+    assert client.delete(f'/ai/images/director/{BIZ}/style').status_code == 403
+    assert not calls
+
+
+def test_a_stray_placement_for_the_speaker_photo_no_longer_stops_a_cover(monkeypatch):
+    """2026-10-05: three of three system covers failed at planning because the
+    planner also "placed" the subject photo. Only logos and product shots are
+    placements; the stray one is dropped, a missing logo still stops it."""
+    from creative_director_models import Plan
+    photo, logo = str(uuid4()), str(uuid4())
+    base = dict(concept='Bold type over a cutout', reference_analysis='Speaker on stage', typography='Condensed',
+                composition='Speaker large, headline above', palette='Navy and red', materials_light='Grain')
+    planned = Plan(**base, placements=[dict(image_id=photo, x=.1, y=.3, width=.8, height=.6)])
+    monkeypatch.setattr(d, 'structured', AsyncMock(return_value=planned))
+    spec = {'goal': 'Cover', 'copy': ['Feelings Lie'], 'references': [{'id': photo, 'role': 'subject', 'use': ''}],
+            'owner_request': '', 'owner_context': '', 'facts': {}, 'preferences': {}}
+    plan = run(d.make_plan(None, {'business_id': BIZ}, spec, {photo: png()}))
+    assert plan.placements == []
+    spec['references'].append({'id': logo, 'role': 'logo', 'use': ''})
+    with pytest.raises(HTTPException):
+        run(d.make_plan(None, {'business_id': BIZ}, spec, {photo: png(), logo: png()}))

@@ -397,10 +397,24 @@ image_id, with normalized x/y/width/height inside the canvas. No other placement
 Reserve the underlying background at those locations; no white boxes or fake UI/logos.
 Keep all copy outside those reserved bounds. Make asset size purposeful and readable.
 If there are no protected assets, placements must be empty. Never invent an asset ID.
+A subject, style or edit-target picture is never a placement: the image generator draws from it.
 ''' + direction_brief(spec)
-    plan = await structured(client, row, Plan, instruction, content)
+    plan = only_protected_placements(await structured(client, row, Plan, instruction, content), spec)
     validate_plan(plan, spec)
     return plan
+
+
+def only_protected_placements(plan, spec):
+    """Drop a placement for a picture that is not a logo or product shot.
+
+    The planner sometimes "places" the speaker's photo too. Only protected
+    assets are pasted on top of the art; a subject is drawn into it from the
+    reference. Before this, that one stray placement stopped every clip cover
+    at planning (2026-10-05 proof: three of three) with "did not preserve every
+    supplied brand/product asset". A missing logo still stops the design."""
+    protected = {r['id'] for r in spec['references'] if r['role'] in ('logo', 'product')}
+    kept = [p for p in plan.placements if str(p.image_id) in protected]
+    return plan if len(kept) == len(plan.placements) else plan.model_copy(update={'placements': kept})
 
 
 def direction_brief(spec):
@@ -412,6 +426,16 @@ def direction_brief(spec):
     owner's own direction and wins; a remembered style shapes the one chosen."""
     if any(r['role'] in ('style', 'edit_target') for r in spec['references']):
         return ''
+    saved = spec.get('preferences') or {}
+    if saved.get('concept') or saved.get('typography'):
+        # Remember this style: a series (a sermon's clip covers, a month of
+        # flyers) should read as one set, not seven different directions.
+        return """
+SAVED STYLE (the owner chose Remember this style on an earlier design). Design in that style so
+this piece reads as part of the same set: the same kind of concept, the same typography, palette,
+materials and light given in preferences. Change only what this brief needs: the subject, the words
+and the layout that fits them. Do not drift to a different look, and do not settle for a plain one.
+"""
     from chief_flyer_direction import DIRECTIONS
     options = '\n'.join(f'- {key}: {text}' for key, text in DIRECTIONS.items())
     return ("""
@@ -605,6 +629,40 @@ async def business_master(business_id: UUID, image_id: UUID, session: UserSessio
     return await _master(business_id, image_id)
 
 
+@business_router.get('/{business_id}/style')
+async def saved_style(business_id: UUID, session: UserSession=Depends(sb_clients.authed_request)):
+    """The style new designs start from, if the owner saved one, with the
+    design it came from so the app can show it."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        biz = await images.business(client, business_id)
+        rows = await sb_clients.sb_as_service(client, 'GET',
+            f"/creative_director_profiles?business_id=eq.{UUID(str(biz['id']))}&select=source_image_id,preferences,updated_at&limit=1")
+        if rows is None:
+            raise HTTPException(503, 'Creative Director storage is unavailable.')
+        if not rows or not (rows[0].get('preferences') or {}).get('concept'):
+            return {'saved': False}
+        row, image = rows[0], None
+        if row.get('source_image_id'):
+            try:
+                image = await images.present(client, await images.artwork(client, biz['id'], row['source_image_id']))
+            except HTTPException:
+                image = None  # The design was deleted; the style itself still applies.
+        return {'saved': True, 'source_image_id': row.get('source_image_id'), 'updated_at': row.get('updated_at'),
+                'concept': str((row.get('preferences') or {}).get('concept') or '')[:300], 'image': image}
+
+
+@business_router.delete('/{business_id}/style')
+async def forget_style(business_id: UUID, session: UserSession=Depends(sb_clients.authed_request)):
+    """Stop using the saved style: new designs choose their own direction again."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        biz = await images.business(client, business_id)
+        done = await sb_clients.sb_as_service(client, 'DELETE',
+            f"/creative_director_profiles?business_id=eq.{UUID(str(biz['id']))}")
+        if done is None:
+            raise HTTPException(503, 'Could not clear the saved style. Try again.')
+    return {'ok': True, 'saved': False, 'message': 'New designs choose their own style again.'}
+
+
 @router.post('/{image_id}/remember')
 async def remember(image_id: UUID, owner=Depends(require_owner), session: UserSession=Depends(sb_clients.authed_request)):
     from platform_chief_creative import platform_business
@@ -635,4 +693,5 @@ async def _remember(business_id, image_id, owner_id):
              'preferences': preferences, 'updated_at': datetime.now(timezone.utc).isoformat()},
             headers=sb_clients.sb_headers_service(prefer='resolution=merge-duplicates,return=representation'))
         if not saved.is_success: raise HTTPException(503, 'Could not remember this design preference.')
-    return {'ok': True, 'message': 'Style remembered for this business. New references can override it.'}
+    return {'ok': True, 'saved': True, 'source_image_id': str(image_id),
+            'message': 'Style remembered. New flyers and covers start from it; a new style reference still wins.'}
