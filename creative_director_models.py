@@ -37,7 +37,10 @@ class Plan(Strict):
     # The planner writes only art direction. Approved copy is supplied separately
     # by the server and cannot be rewritten/expanded by this schema.
     placements: list[Placement] = Field(default_factory=list, max_length=4)
-    copy_concerns: list[str] = Field(default_factory=list, max_length=5)
+    # Any entry stops the design before a render, so only real conflicts belong here.
+    copy_concerns: list[str] = Field(default_factory=list, max_length=5, description=(
+        'ONLY a price, date, result, testimonial or guarantee in the copy that the supplied facts contradict '
+        'or do not support. Empty when the copy is fine. Never notes, confirmations or design remarks.'))
 
 
 class Review(Strict):

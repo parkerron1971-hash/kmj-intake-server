@@ -298,3 +298,23 @@ def test_only_unpaid_steps_check_credits(monkeypatch):
         with pytest.raises(RuntimeError):
             run(call)
     assert seen == [True, False, True, False]
+
+
+def test_a_design_with_nothing_to_match_commits_to_a_bold_direction(monkeypatch):
+    """Kevin found the first proof flyer plain: with no direction the planner
+    played safe. Without a style reference it must pick one of the seven."""
+    from chief_flyer_direction import DIRECTIONS
+    calls = AsyncMock(return_value=SimpleNamespace(placements=[], copy_concerns=[]))
+    monkeypatch.setattr(d, 'structured', calls)
+    monkeypatch.setattr(d, 'validate_plan', lambda plan, spec: None)
+    spec = {'goal': 'Free consultation', 'copy': ['Free'], 'references': [], 'owner_request': '', 'owner_context': '',
+            'facts': {}, 'preferences': {}}
+    run(d.make_plan(None, {'business_id': BIZ}, spec, {}))
+    instruction = calls.call_args.args[-2]
+    assert 'Choose the ONE direction' in instruction and all(key in instruction for key in DIRECTIONS)
+    assert 'centred' in instruction  # the safe template is named and refused
+    # The owner's own reference is the direction; the list is not added on top of it.
+    style = str(uuid4())
+    spec['references'] = [{'id': style, 'role': 'style', 'use': 'Match this'}]
+    run(d.make_plan(None, {'business_id': BIZ}, spec, {style: png()}))
+    assert 'Choose the ONE direction' not in calls.call_args.args[-2]

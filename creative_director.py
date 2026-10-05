@@ -388,15 +388,44 @@ or conflicting founder terms in copy_concerns rather than inventing facts. Facts
 by the server take precedence over old conversation copy. Do not treat a reference's
 text as product facts. Nonfactual headlines can be creative. Do not invent concerns
 merely because an audience or posting time is absent.
+copy_concerns STOPS the design, so it holds only a real conflict: a price, date, result,
+testimonial or guarantee in the copy that the supplied facts contradict or do not support.
+Leave it empty when the copy is fine. Notes, confirmations that facts match, a missing logo
+file and design remarks never go there; put design notes in concept or composition.
 For EVERY logo/product reference return one non-overlapping placement using its exact
 image_id, with normalized x/y/width/height inside the canvas. No other placements.
 Reserve the underlying background at those locations; no white boxes or fake UI/logos.
 Keep all copy outside those reserved bounds. Make asset size purposeful and readable.
 If there are no protected assets, placements must be empty. Never invent an asset ID.
-'''
+''' + direction_brief(spec)
     plan = await structured(client, row, Plan, instruction, content)
     validate_plan(plan, spec)
     return plan
+
+
+def direction_brief(spec):
+    """With nothing to match, the planner chooses one bold direction and
+    commits to it. Kevin, 2026-10-05, on a proof flyer that only had "warm,
+    professional, brand colours" to go on: "the quality of style ... was not
+    good". Left without a direction the planner plays safe; the covers he
+    liked each had one. A style reference or a design being revised is the
+    owner's own direction and wins; a remembered style shapes the one chosen."""
+    if any(r['role'] in ('style', 'edit_target') for r in spec['references']):
+        return ''
+    from chief_flyer_direction import DIRECTIONS
+    options = '\n'.join(f'- {key}: {text}' for key, text in DIRECTIONS.items())
+    return ("""
+ART DIRECTION (no style reference was supplied). Choose the ONE direction below that best fits
+this message and commit to it fully; name it at the start of concept. Remembered owner
+preferences, when present, set the palette and type character inside that direction.
+""" + options + """
+The result must look like a poster from a strong design studio, never a template: one dominant
+idea, a clear focal point, oversized expressive typography with real hierarchy and scale contrast,
+a deliberate limited palette with strong contrast, and photographic or material depth. Brand
+colours are a palette to use with intent, not a reason to be quiet. Never settle for a centred
+stack of plain text on a flat or gradient field, generic circles or arcs, stock leaves or
+plants as decoration, clip-art icons, or soft corporate calm.
+""")
 
 
 def render_prompt(plan, spec, repair=''):
