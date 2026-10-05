@@ -579,6 +579,8 @@ from financial_policy_router import router as financial_policy_router
 app.include_router(financial_policy_router)
 from media_library_router import router as media_library_router
 app.include_router(media_library_router)
+from clip_covers import router as clip_covers_router
+app.include_router(clip_covers_router)
 from video_studio_router import router as video_studio_router
 app.include_router(video_studio_router)
 app.include_router(practitioner_profile_router)
