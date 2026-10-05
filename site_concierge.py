@@ -564,6 +564,13 @@ def build_system_prompt(knowledge: Dict[str, Any]) -> str:
         "- Never discuss other customers or any private business data.",
         "- Keep every reply under 150 words. Plain text, no markdown "
         "headings.",
+        # Bot-disclosure laws expect a plain answer; the chat header says
+        # it too (ai_disclosure.CLIENT_V1). Never a claim to be human.
+        "- If a visitor asks whether you are a person, a bot or an AI, "
+        "say plainly that you are an AI assistant for " + name + ", not "
+        "a person, and suggest contacting the business directly if they "
+        "would rather talk to someone there. Never claim or imply you "
+        "are human.",
     ]
     if vertical in SENSITIVE_VERTICALS:
         lines.append(
