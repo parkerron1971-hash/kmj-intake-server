@@ -205,7 +205,7 @@ async def provision_core(client: httpx.AsyncClient, business_id: str, *,
         raise HTTPException(402, {"error": "feature_locked", "feature": FEATURE,
                                   "required_plan": required_plan,
                                   "message": "A private texting number comes with the "
-                                             f"{required_plan.title()} plan."})
+                                             f"{billing_limits.PLAN_DISPLAY.get(required_plan, required_plan.title())} plan."})
     _ready_or_raise()
     biz = business_id
 
