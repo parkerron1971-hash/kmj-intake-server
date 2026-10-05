@@ -109,10 +109,13 @@ def test_upload_creates_a_private_slot_on_the_storage_host(monkeypatch, on):
 
 
 def test_upload_refused_when_library_is_full(monkeypatch, on):
-    Store(monkeypatch, reads=lambda path: [{'byte_size': cf.LIBRARY_BYTES - 10}])
+    seen = []
+    Store(monkeypatch, reads=lambda path: seen.append(path) or [{'byte_size': cf.LIBRARY_BYTES - 10}])
     with pytest.raises(HTTPException) as caught:
         cf.start_upload(BIZ, upload(), USER)
     assert caught.value.status_code == 409
+    # Recordings removed by the 7-day rule free their share of the allowance.
+    assert 'source_removed_at=is.null' in seen[0] and 'status=neq.failed' in seen[0]
 
 
 def test_upload_token_reads_either_response_shape(monkeypatch, on):
@@ -156,21 +159,48 @@ def test_a_file_that_is_not_a_video_is_removed(monkeypatch, on):
     assert removed == [f'{BIZ}/{SOURCE}.source'] and store.deletes and not store.patches
 
 
-@pytest.mark.parametrize('stdout,expected', [
-    ('{"format": {"duration": "61.5"}, "streams": [{"codec_type": "video", "width": 1280, "height": 720}]}', 61.5),
-    ('{"format": {"duration": "7300"}, "streams": [{"codec_type": "video"}]}', 422),
-    ('{"format": {"duration": "60"}, "streams": [{"codec_type": "audio"}]}', 422),
-    ('{"format": {"duration": "60"}, "streams": [{"codec_type": "video", "width": 7680, "height": 4320}]}', 422),
-    ('oops', 422),
+def test_a_check_that_could_not_run_keeps_the_upload(monkeypatch, on):
+    row = {'id': SOURCE, 'business_id': BIZ, 'kind': 'source', 'status': 'uploading', 'byte_size': 100}
+    monkeypatch.setattr(media, 'asset', lambda *a: row)
+    monkeypatch.setattr(cf, 'stored_size', lambda path: 100)
+    monkeypatch.setattr(cf.storage_links, 'signed_url_sync', lambda *a, **k: 'https://abcdefgh.supabase.co/signed')
+    monkeypatch.setattr(cf, 'remove_objects', lambda paths: pytest.fail('a good upload was deleted'))
+    def slow(url):
+        raise HTTPException(503, 'Checking the recording took too long. Try again in a minute.')
+    monkeypatch.setattr(cf, 'probe_remote', slow)
+    store = Store(monkeypatch)
+    with pytest.raises(HTTPException) as caught:
+        cf.finish_upload(BIZ, SOURCE, USER)
+    assert caught.value.status_code == 503 and not store.deletes and not store.patches
+
+
+@pytest.mark.parametrize('stdout,returncode,stderr,expected', [
+    ('{"format": {"duration": "61.5"}, "streams": [{"codec_type": "video", "width": 1280, "height": 720}]}', 0, '', 61.5),
+    ('{"format": {"duration": "7300"}, "streams": [{"codec_type": "video"}]}', 0, '', 422),
+    ('{"format": {"duration": "60"}, "streams": [{"codec_type": "audio"}]}', 0, '', 422),
+    ('{"format": {"duration": "60"}, "streams": [{"codec_type": "video", "width": 7680, "height": 4320}]}', 0, '', 422),
+    ('oops', 0, '', 422),
+    ('', 1, 'signed: Invalid data found when processing input', 422),          # read it: not a video
+    ('', 1, 'HTTP error 503 Service Unavailable', 503),                       # storage blip: try again
+    ('', 1, 'Connection timed out', 503),
 ])
-def test_remote_probe_rules(monkeypatch, stdout, expected):
-    monkeypatch.setattr(cf.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=stdout))
+def test_remote_probe_rules(monkeypatch, stdout, returncode, stderr, expected):
+    monkeypatch.setattr(cf.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=stdout, returncode=returncode, stderr=stderr))
     if isinstance(expected, float):
         assert cf.probe_remote('https://abcdefgh.supabase.co/signed') == expected
     else:
         with pytest.raises(HTTPException) as caught:
             cf.probe_remote('https://abcdefgh.supabase.co/signed')
         assert caught.value.status_code == expected
+
+
+def test_a_probe_timeout_is_retryable(monkeypatch):
+    def slow(*a, **k):
+        raise cf.subprocess.TimeoutExpired('ffprobe', 120)
+    monkeypatch.setattr(cf.subprocess, 'run', slow)
+    with pytest.raises(HTTPException) as caught:
+        cf.probe_remote('https://abcdefgh.supabase.co/signed')
+    assert caught.value.status_code == 503
 
 
 # ── starting runs ────────────────────────────────────────────────────
@@ -339,6 +369,20 @@ def test_an_unexpected_error_leaves_the_run_to_resume(monkeypatch, worker):
     assert cf.work_once() is True
     assert not any(body.get('status') == 'failed' for _, body in store.patches)
     assert not [c for c in worker.calls if c[0] == 'DELETE']
+
+
+def test_a_clip_that_cannot_be_filed_stops_the_run_before_completed(monkeypatch, worker):
+    worker.script['GET'] = [httpx.Response(404), completed()]
+    def post(path, body):
+        if path == '/media_assets' and body['id'] == str(uuid5(UUID(RUN), 'clip-1')):
+            return None   # the insert failed
+        return [dict(body)]
+    store = Store(monkeypatch, reads=lambda path: [ready_source()] if f'id=eq.{SOURCE}' in path else [], post=post)
+    with pytest.raises(RuntimeError, match='could not be filed'):
+        cf.drive(dict(RUN_ROW))
+    assert not any(body.get('status') == 'completed' for _, body in store.patches)
+    assert worker.metered == [] and worker.notified == []
+    assert not [c for c in worker.calls if c[0] == 'DELETE']   # the job stays on the clip service to resume
 
 
 def test_a_removed_recording_fails_the_run(monkeypatch, worker):

@@ -19,6 +19,35 @@ ALTER TABLE public.media_assets ADD COLUMN IF NOT EXISTS decision text CHECK (de
 ALTER TABLE public.media_assets ADD COLUMN IF NOT EXISTS decided_at timestamptz;
 ALTER TABLE public.media_assets ADD COLUMN IF NOT EXISTS source_removed_at timestamptz;
 
+-- Same function as APPLY-2026-09-07-media-library.sql (verified against
+-- production 2026-10-05) with one change: a recording removed under the
+-- 7-day rule no longer counts against the 20 GB allowance, and cannot be
+-- the source of a new manual clip.
+CREATE OR REPLACE FUNCTION public.enqueue_media_asset(p_business_id uuid,p_actor_id uuid,p_asset jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path=public AS $$
+DECLARE saved public.media_assets; used bigint;
+BEGIN
+  PERFORM id FROM public.businesses WHERE id=p_business_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Business unavailable'; END IF;
+  IF EXISTS(SELECT 1 FROM public.media_assets WHERE business_id=p_business_id AND status IN ('queued','processing')) THEN
+    RETURN jsonb_build_object('refused','A recording or clip is already processing. Wait for it to finish.');
+  END IF;
+  SELECT coalesce(sum(byte_size),0) INTO used FROM public.media_assets
+   WHERE business_id=p_business_id AND status<>'failed' AND source_removed_at IS NULL;
+  IF used+coalesce((p_asset->>'byte_size')::bigint,0)+104857600 > 21474836480 THEN
+    RETURN jsonb_build_object('refused','This media library has reached its 20 GB allowance. Contact support before importing more.');
+  END IF;
+  IF p_asset->>'kind'='clip' AND NOT EXISTS(SELECT 1 FROM public.media_assets WHERE id=(p_asset->>'source_id')::uuid AND business_id=p_business_id AND kind='source' AND status='ready' AND source_removed_at IS NULL) THEN
+    RAISE EXCEPTION 'Source is not ready in this business';
+  END IF;
+  INSERT INTO public.media_assets(business_id,kind,source_id,name,configuration,drive_file_id,source_version,encrypted_token,byte_size,created_by)
+    VALUES(p_business_id,p_asset->>'kind',(p_asset->>'source_id')::uuid,p_asset->>'name',p_asset->'configuration',p_asset->>'drive_file_id',p_asset->>'source_version',p_asset->>'encrypted_token',coalesce((p_asset->>'byte_size')::bigint,0),p_actor_id)
+    RETURNING * INTO saved;
+  RETURN to_jsonb(saved);
+END $$;
+REVOKE ALL ON FUNCTION public.enqueue_media_asset(uuid,uuid,jsonb) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.enqueue_media_asset(uuid,uuid,jsonb) TO service_role;
+
 CREATE TABLE IF NOT EXISTS public.media_clip_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   business_id uuid NOT NULL REFERENCES public.businesses(id) ON DELETE CASCADE,

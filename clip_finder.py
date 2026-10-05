@@ -120,7 +120,10 @@ def configuration(business_id):
 
 
 def library_bytes(business_id):
-    rows = media_library.read(f'/media_assets?business_id=eq.{media_library.key(business_id)}&status=neq.failed&select=byte_size')
+    # Recordings removed under the 7-day rule no longer take up the allowance
+    # (enqueue_media_asset counts the same way).
+    rows = media_library.read(f'/media_assets?business_id=eq.{media_library.key(business_id)}&status=neq.failed'
+                              '&source_removed_at=is.null&select=byte_size')
     return sum(int(r.get('byte_size') or 0) for r in rows)
 
 
@@ -182,16 +185,30 @@ def put_file(local, path, content_type):
         raise RunFailed('A finished clip could not be saved. Try again.')
 
 
+NOT_A_VIDEO = "That file isn't a video we can read. Try an MP4, MOV or WebM."
+
+
 def probe_remote(url):
-    """Duration of a stored recording, read with range requests (no full download)."""
+    """Duration of a stored recording, read with range requests (no full download).
+
+    422 only when ffprobe read the file and it is not a usable video; a
+    timeout, a missing tool or a storage hiccup is a retryable 503, so the
+    caller never deletes a good upload over a blip."""
     try:
         done = subprocess.run([shutil.which('ffprobe') or 'ffprobe', '-v', 'error', '-protocol_whitelist', 'https,tls,tcp,crypto',
                                '-show_entries', 'format=duration:stream=codec_type,width,height', '-of', 'json', url],
                               capture_output=True, text=True, timeout=120)
+    except (subprocess.SubprocessError, OSError):
+        raise HTTPException(503, 'Checking the recording took too long. Try again in a minute.') from None
+    if done.returncode != 0:
+        if 'Invalid data found' in (done.stderr or '') or 'moov atom not found' in (done.stderr or ''):
+            raise HTTPException(422, NOT_A_VIDEO)
+        raise HTTPException(503, 'The recording could not be checked right now. Try again in a minute.')
+    try:
         data = json.loads(done.stdout or '{}')
         duration = float(data['format']['duration'])
-    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError):
-        raise HTTPException(422, "That file isn't a video we can read. Try an MP4, MOV or WebM.") from None
+    except (ValueError, KeyError, TypeError):
+        raise HTTPException(422, NOT_A_VIDEO) from None
     videos = [s for s in data.get('streams', []) if s.get('codec_type') == 'video']
     if not videos:
         raise HTTPException(422, 'That file has no video in it.')
@@ -260,9 +277,11 @@ def finish_upload(business_id, asset_id, user):
         raise HTTPException(503, 'The recording could not be checked. Try again.')
     try:
         duration = probe_remote(url)
-    except HTTPException:
-        remove_objects([path])
-        sb_clients.sb_delete_as_service(f'/media_assets?id=eq.{media_library.key(asset_id)}&status=eq.uploading')
+    except HTTPException as error:
+        if error.status_code == 422:
+            # The file itself is not a usable video: nothing to keep.
+            remove_objects([path])
+            sb_clients.sb_delete_as_service(f'/media_assets?id=eq.{media_library.key(asset_id)}&status=eq.uploading')
         raise
     saved = media_library.one(sb_clients.sb_patch_as_service(
         f'/media_assets?id=eq.{media_library.key(asset_id)}&business_id=eq.{media_library.key(business_id)}&status=eq.uploading',
@@ -415,7 +434,7 @@ def file_clips(run, source, result):
                     except (ValueError, RunFailed, httpx.HTTPError):
                         log.warning('Poster not saved for clip %s', asset_id)
                 start, end = (clip.get('start_ms') or 0) / 1000, (clip.get('end_ms') or 0) / 1000
-                sb_clients.sb_post_as_service('/media_assets', {
+                saved = sb_clients.sb_post_as_service('/media_assets', {
                     'id': str(asset_id), 'business_id': media_library.key(run['business_id']), 'kind': 'clip',
                     'source_id': media_library.key(source['id']), 'name': (clip.get('title') or f'Clip {n + 1}')[:160],
                     'status': 'ready', 'byte_size': video.stat().st_size, 'sha256': sha,
@@ -426,6 +445,11 @@ def file_clips(run, source, result):
                                       'tags': clip.get('tags') or [], 'review_flags': clip.get('review_flags') or [],
                                       'empty_spots': clip.get('empty_spots') or [], 'face_coverage': clip.get('face_coverage'),
                                       'poster': poster, 'caption': '', 'destination': ''}})
+                if not saved:
+                    # Never report a clip that isn't in the library. Stop here and
+                    # let the lease lapse: the next claim resumes, and the stable
+                    # ids skip every clip already filed.
+                    raise RuntimeError(f'Clip {clip["index"]} could not be filed')
         filed += 1
         report(run, stage='saving', percent=round(99 * (filed / max(1, len(rows))), 1), clips_done=filed, clips_total=len(rows))
     return filed
