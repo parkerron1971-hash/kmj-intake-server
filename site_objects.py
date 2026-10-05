@@ -596,11 +596,11 @@ _add(_o(
 # ── 16. THE SHAPED EDGE ──────────────────────────────────────────────
 _add(_o(
     key="edge", name="Shaped section edge",
-    intent="a section whose bottom edge is an arc, a wave, a scallop, a tear or a slant",
+    intent="a section whose bottom edge is an arc, a wave, a scallop, a tear, a slant or steps",
     use_when="one or two seams between big color fields, never every section. "
              "Put the classes on a <section>; the next section's background "
              "shows through the shape.",
-    aliases=("edge", "shaped edge", "arc edge", "wave edge", "wavy edge", "torn edge", "slant edge", "curved seam"),
+    aliases=("edge", "shaped edge", "arc edge", "wave edge", "wavy edge", "torn edge", "slant edge", "stepped edge", "curved seam"),
     html="""<section class="sxo sxo-edge" data-sx-object="edge" data-edge="arc" data-overlap-ok>
   <div class="sxo-edge-inner"><h2>The section above the seam</h2><p>Its bottom edge curves into the next section.</p></div>
 </section>""",
@@ -618,6 +618,7 @@ _add(_o(
                radial-gradient(var(--R) at 50% calc(100% + var(--s) * .5),rgba(0,0,0,0) 99%,rgba(0,0,0,1) 101%) 50% calc(100% - var(--s))/calc(4 * var(--s)) 100% repeat-x;
           mask:radial-gradient(var(--R) at 50% calc(100% - var(--s) * 1.5),rgba(0,0,0,1) 99%,rgba(0,0,0,0) 101%) calc(50% - 2 * var(--s)) 0/calc(4 * var(--s)) 100%,
                radial-gradient(var(--R) at 50% calc(100% + var(--s) * .5),rgba(0,0,0,0) 99%,rgba(0,0,0,1) 101%) 50% calc(100% - var(--s))/calc(4 * var(--s)) 100% repeat-x}
+.sxo-edge[data-edge="steps"]{clip-path:polygon(0 0,100% 0,100% calc(100% - var(--d)),75% calc(100% - var(--d)),75% calc(100% - var(--d) * .66),50% calc(100% - var(--d) * .66),50% calc(100% - var(--d) * .33),25% calc(100% - var(--d) * .33),25% 100%,0 100%)}
 .sxo-edge+*{padding-top:calc(var(--d,48px) + 2rem)}
 @media (max-width:600px){.sxo-edge[data-edge="arc"]{clip-path:ellipse(110% 100% at 50% 0)}}""",
     phone="the arc flattens so it never cuts into text on a narrow screen",
@@ -1032,6 +1033,652 @@ _add(_o(
        "if(!els.length)window.removeEventListener('scroll',check);}"
        "window.addEventListener('scroll',check,{passive:true});check();})();",
     phone="two figures to a row at 44px",
+))
+
+
+# ═════════════════════════════════════════════════════════════════════
+# FROM THE SITES KEVIN SENT (2026-10-05). Kevin: "If I sent you sites,
+# could you look at them and build library for chief to use?" Six sites,
+# studied at 1440 and 390, every screen; each object below is a part I
+# found there and REBUILT from scratch to this library's contract (no
+# code, image, font or word of theirs). What Kevin said each site is for:
+#   dimedocs.com      "professional ... still have creative features"
+#   bridgemind.ai     "what I want to view when my business have future feel"
+#   antwainjackson.com "ministry pages doesn't have to be boring"
+#   2819church.org    "creative ... gives use for any sector"
+#   socialdallas.com  "a hint of traditional ... leadership out front"
+#   tradeify.co       (no note; its parts recur on the others)
+# ═════════════════════════════════════════════════════════════════════
+
+# ── 27. THE NOTICE BAR ───────────────────────────────────────────────
+_add(_o(
+    key="notice-bar", name="Announcement bar",
+    intent="a thin strip above the header with one real piece of news and a link",
+    use_when="one current, real thing from THE REAL DATA or the owner's words: "
+             "a new term, a launch, a move, an offer they stated (with its end "
+             "date only if they gave one). Never an invented sale, code or "
+             "countdown. Once, at the very top, before the header.",
+    aliases=("notice bar", "announcement bar", "promo bar", "top bar", "news bar"),
+    html="""<div class="sxo sxo-notice" data-sx-object="notice-bar">
+  <p class="sxo-notice-line"><span class="sxo-notice-tag">New</span><span>Fall term opens Sep 04, with six wheels left.</span><a href="#book">Save a seat</a></p>
+</div>""",
+    css=""".sxo-notice{background:var(--_ink);color:var(--_paper);font-family:var(--_label);font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+.sxo-notice-line{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:.35rem .8rem;max-width:72rem;margin:0 auto;padding:.6rem 1rem;text-align:center;line-height:1.4}
+.sxo-notice-tag{padding:.15rem .55rem;border-radius:999px;background:var(--_accent);color:var(--_paper);font-weight:700;letter-spacing:.1em}
+.sxo-notice a{color:inherit;font-weight:700;text-decoration:underline;text-underline-offset:.25em}
+@media (max-width:600px){.sxo-notice{font-size:11px;letter-spacing:.08em}.sxo-notice-line{padding:.55rem .8rem}}""",
+    phone="the line wraps to two at most and keeps its link",
+))
+
+# ── 28. THE CALLOUTS ─────────────────────────────────────────────────
+_add(_o(
+    key="callouts", name="Cards floating over a photo",
+    intent="a photo with one card and a small chip floating over its edges",
+    use_when="the hero or about photo of a professional page: the card holds "
+             "three to five real things included (with the action), the chip "
+             "one real figure or fact. data-at on each is right, left, "
+             "top-left, top-right, bottom-left or bottom-right. Needs a real "
+             "photo. Every word from THE REAL DATA.",
+    aliases=("callouts", "floating card", "floating cards", "photo callouts", "photo with a card"),
+    html="""<figure class="sxo sxo-callouts" data-sx-object="callouts" data-overlap-ok>
+  <img src="https://example.com/mara.jpg" alt="Mara Quill at the wheel, arms folded, smiling" width="900" height="1100">
+  <div class="sxo-callout sxo-paper" data-at="right">
+    <p class="sxo-label">Inside the course</p>
+    <ul><li>Six Thursday classes</li><li>Clay, glaze and two firings</li><li>Open studio on Sundays</li></ul>
+    <a href="#book">Save a seat</a>
+  </div>
+  <p class="sxo-callout sxo-callout-chip" data-at="top-left"><b>4 pieces</b><span>to take home</span></p>
+</figure>""",
+    css=""".sxo-callouts{position:relative;max-width:34rem;margin:0 auto}
+.sxo-callouts>img{display:block;width:100%;height:auto;aspect-ratio:4/5;object-fit:cover;border-radius:16px}
+.sxo-callout{position:absolute;z-index:2;margin:0;border-radius:14px;box-shadow:var(--_lift);animation:sxo-bob 7s ease-in-out infinite}
+.sxo-callout[data-at="right"],.sxo-callout[data-at="left"]{top:50%;width:min(64%,17rem);padding:1.1rem 1.2rem;translate:0 -50%}
+.sxo-callout[data-at="right"]{right:-10%}
+.sxo-callout[data-at="left"]{left:-10%}
+.sxo-callout[data-at="top-left"]{left:-6%;top:8%}
+.sxo-callout[data-at="top-right"]{right:-6%;top:8%}
+.sxo-callout[data-at="bottom-left"]{left:-6%;bottom:8%}
+.sxo-callout[data-at="bottom-right"]{right:-6%;bottom:8%}
+.sxo-callout .sxo-label{margin:0 0 .6rem;color:var(--_accent)}
+.sxo-callout ul{list-style:none;margin:0 0 .9rem;padding:0;display:grid;gap:.45rem;font-family:var(--_display);font-size:17px;line-height:1.25}
+.sxo-callout li{display:flex;gap:.55rem;align-items:baseline}
+.sxo-callout li::before{content:"";flex:none;width:7px;height:7px;border-radius:50%;background:var(--_accent);translate:0 -.15em}
+.sxo-callout a{display:block;padding:.65rem .9rem;border-radius:9px;background:var(--_accent);color:var(--_paper);text-align:center;font-size:14px;font-weight:700;text-decoration:none}
+.sxo-callout-chip{display:flex;flex-direction:column;padding:.7rem .95rem;background:var(--_accent);color:var(--_paper);animation-delay:-3.5s}
+.sxo-callout-chip b{font-family:var(--_display);font-size:24px;line-height:1}
+.sxo-callout-chip span{font-size:12px;opacity:.85}
+@keyframes sxo-bob{50%{transform:translateY(-6px)}}
+@media (max-width:700px){.sxo-callouts{display:grid;gap:.8rem}
+  .sxo-callout{position:static;width:auto!important;translate:none!important;animation:none}
+  .sxo-callout-chip{flex-direction:row;align-items:baseline;gap:.5rem;justify-self:start;order:-1}}
+@media (prefers-reduced-motion:reduce){.sxo-callout{animation:none}}""",
+    phone="the card and chip leave the photo and sit under it (the chip above), still and readable",
+))
+
+# ── 29. THE DEVICES ──────────────────────────────────────────────────
+_add(_o(
+    key="device", name="Window and phone frames",
+    intent="a browser window and a phone, built in CSS, holding real screenshots",
+    use_when="a real screenshot from THE REAL DATA's images (their booking "
+             "page, their app, a client's message they shared), or a small "
+             "panel built from real data (their services and prices, their "
+             "hours). Never a made-up interface. A window alone, a phone "
+             "alone, or the pair (the phone overlaps the window's corner); "
+             "two phones side by side for messages or reviews.",
+    aliases=("device", "devices", "phone frame", "browser window", "device frame", "screenshot frame", "app window"),
+    html="""<div class="sxo sxo-devices" data-sx-object="device">
+  <figure class="sxo-device" data-device="window">
+    <div class="sxo-device-bar" aria-hidden="true"><i></i><i></i><i></i><span>wheelhouse.studio/book</span></div>
+    <img src="https://example.com/booking-desktop.jpg" alt="The class booking page on a laptop" width="1440" height="900">
+  </figure>
+  <figure class="sxo-device" data-device="phone">
+    <span class="sxo-device-notch" aria-hidden="true"></span>
+    <img src="https://example.com/booking-phone.jpg" alt="The class booking page on a phone" width="390" height="844">
+  </figure>
+</div>""",
+    css=""".sxo-devices{position:relative;display:flex;justify-content:center;gap:clamp(1rem,3vw,2.5rem);max-width:60rem;margin:0 auto;padding-bottom:5%}
+.sxo-device{position:relative;margin:0;overflow:hidden;background:var(--_ink);box-shadow:0 30px 60px -30px rgba(0,0,0,.6),0 0 0 1px var(--_line)}
+.sxo-device img{display:block;width:100%;height:auto;object-fit:cover;object-position:top}
+.sxo-device[data-device="window"]{flex:0 1 88%;border-radius:12px}
+.sxo-device[data-device="window"] img{aspect-ratio:16/10}
+.sxo-device-bar{display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;font-family:var(--_label);font-size:11px;
+  background:color-mix(in srgb,var(--_ink) 86%,rgba(255,255,255,1));color:color-mix(in srgb,var(--_paper) 70%,transparent)}
+.sxo-device-bar i{width:9px;height:9px;border-radius:50%;background:color-mix(in srgb,var(--_paper) 35%,transparent)}
+.sxo-device-bar span{margin:0 auto;padding:2px 10px;border-radius:6px;background:rgba(255,255,255,.08);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sxo-device[data-device="phone"]{flex:0 0 auto;width:clamp(150px,22vw,250px);padding:9px;border-radius:38px}
+.sxo-device[data-device="phone"] img{aspect-ratio:390/844;border-radius:30px}
+.sxo-device-notch{position:absolute;z-index:1;top:17px;left:50%;width:30%;height:18px;translate:-50% 0;border-radius:999px;background:var(--_ink)}
+.sxo-devices:has([data-device="window"]) [data-device="phone"]{position:absolute;right:0;bottom:0;width:clamp(120px,19vw,210px)}
+@media (max-width:600px){.sxo-device[data-device="window"]{flex-basis:100%}
+  .sxo-devices:has([data-device="window"]) [data-device="phone"]{width:34%;bottom:-2%}
+  .sxo-devices:not(:has([data-device="window"])) [data-device="phone"]{width:44%}}""",
+    phone="the window spans the screen and the phone overlaps its corner at a third of the width; two phones sit side by side",
+))
+
+# ── 30. THE PLANS ────────────────────────────────────────────────────
+_add(_o(
+    key="plan-cards", name="Plan cards",
+    intent="two to four plans side by side, one lifted, with an optional monthly or yearly switch",
+    use_when="memberships, packages or tiers with prices from THE REAL DATA. "
+             "Keep the billing switch only when the data gives BOTH prices for "
+             "every plan (each figure carries data-month and data-year); "
+             "otherwise remove it. Lift the plan the owner leads with; the flag "
+             "names a real reason they gave ('Most chosen' only if they said so).",
+    aliases=("plan cards", "pricing table", "pricing tiers", "membership plans", "price plans"),
+    html="""<div class="sxo sxo-plans" data-sx-object="plan-cards">
+  <div class="sxo-plans-bill" role="group" aria-label="Billing">
+    <button type="button" aria-pressed="true" data-bill="month">Monthly</button>
+    <button type="button" aria-pressed="false" data-bill="year">Yearly</button>
+  </div>
+  <div class="sxo-plans-row">
+    <article class="sxo-plan sxo-paper">
+      <h3>Open studio</h3>
+      <p class="sxo-plan-for">For anyone who has taken a class.</p>
+      <p class="sxo-plan-price"><b data-month="$45" data-year="$450">$45</b><span data-month="a month" data-year="a year">a month</span></p>
+      <ul><li>Sunday afternoons</li><li>Shelf space</li><li>Glaze included</li></ul>
+      <a class="sxo-plan-go" href="#join">Join</a>
+    </article>
+    <article class="sxo-plan sxo-paper is-featured">
+      <p class="sxo-plan-flag sxo-label">Most chosen</p>
+      <h3>Studio member</h3>
+      <p class="sxo-plan-for">For potters who throw every week.</p>
+      <p class="sxo-plan-price"><b data-month="$95" data-year="$950">$95</b><span data-month="a month" data-year="a year">a month</span></p>
+      <ul><li>Every open hour</li><li>A wheel of your own</li><li>Two firings a week</li><li>Ten percent off classes</li></ul>
+      <a class="sxo-plan-go" href="#join">Join</a>
+    </article>
+    <article class="sxo-plan sxo-paper">
+      <h3>Kiln share</h3>
+      <p class="sxo-plan-for">For potters with a wheel at home.</p>
+      <p class="sxo-plan-price"><b data-month="$30" data-year="$300">$30</b><span data-month="a month" data-year="a year">a month</span></p>
+      <ul><li>One shelf a firing</li><li>Drop off any day</li></ul>
+      <a class="sxo-plan-go" href="#join">Join</a>
+    </article>
+  </div>
+</div>""",
+    css=""".sxo-plans{display:grid;justify-items:center;gap:clamp(1.2rem,2.4vw,1.8rem)}
+.sxo-plans-bill{display:inline-flex;padding:4px;border-radius:999px;border:1px solid var(--_line);background:color-mix(in srgb,currentColor 5%,transparent)}
+.sxo-plans-bill button{padding:.5rem 1.1rem;border:0;border-radius:999px;background:none;color:inherit;font:inherit;font-size:14px;cursor:pointer}
+.sxo-plans-bill button[aria-pressed="true"]{background:var(--_accent);color:var(--_paper)}
+.sxo-plans-bill button:focus-visible{outline:2px solid var(--_accent);outline-offset:2px}
+.sxo-plans-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:clamp(.9rem,1.8vw,1.4rem);width:100%;align-items:stretch}
+.sxo-plan{position:relative;display:flex;flex-direction:column;gap:.55rem;padding:clamp(1.3rem,2.4vw,1.8rem);border-radius:18px;border:1px solid var(--_line);box-shadow:var(--_lift)}
+.sxo-plan.is-featured{border:2px solid var(--_accent);box-shadow:0 0 0 6px color-mix(in srgb,var(--_accent) 14%,transparent),var(--_lift)}
+.sxo-plan-flag{position:absolute;top:-.8rem;left:1.3rem;margin:0;padding:.25rem .65rem;border-radius:999px;background:var(--_accent);color:var(--_paper);font-size:11px}
+.sxo-plan h3{margin:0;font-family:var(--_display);font-size:clamp(22px,2vw,28px);line-height:1.1}
+.sxo-plan-for{margin:0;font-size:14px;color:color-mix(in srgb,var(--_ink) 70%,transparent)}
+.sxo-plan-price{display:flex;align-items:baseline;gap:.4rem;margin:.4rem 0 .2rem}
+.sxo-plan-price b{font-family:var(--_display);font-size:clamp(40px,4.2vw,56px);line-height:1;font-variant-numeric:tabular-nums}
+.sxo-plan-price span{font-size:14px;color:color-mix(in srgb,var(--_ink) 65%,transparent)}
+.sxo-plan ul{list-style:none;margin:.4rem 0 1rem;padding:.9rem 0 0;border-top:1px solid var(--_line);display:grid;gap:.5rem;font-size:15px}
+.sxo-plan li{display:flex;gap:.6rem;align-items:baseline}
+.sxo-plan li::before{content:"";flex:none;width:.55em;height:.3em;border-left:2px solid var(--_accent);border-bottom:2px solid var(--_accent);transform:rotate(-45deg) translateY(-.15em)}
+.sxo-plan-go{margin-top:auto;display:block;padding:.8rem 1rem;border-radius:10px;border:1.5px solid var(--_ink);color:var(--_ink);text-align:center;font-weight:700;text-decoration:none}
+.sxo-plan.is-featured .sxo-plan-go{background:var(--_accent);border-color:var(--_accent);color:var(--_paper)}
+@media (max-width:600px){.sxo-plan-price b{font-size:40px}}""",
+    js="(function(){document.querySelectorAll('.sxo-plans').forEach(function(p){var bs=p.querySelectorAll('.sxo-plans-bill button');"
+       "bs.forEach(function(b){b.addEventListener('click',function(){var k=b.getAttribute('data-bill');"
+       "bs.forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});"
+       "p.querySelectorAll('[data-'+k+']').forEach(function(el){if(el.tagName!=='BUTTON')el.textContent=el.getAttribute('data-'+k);});});});});})();",
+    phone="the plans stack one per row, the lifted one keeps its ring",
+))
+
+# ── 31. THE COMPARISON ───────────────────────────────────────────────
+_add(_o(
+    key="comparison", name="Us and the usual way",
+    intent="two columns side by side: what this business does, with checks, and the usual way, with crosses",
+    use_when="the owner's own contrast, in their words: what they do "
+             "differently from the usual way. Never a named competitor, never "
+             "a claim the data does not support. Three to five lines a side.",
+    aliases=("us vs them", "us and the usual way", "with and without", "versus"),
+    html="""<div class="sxo sxo-compare" data-sx-object="comparison">
+  <div class="sxo-compare-col is-ours sxo-paper"><p class="sxo-label">At Wheelhouse</p><ul><li>Your own wheel every class</li><li>Clay, glaze and firing included</li><li>Miss a week, make it up on Sunday</li></ul></div>
+  <div class="sxo-compare-col is-theirs"><p class="sxo-label">The usual night class</p><ul><li>Three people to a wheel</li><li>Clay and firing billed extra</li><li>A missed week is gone</li></ul></div>
+</div>""",
+    css=""".sxo-compare{display:grid;grid-template-columns:1.1fr 1fr;gap:clamp(.8rem,1.6vw,1.2rem);align-items:center}
+.sxo-compare-col{padding:clamp(1.3rem,2.6vw,2rem);border-radius:18px}
+.sxo-compare-col .sxo-label{margin:0 0 1rem}
+.sxo-compare-col ul{list-style:none;margin:0;padding:0;display:grid;gap:.8rem;font-size:16px;line-height:1.4}
+.sxo-compare-col li{display:flex;gap:.7rem;align-items:flex-start}
+.sxo-compare-col li::before{flex:none;display:grid;place-items:center;width:22px;height:22px;border-radius:50%;font-size:12px;font-weight:700;line-height:1}
+.sxo-compare .is-ours{border:2px solid var(--_accent);box-shadow:var(--_lift)}
+.sxo-compare .is-ours .sxo-label{color:var(--_accent)}
+.sxo-compare .is-ours li::before{content:"\\2713";background:var(--_accent);color:var(--_paper)}
+.sxo-compare .is-theirs{border:1px dashed color-mix(in srgb,currentColor 35%,transparent);color:color-mix(in srgb,currentColor 72%,transparent)}
+.sxo-compare .is-theirs li::before{content:"\\2715";background:color-mix(in srgb,currentColor 12%,transparent);color:currentColor}
+@media (max-width:700px){.sxo-compare{grid-template-columns:1fr}}""",
+    phone="the two columns stack, this business first",
+))
+
+# ── 32. THE LAUREL ───────────────────────────────────────────────────
+_LAUREL_SVG = ('<svg class="sxo-laurel-branch{side}" viewBox="0 0 40 100" aria-hidden="true">'
+               '<path d="M30 96C10 82 4 46 20 6"/>'
+               '<ellipse cx="17" cy="88" rx="3" ry="7.5" transform="rotate(-55 17 88)"/>'
+               '<ellipse cx="25" cy="84" rx="2.6" ry="6.5" transform="rotate(35 25 84)"/>'
+               '<ellipse cx="10" cy="76" rx="3" ry="7.5" transform="rotate(-40 10 76)"/>'
+               '<ellipse cx="20" cy="70" rx="2.6" ry="6.5" transform="rotate(40 20 70)"/>'
+               '<ellipse cx="6" cy="62" rx="3" ry="7.5" transform="rotate(-20 6 62)"/>'
+               '<ellipse cx="16" cy="56" rx="2.6" ry="6.5" transform="rotate(45 16 56)"/>'
+               '<ellipse cx="5" cy="47" rx="3" ry="7.5" transform="rotate(-5 5 47)"/>'
+               '<ellipse cx="15" cy="42" rx="2.6" ry="6.5" transform="rotate(50 15 42)"/>'
+               '<ellipse cx="8" cy="32" rx="3" ry="7.5" transform="rotate(12 8 32)"/>'
+               '<ellipse cx="18" cy="28" rx="2.6" ry="6.5" transform="rotate(55 18 28)"/>'
+               '<ellipse cx="14" cy="17" rx="3" ry="7" transform="rotate(25 14 17)"/>'
+               '</svg>')
+_add(_o(
+    key="laurel", name="Award in a laurel",
+    intent="a real award set between two laurel branches: who gave it, what for, the year",
+    use_when="awards, rankings or honors THE REAL DATA or the owner states, "
+             "word for word, with who gave them and the year. Never an "
+             "invented award. Several sit in .sxo-laurel-row.",
+    aliases=("laurel", "laurels", "award laurel", "laurel wreath"),
+    html="""<div class="sxo-laurel-row">
+<p class="sxo sxo-laurel" data-sx-object="laurel">""" + _LAUREL_SVG.format(side="") + """<span class="sxo-laurel-text"><small class="sxo-label">Dallas Arts Weekly</small><b>Best pottery class</b><small class="sxo-label">2025</small></span>""" + _LAUREL_SVG.format(side=" is-right") + """</p>
+</div>""",
+    css=""".sxo-laurel-row{display:flex;flex-wrap:wrap;justify-content:center;gap:clamp(1rem,3vw,2.5rem)}
+.sxo-laurel{display:inline-flex;align-items:center;gap:.35rem;margin:0;color:inherit}
+.sxo-laurel-branch{flex:none;width:auto;height:clamp(64px,7vw,88px);color:var(--_accent)}
+.sxo-laurel-branch path{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.sxo-laurel-branch ellipse{fill:currentColor}
+.sxo-laurel-branch.is-right{transform:scaleX(-1)}
+.sxo-laurel-text{display:flex;flex-direction:column;align-items:center;gap:.2rem;max-width:12ch;text-align:center}
+.sxo-laurel-text b{font-family:var(--_display);font-size:clamp(15px,1.3vw,18px);line-height:1.15}
+.sxo-laurel-text small{font-size:10px;letter-spacing:.14em;color:color-mix(in srgb,currentColor 65%,transparent)}
+@media (max-width:600px){.sxo-laurel-branch{height:60px}}""",
+    phone="the branches drop to 60px; awards wrap two to a row",
+))
+
+# ── 33. THE BEAM ─────────────────────────────────────────────────────
+_add(_o(
+    key="beam", name="Light beam",
+    intent="a shaft of light falling from the top of a dark section onto what sits below it",
+    use_when="the opening of a dark, future-feeling page: it lights the "
+             "product, the work or the offer (a device object or a photo) "
+             "underneath. First child of a dark <section> with position "
+             "relative; the section's content sits above it (z-index 1). "
+             "Once a page. Set --beam-x to move it sideways.",
+    aliases=("beam", "light beam", "spotlight beam", "light shaft", "beam of light"),
+    html="""<div class="sxo sxo-beam" data-sx-object="beam" aria-hidden="true"><span class="sxo-beam-haze"></span><span class="sxo-beam-core"></span><span class="sxo-beam-pool"></span></div>""",
+    css=""".sxo-beam{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.sxo-beam>span{position:absolute;left:var(--beam-x,62%);translate:-50% 0}
+.sxo-beam-haze{top:-8%;width:clamp(220px,30vw,520px);height:78%;filter:blur(28px);
+  background:radial-gradient(50% 100% at 50% 100%,color-mix(in srgb,var(--_accent) 55%,transparent),color-mix(in srgb,var(--_accent) 12%,transparent) 55%,transparent 75%);
+  animation:sxo-beam 7s ease-in-out infinite}
+.sxo-beam-core{top:0;width:4px;height:66%;filter:blur(1.5px);
+  background:linear-gradient(transparent,rgba(255,255,255,.75) 35%,rgba(255,255,255,1) 70%,color-mix(in srgb,var(--_accent) 80%,rgba(255,255,255,1)));
+  box-shadow:0 0 18px 4px color-mix(in srgb,var(--_accent) 70%,transparent),0 0 60px 16px color-mix(in srgb,var(--_accent) 30%,transparent)}
+.sxo-beam-pool{top:60%;width:clamp(320px,62vw,1100px);height:clamp(80px,14vw,200px);border-radius:50%;filter:blur(24px);
+  background:radial-gradient(closest-side,rgba(255,255,255,.55),color-mix(in srgb,var(--_accent) 45%,transparent) 30%,transparent)}
+@keyframes sxo-beam{50%{opacity:.78}}
+@media (max-width:600px){.sxo-beam>span{left:50%}.sxo-beam-core{height:50%}.sxo-beam-pool{top:46%}}
+@media (prefers-reduced-motion:reduce){.sxo-beam-haze{animation:none}}""",
+    phone="the beam centres and lands higher, on what sits under the headline",
+))
+
+# ── 34. THE FLOW ─────────────────────────────────────────────────────
+_add(_o(
+    key="flow-lines", name="One thing branching into several",
+    intent="one card joined by glowing lines to two to four cards it leads to",
+    use_when="one real thing that sets several others moving: a booking and "
+             "what follows it, a gift and where it goes, a membership and "
+             "what it opens. Real steps from the data. The svg keeps one path "
+             "per end card; the paths' end heights are 25 and 75 for two "
+             "ends, 16, 50 and 84 for three, 12, 37, 63 and 88 for four.",
+    aliases=("flow lines", "connector lines", "connectors", "branching", "node graph", "flow diagram"),
+    html="""<div class="sxo sxo-flow" data-sx-object="flow-lines">
+  <p class="sxo-flow-node is-source sxo-paper"><b>One booking</b><span>a single tap</span></p>
+  <svg class="sxo-flow-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M0,50 C45,50 55,16 100,16"/><path pathLength="1" d="M0,50 C45,50 55,50 100,50"/><path pathLength="1" d="M0,50 C45,50 55,84 100,84"/></svg>
+  <ul class="sxo-flow-ends">
+    <li class="sxo-flow-node sxo-paper"><b>A wheel held for you</b><span>the moment you book</span></li>
+    <li class="sxo-flow-node sxo-paper"><b>A reminder</b><span>the day before</span></li>
+    <li class="sxo-flow-node sxo-paper"><b>Your pieces fired</b><span>ready the next week</span></li>
+  </ul>
+</div>""",
+    css=""".sxo-flow{display:grid;grid-template-columns:minmax(0,1fr) minmax(70px,1.1fr) minmax(0,1.3fr);align-items:center;max-width:58rem;margin:0 auto}
+.sxo-flow-node{display:flex;flex-direction:column;gap:.2rem;margin:0;padding:.9rem 1.1rem;border-radius:14px;border:1px solid var(--_line);box-shadow:var(--_lift)}
+.sxo-flow-node b{font-family:var(--_display);font-size:18px;line-height:1.15}
+.sxo-flow-node span{font-size:13px;color:color-mix(in srgb,var(--_ink) 65%,transparent)}
+.sxo-flow-node.is-source{border-color:var(--_accent);box-shadow:0 0 0 5px color-mix(in srgb,var(--_accent) 16%,transparent),var(--_lift)}
+.sxo-flow-lines{align-self:stretch;width:100%;height:100%;overflow:visible}
+.sxo-flow-lines path{fill:none;stroke:var(--_accent);stroke-width:2;stroke-linecap:round;vector-effect:non-scaling-stroke;
+  stroke-dasharray:.035 .015;filter:drop-shadow(0 0 4px color-mix(in srgb,var(--_accent) 60%,transparent));animation:sxo-flowing 9s linear infinite}
+@keyframes sxo-flowing{to{stroke-dashoffset:-1}}
+.sxo-flow-ends{list-style:none;margin:0;padding:0;display:grid;gap:1rem}
+@media (max-width:700px){.sxo-flow{grid-template-columns:1fr;gap:1rem}
+  .sxo-flow-lines{display:none}
+  .sxo-flow-ends{margin-left:1.2rem;padding-left:1.2rem;border-left:2px solid var(--_accent)}}
+@media (prefers-reduced-motion:reduce){.sxo-flow-lines path{animation:none}}""",
+    phone="the lines give way to one accent rule down the left; the cards stack beside it",
+))
+
+# ── 35. THE PHOTO WORDS ──────────────────────────────────────────────
+_add(_o(
+    key="photo-words", name="Words with photos inside them",
+    intent="a huge headline whose lines carry small real photos set in among the words",
+    use_when="the opening line of a loud, creative page: three or four short "
+             "lines of the owner's message, one word in the accent (em), one "
+             "or two real photos (or the latest message's video poster) set "
+             "inside the lines. The photos are decoration of the type "
+             "(alt=''); describe them elsewhere if they matter. Inside a "
+             ".reveal the photos open as the line arrives.",
+    aliases=("photo words", "words with photos", "type collage", "photo headline"),
+    html="""<div class="sxo sxo-pwords" data-sx-object="photo-words"><h1>
+  <span class="sxo-pw-line">Make <span class="sxo-pw-pic"><img src="https://example.com/wheel.jpg" alt="" width="600" height="400"></span> it</span>
+  <span class="sxo-pw-line">with your <em>own</em></span>
+  <span class="sxo-pw-line"><span class="sxo-pw-pic is-wide"><img src="https://example.com/hands.jpg" alt="" width="900" height="400"></span> hands</span>
+</h1></div>""",
+    css=""".sxo-pwords{container-type:inline-size}
+.sxo-pwords h1{margin:0;font-family:var(--_display);font-size:clamp(44px,11cqi,180px);line-height:.92;letter-spacing:-.02em;text-transform:uppercase}
+.sxo-pw-line{display:block}
+.sxo-pw-line:nth-child(2){padding-left:.6em}
+.sxo-pwords em{font-style:normal;color:var(--_accent)}
+.sxo-pw-pic{display:inline-block;width:1.25em;height:.74em;vertical-align:.02em;overflow:hidden;border-radius:.08em;
+  background:color-mix(in srgb,currentColor 10%,transparent);clip-path:inset(0 0 0 0 round .08em);transition:clip-path .9s cubic-bezier(.6,0,.2,1) .2s}
+.sxo-pw-pic.is-wide{width:2.1em}
+.sxo-pw-pic img{display:block;width:100%;height:100%;object-fit:cover}
+.js .reveal:not(.in) .sxo-pw-pic{clip-path:inset(0 100% 0 0 round .08em)}
+@media (max-width:600px){.sxo-pwords h1{font-size:14cqi}.sxo-pw-line:nth-child(2){padding-left:0}}
+@media (prefers-reduced-motion:reduce){.sxo-pw-pic{transition:none}.js .reveal:not(.in) .sxo-pw-pic{clip-path:inset(0 0 0 0 round .08em)}}""",
+    phone="the words size to their column (about a seventh of its width) and keep their photos in the lines",
+))
+
+# ── 36. THE WORD RAIL ────────────────────────────────────────────────
+_add(_o(
+    key="word-rail", name="Word rail down the page edge",
+    intent="a short phrase spread one word at a time down the left edge, staying put as the page scrolls, with a thin accent rule",
+    use_when="the business's motto or mission line in four to seven short "
+             "words, the same words also said in the page's text (the rail "
+             "is hidden from readers). Once a page, as a direct child of "
+             "<body> so it takes the page's own text colour; it makes room "
+             "for itself on the left.",
+    aliases=("word rail", "side rail", "vertical words", "edge words"),
+    html="""<p class="sxo sxo-rail" data-sx-object="word-rail" aria-hidden="true"><span>Make</span><span>it</span><span>with</span><span>your</span><span>own</span><span>hands</span></p>""",
+    css=""".sxo-rail{position:fixed;z-index:30;left:clamp(10px,1.4vw,22px);top:clamp(84px,12vh,120px);bottom:clamp(18px,4vh,40px);margin:0;
+  display:flex;flex-direction:column;justify-content:space-between;pointer-events:none;color:inherit;
+  font-family:var(--_label);font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.sxo-rail::after{content:"";position:fixed;top:0;bottom:0;left:clamp(56px,5.4vw,86px);width:1px;background:var(--_accent)}
+body:has(.sxo-rail){padding-left:clamp(64px,6.4vw,100px)}
+@media (max-width:600px){.sxo-rail{left:6px;font-size:8.5px;letter-spacing:.06em}
+  .sxo-rail::after{left:30px}
+  body:has(.sxo-rail){padding-left:36px}}""",
+    phone="the words shrink to a narrow column and the rule moves in; the page keeps a 36px margin for it",
+))
+
+# ── 37. THE BRACKET LINKS ────────────────────────────────────────────
+_add(_o(
+    key="bracket-links", name="Bracketed links",
+    intent="a row of plain uppercase links, each held in accent brackets",
+    use_when="the two to four next steps on a loud page (plan a visit, watch "
+             "online, take a class), each to a real page or section. Use "
+             "the same bracket voice for links elsewhere on the page.",
+    aliases=("bracket links", "bracketed links"),
+    html="""<nav class="sxo sxo-brackets" data-sx-object="bracket-links" aria-label="Start here"><a href="#visit">Plan your visit</a><a href="#home">Throw from home</a><a href="#classes">See the classes</a></nav>""",
+    css=""".sxo-brackets{display:flex;flex-wrap:wrap;gap:.6rem clamp(1rem,2.4vw,2rem);font-family:var(--_display);font-size:clamp(15px,1.3vw,19px);letter-spacing:.02em;text-transform:uppercase}
+.sxo-brackets a{display:inline-flex;align-items:center;gap:.45em;color:inherit;text-decoration:none;white-space:nowrap}
+.sxo-brackets a::before{content:"(";color:var(--_accent);font-weight:400}
+.sxo-brackets a::after{content:")";color:var(--_accent);font-weight:400;transition:translate .25s}
+.sxo-brackets a:hover,.sxo-brackets a:focus-visible{color:var(--_accent)}
+.sxo-brackets a:hover::after,.sxo-brackets a:focus-visible::after{translate:.25em 0}
+@media (max-width:600px){.sxo-brackets{font-size:14px;gap:.5rem 1rem}}
+@media (prefers-reduced-motion:reduce){.sxo-brackets a::after{transition:none}}""",
+    phone="the links wrap at 14px, brackets kept",
+))
+
+# ── 38. THE TWO DOORS ────────────────────────────────────────────────
+_add(_o(
+    key="two-doors", name="Two big doors",
+    intent="two ways in side by side, each a huge word with its link",
+    use_when="the two real ways to take part: in person and online, at the "
+             "studio and at home, one-to-one and in a group. Each door links "
+             "to its real page. Exactly two.",
+    aliases=("two doors", "two ways in", "in person and online"),
+    html="""<div class="sxo sxo-doors" data-sx-object="two-doors">
+  <a class="sxo-door" href="#visit"><span class="sxo-door-kicker">Wheelhouse</span><b>In the studio</b><span class="sxo-door-go">Book a seat</span></a>
+  <a class="sxo-door" href="#home"><span class="sxo-door-kicker">Wheelhouse</span><b>At home</b><span class="sxo-door-go">Get the clay kit</span></a>
+</div>""",
+    css=""".sxo-doors{container-type:inline-size;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(1.5rem,5cqi,4rem)}
+.sxo-door{display:flex;flex-direction:column;gap:.3rem;padding-top:1.2rem;border-top:2px solid currentColor;color:inherit;text-decoration:none}
+.sxo-door-kicker{font-family:var(--_display);font-size:clamp(20px,4.6cqi,60px);line-height:.95}
+.sxo-door b{font-family:var(--_display);font-size:clamp(30px,7.6cqi,104px);line-height:.92;letter-spacing:-.01em;text-transform:uppercase;color:var(--_accent);transition:translate .35s}
+.sxo-door-go{margin-top:.8rem;font-family:var(--_label);font-size:14px;letter-spacing:.12em;text-transform:uppercase}
+.sxo-door-go::before{content:"( ";color:var(--_accent)}
+.sxo-door-go::after{content:" )";color:var(--_accent)}
+.sxo-door:hover b,.sxo-door:focus-visible b{translate:.06em 0}
+@media (max-width:700px){.sxo-doors{grid-template-columns:1fr}.sxo-door-kicker{font-size:clamp(20px,8cqi,40px)}.sxo-door b{font-size:clamp(30px,13cqi,64px)}}
+@media (prefers-reduced-motion:reduce){.sxo-door b{transition:none}}""",
+    phone="the doors stack, each with its rule above",
+))
+
+# ── 39. THE SIGN-OFF ─────────────────────────────────────────────────
+_add(_o(
+    key="sign-off", name="The name at full width",
+    intent="the business's name set as large as the page is wide, as the page's last word",
+    use_when="the very end of the page, above or inside the footer: the "
+             "name exactly as the business writes it (hidden from readers; "
+             "the footer says it in text). Once a page.",
+    aliases=("sign off", "signoff", "giant name", "footer wordmark", "name at full width"),
+    html="""<p class="sxo sxo-signoff" data-sx-object="sign-off" aria-hidden="true"><span>Wheelhouse</span></p>""",
+    css=""".sxo-signoff{margin:0;overflow:hidden;font-family:var(--_display);font-size:15vw;line-height:.8;letter-spacing:-.03em;white-space:nowrap}
+.sxo-signoff span{display:inline-block;padding-bottom:.06em}""",
+    js="(function(){var els=document.querySelectorAll('.sxo-signoff');if(!els.length)return;function fit(){els.forEach(function(el){"
+       "var s=el.firstElementChild;if(!s)return;el.style.fontSize='';var w=el.clientWidth,sw=s.scrollWidth;"
+       "if(w&&sw)el.style.fontSize=(parseFloat(getComputedStyle(el).fontSize)*w/sw*0.985)+'px';});}"
+       "fit();window.addEventListener('resize',fit);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);})();",
+    phone="the name still fills the width, whatever its length",
+))
+
+# ── 40. THE BILLBOARD ────────────────────────────────────────────────
+_add(_o(
+    key="billboard", name="Name behind the portrait",
+    intent="the person's name set huge across the opening, their portrait standing in front of it",
+    use_when="a personal brand's opening: a pastor, speaker, author, coach "
+             "or founder, with a real portrait. data-cut='cutout' only when "
+             "the photo is a cutout on a transparent background; otherwise "
+             "leave it off and the portrait stands in an arch in front of the "
+             "name. The page's h1 sits under it (the name here is hidden from "
+             "readers).",
+    aliases=("billboard", "name behind portrait", "name behind the person", "big name hero", "personal hero"),
+    html="""<div class="sxo sxo-billboard" data-sx-object="billboard" data-overlap-ok>
+  <p class="sxo-bb-name" aria-hidden="true"><span>Mara Quill</span></p>
+  <img class="sxo-bb-person" src="https://example.com/mara.jpg" alt="Mara Quill, studio lead, laughing with clay on her hands" width="900" height="1100">
+</div>""",
+    css=""".sxo-billboard{position:relative;display:grid;place-items:end center;min-height:clamp(440px,74vh,780px);overflow:hidden}
+.sxo-bb-name{position:absolute;left:0;right:0;top:46%;margin:0;translate:0 -50%;text-align:center;white-space:nowrap;
+  font-family:var(--_display);font-size:16vw;line-height:.8;letter-spacing:-.02em;text-transform:uppercase;color:color-mix(in srgb,currentColor 90%,transparent)}
+.sxo-bb-name span{display:inline-block}
+.sxo-bb-person{position:relative;z-index:1;display:block;width:auto;height:clamp(320px,58vh,620px);aspect-ratio:3/4;object-fit:cover;
+  margin-bottom:clamp(1rem,4vh,2.5rem);border-radius:999px 999px 18px 18px;box-shadow:var(--_lift)}
+.sxo-billboard[data-cut="cutout"] .sxo-bb-person{height:clamp(400px,72vh,760px);aspect-ratio:auto;object-fit:contain;margin-bottom:0;border-radius:0;box-shadow:none;
+  filter:drop-shadow(0 24px 30px rgba(0,0,0,.35))}
+@media (max-width:600px){.sxo-billboard{min-height:auto;padding-top:22vw}
+  .sxo-bb-name{top:14vw;translate:none}
+  .sxo-bb-person{height:auto;width:78%}
+  .sxo-billboard[data-cut="cutout"] .sxo-bb-person{width:92%;height:auto}}""",
+    js="(function(){var els=document.querySelectorAll('.sxo-bb-name');if(!els.length)return;function fit(){els.forEach(function(el){"
+       "var s=el.firstElementChild;if(!s)return;el.style.fontSize='';var w=el.clientWidth,sw=s.scrollWidth;"
+       "if(w&&sw)el.style.fontSize=(parseFloat(getComputedStyle(el).fontSize)*w/sw*0.96)+'px';});}"
+       "fit();window.addEventListener('resize',fit);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);})();",
+    phone="the name fills the top of the screen and the portrait stands under and over it at most of the width",
+))
+
+# ── 41. THE PATTERN BAND ─────────────────────────────────────────────
+_add(_o(
+    key="pattern-band", name="Bold pattern band",
+    intent="a full-width band of bold geometric pattern in the brand colours, a statement on a solid plate over it",
+    use_when="one or two loud seams on a creative or ministry page: the "
+             "statement is a real line of the owner's. data-pattern is "
+             "shards, zigzag or stripes. Never behind body text.",
+    aliases=("pattern band", "geometric band", "brand pattern band"),
+    html="""<section class="sxo sxo-pattern" data-sx-object="pattern-band" data-pattern="shards">
+  <p class="sxo-pattern-words">Make something real this fall</p>
+</section>""",
+    css=""".sxo-pattern{--pa:var(--_accent);--pb:color-mix(in srgb,var(--_accent) 40%,var(--_paper));--pc:var(--_ink);position:relative;display:grid;place-items:center;
+  min-height:clamp(180px,24vw,340px);padding:2rem 1rem;overflow:hidden;background-color:var(--pc)}
+.sxo-pattern[data-pattern="shards"]{background:
+  conic-gradient(from 20deg at 22% 30%,var(--pa) 0 70deg,transparent 0) 0 0/180px 140px,
+  conic-gradient(from 200deg at 70% 64%,var(--pb) 0 58deg,transparent 0) 40px 20px/160px 150px,
+  conic-gradient(from 120deg at 38% 82%,var(--_paper) 0 34deg,transparent 0) 90px 60px/200px 170px,
+  conic-gradient(from 300deg at 80% 20%,var(--pa) 0 40deg,transparent 0) 10px 80px/150px 130px,var(--pc)}
+.sxo-pattern[data-pattern="zigzag"]{background:
+  linear-gradient(135deg,var(--pa) 25%,transparent 25%) -32px 0/64px 64px,
+  linear-gradient(225deg,var(--pa) 25%,transparent 25%) -32px 0/64px 64px,
+  linear-gradient(315deg,var(--pb) 25%,transparent 25%) 0 0/64px 64px,
+  linear-gradient(45deg,var(--pb) 25%,var(--pc) 25%) 0 0/64px 64px}
+.sxo-pattern[data-pattern="stripes"]{background:
+  linear-gradient(transparent 0 46%,var(--pc) 46% 54%,transparent 54%) 0 0/100% 96px,
+  repeating-linear-gradient(90deg,var(--pa) 0 22px,var(--pc) 22px 30px,var(--pb) 30px 44px,var(--pc) 44px 52px,var(--_paper) 52px 58px,var(--pc) 58px 66px)}
+.sxo-pattern-words{position:relative;margin:0;max-width:22ch;padding:.5em .8em;background:var(--pc);color:var(--_paper);box-shadow:0 0 0 6px var(--pc);
+  font-family:var(--_display);font-size:clamp(26px,3.6vw,54px);line-height:1.05;text-align:center;text-transform:uppercase}
+@media (max-width:600px){.sxo-pattern{min-height:160px}.sxo-pattern-words{font-size:24px}}""",
+    phone="the band keeps its pattern at the same scale; the statement drops to 24px on its plate",
+))
+
+# ── 42. THE BOOK ─────────────────────────────────────────────────────
+_add(_o(
+    key="book-cover", name="Book standing on the page",
+    intent="a book cover with its spine shaded and its pages showing, tilted slightly",
+    use_when="a real book, workbook, guide or album the owner made: the "
+             "cover image from THE REAL DATA (img.sxo-book-cover) or, with no "
+             "cover image, a typeset cover (.sxo-book-cover.is-type) with the "
+             "real title and author. Beside its pitch and the real link to get it.",
+    aliases=("book cover", "book mockup", "standing book"),
+    html="""<figure class="sxo sxo-book" data-sx-object="book-cover">
+  <div class="sxo-book-body"><div class="sxo-book-cover is-type"><p class="sxo-label">A studio handbook</p><b>Centered</b><span>Mara Quill</span></div></div>
+  <figcaption class="sxo-label">Paperback and audio</figcaption>
+</figure>""",
+    css=""".sxo-book{display:grid;justify-items:center;gap:1.4rem;width:min(100%,17rem);margin:0 auto}
+.sxo-book-body{position:relative;width:100%;aspect-ratio:2/3;transform:rotate(-2deg);transition:transform .5s cubic-bezier(.2,.7,.2,1)}
+.sxo-book-body::before{content:"";position:absolute;inset:2% -4% -2.5% 6%;border-radius:2px 6px 6px 2px;
+  background:repeating-linear-gradient(90deg,var(--_paper) 0 2px,color-mix(in srgb,var(--_paper) 78%,rgba(0,0,0,1)) 2px 3px);
+  box-shadow:20px 28px 40px -14px rgba(0,0,0,.5)}
+.sxo-book-body::after{content:"";position:absolute;z-index:2;top:0;bottom:0;left:0;width:9%;border-radius:3px 0 0 3px;pointer-events:none;
+  background:linear-gradient(90deg,rgba(0,0,0,.35),rgba(255,255,255,.18) 40%,rgba(0,0,0,.12) 70%,rgba(0,0,0,0))}
+.sxo-book-cover{position:relative;z-index:1;display:block;width:100%;height:100%;object-fit:cover;border-radius:3px 8px 8px 3px}
+.sxo-book-cover.is-type{display:flex;flex-direction:column;justify-content:space-between;padding:1.4rem 1.2rem 1.4rem 1.6rem;background:var(--_accent);color:var(--_paper)}
+.sxo-book-cover.is-type .sxo-label{margin:0;opacity:.85;font-size:10px}
+.sxo-book-cover.is-type b{font-family:var(--_display);font-size:clamp(32px,3.4vw,44px);line-height:1}
+.sxo-book-cover.is-type span{font-size:14px;letter-spacing:.06em}
+.sxo-book:hover .sxo-book-body{transform:rotate(0) translateY(-4px)}
+.sxo-book figcaption{margin:0;color:color-mix(in srgb,currentColor 65%,transparent)}
+@media (max-width:600px){.sxo-book{width:min(100%,13rem)}}
+@media (prefers-reduced-motion:reduce){.sxo-book-body{transition:none}}""",
+    phone="the book narrows to 13rem and keeps its spine and pages",
+))
+
+# ── 43. THE LEADER ───────────────────────────────────────────────────
+_add(_o(
+    key="leader-spotlight", name="Leader spotlight",
+    intent="a leader's photo beside a dark panel with their name huge, on offset colour blocks, with a titled band above",
+    use_when="putting the leaders out front: the pastor, founder or lead "
+             "with their real photo, name, role, one or two sentences from "
+             "THE REAL DATA and the link to their story. A couple or a team "
+             "of two may share one photo and one panel.",
+    aliases=("leader spotlight", "meet the pastor", "meet our pastors", "meet the founder", "leadership spotlight"),
+    html="""<article class="sxo sxo-leader" data-sx-object="leader-spotlight">
+  <p class="sxo-leader-head">Meet the <span class="sxo-leader-script">studio lead</span></p>
+  <div class="sxo-leader-body">
+    <img src="https://example.com/mara.jpg" alt="Mara Quill at the wheel" width="900" height="1100">
+    <div class="sxo-leader-panel">
+      <p class="sxo-label">Studio lead</p>
+      <h3>Mara Quill</h3>
+      <p>Mara opened Wheelhouse so anyone could sit at a wheel without a waiting list.</p>
+      <a href="#about">Her story</a>
+    </div>
+  </div>
+</article>""",
+    css=""".sxo-leader{position:relative;max-width:62rem;margin:0 auto;padding:0 0 clamp(2rem,4vw,3rem) clamp(1rem,3vw,2.5rem)}
+.sxo-leader::before{content:"";position:absolute;z-index:0;left:0;right:12%;top:clamp(1.6rem,3vw,2.4rem);bottom:0;background:var(--_accent)}
+.sxo-leader::after{content:"";position:absolute;z-index:2;right:6%;top:0;width:clamp(48px,7vw,90px);aspect-ratio:1;background:var(--_paper);box-shadow:var(--_lift)}
+.sxo-leader-head{position:relative;z-index:1;display:inline-block;margin:0 0 0 clamp(.5rem,2vw,1.5rem);padding:.5rem 1.2rem;background:var(--_accent);color:var(--_paper);
+  font-family:var(--_display);font-size:clamp(22px,2.6vw,36px);letter-spacing:.02em;text-transform:uppercase}
+.sxo-leader-script{font-family:var(--obj-script,var(--_display));font-style:italic;text-transform:none}
+.sxo-leader-body{position:relative;z-index:1;display:grid;grid-template-columns:1.1fr 1fr;margin-top:1rem}
+.sxo-leader-body img{display:block;width:100%;height:100%;min-height:380px;object-fit:cover}
+.sxo-leader-panel{display:flex;flex-direction:column;justify-content:center;gap:.6rem;padding:clamp(1.5rem,4vw,3rem);background:var(--_ink);color:var(--_paper)}
+.sxo-leader-panel p{margin:0;max-width:36ch;font-size:16px;line-height:1.55}
+.sxo-leader-panel .sxo-label{color:var(--_accent)}
+.sxo-leader-panel h3{margin:0;font-family:var(--_display);font-size:clamp(36px,5vw,72px);line-height:.95;text-transform:uppercase}
+.sxo-leader-panel a{align-self:flex-start;margin-top:.6rem;padding:.7rem 1.2rem;background:var(--_paper);color:var(--_ink);
+  font-family:var(--_label);font-size:13px;letter-spacing:.12em;text-transform:uppercase;text-decoration:none}
+@media (max-width:700px){.sxo-leader{padding-left:.8rem}
+  .sxo-leader::before{right:0}
+  .sxo-leader-body{grid-template-columns:1fr}
+  .sxo-leader-body img{min-height:0;aspect-ratio:4/5}}""",
+    phone="the photo sits over the dark panel, both inside the colour block",
+))
+
+# ── 44. THE CREED ────────────────────────────────────────────────────
+_add(_o(
+    key="creed", name="Values as big type lines",
+    intent="three or four short values set huge, each two words joined by a small italic word, staggered left, centre and right",
+    use_when="the owner's real values, beliefs or promises, each said in "
+             "two strong words and one small joining word (Clay for "
+             "everyone; House of prayer). On a dark band with "
+             "data-finish='inverse', or on the page ground.",
+    aliases=("creed", "creed lines", "value lines", "core values lines"),
+    html="""<ul class="sxo sxo-creed" data-sx-object="creed">
+  <li><b>Clay</b><small>for</small><b>everyone</b></li>
+  <li><b>Hands</b><small>before</small><b>wheels</b></li>
+  <li><b>Kiln</b><small>every</small><b>Friday</b></li>
+</ul>""",
+    css=""".sxo-creed{container-type:inline-size;list-style:none;margin:0;padding:clamp(1.5rem,4vw,3rem) 0;display:grid;gap:clamp(.4rem,1vw,.8rem);font-family:var(--_display);text-transform:uppercase}
+.sxo-creed[data-finish="inverse"]{padding-inline:clamp(1rem,4vw,3rem);background:var(--_paper);color:var(--_ink)}
+.sxo-creed li{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:center;gap:0 .18em;font-size:clamp(34px,10cqi,112px);line-height:.92;letter-spacing:-.01em}
+.sxo-creed li:nth-child(3n+1){justify-content:flex-start;padding-left:4%}
+.sxo-creed li:nth-child(3n){justify-content:flex-end;padding-right:4%}
+.sxo-creed li::before{content:"";flex:none;width:.26em;height:.26em;margin:.34em .18em 0 0;border-radius:50%;background:var(--_accent)}
+.sxo-creed li:nth-child(2)::before{background:color-mix(in srgb,var(--_accent) 50%,currentColor)}
+.sxo-creed small{margin-top:.18em;font-family:var(--_body);font-size:.26em;font-style:italic;line-height:1.2;text-transform:none}
+@media (max-width:600px){.sxo-creed li{justify-content:flex-start!important;padding:0!important;font-size:12cqi}}""",
+    phone="every line starts at the left at about an eighth of its column and may wrap",
+))
+
+# ── 45. THE SCRIPT CAPITAL ───────────────────────────────────────────
+_add(_o(
+    key="script-cap", name="Script capital in a heading",
+    intent="an uppercase heading where one word begins with a large flowing script capital",
+    use_when="section headings on a page that loads a script face (map it "
+             "once to --obj-script: Pinyon Script, Great Vibes, Allura); one "
+             "letter per heading, two or three headings a page. Without a "
+             "script face the capital falls back to the display italic.",
+    aliases=("script cap", "script capital", "script initial", "swash capital"),
+    html="""<h2 class="sxo sxo-scriptcap" data-sx-object="script-cap">Meet our <span class="sxo-cap">P</span>otters</h2>""",
+    css=""".sxo-scriptcap{margin:0;font-family:var(--_display);font-size:clamp(28px,3.4vw,52px);line-height:1.1;letter-spacing:.01em;text-transform:uppercase}
+.sxo-cap{display:inline-block;margin:0 -.04em 0 -.02em;vertical-align:-.16em;font-family:var(--obj-script,var(--_display));font-size:1.9em;font-style:italic;font-weight:400;
+  line-height:0;text-transform:none;color:var(--_accent)}
+@media (max-width:600px){.sxo-scriptcap{font-size:26px}}""",
+    phone="the heading drops to 26px; the capital keeps its size against it",
+))
+
+# ── 46. THE DETAILS ──────────────────────────────────────────────────
+_add(_o(
+    key="visit-details", name="Ruled visit details with a copy button",
+    intent="labelled rows of practical details (times, where, parking), the address with a button that copies it",
+    use_when="a visit or contact section: real times, the real address "
+             "(data-copy holds it exactly), parking and what to expect, from "
+             "THE REAL DATA. A sentence of explanation goes in <small> under "
+             "its row. The copy button hides itself where copying is not allowed.",
+    aliases=("visit details", "info rows", "practical details", "copy address"),
+    html="""<dl class="sxo sxo-details" data-sx-object="visit-details">
+  <div><dt class="sxo-label">Open studio</dt><dd>Sundays // 12 to 5 pm</dd></div>
+  <div><dt class="sxo-label">Where</dt><dd><span>40 Kiln Row, Dallas, TX</span><button type="button" class="sxo-details-copy" data-copy="40 Kiln Row, Dallas, TX">Copy</button></dd></div>
+  <div><dt class="sxo-label">Parking</dt><dd>Free lot behind the studio<small>The side door opens at a quarter to twelve.</small></dd></div>
+</dl>""",
+    css=""".sxo-details{max-width:44rem;margin:0;border-top:2px solid currentColor}
+.sxo-details>div{display:grid;gap:.35rem;padding:1rem 0 1.1rem;border-bottom:1px solid color-mix(in srgb,currentColor 25%,transparent)}
+.sxo-details dt{margin:0;color:var(--_accent)}
+.sxo-details dd{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:.3rem 1rem;margin:0;
+  font-family:var(--_display);font-size:clamp(17px,1.6vw,21px);line-height:1.3;text-transform:uppercase}
+.sxo-details dd small{flex-basis:100%;font-family:var(--_body);font-size:15px;line-height:1.5;text-transform:none;color:color-mix(in srgb,currentColor 75%,transparent)}
+.sxo-details-copy{flex:none;padding:0;border:0;background:none;color:inherit;font-family:var(--_label);font-size:13px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer}
+.sxo-details-copy::before{content:"( ";color:var(--_accent)}
+.sxo-details-copy::after{content:" )";color:var(--_accent)}
+.sxo-details-copy:focus-visible{outline:2px solid var(--_accent);outline-offset:3px}
+@media (max-width:600px){.sxo-details dd{font-size:16px}}""",
+    js="(function(){document.querySelectorAll('.sxo-details-copy[data-copy]').forEach(function(b){"
+       "if(!(navigator.clipboard&&window.isSecureContext)){b.hidden=true;return;}"
+       "b.addEventListener('click',function(){navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function(){"
+       "var t=b.textContent;b.textContent='Copied';setTimeout(function(){b.textContent=t;},1600);},function(){});});});})();",
+    phone="the rows stay full width at 16px; the copy button stays beside the address",
 ))
 
 
