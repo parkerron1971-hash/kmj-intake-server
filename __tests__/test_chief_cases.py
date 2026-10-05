@@ -312,3 +312,49 @@ def test_the_app_door_is_owner_only(monkeypatch):
     with pytest.raises(HTTPException) as e:
         cc.list_cases(BIZ["id"], U())
     assert e.value.status_code == 403
+
+
+# ─── Review fixes (PR #1278) ──────────────────────────────────────────
+
+def test_a_result_that_cannot_be_saved_is_not_announced(db, monkeypatch):
+    db.sessions = [_s("2026-09-15"), _s("2026-09-16")]
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body: None)
+    out = _run(cc.check_one(_due_row()))
+    assert out["verdict"] is None and out["unsaved"]
+    assert not [p for p, _b in db.posts if p in ("/chief_notifications", "/chief_activity")]
+
+
+def test_the_check_waits_for_the_business_day(db, monkeypatch):
+    # 2026-10-05 16:00 UTC is still Oct 5 in Chicago; a case whose check
+    # day is Oct 6 there must not be checked by a tick that reads Oct 6 UTC.
+    from zoneinfo import ZoneInfo
+    late = datetime(2026, 10, 6, 1, 0, tzinfo=timezone.utc)     # Oct 5, 8 pm in Chicago
+    monkeypatch.setattr(cc, "_now", lambda: late)
+    monkeypatch.setattr(ca, "_tz_for", lambda bid: ZoneInfo("America/Chicago"))
+    row = {**_due_row(), "check_on": "2026-10-06"}
+    out = _run(cc.check_one(row))
+    assert out == {"id": "case-1", "verdict": None, "waiting": True}
+    assert not db.patches and not db.posts
+    monkeypatch.setattr(cc, "_now", lambda: datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc))
+    assert _run(cc.check_one(row))["verdict"] in ("met", "partly", "not_met")
+
+
+def test_a_check_days_late_is_final_even_if_the_counter_never_saved(db, monkeypatch):
+    db.fail_reads = True
+    monkeypatch.setattr(cc, "_now", lambda: datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc))
+    out = _run(cc.check_one({**_due_row(), "attempts": 0}))
+    assert out["verdict"] == "unmeasured"
+
+
+def test_close_without_an_id_never_guesses_between_cases(db):
+    db.cases = [{"id": "c-1", "status": "open", "symptom": "Slow Tuesdays"},
+                {"id": "c-2", "status": "checked", "symptom": "Late invoices"}]
+    out = _run(cc.handle_close_case(None, BIZ, {"outcome": "solved"}))
+    assert out.get("failed") and "which one" in out["result"]
+    assert not db.patches
+    out = _run(cc.handle_close_case(None, BIZ, {"outcome": "solved", "case_id": "c-2"}))
+    assert not out.get("failed") and out["case_id"] == "c-2"
+    db.cases = [{"id": "c-1", "status": "open", "symptom": "Slow Tuesdays"}]
+    db.patches.clear()
+    out = _run(cc.handle_close_case(None, BIZ, {"outcome": "dropped"}))
+    assert not out.get("failed") and db.patches

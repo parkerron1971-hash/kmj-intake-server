@@ -65,8 +65,15 @@ A salon owner says "Tuesdays are dead."
 - The forecast must beat the number before. A read that fails opens
   nothing; it never becomes a zero.
 - One open case per problem, ten open per business.
+- The tick reads due cases by the UTC date, but a case is checked only once
+  the business's own date reaches its check day, so the window's last
+  evening always counts.
 - A check that cannot read tries again on the next ticks; after three
-  failures the verdict is unmeasured and the owner is told so.
+  failures (or three days past the check day) the verdict is unmeasured and
+  the owner is told so. The owner is told only after the result is saved, so
+  a failed write never repeats the notice.
+- Closing without a case id works only when one case is open; with more,
+  Chief asks which one.
 
 Kill switch: `CHIEF_CASES=off` stops the check; the verbs still record.
 

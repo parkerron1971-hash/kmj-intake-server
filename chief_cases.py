@@ -298,9 +298,9 @@ def recent_rows(business_id: str, limit: int = 20) -> List[Dict[str, Any]]:
 
 
 def due_rows(today: Optional[date] = None) -> List[Dict[str, Any]]:
-    """Open cases whose check day has come. check_on is the business's day
-    after the window, so a UTC date a few hours off only moves the check
-    by one tick, never into the window."""
+    """Open cases whose check day may have come. This reads by the UTC
+    date; check_one then waits until the business's own date reaches
+    check_on, so a check never lands while the window's last day runs."""
     today = today or _now().date()
     rows = sb_clients.sb_get_as_service(
         f"{TABLE}?status=eq.open&check_on=lte.{today.isoformat()}&{_SELECT}"
@@ -449,23 +449,39 @@ async def check_one(row: Dict[str, Any]) -> Dict[str, Any]:
     measure = row.get("measure") if isinstance(row.get("measure"), dict) else {}
     baseline = row.get("baseline") if isinstance(row.get("baseline"), dict) else {}
     tz = await asyncio.to_thread(assignments._tz_for, bid)
+    # due_rows reads by the UTC date; the check day is the BUSINESS's day.
+    # West of UTC the evening tick lands while the window's last day is
+    # still running, so wait for the business's own date to arrive.
+    local_today = _today(tz)
+    check_on = assignments._parse_date(row.get("check_on"))
+    if check_on and local_today < check_on:
+        return {"id": cid, "verdict": None, "waiting": True}
     w_from = assignments._parse_date(baseline.get("window_from"))
     w_to = assignments._parse_date(baseline.get("window_to"))
     try:
         value = await asyncio.to_thread(measure_value, bid, measure, w_from, w_to, tz=tz)
     except Exception as e:
         attempts = int(row.get("attempts") or 0) + 1
-        if attempts < MAX_ATTEMPTS:
-            await asyncio.to_thread(save, cid, {"attempts": attempts})
+        # Three failed reads, or three days past the check day whatever
+        # the counter says (an attempts write can fail too): unmeasured.
+        late = bool(check_on) and (local_today - check_on).days >= MAX_ATTEMPTS
+        if attempts < MAX_ATTEMPTS and not late:
+            if not await asyncio.to_thread(save, cid, {"attempts": attempts}):
+                logger.warning(f"[cases] {cid[:8]} could not record failed attempt {attempts}")
             logger.info(f"[cases] {cid[:8]} check failed ({e}); retry {attempts}/{MAX_ATTEMPTS}")
             return {"id": cid, "verdict": None}
         value = None
     v = verdict(row.get("expected"), baseline.get("value"), value)
     now = _z(_now())
-    await asyncio.to_thread(save, cid, {
+    saved = await asyncio.to_thread(save, cid, {
         "status": "checked", "verdict": v, "checked_at": now,
         "result": {"value": value, "checked_at": now},
         "attempts": int(row.get("attempts") or 0) + (1 if value is None else 0)})
+    if not saved:
+        # The row is still open. Telling the owner now would tell them
+        # again on every tick until the write lands; the next tick retries.
+        logger.warning(f"[cases] {cid[:8]} result not saved; owner not told yet")
+        return {"id": cid, "verdict": None, "unsaved": v}
     head, body = _result_line(row, value, v)
     await _announce(bid, head, body, v)
     return {"id": cid, "verdict": v, "value": value}
@@ -606,6 +622,10 @@ async def handle_close_case(client, biz, action) -> Dict[str, Any]:
         rows = [r for r in rows if str(r.get("id")) == cid]
     if not rows:
         return _fail("close_case", "no open case to close")
+    if not cid and len(rows) > 1:
+        # "The Tuesday thing is solved" must never close a different case.
+        names = "; ".join(f"'{_text(r.get('symptom'), 60)}' [id={r.get('id')}]" for r in rows[:5])
+        return _fail("close_case", f"more than one case is open — ask which one, then pass its case_id: {names}")
     row = rows[0]
     ok = await asyncio.to_thread(save, str(row["id"]), {
         "status": "closed", "outcome": outcome, "note": _text(action.get("note")),
