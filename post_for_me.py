@@ -169,6 +169,61 @@ async def accounts_by_ids(account_ids: List[str]) -> List[Dict[str, Any]]:
     return [public_account(a) for a in (data or []) if isinstance(a, dict) and a.get("id")]
 
 
+async def create_post(*, caption: str, account_ids: List[str], media_urls: List[str],
+                      external_id: str, scheduled_at: Optional[str] = None,
+                      platform_configurations: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Hand one post to Post for Me. No scheduled_at = post now. Media go by
+    public URL (Post for Me fetches them). Returns {id, status}."""
+    body: Dict[str, Any] = {"caption": caption, "social_accounts": account_ids,
+                            "external_id": external_id,
+                            "media": [{"url": u} for u in media_urls]}
+    if scheduled_at:
+        body["scheduled_at"] = scheduled_at
+    if platform_configurations:
+        body["platform_configurations"] = platform_configurations
+    out = await _request("POST", "/social-posts", json=body)
+    if not out.get("id"):
+        raise PostForMeError("Post for Me didn't accept the post.")
+    return {"id": out["id"], "status": out.get("status")}
+
+
+async def post_results(post_id: str) -> List[Dict[str, Any]]:
+    """One result per account the post went to: success, error, and the
+    live post's link (platform_data.url)."""
+    out = await _request("GET", "/social-post-results",
+                         params=[("post_id", post_id), ("limit", "100")])
+    data = out.get("data") if isinstance(out, dict) else out
+    keep = []
+    for r in data or []:
+        if not isinstance(r, dict):
+            continue
+        pd = r.get("platform_data") or {}
+        keep.append({"social_account_id": r.get("social_account_id"),
+                     "success": bool(r.get("success")),
+                     "error": (str(r.get("error"))[:300] if r.get("error") else None),
+                     "url": pd.get("url") if isinstance(pd, dict) else None})
+    return keep
+
+
+async def upload_slot() -> Dict[str, str]:
+    """A place to put one photo or video: {upload_url, media_url}. The
+    upload URL is signed for a short time and for that one file, so it is
+    safe to hand to the browser, which PUTs the file straight to Post for
+    Me (large videos never pass through our server). media_url is the
+    public link a post then names."""
+    out = await _request("POST", "/media/create-upload-url")
+    up, media = out.get("upload_url"), out.get("media_url")
+    if not (isinstance(up, str) and up.startswith("https://")
+            and isinstance(media, str) and media.startswith("https://")):
+        raise PostForMeError("Post for Me returned no upload link.")
+    return {"upload_url": up, "media_url": media}
+
+
+async def cancel_post(post_id: str) -> None:
+    """Post for Me deletes a post only while it is still scheduled."""
+    await _request("DELETE", f"/social-posts/{post_id}")
+
+
 async def disconnect(account_id: str) -> None:
     """Removes the network tokens at Post for Me; the record stays there."""
     await _request("POST", f"/social-accounts/{account_id}/disconnect")
