@@ -3,10 +3,10 @@ title: Chief opens a case for a problem it diagnosed, forecasts the fix, and che
 date: 2026-10-05
 agent: Claude Code (Claude Opus 5.5)
 asked: "Make the changes ... I have worked with codex on fixing chief responses ... make sure not to mess those things up"
-status: in progress
-prs: []
-migrations: [supabase/APPLY-2026-10-05-chief-cases.sql (pending)]
-left_undone: ["cases as a source in Codex's responsibility report (chief_responsibilities.py) — separate change", "Home card for open cases (frontend)"]
+status: shipped
+prs: [kmj-intake-server#1278, solutionist-studio#1143]
+migrations: [supabase/APPLY-2026-10-05-chief-cases.sql (applied 2026-10-05)]
+left_undone: ["cases as a source in Codex's responsibility report (chief_responsibilities.py) — separate change", "a line for open cases in Chief's Home panel, if Kevin wants it there"]
 decisions: ["a case grants no permission and starts no work between conversations", "results are what the records show, never a causal claim (same rule as Codex's responsibilities)", "the forecast must beat the number before, read from the same length of time just before the window", "Codex's conversation rules already hold the one-question and records-vs-synthesis rules; nothing duplicated"]
 related: [2026-10-03-chief-follow-through.md]
 ---
