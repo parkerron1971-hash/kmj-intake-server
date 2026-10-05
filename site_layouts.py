@@ -2,7 +2,11 @@
 
 Kevin, 2026-10-03: "give it all 12 layouts to choose from." (2026-10-04,
 "grow the builder's own layout and object library": two more, bulletin and
-booking, the structures I built by hand for the church and the salon.) The new
+booking, the structures I built by hand for the church and the salon.
+2026-10-05, from the six sites Kevin sent: launch (bridgemind.ai, "what I
+want to view when my business have future feel"), poster (2819church.org)
+and leader (antwainjackson.com, socialdallas.com: the person out front).)
+The new
 builder had no layout menu: every business got the Director's one DENSITY
 SKELETON (nav, full-viewport hero, band, services grid, strip, portfolio,
 steps, about, contact, footer), so the look changed and the skeleton never
@@ -11,7 +15,7 @@ business has and how people buy from it, decide the page's structure, say
 why, then build that structure on purpose.
 
 This module is that decision, in code:
-- LAYOUTS: fourteen layouts, each with when it fits, what it needs, its page
+- LAYOUTS: seventeen layouts, each with when it fits, what it needs, its page
   skeleton (the Director's section order), its structure (the builder's
   recipe) and its phone plan.
 - signals(ctx): what the business actually has, read from the gathered
@@ -66,6 +70,21 @@ _APPOINTMENT_TRADE_RE = re.compile(
     r"chiro|physio|acupunct|dental|dentist|clinic|therap|counsel|tutor|lesson|"
     r"personal train|photo session|portrait session",
     re.IGNORECASE)
+# A future feel: software, AI, trading, anything digital-first, or a
+# brand idea that reaches forward (Kevin: "when my business have future
+# feel to it").
+_FUTURE_RE = re.compile(
+    r"\bai\b|artificial intelligence|software|saas|\bapps?\b|\btech\b|technolog|digital|"
+    r"platform|startup|developer|automation|crypto|blockchain|fintech|trading|robot|cyber|"
+    r"\bdata\b|cloud|futur|orbit|galaxy|neon|sci-?fi|innovat",
+    re.IGNORECASE)
+# The person is the brand: their name and face lead.
+_PERSONAL_RE = re.compile(
+    r"pastor|bishop|apostle|prophet|evangel|preacher|\bminister\b|ministries|ministry|"
+    r"speaker|keynote|author|\bcoach|consultant|mentor|influencer|creator|artist|musician|"
+    r"singer|rapper|\bdj\b|podcast|personal brand|founder",
+    re.IGNORECASE)
+_CONGREGATION_RE = re.compile(r"church|congregation|parish|chapel|cathedral", re.IGNORECASE)
 # A clock time in what the owner said: "9am", "10:30 a.m.", "17:00".
 _CLOCK_RE = re.compile(
     r"\b((?:[01]?\d|2[0-3])(?::[0-5]\d)?)\s*(a\.?m\.?|p\.?m\.?)(?![a-z])|\b((?:[01]?\d|2[0-3]):[0-5]\d)\b",
@@ -84,6 +103,7 @@ _IDEA_WORDS = {
     "statement": re.compile(r"manifesto|sign|poster|banner|declar|promise", re.I),
     "bulletin": re.compile(r"bulletin|calendar|schedule|timetable|noticeboard|sunday", re.I),
     "booking": re.compile(r"appointment|chair|booking|reservation|planner", re.I),
+    "poster": re.compile(r"manifesto|mission|poster|print|zine|street|loud|bold|shout|declar|until", re.I),
 }
 
 
@@ -330,6 +350,57 @@ def _fit_booking(s: Signals) -> Points:
     return p
 
 
+def _fit_launch(s: Signals) -> Points:
+    p: Points = []
+    if s["future"]:
+        p.append((5, "your business has a future feel, and this layout is built for it"))
+    else:
+        p.append((-3, "nothing here asks for a futuristic stage"))
+    if s["photos"] == 0:
+        p.append((-2, "there is nothing to set under the light yet"))
+    if s["offerings"] >= 2:
+        p.append((1, "your plans and features fill the bands"))
+    if s["gathering_trade"]:
+        p.append((-2, "a gathering wants warmth more than a dark stage"))
+    return p
+
+
+def _fit_poster(s: Signals) -> Points:
+    p: Points = []
+    if s["photos"] >= 4 and s["idea"]:
+        p.append((3, "a loud message and real photos to set into it"))
+    elif s["photos"] >= 4:
+        p.append((1, "there are real photos to set into big type"))
+    if s["photos"] < 3:
+        p.append((-5, "it needs four or more real photos to set into the words"))
+    if s["gathering_trade"]:
+        p.append((2, "a church or a gathering can speak in one loud voice"))
+    if s["visual_trade"]:
+        p.append((1, "your work is bold enough to sit inside the type"))
+    if s["calm_trade"]:
+        p.append((-10, "loud type does not suit health, legal or money work"))
+    if _IDEA_WORDS["poster"].search(s["idea"]):
+        p.append((2, "it matches the idea of the site"))
+    return p
+
+
+def _fit_leader(s: Signals) -> Points:
+    p: Points = []
+    if s["personal_trade"]:
+        p.append((4, "you are the brand, so your name and face lead"))
+    else:
+        p.append((-3, "the business, not one person, is the brand"))
+    if s["photos"] == 0:
+        p.append((-6, "it needs a strong portrait"))
+    else:
+        p.append((1, "a portrait can stand in front of your name"))
+    if s["story_beats"] >= 3:
+        p.append((2, "your story carries the page"))
+    if s["congregation"]:
+        p.append((-2, "a church is bigger than one person; put its leaders in a spotlight instead"))
+    return p
+
+
 LAYOUTS: Dict[str, Dict[str, Any]] = {
     "split": {
         "name": "Split", "line": "Words on one side, a picture on the other.",
@@ -527,13 +598,67 @@ LAYOUTS: Dict[str, Dict[str, Any]] = {
                  "carries Book once the opening scrolls away.",
         "fit": _fit_booking,
     },
+    # bridgemind.ai, Kevin: "This layout is what I want to view when my
+    # business have future feel to it."
+    "launch": {
+        "name": "Launch", "line": "A dark stage, a beam of light, the product or work front and centre.",
+        "best_for": "Apps, software, AI, trading, online programs and any brand with a future feel",
+        "needs": "Something real to show: a screenshot, the work, or the offer",
+        "skeleton": "a dark opening with a light beam falling on the product, work or offer in a "
+                    "window or phone → three pillars → feature bands, each a big claim beside a "
+                    "numbered list or a device → how one thing leads to the next (flow lines) → "
+                    "proof from real people → plan cards → questions beside a headline → a "
+                    "closing call on a glowing horizon → footer. 7 to 10 sections.",
+        "structure": "A dark ground throughout with one accent glow. The opening's headline is "
+                     "tight and large; the beam object lights the device object holding a real "
+                     "screenshot or photo. Later bands keep the device sticky beside scrolling "
+                     "claims; cards sit a shade above the ground with hairline borders. One "
+                     "accent, never a neon soup.",
+        "phone": "The device sits under the headline at full width; sticky panels release and stack; plans stack.",
+        "fit": _fit_launch,
+    },
+    # 2819church.org, Kevin: "This gives use for any sector ... creative
+    # and excellent in its approach."
+    "poster": {
+        "name": "Poster", "line": "Huge words with real photos set into them, on a ruled grid.",
+        "best_for": "Churches, creatives, events and brands with one loud message",
+        "needs": "A short, strong message and four or more real photos",
+        "skeleton": "an opening of huge stacked words with photos set into the lines → the "
+                    "mission in a few bold lines beside staggered photos → the two ways in (two "
+                    "doors) → the next steps as bracketed links → the name at full width to sign "
+                    "off → footer. 5 to 8 sections.",
+        "structure": "Type is the architecture: display words at 9 to 14vw with one word in the "
+                     "accent and real photos inside the lines (the photo-words object). A thin "
+                     "accent rule and a word rail run down the page; photos, often black and "
+                     "white, sit at staggered sizes; links read as bracketed words. The page "
+                     "ends on the name at full width (the sign-off object).",
+        "phone": "The words drop to about a seventh of the width and keep their photos; the rail narrows; photos stack staggered.",
+        "fit": _fit_poster,
+    },
+    # antwainjackson.com ("ministry pages doesn't have to be boring") and
+    # socialdallas.com ("leadership out front").
+    "leader": {
+        "name": "Leader", "line": "The person is the brand: their name, their face, their message.",
+        "best_for": "Pastors, speakers, authors, coaches and founders",
+        "needs": "A strong portrait and the person's story",
+        "skeleton": "an opening with the person standing in front of their name set huge → who "
+                    "they are, in their words → the message, the book or the work → where they "
+                    "speak or serve, broken by a pattern band → proof → how to book or invite "
+                    "them → the name at full width to sign off → footer. 6 to 9 sections.",
+        "structure": "The billboard object opens: the name across the full width behind the "
+                     "portrait. The story reads beside a second portrait; the book-cover or "
+                     "leader-spotlight object carries the work; a pattern band in the brand "
+                     "colours breaks the page once or twice. Every invitation leads to one action.",
+        "phone": "The name fills the top of the screen behind the portrait; panels stack; the pattern band keeps its words on a solid plate.",
+        "fit": _fit_leader,
+    },
 }
 
 KEYS: Tuple[str, ...] = tuple(LAYOUTS)
 
 # The Coach's older hero-shape cards, read as a nudge toward page layouts.
 _HERO_SHAPE_TO_LAYOUTS = {
-    "split-stage": ("split",), "poster": ("fullscreen", "statement"),
+    "split-stage": ("split",), "poster": ("poster", "fullscreen", "statement"),
     "editorial": ("editorial",), "exhibition": ("showcase",),
     "monument": ("statement",), "corridor": ("showcase", "fullscreen"),
     "letter": ("editorial", "minimal"),
@@ -546,6 +671,9 @@ _ALIASES = {
     "cards": "grid", "modular": "bento", "portfolio": "showcase",
     "booking desk": "booking", "booking-led": "booking", "appointment": "booking",
     "times first": "bulletin", "schedule first": "bulletin", "weekly bulletin": "bulletin",
+    "future": "launch", "futuristic": "launch", "future feel": "launch", "tech launch": "launch",
+    "type collage": "poster", "photo poster": "poster",
+    "personal brand": "leader", "founder-led": "leader", "person-led": "leader",
 }
 
 
@@ -651,6 +779,7 @@ def signals(ctx: Dict[str, Any], recent: Optional[List[str]] = None) -> Signals:
     timed = max(timed, sum(1 for o in stated if isinstance(o, dict) and _leaf(o.get("duration"))))
     booking = ctx.get("booking") if isinstance(ctx.get("booking"), dict) else {}
     events = ctx.get("events_door") if isinstance(ctx.get("events_door"), dict) else {}
+    taste_text = " ".join(_leaf(v) for v in taste.values() if not isinstance(v, list))
     return {
         "photos": _photo_count(ctx),
         "offerings": offerings,
@@ -668,6 +797,9 @@ def signals(ctx: Dict[str, Any], recent: Optional[List[str]] = None) -> Signals:
         "timed_offers": timed,
         "booking_live": bool(booking.get("enabled")),
         "events": bool(events.get("enabled")),
+        "future": bool(_FUTURE_RE.search(" ".join((btype, idea, taste_text)))),
+        "personal_trade": bool(_PERSONAL_RE.search(btype)),
+        "congregation": bool(_CONGREGATION_RE.search(btype)),
         "idea": idea[:400],
         "owner_pick": normalize(_leaf(taste.get("layout"))),
         "hero_shape": _leaf(taste.get("hero_shape")).lower(),
@@ -800,7 +932,7 @@ RENDER_JS = r"""
   const out = {layout_measured: true, sections: tops.length, hero_cols: 1, hero_img_ratio: 0,
                hero_height_ratio: 0, h1_px: 0, sidebar: false, row_max: 1, tall_sections: 0,
                narrow_text_ratio: 0, overlap_ok: 0, rotated: 0, bento_grids: 0, big_images: 0, mixed_cols: 0,
-               times_top: 0, book_links: 0};
+               times_top: 0, book_links: 0, ground_l: 1, h1_imgs: 0, objects: []};
   const h1 = document.querySelector('h1');
   if (h1 && vis(h1)) out.h1_px = Math.round(parseFloat(getComputedStyle(h1).fontSize) || 0);
   if (first) {
@@ -868,6 +1000,13 @@ RENDER_JS = r"""
   }
   out.times_top = seen.size;
   out.book_links = [...document.querySelectorAll('a[href]')].filter(a => vis(a) && /\/book\b|#book|booking/i.test(a.getAttribute('href') || '')).length;
+  const bgOf = el => { for (let e = el; e; e = e.parentElement) { const m = getComputedStyle(e).backgroundColor.match(/rgba?\(([^)]+)\)/);
+    if (m) { const v = m[1].split(',').map(Number); if (v.length < 4 || v[3] > 0.5) return v; } } return [255, 255, 255]; };
+  const lum = v => (0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]) / 255;
+  const grounds = tops.map(t => lum(bgOf(t)));
+  out.ground_l = grounds.length ? +(grounds.reduce((a, b) => a + b, 0) / grounds.length).toFixed(2) : 1;
+  out.h1_imgs = h1 ? h1.querySelectorAll('img,video,picture').length : 0;
+  out.objects = [...new Set([...document.querySelectorAll('[data-sx-object]')].map(e => e.getAttribute('data-sx-object')))];
   return out;
 })()
 """
@@ -929,6 +1068,17 @@ def render_findings(key: Optional[str], measures: Optional[Dict[str, Any]]) -> L
     elif k == "booking" and m.get("book_links", 0) < 3:
         miss = (f"only {m.get('book_links', 0)} links lead to booking; give every service its "
                 "own book link and put a booking band in the middle of the page")
+    elif k == "launch" and m.get("ground_l", 1) > 0.35:
+        miss = "the page sits on a light ground; the launch layout is a dark stage with one accent glow"
+    elif k == "launch" and not ({"beam", "device"} & set(m.get("objects") or [])):
+        miss = ("nothing is lit on the stage; set the product, work or offer in the device "
+                "object under the beam")
+    elif k == "poster" and (m.get("h1_px", 0) < 96 or m.get("h1_imgs", 0) < 1):
+        miss = ("the opening words are not a poster; set them at 9 to 14vw with real photos "
+                "inside the lines (the photo-words object)")
+    elif k == "leader" and not ({"billboard", "leader-spotlight"} & set(m.get("objects") or [])):
+        miss = ("the person does not lead the page; open with their name set huge behind their "
+                "portrait (the billboard object)")
     if not miss:
         return []
     return [f"THE LAYOUT is {LAYOUTS[k]['name']}, but at 1440px {miss}. "
