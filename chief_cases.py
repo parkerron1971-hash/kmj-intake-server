@@ -34,6 +34,15 @@ WHAT IT IS NOT
   the fix did it. Not work between conversations: if the owner wants Chief
   to chase the number, that is start_business_responsibility, unchanged.
 
+THE WORDS (2026-10-05, Kevin: "the wording pass for all the businesses")
+  "Case", "forecast" and "the records show" are this file's words, never
+  the owner's. Everything an owner reads says "keeping an eye on",
+  "hoping for", "before" and "now", and counts in their trade's own word
+  from vertical_terminology: a barber's appointments, a coach's sessions,
+  a lawyer's consultations, a church's meetings and members, a
+  contractor's visits. The word is stored on the case when it opens, so
+  every later line (the check, the card, Chief's context) needs no lookup.
+
 STORAGE
   public.chief_cases (APPLY-2026-10-05-chief-cases.sql), service-role only:
   RLS on, no policies. Every write goes through the backend after the
@@ -132,35 +141,83 @@ def _day_names(days: List[int]) -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
+def unit_for(business_type: Optional[str], kind: str) -> str:
+    """The trade's own word for what a measure counts, lower case: what
+    the app's screens already call it (vertical_terminology, the mirror
+    of the studio's dictionary.ts). Sessions are the vertical's word for
+    a sitting (a coach's sessions, a lawyer's consultations, a church's
+    meetings, a contractor's visits), else appointments: Kevin's 8/18
+    ruling that a barber says "appointment". New contacts are the people
+    it serves (clients, members, donors, students)."""
+    try:
+        import vertical_terminology as vt
+        terms = vt.terms_for(business_type)
+        if kind in _SESSION_KINDS:
+            word = terms.get("sessions") or terms.get("appointments") or "Appointments"
+        elif kind == "new_contacts":
+            word = vt.get_term(business_type, "customers")
+        else:
+            return ""
+    except Exception:  # a lookup must never cost the case
+        word = "appointments" if kind in _SESSION_KINDS else "clients"
+    return str(word or "").strip().lower()
+
+
+def with_unit(row: Dict[str, Any], business_type: Optional[str]) -> Dict[str, Any]:
+    """The row with its trade word, looked up when it was opened before the
+    word was stored (or by an older server). Pure apart from the lookup."""
+    m = row.get("measure") if isinstance(row.get("measure"), dict) else {}
+    if m.get("unit") or not m.get("kind"):
+        return row
+    unit = unit_for(business_type, m["kind"])
+    return {**row, "measure": {**m, "unit": unit}} if unit else row
+
+
 def _noun(measure: Dict[str, Any]) -> str:
     kind = measure.get("kind")
     days = measure.get("weekdays") or []
     on = f" on {_day_names(days)}" if days else ""
+    unit = measure.get("unit")
     return {
-        "sessions_scheduled": f"bookings{on}",
-        "sessions_completed": f"completed sessions{on}",
-        "new_contacts": "new contacts",
-        "revenue_collected": "collected",
+        "sessions_scheduled": f"{unit or 'appointments'}{on}",
+        "sessions_completed": f"finished {unit or 'appointments'}{on}",
+        "new_contacts": f"new {unit or 'clients'}",
+        "revenue_collected": "in payments",
         "invoice_paid": "invoice paid",
-    }.get(kind, "measured")
+    }.get(kind, "")
 
 
 def _amount(kind: str, value: Any) -> str:
     if value is None:
-        return "not measured"
+        return "not counted"
     if kind == "revenue_collected":
-        return f"${float(value):,.2f}"
+        v = float(value)
+        return f"${v:,.0f}" if v == int(v) else f"${v:,.2f}"
     if kind == "invoice_paid":
         return "paid" if value else "not paid"
     return str(int(value))
 
 
 def describe(measure: Dict[str, Any], value: Any) -> str:
-    """'4 bookings on Tuesdays and Wednesdays', '$1,200.00 collected'."""
+    """'4 appointments on Tuesdays and Wednesdays', '$1,200 in payments'."""
     kind = measure.get("kind") or ""
     if kind == "invoice_paid":
         return "the invoice " + _amount(kind, value)
     return f"{_amount(kind, value)} {_noun(measure)}"
+
+
+def _span_words(d_from: Any, d_to: Any) -> str:
+    """'three weeks', 'week', '10 days': how long a window is, said aloud."""
+    a, b = assignments._parse_date(d_from), assignments._parse_date(d_to)
+    if not a or not b:
+        return "few weeks"
+    n = (b - a).days + 1
+    weeks = {7: "week", 14: "two weeks", 21: "three weeks", 28: "four weeks"}
+    return weeks.get(n, f"{n} days")
+
+
+def _dates(d_from: Any, d_to: Any) -> str:
+    return f"{_short_date(d_from)} to {_short_date(d_to)}"
 
 
 def normalize(raw: Any, expected: Any, *, tz, check_on: Any = None,
@@ -344,12 +401,12 @@ def public_row(row: Dict[str, Any]) -> Dict[str, Any]:
         out["forecast"] = "the invoice paid"
     else:
         out["before"] = (f"{describe(measure, baseline.get('value'))} "
-                         f"({baseline.get('from')} to {baseline.get('to')})")
+                         f"({_dates(baseline.get('from'), baseline.get('to'))})")
         out["forecast"] = (f"{describe(measure, row.get('expected'))} "
-                           f"({baseline.get('window_from')} to {baseline.get('window_to')})")
+                           f"({_dates(baseline.get('window_from'), baseline.get('window_to'))})")
     if result:
         out["result"] = describe(measure, result.get("value")) if result.get("value") is not None \
-            else "could not be measured"
+            else "couldn't be counted"
     return out
 
 
@@ -362,7 +419,7 @@ def open_case(biz: Dict[str, Any], *, symptom: str, cause: str, fix: str,
     bid = str(biz.get("id") or "")
     symptom, cause, fix = _text(symptom), _text(cause), _text(fix)
     if not (symptom and cause and fix):
-        return "a case needs the problem, the cause you found, and the fix", {}
+        return "to keep an eye on a problem I need the problem, what's causing it, and the fix", {}
     tz = assignments._tz_for(bid)
     err, plan = normalize(measure, expected, tz=tz, check_on=check_on)
     if err:
@@ -370,16 +427,19 @@ def open_case(biz: Dict[str, Any], *, symptom: str, cause: str, fix: str,
     try:
         existing = open_rows(bid)
     except Exception:
-        return "cases are not available right now, so no case was opened", {}
+        return "I can't keep track of that right now; nothing was saved", {}
     if len(existing) >= MAX_OPEN:
-        return (f"there are already {MAX_OPEN} open cases; close one first "
-                "(close_case) so each gets followed properly"), {}
+        return (f"I'm already keeping an eye on {MAX_OPEN} things; close one first "
+                "(close_case) so each gets a proper check"), {}
     want = symptom.lower()
     for r in existing:
         if (r.get("symptom") or "").strip().lower() == want:
-            return f"that problem already has an open case [id={r.get('id')}]", {}
+            return f"I'm already keeping an eye on that one [id={r.get('id')}]", {}
 
     m = plan["measure"]
+    unit = unit_for(biz.get("type"), m["kind"])
+    if unit:
+        m = {**m, "unit": unit}
     baseline: Dict[str, Any] = {}
     try:
         if m["kind"] == "invoice_paid":
@@ -392,14 +452,14 @@ def open_case(biz: Dict[str, Any], *, symptom: str, cause: str, fix: str,
             w_from, w_to = plan["window"]
             before = measure_value(bid, m, b_from, b_to, tz=tz)
             if float(plan["expected"]) <= float(before):
-                return (f"the forecast has to beat the number before: {describe(m, before)} "
-                        f"in the same length of time just before ({b_from} to {b_to})"), {}
+                return (f"what you hope for has to beat the number now: {describe(m, before)} "
+                        f"in the same stretch just before ({_dates(b_from, b_to)})"), {}
             baseline = {"value": before, "from": b_from.isoformat(), "to": b_to.isoformat(),
                         "window_from": w_from.isoformat(), "window_to": w_to.isoformat()}
     except RuntimeError as e:
-        return f"I could not read the number before the fix ({e}), so no case was opened", {}
+        return f"I couldn't count where things stand now ({e}), so nothing was saved", {}
     except Exception:
-        return "I could not read the number before the fix, so no case was opened", {}
+        return "I couldn't count where things stand now, so nothing was saved", {}
 
     row = {
         "business_id": bid, "status": "open",
@@ -416,36 +476,62 @@ def open_case(biz: Dict[str, Any], *, symptom: str, cause: str, fix: str,
         return None, saved[0]
     if isinstance(saved, dict) and saved.get("id"):
         return None, saved
-    return "the case could not be saved", {}
+    return "that couldn't be saved", {}
 
 
 # ─── The check ───────────────────────────────────────────────────────
 
 def _result_line(row: Dict[str, Any], value: Any, v: str) -> Tuple[str, str]:
-    """(headline, body) for the owner, in plain words. Observed, never
-    credited: the records moved or they did not."""
+    """(headline, body) for the owner, said the way they'd say it, in
+    their trade's word. Observed, never credited: the numbers moved or they
+    did not, and Chief never claims its fix did it."""
     measure = row.get("measure") if isinstance(row.get("measure"), dict) else {}
     baseline = row.get("baseline") if isinstance(row.get("baseline"), dict) else {}
+    kind = measure.get("kind") or ""
     problem = _text(row.get("symptom"), 70)
     if v == "unmeasured":
         return (f"Couldn't check: {problem}",
-                "I couldn't read the records to check this fix. Ask me and I'll look again.")
+                "I couldn't get to your numbers to check this one. Ask me and I'll look again.")
+    if kind == "invoice_paid":
+        if v == "met":
+            return f"Paid: {problem}", "The invoice is paid."
+        return (f"Still not paid: {problem}",
+                "The invoice still isn't paid. Ask me and we'll try something else.")
     got = describe(measure, value)
-    expected = describe(measure, row.get("expected"))
-    if measure.get("kind") == "invoice_paid":
-        body = "The invoice is paid." if v == "met" else "The invoice is still not paid."
-    else:
-        body = (f"Before: {describe(measure, baseline.get('value'))}. "
-                f"Expected: {expected}. The records show {got}.")
-    head = {"met": "Fix worked", "partly": "Fix helped, short of the forecast",
-            "not_met": "Fix didn't move it"}.get(v, "Checked")
-    return f"{head}: {problem}", body
+    before = baseline.get("value")
+    hoped = _amount(kind, row.get("expected"))
+    if v == "met":
+        return (f"It worked: {problem}",
+                f"{got}, up from {_amount(kind, before)}. I was hoping for {hoped}.")
+    if v == "partly":
+        return (f"It helped: {problem}",
+                f"{got}, up from {_amount(kind, before)}. I was hoping for {hoped}. "
+                "Ask me and we'll try one more thing.")
+    try:
+        same = float(value) == float(before)
+    except (TypeError, ValueError):
+        same = False
+    moved = "the same as before" if same else f"down from {_amount(kind, before)}"
+    return (f"No change yet: {problem}",
+            f"{got}, {moved}. I was hoping for {hoped}. Ask me and we'll try something else.")
+
+
+def _business(business_id: str) -> Dict[str, Any]:
+    """owner_id and type: who to tell, and in which trade's words."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=owner_id,type&limit=1") or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
 
 
 async def check_one(row: Dict[str, Any]) -> Dict[str, Any]:
     """Measure one due case, record what happened, tell the owner once."""
     cid = str(row.get("id"))
     bid = str(row.get("business_id") or "")
+    biz = await asyncio.to_thread(_business, bid)
+    row = with_unit(row, biz.get("type"))
     measure = row.get("measure") if isinstance(row.get("measure"), dict) else {}
     baseline = row.get("baseline") if isinstance(row.get("baseline"), dict) else {}
     tz = await asyncio.to_thread(assignments._tz_for, bid)
@@ -483,20 +569,16 @@ async def check_one(row: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning(f"[cases] {cid[:8]} result not saved; owner not told yet")
         return {"id": cid, "verdict": None, "unsaved": v}
     head, body = _result_line(row, value, v)
-    await _announce(bid, head, body, v)
+    await _announce(bid, head, body, v, owner=biz.get("owner_id"))
     return {"id": cid, "verdict": v, "value": value}
 
 
-async def _announce(business_id: str, headline: str, body: str, v: str) -> None:
+async def _announce(business_id: str, headline: str, body: str, v: str,
+                    owner: Optional[str] = None) -> None:
     """Where the owner looks: the notification list, the activity rail,
     their phone. Each is best-effort; the row is the record."""
-    owner = None
-    try:
-        rows = sb_clients.sb_get_as_service(
-            f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
-        owner = rows[0].get("owner_id") if rows else None
-    except Exception:
-        pass
+    if not owner:
+        owner = (await asyncio.to_thread(_business, business_id)).get("owner_id")
     try:
         sb_clients.sb_post_as_service("/chief_notifications", {
             "business_id": business_id, "type": "reminder", "title": headline[:120],
@@ -554,17 +636,23 @@ async def open_for_context(business_id: str) -> List[Dict[str, Any]]:
     return [public_row(r) for r in rows]
 
 
+_VERDICT_WORDS = {"met": "it worked", "partly": "it helped, short of what you hoped",
+                  "not_met": "no change yet", "unmeasured": "couldn't check"}
+
+
 def context_lines(items: List[Dict[str, Any]]) -> List[str]:
+    """Chief reads these in the owner's words, so it says them back in the
+    owner's words: no "case", "forecast" or "the records show"."""
     lines = []
     for c in items[:8]:
-        line = f"  - {c.get('symptom')} — cause: {c.get('cause')}; fix: {c.get('fix')}"
+        line = f"  - {c.get('symptom')} — why: {c.get('cause')}; the fix: {c.get('fix')}"
         if c.get("status") == "open":
-            line += (f". Before: {c.get('before')}. Forecast: {c.get('forecast')}. "
+            line += (f". Before: {c.get('before')}. Hoping for: {c.get('forecast')}. "
                      f"Checking on {c.get('check_on')}.")
         else:
-            line += (f". RESULT (checked {c.get('checked_at')}, verdict {c.get('verdict')}): "
-                     f"before {c.get('before')}; forecast {c.get('forecast')}; "
-                     f"the records show {c.get('result')}.")
+            line += (f". RESULT to tell them ({_VERDICT_WORDS.get(c.get('verdict'), 'checked')}, "
+                     f"checked {c.get('checked_at')}): before {c.get('before')}; hoping for "
+                     f"{c.get('forecast')}; now {c.get('result')}.")
         line += f" [id={c.get('id')}]"
         lines.append(line)
     return lines
@@ -590,20 +678,27 @@ async def handle_open_case(client, biz, action) -> Dict[str, Any]:
         return _fail("open_case", err)
     pub = public_row(row)
     when = _short_date(pub["check_on"])
-    if (row.get("measure") or {}).get("kind") == "invoice_paid":
-        said = f"I'll check on {when} whether the invoice is paid."
+    m = row.get("measure") if isinstance(row.get("measure"), dict) else {}
+    b = row.get("baseline") if isinstance(row.get("baseline"), dict) else {}
+    if m.get("kind") == "invoice_paid":
+        said = f"I'll check on {when} whether it's paid."
     else:
-        said = f"Before: {pub['before']}. Forecast: {pub['forecast']}. I'll check on {when}."
+        span = _span_words(b.get("window_from"), b.get("window_to"))
+        said = (f"{describe(m, b.get('value'))} in the last {span}. I'm hoping for "
+                f"{_amount(m.get('kind') or '', row.get('expected'))} in the next {span}, "
+                f"and I'll check on {when}.")
     return {
         "type": "open_case",
-        "result": f"case opened for '{pub['symptom']}'. {said}",
-        "label": f"📌 Case opened: {_text(pub['symptom'], 60)}",
+        "result": f"keeping an eye on '{pub['symptom']}'. {said}",
+        "label": f"👀 Keeping an eye on: {_text(pub['symptom'], 60)}",
         "case_id": row.get("id"),
         "case": pub,
         "speak": said,
-        "for_chief": ("Tell the owner the forecast in one sentence with the number before, the "
-                      "number you expect, and the check day. Opening a case sends, books and "
-                      "charges nothing; the fix itself still needs its own action or approval."),
+        "for_chief": ("Tell the owner in one plain sentence, in their words: where it stands "
+                      "now, what you're hoping for, and the day you'll check, the way `speak` "
+                      "says it. Never call it a case or a forecast, and never say 'the records "
+                      "show'. Keeping an eye on it sends, books and charges nothing; the fix "
+                      "itself still needs its own action or approval."),
     }
 
 
@@ -621,22 +716,23 @@ async def handle_close_case(client, biz, action) -> Dict[str, Any]:
     if cid:
         rows = [r for r in rows if str(r.get("id")) == cid]
     if not rows:
-        return _fail("close_case", "no open case to close")
+        return _fail("close_case", "there's nothing open to close")
     if not cid and len(rows) > 1:
         # "The Tuesday thing is solved" must never close a different case.
         names = "; ".join(f"'{_text(r.get('symptom'), 60)}' [id={r.get('id')}]" for r in rows[:5])
-        return _fail("close_case", f"more than one case is open — ask which one, then pass its case_id: {names}")
+        return _fail("close_case", f"I'm keeping an eye on more than one thing — ask which one, then pass its case_id: {names}")
     row = rows[0]
     ok = await asyncio.to_thread(save, str(row["id"]), {
         "status": "closed", "outcome": outcome, "note": _text(action.get("note")),
         "closed_at": _z(_now())})
     if not ok:
-        return _fail("close_case", "could not save; the case is still open")
-    word = "solved" if outcome == "solved" else "dropped"
+        return _fail("close_case", "that didn't save; it's still open")
+    word = "fixed" if outcome == "solved" else "dropped"
     return {
         "type": "close_case",
-        "result": f"closed the case '{row.get('symptom')}' as {word}",
-        "label": f"📌 Case {word}: {_text(row.get('symptom'), 60)}",
+        "result": f"marked '{row.get('symptom')}' as {word}; no longer keeping an eye on it",
+        "label": (f"✅ Fixed: {_text(row.get('symptom'), 60)}" if outcome == "solved"
+                  else f"Dropped: {_text(row.get('symptom'), 60)}"),
         "case_id": row.get("id"),
     }
 
@@ -645,12 +741,13 @@ async def handle_close_case(client, biz, action) -> Dict[str, Any]:
 
 @router.get("")
 def list_cases(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    assignments._require_owner(business_id, user)
+    biz = assignments._require_owner(business_id, user)
     try:
         rows = recent_rows(business_id, 20)
     except Exception as e:
         logger.warning(f"[cases] list failed: {e}")
         raise HTTPException(status_code=503, detail=f"cases are not set up yet ({MIGRATION})")
-    items = [public_row(r) for r in rows if r.get("status") in ("open", "checked")]
+    items = [public_row(with_unit(r, biz.get("type")))
+             for r in rows if r.get("status") in ("open", "checked")]
     return {"ok": True, "cases": items,
             "open": sum(1 for r in rows if r.get("status") == "open")}

@@ -98,6 +98,16 @@ _ESTABLISHED = {
         "sessions": ["Tasha Green", "Maria Lopez", "Rosa Diaz", "Kim Park"],
         "invoices": [],
     },
+    # A barbershop (2026-10-05): the trade the Solo / Booked / Boss plans
+    # are built for. Regulars, the chair, no weekly hours set.
+    "barber": {
+        "offerings": [("Haircut", 35, "service"), ("Skin Fade", 45, "service"),
+                      ("Beard Trim", 20, "service")],
+        "contacts": [("Marcus Bell", "active", 82), ("Dre Coleman", "active", 74), ("Tony Ruiz", "active", 31),
+                     ("Jay Price", "lead", 50), ("Kev Simmons", "past", 15)],
+        "sessions": ["Marcus Bell", "Dre Coleman"],
+        "invoices": [],
+    },
     "contractor": {
         "offerings": [("Bathroom Remodel", 14000, "project"), ("Kitchen Remodel", 32000, "project"),
                       ("Handyman Hour", 95, "service")],
@@ -145,6 +155,8 @@ BUSINESSES = {
     "trades_est": (_biz("contractor", "Baker Build & Remodel", "00000000-0000-4000-8000-000000000013"),
                    _established_context),
     "church_est": (_biz("ministry", "Grace Harbor Church", "00000000-0000-4000-8000-000000000014"),
+                   _established_context),
+    "barber_est": (_biz("barber", "Fade Street Barbers", "00000000-0000-4000-8000-000000000015"),
                    _established_context),
 }
 
@@ -213,6 +225,11 @@ CASES: List[Dict[str, str]] = [
      "message": "I'm working all the time but my income is flat. Why?",
      # Not "$1,200": the 3-Month package costs that too. Monica owes it.
      "cause": r"(?-i:\bMonica\b)"},
+    # The same planted cause as the salon, asked the way a barber asks.
+    {"id": "barber_slow_tuesdays", "biz": "barber_est",
+     "message": "Tuesdays are dead in the shop. What do I do?",
+     "cause": r"no (?:weekly |business |set |opening )?hours|hours (?:aren't|are not|haven't been|have not been|were never) set|"
+              r"(?:open|available) (?:24/7|24 hours|around the clock|all day and night)|24/7"},
     {"id": "hidden_thin_calendar_coach", "biz": "coach_est",
      "message": "My calendar is thin next week. What's the real problem?",
      "cause": r"(?-i:\bAda\b|\bSam\b)"},
@@ -244,6 +261,14 @@ _CAVEAT = re.compile(r"still unverified|I left out|general rules from what I kno
 _QUOTED = re.compile(r"“[^”]*”|\"[^\"]*\"|‘[^’]*’|(?<!\w)'(?:[^'\n]|'(?=\w))+'(?!\w)")
 
 
+# Office words the SI layer must never put in an owner's ear (the wording
+# pass, 2026-10-05). "Case" only as Chief's own bookkeeping ("opened a
+# case", the open_case verb); "in this case" and "make a case for" are
+# plain English and pass.
+_JARGON = re.compile(r"\b(?:open(?:ed|ing)? a case|open_case|forecast(?:ed|ing)?|"
+                     r"baseline|the records show|Solutionist Intelligence)\b|(?-i:\bSI\b)", re.I)
+
+
 def questions_asked(text: str) -> int:
     """Questions Chief asks the owner: question marks outside quotes."""
     return len(re.findall(r"\?", _QUOTED.sub("", text or "")))
@@ -273,6 +298,7 @@ def score_reply(reply: str, taken: List[str], cause: Optional[str] = None) -> Di
         # Codex's conversation rule (chief_conversation): at most one
         # focused question, after the answer.
         "one_question_max": not walled and questions_asked(text) <= 1,
+        "plain_words": not walled and not _JARGON.search(text),
     }
     if cause:
         checks["finds_cause"] = not walled and bool(re.search(cause, text, re.I))
@@ -424,7 +450,8 @@ def si_score(rates: Dict[str, float], grade_means: Optional[Dict[str, float]]) -
     keep to one question, and (with --grade) the graded substance as a
     share of its points. Parts, not one blended figure: each moves for a
     different reason."""
-    out: Dict[str, Any] = {k: rates.get(k) for k in ("answered", "finds_cause", "one_question_max")}
+    out: Dict[str, Any] = {k: rates.get(k) for k in ("answered", "finds_cause", "one_question_max",
+                                                     "plain_words")}
     if grade_means:
         out["substance"] = round(sum(grade_means.values()) / (2 * len(grade_means)), 3)
     return out
@@ -438,7 +465,7 @@ def si_line(report: Dict[str, Any]) -> str:
         return "n/a" if v is None else f"{round(v * 100)}%"
     return (f"SI score: answered {pct(si.get('answered'))}, named the hidden cause "
             f"{pct(si.get('finds_cause'))}, one question at most {pct(si.get('one_question_max'))}, "
-            f"graded substance {pct(si.get('substance'))}.")
+            f"plain words {pct(si.get('plain_words'))}, graded substance {pct(si.get('substance'))}.")
 
 
 def compare(before: Dict[str, Any], after: Dict[str, Any]) -> int:
