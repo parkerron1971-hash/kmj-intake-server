@@ -34,6 +34,8 @@ strips them.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -101,10 +103,42 @@ async def postforme_connect_start(business_id: str, platform: str,
     return {"authorize_url": f"/connect/postforme?ticket={quote(ticket)}&platform={p}"}
 
 
+# ─── Phones: the same window, and back to the app ────────────────────
+# On a phone — above all the installed home-screen app — a popup opens as
+# a separate browser tab that can come back empty and can't tell the app
+# anything. So the phone sends the whole window through the sign-in and
+# names where it came from (`return_origin`). The ORIGIN only: the path
+# back is fixed here (/?nav=build:social-media), and only our own app's
+# origins are accepted, so the link can't be turned into a redirect to
+# anywhere else. It rides a short-lived cookie scoped to these routes,
+# because Post for Me's return address is one fixed URL for the project.
+
+_RETURN_COOKIE = "pfm_return"
+_RETURN_PATH = "/?nav=build:social-media"
+_DEFAULT_APP_ORIGINS = "https://system.mysolutionist.app,https://solutionist-studio.vercel.app"
+_PREVIEW_ORIGIN = re.compile(r"^https://solutionist-studi[a-z0-9-]*-kmjcreativesolution-1900s-projects\.vercel\.app$")
+_LOCAL_ORIGIN = re.compile(r"^http://localhost:\d{2,5}$")
+
+
+def app_origin(raw: Optional[str]) -> Optional[str]:
+    """`raw` if it is one of our app's origins (scheme://host[:port], no
+    path), else None."""
+    o = (raw or "").strip().rstrip("/")
+    if not o or "/" in o.split("://", 1)[-1]:
+        return None
+    allowed = {x.strip().rstrip("/") for x in
+               (os.environ.get("SOCIAL_APP_ORIGINS") or _DEFAULT_APP_ORIGINS).split(",") if x.strip()}
+    if o in allowed or _PREVIEW_ORIGIN.match(o) or _LOCAL_ORIGIN.match(o):
+        return o
+    return None
+
+
 @router.get("/connect/postforme")
-async def postforme_connect(ticket: str = "", platform: str = ""):
-    """The popup lands here; the ticket names the business. Asks Post for
-    Me for that business's sign-in link and sends the popup to it."""
+async def postforme_connect(ticket: str = "", platform: str = "", return_origin: str = ""):
+    """The popup (desktop) or the whole window (phone) lands here; the
+    ticket names the business. Asks Post for Me for that business's
+    sign-in link and sends the window to it. A phone also names the app
+    origin to come back to."""
     business_id, _uid = oauth_connect_ticket.verify(ticket) if ticket else (None, None)
     if not business_id:
         return _page("This link expired", "Start again from Solutionist.", ok=False)
@@ -121,7 +155,13 @@ async def postforme_connect(ticket: str = "", platform: str = ""):
             return _page("That network isn't switched on yet",
                          "Close this window. It can be connected once it's turned on.", ok=False)
         return _page("Couldn't reach the sign-in", "Close this window and try again in a minute.", ok=False)
-    return RedirectResponse(url=url, status_code=302)
+    resp = RedirectResponse(url=url, status_code=302)
+    origin = app_origin(return_origin)
+    if origin:
+        # SameSite=Lax rides the top-level redirect back from the network.
+        resp.set_cookie(_RETURN_COOKIE, origin, max_age=900, httponly=True, secure=True,
+                        samesite="lax", path="/connect/postforme")
+    return resp
 
 
 @router.get("/connect/postforme/done")
@@ -134,6 +174,16 @@ async def postforme_connect_done(request: Request):
     logger.info("[social] connect returned with params %s", keys)
     failed = any(k.lower() in ("error", "error_description", "error_reason") for k in keys) \
         or (request.query_params.get("isSuccess") or "").lower() == "false"
+    # A phone came through in its own window: send it back to the app's
+    # Social Media page, which syncs on arrival. The cookie is re-checked
+    # against our app origins — a tampered cookie goes nowhere.
+    origin = app_origin(request.cookies.get(_RETURN_COOKIE))
+    if origin:
+        back = RedirectResponse(
+            url=f"{origin}{_RETURN_PATH}&social={'not_connected' if failed else 'connected'}",
+            status_code=302)
+        back.delete_cookie(_RETURN_COOKIE, path="/connect/postforme")
+        return back
     if failed:
         return _page("Not connected", "The sign-in didn't finish. Close this window and try again.",
                      ok=False, notify=True)
