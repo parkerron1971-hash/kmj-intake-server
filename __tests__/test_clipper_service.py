@@ -361,3 +361,17 @@ def test_a_frame_that_times_out_does_not_fail_the_job(tmp_path, monkeypatch):
     target = tmp_path / 'clip_00_frame.jpg'
     svc.make_frame(tmp_path / 'source.mp4', 12.5, target)
     assert not target.exists()
+
+
+@pytest.mark.parametrize('returncode,body', [(1, b''), (1, b'half'), (0, b'')])
+def test_a_failed_or_empty_still_is_never_advertised(tmp_path, monkeypatch, returncode, body):
+    """A seek past the end can exit non-zero or leave a 0-byte file; neither
+    may reach the API as a frame or a poster."""
+    def ffmpeg(args, **kwargs):
+        svc.Path(args[-1]).write_bytes(body)
+        return svc.subprocess.CompletedProcess(args, returncode)
+    monkeypatch.setattr(svc.subprocess, 'run', ffmpeg)
+    frame, poster = tmp_path / 'clip_00_frame.jpg', tmp_path / 'clip_00.jpg'
+    svc.make_frame(tmp_path / 'source.mp4', 9999.0, frame)
+    svc.make_poster(tmp_path / 'clip_00.mp4', 9999.0, poster)
+    assert not frame.exists() and not poster.exists()

@@ -263,26 +263,33 @@ def run_engine(state, config, env, job_dir):
     return final
 
 
+def grab_frame(args, target):
+    """One ffmpeg still. True only for a real picture: a non-zero exit or an
+    empty file (a seek past the end) is removed, never advertised."""
+    try:
+        done = subprocess.run(args, capture_output=True, timeout=60)
+        if done.returncode == 0 and Path(target).is_file() and Path(target).stat().st_size > 0:
+            return True
+    except (subprocess.SubprocessError, OSError):
+        pass
+    Path(target).unlink(missing_ok=True)
+    return False
+
+
 def make_poster(video, at, target):
     """Best effort: a clip without a poster still reaches review."""
-    try:
-        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', f'{at:.2f}', '-i', str(video), '-frames:v', '1', '-vf', 'scale=540:-2', '-q:v', '4', str(target)],
-                       capture_output=True, timeout=60)
-    except (subprocess.SubprocessError, OSError):
+    if not grab_frame(['ffmpeg', '-v', 'error', '-y', '-ss', f'{at:.2f}', '-i', str(video), '-frames:v', '1',
+                       '-vf', 'scale=540:-2', '-q:v', '4', str(target)], target):
         log.warning('Poster frame failed for %s', video.name)
-        Path(target).unlink(missing_ok=True)
 
 
 def make_frame(source, at, target):
     """The same moment as the poster, from the recording itself: no captions,
     no title card, full resolution (capped at 1920 wide). A cover is designed
     from this. Best effort, like the poster."""
-    try:
-        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', f'{at:.2f}', '-i', str(source), '-frames:v', '1',
-                        '-vf', "scale='min(1920,iw)':-2", '-q:v', '2', str(target)], capture_output=True, timeout=60)
-    except (subprocess.SubprocessError, OSError):
+    if not grab_frame(['ffmpeg', '-v', 'error', '-y', '-ss', f'{at:.2f}', '-i', str(source), '-frames:v', '1',
+                       '-vf', "scale='min(1920,iw)':-2", '-q:v', '2', str(target)], target):
         log.warning('Clean frame failed at %.2fs', at)
-        Path(target).unlink(missing_ok=True)
 
 
 def check_clips(state, manifest_path, source=None):
