@@ -330,6 +330,17 @@ def test_a_run_starts_the_job_follows_it_and_files_every_clip(monkeypatch, worke
     assert worker.metered == [0] and worker.notified == [(2, 1)]
 
 
+def test_a_clean_frame_is_filed_beside_the_poster(monkeypatch, worker):
+    with_frame = {**RESULT, 'clips': [dict(RESULT['clips'][0], frame='clip_00_frame.jpg'), RESULT['clips'][1]]}
+    worker.script['GET'] = [httpx.Response(404), completed(with_frame)]
+    store = Store(monkeypatch, reads=lambda path: [ready_source()] if f'id=eq.{SOURCE}' in path else [])
+    cf.drive(dict(RUN_ROW))
+    clips = [body for path, body in store.posts if path == '/media_assets']
+    assert clips[0]['configuration']['frame'] is True and clips[1]['configuration']['frame'] is False
+    assert (f'{BIZ}/{clips[0]["id"]}-frame.jpg', 'image/jpeg') in worker.puts
+    assert cf.frame_path({'business_id': BIZ, 'id': clips[0]['id']}) == f'{BIZ}/{clips[0]["id"]}-frame.jpg'
+
+
 def test_a_resumed_run_does_not_restart_the_job_or_refile_clips(monkeypatch, worker):
     worker.script['GET'] = [working(90), completed()]
     filed = {str(uuid5(UUID(RUN), 'clip-0'))}

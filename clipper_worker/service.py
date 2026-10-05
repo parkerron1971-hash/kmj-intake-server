@@ -41,7 +41,7 @@ MAX_SOURCE_SECONDS = int(os.getenv('CLIPPER_MAX_SOURCE_SECONDS', '7200'))
 JOB_SECONDS = int(os.getenv('CLIPPER_JOB_SECONDS', '3600'))
 RESULT_TTL = int(os.getenv('CLIPPER_RESULT_TTL', '7200'))
 CAPTION_PRESETS = ('pop', 'spotlight', 'impact', 'glow', 'boxed', 'sweep', 'editorial', 'hype', 'punch', 'neon', 'headline', 'paper', 'subtle')
-FILE_NAME = re.compile(r'^clip_\d{2}\.(mp4|jpg)$')
+FILE_NAME = re.compile(r'^clip_\d{2}(\.mp4|\.jpg|_frame\.jpg)$')
 # Only these reach the engine process; the service token never does.
 ENGINE_ENV_KEEP = ('PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LD_LIBRARY_PATH', 'FONTCONFIG_FILE', 'SYSTEMROOT', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA')
 
@@ -273,7 +273,19 @@ def make_poster(video, at, target):
         Path(target).unlink(missing_ok=True)
 
 
-def check_clips(state, manifest_path):
+def make_frame(source, at, target):
+    """The same moment as the poster, from the recording itself: no captions,
+    no title card, full resolution (capped at 1920 wide). A cover is designed
+    from this. Best effort, like the poster."""
+    try:
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', f'{at:.2f}', '-i', str(source), '-frames:v', '1',
+                        '-vf', "scale='min(1920,iw)':-2", '-q:v', '2', str(target)], capture_output=True, timeout=60)
+    except (subprocess.SubprocessError, OSError):
+        log.warning('Clean frame failed at %.2fs', at)
+        Path(target).unlink(missing_ok=True)
+
+
+def check_clips(state, manifest_path, source=None):
     """Run the empty-spot check on every finished clip and build the result the API stores."""
     data = json.loads(manifest_path.read_text(encoding='utf-8'))
     clip_dir = manifest_path.parent
@@ -290,6 +302,11 @@ def check_clips(state, manifest_path):
         found = empty_spots.scan(video, detector)
         poster = clip_dir / f'clip_{index:02d}.jpg'
         make_poster(video, found['poster_at'], poster)
+        frame = clip_dir / f'clip_{index:02d}_frame.jpg'
+        if source is not None and source.is_file():
+            # A clip is cut straight from [start, end] of the recording, so the
+            # poster's moment in the clip is start + poster_at in the source.
+            make_frame(source, (row.get('start_time_ms') or 0) / 1000 + found['poster_at'], frame)
         editorial = row.get('editorial') or {}
         clips.append({
             'index': index,
@@ -303,6 +320,7 @@ def check_clips(state, manifest_path):
             'review_flags': editorial.get('flags') or [],
             'video': video.name,
             'poster': poster.name if poster.is_file() else None,
+            'frame': frame.name if frame.is_file() else None,
             'bytes': video.stat().st_size,
             'empty_spots': found['empty_spots'],
             'face_coverage': found['face_coverage'],
@@ -331,15 +349,19 @@ def work(job_id, request, state):
         probe(source)
         state.update(stage='listening', percent=5.0)
         final = run_engine(state, engine_config(job_id, source, job_dir / 'out', request.options), engine_env(job_dir), job_dir)
-        source.unlink(missing_ok=True)
         if not final or final.get('type') != 'result':
+            source.unlink(missing_ok=True)
             error = final or {}
             log_engine_tail(job_dir)
             raise JobError(error.get('message') or 'Finding clips failed. Try again.', error.get('stage') or state['stage'], error.get('code') or 'engine.failed')
         manifest = next((job_dir / 'out').rglob('job_output.json'), None)
         if manifest is None:
             raise JobError('Finding clips failed. Try again.', 'saving', 'engine.no_manifest')
-        clip_dir, result = check_clips(state, manifest)
+        try:
+            clip_dir, result = check_clips(state, manifest, source)
+        finally:
+            # Kept only long enough for the clean frames.
+            source.unlink(missing_ok=True)
         result['source']['bytes'] = state.get('source_bytes')
         result['timings'] = dict(result.get('timings') or {}, total=round(time.monotonic() - state['started'], 1))
         state.update(status='completed', stage='done', percent=100.0, result=result, clip_dir=clip_dir)
