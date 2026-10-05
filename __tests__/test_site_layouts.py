@@ -1,6 +1,7 @@
 """THE LAYOUT LIBRARY (2026-10-03, the hand-build plan).
 
-Fourteen layouts (twelve, then bulletin and booking on 2026-10-04) and the
+Seventeen layouts (twelve; bulletin and booking on 2026-10-04; launch,
+poster and leader from the sites Kevin sent on 2026-10-05) and the
 rubric that ranks them for a business from what it
 actually has. The scenario tests are the hand-build check: each business
 gets the layout a designer would pick by hand, for the reason a designer
@@ -43,13 +44,13 @@ def _top(ctx, n=1, recent=None):
 
 # ─── the catalog ─────────────────────────────────────────────────────
 
-def test_there_are_fourteen_complete_layouts():
-    assert len(sl.LAYOUTS) == 14
+def test_there_are_seventeen_complete_layouts():
+    assert len(sl.LAYOUTS) == 17
     for k, L in sl.LAYOUTS.items():
         for field in ("name", "line", "best_for", "needs", "skeleton", "structure", "phone", "fit"):
             assert L.get(field), (k, field)
         assert callable(L["fit"])
-    assert len({L["name"] for L in sl.LAYOUTS.values()}) == 14
+    assert len({L["name"] for L in sl.LAYOUTS.values()}) == 17
 
 
 def test_every_layout_has_a_phone_plan_and_a_section_range():
@@ -254,7 +255,7 @@ def test_the_director_is_handed_the_ranked_layouts(monkeypatch):
                          for k in ("proof", "voice", "origin", "atmosphere")}}}}}
     spec_author.author_spec("biz-1", ctx, None, [])
     assert "== THE LAYOUT" in seen["user"] and "RANKED FOR THIS BUSINESS" in seen["user"]
-    assert "ALL 14 LAYOUTS" in seen["user"]
+    assert "ALL 17 LAYOUTS" in seen["user"]
 
 
 def test_recent_layouts_come_from_other_businesses_blueprints(monkeypatch):
@@ -389,3 +390,74 @@ def test_the_builder_reads_the_new_recipes():
     assert "times-strip object" in sl.builder_block("bulletin")
     block = sl.builder_block("booking")
     assert "hours-card object" in block and "dock object" in block
+
+
+# ─── from the sites Kevin sent (2026-10-05) ───────────────────────────
+
+def test_a_software_business_opens_on_the_launch_stage():
+    ctx = _ctx("software", photos=3, offerings=3, story=_RICH_STORY, action="start a free trial")
+    rows = sl.rank(sl.signals(ctx))
+    assert rows[0]["key"] == "launch"
+    assert "your business has a future feel, and this layout is built for it" in rows[0]["why"]
+
+
+def test_a_future_feel_in_the_owner_s_taste_reaches_the_launch_layout():
+    """Kevin: 'This layout is what I want to view when my business have
+    future feel to it' - the feel, not only the trade."""
+    plain = sl.signals(_ctx("consulting", photos=2, offerings=3))
+    future = sl.signals(_ctx("consulting", photos=2, offerings=3,
+                             taste={"feel_words": {"value": "futuristic, sleek, dark"}}))
+    assert not plain["future"] and future["future"]
+    assert sl.score("launch", future)[0] >= sl.score("launch", plain)[0] + 8
+
+
+def test_a_church_with_a_loud_mission_and_real_photos_gets_the_poster():
+    ctx = _ctx("church", photos=6, offerings=3, idea="Until all have heard: the mission as a street poster",
+               action="plan your visit")
+    rows = sl.rank(sl.signals(ctx))
+    assert rows[0]["key"] == "poster"
+    assert "a loud message and real photos to set into it" in rows[0]["why"]
+
+
+def test_the_poster_needs_photos_and_never_shouts_at_calm_work():
+    rows = {r["key"]: r for r in sl.rank(sl.signals(_ctx("church", photos=1, idea="Until all have heard")))}
+    assert "it needs four or more real photos to set into the words" in rows["poster"]["against"]
+    law = {r["key"]: r for r in sl.rank(sl.signals(_ctx("law firm", photos=6, idea="a bold promise")))}
+    assert law["poster"]["score"] < 0
+
+
+def test_a_personal_ministry_puts_the_person_out_front():
+    ctx = _ctx("ministry", photos=3, offerings=2, story=_RICH_STORY, action="book Bishop for your event")
+    rows = sl.rank(sl.signals(ctx))
+    assert rows[0]["key"] == "leader"
+    assert "you are the brand, so your name and face lead" in rows[0]["why"]
+
+
+def test_a_church_is_bigger_than_one_person():
+    rows = {r["key"]: r for r in sl.rank(sl.signals(_ctx("church", photos=4, story=_RICH_STORY)))}
+    assert rows["leader"]["score"] < 0
+    nobody = {r["key"]: r for r in sl.rank(sl.signals(_ctx("speaker", offerings=2)))}
+    assert "it needs a strong portrait" in nobody["leader"]["against"]
+
+
+def test_the_render_check_knows_the_three_new_shapes():
+    m = lambda **kw: {"1440": {"layout_measured": True, **kw}}
+    assert "light ground" in sl.render_findings("launch", m(ground_l=0.9, objects=["beam"]))[0]
+    assert "nothing is lit" in sl.render_findings("launch", m(ground_l=0.1, objects=["faq"]))[0]
+    assert sl.render_findings("launch", m(ground_l=0.1, objects=["beam", "device"])) == []
+    assert "not a poster" in sl.render_findings("poster", m(h1_px=140, h1_imgs=0))[0]
+    assert sl.render_findings("poster", m(h1_px=140, h1_imgs=2)) == []
+    assert "does not lead the page" in sl.render_findings("leader", m(objects=["ticket"]))[0]
+    assert sl.render_findings("leader", m(objects=["billboard"])) == []
+    for key in ("ground_l", "h1_imgs", "objects"):
+        assert key in sl.RENDER_JS
+
+
+def test_the_builder_reads_the_three_new_recipes():
+    assert "beam object" in sl.builder_block("launch") and "device object" in sl.builder_block("launch")
+    assert "photo-words object" in sl.builder_block("poster") and "sign-off object" in sl.builder_block("poster")
+    assert "billboard object" in sl.builder_block("leader")
+    import site_objects
+    for key in ("beam", "device", "photo-words", "sign-off", "billboard", "book-cover",
+                "leader-spotlight", "word-rail", "two-doors", "flow-lines", "plan-cards"):
+        assert key in site_objects.OBJECTS, f"a recipe names {key}, which must have a renderer"

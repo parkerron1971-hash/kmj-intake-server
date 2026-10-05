@@ -15,8 +15,8 @@ from site_objects import OBJECTS, OBJECT_KEYS
 
 # ─── 1. the contract every object keeps ──────────────────────────────
 
-def test_there_are_twenty_six_objects_each_with_every_part():
-    assert len(OBJECTS) == 26
+def test_there_are_forty_six_objects_each_with_every_part():
+    assert len(OBJECTS) == 46
     for key, o in OBJECTS.items():
         assert o.key == key
         assert o.intent.strip() and o.use_when.strip() and o.phone.strip(), key
@@ -101,7 +101,10 @@ def test_every_phone_rule_exists_where_layout_changes():
     for key in ("letter", "card-id", "ticket", "schedule-card", "frame",
                 "boarding-pass", "installments", "edge", "index-card", "polaroid",
                 "marquee", "times-strip", "hours-card", "panels", "mosaic", "pull-quote",
-                "dock", "faq", "stat-strip"):
+                "dock", "faq", "stat-strip",
+                "notice-bar", "callouts", "device", "plan-cards", "comparison", "laurel", "beam",
+                "flow-lines", "photo-words", "word-rail", "bracket-links", "two-doors", "billboard",
+                "pattern-band", "book-cover", "leader-spotlight", "creed", "script-cap", "visit-details"):
         assert "@media (max-width:" in OBJECTS[key].css, f"{key} has no phone version"
     # the timeline answers to its own column, so a narrow column anywhere
     # (every phone included) gets the vertical line
@@ -270,3 +273,81 @@ def test_panels_and_the_dock_never_strand_content():
 def test_the_edge_has_a_wave():
     edge = OBJECTS["edge"]
     assert '.sxo-edge[data-edge="wave"]' in edge.css and "wave" in edge.intent
+
+
+# ─── from the sites Kevin sent (2026-10-05) ───────────────────────────
+# dimedocs, bridgemind, antwainjackson, 2819church, socialdallas, tradeify:
+# twenty parts rebuilt from scratch to this contract.
+
+KEVINS = ("notice-bar", "callouts", "device", "plan-cards", "comparison", "laurel", "beam",
+          "flow-lines", "photo-words", "word-rail", "bracket-links", "two-doors", "sign-off",
+          "billboard", "pattern-band", "book-cover", "leader-spotlight", "creed", "script-cap",
+          "visit-details")
+
+
+def test_the_twenty_are_catalogued_and_carry_no_one_elses_words():
+    block = so.director_block()
+    for key in KEVINS:
+        assert f"- {key}:" in block, key
+    # rebuilt, not copied: none of the studied sites' names or lines appear
+    everything = " ".join(OBJECTS[k].html + OBJECTS[k].css + OBJECTS[k].use_when for k in KEVINS).lower()
+    for theirs in ("dime docs", "bridgemind", "antwain", "2819", "social dallas", "tradeify",
+                   "until all have heard", "god loves dallas", "stop guessing"):
+        assert theirs not in everything, theirs
+
+
+def test_everyday_words_never_name_the_new_objects():
+    """'the book', 'the plans', 'the details', 'the leader' and 'an award'
+    are ordinary words on an OBJECTS line; only the object names count."""
+    line = "OBJECTS: a ticket to book, the plans and details on a letterboard, the leader's certificate award"
+    assert so.object_names_in(line) == ["ticket", "letterboard", "certificate"]
+    assert so.object_names_in("OBJECTS: plan cards, book cover, leader spotlight, visit details, laurel") == \
+        ["plan-cards", "book-cover", "leader-spotlight", "visit-details", "laurel"]
+
+
+def test_images_keep_their_frame_s_shape():
+    """An <img> with width/height attributes keeps the attribute height
+    unless the CSS says height:auto, and the frame's aspect-ratio never
+    applies (found rendering the callouts and the devices)."""
+    import re as _re
+    for key in ("callouts", "device"):
+        css = OBJECTS[key].css
+        img_rules = _re.findall(r"[^{}]*img\{[^}]*\}", css)
+        assert any("aspect-ratio" in r for r in img_rules), key
+        assert any("height:auto" in r or "height:100%" in r for r in img_rules), key
+
+
+def test_honest_by_default():
+    plans = OBJECTS["plan-cards"]
+    assert "BOTH prices" in plans.use_when and "data-month" in plans.html and "data-year" in plans.html
+    assert "remove it" in plans.use_when, "no switch without two real prices"
+    for key, rule in (("laurel", "Never an invented award"), ("notice-bar", "Never an invented sale"),
+                      ("comparison", "Never a named competitor"), ("device", "Never a made-up interface")):
+        assert rule.lower() in OBJECTS[key].use_when.lower(), key
+
+
+def test_the_copy_button_never_dead_ends():
+    js = OBJECTS["visit-details"].js
+    assert "b.hidden=true" in js and "isSecureContext" in js, "no clipboard, no button"
+    assert 'data-copy="' in OBJECTS["visit-details"].html
+
+
+def test_big_type_sizes_to_its_own_column():
+    """Creed lines, the two doors and the photo words overflowed a half-width
+    column when they sized to the window; they size to their container."""
+    for key in ("creed", "two-doors", "photo-words"):
+        css = OBJECTS[key].css
+        assert "container-type:inline-size" in css and "cqi" in css, key
+    for key in ("sign-off", "billboard"):
+        assert "scrollWidth" in OBJECTS[key].js, f"{key} fits the name to the width"
+
+
+def test_the_rail_makes_room_and_reads_on_the_page_ground():
+    rail = OBJECTS["word-rail"]
+    assert "body:has(.sxo-rail){padding-left" in rail.css
+    assert "color:inherit" in rail.css and "mix-blend-mode" not in rail.css
+    assert "direct child of <body>" in rail.use_when
+
+
+def test_the_edge_steps_down():
+    assert '.sxo-edge[data-edge="steps"]' in OBJECTS["edge"].css and "steps" in OBJECTS["edge"].intent

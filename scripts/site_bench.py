@@ -320,7 +320,8 @@ def objects_sheet(out_dir: str, shoot_it: bool = False) -> List[str]:
     photo urls swapped for labeled stand-ins (the examples point nowhere)."""
     import site_objects
     html = site_objects.contact_sheet_html(site_objects.CONTACT_THEMES)
-    html = re.sub(r"https://example\.com/([a-z]+)\.jpg",
+    # any example name the library uses (booking-phone.jpg, a .png cutout)
+    html = re.sub(r"https://example\.com/([a-z0-9-]+)\.(?:jpg|png)",
                   lambda m: _stand_in(m.group(1), 800, 1000), html)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "objects.html")
