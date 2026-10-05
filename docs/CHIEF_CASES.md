@@ -19,9 +19,9 @@ A salon owner says "Tuesdays are dead."
    bookings on Tuesdays and Wednesdays), the number BEFORE (the same
    measure over the same length of time just before, read when the case
    opens), the number Chief EXPECTS, and the day it will look.
-4. Chief says it in one sentence: "Tuesdays and Wednesdays had 4 bookings
-   in the last three weeks. I expect 9 in the next three, and I'll check
-   on the 27th."
+4. Chief says it in one sentence: "Tuesdays and Wednesdays had 4
+   appointments in the last three weeks. I'm hoping for 9 in the next three,
+   and I'll check on the 27th."
 5. On that day the tick reads the records (no model) and records what
    they show and a verdict: met, partly (moved, short of the forecast),
    not_met, or unmeasured. She gets one notification, an activity row and
@@ -29,6 +29,33 @@ A salon owner says "Tuesdays are dead."
    RESULT, and Chief tells her plainly: before, forecast, now. If it fell
    short, it says so and offers one next fix.
 6. She closes it as solved or dropped (or Chief does, when she says so).
+
+## The words the owner hears
+
+"Case", "forecast" and "the records show" are the code's words, never the
+owner's (Kevin's wording pass, 2026-10-05: "for all the businesses"). The
+owner hears "keeping an eye on it", "I'm hoping for", "before" and "now",
+and every count uses their trade's own word from `vertical_terminology`
+(stored on the case when it opens as `measure.unit`):
+
+| Business | Counts | New people are |
+|---|---|---|
+| Barber, salon (personal services) | appointments | clients |
+| Coach, fitness, therapist | sessions | clients |
+| Lawyer, financial educator | consultations | clients |
+| Church / ministry | meetings | members |
+| Contractor | visits | customers |
+| Course creator | classes | students |
+| Nonprofit | appointments | donors |
+
+A barber's chat chip reads "👀 Keeping an eye on: Tuesdays are dead". Chief
+says "4 appointments on Tuesdays and Wednesdays in the last three weeks.
+I'm hoping for 9 in the next three weeks, and I'll check on Oct 26." The
+alert on the day reads "It helped: Tuesdays are dead / 6 appointments on
+Tuesdays and Wednesdays, up from 4. I was hoping for 9. Ask me and we'll
+try one more thing." The other results are "It worked", "No change yet"
+and "Couldn't check". The weekly advice eval scores `plain_words` on
+every reply and asks a barbershop the Tuesday question.
 
 ## What a case is not
 

@@ -3989,7 +3989,7 @@ ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner;
 ASSIGNMENTS CHIEF IS WORKING BETWEEN CONVERSATIONS (answer "how is it going?" from these; never create_assignment one that already exists; stop_assignment ends one):
 {chr(10).join(assignment_lines) if assignment_lines else '  (none)'}
 
-OPEN CASES (problems you diagnosed, the fix, your forecast and the day you check; a RESULT line is a check you owe the owner: tell them once, plainly, unless you already did in this conversation):
+KEEPING AN EYE ON (problems you diagnosed with the owner: why, the fix, the number before, what you're hoping for, the day you check; a RESULT line is a check you owe the owner: tell them once, plainly and in their words, unless you already did in this conversation):
 {chr(10).join(case_lines) if case_lines else '  (none)'}
 
 {chr(10).join(learning_lines) if learning_lines else 'WHAT LANDS WITH THIS PRACTITIONER: nothing recorded yet — no outcomes from your own moves in the last 30 days.'}

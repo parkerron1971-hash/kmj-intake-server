@@ -170,15 +170,17 @@ def test_opening_reads_the_number_before_and_saves_the_forecast(db):
     assert row["baseline"]["from"] == "2026-09-14" and row["baseline"]["to"] == "2026-10-04"
     assert row["expected"] == 9 and row["check_on"] == "2026-10-26"
     pub = cc.public_row(row)
-    assert pub["before"].startswith("4 bookings on Tuesdays and Wednesdays")
-    assert pub["forecast"].startswith("9 bookings on Tuesdays and Wednesdays")
+    # A salon counts appointments (its own word), and says dates plainly.
+    assert row["measure"]["unit"] == "appointments"
+    assert pub["before"] == "4 appointments on Tuesdays and Wednesdays (Sep 14 to Oct 4)"
+    assert pub["forecast"] == "9 appointments on Tuesdays and Wednesdays (Oct 5 to Oct 25)"
 
 
 def test_a_forecast_that_does_not_beat_the_number_before_is_refused(db):
     db.sessions = [_s("2026-09-15"), _s("2026-09-16"), _s("2026-09-22")]
     err, row = cc.open_case(BIZ, symptom="slow midweek", cause="c", fix="f", evidence="",
                             measure={"kind": "sessions_scheduled", "weekdays": [1, 2]}, expected=3)
-    assert row == {} and "beat the number before" in err
+    assert row == {} and "beat the number now" in err
     assert not [p for p in db.posts if p[0] == "/chief_cases"]
 
 
@@ -186,7 +188,7 @@ def test_a_failed_read_opens_nothing_and_never_becomes_zero(db):
     db.fail_reads = True
     err, row = cc.open_case(BIZ, symptom="slow midweek", cause="c", fix="f", evidence="",
                             measure={"kind": "sessions_scheduled", "weekdays": [1]}, expected=5)
-    assert row == {} and "could not read the number before" in err
+    assert row == {} and "couldn't count where things stand now" in err
     assert not db.posts
 
 
@@ -194,17 +196,17 @@ def test_one_case_per_problem_and_a_cap(db):
     db.cases = [{"id": "c-1", "status": "open", "symptom": "Slow midweek"}]
     err, _ = cc.open_case(BIZ, symptom="slow midweek", cause="c", fix="f", evidence="",
                           measure={"kind": "new_contacts"}, expected=5)
-    assert "already has an open case" in err
+    assert "already keeping an eye on that one" in err
     db.cases = [{"id": f"c-{i}", "status": "open", "symptom": f"p{i}"} for i in range(cc.MAX_OPEN)]
     err, _ = cc.open_case(BIZ, symptom="new one", cause="c", fix="f", evidence="",
                           measure={"kind": "new_contacts"}, expected=5)
-    assert "close one first" in err
+    assert "close one first" in err and "10 things" in err
 
 
 def test_a_case_needs_the_problem_the_cause_and_the_fix(db):
     err, _ = cc.open_case(BIZ, symptom="slow", cause="", fix="f", evidence="",
                           measure={"kind": "new_contacts"}, expected=5)
-    assert "the cause you found" in err
+    assert "what's causing it" in err
 
 
 # ─── 4. the check is a read, and it is honest ─────────────────────────
@@ -237,8 +239,9 @@ def test_the_check_records_what_the_records_show_and_tells_the_owner_once(db):
     assert saved["result"]["value"] == 6
     notes = [b for p, b in db.posts if p == "/chief_notifications"]
     assert len(notes) == 1
-    assert notes[0]["title"].startswith("Fix helped, short of the forecast")
-    assert "Before: 4 bookings" in notes[0]["body"] and "The records show 6 bookings" in notes[0]["body"]
+    assert notes[0]["title"] == "It helped: Tuesdays and Wednesdays are dead"
+    assert notes[0]["body"] == ("6 appointments on Tuesdays and Wednesdays, up from 4. "
+                                "I was hoping for 9. Ask me and we'll try one more thing.")
     # Observed, never credited.
     assert "because" not in notes[0]["body"].lower() and "caused" not in notes[0]["body"].lower()
 
@@ -275,10 +278,10 @@ def test_context_lines_carry_the_forecast_and_owed_results():
     checked = cc.public_row({**_due_row(), "status": "checked", "verdict": "met",
                              "checked_at": "2026-10-26T06:00:00Z", "result": {"value": 10}})
     lines = cc.context_lines([open_row, checked])
-    assert "Forecast: 9 bookings on Tuesdays and Wednesdays" in lines[0]
+    assert "Hoping for: 9 appointments on Tuesdays and Wednesdays" in lines[0]
     assert "Checking on 2026-10-26" in lines[0]
-    assert "RESULT" in lines[1] and "verdict met" in lines[1]
-    assert "the records show 10 bookings" in lines[1]
+    assert "RESULT to tell them (it worked" in lines[1]
+    assert "now 10 appointments" in lines[1]
 
 
 def test_the_answer_check_treats_cases_as_records():
@@ -299,7 +302,7 @@ def test_the_verbs_are_class_a_registered_and_documented():
         assert action_registry.REGISTRY[verb]["reversibility"] == "A"
     src = chief_source()
     assert '"type":"open_case"' in src and '"type":"close_case"' in src
-    assert "OPEN CASES" in src
+    assert "KEEPING AN EYE ON (" in src
 
 
 def test_the_app_door_is_owner_only(monkeypatch):
@@ -358,3 +361,65 @@ def test_close_without_an_id_never_guesses_between_cases(db):
     db.patches.clear()
     out = _run(cc.handle_close_case(None, BIZ, {"outcome": "dropped"}))
     assert not out.get("failed") and db.patches
+
+
+# ─── The wording pass (2026-10-05): every business, its own words ─────
+
+_JARGON = ("case", "forecast", "records show", "baseline", "metric", "verdict")
+
+
+def _owner_words(*texts):
+    import re
+    joined = " ".join(texts).lower()
+    return [w for w in _JARGON if re.search(r"\b" + w + r"\b", joined)]
+
+
+def test_each_trade_counts_in_its_own_word(db):
+    cases = [("barber", "sessions_scheduled", "appointments"),
+             ("coach", "sessions_scheduled", "sessions"),
+             ("lawyer", "sessions_scheduled", "consultations"),
+             ("church", "sessions_scheduled", "meetings"),
+             ("contractor", "sessions_scheduled", "visits"),
+             ("ministry", "new_contacts", "members"),
+             ("nonprofit", "new_contacts", "donors"),
+             ("course_creator", "new_contacts", "students")]
+    for btype, kind, word in cases:
+        assert cc.unit_for(btype, kind) == word, (btype, kind)
+    db.sessions = [_s("2026-09-15"), _s("2026-09-22")]
+    err, row = cc.open_case({**BIZ, "type": "coach"}, symptom="Thin Tuesdays", cause="c", fix="f",
+                            evidence="", measure={"kind": "sessions_scheduled", "weekdays": ["tue"]},
+                            expected=5)
+    assert err is None and cc.public_row(row)["before"].startswith("2 sessions on Tuesdays")
+
+
+def test_what_the_owner_reads_has_no_office_words(db):
+    db.sessions = [_s("2026-09-15"), _s("2026-09-16"), _s("2026-09-22"), _s("2026-09-30")]
+    out = _run(cc.handle_open_case(None, {**BIZ, "type": "barber"}, {
+        "symptom": "Tuesdays are dead", "cause": "no hours set", "fix": "set hours, text regulars",
+        "measure": {"kind": "sessions_scheduled", "weekdays": ["tuesday", "wednesday"]}, "expected": 9}))
+    assert out["label"] == "👀 Keeping an eye on: Tuesdays are dead"
+    assert out["speak"] == ("4 appointments on Tuesdays and Wednesdays in the last three weeks. "
+                            "I'm hoping for 9 in the next three weeks, and I'll check on Oct 26.")
+    assert not _owner_words(out["label"], out["speak"])
+    row = {**_due_row(), "measure": {"kind": "sessions_scheduled", "weekdays": [1, 2], "unit": "appointments"}}
+    for value, verdict, title in ((10, "met", "It worked"), (6, "partly", "It helped"),
+                                  (4, "not_met", "No change yet"), (2, "not_met", "No change yet"),
+                                  (None, "unmeasured", "Couldn't check")):
+        head, body = cc._result_line(row, value, verdict)
+        assert head.startswith(title), (verdict, head)
+        assert not _owner_words(head, body), (verdict, head, body)
+    assert "the same as before" in cc._result_line(row, 4, "not_met")[1]
+    assert "down from 4" in cc._result_line(row, 2, "not_met")[1]
+    money = {**row, "measure": {"kind": "revenue_collected"}, "expected": 1200,
+             "baseline": {"value": 800.0}}
+    assert cc._result_line(money, 950.0, "partly")[1].startswith("$950 in payments, up from $800.")
+    db.cases = [{"id": "c-9", "status": "checked", "symptom": "Tuesdays are dead"}]
+    closed = _run(cc.handle_close_case(None, BIZ, {"outcome": "solved"}))
+    assert closed["label"] == "✅ Fixed: Tuesdays are dead" and not _owner_words(closed["label"])
+
+
+def test_chief_is_told_to_say_it_in_their_words():
+    from __tests__._chief_source import chief_source
+    src = chief_source()
+    assert 'Never say "case", "forecast", "baseline", "metric" or "the records show" to them' in src
+    assert "OPEN CASES" not in src
