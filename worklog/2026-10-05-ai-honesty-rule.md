@@ -2,7 +2,7 @@
 title: Chief, its coaches, the fast lane and the website concierge say plainly they are an AI when asked
 date: 2026-10-05
 agent: Claude Code (Claude Opus 5.5)
-asked: "Make the changes" (SI review, Dev Desk)
+asked: 'Make the changes (SI review, Dev Desk)'
 status: shipped
 prs: []
 migrations: []
