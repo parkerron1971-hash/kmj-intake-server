@@ -143,6 +143,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "responsibility_status": _r("reads tenant-scoped work states and observed progress; no recovery or execution"),
     "acknowledge_follow_up": _w("C", "owner acknowledges an uncertain event result with a revision check; never retries effects"),
     "start_business_responsibility": _w("A", "creates a measurable assignment through the existing owner-requested assignment door; sends remain gated"),
+    "open_case":           _w("A", "records a diagnosed problem and a forecast (one row, read-only measurement); sends, books and charges nothing; close_case undoes it"),
+    "close_case":          _w("A", "marks a case solved or dropped; the row and its result stay on record"),
     "check_goals":         _r("computes goal progress from business settings + live data"),
     "contact_deep_dive":   _r("assembles one contact's history"),
     "inspect_module":      _r("checks a built module against the renderer's contract; "
