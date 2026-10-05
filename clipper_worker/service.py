@@ -91,7 +91,8 @@ class Cancelled(Exception):
 
 def authorized(authorization: str = Header(default='')):
     expected = os.getenv('CLIPPER_TOKEN', '')
-    if len(expected) < 32 or not hmac.compare_digest(authorization, 'Bearer ' + expected):
+    # Compare bytes: compare_digest raises on non-ASCII str, which would be a 500.
+    if len(expected) < 32 or not hmac.compare_digest(authorization.encode(), ('Bearer ' + expected).encode()):
         raise HTTPException(401, 'Unauthorized')
 
 
@@ -164,10 +165,10 @@ def check_cancel(state):
         raise JobError('Finding clips took too long and was stopped.', state['stage'], 'job.timeout')
 
 
-def download(url, target, state):
+def download(url, target, state, transport=None):
     timeout = httpx.Timeout(60.0, read=120.0)
     size = 0
-    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+    with httpx.Client(timeout=timeout, follow_redirects=False, transport=transport) as client:
         with client.stream('GET', url) as response:
             if response.status_code != 200:
                 raise JobError('The recording could not be downloaded. Try again.', 'downloading', 'download.status')
@@ -263,8 +264,13 @@ def run_engine(state, config, env, job_dir):
 
 
 def make_poster(video, at, target):
-    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', f'{at:.2f}', '-i', str(video), '-frames:v', '1', '-vf', 'scale=540:-2', '-q:v', '4', str(target)],
-                   capture_output=True, timeout=60)
+    """Best effort: a clip without a poster still reaches review."""
+    try:
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-ss', f'{at:.2f}', '-i', str(video), '-frames:v', '1', '-vf', 'scale=540:-2', '-q:v', '4', str(target)],
+                       capture_output=True, timeout=60)
+    except (subprocess.SubprocessError, OSError):
+        log.warning('Poster frame failed for %s', video.name)
+        Path(target).unlink(missing_ok=True)
 
 
 def check_clips(state, manifest_path):

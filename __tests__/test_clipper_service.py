@@ -84,6 +84,11 @@ def test_every_job_route_needs_the_token(client):
     assert client.get('/health').json()['ready'] is True
 
 
+def test_a_non_ascii_auth_header_is_a_401_not_a_500(client):
+    # The server decodes header bytes as latin-1, so these arrive as non-ASCII text.
+    assert client.get(f'/jobs/{uuid4()}', headers={'Authorization': b'Bearer caf\xc3\xa9'}).status_code == 401
+
+
 def test_a_short_configured_token_refuses_everything(client, monkeypatch):
     monkeypatch.setenv('CLIPPER_TOKEN', 'short')
     assert client.get(f'/jobs/{uuid4()}', headers={'Authorization': 'Bearer short'}).status_code == 401
@@ -217,6 +222,75 @@ def test_delete_stops_a_running_job_and_forgets_it(client, monkeypatch):
 def test_missing_ai_key_is_refused_up_front(client, monkeypatch):
     monkeypatch.delenv('OPENROUTER_API_KEY')
     assert client.post(f'/jobs/{uuid4()}', json={'source_url': SOURCE}, headers=AUTH).status_code == 503
+
+
+def fresh_state():
+    return {'cancel': threading.Event(), 'started': time.monotonic(), 'stage': 'downloading', 'percent': 0.0}
+
+
+def serve(body=b'', status=200, headers=None):
+    import httpx
+    return httpx.MockTransport(lambda request: httpx.Response(status, content=body, headers=headers or {}))
+
+
+def test_download_writes_the_file_and_reports_progress(tmp_path):
+    target, state = tmp_path / 'source.mp4', fresh_state()
+    size = svc.download(SOURCE, target, state, transport=serve(b'x' * 3000, headers={'content-length': '3000'}))
+    assert size == 3000 and target.read_bytes() == b'x' * 3000 and state['percent'] == 5.0
+
+
+@pytest.mark.parametrize('body,headers,code', [
+    (b'x' * 10, {'content-length': '999999'}, 'download.too_large'),   # declared too big: refused before reading
+    (b'x' * 2000, {}, 'download.too_large'),                             # no length given, too big while streaming
+    (b'', {}, 'download.empty'),
+])
+def test_download_size_limits(tmp_path, monkeypatch, body, headers, code):
+    monkeypatch.setattr(svc, 'MAX_SOURCE_BYTES', 1000)
+    with pytest.raises(svc.JobError) as caught:
+        svc.download(SOURCE, tmp_path / 'source.mp4', fresh_state(), transport=serve(body, headers=headers))
+    assert caught.value.code == code
+
+
+@pytest.mark.parametrize('status', [302, 403, 404, 500])
+def test_download_refuses_redirects_and_errors(tmp_path, status):
+    transport = serve(b'', status=status, headers={'location': 'http://169.254.169.254/'})
+    with pytest.raises(svc.JobError) as caught:
+        svc.download(SOURCE, tmp_path / 'source.mp4', fresh_state(), transport=transport)
+    assert caught.value.code == 'download.status'
+
+
+@pytest.mark.parametrize('stdout,result', [
+    ('{"format": {"duration": "3760.9"}, "streams": [{"codec_type": "video"}, {"codec_type": "audio"}]}', 3760.9),
+    ('{"format": {"duration": "7201"}, "streams": [{"codec_type": "video"}]}', 'probe.too_long'),
+    ('{"format": {"duration": "60"}, "streams": [{"codec_type": "audio"}]}', 'probe.no_video'),
+    ('not json', 'probe.unreadable'),
+    ('{"streams": []}', 'probe.unreadable'),
+])
+def test_probe_enforces_two_hours_and_real_video(tmp_path, monkeypatch, stdout, result):
+    monkeypatch.setattr(svc.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=stdout))
+    if isinstance(result, float):
+        assert svc.probe(tmp_path / 'source.mp4') == result
+    else:
+        with pytest.raises(svc.JobError) as caught:
+            svc.probe(tmp_path / 'source.mp4')
+        assert caught.value.code == result
+
+
+def test_a_job_past_its_time_limit_is_stopped(monkeypatch):
+    monkeypatch.setattr(svc, 'JOB_SECONDS', 10)
+    state = fresh_state() | {'started': time.monotonic() - 11}
+    with pytest.raises(svc.JobError) as caught:
+        svc.check_cancel(state)
+    assert caught.value.code == 'job.timeout'
+
+
+def test_a_poster_that_times_out_does_not_fail_the_job(tmp_path, monkeypatch):
+    def slow(*args, **kwargs):
+        raise svc.subprocess.TimeoutExpired('ffmpeg', 60)
+    monkeypatch.setattr(svc.subprocess, 'run', slow)
+    target = tmp_path / 'clip_00.jpg'
+    svc.make_poster(tmp_path / 'clip_00.mp4', 2.0, target)
+    assert not target.exists()
 
 
 def test_progress_bands_match_the_engine():
