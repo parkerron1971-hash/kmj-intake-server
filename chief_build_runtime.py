@@ -797,6 +797,11 @@ def route_actions(actions):
         kind=action.get('type')
         if kind=='generate_image':
             out.append({'type':'submit_work_order','kind':'flyer','facts':{k:v for k,v in action.items() if k!='type'}})
+        elif kind=='design_flyer':
+            # The same flyer order; the build step runs the Director (or the switch's single call).
+            facts={'prompt':action.get('goal') or action.get('prompt') or ''}
+            facts.update({k:action[k] for k in ('exact_copy','references','size','website_url') if k in action})
+            out.append({'type':'submit_work_order','kind':'flyer','facts':facts})
         elif kind=='create_client_form':
             out.append({'type':'submit_work_order','kind':'form_and_link','facts':{k:v for k,v in action.items() if k!='type'}})
         elif kind=='set_site_capability' and action.get('capability')=='events' and action.get('on',True):
@@ -901,7 +906,7 @@ For those requested builds, call submit_work_order exactly once. Do not perform 
 - flyer: prompt, optional reference_ids, website_url, size and quality. This is also the route for editing an existing image.
 - site_door: capability=events.
 - plan: a request that needs more than three changes, includes a long piece (an image), or is a job of dependent steps. Submit it FIRST, before doing any of it directly: a reply can make only three direct changes. Up to three quick changes are done directly instead. It runs in the background and the owner keeps talking. facts: title, goal, steps: [{"title": "...", "action": {"type": "<action>", ...the same fields that action takes in chat}}]. Steps run in order. A later step can use an earlier step's result with "@type.field" (for example "@create_contact.contact_id"), or repeat over a list with "for_each": "@show_view.rows" and {{item.field}}. Put "approval": true on a step the owner wants to review first. A plan may include one generate_image step. Workshops, forms with links and events pages are never plan steps: they are their own orders. A message with several pieces gets one order per piece (for example an event_setup for the workshop, a flyer, and one plan for everything else), up to four orders per turn; they run side by side. Sends, bookings and charges in a plan run on the owner's ask, exactly as in chat.
-Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form or generate_image for those build steps.
+Use the native submit_work_order tool when offered. If missing details remain, submit the facts you have; the job asks the single next question. Do not emit ensure_module, create_module_entry, create_client_form, generate_image or design_flyer for those build steps.
 Questions about a job in BUILDS IN PROGRESS are read-only: answer with its summary_label verbatim, without extra execution claims or follow-up offers. Never create another build to check progress.
 An explicit go-ahead for a held build uses respond_work_order with that existing job_id and approve=true. Missing-detail answers use its job_id, requested field and answer; a plan's question is answered with field plan_answer.
 After submitting or responding, use the returned label for its execution status; queued work is not finished work. Still answer any question the owner asked alongside the work. A request to discuss, calculate, or explain a plan is not a request to save or queue it; use ordinary prose. Goal trackers use create_goal, milestone initiatives use create_growth_objective, and notes use save_note when requested; there is no goal_setup build kind.

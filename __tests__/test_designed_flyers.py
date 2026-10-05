@@ -318,3 +318,18 @@ def test_a_design_with_nothing_to_match_commits_to_a_bold_direction(monkeypatch)
     spec['references'] = [{'id': style, 'role': 'style', 'use': 'Match this'}]
     run(d.make_plan(None, {'business_id': BIZ}, spec, {style: png()}))
     assert 'Choose the ONE direction' not in calls.call_args.args[-2]
+
+
+def test_a_design_flyer_tag_in_build_mode_becomes_the_flyer_order():
+    ref = str(uuid4())
+    routed = runtime.route_actions([{'type': 'design_flyer', 'goal': 'Saturday special', 'exact_copy': ['Fades $20'],
+                                     'references': [{'id': ref, 'role': 'logo'}], 'size': '1088x1920'}])
+    assert routed == [{'type': 'submit_work_order', 'kind': 'flyer', 'facts': {
+        'prompt': 'Saturday special', 'exact_copy': ['Fades $20'], 'references': [{'id': ref, 'role': 'logo'}], 'size': '1088x1920'}}]
+
+
+def test_chief_is_taught_the_design_flyer_tag():
+    import chief_prompt
+    import inspect
+    source = inspect.getsource(chief_prompt).replace('{{', '{').replace(' ', '')
+    assert '[ACTION:{"type":"design_flyer"' in source
