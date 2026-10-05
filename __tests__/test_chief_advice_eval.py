@@ -96,7 +96,7 @@ def test_finds_cause_is_scored_only_on_hidden_cause_cases():
     assert "finds_cause" not in ev.score_reply(GOOD, [])["checks"]
     hit = ev.score_reply("The real problem is Tom Baker's $7,000 invoice, still unpaid.", [],
                          r"7,000|Tom Baker")
-    assert hit["checks"]["finds_cause"] and hit["total"] == 8
+    assert hit["checks"]["finds_cause"] and hit["total"] == 9
     miss = ev.score_reply("Raise your prices and post more on Instagram.", [], r"7,000|Tom Baker")
     assert not miss["checks"]["finds_cause"]
     walled = ev.score_reply(truth.NO_ACTION_REPLY, [], r"7,000|Tom Baker")
@@ -132,6 +132,7 @@ def test_the_summary_handles_mixed_checks_and_carries_the_si_score():
     assert rep["si_score"]["finds_cause"] == 0.5 and "substance" not in rep["si_score"]
     line = ev.si_line(rep)
     assert line.startswith("SI score: answered 67%") and "named the hidden cause 50%" in line
+    assert "plain words 67%" in line
     graded = ev.si_score(rep["rates"], {k: 2 for k in ev.GRADE_SCHEMA["required"]})
     assert graded["substance"] == 1.0
 
@@ -142,6 +143,7 @@ GENERIC = {
     "hidden_busy_broke_trades": "Track your expenses, raise prices a little, and make sure you have an outstanding reputation.",
     "hidden_flat_income_coach": "Raise your rates, sell the $1,200 package more, and cut low-value work. Overdue for a price review.",
     "hidden_thin_calendar_coach": "Reach out to past clients the same week, adapt your offer, and post about your leads magnet.",
+    "barber_slow_tuesdays": "Run a Tuesday special, post a fresh fade on Instagram, and keep your chair hours flexible.",
 }
 NAMED = {
     "salon_slow_days": "You have no weekly hours set, so the booking page shows you open 24/7.",
@@ -149,6 +151,7 @@ NAMED = {
     "hidden_busy_broke_trades": "Tom Baker's $7,000 invoice is still unpaid; that's your cash.",
     "hidden_flat_income_coach": "Monica owes $1,200 and it's overdue.",
     "hidden_thin_calendar_coach": "Ada and Sam are leads who were never invited to a call.",
+    "barber_slow_tuesdays": "Your shop has no hours set, so the booking page shows you open 24/7.",
 }
 
 
@@ -158,3 +161,25 @@ def test_a_generic_answer_never_scores_as_naming_the_cause():
     for cid, case in cases.items():
         assert not ev.score_reply(GENERIC[cid], [], case["cause"])["checks"]["finds_cause"], cid
         assert ev.score_reply(NAMED[cid], [], case["cause"])["checks"]["finds_cause"], cid
+
+
+def test_office_words_fail_plain_words_and_plain_english_passes():
+    for bad in ("I've opened a case for Tuesdays.", "My forecast is 9 appointments.",
+                "The records show 6 cuts.", "Your baseline is 4.", "That's Solutionist Intelligence at work.",
+                "SI found the cause."):
+        assert not ev.score_reply(bad, [])["checks"]["plain_words"], bad
+    for ok in ("In that case, start with your regulars.", "In this case, text your regulars first.",
+               "The case is clear: raise the fade to $45.", "You could make a case for a Tuesday special.",
+               "I'll keep an eye on Tuesdays and check on the 27th.",
+               "You had 4 appointments; I'm hoping for 9. Si, it can work."):
+        assert ev.score_reply(ok, [])["checks"]["plain_words"], ok
+
+
+def test_the_barbershop_is_a_real_fixture():
+    biz, make_ctx = ev.BUSINESSES["barber_est"]
+    assert biz["type"] == "barber"
+    ctx = make_ctx(biz)
+    assert {o["name"] for o in ctx["offerings"]} >= {"Haircut", "Skin Fade"}
+    case = [c for c in ev.CASES if c["id"] == "barber_slow_tuesdays"][0]
+    salon = [c for c in ev.CASES if c["id"] == "salon_slow_days"][0]
+    assert case["cause"] == salon["cause"]
