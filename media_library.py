@@ -301,7 +301,9 @@ def process(row):
                 url = storage_links.signed_url_sync(BUCKET, object_path(parent), ttl=900)
                 if not url:
                     raise ValueError('The source recording is unavailable.')
-                transfer_to_file(client, url, {}, source)
+                # Uploaded recordings can be up to 5 GB; bound the read by the
+                # size this source was stored at, never less than the Drive cap.
+                transfer_to_file(client, url, {}, source, maximum=max(MAX_BYTES, int(parent.get('byte_size') or 0)))
                 # Recordings uploaded from a computer go straight to storage and
                 # carry no checksum; Drive imports keep theirs and are verified.
                 if parent.get('sha256'):

@@ -483,3 +483,22 @@ def test_manual_clips_refuse_a_removed_recording(monkeypatch):
     with pytest.raises(HTTPException) as caught:
         media.create_clip(BIZ, body, USER)
     assert caught.value.status_code == 409
+
+
+def test_a_hand_cut_clip_can_read_a_large_uploaded_recording(monkeypatch, tmp_path):
+    """The manual cutter downloads the recording first; its cap follows the
+    recording's stored size (uploads go to 5 GB), never below the Drive cap."""
+    parent = ready_source(byte_size=3 * 1024 ** 3, sha256=None)
+    row = {'id': RUN, 'business_id': BIZ, 'kind': 'clip', 'source_id': SOURCE, 'created_by': OWNER,
+           'configuration': {'start_seconds': 1, 'end_seconds': 10}}
+    monkeypatch.setattr(media, 'access', lambda *a, **k: None)
+    monkeypatch.setattr(media, 'asset', lambda *a: parent)
+    monkeypatch.setattr(media.storage_links, 'signed_url_sync', lambda *a, **k: 'https://abcdefgh.supabase.co/signed')
+    caps = []
+    def transfer(client, url, headers, target, maximum=media.MAX_BYTES):
+        caps.append(maximum)
+        raise ValueError('stop after the cap is chosen')
+    monkeypatch.setattr(media, 'transfer_to_file', transfer)
+    with pytest.raises(ValueError, match='stop after'):
+        media.process(row)
+    assert caps == [3 * 1024 ** 3]
