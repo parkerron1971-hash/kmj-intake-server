@@ -26,7 +26,8 @@ async def render(client, row, prompt, raw_refs, *, charge=True):
         decoded = True
     finally:
         # Record a returned paid render even if decoding, storage or review fails.
-        await images.log_api_usage(endpoint='/platform/chief/director/render', model=row['model'],
+        endpoint = '/ai/images/director/render' if scope_of(row) == 'business' else '/platform/chief/director/render'
+        await images.log_api_usage(endpoint=endpoint, model=row['model'],
             business_id=row['business_id'], input_tokens=usage.get('input_tokens', 0), output_tokens=usage.get('output_tokens', 0),
             task_type='image_generation', cost_cents_override=estimate*100,
             units=images.image_units(row['quality']) if decoded and charge else 0, ok=decoded)
