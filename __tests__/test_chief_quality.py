@@ -114,3 +114,59 @@ def test_tick_splits_the_windows_records_and_flags(monkeypatch):
 def test_kill_switch(monkeypatch):
     monkeypatch.setenv("CHIEF_QUALITY", "off")
     assert asyncio.run(cq.quality_tick()) == {"skipped": True}
+
+
+# ─── The live wall rate (SI score, 2026-10-05) ────────────────────────
+
+def _turn(reply, n=2, hours_ago=1):
+    return {"message_count": n, "ended_at": (NOW - timedelta(hours=hours_ago)).isoformat(),
+            "messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": reply}]}
+
+
+def test_the_wall_phrases_are_the_answer_checks_own():
+    import chief_truth
+    walls = (chief_truth.UNVERIFIED_REPLY, chief_truth.NO_ACTION_REPLY)
+    for phrase in cq.WALL_PHRASES:
+        assert any(phrase in w for w in walls), phrase
+    for w in walls:
+        assert any(p in w for p in cq.WALL_PHRASES), w
+
+
+def test_wall_metrics_count_single_turns_only():
+    import chief_truth
+    rows = [_turn("Raise it to $175."), _turn(chief_truth.NO_ACTION_REPLY),
+            _turn(chief_truth.UNVERIFIED_REPLY), _turn("x", n=8), _turn("")]
+    m = cq.wall_metrics(rows)
+    assert m == {"replies": 3, "walled": 2, "wall_rate": 0.667}
+    assert cq.wall_metrics([])["wall_rate"] is None
+
+
+def test_a_wall_rate_of_ten_percent_is_flagged_with_enough_replies():
+    steady = cq.turn_metrics([])
+    f = cq.flags(steady, steady, None, None, {"replies": 30, "walled": 3, "wall_rate": 0.1})
+    assert [x["code"] for x in f] == ["quality:walls"]
+    assert "3 of 30 replies" in f[0]["detail"]
+    assert not cq.flags(steady, steady, None, None, {"replies": 30, "walled": 2, "wall_rate": 0.067})
+    assert not cq.flags(steady, steady, None, None, {"replies": 5, "walled": 3, "wall_rate": 0.6})
+
+
+def test_the_report_reads_the_live_wall_rate(monkeypatch):
+    import chief_truth
+
+    class ConvoDB(FakeDB):
+        async def get(self, url, headers=None, params=None):
+            t = url.rsplit("/", 1)[-1]
+            if t == "chief_conversations":
+                return _Resp([_turn("fine")] * 18 + [_turn(chief_truth.NO_ACTION_REPLY)] * 2 +
+                             [_turn(chief_truth.NO_ACTION_REPLY, hours_ago=72)])
+            return await super().get(url, headers, params)
+
+    db = ConvoDB([], [])
+    import spend_guard
+    monkeypatch.setattr(spend_guard, "today_spend_cents", lambda *a, **k: 0.0)
+    monkeypatch.setattr(spend_guard, "_cap_cents", lambda: 5000.0)
+    r = asyncio.run(cq.report(db, {}, now=NOW))
+    assert r["walls_24h"] == {"replies": 20, "walled": 2, "wall_rate": 0.1}
+    assert r["walls_week_before"]["walled"] == 1
+    assert "quality:walls" in [f["code"] for f in r["flags"]]
+    assert "10% withheld as unverified" in cq._summary(r) or not r["day"].get("turns")

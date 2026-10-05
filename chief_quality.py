@@ -49,6 +49,14 @@ AGENT = "chief_quality"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=15.0, pool=10.0)
 MIN_TURNS_DAY = 20
 MIN_TURNS_BASE = 50
+# The live wall rate (SI score, 2026-10-05): a reply the answer check
+# replaced with "couldn't verify" is an answer the owner never got. The
+# phrases are chief_truth's own (UNVERIFIED_REPLY, NO_ACTION_REPLY); a test
+# keeps them in step. Counted, never stored or quoted.
+WALL_PHRASES = ("couldn't verify the answer from the information available",
+                "couldn't verify my proposed answer")
+MIN_REPLIES_DAY = 10
+WALL_FLAG_RATE = 0.10
 
 
 def enabled() -> bool:
@@ -89,6 +97,26 @@ def turn_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def wall_metrics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Pure: how many of Chief's archived replies were the answer check's
+    "couldn't verify" wall. One chief_conversations row per turn
+    (message_count 2); the browser's multi-turn sweeps are left out so a
+    turn is never counted twice."""
+    replies = walled = 0
+    for r in rows:
+        if (r.get("message_count") or 0) != 2:
+            continue
+        msgs = r.get("messages") if isinstance(r.get("messages"), list) else []
+        reply = next((str(m.get("content") or "") for m in msgs
+                      if isinstance(m, dict) and m.get("role") == "assistant"), "")
+        if not reply.strip():
+            continue
+        replies += 1
+        walled += any(p in reply for p in WALL_PHRASES)
+    return {"replies": replies, "walled": walled,
+            "wall_rate": round(walled / replies, 3) if replies else None}
+
+
 def spend_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Pure: where the money went in one window of api_usage rows."""
     by_endpoint: Dict[str, float] = defaultdict(float)
@@ -106,7 +134,8 @@ def spend_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def flags(day: Dict[str, Any], base: Dict[str, Any],
-          spent_cents: Optional[float], cap_cents: Optional[float]) -> List[Dict[str, Any]]:
+          spent_cents: Optional[float], cap_cents: Optional[float],
+          walls: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Pure: what needs a person. Trends only with enough turns on both sides."""
     out: List[Dict[str, Any]] = []
 
@@ -136,6 +165,12 @@ def flags(day: Dict[str, Any], base: Dict[str, Any],
         flag("quality:errors", f"{round(day['error_rate'] * 100)}% of turns errored",
              f"{round(day['error_rate'] * day['turns'])} of {day['turns']} turns in the last "
              "24h recorded an error. Sentry has the details.")
+    if walls and (walls.get("replies") or 0) >= MIN_REPLIES_DAY and \
+            (walls.get("wall_rate") or 0) >= WALL_FLAG_RATE:
+        flag("quality:walls", f"{round(walls['wall_rate'] * 100)}% of answers withheld as unverified",
+             f"{walls['walled']} of {walls['replies']} replies in the last 24h were the answer "
+             "check's \"couldn't verify\" message instead of an answer. Run the weekly advice "
+             "eval or read the chief.truth verdict lines for the reasons.")
     if spent_cents is not None and cap_cents:
         if spent_cents >= 0.7 * cap_cents:
             flag("cost:near_cap", f"today's spend at {round(spent_cents / cap_cents * 100)}% of the cap",
@@ -180,6 +215,15 @@ async def report(c: httpx.AsyncClient, headers: Dict[str, str],
         unseen.append("spend")
     spend = spend_summary(usage or [])
 
+    convos = await _rows(c, headers, "chief_conversations", {
+        "select": "messages,message_count,ended_at", "message_count": "eq.2",
+        "ended_at": f"gte.{base_start.isoformat()}", "limit": "5000"})
+    if convos is None:
+        unseen.append("Chief replies")
+        convos = []
+    walls_day = wall_metrics([r for r in convos if (_when(r.get("ended_at")) or base_start) >= day_start])
+    walls_base = wall_metrics([r for r in convos if (_when(r.get("ended_at")) or now) < day_start])
+
     spent = cap = None
     try:
         import spend_guard
@@ -188,8 +232,9 @@ async def report(c: httpx.AsyncClient, headers: Dict[str, str],
         unseen.append("spend cap")
 
     return {"day": day, "week_before": base, "spend_24h": spend,
+            "walls_24h": walls_day, "walls_week_before": walls_base,
             "today_spent_cents": spent, "cap_cents": cap, "unseen": unseen,
-            "flags": flags(day, base, spent, cap)}
+            "flags": flags(day, base, spent, cap, walls_day)}
 
 
 def _summary(r: Dict[str, Any]) -> str:
@@ -200,6 +245,9 @@ def _summary(r: Dict[str, Any]) -> str:
         slo = f", on time {round(d['slo_met_rate'] * 100)}%" if d.get("slo_met_rate") is not None else ""
         head = (f"{d['turns']} turns, {d['cost_per_turn_cents']:.2f}¢ each, first word "
                 f"p50 {d.get('ttft_p50_ms')} ms{slo}")
+    w = r.get("walls_24h") or {}
+    if w.get("replies"):
+        head += f", {round(w['wall_rate'] * 100)}% withheld as unverified"
     tail = f"; ${s['total_cents'] / 100:.2f} spent across {s['calls']} paid calls"
     if r["flags"]:
         tail += "; " + "; ".join(f["title"].removeprefix("Chief: ") for f in r["flags"])

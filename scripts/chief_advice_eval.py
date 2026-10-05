@@ -183,7 +183,10 @@ CASES: List[Dict[str, str]] = [
     {"id": "ads_new", "biz": "coach_new",
      "message": "Is it worth running Facebook ads at my stage? What budget would you start with?"},
     {"id": "salon_slow_days", "biz": "salon_est",
-     "message": "Tuesdays and Wednesdays are dead. What should I do about it?"},
+     "message": "Tuesdays and Wednesdays are dead. What should I do about it?",
+     # The salon has no weekly hours set, so its booking page reads as
+     # open around the clock: the cause is in the records.
+     "cause": r"\bhours\b"},
     {"id": "salon_rebook", "biz": "salon_est",
      "message": "How do I get more clients to rebook before they leave the chair?"},
     {"id": "trades_leads", "biz": "trades_est",
@@ -194,6 +197,22 @@ CASES: List[Dict[str, str]] = [
      "message": "Some members have gone quiet. How should we reconnect with them this month?"},
     {"id": "church_workshop", "biz": "church_est",
      "message": "We want to fill the marriage workshop. What's the plan?"},
+    # ── Hidden causes (Solutionist Intelligence, 2026-10-05) ───────────
+    # The stated problem is a symptom; its cause is planted in the
+    # business's records. A solutionist names it; a generic answer lists
+    # tips. `cause` is what the reply must name.
+    {"id": "hidden_no_bookings_new", "biz": "coach_new",
+     "message": "Nobody is booking sessions with me. What's wrong?",
+     "cause": r"offering|nothing (?:to|they can) (?:book|buy)|no (?:services|packages|offers|prices)"},
+    {"id": "hidden_busy_broke_trades", "biz": "trades_est",
+     "message": "I'm busy every week but money is always tight. What's going on?",
+     "cause": r"7,000|\$7k|Tom Baker|Tom's|unpaid|outstanding"},
+    {"id": "hidden_flat_income_coach", "biz": "coach_est",
+     "message": "I'm working all the time but my income is flat. Why?",
+     "cause": r"1,200|Monica|overdue"},
+    {"id": "hidden_thin_calendar_coach", "biz": "coach_est",
+     "message": "My calendar is thin next week. What's the real problem?",
+     "cause": r"Ada|Sam|\bleads?\b"},
 ]
 
 # Verbs an advice turn may run without being asked: reads, and opening a
@@ -217,6 +236,14 @@ _NEXT_STEP = re.compile(
     r"\b(?:want me to|would you like me to|should I|shall I|I can (?:\w+\s+){0,3}(?:for you|now|today|this week)|"
     r"say the word|just say|I'?ll (?:set|draft|build|put|add|create|line) (?:\w+\s+){0,4}if you)\b", re.I)
 _CAVEAT = re.compile(r"still unverified|I left out|general rules from what I know, not from your records", re.I)
+# A script for the owner to say ("Something like: 'How is your week?'")
+# is not Chief asking; quoted text is left out of the question count.
+_QUOTED = re.compile(r"“[^”]*”|\"[^\"]*\"|‘[^’]*’|(?<!\w)'(?:[^'\n]|'(?=\w))+'(?!\w)")
+
+
+def questions_asked(text: str) -> int:
+    """Questions Chief asks the owner: question marks outside quotes."""
+    return len(re.findall(r"\?", _QUOTED.sub("", text or "")))
 
 
 def _first_sentence(text: str) -> str:
@@ -225,8 +252,9 @@ def _first_sentence(text: str) -> str:
     return next((p for p in parts if p.strip()), "")
 
 
-def score_reply(reply: str, taken: List[str]) -> Dict[str, Any]:
-    """Deterministic checks for one advice reply. Pure: unit-tested."""
+def score_reply(reply: str, taken: List[str], cause: Optional[str] = None) -> Dict[str, Any]:
+    """Deterministic checks for one advice reply. Pure: unit-tested.
+    `cause` (a case's planted hidden cause) adds the finds_cause check."""
     import action_registry
     text = (reply or "").strip()
     walled = any(text.startswith(w) or text == w for w in _walls()) or not text
@@ -239,7 +267,12 @@ def score_reply(reply: str, taken: List[str]) -> Dict[str, Any]:
         "offers_next_step": not walled and bool(_NEXT_STEP.search(text)),
         "no_caveat_block": not walled and not _CAVEAT.search(text),
         "wrote_nothing": not writes,
+        # Codex's conversation rule (chief_conversation): at most one
+        # focused question, after the answer.
+        "one_question_max": not walled and questions_asked(text) <= 1,
     }
+    if cause:
+        checks["finds_cause"] = not walled and bool(re.search(cause, text, re.I))
     return {"checks": checks, "score": sum(checks.values()), "total": len(checks),
             "words": len(text.split()), "writes": writes}
 
@@ -346,7 +379,7 @@ def run_live(cases: List[Dict[str, str]], with_grade: bool = False) -> Dict[str,
             reply = out.get("response") or ""
             taken = [a.get("type") for a in out.get("actions_taken", []) if isinstance(a, dict)]
             row = {"id": case["id"], "biz": case["biz"], "message": case["message"],
-                   **score_reply(reply, taken_writes + taken),
+                   **score_reply(reply, taken_writes + taken, case.get("cause")),
                    "seconds": round(time.time() - started, 1),
                    "cents": round(sum(u.get("cents") or 0 for u in _USAGE), 2),
                    "grounding": (out.get("grounding") or {}).get("status"),
@@ -361,9 +394,13 @@ def run_live(cases: List[Dict[str, str]], with_grade: bool = False) -> Dict[str,
 
 
 def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    n = len(results) or 1
-    check_names = list(results[0]["checks"]) if results else []
-    rates = {k: round(sum(r["checks"][k] for r in results) / n, 3) for k in check_names}
+    check_names: List[str] = []
+    for r in results:
+        check_names += [k for k in r["checks"] if k not in check_names]
+    rates = {}
+    for k in check_names:
+        rows = [r for r in results if k in r["checks"]]
+        rates[k] = round(sum(r["checks"][k] for r in rows) / (len(rows) or 1), 3)
     graded = [r["grade"] for r in results if isinstance(r.get("grade"), dict)]
     grade_means = ({k: round(statistics.mean(g[k] for g in graded), 2)
                     for k in GRADE_SCHEMA["required"]} if graded else None)
@@ -372,9 +409,33 @@ def summarize(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "model": chief_models.model_for("chat"), "effort": chief_models.effort_for("chat"),
         "results": results, "rates": rates, "grade_means": grade_means,
         "walled": [r["id"] for r in results if not r["checks"]["answered"]],
+        "si_score": si_score(rates, grade_means),
         "median_seconds": statistics.median([r["seconds"] for r in results]) if results else 0,
         "mean_cents": round(statistics.mean([r["cents"] for r in results]), 2) if results else 0,
     }
+
+
+def si_score(rates: Dict[str, float], grade_means: Optional[Dict[str, float]]) -> Dict[str, Any]:
+    """The weekly Solutionist Intelligence number, kept in its parts:
+    did Chief answer (not walled), did it name the hidden cause, did it
+    keep to one question, and (with --grade) the graded substance as a
+    share of its points. Parts, not one blended figure: each moves for a
+    different reason."""
+    out: Dict[str, Any] = {k: rates.get(k) for k in ("answered", "finds_cause", "one_question_max")}
+    if grade_means:
+        out["substance"] = round(sum(grade_means.values()) / (2 * len(grade_means)), 3)
+    return out
+
+
+def si_line(report: Dict[str, Any]) -> str:
+    """One sentence for the weekly issue."""
+    si = report.get("si_score") or {}
+
+    def pct(v):
+        return "n/a" if v is None else f"{round(v * 100)}%"
+    return (f"SI score: answered {pct(si.get('answered'))}, named the hidden cause "
+            f"{pct(si.get('finds_cause'))}, one question at most {pct(si.get('one_question_max'))}, "
+            f"graded substance {pct(si.get('substance'))}.")
 
 
 def compare(before: Dict[str, Any], after: Dict[str, Any]) -> int:
@@ -398,7 +459,17 @@ def main() -> int:
     ap.add_argument("--only", help="comma-separated case ids")
     ap.add_argument("--out", help="write the report as JSON")
     ap.add_argument("--compare", nargs=2, metavar=("BEFORE", "AFTER"))
+    ap.add_argument("--si-line", metavar="REPORT", help="print the SI score sentence for a saved report")
+    ap.add_argument("--min-answered", type=float, default=0.0,
+                    help="exit 1 when fewer answers than this share got through the answer check")
     args = ap.parse_args()
+    if args.si_line:
+        try:
+            with open(args.si_line, encoding="utf-8") as f:
+                print(si_line(json.load(f)))
+        except (OSError, ValueError):
+            print("SI score: no advice report this week.")
+        return 0
     if args.compare:
         with open(args.compare[0], encoding="utf-8") as f:
             before = json.load(f)
@@ -419,10 +490,12 @@ def main() -> int:
     if report["grade_means"]:
         print("grade:", json.dumps(report["grade_means"]))
     print(f"walled: {report['walled']}  median {report['median_seconds']}s  {report['mean_cents']}c/question")
+    print(si_line(report))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
-    return 0
+    answered = (report.get("rates") or {}).get("answered") or 0
+    return 1 if answered < args.min_answered else 0
 
 
 if __name__ == "__main__":

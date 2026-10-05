@@ -78,3 +78,59 @@ def test_usage_capture_keeps_fixture_turns_out_of_the_table():
             "print(len(rows), rows[0]['cents'])")
     out = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True, timeout=60)
     assert out.stdout.split() == ["1", "200.0"], out.stderr[-500:]
+
+
+# ─── The SI score (2026-10-05) ────────────────────────────────────────
+
+def test_one_question_at_most_and_a_quoted_script_is_not_a_question():
+    two = "Raise it to $175. What's your current rate? And how many clients do you carry?"
+    assert not ev.score_reply(two, [])["checks"]["one_question_max"]
+    scripted = ("Name it once, warmly. Something like: 'What's going on in your week, and is there "
+                "a better rhythm?' Is it one client or several?")
+    assert ev.score_reply(scripted, [])["checks"]["one_question_max"]
+    assert ev.score_reply(GOOD, [])["checks"]["one_question_max"]
+    assert not ev.score_reply(truth.NO_ACTION_REPLY, [])["checks"]["one_question_max"]
+
+
+def test_finds_cause_is_scored_only_on_hidden_cause_cases():
+    assert "finds_cause" not in ev.score_reply(GOOD, [])["checks"]
+    hit = ev.score_reply("The real problem is Tom Baker's $7,000 invoice, still unpaid.", [],
+                         r"7,000|Tom Baker")
+    assert hit["checks"]["finds_cause"] and hit["total"] == 8
+    miss = ev.score_reply("Raise your prices and post more on Instagram.", [], r"7,000|Tom Baker")
+    assert not miss["checks"]["finds_cause"]
+    walled = ev.score_reply(truth.NO_ACTION_REPLY, [], r"7,000|Tom Baker")
+    assert not walled["checks"]["finds_cause"]
+
+
+def test_the_planted_causes_are_really_in_the_records():
+    cases = {c["id"]: c for c in ev.CASES if c.get("cause")}
+    assert len(cases) >= 5
+    est = ev._ESTABLISHED
+    assert ("Tom Baker", 7000, "sent") in est["contractor"]["invoices"]
+    assert ("Monica Walton", 1200, "overdue") in est["coach"]["invoices"]
+    assert {"Ada Lovelace", "Sam Ortiz"} <= {n for n, s, _h in est["coach"]["contacts"] if s == "lead"}
+    biz, make_ctx = ev.BUSINESSES["coach_new"]
+    assert not make_ctx(biz).get("offerings")
+    import re
+    for case in cases.values():
+        re.compile(case["cause"])
+
+
+def test_the_summary_handles_mixed_checks_and_carries_the_si_score():
+    rows = [
+        {"id": "a", "checks": ev.score_reply(GOOD, [])["checks"], "seconds": 1, "cents": 1},
+        {"id": "b", "checks": ev.score_reply("Tom Baker owes $7,000.", [], r"Tom Baker")["checks"],
+         "seconds": 1, "cents": 1},
+        {"id": "c", "checks": ev.score_reply(truth.NO_ACTION_REPLY, [], r"Tom Baker")["checks"],
+         "seconds": 1, "cents": 1},
+    ]
+    rep = ev.summarize(rows)
+    assert rep["rates"]["finds_cause"] == 0.5          # over the two cases that carry it
+    assert rep["rates"]["answered"] == round(2 / 3, 3)
+    assert rep["walled"] == ["c"]
+    assert rep["si_score"]["finds_cause"] == 0.5 and "substance" not in rep["si_score"]
+    line = ev.si_line(rep)
+    assert line.startswith("SI score: answered 67%") and "named the hidden cause 50%" in line
+    graded = ev.si_score(rep["rates"], {k: 2 for k in ev.GRADE_SCHEMA["required"]})
+    assert graded["substance"] == 1.0
