@@ -168,13 +168,13 @@ def test_popup_follows_only_a_valid_ticket(monkeypatch):
 
 
 def test_return_page_tells_the_app_and_logs_names_only(caplog):
-    req = SimpleNamespace(query_params={"isSuccess": "true", "accountIds": "spc_SECRETID"})
+    req = SimpleNamespace(query_params={"isSuccess": "true", "accountIds": "spc_SECRETID"}, cookies={})
     with caplog.at_level(logging.INFO, logger="social_connect"):
         page = run(scr.postforme_connect_done(req))
     html = page.body.decode()
     assert "solutionist-social-connected" in html and "Connected" in html
     assert "spc_SECRETID" not in caplog.text and "accountIds" in caplog.text
-    failed = run(scr.postforme_connect_done(SimpleNamespace(query_params={"error": "access_denied"})))
+    failed = run(scr.postforme_connect_done(SimpleNamespace(query_params={"error": "access_denied"}, cookies={})))
     assert "Not connected" in failed.body.decode()
 
 
@@ -330,3 +330,71 @@ def test_connect_lines_actually_print():
     for name in ("social_connect", "post_for_me"):
         lg = _l.getLogger(name)
         assert lg.handlers and lg.level == _l.INFO, name
+
+
+# ─── 8. phones: the same window, and back to the app ──────────────────
+
+@pytest.mark.parametrize("origin, ok", [
+    ("https://system.mysolutionist.app", True),
+    ("https://system.mysolutionist.app/", True),
+    ("https://solutionist-studi-git-85b688-kmjcreativesolution-1900s-projects.vercel.app", True),
+    ("http://localhost:5173", True),
+    ("https://evil.example", False),
+    ("https://system.mysolutionist.app.evil.example", False),
+    ("https://system.mysolutionist.app/steal?x=1", False),
+    ("javascript:alert(1)", False),
+    ("", False),
+])
+def test_only_our_app_origins_are_accepted(origin, ok):
+    assert (scr.app_origin(origin) is not None) is ok
+
+
+def _auth(monkeypatch):
+    async def fake_auth(platform, external_id):
+        return "https://www.instagram.com/oauth/authorize?x=1"
+    monkeypatch.setattr(pfm, "auth_url", fake_auth)
+
+
+def test_a_phone_names_its_app_and_the_return_is_remembered(monkeypatch):
+    _auth(monkeypatch)
+    ticket = oauth_connect_ticket.mint(BIZ, "user-1")
+    resp = run(scr.postforme_connect(ticket=ticket, platform="instagram",
+                                     return_origin="https://system.mysolutionist.app"))
+    cookie = resp.headers.get("set-cookie", "")
+    assert resp.status_code == 302
+    from http.cookies import SimpleCookie
+    from starlette.requests import cookie_parser
+    jar = SimpleCookie(); jar.load(cookie)
+    assert jar["pfm_return"].value == "https://system.mysolutionist.app"
+    # ...and the server's own parser reads it back unquoted on /done.
+    assert cookie_parser(cookie.split(";", 1)[0])["pfm_return"] == "https://system.mysolutionist.app"
+    assert "HttpOnly" in cookie and "Secure" in cookie and "samesite=lax" in cookie.lower()
+
+
+def test_a_foreign_origin_is_ignored_not_remembered(monkeypatch):
+    _auth(monkeypatch)
+    ticket = oauth_connect_ticket.mint(BIZ, "user-1")
+    resp = run(scr.postforme_connect(ticket=ticket, platform="instagram", return_origin="https://evil.example"))
+    assert resp.status_code == 302 and "pfm_return" not in resp.headers.get("set-cookie", "")
+
+
+def test_return_sends_the_phone_back_to_social_media():
+    req = SimpleNamespace(query_params={"isSuccess": "true"},
+                          cookies={"pfm_return": "https://system.mysolutionist.app"})
+    resp = run(scr.postforme_connect_done(req))
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "https://system.mysolutionist.app/?nav=build:social-media&social=connected"
+    assert "pfm_return=" in resp.headers.get("set-cookie", "")       # cleared
+
+
+def test_a_tampered_return_cookie_goes_nowhere():
+    req = SimpleNamespace(query_params={"isSuccess": "true"}, cookies={"pfm_return": "https://evil.example"})
+    resp = run(scr.postforme_connect_done(req))
+    assert resp.status_code == 200 and "solutionist-social-connected" in resp.body.decode()
+
+
+def test_a_failed_phone_sign_in_still_comes_back_and_says_so():
+    req = SimpleNamespace(query_params={"error": "access_denied"},
+                          cookies={"pfm_return": "https://system.mysolutionist.app"})
+    resp = run(scr.postforme_connect_done(req))
+    assert resp.headers["location"].endswith("&social=not_connected")
