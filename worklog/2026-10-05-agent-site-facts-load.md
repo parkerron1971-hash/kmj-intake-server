@@ -2,7 +2,7 @@
 title: Site agent surface was dead since launch (wrong column names)
 date: 2026-10-05
 agent: Claude Code (Claude Opus 5.5)
-asked: "I would like to figure out how to build this" (found while building designed flyers)
+asked: 'found while building designed flyers ("I would like to figure out how to build this")'
 status: shipped
 prs: [kmj-intake-server agent-site-facts-load]
 migrations: []
