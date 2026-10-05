@@ -1,0 +1,153 @@
+"""post_for_me.py — the one place that talks to Post for Me.
+
+Post for Me (api.postforme.dev) is the posting service a business's
+social accounts connect through (Kevin, 2026-09-28: practitioners publish
+via Post for Me; 2026-10-04: the account is live, Quickstart mode). It is
+headless — every screen a practitioner sees is ours; the only moment they
+leave is the social network's own sign-in.
+
+THE RULE THIS MODULE EXISTS TO KEEP
+A Post for Me social-account object carries the network's ACCESS and
+REFRESH TOKENS for that person's Instagram / Facebook / TikTok. Nothing
+outside this file ever sees them: every account that leaves here has been
+through public_account(), which keeps an allow-list of display fields and
+drops everything else. Nothing here logs a response body.
+
+The key (POST_FOR_ME_API_KEY) is an admin key for the whole Post for Me
+project. Server only — it never reaches the browser or Chief.
+
+Quickstart vs white label: Quickstart uses Post for Me's own approved
+network apps, so the network's permission screen names "Post for Me" and
+the project's redirect URL is set in THEIR dashboard (redirect overrides
+are refused). Bringing our own network credentials later changes the
+project settings, not this code.
+"""
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+logger = logging.getLogger("post_for_me")
+
+BASE = "https://api.postforme.dev/v1"
+TIMEOUT = 20.0
+
+# The networks a business can connect, in the order the card offers them.
+# (Post for Me also has bluesky and tiktok_business; not offered yet.)
+PLATFORMS = ("instagram", "facebook", "tiktok", "x", "linkedin", "youtube",
+             "pinterest", "threads")
+
+# Display fields only. Anything not named here — access_token,
+# refresh_token, their expiry stamps, provider metadata — is dropped.
+_PUBLIC_FIELDS = ("id", "platform", "username", "user_id", "profile_photo_url",
+                  "status", "external_id")
+
+
+class PostForMeError(RuntimeError):
+    """A Post for Me call failed. `status` is the HTTP status (0 = no answer)."""
+
+    def __init__(self, message: str, status: int = 0):
+        super().__init__(message)
+        self.status = status
+
+
+def api_key() -> str:
+    return (os.environ.get("POST_FOR_ME_API_KEY") or "").strip()
+
+
+def configured() -> bool:
+    return bool(api_key())
+
+
+def pilot_businesses() -> frozenset:
+    """Businesses allowed to connect while posting is a pilot (comma-
+    separated ids in POST_FOR_ME_PILOT_BUSINESSES). Posting becomes a
+    Booked / Boss feature when those plans go on sale; until then it is
+    on only where the owner switched it on, so it can't become a free
+    feature that would later have to be taken away."""
+    raw = os.environ.get("POST_FOR_ME_PILOT_BUSINESSES") or ""
+    return frozenset(x.strip() for x in raw.split(",") if x.strip())
+
+
+def allowed_for(business_id: str) -> bool:
+    return configured() and str(business_id) in pilot_businesses()
+
+
+def public_account(acct: Dict[str, Any]) -> Dict[str, Any]:
+    """A social account with only its display fields. See the module rule."""
+    return {k: acct.get(k) for k in _PUBLIC_FIELDS if k in acct}
+
+
+def _headers() -> Dict[str, str]:
+    key = api_key()
+    if not key:
+        raise PostForMeError("Post for Me is not configured on the server.")
+    return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+
+async def _request(method: str, path: str, *, params: Any = None,
+                   json: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as c:
+            r = await c.request(method, f"{BASE}{path}", headers=_headers(),
+                                params=params, json=json)
+    except httpx.HTTPError as e:
+        logger.warning("[post_for_me] %s %s: no answer (%s)", method, path, type(e).__name__)
+        raise PostForMeError("Post for Me did not answer.") from e
+    if r.status_code >= 400:
+        # Status only: a body can echo request data back.
+        logger.warning("[post_for_me] %s %s -> %s", method, path, r.status_code)
+        raise PostForMeError(f"Post for Me answered {r.status_code}.", r.status_code)
+    try:
+        return r.json() if r.content else {}
+    except ValueError:
+        return {}
+
+
+async def auth_url(platform: str, external_id: str) -> str:
+    """The network sign-in link that connects one account to `external_id`
+    (our business id). Instagram uses Instagram login, so a business or
+    creator account connects without a Facebook Page. LinkedIn must be an
+    organization connection on Quickstart credentials."""
+    if platform not in PLATFORMS:
+        raise PostForMeError(f"Unknown network: {platform}")
+    body: Dict[str, Any] = {"platform": platform, "external_id": external_id,
+                            # "feeds" now, so reading a post's results later
+                            # doesn't make every owner reconnect.
+                            "permissions": ["posts", "feeds"]}
+    if platform == "instagram":
+        body["platform_data"] = {"instagram": {"connection_type": "instagram"}}
+    elif platform == "linkedin":
+        body["platform_data"] = {"linkedin": {"connection_type": "organization"}}
+    out = await _request("POST", "/social-accounts/auth-url", json=body)
+    url = out.get("url")
+    if not isinstance(url, str) or not url.startswith("https://"):
+        raise PostForMeError("Post for Me returned no sign-in link.")
+    return url
+
+
+async def accounts_for(external_id: str) -> List[Dict[str, Any]]:
+    """Every account Post for Me holds for this business, display fields only."""
+    out = await _request("GET", "/social-accounts",
+                         params=[("external_id", external_id), ("limit", "100")])
+    data = out.get("data") if isinstance(out, dict) else out
+    return [public_account(a) for a in (data or []) if isinstance(a, dict) and a.get("id")]
+
+
+async def accounts_by_ids(account_ids: List[str]) -> List[Dict[str, Any]]:
+    """Specific accounts by Post for Me id, whatever business they're
+    labelled with now, display fields only."""
+    if not account_ids:
+        return []
+    params = [("id", i) for i in account_ids] + [("limit", "100")]
+    out = await _request("GET", "/social-accounts", params=params)
+    data = out.get("data") if isinstance(out, dict) else out
+    return [public_account(a) for a in (data or []) if isinstance(a, dict) and a.get("id")]
+
+
+async def disconnect(account_id: str) -> None:
+    """Removes the network tokens at Post for Me; the record stays there."""
+    await _request("POST", f"/social-accounts/{account_id}/disconnect")
