@@ -31,14 +31,35 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 logger = logging.getLogger("post_for_me")
+if not logger.handlers:
+    # Root is at WARNING in production; a module logger needs its own
+    # handler or its INFO lines never print.
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] post_for_me: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
 
 BASE = "https://api.postforme.dev/v1"
 TIMEOUT = 20.0
 
-# The networks a business can connect, in the order the card offers them.
+# Every network we know how to connect, in the order the card offers them.
 # (Post for Me also has bluesky and tiktok_business; not offered yet.)
 PLATFORMS = ("instagram", "facebook", "tiktok", "x", "linkedin", "youtube",
              "pinterest", "threads")
+
+# The ones switched on in OUR Post for Me project (its dashboard → Setup).
+# A network that is off there has no sign-in to hand out, so offering its
+# button would be a dead end. Kept as a setting because the dashboard is
+# where it changes. On 2026-10-05: Facebook, Instagram, TikTok, X, YouTube.
+_DEFAULT_ENABLED = "instagram,facebook,tiktok,x,youtube"
+
+
+def enabled_platforms() -> tuple:
+    """POST_FOR_ME_PLATFORMS (comma-separated), in PLATFORMS order; unknown
+    names ignored."""
+    raw = os.environ.get("POST_FOR_ME_PLATFORMS") or _DEFAULT_ENABLED
+    wanted = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    return tuple(p for p in PLATFORMS if p in wanted)
 
 # Display fields only. Anything not named here — access_token,
 # refresh_token, their expiry stamps, provider metadata — is dropped.

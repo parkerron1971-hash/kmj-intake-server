@@ -48,6 +48,14 @@ from auth_supabase import UserSession
 from business_access import business_access
 
 logger = logging.getLogger("social_connect")
+if not logger.handlers:
+    # Root is at WARNING in production; without its own handler the
+    # connect lines below never print (the first live connect, 10/05,
+    # left no trace of what Post for Me sent back).
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] social: %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
 
 router = APIRouter(tags=["social-connect"])
 
@@ -68,8 +76,8 @@ def _require_pilot(business_id: str) -> None:
 
 def _platform_or_400(platform: str) -> str:
     p = (platform or "").strip().lower()
-    if p not in post_for_me.PLATFORMS:
-        raise HTTPException(400, "That network isn't one we connect.")
+    if p not in post_for_me.enabled_platforms():
+        raise HTTPException(400, "That network isn't one you can connect yet.")
     return p
 
 
@@ -101,11 +109,17 @@ async def postforme_connect(ticket: str = "", platform: str = ""):
     if not business_id:
         return _page("This link expired", "Start again from Solutionist.", ok=False)
     p = (platform or "").strip().lower()
-    if p not in post_for_me.PLATFORMS or not post_for_me.allowed_for(business_id):
+    if p not in post_for_me.enabled_platforms() or not post_for_me.allowed_for(business_id):
         return _page("Can't connect that here", "Start again from Solutionist.", ok=False)
     try:
         url = await post_for_me.auth_url(p, business_id)
-    except post_for_me.PostForMeError:
+    except post_for_me.PostForMeError as e:
+        if e.status == 404:
+            # Post for Me answers 404 when the network isn't switched on in
+            # our project ("Social account credentials not found").
+            logger.warning("[social] %s is not switched on in the Post for Me project", p)
+            return _page("That network isn't switched on yet",
+                         "Close this window. It can be connected once it's turned on.", ok=False)
         return _page("Couldn't reach the sign-in", "Close this window and try again in a minute.", ok=False)
     return RedirectResponse(url=url, status_code=302)
 
@@ -162,7 +176,7 @@ async def list_connections(business_id: str, biz: dict = Depends(business_access
     except Exception:
         rows = []
     return {"ok": True, "enabled": enabled,
-            "platforms": list(post_for_me.PLATFORMS) if enabled else [],
+            "platforms": list(post_for_me.enabled_platforms()) if enabled else [],
             "connections": rows}
 
 

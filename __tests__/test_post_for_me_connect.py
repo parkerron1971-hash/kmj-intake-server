@@ -296,3 +296,37 @@ def test_connections_list_says_whether_posting_is_on(table):
     assert run(scr.list_connections(BIZ, biz={}))["enabled"] is True
     off = run(scr.list_connections(OTHER, biz={}))
     assert off["enabled"] is False and off["platforms"] == []
+
+
+# ─── 7. only networks switched on in our Post for Me project ──────────
+
+def test_default_networks_are_the_ones_switched_on(monkeypatch):
+    monkeypatch.delenv("POST_FOR_ME_PLATFORMS", raising=False)
+    assert pfm.enabled_platforms() == ("instagram", "facebook", "tiktok", "x", "youtube")
+    monkeypatch.setenv("POST_FOR_ME_PLATFORMS", "threads, Instagram, myspace")
+    assert pfm.enabled_platforms() == ("instagram", "threads")
+
+
+def test_a_network_that_is_off_is_never_offered_or_started(monkeypatch, table):
+    monkeypatch.delenv("POST_FOR_ME_PLATFORMS", raising=False)
+    assert "linkedin" not in run(scr.list_connections(BIZ, biz={}))["platforms"]
+    with pytest.raises(HTTPException) as e:
+        run(scr.postforme_connect_start(BIZ, "linkedin", biz={}, session=SESSION))
+    assert e.value.status_code == 400
+
+
+def test_post_for_me_404_reads_as_switched_off(monkeypatch):
+    async def not_enabled(platform, external_id):
+        raise pfm.PostForMeError("Post for Me answered 404.", 404)
+    monkeypatch.setattr(pfm, "auth_url", not_enabled)
+    ticket = oauth_connect_ticket.mint(BIZ, "user-1")
+    page = run(scr.postforme_connect(ticket=ticket, platform="tiktok"))
+    assert "switched on" in page.body.decode()
+
+
+def test_connect_lines_actually_print():
+    # Root logs at WARNING in production; the module loggers carry their own.
+    import logging as _l
+    for name in ("social_connect", "post_for_me"):
+        lg = _l.getLogger(name)
+        assert lg.handlers and lg.level == _l.INFO, name
