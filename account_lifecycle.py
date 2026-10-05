@@ -201,6 +201,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "chief_conversations",
     "chief_activity",
     "chief_assignments",      # the outcomes they handed Chief + its moves log (9/4)
+    "chief_cases",            # problems Chief diagnosed, forecasts and results (10/5)
     "chief_moves",            # what came of each of Chief's moves (9/4)
     "chief_proposals",
     "chief_bookkeeping_proposals",

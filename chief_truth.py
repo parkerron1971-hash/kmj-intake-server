@@ -1585,7 +1585,7 @@ def evidence_for_review(ctx, view_detail, taken):
         # cohort is $750"). Ranked with the prose they were dropped first
         # and a correct answer quoting one was withheld (2026-09-24).
         'memories',
-        'projects', 'open_missions', 'open_assignments', 'products', 'offerings', 'contacts_lookup',
+        'projects', 'open_missions', 'open_assignments', 'open_cases', 'products', 'offerings', 'contacts_lookup',
         'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'invoice_summary', 'sessions',
         'contacts_total', 'contacts_loaded', 'contacts_complete', 'context_quality')
     context = [(name, ctx[name]) for name in context_fields if name in (ctx or {})]
@@ -1918,7 +1918,7 @@ _WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
 _FAST_CONTEXT = frozenset((
     'context:sessions', 'context:products', 'context:open_invoices', 'context:contacts_lookup',
     'context:projects', 'context:invoice_summary', 'context:offerings', 'context:modules', 'context:module_counts', 'context:business_identity',
-    'context:open_missions', 'context:open_assignments', 'context:image_jobs'))
+    'context:open_missions', 'context:open_assignments', 'context:open_cases', 'context:image_jobs'))
 _UNTRUSTED_READ = re.compile(r'mail|inbox|sms|text_message|message|research|web|memor|recall|note|learn',
                              re.I)
 # An item that doubts itself is never proof: "STALE: verify", "No current

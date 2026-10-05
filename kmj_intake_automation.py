@@ -263,6 +263,9 @@ from chief_assignments import router as chief_assignments_router
 app.include_router(chief_assignments_router)
 from chief_responsibilities import router as chief_responsibilities_router
 app.include_router(chief_responsibilities_router)
+# Cases (2026-10-05): problems Chief diagnosed, with a forecast it checks.
+from chief_cases import router as chief_cases_router
+app.include_router(chief_cases_router)
 from agent_coordination import router as agent_coordination_router
 app.include_router(agent_coordination_router)
 # Outcomes (2026-09-04): what came of Chief's moves, per business.
@@ -1642,6 +1645,15 @@ async def startup():
                           "interval", minutes=15, id="chief_assignments")
     except Exception as e:
         print(f"   [warn] chief assignments tick not scheduled: {e}")
+    # Cases (2026-10-05): every six hours, check the cases whose day has
+    # come with a plain read (no model) and tell the owner once what the
+    # records show against the forecast. Kill switch: CHIEF_CASES=off.
+    try:
+        import chief_cases as _chief_cases
+        scheduler.add_job(g("chief_cases", _chief_cases.cases_tick),
+                          "interval", hours=6, id="chief_cases")
+    except Exception as e:
+        print(f"   [warn] chief cases tick not scheduled: {e}")
     # Proposals with a life (2026-09-04): hourly, expire the drafts
     # nobody approved in time (any hour) and remind about the ones
     # waiting (waking hours, once per proposal, once per business per
