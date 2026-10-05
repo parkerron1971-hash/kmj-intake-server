@@ -487,9 +487,13 @@ def _load_bundle(business_id: str) -> Optional[Dict[str, Any]]:
         if hit and now - hit[0] < _CACHE_TTL:
             return hit[1]
     try:
+        # businesses has no logo_url column (the logo lives in
+        # settings.brand_kit). Asking for it made every read a 400, so from
+        # 2026-09-03 every site's structured data, manifest and agent
+        # booking door answered "no business at this address".
         rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}"
-            "&select=id,name,type,settings,owner_id,logo_url&limit=1") or []
+            "&select=id,name,type,settings,owner_id&limit=1") or []
         if not rows:
             return None
         biz = rows[0]
@@ -500,8 +504,10 @@ def _load_bundle(business_id: str) -> Optional[Dict[str, Any]]:
         profile: Dict[str, Any] = {}
         if biz.get("owner_id"):
             prows = sb_clients.sb_get_as_service(
+                # timezone is the only one of these the table has; naming the
+                # others made this read a 400 too, so the zone never arrived.
                 f"/practitioner_profiles?owner_id=eq.{biz['owner_id']}"
-                "&select=phone,address_city,address_state,timezone&limit=1") or []
+                "&select=timezone&limit=1") or []
             profile = prows[0] if prows else {}
         offerings = sb_clients.sb_get_as_service(
             f"/offerings?business_id=eq.{business_id}&is_active=eq.true"

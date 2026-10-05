@@ -411,3 +411,27 @@ def test_router_is_registered_before_the_catch_all():
 def test_rate_bucket_exists_and_is_strict_capable():
     import rate_limit
     assert "agent_site" in rate_limit._LIMITS
+
+
+def test_the_bundle_asks_only_for_columns_businesses_has(monkeypatch):
+    """A select naming a missing column is a 400 for the whole read. From
+    2026-09-03 the loader asked for businesses.logo_url, which does not
+    exist, and every site's agent surface answered "no business"."""
+    import sb_clients
+    asked = []
+    def get(path):
+        asked.append(path)
+        if path.startswith("/businesses?"):
+            columns = path.split("select=")[1].split("&")[0].split(",")
+            if not set(columns) <= {"id", "name", "type", "settings", "owner_id"}:
+                return None  # what sb_get_as_service hands back on a PostgREST 400
+            return [{"id": "b1", "name": "Fade Lab", "type": "barber", "settings": {}, "owner_id": "o1"}]
+        if path.startswith("/practitioner_profiles?"):
+            columns = path.split("select=")[1].split("&")[0].split(",")
+            return None if not set(columns) <= {"timezone"} else [{"timezone": "America/Detroit"}]
+        return []
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    ag._cache.clear()
+    bundle = ag._load_bundle("b1")
+    assert bundle and bundle["facts"]["name"] == "Fade Lab"
+    assert bundle["facts"]["timezone"] == "America/Detroit"
