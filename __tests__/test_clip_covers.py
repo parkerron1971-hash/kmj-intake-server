@@ -100,6 +100,20 @@ def test_only_the_owner_makes_covers(app, monkeypatch):
     monkeypatch.setattr(images, 'business', AsyncMock(side_effect=HTTPException(403, 'Business access denied.')))
     assert post(app).status_code == 403
     assert not app.designed and not app.patched
+    # Checked first: a stranger learns nothing about whether the clip exists or has a frame.
+    app.rows = []
+    assert post(app).status_code == 403
+    app.rows = [clip(frame=False)]
+    assert post(app).status_code == 403
+
+
+def test_the_cover_is_saved_onto_the_clip_as_it_is_now(app, monkeypatch):
+    """The design takes a minute; a caption saved meanwhile must survive."""
+    reads = iter([[clip()], [clip(caption='Saved while the cover was designing')]])
+    monkeypatch.setattr(cc.media_library, 'read', lambda path: next(reads))
+    post(app)
+    saved = app.patched[0][1]['configuration']
+    assert saved['caption'] == 'Saved while the cover was designing' and saved['cover_image_id']
 
 
 def test_a_cover_needs_a_signed_in_user():

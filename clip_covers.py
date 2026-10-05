@@ -80,7 +80,10 @@ async def frame_artwork(client, biz, row, user_id):
 
 
 def remember_cover(row, image_id):
-    configuration = dict(row.get('configuration') or {}, cover_image_id=str(image_id))
+    # Read again: the design took a minute, and the clip may have changed meanwhile.
+    fresh = media_library.read(f"/media_assets?id=eq.{media_library.key(row['id'])}"
+                               f"&business_id=eq.{media_library.key(row['business_id'])}&select=configuration&limit=1")
+    configuration = dict((fresh[0] if fresh else row).get('configuration') or {}, cover_image_id=str(image_id))
     media_library.one(sb_clients.sb_patch_as_service(
         f"/media_assets?id=eq.{media_library.key(row['id'])}&business_id=eq.{media_library.key(row['business_id'])}",
         {'configuration': configuration}))
@@ -89,13 +92,14 @@ def remember_cover(row, image_id):
 @router.post('/{business_id}/clips/{asset_id}/cover', status_code=202)
 async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
                      session: UserSession = Depends(sb_clients.authed_request)):
-    row = await asyncio.to_thread(clip_row, business_id, asset_id)
-    words = [w.strip()[:200] for w in (body.words or [row.get('name') or '']) if w and w.strip()]
-    if not words:
-        raise HTTPException(422, 'Say what the cover should read, or give the clip a title first.')
     async with httpx.AsyncClient(timeout=60) as client:
-        # The owner only: a cover spends the business's credits, like Image Studio.
+        # The owner only, checked before anything about the clip is read or
+        # revealed: a cover spends the business's credits, like Image Studio.
         biz = await images.business(client, business_id)
+        row = await asyncio.to_thread(clip_row, business_id, asset_id)
+        words = [w.strip()[:200] for w in (body.words or [row.get('name') or '']) if w and w.strip()]
+        if not words:
+            raise HTTPException(422, 'Say what the cover should read, or give the clip a title first.')
         frame_id = await frame_artwork(client, biz, row, session.user.id)
         turn = images.turn_id.set(f'clip-cover:{asset_id}:{body.request_id}')
         index = images.turn_image_index.set(0)
