@@ -281,6 +281,7 @@ ANTHROPIC_VERSION = "2023-06-01"
 import chief_models
 import chief_missions
 import chief_assignments
+import chief_cases
 from chief_responsibilities import handle_responsibility_status, handle_acknowledge_follow_up
 from chief_business_responsibilities import handle_start_business_responsibility
 import agent_coordination
@@ -2324,6 +2325,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         _sb(client, "GET",
             f"/offerings?business_id=eq.{biz_id}&is_active=eq.true"
             f"&select=name,current_price,category,duration_min&order=name.asc&limit={_LIST_LIMITS['offerings']}"),
+        # Open cases (2026-10-05): problems Chief diagnosed, the fix, the
+        # forecast, and results from the last week it owes the owner.
+        chief_cases.open_for_context(biz_id),
     ]
     context_unavailable = []
 
@@ -2431,7 +2435,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             if not task.done():
                 task.cancel()
         await asyncio.gather(*primary, *dependent, *early, return_exceptions=True)
-    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows = primary_values
+    biz_rows, contacts, queue, events, sessions, insights, modules, memories, notifications, recent_queue, site_rows, strategy_rows, business_track_rows, products, email_replies, mailbox_messages, sms_messages, project_rows, open_missions, open_invoices, open_assignments, learning_lines, image_jobs, offering_rows, open_cases = primary_values
     # The onboarding welcome note sat in the draft queue like work: a new
     # practitioner's first greeting said "1 waiting for your review" and
     # pointed them at a system note. It is not a draft anyone owes a
@@ -2588,6 +2592,7 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
             for m in (open_missions or [])
         ],
         "open_assignments": list(open_assignments or []),
+        "open_cases": list(open_cases or []),
         "learning_lines": list(learning_lines or []),
         "image_jobs": [
             {"id": r.get("id"), "prompt": str(r.get("prompt") or "")[:120],
@@ -3893,6 +3898,7 @@ def _format_context_for_prompt(ctx: Dict[str, Any]) -> str:
         project_lines.append(line)
 
     assignment_lines = chief_assignments.context_lines(ctx.get("open_assignments") or [])
+    case_lines = chief_cases.context_lines(ctx.get("open_cases") or [])
     learning_lines = list(ctx.get("learning_lines") or [])
     standing_lines = standing_permissions.context_lines(ctx.get("business") or {})
 
@@ -3982,6 +3988,9 @@ ACTIVE MISSIONS (plans in flight — raise the ones waiting on the practitioner;
 
 ASSIGNMENTS CHIEF IS WORKING BETWEEN CONVERSATIONS (answer "how is it going?" from these; never create_assignment one that already exists; stop_assignment ends one):
 {chr(10).join(assignment_lines) if assignment_lines else '  (none)'}
+
+OPEN CASES (problems you diagnosed, the fix, your forecast and the day you check; a RESULT line is a check you owe the owner: tell them once, plainly, unless you already did in this conversation):
+{chr(10).join(case_lines) if case_lines else '  (none)'}
 
 {chr(10).join(learning_lines) if learning_lines else 'WHAT LANDS WITH THIS PRACTITIONER: nothing recorded yet — no outcomes from your own moves in the last 30 days.'}
 
@@ -11618,6 +11627,8 @@ ACTION_HANDLERS = {
     "create_assignment":      chief_assignments.handle_create_assignment,
     "stop_assignment":        chief_assignments.handle_stop_assignment,
     "assignment_status":      chief_assignments.handle_assignment_status,
+    "open_case":              chief_cases.handle_open_case,
+    "close_case":             chief_cases.handle_close_case,
     "responsibility_status": handle_responsibility_status,
     "acknowledge_follow_up": handle_acknowledge_follow_up,
     "start_business_responsibility": handle_start_business_responsibility,
