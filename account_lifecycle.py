@@ -183,8 +183,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "creative_director_profiles",  # preserve owner preferences before deleting their source artwork
     "image_publications", "image_artworks",  # publication records reference originals
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
+    "media_clip_runs",        # Find my best clips runs; before the recordings they reference
     "media_assets",
-    "growth_events",          # references contacts; export history before erasure
+    "growth_events",         # references contacts; export history before erasure
     "growth_records",         # reporting settings, actions, costs and invoice credit
     "events",
     "agent_queue",
@@ -613,6 +614,7 @@ _IMPORT_SKIP = {
     "creative_director_profiles",  # source/logo IDs belong to the original private gallery; remember again after restore
     "image_publications", "image_artworks",
     "video_jobs", "video_messages", "video_revisions", "video_assets", "video_projects",
+    "media_clip_runs",  # paid job state, like video_jobs
     "media_assets",  # media files and review proofs need an explicit restore
     # Derived snapshots and security decisions cannot be recreated from an
     # untrusted uploaded bundle. Export preserves them for reference; reports

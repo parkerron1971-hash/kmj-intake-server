@@ -33,7 +33,7 @@ BUCKET = 'program-media'
 MAX_BYTES = 1024 ** 3
 MAX_SECONDS = 7200
 DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
-PUBLIC_COLUMNS = 'id,business_id,kind,source_id,name,status,configuration,drive_file_id,source_version,byte_size,duration_seconds,sha256,error,created_by,created_at,finished_at,approval'
+PUBLIC_COLUMNS = 'id,business_id,kind,source_id,name,status,configuration,drive_file_id,source_version,byte_size,duration_seconds,sha256,error,created_by,created_at,finished_at,approval,decision,decided_at,source_removed_at'
 
 
 class DriveImport(StrictModel):
@@ -180,6 +180,8 @@ def create_clip(business_id, body, user):
     source = asset(business_id, body.source_id, user)
     if source['kind'] != 'source' or source['status'] != 'ready':
         raise HTTPException(409, 'Wait for the recording to finish importing.')
+    if source.get('source_removed_at'):
+        raise HTTPException(409, 'The original recording was removed 7 days after its clips were made.')
     if body.end_seconds > float(source['duration_seconds']):
         raise HTTPException(422, 'The clip ends after the recording ends.')
     return enqueue(business_id, user, {'kind': 'clip', 'name': body.name, 'source_id': str(body.source_id),
@@ -208,6 +210,8 @@ def playback(business_id, asset_id, user, reviewed=False):
     row = asset(business_id, asset_id, user)
     if row['status'] != 'ready':
         raise HTTPException(409, 'This recording is not ready.')
+    if row.get('source_removed_at'):
+        raise HTTPException(409, 'The original recording was removed 7 days after its clips were made.')
     if reviewed and (row['kind'] != 'clip' or (row.get('approval') or {}).get('fingerprint') != fingerprint(row)):
         raise HTTPException(409, 'Approve this exact clip before creating a reviewed handoff.')
     url = storage_links.signed_url_sync(BUCKET, object_path(row), ttl=900,
@@ -298,9 +302,12 @@ def process(row):
                 if not url:
                     raise ValueError('The source recording is unavailable.')
                 transfer_to_file(client, url, {}, source)
-                with source.open('rb') as content:
-                    if hashlib.file_digest(content, 'sha256').hexdigest() != parent['sha256']:
-                        raise ValueError('The source recording checksum did not match.')
+                # Recordings uploaded from a computer go straight to storage and
+                # carry no checksum; Drive imports keep theirs and are verified.
+                if parent.get('sha256'):
+                    with source.open('rb') as content:
+                        if hashlib.file_digest(content, 'sha256').hexdigest() != parent['sha256']:
+                            raise ValueError('The source recording checksum did not match.')
                 output = Path(folder) / 'clip.mp4'
                 render_clip(source, output, row['configuration'])
                 duration = probe(output)

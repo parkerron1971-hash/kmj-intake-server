@@ -1593,6 +1593,18 @@ async def startup():
                           "interval", seconds=30, id="media_library", max_instances=1)
     except Exception as e:
         print(f"   [warn] media processing not scheduled: {e}")
+    # Find my best clips (2026-10-05): follow one run on the clip service;
+    # a run outlives an API restart (the next claim resumes it). The sweep
+    # applies the storage rules (recordings 7 days after their clips,
+    # skipped clips after 30). Switch: CLIP_FINDER=on.
+    try:
+        import clip_finder as _clip_finder
+        scheduler.add_job(g("clip_finder", _clip_finder.tick),
+                          "interval", seconds=15, id="clip_finder", max_instances=1)
+        scheduler.add_job(g("clip_finder_sweep", _clip_finder.sweep_tick),
+                          "interval", hours=6, id="clip_finder_sweep", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] clip finder not scheduled: {e}")
     try:
         import video_studio_worker as _video_studio_worker
         scheduler.add_job(_video_studio_worker.tick, 'interval', seconds=8, id='video_studio', max_instances=1)

@@ -453,7 +453,9 @@ async def billing_plans(for_type: Optional[str] = None):
 
     # In FEATURE_MIN_PLAN order, so the cards list features the same way
     # for every plan; plan_features() is the one answer to "included?".
-    features_by_plan = {p: [f for f in fg.FEATURE_MIN_PLAN if f in fg.plan_features(p)]
+    # Unannounced gates stay off the cards until their screen ships.
+    features_by_plan = {p: [f for f in fg.FEATURE_MIN_PLAN
+                            if f in fg.plan_features(p) and f not in fg.UNANNOUNCED_FEATURES]
                         for p in list(fg.PLANS) + audience_keys}
 
     # The offer numbers per tier, for the plan cards. plan_limits() is

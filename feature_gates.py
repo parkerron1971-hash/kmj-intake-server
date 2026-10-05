@@ -100,7 +100,17 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # (max_seats limit); the frontend still hides
                                            # this key from plan cards (HIDDEN_FEATURES)
                                            # until the full team experience ships
+    "ai_clips": "practice",                # Find my best clips (clip_finder.py): a
+                                           # recording becomes short captioned clips.
+                                           # Kevin 2026-10-05: the Growth marketing
+                                           # level (the Solutionist plan), 10 hours a
+                                           # month included, then 75 actions an hour.
 }
+
+# Gated but not yet on sale: kept off the plan cards (/billing/plans) until
+# the screen that sells it is live, so a card never lists a raw key or a
+# feature nobody can open. Remove a key here when its screen ships.
+UNANNOUNCED_FEATURES = frozenset({"ai_clips"})
 
 # ─── Plans for one kind of business ──────────────────────────────────
 # Solo = everything Starter carries (derived, so a new Starter feature
