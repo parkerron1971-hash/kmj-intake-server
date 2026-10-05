@@ -285,6 +285,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "business_customers",
     "social_accounts",
     "social_posts",
+    # Which social accounts the business connected through Post for Me —
+    # display fields only, no tokens (social_connect_router).
+    "social_connections",
     "design_rationales",
     "design_feedback",
     "goals",
@@ -644,6 +647,10 @@ _IMPORT_SKIP = {
     # subscriptions are credentials and devices, not records. The
     # disputes cache is Stripe's, re-fetched on demand.
     "sms_numbers", "auditor_links", "push_subscriptions", "stripe_disputes_cache",
+    # A social connection points at an account held at Post for Me, and one
+    # account belongs to one business (unique provider id). A restored
+    # business signs in to its networks again rather than copying pointers.
+    "social_connections",
 }
 
 # Columns the platform owns. Carrying them across would let an import
