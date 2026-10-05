@@ -155,3 +155,24 @@ def test_real_clip_render_preserves_duration_and_vertical_canvas(tmp_path):
     result = subprocess.run([shutil.which('ffprobe'), '-v', 'error', '-show_entries', 'stream=width,height', '-of', 'json', str(target)], capture_output=True, check=True)
     stream = json.loads(result.stdout)['streams'][0]
     assert (stream['width'], stream['height']) == (720, 1280)
+
+
+def test_a_clip_changed_after_approval_can_be_approved_again(monkeypatch):
+    """A new cover changes the clip's configuration, so its fingerprint. The old
+    approval stops opening the reviewed handoff, and approving the clip as it
+    is now must replace it (it used to return early on any approval)."""
+    row = {'id': CLIP, 'business_id': BIZ, 'kind': 'clip', 'status': 'ready', 'source_id': SOURCE, 'sha256': 'c' * 64,
+           'configuration': {'origin': 'ai', 'cover_image_id': 'new-cover'}}
+    row['approval'] = {'fingerprint': media.fingerprint(row | {'configuration': {'origin': 'ai'}}), 'by': OWNER}
+    patched = []
+    monkeypatch.setattr(media, 'asset', lambda b, a, u: dict(row))
+    monkeypatch.setattr(media, 'audit', lambda *a, **k: None)
+    monkeypatch.setattr(media.sb_clients, 'sb_patch_as_service', lambda path, body: patched.append(body) or [row | body])
+    body = media.Review(fingerprint=media.fingerprint(row), permission_note='Recorded authorization', rights_confirmed=True,
+                        privacy_checked=True, caption_checked=True, destination_checked=True)
+    media.approve(BIZ, CLIP, body, USER)
+    assert patched and patched[0]['approval']['fingerprint'] == media.fingerprint(row)
+    # Approving again as it already is changes nothing.
+    row['approval'] = patched[0]['approval']; patched.clear()
+    media.approve(BIZ, CLIP, body, USER)
+    assert not patched

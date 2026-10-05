@@ -107,3 +107,22 @@ on; `off` restores the single call).
   on 2026-10-05. GPT Image 2 keeps square, portrait and landscape.
 
 `python -m pytest __tests__/test_designed_flyers.py __tests__/test_creative_director.py -q`
+
+## Clip covers (2026-10-05)
+
+`POST /media-library/{business_id}/clips/{asset_id}/cover` with
+`{request_id, words?, size?}` (owner only; `clip_covers.py`). It designs a
+cover with the same engine as a flyer: the clip's clean frame (`<clip>-frame.jpg`,
+taken from the recording at the poster's moment, see `clipper_worker`) is
+copied once into the gallery and used as the `subject`; the words default to
+the clip's title; the size defaults to `1088x1920` (`1920x1088` for a YouTube
+thumbnail). 30 credits, like any design. A remembered style (Remember this
+style) gives every cover in a series the same look.
+
+The cover's id is saved as `configuration.cover_image_id` on the clip.
+Configuration is part of the clip's approval fingerprint, so a new cover after
+approval asks for a fresh approval: the cover goes out with the clip. Clips
+made before the clip service took frames (`configuration.frame` false) get a
+409 and keep their poster.
+
+`python -m pytest __tests__/test_clip_covers.py -q`

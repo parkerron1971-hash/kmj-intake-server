@@ -192,7 +192,9 @@ def approve(business_id, asset_id, body, user):
     row = asset(business_id, asset_id, user)
     if row['kind'] != 'clip' or row['status'] != 'ready' or fingerprint(row) != body.fingerprint:
         raise HTTPException(409, 'Review this finished clip and its current caption and destination first.')
-    if row.get('approval'):
+    # Already approved as it is now. An approval of an earlier version (a new
+    # cover, say) is replaced, or the clip could never be approved again.
+    if (row.get('approval') or {}).get('fingerprint') == fingerprint(row):
         return public(row)
     approval = body.model_dump() | {'by': str(user.id), 'at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
     result = one(sb_clients.sb_patch_as_service(f'/media_assets?id=eq.{key(asset_id)}&business_id=eq.{key(business_id)}&status=eq.ready', {'approval': approval}))
