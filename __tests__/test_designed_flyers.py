@@ -142,6 +142,8 @@ def test_a_repair_render_and_the_planning_calls_cost_no_credits(monkeypatch):
     run(exercise())
     units = [b.get('units') for b in billed]
     assert units == [0, images.image_units('high'), 0]
+    # A business's render shows under its own name in Costs, not Mission Control's.
+    assert billed[1]['endpoint'] == '/ai/images/director/render'
 
 
 # ── Chief's action ───────────────────────────────────────────────────────
