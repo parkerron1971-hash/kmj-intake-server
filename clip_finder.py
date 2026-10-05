@@ -134,11 +134,16 @@ def _supabase():
 
 
 def resumable_endpoint():
-    """Large files go straight to the storage host, as Supabase recommends."""
+    """Large files go straight to the storage host, as Supabase recommends.
+
+    The signed-token variant lives at /upload/resumable/sign. The plain
+    /upload/resumable route ignores x-signature and wants a login token
+    ("Invalid Compact JWS"), which the private bucket then refuses; probed
+    against production 2026-10-05."""
     host = urlsplit(_supabase()).hostname or ''
     if host.endswith('.supabase.co'):
-        return f'https://{host.split(".")[0]}.storage.supabase.co/storage/v1/upload/resumable'
-    return _supabase() + '/storage/v1/upload/resumable'
+        return f'https://{host.split(".")[0]}.storage.supabase.co/storage/v1/upload/resumable/sign'
+    return _supabase() + '/storage/v1/upload/resumable/sign'
 
 
 def upload_token(path):
