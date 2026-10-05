@@ -19,6 +19,9 @@ afterwards.
    speaker, burn in captions, run Jev's editorial check.
 3. Checks every finished clip for stretches of 2+ seconds with nobody on screen
    (`empty_spots.py`) and picks a poster frame where the speaker is visible.
+   At that same moment it takes a clean frame from the recording itself (no
+   captions, no title card, up to 1920 wide): what a cover is designed from.
+   The recording is deleted once the frames are taken.
 4. Keeps the clips, posters and a result manifest until the API deletes the job
    or `CLIPPER_RESULT_TTL` passes.
 
@@ -31,11 +34,11 @@ One job at a time. A second `POST` while busy gets `409`; the API queues.
 | `GET /health` | `{ok, engine, busy, ready}`. `ready` is false until both secrets are set. |
 | `POST /jobs/{uuid}` | `{source_url, options}` → `202`. Options: `durations` (`xshort` `short` `medium` `long`), `caption_preset`, `aspect_ratio` (`9:16` or `16:9`), `clip_request`, `keyterms`, `max_clips`. |
 | `GET /jobs/{uuid}` | `{status, stage, percent, clips_done, clips_total, error, result}`. `status` is `working`, `completed`, `failed` or `cancelled`. `stage` is `downloading`, `listening`, `choosing`, `framing`, `checking` or `done`. |
-| `GET /jobs/{uuid}/files/{clip_NN.mp4 or clip_NN.jpg}` | One finished clip or poster. |
+| `GET /jobs/{uuid}/files/{clip_NN.mp4, clip_NN.jpg or clip_NN_frame.jpg}` | One finished clip, poster or clean frame. |
 | `DELETE /jobs/{uuid}` | Stops a running job, or forgets a finished one and deletes its files. |
 
 `result.clips[]` carries `index`, `title`, `start_ms`, `end_ms`, `duration_ms`,
-`score`, `tags`, `layout`, `review_flags`, `video`, `poster`, `bytes`,
+`score`, `tags`, `layout`, `review_flags`, `video`, `poster`, `frame`, `bytes`,
 `empty_spots` (`[{from, to, seconds}]`) and `face_coverage`. `result.cost` is the
 engine's own provider-reported cost breakdown; OpenRouter's bill is the authority.
 
