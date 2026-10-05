@@ -106,6 +106,39 @@ def tier_credits() -> Dict[str, int]:
     }
 
 
+# ─── Plans sold to one kind of business ──────────────────────────────
+# Barbers and salons (Kevin, 2026-10-04): Solo $49 / Booked $79 / Boss $99.
+# Credits sized from the cost measured that day: every plan stays above
+# the chat floor (chat_price x cents_per_credit >= 18.43, the same line
+# test_chat_repricing holds the ladder to) and above the trial tank.
+# Kept OUT of tier_credits() / tier_price_cents(): those describe the
+# public ladder that the site, the compare table and their tests price.
+# Hidden until offered — a plan card for features that don't exist yet
+# would be a dead end.
+
+def audience_credits() -> Dict[str, int]:
+    """audience plan key -> monthly included credits."""
+    return {
+        "solo":   _dial("SOLO_CREDITS", "CREDITS_", 1200),
+        "booked": _dial("BOOKED_CREDITS", "CREDITS_", 2000),
+        "boss":   _dial("BOSS_CREDITS", "CREDITS_", 2500),
+    }
+
+
+def audience_price_cents() -> Dict[str, int]:
+    """audience plan key -> monthly list price, cents (annual = 10x)."""
+    return {
+        "solo":   _dial("TIER_SOLO_CENTS", "PRICE_", 4900),
+        "booked": _dial("TIER_BOOKED_CENTS", "PRICE_", 7900),
+        "boss":   _dial("TIER_BOSS_CENTS", "PRICE_", 9900),
+    }
+
+
+def audience_plan_offered(plan: str) -> bool:
+    """PLAN_<KEY>_OFFERED=1 puts a plan on sale. Off by default."""
+    return _dial(f"{(plan or '').upper()}_OFFERED", "PLAN_", 0) != 0
+
+
 # ─── Action prices ───────────────────────────────────────────────────
 
 def build_base() -> int:

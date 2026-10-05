@@ -657,8 +657,10 @@ def set_comp_tier(business_id: str, body: TierBody,
     Stripe subscription (feature_gates.plan_of prefers comp_tier).
     Pass comp_tier null to clear back to Stripe-derived."""
     tier = (body.comp_tier or "").strip().lower() or None
-    if tier is not None and tier not in ("starter", "professional", "practice"):
-        raise HTTPException(400, "comp_tier must be starter|professional|practice|null")
+    import feature_gates
+    if tier is not None and tier not in feature_gates.ALL_PLANS:
+        raise HTTPException(400, "comp_tier must be one of "
+                                 + "|".join(feature_gates.ALL_PLANS) + "|null")
     sb_clients.sb_patch_as_service(
         f"/businesses?id=eq.{business_id}", {"comp_tier": tier})
     logger.info(f"[access] comp_tier={tier} business={business_id} reason={body.reason}")

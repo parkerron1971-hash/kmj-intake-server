@@ -397,27 +397,51 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
         return {"ok": True, "state": "full", "reason": "error_fail_open"}
 
 
+async def _plan_entry(plan: str) -> Dict[str, Any]:
+    """One plan card's price data: monthly price id + live display, and
+    the annual variant (2 months free; checkout takes plan='<tier>_annual')."""
+    pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
+    entry: Dict[str, Any] = {"plan": plan, "configured": bool(pid), "price_id": pid or None}
+    display = await _price_display(pid)
+    if display:
+        entry.update(display)
+    annual_pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}_ANNUAL") or "").strip()
+    if annual_pid:
+        entry["annual_price_id"] = annual_pid
+        annual_display = await _price_display(annual_pid)
+        if annual_display:
+            entry["annual_unit_amount"] = annual_display.get("unit_amount")
+    return entry
+
+
+def _plan_detail(fg, limits: Dict[str, Any], p: str) -> Dict[str, Any]:
+    import chief_models
+    lim = limits.get(p) or {}
+    return {
+        "credits_monthly": lim.get("chief_messages_monthly"),
+        "max_seats": lim.get("max_seats"),
+        "max_businesses": lim.get("max_businesses"),
+        "bank_connections": lim.get("plaid_connections"),
+        "deep_analysis": chief_models.deep_analysis_label(p),
+        "deep_model": chief_models.tier_deep_model_label(p),
+    }
+
+
 @router.get("/plans")
-async def billing_plans():
+async def billing_plans(for_type: Optional[str] = None):
     """The configured tiers with live price display data from Stripe.
-    Unconfigured tiers are listed with configured=false (pricing TBD)."""
+    Unconfigured tiers are listed with configured=false (pricing TBD).
+
+    `for_type` (a business type, e.g. "barber") adds `audience_plans`:
+    the plans sold only to that kind of business (Solo / Booked / Boss
+    for barbers and salons), and only once each is offered. The public
+    `plans` list never changes shape, so the site and every older caller
+    read it as before. Checkout enforces the audience on the real
+    business; this is just which cards to draw."""
     import feature_gates as fg
-    out = []
-    for plan in fg.PLANS:
-        pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
-        entry = {"plan": plan, "configured": bool(pid), "price_id": pid or None}
-        display = await _price_display(pid)
-        if display:
-            entry.update(display)
-        # Annual variant (2 months free) — display data only; checkout
-        # takes plan='<tier>_annual'.
-        annual_pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}_ANNUAL") or "").strip()
-        if annual_pid:
-            entry["annual_price_id"] = annual_pid
-            annual_display = await _price_display(annual_pid)
-            if annual_display:
-                entry["annual_unit_amount"] = annual_display.get("unit_amount")
-        out.append(entry)
+    out = [await _plan_entry(plan) for plan in fg.PLANS]
+    audience_keys = fg.audience_plans_for(for_type) if for_type else []
+    audience = [await _plan_entry(plan) for plan in audience_keys]
 
     # Founding-member offer: Professional at the locked launch rate,
     # first FOUNDER_SEAT_LIMIT seats. Seat counts are real.
@@ -427,9 +451,10 @@ async def billing_plans():
         if display:
             founder.update(display)
 
-    features_by_plan = {p: [f for f, mp in fg.FEATURE_MIN_PLAN.items()
-                            if fg._PLAN_RANK[p] >= fg._PLAN_RANK[mp]]
-                        for p in fg.PLANS}
+    # In FEATURE_MIN_PLAN order, so the cards list features the same way
+    # for every plan; plan_features() is the one answer to "included?".
+    features_by_plan = {p: [f for f in fg.FEATURE_MIN_PLAN if f in fg.plan_features(p)]
+                        for p in list(fg.PLANS) + audience_keys}
 
     # The offer numbers per tier, for the plan cards. plan_limits() is
     # the single source of truth (env-dialed credits included); None on
@@ -439,19 +464,12 @@ async def billing_plans():
     # Control). Both go None while a CHIEF_MODEL_DEEP override has the
     # tier ladder switched off — no surface may promise a difference
     # the override is currently denying.
-    import chief_models
     limits = fg.plan_limits()
-    plan_details = {p: {
-        "credits_monthly": limits.get(p, {}).get("chief_messages_monthly"),
-        "max_seats": limits.get(p, {}).get("max_seats"),
-        "max_businesses": limits.get(p, {}).get("max_businesses"),
-        "bank_connections": limits.get(p, {}).get("plaid_connections"),
-        "deep_analysis": chief_models.deep_analysis_label(p),
-        "deep_model": chief_models.tier_deep_model_label(p),
-    } for p in fg.PLANS}
+    plan_details = {p: _plan_detail(fg, limits, p) for p in list(fg.PLANS) + audience_keys}
 
     any_configured = any(e["configured"] for e in out)
     return {"ok": True, "plans": out, "founder": founder,
+            "audience_plans": audience,
             "features_by_plan": features_by_plan,
             "plan_details": plan_details,
             "enforce": fg.enforcement_on(),
@@ -519,7 +537,20 @@ def _price_for_plan(plan):
 async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require_user)):
     """Mint a Stripe Customer (if needed) + Checkout Session for a
     subscription. Returns the Checkout URL the frontend opens."""
-    price_id = (body.price_id or _price_for_plan(body.plan)).strip()
+    import feature_gates
+    requested = (body.plan or "").strip().lower()
+    requested_base = requested[:-len("_annual")] if requested.endswith("_annual") else requested
+    if requested_base in feature_gates.AUDIENCE_PLANS:
+        # Strict: an audience plan resolves to ITS price or nothing.
+        # _price_for_plan falls back to the default (Professional) price,
+        # which would put a barber who asked for Solo on a Professional
+        # checkout while Solo's price isn't set yet.
+        price_id = (body.price_id or
+                    os.environ.get(f"STRIPE_PRICE_ID_{requested.upper()}") or "").strip()
+        if not price_id:
+            raise HTTPException(409, "That plan isn't open yet.")
+    else:
+        price_id = (body.price_id or _price_for_plan(body.plan)).strip()
     if not price_id:
         raise HTTPException(409, "Pricing is not configured yet (no Stripe price ids set). "
                                  "Everything stays free until pricing is locked.")
@@ -530,7 +561,6 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     # the client was a way to buy Starter at any price in the account.
     # The app only ever sends `plan`; this closes the side door.
     if body.price_id:
-        import feature_gates
         if price_id not in feature_gates.price_to_plan():
             raise HTTPException(400, "That isn't one of our plan prices.")
 
@@ -550,6 +580,15 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
 
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
+
+    # Plans sold to one kind of business: only that kind may buy, and
+    # only once the plan is offered. Checked on the RESOLVED plan, so a
+    # raw catalog price id for Solo is held to the same rule as plan=solo.
+    resolved = feature_gates.price_to_plan().get(price_id)
+    if resolved in feature_gates.AUDIENCE_PLANS:
+        if resolved not in feature_gates.audience_plans_for(biz.get("type")):
+            raise HTTPException(
+                409, f"The {resolved.title()} plan isn't available for this business.")
 
     customer_id = biz.get("stripe_customer_id")
     if not customer_id:
@@ -1380,6 +1419,14 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_PRACTICE_ANNUAL",     "solutionist_practice_annual",      "The Solutionist",           299000, "year"),
     ("STRIPE_PRICE_ID_FOUNDER",             "solutionist_founder_monthly",      "Solutionist Professional — Founding Member", 9900,  "month"),
     ("STRIPE_PRICE_ID_FOUNDER_ANNUAL",      "solutionist_founder_annual",       "Solutionist Professional — Founding Member", 99000, "year"),
+    # Barber and salon plans (2026-10-04). Creating the prices sells
+    # nothing: checkout still refuses each plan until PLAN_<KEY>_OFFERED.
+    ("STRIPE_PRICE_ID_SOLO",                "solutionist_solo_monthly",         "Solutionist Solo",          4900,   "month"),
+    ("STRIPE_PRICE_ID_SOLO_ANNUAL",         "solutionist_solo_annual",          "Solutionist Solo",          49000,  "year"),
+    ("STRIPE_PRICE_ID_BOOKED",              "solutionist_booked_monthly",       "Solutionist Booked",        7900,   "month"),
+    ("STRIPE_PRICE_ID_BOOKED_ANNUAL",       "solutionist_booked_annual",        "Solutionist Booked",        79000,  "year"),
+    ("STRIPE_PRICE_ID_BOSS",                "solutionist_boss_monthly",         "Solutionist Boss",          9900,   "month"),
+    ("STRIPE_PRICE_ID_BOSS_ANNUAL",         "solutionist_boss_annual",          "Solutionist Boss",          99000,  "year"),
 ]
 
 

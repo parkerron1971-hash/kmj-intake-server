@@ -104,6 +104,11 @@ _TIER_LADDER = {
     "starter":      "claude-sonnet-5",
     "professional": "claude-opus-4-8",
     "practice":     "claude-fable-5",
+    # Barber/salon plans think on the Standard lane: their value is the
+    # front desk and the books, not deep analysis (cost measured 10/04).
+    "solo":         "claude-sonnet-5",
+    "booked":       "claude-sonnet-5",
+    "boss":         "claude-sonnet-5",
 }
 _LADDER_LANES = ("deep", "insight")
 
@@ -125,6 +130,9 @@ _TIER_ANALYSIS_LABELS = {
     "starter": "Standard",
     "professional": "Advanced",
     "practice": "Maximum",
+    "solo": "Standard",
+    "booked": "Standard",
+    "boss": "Standard",
 }
 
 
