@@ -6,6 +6,7 @@ import asyncio
 import contextvars
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -19,6 +20,13 @@ KINDS = {'event_setup', 'form_and_link', 'flyer', 'site_door', 'plan'}
 MAX_STEPS = 8
 # A plan's steps are the mission engine's steps (chief_plans), whose cap is 12.
 MAX_PLAN_STEPS = 12
+
+
+def flyer_verb():
+    """Which verb draws a flyer. The Creative Director plans it, draws it,
+    checks the finished picture and repairs it once; off is one GPT call."""
+    off = os.getenv('PRACTITIONER_CREATIVE_DIRECTOR', 'on').strip().lower() in ('0', 'off', 'false')
+    return 'generate_image' if off else 'design_flyer'
 
 
 def digest(value):
@@ -73,6 +81,18 @@ class WorkOrder:
             if not isinstance(refs,list) or len(refs)>4:
                 raise ValueError('Choose up to four reference images.')
             facts={**facts,'reference_ids':[str(UUID(str(ref))) for ref in refs]}
+        if 'exact_copy' in facts:
+            copy=facts['exact_copy']
+            if isinstance(copy,str): copy=[copy]
+            if not isinstance(copy,list) or len(copy)>16 or any(not isinstance(c,str) or len(c)>500 for c in copy):
+                raise ValueError('List the flyer wording as up to sixteen short lines.')
+            facts={**facts,'exact_copy':copy}
+        if 'references' in facts:
+            refs=facts['references']
+            roles=('style','subject','logo','product','edit_target')
+            if not isinstance(refs,list) or len(refs)>4 or any(not isinstance(r,dict) or r.get('role') not in roles for r in refs):
+                raise ValueError('Give each reference image a role: style, subject, logo, product or edit_target.')
+            facts={**facts,'references':[{'id':str(UUID(str(r.get('id')))),'role':r['role'],'use':str(r.get('use') or '')[:400]} for r in refs]}
         # Authority and identity are supplied only by the server, never the model.
         conversation_id = conversation_id if isinstance(conversation_id, str) else ''
         # One message may start several orders; each has its own slot, and
@@ -111,6 +131,9 @@ def question(order):
         ('location', 'Where will the workshop take place?')],
         'form_and_link': [('name', 'What should the form be called?')],
         'flyer': [('prompt', 'What should the flyer show?')], 'site_door': [], 'plan': []}[order.kind]
+    if order.kind == 'flyer' and flyer_verb() == 'design_flyer':
+        # The Director prints only approved words; it never writes a headline or a price itself.
+        needed = needed + [('exact_copy', 'What should the flyer say, word for word? For example the headline, the date and how to book.')]
     for key, text in needed:
         if not f.get(key):
             return {'field': key, 'text': text}
@@ -161,7 +184,7 @@ def plan(order, state=None):
             steps.append(Step('registration', 'verify_registration', 'Registration is connected to your workshop.', requires=('events_page',)))
         steps.append(Step('site_link', 'connect_events', 'Your website links to Events.', requires=('events_page',)))
         if f.get('wants_flyer'):
-            steps.append(Step('flyer', 'generate_image', 'Your flyer is ready in Media Library.', sensitive=True))
+            steps.append(Step('flyer', flyer_verb(), 'Your flyer is ready in Media Library.', sensitive=True))
         return steps
     if order.kind == 'form_and_link':
         steps = [Step('form', 'create_client_form', 'Your form is ready.',
@@ -170,7 +193,7 @@ def plan(order, state=None):
             steps.append(Step('send', 'send_form_link', 'Your form link was sent.', requires=('form',), sensitive=True))
         return steps
     if order.kind == 'flyer':
-        return [Step('flyer', 'generate_image', 'Your flyer is ready in Media Library.', sensitive=True)]
+        return [Step('flyer', flyer_verb(), 'Your flyer is ready in Media Library.', sensitive=True)]
     return [Step('events_module', 'ensure_module', 'Events is ready in Build.', {'module_name':'Events','archetype':'event_roster'}),
             Step('events_page', 'set_site_capability', 'Your events page is available.', {'capability':'events','on':True}, ('events_module',)),
             Step('site_link', 'connect_events', 'Your website links to Events.', requires=('events_page',))]

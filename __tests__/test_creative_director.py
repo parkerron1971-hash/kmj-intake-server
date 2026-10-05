@@ -62,11 +62,11 @@ def test_price_substring_is_not_a_pass_and_flags_have_issues():
 
 @pytest.fixture
 def pipeline(monkeypatch):
-    s = SimpleNamespace(writes=[], renders=[], reviews=[], saved={}, fail_render=None, fail_review=False, fail_store=False)
+    s = SimpleNamespace(writes=[], renders=[], charges=[], reviews=[], saved={}, fail_render=None, fail_review=False, fail_store=False)
     async def db(client, method, path, body=None, **kw):
         s.writes.append(copy.deepcopy(body)); return [body]
-    async def render(client, record, prompt, refs):
-        s.renders.append(refs)
+    async def render(client, record, prompt, refs, charge=True):
+        s.renders.append(refs); s.charges.append(charge)
         if s.fail_render == len(s.renders): raise httpx.ReadTimeout('uncertain')
         return png(), {'output_tokens':10}, .05
     async def review(*args):
@@ -85,6 +85,8 @@ def pipeline(monkeypatch):
 def test_pipeline_has_two_render_ceiling_and_preserves_review_findings(pipeline):
     run(d.run(None, row()))
     assert len(pipeline.renders) == 2
+    # One price per design: only the first render is charged; the repair is free.
+    assert pipeline.charges == [True, False]
     assert pipeline.writes[-1]['director']['phase'] == 'needs_review'
     assert pipeline.writes[-1]['director']['review']['issues'] == ['Title clipped']
     assert len(pipeline.saved) == 4
