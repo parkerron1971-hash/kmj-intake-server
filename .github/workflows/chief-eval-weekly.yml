@@ -60,7 +60,10 @@ jobs:
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python scripts/chief_advice_eval.py --live --out chief-advice-report.json
+        # --grade: the substance grader (Opus) scores every answer; the SI
+        # score in the report reads it. --min-answered: a week where more
+        # than one answer in ten is walled by the answer check is flagged.
+        run: python scripts/chief_advice_eval.py --live --grade --min-answered 0.9 --out chief-advice-report.json
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -90,6 +93,7 @@ jobs:
           $(line 'Turn behaviour' "$TURN")
           $(line 'Factual answers and unsupported claims' "$FACTUAL")
           $(line 'Advice answers' "$ADVICE")
+          - $(python scripts/chief_advice_eval.py --si-line chief-advice-report.json)
 
           The reports (which cases failed, and Chief's actual replies) are attached to the [run]($RUN)."
           existing=$(gh issue list --label chief-quality --state open --json number --jq '.[0].number')
