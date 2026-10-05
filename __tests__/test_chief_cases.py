@@ -423,3 +423,18 @@ def test_chief_is_told_to_say_it_in_their_words():
     src = chief_source()
     assert 'Never say "case", "forecast", "baseline", "metric" or "the records show" to them' in src
     assert "OPEN CASES" not in src
+
+
+def test_a_case_opened_without_the_trade_word_gets_it_when_read(db, monkeypatch):
+    # Opened before the word was stored: the alert and the card look it up.
+    row = {**_due_row(), "measure": {"kind": "sessions_scheduled", "weekdays": [1, 2]}}
+    assert cc.with_unit(row, "coach")["measure"]["unit"] == "sessions"
+    assert cc.with_unit(row, None)["measure"]["unit"] == "appointments"
+    stored = {**row, "measure": {**row["measure"], "unit": "visits"}}
+    assert cc.with_unit(stored, "coach") is stored
+    db.sessions = [_s("2026-09-15"), _s("2026-09-16"), _s("2026-09-22"),
+                   _s("2026-09-23"), _s("2026-09-29"), _s("2026-09-30")]
+    monkeypatch.setattr(cc, "_business", lambda bid: {"owner_id": "own-1", "type": "coach"})
+    _run(cc.check_one(row))
+    note = [b for p, b in db.posts if p == "/chief_notifications"][0]
+    assert note["body"].startswith("6 sessions on Tuesdays and Wednesdays, up from 4.")

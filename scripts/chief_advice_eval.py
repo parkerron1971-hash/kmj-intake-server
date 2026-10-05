@@ -262,9 +262,10 @@ _QUOTED = re.compile(r"“[^”]*”|\"[^\"]*\"|‘[^’]*’|(?<!\w)'(?:[^'\n]|
 
 
 # Office words the SI layer must never put in an owner's ear (the wording
-# pass, 2026-10-05). "Case" only in the senses Chief would use it for its
-# own bookkeeping; "in that case" stays plain English.
-_JARGON = re.compile(r"\b(?:open(?:ed|ing)? a case|this case|the case is|a case for|forecast(?:ed|ing)?|"
+# pass, 2026-10-05). "Case" only as Chief's own bookkeeping ("opened a
+# case", the open_case verb); "in this case" and "make a case for" are
+# plain English and pass.
+_JARGON = re.compile(r"\b(?:open(?:ed|ing)? a case|open_case|forecast(?:ed|ing)?|"
                      r"baseline|the records show|Solutionist Intelligence)\b|(?-i:\bSI\b)", re.I)
 
 

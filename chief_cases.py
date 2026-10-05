@@ -163,6 +163,16 @@ def unit_for(business_type: Optional[str], kind: str) -> str:
     return str(word or "").strip().lower()
 
 
+def with_unit(row: Dict[str, Any], business_type: Optional[str]) -> Dict[str, Any]:
+    """The row with its trade word, looked up when it was opened before the
+    word was stored (or by an older server). Pure apart from the lookup."""
+    m = row.get("measure") if isinstance(row.get("measure"), dict) else {}
+    if m.get("unit") or not m.get("kind"):
+        return row
+    unit = unit_for(business_type, m["kind"])
+    return {**row, "measure": {**m, "unit": unit}} if unit else row
+
+
 def _noun(measure: Dict[str, Any]) -> str:
     kind = measure.get("kind")
     days = measure.get("weekdays") or []
@@ -506,10 +516,22 @@ def _result_line(row: Dict[str, Any], value: Any, v: str) -> Tuple[str, str]:
             f"{got}, {moved}. I was hoping for {hoped}. Ask me and we'll try something else.")
 
 
+def _business(business_id: str) -> Dict[str, Any]:
+    """owner_id and type: who to tell, and in which trade's words."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=owner_id,type&limit=1") or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
 async def check_one(row: Dict[str, Any]) -> Dict[str, Any]:
     """Measure one due case, record what happened, tell the owner once."""
     cid = str(row.get("id"))
     bid = str(row.get("business_id") or "")
+    biz = await asyncio.to_thread(_business, bid)
+    row = with_unit(row, biz.get("type"))
     measure = row.get("measure") if isinstance(row.get("measure"), dict) else {}
     baseline = row.get("baseline") if isinstance(row.get("baseline"), dict) else {}
     tz = await asyncio.to_thread(assignments._tz_for, bid)
@@ -547,20 +569,16 @@ async def check_one(row: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning(f"[cases] {cid[:8]} result not saved; owner not told yet")
         return {"id": cid, "verdict": None, "unsaved": v}
     head, body = _result_line(row, value, v)
-    await _announce(bid, head, body, v)
+    await _announce(bid, head, body, v, owner=biz.get("owner_id"))
     return {"id": cid, "verdict": v, "value": value}
 
 
-async def _announce(business_id: str, headline: str, body: str, v: str) -> None:
+async def _announce(business_id: str, headline: str, body: str, v: str,
+                    owner: Optional[str] = None) -> None:
     """Where the owner looks: the notification list, the activity rail,
     their phone. Each is best-effort; the row is the record."""
-    owner = None
-    try:
-        rows = sb_clients.sb_get_as_service(
-            f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
-        owner = rows[0].get("owner_id") if rows else None
-    except Exception:
-        pass
+    if not owner:
+        owner = (await asyncio.to_thread(_business, business_id)).get("owner_id")
     try:
         sb_clients.sb_post_as_service("/chief_notifications", {
             "business_id": business_id, "type": "reminder", "title": headline[:120],
@@ -723,12 +741,13 @@ async def handle_close_case(client, biz, action) -> Dict[str, Any]:
 
 @router.get("")
 def list_cases(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    assignments._require_owner(business_id, user)
+    biz = assignments._require_owner(business_id, user)
     try:
         rows = recent_rows(business_id, 20)
     except Exception as e:
         logger.warning(f"[cases] list failed: {e}")
         raise HTTPException(status_code=503, detail=f"cases are not set up yet ({MIGRATION})")
-    items = [public_row(r) for r in rows if r.get("status") in ("open", "checked")]
+    items = [public_row(with_unit(r, biz.get("type")))
+             for r in rows if r.get("status") in ("open", "checked")]
     return {"ok": True, "cases": items,
             "open": sum(1 for r in rows if r.get("status") == "open")}

@@ -168,7 +168,9 @@ def test_office_words_fail_plain_words_and_plain_english_passes():
                 "The records show 6 cuts.", "Your baseline is 4.", "That's Solutionist Intelligence at work.",
                 "SI found the cause."):
         assert not ev.score_reply(bad, [])["checks"]["plain_words"], bad
-    for ok in ("In that case, start with your regulars.", "I'll keep an eye on Tuesdays and check on the 27th.",
+    for ok in ("In that case, start with your regulars.", "In this case, text your regulars first.",
+               "The case is clear: raise the fade to $45.", "You could make a case for a Tuesday special.",
+               "I'll keep an eye on Tuesdays and check on the 27th.",
                "You had 4 appointments; I'm hoping for 9. Si, it can work."):
         assert ev.score_reply(ok, [])["checks"]["plain_words"], ok
 
