@@ -523,3 +523,34 @@ def test_a_hand_cut_clip_can_read_a_large_uploaded_recording(monkeypatch, tmp_pa
     with pytest.raises(ValueError, match='stop after'):
         media.process(row)
     assert caps == [3 * 1024 ** 3]
+
+
+# ── covers designed with the clips (Kevin, 2026-10-06) ──────────────
+
+def test_covers_with_the_clips_are_asked_for_by_the_owner_only(monkeypatch, on, gates):
+    monkeypatch.setattr(media, 'asset', lambda *a: ready_source())
+    owner = {'id': str(USER.id)}
+    monkeypatch.setattr(cf.sb_clients, 'sb_get_as_service', lambda path: [{'owner_id': owner['id']}])
+    store = Store(monkeypatch, reads=lambda path: [])
+    plan = cf.FindClips(covers={'sizes': ['story', 'wide'], 'note': 'keep it dark'})
+    cf.start_run(BIZ, SOURCE, plan, USER)
+    options = store.posts[0][1]['options']
+    assert options['covers'] == {'sizes': ['story', 'wide'], 'style_image_id': None, 'note': 'keep it dark'}
+    owner['id'] = '99999999-9999-4999-8999-999999999999'
+    with pytest.raises(HTTPException) as caught:
+        cf.start_run(BIZ, SOURCE, plan, USER)
+    assert caught.value.status_code == 403
+
+
+def test_a_run_without_covers_stores_no_covers_key():
+    """A JSON null would still match the cover step's options->covers=not.is.null."""
+    assert 'covers' not in cf.FindClips().model_dump(mode='json', exclude={'covers'})
+    assert cf.engine_options(cf.FindClips(covers={}).model_dump(mode='json')).keys() == cf.engine_options(
+        cf.FindClips().model_dump(mode='json')).keys()
+
+
+def test_the_offer_prices_covers_from_the_live_dials(monkeypatch):
+    monkeypatch.delenv('PRACTITIONER_CREATIVE_DIRECTOR', raising=False)
+    offer = cf.cover_offer()
+    assert offer['available'] and offer['shapes'] == ['story', 'wide'] and offer['clip_limit'] == 6
+    assert offer['credits_each'] == 30

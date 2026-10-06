@@ -152,3 +152,44 @@ partly covered by the person are fine (a graphic device). So:
   `likeness_match`; a miss is repaired once (the one-repair ceiling stays, so a
   design always comes out). The checker no longer reports overlapped letters.
 - `input_fidelity: "high"` is rejected by GPT Image 2.5 (`invalid_input_fidelity_model`).
+
+## Two shapes, a look to follow, covers with the clips (2026-10-06)
+
+Kevin: "I like the full screen videos covers along with the story size ... can
+we figure out a way to have both?" and "an option to create the cover right
+along with the video clips".
+
+- **Shapes.** `story` (1088x1920: Reels, Shorts, TikTok) and `wide`
+  (1920x1088: a YouTube thumbnail). Make cover takes `sizes: ["story","wide"]`
+  and designs both in one tap; each is its own design (30 credits) with its own
+  turn id (`clip-cover:{clip}:{request_id}:{shape}`), sharing the speaker's
+  pictures. The wide brief keeps the bottom-right corner clear (the video
+  length sits there). One shape can fail (credits ran out) while the other
+  designs: the response carries `covers` and `errors` by shape. A request with
+  only `size` keeps the original turn id, so an older app's retry lands on the
+  same design.
+- **A look to follow.** `style_image_id` (a picture in this business's
+  gallery) joins as a `style` reference: its layout, type, palette, light and
+  texture, never its words, people or logos. `note` (300 characters) is the
+  owner's own words about the look ("keep it dark, almost black and white").
+- **Read back.** `clip_covers.shaped_covers` gives each clip
+  `covers: {story, wide}` in the library list; `cover_image_id` stays (story).
+- **With the clips.** Find my best clips takes `covers: {sizes, style_image_id?,
+  note?}` (owner only; 403 otherwise). The run's options keep it (no `covers`
+  key when none was asked for: a JSON null would match the filter). Every 30 s
+  `clip_covers.cover_tick` takes completed runs from the last 6 hours that asked
+  for covers and designs the missing shapes for the best-scoring clips that
+  are not skipped and have a clean frame, at most `CLIP_COVER_LIMIT` (6) clips.
+  It acts as the run's owner (`image_studio.build_actor`), so the copied frames
+  carry `cost_usd: 0`. Stable turn ids make it safe to repeat. A design that
+  cannot start (credits, spend limit, the 20-designs-a-day cap in
+  `reserve_image_artwork`) is tried twice; once every missing cover has used
+  its tries, the owner gets one Chief notification (marked sent only when it
+  is written) and the clips keep Make cover. Make cover skips a shape that
+  already has a cover designing (`designing_now`), so a tap while the
+  automatic cover is still being drawn never pays twice (409 when every
+  asked-for shape is busy).
+- **Pricing for the app.** `clip_finder.configuration().covers` =
+  `{available, credits_each, clip_limit, shapes}`.
+
+`python -m pytest __tests__/test_clip_covers.py __tests__/test_clip_finder.py -q`
