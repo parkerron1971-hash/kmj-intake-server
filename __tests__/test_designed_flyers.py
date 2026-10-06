@@ -440,6 +440,9 @@ def test_drawing_with_a_subject_photo_puts_likeness_first():
     with_person = {'copy': ['A'], 'references': [{'id': 'x', 'role': 'subject', 'use': 'face'}]}
     assert 'LIKENESS FIRST' in d.render_prompt(plan, with_person)
     assert 'LIKENESS FIRST' not in d.render_prompt(plan, {'copy': ['A'], 'references': []})
+    # Kevin, 2026-10-06: the shirt read GOD for GOD IS DOPE. Clothing words: whole, or out of view.
+    prompt = d.render_prompt(plan, with_person)
+    assert 'complete and spelled exactly' in prompt and 'never cut off' in prompt and 'white patch stays white' in prompt
 
 
 def test_the_checker_sees_the_subject_photo_and_lets_letters_overlap(monkeypatch):

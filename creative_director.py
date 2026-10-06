@@ -411,6 +411,10 @@ If there are no protected assets, placements must be empty. Never invent an asse
 A subject, style or edit-target picture is never a placement: the image generator draws from it.
 With subject photos of a real person, plan for likeness first: keep them large and photographic
 enough that their own face and hair carry the design; never plan a stylisation that changes who they are.
+Read any words printed on the person's clothing across all the subject photos (a wide photo may show the
+whole print where a close-up cuts it off) and write them into preserve exactly and completely, with
+their colours (for example: shirt print reads "GOD IS DOPE." in black on a white patch), or plan the
+framing so none of the print shows. Never plan a print that is cut off.
 ''' + direction_brief(spec)
     plan = only_protected_placements(await structured(client, row, Plan, instruction, content), spec)
     validate_plan(plan, spec)
@@ -465,7 +469,14 @@ plants as decoration, clip-art icons, or soft corporate calm.
 """)
 
 
-LIKENESS = ('LIKENESS FIRST: the person in the subject photos must be recognisably the same individual, close to a photograph of them: the same face shape, eyes, nose, mouth, beard, hairline and hairstyle, skin tone, build and age. Do not beautify, slim, age, restyle or swap their features, and do not invent a new face from the pose. A close-up subject photo is the authority on the face and hair; a wider one shows pose, body and clothes. Graphic treatment (cut-out, light, colour grade) is fine; a different-looking person is not.')
+# Kevin, 2026-10-06: "my shirt words are not complete on there". His shirt
+# reads GOD IS DOPE. on a white patch; the close-ups crop it to GOD, the cover
+# printed GOD on a grey patch, and the checker took the patch for a backing box.
+CLOTHING = ('Their clothing is part of them: words printed on it appear complete and spelled exactly as in the '
+            'photos, in the same colours (a white patch stays white), or the print is kept fully out of view; '
+            'never cut off or half shown.')
+LIKENESS = ('LIKENESS FIRST: the person in the subject photos must be recognisably the same individual, close to a photograph of them: the same face shape, eyes, nose, mouth, beard, hairline and hairstyle, skin tone, build and age. Do not beautify, slim, age, restyle or swap their features, and do not invent a new face from the pose. A close-up subject photo is the authority on the face and hair; a wider one shows pose, body and clothes. Graphic treatment (cut-out, light, colour grade) is fine; a different-looking person is not. '
+    + CLOTHING)
 
 
 def render_prompt(plan, spec, repair=''):
@@ -546,6 +557,11 @@ When subject photos are supplied, judge likeness_match: is this recognisably the
 and hair? Mark it false only when someone who knows them would doubt it; then make the repair
 instruction about matching the face and hair. Letters partly covered by the person or another element
 are a deliberate graphic device: do not report them while the words still read.
+Words printed on the person's clothing are part of them, not extra copy, and a patch they are printed
+on is not a backing rectangle. If any of the print shows, it must be complete and spelled as in the
+subject photos (read the whole print in whichever photo shows it, often the wider one); a cut-off or
+changed print (only "GOD" of "GOD IS DOPE.") is a defect: report it and make the repair instruction
+restore the full print in its colours, or turn or frame the person so none of it shows.
 ''', content)
     return review_verdict(result, spec)
 

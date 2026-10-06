@@ -363,3 +363,26 @@ def test_the_meter_sends_the_design_and_the_subject_photos(monkeypatch):
     assert kw['timeout'].read == 40
     monkeypatch.delenv('CLIPPER_URL')
     assert run(d.measure_likeness(png(), spec, loaded)) is None
+
+
+def test_the_planner_and_checker_keep_clothing_words_whole(monkeypatch):
+    """Kevin, 2026-10-06: "my shirt words are not complete on there" (GOD for GOD IS DOPE.)."""
+    said = []
+
+    class Stop(Exception):
+        pass
+
+    async def structured(client, row, model, instruction, content):
+        said.append(instruction)
+        raise Stop()
+    monkeypatch.setattr(d, 'structured', structured)
+    face = str(uuid4())
+    spec = {'goal': 'A cover', 'copy': ['Feelings'], 'owner_request': 'Make a cover', 'owner_context': '', 'facts': {},
+            'preferences': {}, 'references': [dict(id=face, role='subject', use='Close-up of the same person')]}
+    with pytest.raises(Stop):
+        run(d.make_plan(None, row(), spec, {face: png()}))
+    with pytest.raises(Stop):
+        run(d.review(None, row(), spec, plan(), png(), {face: png()}))
+    planner, checker = said
+    assert 'words printed on the person' in planner and 'Never plan a print that is cut off' in planner
+    assert 'not a backing rectangle' in checker and 'cut-off or' in checker and 'GOD IS DOPE.' in checker
