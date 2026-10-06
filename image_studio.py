@@ -419,6 +419,24 @@ async def upload(business_id: UUID, file: UploadFile = File(...), session: UserS
         return await present(client, rows[0])
 
 
+async def delivery_jpeg(client, business_id, row):
+    """A published copy of one artwork, as a JPEG at a public link; returns the
+    link. JPEG supports Instagram (a Reel cover must be JPEG too) and website
+    delivery. Originals stay lossless and private. The same artwork always
+    lands at the same path, so publishing it again replaces its copy."""
+    raw = await original(client, row)
+    with Image.open(io.BytesIO(raw)) as im:
+        rgb = Image.new('RGB', im.size, 'white')
+        if im.mode == 'RGBA':
+            rgb.paste(im, mask=im.getchannel('A'))
+        else:
+            rgb.paste(im.convert('RGB'))
+        out = io.BytesIO(); rgb.save(out, 'JPEG', quality=95)
+    path = f"{business_id}/published-artwork/{row['id']}.jpg"
+    await store(client, path, out.getvalue(), 'image/jpeg', 'business-assets')
+    return storage_url(f'object/public/business-assets/{path}')
+
+
 @router.post('/{image_id}/publish')
 async def publish(image_id: UUID, req: PublishImage, session: UserSession = Depends(sb_clients.authed_request)):
     async with httpx.AsyncClient(timeout=120) as client:
@@ -430,18 +448,7 @@ async def publish(image_id: UUID, req: PublishImage, session: UserSession = Depe
             if not claim.get('claimed'):
                 return {'status': claim.get('status', 'sending'), 'result': claim.get('result'),
                     'message': 'This publishing request has already been submitted. Check the Content calendar and destination before sending again.'}
-        raw = await original(client, row)
-        # JPEG supports Instagram and website delivery. Originals stay lossless and private.
-        with Image.open(io.BytesIO(raw)) as im:
-            rgb = Image.new('RGB', im.size, 'white')
-            if im.mode == 'RGBA':
-                rgb.paste(im, mask=im.getchannel('A'))
-            else:
-                rgb.paste(im.convert('RGB'))
-            out = io.BytesIO(); rgb.save(out, 'JPEG', quality=95)
-        path = f'{req.business_id}/published-artwork/{image_id}.jpg'
-        await store(client, path, out.getvalue(), 'image/jpeg', 'business-assets')
-        url = storage_url(f'object/public/business-assets/{path}')
+        url = await delivery_jpeg(client, req.business_id, row)
         post = {'id': f'image-{req.request_id}', 'title': req.title, 'body': req.caption, 'platform': req.destination,
             'status': 'draft', 'scheduled_date': datetime.now(timezone.utc).date().isoformat(),
             'created_at': datetime.now(timezone.utc).isoformat(), 'image_url': url, 'image_asset_id': str(image_id)}

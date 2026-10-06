@@ -6,9 +6,9 @@ asked: 'Would work with clips we making or both separate and together? (covers f
 status: in progress
 prs: [kmj-intake-server clip-covers]
 migrations: []
-left_undone: ["Frontend: Make cover / Make covers for kept clips in Video Clips (FindBestClips.tsx ClipReview), cover preview from configuration.cover_image_id via /ai/images/{biz}/{id}, Remember this style, director stages on the card", "Post for Me thumbnail_url when clip posting is built (find-best-clips PR 3)"]
+left_undone: ["Frontend: Make cover / Make covers for kept clips in Video Clips (FindBestClips.tsx ClipReview), cover preview from configuration.cover_image_id via /ai/images/{biz}/{id}, Remember this style, director stages on the card"]
 decisions: ["Owner only (covers spend credits, like Image Studio)", "Words default to the clip title; the owner can pass up to four lines", "Cover id lives in configuration, so it is part of what an approval covers"]
-related: [2026-10-05-creative-director-every-business.md, 2026-10-05-clip-clean-frames.md]
+related: [2026-10-05-creative-director-every-business.md, 2026-10-05-clip-clean-frames.md, 2026-10-06-post-clip-with-cover.md]
 ---
 One engine, several doors: a clip's cover is a Creative Director design with
 the clip's clean frame as the subject and its title as the words. The frame is

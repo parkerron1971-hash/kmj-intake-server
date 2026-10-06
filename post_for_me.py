@@ -172,14 +172,29 @@ async def accounts_by_ids(account_ids: List[str]) -> List[Dict[str, Any]]:
     return [public_account(a) for a in (data or []) if isinstance(a, dict) and a.get("id")]
 
 
-async def create_post(*, caption: str, account_ids: List[str], media_urls: List[str],
+def media_item(item: Any) -> Dict[str, Any]:
+    """One media entry of a post: a URL, or {url, thumbnail_url} for a video
+    with its cover (Post for Me's SocialPostMediaDto; the thumbnail is a
+    public image URL it fetches, like the media)."""
+    if isinstance(item, dict):
+        out: Dict[str, Any] = {"url": item["url"]}
+        if item.get("thumbnail_url"):
+            out["thumbnail_url"] = item["thumbnail_url"]
+        return out
+    return {"url": item}
+
+
+async def create_post(*, caption: str, account_ids: List[str], media_urls: List[Any],
                       external_id: str, scheduled_at: Optional[str] = None,
                       platform_configurations: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Hand one post to Post for Me. No scheduled_at = post now. Media go by
-    public URL (Post for Me fetches them). Returns {id, status}."""
+    public URL (Post for Me fetches them); an item may be {url, thumbnail_url}
+    (see media_item). platform_configurations overrides per network: its
+    own media (a different thumbnail), placement, a YouTube title. Returns
+    {id, status}."""
     body: Dict[str, Any] = {"caption": caption, "social_accounts": account_ids,
                             "external_id": external_id,
-                            "media": [{"url": u} for u in media_urls]}
+                            "media": [media_item(u) for u in media_urls]}
     if scheduled_at:
         body["scheduled_at"] = scheduled_at
     if platform_configurations:
