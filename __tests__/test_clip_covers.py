@@ -30,7 +30,7 @@ def app(monkeypatch):
 
     async def db(client, method, path, body=None, **kw):
         if method == 'GET':
-            return list(s.artworks)
+            return [a for a in s.artworks if a['id'] in path]
         s.posted.append(body); s.artworks.append(body); return [body]
     monkeypatch.setattr(images, 'db', db)
     monkeypatch.setattr(images, 'store', AsyncMock(side_effect=lambda c, path, raw, mime: s.stored.append(path)))
@@ -63,7 +63,7 @@ def test_a_cover_is_designed_from_the_clean_frame_with_the_clip_title(app):
     assert response.status_code == 202 and response.json()['cover']['status'] == 'queued'
     turn, action = app.designed[0]
     frame_id = str(uuid5(UUID(CLIP), 'cover-frame'))
-    assert action['references'] == [{'id': frame_id, 'role': 'subject', 'use': 'The speaker in this clip. Keep their exact likeness.'}]
+    assert action['references'] == [{'id': frame_id, 'role': 'subject', 'use': 'The speaker on stage: pose, body and clothes. Keep their exact likeness.'}]
     assert action['exact_copy'] == ["Don't Measure Rightness By Feelings"] and action['size'] == '1088x1920'
     assert "Don't Measure Rightness By Feelings" in action['goal']
     # The frame comes from the clip's private storage and lands in the owner's gallery.
@@ -152,3 +152,27 @@ def test_many_clips_are_read_in_short_batches(monkeypatch):
     cc.covers_for(BIZ, many)
     ids_per_batch = [len(p.split('in.(')[1].split(')')[0].split(',')) for p in asked]
     assert ids_per_batch == [100, 100, 50]
+
+
+def test_a_face_close_up_leads_the_cover_when_the_clip_has_one(app):
+    """Kevin, 2026-10-06: covers must look over 90% like the person. The close-up
+    of the face goes first and is the authority on the face and hair."""
+    app.rows = [clip(face=True)]
+    post(app)
+    refs = app.designed[0][1]['references']
+    assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-face')), str(uuid5(UUID(CLIP), 'cover-frame'))]
+    assert 'face' in refs[0]['use'] and all(r['role'] == 'subject' for r in refs)
+    assert any(u.endswith(f'/{BIZ}/{CLIP}-face.jpg') for u in app.fetched)
+
+
+def test_a_close_up_that_cannot_be_read_leaves_the_cover_to_the_frame(app, monkeypatch):
+    """Review of #1286: the close-up is best effort; a missing file never fails the cover."""
+    class Response:
+        def __init__(self, ok): self.is_success, self.content = ok, b'jpg'
+    async def get(self, url, headers=None):
+        app.fetched.append(url); return Response(not url.endswith('-face.jpg'))
+    monkeypatch.setattr(cc.httpx.AsyncClient, 'get', get)
+    app.rows = [clip(face=True)]
+    post(app)
+    refs = app.designed[0][1]['references']
+    assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-frame'))]

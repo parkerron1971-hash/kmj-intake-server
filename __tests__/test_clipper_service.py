@@ -67,6 +67,7 @@ def fake_pipeline(monkeypatch, final=None, clips=2, spots=None):
         seen.setdefault('frames', []).append((source.name, source.is_file(), at))
         target.write_bytes(b'frame')
     monkeypatch.setattr(svc, 'make_frame', make_frame)
+    monkeypatch.setattr(svc.empty_spots, 'face_closeup', lambda source, at, target, det: target.write_bytes(b'face') or (70, 90))
     return seen
 
 
@@ -375,3 +376,38 @@ def test_a_failed_or_empty_still_is_never_advertised(tmp_path, monkeypatch, retu
     svc.make_frame(tmp_path / 'source.mp4', 9999.0, frame)
     svc.make_poster(tmp_path / 'clip_00.mp4', 9999.0, poster)
     assert not frame.exists() and not poster.exists()
+
+
+def test_each_clip_gets_a_face_close_up_for_its_cover(client, monkeypatch):
+    fake_pipeline(monkeypatch, clips=1)
+    job = uuid4()
+    client.post(f'/jobs/{job}', json={'source_url': SOURCE}, headers=AUTH)
+    body = wait_done(client, job)
+    assert body['result']['clips'][0]['face'] == 'clip_00_face.jpg'
+    assert client.get(f'/jobs/{job}/files/clip_00_face.jpg', headers=AUTH).content == b'face'
+
+
+def test_no_face_in_frame_means_no_close_up(tmp_path):
+    """A blank picture has no face: nothing is written and the cover uses the frame alone.
+    Runs where the clip service's OpenCV is installed (its image, a dev box); CI has none."""
+    cv2 = pytest.importorskip('cv2')
+    import numpy as np
+    video = tmp_path / 'blank.mp4'
+    out = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*'mp4v'), 10, (320, 240))
+    for _ in range(30):
+        out.write(np.zeros((240, 320, 3), dtype=np.uint8))
+    out.release()
+    target = tmp_path / 'face.jpg'
+    assert svc.empty_spots.face_closeup(video, 1.0, target, svc.empty_spots.detector()) is None
+    assert not target.exists()
+
+
+def test_the_close_up_box_stays_four_by_five_inside_the_frame():
+    """Review of #1286: a big face in a short frame used to give a wider crop."""
+    box = svc.empty_spots.closeup_box
+    for full_w, full_h, face in ((1920, 1080, (900, 300, 120, 150)),   # a stage shot
+                                 (1280, 720, (500, 100, 400, 480)),    # a big face, short frame
+                                 (300, 1000, (100, 400, 150, 180))):   # a narrow frame
+        left, top, w, h = box(full_w, full_h, *face)
+        assert abs(h / w - 1.25) < 0.01, (full_w, full_h, w, h)
+        assert left >= 0 and top >= 0 and left + w <= full_w and top + h <= full_h
