@@ -46,6 +46,7 @@ A plan's image is found by its stable id on every run, so a redirect cannot pay 
 - **Lanes** (`supabase/APPLY-2026-09-26-chief-build-lanes.sql`): one running build per business and lane, instead of per business. The lanes are `site` (workshops, forms with links, events pages, which share the Events collection, forms and the website), `image` (flyers) and `plan` (plans). A workshop, a flyer and a plan from one message run at once, and two workshops still take turns. Only `chief_build_claim` changes (same signature), so the server code runs before and after the migration; before it, jobs simply queue per business as they did. `scripts/chief-build-lanes-db-check.mjs` checks it in CI.
 - **No five-minute wait.** When a job finishes, the worker starts whatever was queued for that business (`_launch_waiting`), instead of waiting for the recovery tick.
 - **Starting a plan names its pieces**: "Working on these in the background: A, B and C. You can leave this chat..." Before, the reply and its receipts never said what went to the background.
+- **Said once (2026-10-06).** A started or answered job's sentence rides as `say` and is said once in the reply; its label and result are one short line ("Started your thumbnail", "Resumed your thumbnail", "Cancelled your plan"). A plan beside other jobs is merged into one sentence by `job_sentence`: "Started your thumbnail. Working on these in the background: A and B. You can leave this chat..." once, not twice.
 
 ## Important contract decisions
 

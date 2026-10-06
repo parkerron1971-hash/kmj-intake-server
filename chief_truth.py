@@ -2446,24 +2446,21 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
 
 
 def with_job_sentences(text, taken):
-    """The reply plus, once, what each job this turn started says (its
-    `say`: "I'm on it ... you can leave this chat; I'll let you know").
-    A turn that started a job AND did something else (a task, a contact)
-    is reviewed as prose, and the review never adds the sentence, so the
-    owner never heard they could leave. Server-written, so it is added
-    after the review, and never twice."""
-    out = text
+    """The reply plus, once, what the jobs this turn started or continued
+    say (their `say`: "I'm on it ... you can leave this chat; I'll let you
+    know"), merged into one sentence when there are several. A turn that
+    started a job AND did something else (a task, a contact) is reviewed as
+    prose, and the review never adds the sentence, so the owner never heard
+    they could leave. Server-written, so it is added after the review, and
+    never twice."""
+    import chief_build_runtime
+    say = chief_build_runtime.job_sentence(taken)
     flat = lambda t: re.sub(r'\s+', ' ', t or '').strip()
-    for r in taken or []:
-        if not isinstance(r, dict) or r.get('type') != 'submit_work_order' or r.get('failed'):
-            continue
-        say = str(r.get('say') or '').strip()
-        if not say or flat(say) in flat(out):
-            continue
-        if 'leave this chat' in say.lower() and 'leave this chat' in (out or '').lower():
-            continue  # the reply already told them, in its own words
-        out = f"{out.rstrip()}\n\n{say}" if (out or '').strip() else say
-    return out
+    if not say or flat(say) in flat(text):
+        return text
+    if 'leave this chat' in say.lower() and 'leave this chat' in (text or '').lower():
+        return text  # the reply already told them, in its own words
+    return f"{text.rstrip()}\n\n{say}" if (text or '').strip() else say
 
 
 async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, business_id, reviewer,
@@ -2490,10 +2487,15 @@ async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, bu
     import chief_of_staff as chief
     receipts = [r for r in taken if isinstance(r, dict)]
     if receipts and all(r.get('type') in ('submit_work_order','respond_work_order') for r in receipts):
-        # A started job's sentence ("I'm on it ... you can leave this chat")
-        # is its `say`, said here once, even when one message started
-        # several jobs; its label is the short step/receipt line.
-        said = [str(r.get('say') or r.get('label') or r.get('result') or '') for r in receipts]
+        # A started or continued job's sentence ("I'm on it ... you can
+        # leave this chat") is its `say`, said here once, even when one
+        # message started several jobs (merged: a plan and a flyer used to
+        # say two); its label is the short step/receipt line. A refusal
+        # says why, in its label.
+        import chief_build_runtime
+        sentence = chief_build_runtime.job_sentence(receipts)
+        said = [sentence if chief_build_runtime.says_job(r) else str(r.get('label') or r.get('result') or '')
+                for r in receipts]
         return '\n\n'.join(dict.fromkeys(s for s in said if s)), {'status':'receipts','sources':[]}
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):

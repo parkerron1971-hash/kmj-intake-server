@@ -360,6 +360,9 @@ _ACTION_PHRASES = {
     # never the verb ("Design flyer", "Submit work order").
     "design_flyer": "starting the design",
     "submit_work_order": "starting the work",
+    # Answering or going ahead on a job in progress; it ends on the job's
+    # name ("Resumed your thumbnail"), never "Respond work order".
+    "respond_work_order": "continuing the work",
 }
 
 
@@ -407,6 +410,8 @@ def _design_step_phrase(atype: str, action: Optional[Dict[str, Any]]) -> Optiona
         if atype == "submit_work_order":
             import chief_build_runtime
             return chief_build_runtime.starting_phrase(action)
+        if atype == "respond_work_order" and action.get("cancel"):
+            return "cancelling the work"
     except Exception as e:
         # Never break a step line over a name; say so, so a slide back to
         # the plain phrase is visible in the logs.

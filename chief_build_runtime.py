@@ -144,6 +144,19 @@ def started_label(order):
     return f"Started your {order_name(order)}"
 
 
+def _saved_name(job):
+    """A saved job's name where people read it (thumbnail, form, plan...),
+    from its own order. The job already moved, so a name never breaks it."""
+    from types import SimpleNamespace
+    params = job.get('params') or {}
+    try:
+        return order_name(SimpleNamespace(kind=params.get('kind'), facts=params.get('facts') or {},
+                                          practitioner_words=params.get('practitioner_words') or ''))
+    except Exception as exc:
+        log.warning('job name for %s failed: %s: %s', job.get('id'), type(exc).__name__, exc)
+        return 'work'
+
+
 def starting_phrase(action):
     """The step line while a submit_work_order action is starting, from the
     action as the model sent it (the order is not made yet)."""
@@ -239,9 +252,50 @@ def queued_label(order):
     titles = [t for t in titles if t][:8]
     if not titles:
         return QUEUED_LABEL
-    listed = titles[0] if len(titles) == 1 else ', '.join(titles[:-1]) + ' and ' + titles[-1]
-    return (f"Working on these in the background: {listed}. You can leave this chat; "
+    return (f"Working on these in the background: {_listed(titles)}. You can leave this chat; "
             f"I'll let you know here when they're done or if I need you.")
+
+
+# The closing every background sentence shares, said once per reply.
+LEAVE = "You can leave this chat"
+LEAVE_MANY = "You can leave this chat; I'll let you know here when they're done or if I need you."
+_QUEUED_LEAD = QUEUED_LABEL.partition(LEAVE)[0].strip()
+
+
+def says_job(receipt):
+    """A job this turn started or continued, with a sentence for the reply."""
+    return (isinstance(receipt, dict) and receipt.get('type') in ('submit_work_order', 'respond_work_order')
+            and not receipt.get('failed') and bool(str(receipt.get('say') or '').strip()))
+
+
+def _listed(names):
+    return names[0] if len(names) == 1 else ', '.join(names[:-1]) + ' and ' + names[-1]
+
+
+def job_sentence(receipts):
+    """What this turn's started or continued jobs tell the owner, once.
+
+    One job, or several that say the same thing: that sentence. A plan
+    beside another job used to say two background sentences, each telling
+    them they could leave. Now each job leads once (a plan names its
+    pieces; a plain job its short line, "Started your thumbnail") and one
+    "You can leave this chat" closes it."""
+    jobs = [r for r in receipts or [] if says_job(r)]
+    says = list(dict.fromkeys(str(r['say']).strip() for r in jobs))
+    if len(says) <= 1:
+        return says[0] if says else ''
+    started, leads, leave = [], [], False
+    for r in jobs:
+        lead, closing, _ = str(r['say']).strip().partition(LEAVE)
+        lead, label = lead.strip(), str(r.get('label') or '').strip()
+        leave = leave or bool(closing)
+        if lead == _QUEUED_LEAD and label.startswith('Started '):
+            started.append(label[len('Started '):])  # "your thumbnail"
+        elif lead and lead not in leads:
+            leads.append(lead)
+    if started:
+        leads.insert(0, f"Started {_listed(list(dict.fromkeys(started)))}.")
+    return ' '.join(leads + ([LEAVE_MANY] if leave else []))
 
 # Why the website link step stopped, said plainly (first live build,
 # 2026-09-26: a business with no built site got only "could not be
@@ -897,10 +951,16 @@ async def handle_respond_work_order(client,biz,action):
             stamp=job.get('finished_at') or job['created_at']
             if (datetime.now(timezone.utc)-datetime.fromisoformat(stamp.replace('Z','+00:00'))).total_seconds()>900:
                 raise ValueError('Review this build on its card before approving it.')
+        cancel=bool(action.get('cancel'))
         updated=await respond(client,job['id'],ctx['user_id'],job['build_revision'],
-            answer=action.get('answer'),field=action.get('field'),approve=bool(action.get('approve')),cancel=bool(action.get('cancel')))
-        label=updated['result']['summary_label']
-        return {'type':'respond_work_order','label':label,'result':label,'nav':None,'job_id':job['id'],'build':updated,'frontend_event':{'name':'solutionist-builds-changed'}}
+            answer=action.get('answer'),field=action.get('field'),approve=bool(action.get('approve')),cancel=cancel)
+        # The reply says the job's sentence once (`say`); the step line and
+        # the receipt carry one short line naming the job, as a start does.
+        # The summary used to be the label, the result and the reply, so one
+        # answer printed the same sentence three times.
+        line=f"{'Cancelled' if cancel else 'Resumed'} your {_saved_name(job)}"
+        return {'type':'respond_work_order','label':line,'result':line,'say':updated['result']['summary_label'],
+                'nav':None,'job_id':job['id'],'build':updated,'frontend_event':{'name':'solutionist-builds-changed'}}
     except (ValueError,HTTPException) as exc:
         label=str(getattr(exc,'detail',str(exc)))
         return {'type':'respond_work_order','label':label,'result':label,'failed':True,'nav':None}

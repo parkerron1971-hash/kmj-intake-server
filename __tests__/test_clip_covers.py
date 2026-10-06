@@ -12,6 +12,8 @@ import clip_covers as cc
 import image_studio as images
 import sb_clients
 
+REAL_PICK = cc.pick_expression
+
 BIZ = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 OWNER = '11111111-1111-1111-1111-111111111111'
 CLIP = '22222222-2222-4222-8222-222222222222'
@@ -25,7 +27,7 @@ def clip(**configuration):
 @pytest.fixture
 def app(monkeypatch):
     s = SimpleNamespace(rows=[clip()], patched=[], designed=[], stored=[], posted=[], fetched=[], artworks=[], busy=set(),
-                        faces=False, extra=False, backfilled=[])
+                        faces=False, extra=False, backfilled=[], patched_rows=[])
     monkeypatch.setattr(cc.media_library, 'read', lambda path: list(s.rows))
     monkeypatch.setattr(cc, 'designing_now', lambda biz, clip_id: set(s.busy))
     monkeypatch.setattr(cc.sb_clients, 'sb_patch_as_service', lambda path, body: s.patched.append((path, body)) or [body])
@@ -34,6 +36,11 @@ def app(monkeypatch):
     async def db(client, method, path, body=None, **kw):
         if method == 'GET':
             return [a for a in s.artworks if a['id'] in path]
+        if method == 'PATCH':
+            hit = [a for a in s.artworks if a['id'] in path]
+            for a in hit:
+                a.update(body)
+            s.patched_rows.append((path, body)); return hit
         s.posted.append(body); s.artworks.append(body); return [body]
     monkeypatch.setattr(images, 'db', db)
     monkeypatch.setattr(images, 'store', AsyncMock(side_effect=lambda c, path, raw, mime: s.stored.append(path)))
@@ -50,6 +57,11 @@ def app(monkeypatch):
     monkeypatch.setattr(cc.httpx.AsyncClient, 'get', get)
     monkeypatch.setattr(cc, 'backfill_faces', lambda row, need_first=False: s.backfilled.append((row['id'], need_first)) or 0)
     monkeypatch.setattr(cc, '_asked', set())
+    # The face picker's order unless a test asks for the expression pick, and
+    # no speaker photo unless a test saves one.
+    monkeypatch.setattr(cc, 'pick_expression', AsyncMock(side_effect=lambda client, biz, title, ups: ups))
+    monkeypatch.setattr(cc, '_expression_pick', {})
+    monkeypatch.setattr(cc, '_speaker_match', {})
 
     async def design(client, biz, action):
         s.designed.append((images.turn_id.get(), action))
@@ -521,3 +533,235 @@ def test_the_face_request_is_bounded(monkeypatch):
     backfill_env(monkeypatch, [], lambda method, path, **kw: seen.append(kw.get('timeout')) or SimpleNamespace(status_code=200, content=b'', json=lambda: faces_payload(b'j')))
     cc.backfill_face(older())
     assert seen[0].read == 75
+
+
+# -- the expression that fits the title (Kevin, 2026-10-06) -------------
+
+FACES = [str(uuid5(UUID(CLIP), k)) for k in ('cover-face', 'cover-face2', 'cover-face3')]
+
+
+class Answer:
+    def __init__(self, text, ok=True):
+        self.is_success, self.text = ok, text
+
+    def json(self):
+        return {'content': [{'type': 'text', 'text': self.text}]}
+
+
+def pick_env(monkeypatch, answer):
+    import llm_call
+    asked = []
+
+    async def apost(client, payload, **kw):
+        asked.append((payload, kw))
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(llm_call, 'apost', apost)
+    monkeypatch.setattr(cc, 'picture_b64', AsyncMock(side_effect=lambda client, biz, image_id, side=640: f'b64-{image_id}'))
+    monkeypatch.setattr(cc, '_expression_pick', {})
+    return asked
+
+
+def pick(title='Stop Fronting', ups=FACES):
+    return asyncio.run(REAL_PICK(None, {'id': BIZ}, title, list(ups)))
+
+
+def test_the_close_up_whose_expression_fits_the_title_leads(monkeypatch):
+    """Kevin: "does the chief go through the clip to find the best pose that
+    shows my face and expressions the best that fit the title"."""
+    asked = pick_env(monkeypatch, Answer('2'))
+    assert pick() == [FACES[1], FACES[0], FACES[2]]
+    payload, kw = asked[0]
+    content = payload['messages'][0]['content']
+    assert 'Stop Fronting' in content[0]['text'] and 'expression and gesture' in content[0]['text']
+    assert [b['source']['data'] for b in content if b['type'] == 'image'] == [f'b64-{f}' for f in FACES]
+    # Its own picture choice, never charged to the customer as a design.
+    assert kw['units'] == 0 and kw['business_id'] == BIZ
+    # Thinking counts against max_tokens: a bounded effort where the model takes one.
+    assert payload['max_tokens'] >= 400
+
+
+def test_the_story_and_wide_covers_share_one_pick(monkeypatch):
+    asked = pick_env(monkeypatch, Answer('3'))
+    assert pick() == pick() == [FACES[2], FACES[0], FACES[1]]
+    assert len(asked) == 1
+
+
+@pytest.mark.parametrize('answer', [Answer('7'), Answer('none of them'), Answer('2', ok=False), RuntimeError('down')])
+def test_a_pick_that_cannot_be_read_keeps_the_face_order(monkeypatch, answer):
+    pick_env(monkeypatch, answer)
+    assert pick() == FACES
+
+
+def test_one_close_up_or_no_title_needs_no_pick(monkeypatch):
+    asked = pick_env(monkeypatch, Answer('1'))
+    assert pick(ups=FACES[:1]) == FACES[:1] and pick(title='  ') == FACES and asked == []
+
+
+def test_the_picked_close_up_is_told_to_carry_the_expression(app, monkeypatch):
+    app.faces = app.extra = True
+    monkeypatch.setattr(cc, 'pick_expression', AsyncMock(side_effect=lambda client, biz, title, ups: [ups[2], ups[0], ups[1]]))
+    post(app)
+    refs = app.designed[0][1]['references']
+    assert [r['id'] for r in refs] == [FACES[2], FACES[0], FACES[1], str(uuid5(UUID(CLIP), 'cover-frame'))]
+    assert 'use this expression and gesture' in refs[0]['use'] and 'Another close-up' in refs[1]['use']
+
+
+# -- the speaker photo (Kevin, 2026-10-06) ----------------------------------
+
+def speaker(app, monkeypatch, score=0.8):
+    """The business has a speaker photo saved; face recognition gives `score`."""
+    photo = {'id': cc.speaker_id(BIZ), 'business_id': BIZ, 'status': 'ready', 'storage_path': f'{BIZ}/speaker-x.png',
+             'prompt': 'Speaker photo'}
+    app.artworks.append(photo)
+    compared = []
+    monkeypatch.setattr(cc, 'picture_b64', AsyncMock(side_effect=lambda client, biz, image_id, side=640: f'b64-{image_id}'))
+    monkeypatch.setattr(cc, 'likeness_score', lambda image, reference: compared.append((image, reference)) or score)
+    return photo, compared
+
+
+def test_the_speaker_photo_leads_when_it_is_the_clips_speaker(app, monkeypatch):
+    """A face in a video frame is small and soft; a real photo has the detail."""
+    app.faces = app.extra = True
+    photo, compared = speaker(app, monkeypatch)
+    post(app)
+    refs = app.designed[0][1]['references']
+    # Four pictures: the photo, two close-ups and the stage frame.
+    assert [r['id'] for r in refs] == [photo['id'], FACES[0], FACES[1], str(uuid5(UUID(CLIP), 'cover-frame'))]
+    assert refs[0] == {'id': photo['id'], 'role': 'subject', 'use': cc.SPEAKER_USE} and 'authority' in cc.SPEAKER_USE
+    # Checked against the clip's own best close-up.
+    assert compared == [(f'b64-{FACES[0]}', f'b64-{photo["id"]}')]
+
+
+def test_a_guest_speakers_clip_never_gets_the_speaker_photo(app, monkeypatch):
+    app.faces = app.extra = True
+    speaker(app, monkeypatch, score=0.2)
+    post(app)
+    assert [r['id'] for r in app.designed[0][1]['references']] == FACES + [str(uuid5(UUID(CLIP), 'cover-frame'))]
+
+
+def test_no_face_reading_means_no_speaker_photo(app, monkeypatch):
+    """The clip service down or no face found: the cover goes on without it."""
+    app.faces = True
+    speaker(app, monkeypatch, score=None)
+    post(app)
+    assert [r['id'] for r in app.designed[0][1]['references']] == [FACES[0], str(uuid5(UUID(CLIP), 'cover-frame'))]
+
+
+def test_the_match_is_measured_once_per_clip(app, monkeypatch):
+    app.faces = True
+    _, compared = speaker(app, monkeypatch)
+    post(app, sizes=['story', 'wide'])
+    post(app)
+    assert len(compared) == 1
+
+
+def test_a_reading_that_failed_is_asked_again(app, monkeypatch):
+    """Review of #1297: a clip service with a bad minute is not an answer."""
+    app.faces = True
+    photo, compared = speaker(app, monkeypatch, score=None)
+    post(app)
+    monkeypatch.setattr(cc, 'likeness_score', lambda image, reference: compared.append((image, reference)) or 0.8)
+    post(app)
+    assert len(compared) == 2 and app.designed[1][1]['references'][0]['id'] == photo['id']
+
+
+def test_the_process_caches_stay_bounded():
+    cache = {}
+    for n in range(1200):
+        cc.remember(cache, n, n, limit=500)
+    assert len(cache) <= 500 and cache[1199] == 1199
+
+
+def test_with_a_style_picture_the_speaker_photo_one_close_up_and_the_frame_stay(app, monkeypatch):
+    app.faces = app.extra = True
+    photo, _ = speaker(app, monkeypatch)
+    style = str(uuid4())
+    post(app, style_image_id=style)
+    assert [r['id'] for r in app.designed[0][1]['references']] == [photo['id'], FACES[0], str(uuid5(UUID(CLIP), 'cover-frame')), style]
+
+
+@pytest.fixture
+def photo_api(app, monkeypatch):
+    chosen = str(uuid4())
+    app.artworks.append({'id': chosen, 'business_id': BIZ, 'status': 'ready', 'storage_path': f'{BIZ}/{chosen}.png'})
+    monkeypatch.setattr(images, 'original', AsyncMock(return_value=b'raw'))
+    monkeypatch.setattr(images, 'present', AsyncMock(side_effect=lambda client, row: {'id': row['id'], 'url': 'https://signed'}))
+    deleted = []
+
+    async def service(client, method, path, body=None):
+        deleted.append((method, path))
+        app.artworks[:] = [a for a in app.artworks if a['id'] not in path]
+        return []
+    monkeypatch.setattr(cc.sb_clients, 'sb_as_service', service)
+    monkeypatch.setenv('CLIPPER_URL', 'https://clipper.example.test')
+    monkeypatch.setenv('CLIPPER_TOKEN', 't' * 40)
+    face = {'found': True}
+    monkeypatch.setattr(cc.clip_finder, 'clipper', lambda method, path, **kw: SimpleNamespace(
+        status_code=200, json=lambda: {'score': 1.0 if face['found'] else None, 'face_found': face['found']}))
+    return SimpleNamespace(chosen=chosen, deleted=deleted, face=face, url=f'/media-library/{BIZ}/speaker-photo')
+
+
+def test_the_owner_saves_a_speaker_photo_as_a_copy(app, photo_api):
+    response = app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    assert response.status_code == 200 and response.json()['set'] is True
+    row = app.posted[-1]
+    assert row['id'] == cc.speaker_id(BIZ) and row['prompt'] == 'Speaker photo' and row['cost_usd'] == 0
+    # A copy: deleting the original later never breaks the covers.
+    assert row['storage_path'] != f'{BIZ}/{photo_api.chosen}.png' and app.stored[-1] == row['storage_path']
+    assert app.client.get(photo_api.url).json() == {'set': True, 'image': {'id': cc.speaker_id(BIZ), 'url': 'https://signed'}}
+
+
+def test_replacing_the_speaker_photo_keeps_one(app, photo_api):
+    app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    first = app.stored[-1]
+    app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    rows = [a for a in app.artworks if a['id'] == cc.speaker_id(BIZ)]
+    assert len(rows) == 1 and rows[0]['storage_path'] == app.stored[-1] != first
+    # Pointed at the new file in one write, never deleted first.
+    assert photo_api.deleted == [] and app.patched_rows[-1][1] == {'status': 'ready', 'storage_path': app.stored[-1]}
+
+
+def test_a_failed_save_keeps_the_old_speaker_photo(app, photo_api, monkeypatch):
+    app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    kept = app.stored[-1]
+    monkeypatch.setattr(images, 'store', AsyncMock(side_effect=HTTPException(502, 'The image could not be saved.')))
+    assert app.client.put(photo_api.url, json={'image_id': photo_api.chosen}).status_code == 502
+    assert [a['storage_path'] for a in app.artworks if a['id'] == cc.speaker_id(BIZ)] == [kept]
+
+
+def test_a_picture_without_a_face_is_refused(app, photo_api):
+    photo_api.face['found'] = False
+    response = app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    assert response.status_code == 422 and 'face' in response.json()['detail']
+    assert not any(a['id'] == cc.speaker_id(BIZ) for a in app.artworks)
+
+
+def test_clearing_the_speaker_photo(app, photo_api):
+    app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    assert app.client.delete(photo_api.url).json() == {'ok': True, 'set': False}
+    assert app.client.get(photo_api.url).json() == {'set': False, 'image': None}
+
+
+def test_a_clip_service_that_cannot_answer_keeps_the_photo(app, photo_api, monkeypatch):
+    def down(method, path, **kw):
+        raise cc.httpx.ConnectError('down')
+    monkeypatch.setattr(cc.clip_finder, 'clipper', down)
+    assert app.client.put(photo_api.url, json={'image_id': photo_api.chosen}).status_code == 200
+
+
+def test_a_speaker_photo_that_cannot_be_read_never_fails_the_cover(app, monkeypatch):
+    app.faces = True
+    speaker(app, monkeypatch)
+    monkeypatch.setattr(cc, 'picture_b64', AsyncMock(side_effect=OSError('not an image')))
+    assert post(app).status_code == 202
+    assert [r['id'] for r in app.designed[0][1]['references']] == [FACES[0], str(uuid5(UUID(CLIP), 'cover-frame'))]
+
+
+def test_only_the_owner_sets_the_speaker_photo(app, photo_api, monkeypatch):
+    monkeypatch.setattr(images, 'business', AsyncMock(side_effect=HTTPException(403, 'Business access denied.')))
+    assert app.client.put(photo_api.url, json={'image_id': photo_api.chosen}).status_code == 403
+    assert app.client.delete(photo_api.url).status_code == 403
+    assert app.client.get(photo_api.url).status_code == 403
+    assert photo_api.deleted == [] and not any(a['id'] == cc.speaker_id(BIZ) for a in app.artworks)
