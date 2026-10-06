@@ -62,10 +62,18 @@ class UploadStart(StrictModel):
     rights_confirmed: Literal[True]
 
 
+class CoverPlan(StrictModel):
+    """Covers designed as the clips are made (clip_covers.cover_tick)."""
+    sizes: list[Literal['story', 'wide']] = Field(default_factory=lambda: ['story', 'wide'], min_length=1, max_length=2)
+    style_image_id: Optional[UUID] = None
+    note: Optional[str] = Field(default=None, max_length=300)
+
+
 class FindClips(StrictModel):
     lengths: list[Literal['short', 'medium', 'long']] = Field(default_factory=lambda: ['short', 'medium'], min_length=1, max_length=3)
     caption_style: Literal['pop', 'clean', 'headline'] = 'pop'
     look_for: Optional[str] = Field(default=None, max_length=1000)
+    covers: Optional[CoverPlan] = None
 
 
 class ClipUpdate(StrictModel):
@@ -116,7 +124,17 @@ def configuration(business_id):
     used = seconds_this_month(business_id) if enabled(business_id) else 0.0
     return {'available': enabled(business_id), 'included_hours': INCLUDED_SECONDS // 3600,
             'used_hours': round(used / 3600, 1), 'actions_per_extra_hour': UNITS_PER_EXTRA_HOUR,
-            'max_upload_bytes': MAX_UPLOAD_BYTES, 'caption_styles': list(CAPTION_STYLES), 'lengths': ['short', 'medium', 'long']}
+            'max_upload_bytes': MAX_UPLOAD_BYTES, 'caption_styles': list(CAPTION_STYLES), 'lengths': ['short', 'medium', 'long'],
+            'covers': cover_offer()}
+
+
+def cover_offer():
+    """What a cover costs and how many a run designs, for the app to price it."""
+    import clip_covers
+    import image_studio
+    from chief_code import flyer_verb
+    return {'available': flyer_verb() == 'design_flyer', 'credits_each': image_studio.image_units('high'),
+            'clip_limit': clip_covers.AUTO_CLIP_LIMIT, 'shapes': list(clip_covers.SHAPES)}
 
 
 def library_bytes(business_id):
@@ -346,9 +364,19 @@ def start_run(business_id, source_id, body, user):
     # About 0.4 GB of clips per hour of recording; leave room before starting.
     if library_bytes(business_id) + int(seconds / 3600 * 600 * 1024 ** 2) > LIBRARY_BYTES:
         raise HTTPException(409, 'This media library is nearly full. Remove recordings or clips you no longer need first.')
+    if body.covers:
+        # Covers spend the business's credits, so only its owner can ask for them.
+        owner = sb_clients.sb_get_as_service(f'/businesses?id=eq.{media_library.key(business_id)}&select=owner_id&limit=1') or []
+        if not owner or str(owner[0].get('owner_id')) != str(user.id):
+            raise HTTPException(403, 'Only the owner can have covers designed with the clips.')
+        if not cover_offer()['available']:
+            raise HTTPException(409, 'Designed covers are switched off right now. Find the clips without them.')
     row = sb_clients.sb_post_as_service('/media_clip_runs', {
         'business_id': media_library.key(business_id), 'source_id': media_library.key(source_id),
-        'options': body.model_dump(mode='json'), 'source_seconds': seconds, 'created_by': str(user.id)})
+        # No covers key unless covers were asked for: a JSON null would still
+        # match the cover step's options->covers=not.is.null.
+        'options': body.model_dump(mode='json', exclude={'covers'} if body.covers is None else None),
+        'source_seconds': seconds, 'created_by': str(user.id)})
     if not row:
         # The one-active-run index refused it.
         raise HTTPException(409, 'Clips are already being found for this business. Wait for that to finish.')
