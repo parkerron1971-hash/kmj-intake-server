@@ -422,6 +422,17 @@ def test_a_refused_hand_off_is_failed_and_the_same_tap_says_so_again(s, monkeypa
     assert ok.status_code == 200 and ok.json()['already'] is False and len(s.sent) == 2
 
 
+@pytest.mark.parametrize('failing', ['approved_hash=eq.', 'status=neq.failed'])
+def test_a_failed_read_posts_nothing(s, monkeypatch, failing):
+    """Review of #1298: the real service answers None on a failed read. The
+    same-post-today check and the daily cap must not read that as nothing."""
+    real = s.db.get
+    monkeypatch.setattr(sb_clients, 'sb_get_as_service', lambda path: None if failing in path else real(path))
+    r = post(s, connection_ids=['c-ig'])
+    assert r.status_code == 503 and 'Nothing was' in r.json()['detail']
+    assert s.sent == [] and s.db.pubs == [] and s.audited == []
+
+
 def test_no_signed_link_means_nothing_is_posted(s, monkeypatch):
     monkeypatch.setattr(cp.storage_links, 'signed_url_sync', lambda *a, **k: None)
     r = post(s)

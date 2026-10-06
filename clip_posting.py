@@ -210,7 +210,10 @@ def recent_duplicate(business_id: str, digest: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f'/social_publications?business_id=eq.{business_id}&approved_hash=eq.{digest}'
         f'&created_at=gte.{since}&status=not.in.(failed,cancelled)'
-        f'&select={social._SELECT}&order=created_at.desc&limit=1') or []
+        f'&select={social._SELECT}&order=created_at.desc&limit=1')
+    if rows is None:
+        # A failed read is not "no earlier post": a second tap would post twice.
+        raise HTTPException(503, "Couldn't check for an earlier post. Nothing was posted. Try again in a minute.")
     return rows[0] if rows else None
 
 
@@ -218,11 +221,12 @@ def recent_duplicate(business_id: str, digest: str) -> Optional[Dict[str, Any]]:
 async def post_clip(business_id: UUID, asset_id: UUID, body: ClipPost,
                     session: UserSession = Depends(sb_clients.authed_request)):
     biz, clip_id = str(business_id), str(asset_id)
-    _require_owner(biz, session.user)
-    social._require_pilot(biz)
+    # Every database read runs in a thread: never on the event loop.
+    await asyncio.to_thread(_require_owner, biz, session.user)
+    await asyncio.to_thread(social._require_pilot, biz)
     row = await asyncio.to_thread(_clip, biz, clip_id)
     fingerprint = check_approved(row, body.fingerprint)
-    targets = social._targets(biz, body.connection_ids)
+    targets = await asyncio.to_thread(social._targets, biz, body.connection_ids)
     scheduled_at = social._schedule(body.scheduled_at)
     caption = (body.caption if body.caption is not None else default_caption(row)).strip()
     covers = await asyncio.to_thread(ready_covers, biz, clip_id, body.covers)

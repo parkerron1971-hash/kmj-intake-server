@@ -27,6 +27,7 @@ error.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -221,16 +222,20 @@ async def send_post(business_id: str, approved_by: str, *, caption: str,
     as it is, never sent twice: (row, False); one whose hand-off was refused
     answers as refused again."""
     if publication_id:
-        existing = _publication(business_id, publication_id)
+        existing = await asyncio.to_thread(_publication, business_id, publication_id)
         if existing:
             if existing.get("status") == "failed":
                 raise HTTPException(502, REFUSED)
             return existing, False
 
     since = (_now() - timedelta(days=1)).isoformat().replace("+", "%2B")
-    today = sb_clients.sb_get_as_service(
+    today = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
         f"/social_publications?business_id=eq.{business_id}&created_at=gte.{since}"
-        f"&status=neq.failed&select=id&limit={POSTS_PER_DAY_CAP + 1}") or []
+        f"&status=neq.failed&select=id&limit={POSTS_PER_DAY_CAP + 1}")
+    if today is None:
+        # A failed read is not "no posts today": the cap must hold.
+        raise HTTPException(503, "Couldn't check today's posts. Nothing was sent; try again in a minute.")
     if len(today) >= POSTS_PER_DAY_CAP:
         raise HTTPException(429, f"That's {POSTS_PER_DAY_CAP} posts in a day. Try again tomorrow.")
 
@@ -242,11 +247,11 @@ async def send_post(business_id: str, approved_by: str, *, caption: str,
     }
     if publication_id:
         record["id"] = publication_id
-    created = sb_clients.sb_post_as_service("/social_publications", record)
+    created = await asyncio.to_thread(sb_clients.sb_post_as_service, "/social_publications", record)
     row = (created or [None])[0] if isinstance(created, list) else created
     if (not row or not row.get("id")) and publication_id:
         # Two taps at once: the other one saved this id first and is sending it.
-        existing = _publication(business_id, publication_id)
+        existing = await asyncio.to_thread(_publication, business_id, publication_id)
         if existing:
             return existing, False
     if not row or not row.get("id"):
@@ -258,12 +263,12 @@ async def send_post(business_id: str, approved_by: str, *, caption: str,
             external_id=row["id"], scheduled_at=scheduled_at,
             platform_configurations=platform_configurations)
     except post_for_me.PostForMeError:
-        sb_clients.sb_patch_as_service(f"/social_publications?id=eq.{row['id']}", {
+        await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}", {
             "status": "failed", "updated_at": _now().isoformat(),
             "results": [{"platform": None, "success": False,
                          "error": "The posting service didn't accept it."}]})
         raise HTTPException(502, REFUSED)
-    sb_clients.sb_patch_as_service(f"/social_publications?id=eq.{row['id']}", {
+    await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}", {
         "provider_post_id": sent["id"], "updated_at": _now().isoformat()})
     row["provider_post_id"] = sent["id"]
     logger.info("[social] %s %s to %d account(s)", business_id[:8],
