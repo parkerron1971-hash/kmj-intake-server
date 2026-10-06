@@ -193,3 +193,19 @@ along with the video clips".
   `{available, credits_each, clip_limit, shapes}`.
 
 `python -m pytest __tests__/test_clip_covers.py __tests__/test_clip_finder.py -q`
+
+## Close-ups for older clips (2026-10-06)
+
+Kevin's cover for "Don't Judge Rightness By Feelings" was "75 percent me": the
+clip was made before close-ups existed, so only the wide stage frame (his face
+about 30 px, turned) guided it. Now, when a cover is made for a clip with no
+close-up (`configuration.face` unset), `clip_covers.backfill_face` asks the clip
+service for one: `POST /faces {source_url, start, end}` reads the clip's
+stretch of the recording while it is kept (7 days; otherwise the clip's own
+video) with one ffmpeg pass over range requests, runs the same picker as a clip
+run (`empty_spots.pick_closeup`), and returns the JPEG, which is saved at
+`<clip>-face.jpg`. The clip's configuration is not touched (it is permanent).
+A stretch with no usable face answers 404 "No usable face in that stretch" and
+is remembered for the process; any other 404 (a clip service from before
+`/faces`) is not. Measured on the sermon: 14 frames read in about 4 s, an
+86 px face, facing the camera. Clips that had a close-up are never backfilled.

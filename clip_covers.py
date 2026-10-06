@@ -149,21 +149,83 @@ def shaped_covers(business_id, rows):
     return shaped
 
 
+# Clips whose recording had no usable face for a close-up, in this process:
+# asked once, then the cover uses the stage frame alone.
+_no_face = set()
+
+
+def backfill_face(row):
+    """A close-up for a clip made before close-ups existed (2026-10-06: Kevin's
+    "Don't Judge Rightness By Feelings" cover was about 75% him, drawn from a
+    wide shot where his face was 30 px and turned). The clip service reads the
+    clip's stretch of the recording while it is kept (7 days), else the clip
+    itself, and the close-up is saved where a clip run would have put it. The
+    clip's configuration stays as it is: it is permanent once it exists."""
+    if str(row['id']) in _no_face or not os.environ.get('CLIPPER_URL') or not os.environ.get('CLIPPER_TOKEN'):
+        return False
+    cfg = row.get('configuration') or {}
+    source = media_library.read(f"/media_assets?id=eq.{media_library.key(row.get('source_id') or row['id'])}"
+                                f"&business_id=eq.{media_library.key(row['business_id'])}&select=*&limit=1") if row.get('source_id') else []
+    start, end = cfg.get('start_seconds'), cfg.get('end_seconds')
+    if source and source[0].get('status') == 'ready' and not source[0].get('source_removed_at') and start is not None and end:
+        url = storage_links.signed_url_sync(media_library.BUCKET, media_library.object_path(source[0]), ttl=900)
+    else:
+        url, start, end = storage_links.signed_url_sync(media_library.BUCKET, media_library.object_path(row), ttl=900), 0.0, float(row.get('duration_seconds') or 0)
+    if not url or not end:
+        return False
+    try:
+        response = clip_finder.clipper('POST', '/faces', json={'source_url': url, 'start': float(start), 'end': float(end)})
+    except httpx.HTTPError:
+        log.warning('Face close-up could not be requested for clip %s', row['id'])
+        return False
+    if response.status_code == 404:
+        # Remember only the endpoint's own answer: a clip service from before
+        # /faces existed also says 404 (Not Found), and that is not this clip's fault.
+        try:
+            said = (response.json() or {}).get('detail')
+        except ValueError:
+            said = None
+        if said == 'No usable face in that stretch':
+            _no_face.add(str(row['id']))
+        return False
+    if response.status_code != 200 or not response.content:
+        log.warning('Face close-up for clip %s: clip service answered %s', row['id'], response.status_code)
+        return False
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='clip-face-') as folder:
+        local = os.path.join(folder, 'face.jpg')
+        with open(local, 'wb') as out:
+            out.write(response.content)
+        try:
+            clip_finder.put_file(local, clip_finder.face_path(row), 'image/jpeg')
+        except clip_finder.RunFailed:
+            log.warning('Face close-up for clip %s could not be saved', row['id'])
+            return False
+    return True
+
+
 async def subject_references(client, biz, row, user_id):
     """The clip's pictures of the speaker: the face close-up first (the
-    authority on the face and hair: likeness over 90%), then the stage frame."""
+    authority on the face and hair: likeness over 90%), then the stage frame.
+    A clip from before close-ups gets one made now (backfill_face)."""
     references = [{'id': await frame_artwork(client, biz, row, user_id), 'role': 'subject',
                    'use': 'The speaker on stage: pose, body and clothes. Keep their exact likeness.'}]
-    if (row.get('configuration') or {}).get('face'):
-        # Best effort, like making it: a close-up that cannot be read leaves the
-        # cover to the stage frame alone instead of failing it.
-        try:
-            face_id = await frame_artwork(client, biz, row, user_id, kind='face')
-        except HTTPException:
-            log.warning('Face close-up could not be loaded for clip %s; using the frame alone', row['id'])
-        else:
-            references.insert(0, {'id': face_id, 'role': 'subject',
-                                  'use': 'Close-up of the same person: match this face, beard, hairline and hairstyle exactly.'})
+    # Best effort, like making it: a close-up that cannot be read or made
+    # leaves the cover to the stage frame alone instead of failing it.
+    face_id = None
+    try:
+        face_id = await frame_artwork(client, biz, row, user_id, kind='face')
+    except HTTPException:
+        if not (row.get('configuration') or {}).get('face') and await asyncio.to_thread(backfill_face, row):
+            try:
+                face_id = await frame_artwork(client, biz, row, user_id, kind='face')
+            except HTTPException:
+                face_id = None
+        if face_id is None:
+            log.warning('No face close-up for clip %s; using the frame alone', row['id'])
+    if face_id:
+        references.insert(0, {'id': face_id, 'role': 'subject',
+                              'use': 'Close-up of the same person: match this face, beard, hairline and hairstyle exactly.'})
     return references
 
 

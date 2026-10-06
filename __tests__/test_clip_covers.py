@@ -24,7 +24,8 @@ def clip(**configuration):
 
 @pytest.fixture
 def app(monkeypatch):
-    s = SimpleNamespace(rows=[clip()], patched=[], designed=[], stored=[], posted=[], fetched=[], artworks=[], busy=set())
+    s = SimpleNamespace(rows=[clip()], patched=[], designed=[], stored=[], posted=[], fetched=[], artworks=[], busy=set(),
+                        faces=False, backfilled=[])
     monkeypatch.setattr(cc.media_library, 'read', lambda path: list(s.rows))
     monkeypatch.setattr(cc, 'designing_now', lambda biz, clip_id: set(s.busy))
     monkeypatch.setattr(cc.sb_clients, 'sb_patch_as_service', lambda path, body: s.patched.append((path, body)) or [body])
@@ -39,11 +40,12 @@ def app(monkeypatch):
     monkeypatch.setattr(images, 'normalize_image', lambda raw: b'png')
 
     class Response:
-        is_success = True
-        content = b'jpg'
+        def __init__(self, ok): self.is_success, self.content = ok, b'jpg'
     async def get(self, url, headers=None):
-        s.fetched.append(url); return Response()
+        # A face close-up is in storage only when the test says one is.
+        s.fetched.append(url); return Response(s.faces or not url.endswith('-face.jpg'))
     monkeypatch.setattr(cc.httpx.AsyncClient, 'get', get)
+    monkeypatch.setattr(cc, 'backfill_face', lambda row: s.backfilled.append(row['id']) or False)
 
     async def design(client, biz, action):
         s.designed.append((images.turn_id.get(), action))
@@ -80,7 +82,7 @@ def test_a_cover_is_designed_from_the_clean_frame_with_the_clip_title(app):
 def test_the_frame_is_copied_once_and_each_request_is_its_own_design(app):
     post(app, words=['Feelings Lie'])
     post(app, words=['Feelings Lie'], size='1920x1088')
-    assert len(app.fetched) == 1 and len(app.posted) == 1
+    assert [u for u in app.fetched if u.endswith('-frame.jpg')] == app.fetched[:1] and len(app.posted) == 1
     (first, a), (second, b) = app.designed
     assert first != second and b['size'] == '1920x1088' and a['exact_copy'] == ['Feelings Lie']
 
@@ -160,6 +162,7 @@ def test_a_face_close_up_leads_the_cover_when_the_clip_has_one(app):
     """Kevin, 2026-10-06: covers must look over 90% like the person. The close-up
     of the face goes first and is the authority on the face and hair."""
     app.rows = [clip(face=True)]
+    app.faces = True
     post(app)
     refs = app.designed[0][1]['references']
     assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-face')), str(uuid5(UUID(CLIP), 'cover-frame'))]
@@ -343,3 +346,101 @@ def test_the_cover_step_only_looks_at_recent_runs_that_asked(monkeypatch):
     cc.runs_wanting_covers()
     assert 'status=eq.completed' in asked[0] and 'options->covers=not.is.null' in asked[0]
     assert '+' not in asked[0].split('finished_at=gte.')[1].split('&')[0]
+
+
+# -- older clips get a close-up made when their cover is (2026-10-06) ---
+
+def test_an_older_clip_gets_its_close_up_made_then_leads_the_cover(app, monkeypatch):
+    """Kevin's "Don't Judge Rightness By Feelings" cover was about 75% him: the
+    clip predates close-ups, so only a wide shot with a 30 px face guided it."""
+    def backfill(row):
+        app.backfilled.append(row['id'])
+        app.faces = True  # the clip service made it and it was saved
+        return True
+    monkeypatch.setattr(cc, 'backfill_face', backfill)
+    post(app)
+    refs = app.designed[0][1]['references']
+    assert app.backfilled == [CLIP]
+    assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-face')), str(uuid5(UUID(CLIP), 'cover-frame'))]
+
+
+def test_no_close_up_to_be_had_leaves_the_cover_to_the_frame(app):
+    post(app)
+    assert app.backfilled == [CLIP]
+    assert [r['id'] for r in app.designed[0][1]['references']] == [str(uuid5(UUID(CLIP), 'cover-frame'))]
+
+
+def test_a_clip_that_had_a_close_up_is_never_backfilled(app):
+    """configuration.face says it was made; a storage miss is not a reason to remake it."""
+    app.rows = [clip(face=True)]
+    post(app)
+    assert app.backfilled == []
+
+
+class Clipper:
+    def __init__(self, status=200, content=b'jpeg', detail=None):
+        self.calls, self.status, self.content, self.detail = [], status, content, detail
+
+    def __call__(self, method, path, **kw):
+        self.calls.append((method, path, kw.get('json')))
+        return SimpleNamespace(status_code=self.status, content=self.content, json=lambda: {'detail': self.detail})
+
+
+def backfill_env(monkeypatch, source_rows, clipper):
+    monkeypatch.setenv('CLIPPER_URL', 'https://clipper.example.test')
+    monkeypatch.setenv('CLIPPER_TOKEN', 't' * 40)
+    monkeypatch.setattr(cc, '_no_face', set())
+    monkeypatch.setattr(cc.media_library, 'read', lambda path: list(source_rows))
+    monkeypatch.setattr(cc.storage_links, 'signed_url_sync', lambda bucket, path, ttl=0: f'https://store.example.test/{path}')
+    monkeypatch.setattr(cc.clip_finder, 'clipper', clipper)
+    saved = []
+    monkeypatch.setattr(cc.clip_finder, 'put_file', lambda local, path, kind: saved.append((open(local, 'rb').read(), path, kind)))
+    return saved
+
+
+SOURCE = '99999999-9999-4999-8999-999999999999'
+
+
+def older(**extra):
+    return dict(clip(start_seconds=291.0, end_seconds=381.0), source_id=SOURCE, duration_seconds=90.0, **extra)
+
+
+def test_the_close_up_comes_from_the_recording_while_it_is_kept(monkeypatch):
+    clipper = Clipper()
+    saved = backfill_env(monkeypatch, [{'id': SOURCE, 'business_id': BIZ, 'kind': 'source', 'status': 'ready'}], clipper)
+    assert cc.backfill_face(older()) is True
+    method, path, body = clipper.calls[0]
+    assert (method, path) == ('POST', '/faces') and body['start'] == 291.0 and body['end'] == 381.0
+    assert body['source_url'].endswith(f'{BIZ}/{SOURCE}.source')
+    assert saved == [(b'jpeg', f'{BIZ}/{CLIP}-face.jpg', 'image/jpeg')]
+
+
+def test_after_the_recording_is_gone_the_clip_itself_is_read(monkeypatch):
+    clipper = Clipper()
+    backfill_env(monkeypatch, [{'id': SOURCE, 'business_id': BIZ, 'kind': 'source', 'status': 'ready',
+                                'source_removed_at': '2026-10-13T00:00:00Z'}], clipper)
+    assert cc.backfill_face(older()) is True
+    body = clipper.calls[0][2]
+    assert body['source_url'].endswith(f'{BIZ}/{CLIP}.mp4') and body['start'] == 0.0 and body['end'] == 90.0
+
+
+def test_no_face_in_the_stretch_is_asked_once(monkeypatch):
+    clipper = Clipper(status=404, detail='No usable face in that stretch')
+    saved = backfill_env(monkeypatch, [], clipper)
+    assert cc.backfill_face(older()) is False and cc.backfill_face(older()) is False
+    assert len(clipper.calls) == 1 and saved == []
+
+
+def test_a_clip_service_without_faces_yet_is_asked_again_later(monkeypatch):
+    """Deployed before the clip service: its 404 is 'Not Found', not this clip's verdict."""
+    clipper = Clipper(status=404, detail='Not Found')
+    backfill_env(monkeypatch, [], clipper)
+    assert cc.backfill_face(older()) is False and cc.backfill_face(older()) is False
+    assert len(clipper.calls) == 2
+
+
+def test_without_the_clip_service_nothing_is_asked(monkeypatch):
+    clipper = Clipper()
+    backfill_env(monkeypatch, [], clipper)
+    monkeypatch.delenv('CLIPPER_URL')
+    assert cc.backfill_face(older()) is False and clipper.calls == []
