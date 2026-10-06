@@ -21,8 +21,11 @@ afterwards.
    (`empty_spots.py`) and picks a poster frame where the speaker is visible.
    At that same moment it takes a clean frame from the recording itself (no
    captions, no title card, up to 1920 wide): what a cover is designed from.
-   It also saves a head-and-shoulders close-up of the speaker (the largest face
-   within 1.5 s), so a cover can keep the face and hair. The recording is
+   It also saves a head-and-shoulders close-up of the speaker, so a cover can
+   keep the face and hair: of 14 moments spread across the clip plus five
+   within 1.5 s of the poster, the face that best faces the camera, is sharp,
+   big and surely a face (`face_score`; strong profiles and tiny faces are never
+   used; a two-person shot looks only around the poster). The recording is
    deleted once the frames are taken.
 4. Keeps the clips, posters and a result manifest until the API deletes the job
    or `CLIPPER_RESULT_TTL` passes.

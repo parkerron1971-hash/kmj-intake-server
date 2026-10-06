@@ -7,6 +7,7 @@ of at least MIN_GAP seconds with no face, so the review screen can say
 "Nobody on screen 0:05-0:20". Measured on a 63-minute sermon (2026-10-05): it
 flagged 5 of 16 clips and every flagged spot was a real empty stage.
 """
+import math
 from pathlib import Path
 
 FPS = 4
@@ -14,6 +15,18 @@ MIN_GAP = 2.0
 SCORE = 0.6
 DETECT_WIDTH = 360  # YuNet needs far less than the 1080-wide output
 MODEL = Path(__file__).parent / 'vendor' / 'bridgeclip' / 'engine' / 'assets' / 'models' / 'face_detection_yunet_2023mar.onnx'
+
+# Choosing the face close-up a cover is drawn from (see face_score).
+SPREAD = 14            # moments sampled evenly across the clip, besides the poster's
+MIN_FACE = 0.035       # face width as a share of the frame's short side; smaller is too few pixels to keep a likeness
+FULL_FACE = 0.25       # ... and the share past which a bigger face adds nothing
+MAX_TURN = 0.45        # nose off the eyes' midpoint, in eye-distances: past this the head is turned away
+MIN_EYE_SPREAD = 0.25  # eye distance / face width: below this the eyes have collapsed into a profile
+FRONT_SPREAD = 0.4     # ... and a face-on spread
+MAX_TILT = 0.5         # one eye above the other, in eye-distances
+SHARP_SIDE = 128       # sharpness is measured on the face scaled to this width, so sizes compare
+EYES_BAND = 0.6        # ... over the top of the face box: brows and eyes, not the mouth
+SHARP_HALF = 60.0      # the Laplacian variance that counts as half sharp
 
 
 def gaps(samples, end, min_gap=MIN_GAP):
@@ -61,19 +74,93 @@ def closeup_box(full_w, full_h, x, y, w, h):
     return int(left), int(top), int(crop_w), int(crop_h)
 
 
-def face_closeup(source, at, target, face_detector, window=1.5):
+def sample_times(at, window=1.5, start=None, end=None, spread=SPREAD):
+    """When to look for the cover's face: five moments within `window` seconds
+    of the poster moment `at`, plus `spread` moments evenly across the clip's
+    [start, end] in the recording (the middle of each equal slice, so never a
+    cut at either edge). Sorted, so the reader only seeks forward."""
+    times = {round(max(0.0, at + offset), 2) for offset in (-window, -window / 2, 0.0, window / 2, window)}
+    if start is not None and end is not None and end > start:
+        step = (end - start) / spread
+        times |= {round(max(0.0, start + step * (i + 0.5)), 2) for i in range(spread)}
+    return sorted(times)
+
+
+def face_score(face, frame_w, frame_h, sharpness):
+    """How well one detected face would guide a cover that must look like the
+    person: facing the camera, sharp, big and surely a face. `face` is a YuNet
+    row in the frame's pixels (x, y, w, h, right eye, left eye, nose tip,
+    right and left mouth corners, confidence); `sharpness` is face_sharpness().
+
+        score = size * sure * frontal * sharp, from 0 to 1
+
+    size: face width over the frame's short side, saturating at FULL_FACE
+    (square-rooted: a bigger face helps, but never outweighs a turned head).
+    sure: the detector's confidence above a coin flip, (c - 0.5) / 0.5; a hand
+    or the microphone across the face lowers it. frontal: the nose tip near
+    the midpoint of the eyes, the eyes level, and the eyes spread across the
+    face (a profile collapses them). sharp: the Laplacian variance v as
+    v / (v + SHARP_HALF). None for a face too small to keep a likeness or
+    turned too far away to show it: never the cover's face.
+
+    A smile bonus was tried on the sermon test footage and left out: the
+    mouth-corner width moves as much with speech as with a smile."""
+    w, h = float(face[2]), float(face[3])
+    rex, rey, lex, ley, nose_x = (float(v) for v in face[4:9])
+    confidence = float(face[14])
+    short = min(frame_w, frame_h)
+    if w <= 0 or h <= 0 or short <= 0 or w / short < MIN_FACE:
+        return None
+    eyes = math.hypot(lex - rex, ley - rey)
+    if eyes <= 0:
+        return None
+    turn = abs(nose_x - (rex + lex) / 2) / eyes
+    tilt = abs(ley - rey) / eyes
+    eye_spread = eyes / w
+    if turn > MAX_TURN or eye_spread < MIN_EYE_SPREAD:
+        return None
+    frontal = (1 - (turn / MAX_TURN) ** 2) * max(0.0, 1 - (tilt / MAX_TILT) ** 2) * min(1.0, eye_spread / FRONT_SPREAD)
+    size = math.sqrt(min(1.0, w / short / FULL_FACE))
+    sure = max(0.0, min(1.0, (confidence - 0.5) / 0.5))
+    sharp = max(0.0, sharpness) / (max(0.0, sharpness) + SHARP_HALF)
+    score = size * sure * frontal * sharp
+    return score if score > 0 else None
+
+
+def face_sharpness(frame, x, y, w, h):
+    """Variance of the Laplacian of the grey upper face (brows, eyes, top of
+    the nose: the top EYES_BAND of the box, so an open mouth's teeth don't
+    count as sharpness), scaled to SHARP_SIDE wide first so faces of
+    different sizes compare (a small face upscaled is soft, as it would be on
+    the cover). 0.0 for a box outside the frame."""
+    import cv2
+    full_h, full_w = frame.shape[:2]
+    left, top = max(0, int(x)), max(0, int(y))
+    right, bottom = min(full_w, int(math.ceil(x + w))), min(full_h, int(math.ceil(y + h * EYES_BAND)))
+    if right - left < 2 or bottom - top < 2:
+        return 0.0
+    grey = cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2GRAY)
+    factor = SHARP_SIDE / grey.shape[1]
+    grey = cv2.resize(grey, (SHARP_SIDE, max(2, round(grey.shape[0] * factor))),
+                      interpolation=cv2.INTER_AREA if factor < 1 else cv2.INTER_LINEAR)
+    return float(cv2.Laplacian(grey, cv2.CV_64F).var())
+
+
+def face_closeup(source, at, target, face_detector, window=1.5, start=None, end=None):
     """A head-and-shoulders close-up of the speaker from the recording, for
     designing a cover that looks like them (Kevin, 2026-10-06: "over 90
-    percent looks"). Of five frames within `window` seconds of `at`, it uses
-    the one whose face is largest and surest: more real face pixels for the
-    image model to keep. Crops about three face-widths wide, 4:5, and scales
-    small crops up to 1024 tall. Returns the face size in pixels, or None."""
+    percent looks"). It looks at the moments sample_times() gives (around the
+    poster moment `at` and across the clip's [start, end] in the recording),
+    takes the speaker as the largest face in each, and keeps the frame whose
+    face scores best on face_score(): facing the camera, sharp, big, sure.
+    Crops about three face-widths wide, 4:5, and scales small crops up to 1024
+    tall. Returns the face size in pixels, or None (no usable face: no file)."""
     import cv2
     cap = cv2.VideoCapture(str(source))
     best = None
     try:
-        for offset in (-window, -window / 2, 0.0, window / 2, window):
-            cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, at + offset) * 1000)
+        for moment in sample_times(at, window, start, end):
+            cap.set(cv2.CAP_PROP_POS_MSEC, moment * 1000)
             ok, frame = cap.read()
             if not ok:
                 continue
@@ -85,10 +172,11 @@ def face_closeup(source, at, target, face_detector, window=1.5):
             if faces is None or not len(faces):
                 continue
             face = max(faces, key=lambda f: f[2] * f[3])
-            x, y, w, h = (float(v) / scale for v in face[:4])
-            weight = w * h * float(face[-1])
-            if best is None or weight > best[0]:
-                best = (weight, frame, (x, y, w, h))
+            full = [float(v) / scale for v in face[:14]] + [float(face[14])]
+            x, y, w, h = full[:4]
+            score = face_score(full, width, height, face_sharpness(frame, x, y, w, h))
+            if score is not None and (best is None or score > best[0]):
+                best = (score, frame, (x, y, w, h))
     finally:
         cap.release()
     if best is None:
