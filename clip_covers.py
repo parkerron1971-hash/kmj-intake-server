@@ -285,14 +285,28 @@ async def subject_references(client, biz, row, user_id):
 _expression_pick = {}
 
 
-async def picture_b64(client, biz, image_id, side=640):
-    raw = await images.original(client, await images.artwork(client, biz['id'], image_id))
+def shrink_b64(raw, side):
     with Image.open(io.BytesIO(raw)) as im:
         im = im.convert('RGB')
         im.thumbnail((side, side))
         out = io.BytesIO()
         im.save(out, 'JPEG', quality=85)
     return base64.b64encode(out.getvalue()).decode()
+
+
+async def picture_b64(client, biz, image_id, side=640):
+    """A gallery picture as a small base64 JPEG. Decoding runs in a thread:
+    never on the event loop that serves every other request."""
+    raw = await images.original(client, await images.artwork(client, biz['id'], image_id))
+    return await asyncio.to_thread(shrink_b64, raw, side)
+
+
+def remember(cache, key, value, limit=500):
+    """A process cache that never grows without bound."""
+    if len(cache) >= limit:
+        cache.clear()
+    cache[key] = value
+    return value
 
 
 async def pick_expression(client, biz, title, close_ups):
@@ -332,8 +346,7 @@ async def pick_expression(client, biz, title, close_ups):
         return close_ups
     if not 0 <= pick < len(close_ups):
         return close_ups
-    _expression_pick[key] = [close_ups[pick]] + [c for i, c in enumerate(close_ups) if i != pick]
-    return _expression_pick[key]
+    return remember(_expression_pick, key, [close_ups[pick]] + [c for i, c in enumerate(close_ups) if i != pick])
 
 
 # -- the speaker photo (Kevin, 2026-10-06) ----------------------------------
@@ -384,11 +397,14 @@ async def speaker_reference(client, biz, row, clip_face_id):
         if not photo:
             return None
         key = (str(row['id']), photo.get('storage_path'))
-        if key not in _speaker_match:
+        score = _speaker_match.get(key)
+        if score is None:
             score = await asyncio.to_thread(likeness_score, await picture_b64(client, biz, clip_face_id, 1024),
                                             await picture_b64(client, biz, photo['id'], 1024))
-            _speaker_match[key] = score
-        score = _speaker_match[key]
+            # Only an answer is remembered: a clip service with a bad minute
+            # must not cost this clip its speaker photo until a restart.
+            if score is not None:
+                remember(_speaker_match, key, score)
     except Exception:
         # Best effort: a photo that cannot be read leaves the cover to the clip's own pictures.
         log.warning('Speaker photo could not be compared for clip %s', row['id'])
@@ -417,7 +433,8 @@ async def set_speaker_photo(business_id: UUID, body: SpeakerPhoto, session: User
     later never breaks covers. It must show a face."""
     async with httpx.AsyncClient(timeout=60) as client:
         biz = await images.business(client, business_id)
-        raw = images.normalize_image(await images.original(client, await images.artwork(client, biz['id'], body.image_id)))
+        raw = await asyncio.to_thread(images.normalize_image,
+                                      await images.original(client, await images.artwork(client, biz['id'], body.image_id)))
         picture = base64.b64encode(raw).decode()
         # The photo compared with itself: face_found says whether a face is in
         # it. When the clip service cannot answer the photo is kept; each
@@ -426,13 +443,16 @@ async def set_speaker_photo(business_id: UUID, body: SpeakerPhoto, session: User
         if reading is not None and not reading.get('face_found'):
             raise HTTPException(422, 'No face was found in that picture. Choose a clear photo of the speaker facing the camera.')
         image_id = speaker_id(biz['id'])
+        # A new file each time (the match cache keys on the path), and the row
+        # is pointed at it in one write: a failed save leaves the old photo in
+        # place. The old file stays in storage, like every gallery picture.
         path = f"{biz['id']}/speaker-{uuid4()}.png"
         await images.store(client, path, raw, 'image/png')
-        if await sb_clients.sb_as_service(client, 'DELETE', f"/image_artworks?id=eq.{image_id}&business_id=eq.{UUID(str(biz['id']))}") is None:
-            raise HTTPException(503, 'The speaker photo could not be saved. Try again.')
-        await images.db(client, 'POST', '/image_artworks', {
-            'id': image_id, 'business_id': str(biz['id']), 'owner_id': str(session.user.id), 'prompt': 'Speaker photo',
-            'status': 'ready', 'storage_path': path, 'cost_usd': 0}, server_write=True)
+        row = f"/image_artworks?id=eq.{image_id}&business_id=eq.{UUID(str(biz['id']))}"
+        if not await images.db(client, 'PATCH', row, {'status': 'ready', 'storage_path': path}, server_write=True):
+            await images.db(client, 'POST', '/image_artworks', {
+                'id': image_id, 'business_id': str(biz['id']), 'owner_id': str(session.user.id), 'prompt': 'Speaker photo',
+                'status': 'ready', 'storage_path': path, 'cost_usd': 0}, server_write=True)
         _speaker_match.clear()
         return {'ok': True, 'set': True, 'image': await images.present(client, await images.artwork(client, biz['id'], image_id))}
 

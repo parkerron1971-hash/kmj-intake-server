@@ -27,7 +27,7 @@ def clip(**configuration):
 @pytest.fixture
 def app(monkeypatch):
     s = SimpleNamespace(rows=[clip()], patched=[], designed=[], stored=[], posted=[], fetched=[], artworks=[], busy=set(),
-                        faces=False, extra=False, backfilled=[])
+                        faces=False, extra=False, backfilled=[], patched_rows=[])
     monkeypatch.setattr(cc.media_library, 'read', lambda path: list(s.rows))
     monkeypatch.setattr(cc, 'designing_now', lambda biz, clip_id: set(s.busy))
     monkeypatch.setattr(cc.sb_clients, 'sb_patch_as_service', lambda path, body: s.patched.append((path, body)) or [body])
@@ -36,6 +36,11 @@ def app(monkeypatch):
     async def db(client, method, path, body=None, **kw):
         if method == 'GET':
             return [a for a in s.artworks if a['id'] in path]
+        if method == 'PATCH':
+            hit = [a for a in s.artworks if a['id'] in path]
+            for a in hit:
+                a.update(body)
+            s.patched_rows.append((path, body)); return hit
         s.posted.append(body); s.artworks.append(body); return [body]
     monkeypatch.setattr(images, 'db', db)
     monkeypatch.setattr(images, 'store', AsyncMock(side_effect=lambda c, path, raw, mime: s.stored.append(path)))
@@ -652,6 +657,23 @@ def test_the_match_is_measured_once_per_clip(app, monkeypatch):
     assert len(compared) == 1
 
 
+def test_a_reading_that_failed_is_asked_again(app, monkeypatch):
+    """Review of #1297: a clip service with a bad minute is not an answer."""
+    app.faces = True
+    photo, compared = speaker(app, monkeypatch, score=None)
+    post(app)
+    monkeypatch.setattr(cc, 'likeness_score', lambda image, reference: compared.append((image, reference)) or 0.8)
+    post(app)
+    assert len(compared) == 2 and app.designed[1][1]['references'][0]['id'] == photo['id']
+
+
+def test_the_process_caches_stay_bounded():
+    cache = {}
+    for n in range(1200):
+        cc.remember(cache, n, n, limit=500)
+    assert len(cache) <= 500 and cache[1199] == 1199
+
+
 def test_with_a_style_picture_the_speaker_photo_one_close_up_and_the_frame_stay(app, monkeypatch):
     app.faces = app.extra = True
     photo, _ = speaker(app, monkeypatch)
@@ -693,9 +715,20 @@ def test_the_owner_saves_a_speaker_photo_as_a_copy(app, photo_api):
 
 def test_replacing_the_speaker_photo_keeps_one(app, photo_api):
     app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    first = app.stored[-1]
     app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
-    assert [a['id'] for a in app.artworks].count(cc.speaker_id(BIZ)) == 1
-    assert all(m == 'DELETE' and cc.speaker_id(BIZ) in p for m, p in photo_api.deleted)
+    rows = [a for a in app.artworks if a['id'] == cc.speaker_id(BIZ)]
+    assert len(rows) == 1 and rows[0]['storage_path'] == app.stored[-1] != first
+    # Pointed at the new file in one write, never deleted first.
+    assert photo_api.deleted == [] and app.patched_rows[-1][1] == {'status': 'ready', 'storage_path': app.stored[-1]}
+
+
+def test_a_failed_save_keeps_the_old_speaker_photo(app, photo_api, monkeypatch):
+    app.client.put(photo_api.url, json={'image_id': photo_api.chosen})
+    kept = app.stored[-1]
+    monkeypatch.setattr(images, 'store', AsyncMock(side_effect=HTTPException(502, 'The image could not be saved.')))
+    assert app.client.put(photo_api.url, json={'image_id': photo_api.chosen}).status_code == 502
+    assert [a['storage_path'] for a in app.artworks if a['id'] == cc.speaker_id(BIZ)] == [kept]
 
 
 def test_a_picture_without_a_face_is_refused(app, photo_api):
