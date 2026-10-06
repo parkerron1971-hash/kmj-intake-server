@@ -61,8 +61,21 @@ engine's own provider-reported cost breakdown; OpenRouter's bill is the authorit
 | `CLIPPER_JOB_SECONDS` | no | Default 3600. A job running longer is stopped. |
 | `CLIPPER_RESULT_TTL` | no | Default 7200. Finished jobs are forgotten after this. |
 
-On Railway: a service built from this repo with config file
-`clipper_worker/railway.toml`. Give it room: 8 vCPU / 8 GB is plenty for one job.
+On Railway: the `solutionist-clipper` service, connected to this repo's `main`
+with **Root Directory `/clipper_worker`**. The Dockerfile builds from this
+folder, so the backend's `railway.toml` and `nixpacks.toml` at the repo root are
+never read; connected without a root directory, the service picked them up and
+started building the API (2026-10-06). **Watch Paths `/clipper_worker/**`**, so a
+merge that only touches the API never restarts a running job, and a `/health`
+healthcheck, so a broken build never replaces a working one. Config as Code is
+deprecated and ignored for this service: `railway.toml` here records the
+dashboard settings. Give it room: 8 vCPU / 8 GB is plenty for one job.
+
+A merge to `main` that touches this folder deploys it. By hand, only if
+needed: check `/health` says `busy: false`, stage the folder keeping its name
+(`git archive origin/main clipper_worker | tar -x -C C:/Users/kmccl/clipper-deploy`;
+the root directory applies to CLI uploads too), then
+`railway up C:/Users/kmccl/clipper-deploy --path-as-root --ci -s solutionist-clipper -e production`.
 
 ## The vendored engine (`vendor/bridgeclip/`)
 

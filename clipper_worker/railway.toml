@@ -1,7 +1,16 @@
+# The clip service's Railway settings. Railway's Config as Code is deprecated
+# and this service cannot opt in (2026-08-28), so these values are set in the
+# dashboard and kept here as the record (solutionist-clipper, Settings):
+#   Source         repo parkerron1971-hash/kmj-intake-server, branch main
+#   Root Directory /clipper_worker   (the backend's root railway.toml and
+#                                     nixpacks.toml must never be read)
+#   Watch Paths    /clipper_worker/** (an API-only merge must not restart a job)
+#   Builder        Dockerfile, found at the root directory
+#   Healthcheck    /health, 120 s
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "clipper_worker/Dockerfile"
-watchPatterns = ["clipper_worker/**"]
+dockerfilePath = "Dockerfile"
+watchPatterns = ["/clipper_worker/**"]
 
 [deploy]
 startCommand = "python -m clipper_worker.service"

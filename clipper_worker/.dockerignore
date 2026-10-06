@@ -1,0 +1,9 @@
+# The build context is this folder (the service's Root Directory), so the
+# repo's own .dockerignore does not apply here.
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.env*
+output
+*.mp4
+*.wav

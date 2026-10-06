@@ -707,3 +707,20 @@ def test_several_close_ups_come_back_best_first(client, monkeypatch):
     assert response.status_code == 200 and [base64.b64decode(f['jpeg_b64']) for f in faces] == [b'f2', b'f1']
     assert faces[0]['size'] == [80, 100]
     assert client.post('/faces', json={'source_url': SOURCE, 'start': 0, 'end': 30, 'count': 4}, headers=AUTH).status_code == 422
+
+
+# -- the build (2026-10-06) ------------------------------------------------
+
+def test_the_image_builds_from_inside_its_own_folder():
+    """The service's Railway Root Directory is clipper_worker/: the backend's
+    railway.toml and nixpacks.toml at the repo root must never be in reach.
+    Connected without it, the service started building the API."""
+    from pathlib import Path
+    here = Path(svc.__file__).parent
+    dockerfile = (here / 'Dockerfile').read_text(encoding='utf-8')
+    sources = [line.split()[1] for line in dockerfile.splitlines()
+               if line.startswith('COPY ') and '--from=' not in line]
+    assert sources and all(not s.startswith('clipper_worker') for s in sources)
+    assert (here / '.dockerignore').exists()
+    toml = (here / 'railway.toml').read_text(encoding='utf-8')
+    assert 'dockerfilePath = "Dockerfile"' in toml and '/clipper_worker' in toml
