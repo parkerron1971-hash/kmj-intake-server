@@ -27,7 +27,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from clipper_worker import empty_spots
@@ -48,6 +48,9 @@ ENGINE_ENV_KEEP = ('PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'L
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 log = logging.getLogger('clipper')
 lock = threading.Lock()
+# POST /faces runs beside a job; two at a time keeps it from crowding one.
+FACE_SLOTS = 2
+face_slots = threading.BoundedSemaphore(FACE_SLOTS)
 jobs = {}
 
 
@@ -77,6 +80,15 @@ class JobRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_url: str = Field(max_length=4096)
     options: Options = Field(default_factory=Options)
+
+
+class FaceRequest(BaseModel):
+    """A face close-up for a clip made before close-ups existed: the clip's
+    stretch of the recording (or the clip itself), read over the network."""
+    model_config = ConfigDict(extra='forbid')
+    source_url: str = Field(max_length=4096)
+    start: float = Field(ge=0, le=MAX_SOURCE_SECONDS)
+    end: float = Field(gt=0, le=MAX_SOURCE_SECONDS)
 
 
 class JobError(Exception):
@@ -465,6 +477,35 @@ def start(job_id: UUID, request: JobRequest):
         lock.release()
         raise
     return {'accepted': True}
+
+
+@app.post('/faces', dependencies=[Depends(authorized)])
+def faces(request: FaceRequest):
+    """The best face in [start, end] of the video at source_url, as a JPEG
+    close-up (the same picker and crop as a clip run's clip_NN_face.jpg).
+    404 when no usable face is there. Runs beside a job: its own detector,
+    its own temporary folder, nothing kept."""
+    if not source_allowed(request.source_url):
+        raise HTTPException(422, 'Source link not allowed')
+    if request.end <= request.start:
+        raise HTTPException(422, 'The end must come after the start')
+    # At most FACE_SLOTS at once beside a job: a sync endpoint uses the threadpool.
+    if not face_slots.acquire(timeout=5):
+        raise HTTPException(503, 'Busy making close-ups; try again')
+    try:
+        with tempfile.TemporaryDirectory(prefix='clipper-face-') as folder:
+            target = Path(folder) / 'face.jpg'
+            try:
+                frames = empty_spots.remote_frames(request.source_url, request.start, min(request.end, request.start + 600), folder)
+            except empty_spots.FramesUnreadable as error:
+                # Not a verdict on the clip: the caller may ask again.
+                raise HTTPException(502, str(error)) from None
+            size = empty_spots.pick_closeup(frames, target, empty_spots.detector())
+            if not size or not target.is_file():
+                raise HTTPException(404, 'No usable face in that stretch')
+            return Response(content=target.read_bytes(), media_type='image/jpeg', headers={'X-Face-Size': f'{size[0]}x{size[1]}'})
+    finally:
+        face_slots.release()
 
 
 @app.get('/jobs/{job_id}', dependencies=[Depends(authorized)])

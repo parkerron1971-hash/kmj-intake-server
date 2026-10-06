@@ -8,6 +8,7 @@ of at least MIN_GAP seconds with no face, so the review screen can say
 flagged 5 of 16 clips and every flagged spot was a real empty stage.
 """
 import math
+import subprocess
 from pathlib import Path
 
 FPS = 4
@@ -157,28 +158,69 @@ def face_closeup(source, at, target, face_detector, window=1.5, start=None, end=
     tall. Returns the face size in pixels, or None (no usable face: no file)."""
     import cv2
     cap = cv2.VideoCapture(str(source))
-    best = None
-    try:
+
+    def frames():
         for moment in sample_times(at, window, start, end):
             cap.set(cv2.CAP_PROP_POS_MSEC, moment * 1000)
             ok, frame = cap.read()
-            if not ok:
-                continue
-            height, width = frame.shape[:2]
-            scale = min(1.0, 640 / width)
-            small = cv2.resize(frame, (round(width * scale), round(height * scale))) if scale < 1 else frame
-            face_detector.setInputSize((small.shape[1], small.shape[0]))
-            _, faces = face_detector.detect(small)
-            if faces is None or not len(faces):
-                continue
-            face = max(faces, key=lambda f: f[2] * f[3])
-            full = [float(v) / scale for v in face[:14]] + [float(face[14])]
-            x, y, w, h = full[:4]
-            score = face_score(full, width, height, face_sharpness(frame, x, y, w, h))
-            if score is not None and (best is None or score > best[0]):
-                best = (score, frame, (x, y, w, h))
+            if ok:
+                yield frame
+    try:
+        return pick_closeup(frames(), target, face_detector)
     finally:
         cap.release()
+
+
+class FramesUnreadable(Exception):
+    """The video could not be read (an expired or bad link, a network blip,
+    an unreadable file): never the same as "no face in it"."""
+
+
+READ_SECONDS = 60
+
+
+def remote_frames(url, start, end, folder, count=SPREAD):
+    """`count` frames spread across [start, end] of a video at `url`, read by
+    ffmpeg over the network: it seeks with range requests, so only that
+    stretch of the recording is fetched, never the whole file. Returns BGR
+    frames; raises FramesUnreadable when ffmpeg fails or reads none."""
+    length = max(0.5, float(end) - float(start))
+    try:
+        done = subprocess.run(['ffmpeg', '-nostdin', '-loglevel', 'error', '-ss', f'{max(0.0, float(start)):.3f}', '-t', f'{length:.3f}',
+                               '-i', url, '-vf', f'fps={count / length:.6f}', '-frames:v', str(count), '-q:v', '2',
+                               str(Path(folder) / 'frame_%03d.jpg')], capture_output=True, timeout=READ_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise FramesUnreadable('Reading the video took too long.') from None
+    paths = sorted(Path(folder).glob('frame_*.jpg'))
+    if done.returncode != 0 or not paths:
+        raise FramesUnreadable('The video could not be read.')
+    import cv2
+    frames = [frame for frame in (cv2.imread(str(path)) for path in paths) if frame is not None]
+    if not frames:
+        raise FramesUnreadable('The video could not be read.')
+    return frames
+
+
+def pick_closeup(frames, target, face_detector):
+    """The best face among `frames` (the speaker is the largest face in each,
+    scored by face_score), cropped by closeup_box, scaled up to 1024 tall and
+    written to `target` as JPEG. Returns the face size in pixels, or None."""
+    import cv2
+    best = None
+    for frame in frames:
+        height, width = frame.shape[:2]
+        scale = min(1.0, 640 / width)
+        small = cv2.resize(frame, (round(width * scale), round(height * scale))) if scale < 1 else frame
+        face_detector.setInputSize((small.shape[1], small.shape[0]))
+        _, faces = face_detector.detect(small)
+        if faces is None or not len(faces):
+            continue
+        face = max(faces, key=lambda f: f[2] * f[3])
+        full = [float(v) / scale for v in face[:14]] + [float(face[14])]
+        x, y, w, h = full[:4]
+        score = face_score(full, width, height, face_sharpness(frame, x, y, w, h))
+        if score is not None and (best is None or score > best[0]):
+            best = (score, frame, (x, y, w, h))
     if best is None:
         return None
     _, frame, (x, y, w, h) = best

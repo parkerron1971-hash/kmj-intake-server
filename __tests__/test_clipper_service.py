@@ -571,3 +571,78 @@ def test_the_close_up_crops_the_best_scoring_frame_at_full_resolution(tmp_path, 
     # closeup_box(1280, 720, 900, 150, 100, 130) = (800, 33, 300, 375), scaled up to 1024 tall.
     assert svc.empty_spots.closeup_box(1280, 720, 900, 150, 100, 130) == (800, 33, 300, 375)
     assert written == [(str(target), 'best', (800, 33, 300, 375), (1024, 819), [1, 92])]
+
+
+# -- a close-up on demand, for clips made before close-ups (2026-10-06) --
+
+def test_a_face_close_up_is_made_on_demand_from_a_stretch_of_the_recording(client, monkeypatch):
+    asked = []
+
+    def frames(url, start, end, folder, count=14):
+        asked.append((url, start, end, count))
+        yield 'frame'
+    monkeypatch.setattr(svc.empty_spots, 'remote_frames', frames)
+    monkeypatch.setattr(svc.empty_spots, 'detector', lambda: 'detector')
+
+    def pick(found, target, detector):
+        assert list(found) == ['frame'] and detector == 'detector'
+        target.write_bytes(b'\xff\xd8face')
+        return (86, 120)
+    monkeypatch.setattr(svc.empty_spots, 'pick_closeup', pick)
+    response = client.post('/faces', json={'source_url': SOURCE, 'start': 291, 'end': 381}, headers=AUTH)
+    assert response.status_code == 200 and response.headers['content-type'] == 'image/jpeg'
+    assert response.content == b'\xff\xd8face' and response.headers['x-face-size'] == '86x120'
+    assert asked == [(SOURCE, 291, 381, 14)]
+
+
+def test_a_stretch_with_no_usable_face_is_a_404(client, monkeypatch):
+    monkeypatch.setattr(svc.empty_spots, 'remote_frames', lambda *a, **k: iter(()))
+    monkeypatch.setattr(svc.empty_spots, 'detector', lambda: None)
+    monkeypatch.setattr(svc.empty_spots, 'pick_closeup', lambda frames, target, det: None)
+    assert client.post('/faces', json={'source_url': SOURCE, 'start': 0, 'end': 30}, headers=AUTH).status_code == 404
+
+
+def test_the_face_endpoint_guards_like_a_job(client, monkeypatch):
+    monkeypatch.setattr(svc.empty_spots, 'remote_frames', lambda *a, **k: pytest.fail('read before the checks'))
+    body = {'source_url': SOURCE, 'start': 0, 'end': 30}
+    assert client.post('/faces', json=body).status_code == 401
+    assert client.post('/faces', json=dict(body, source_url='https://evil.example.com/a.mp4'), headers=AUTH).status_code == 422
+    assert client.post('/faces', json=dict(body, start=40), headers=AUTH).status_code == 422
+    assert client.post('/faces', json=dict(body, extra=1), headers=AUTH).status_code == 422
+
+
+def test_remote_frames_reads_only_the_stretch_and_says_when_it_cannot(monkeypatch, tmp_path):
+    """A failed read is not "no face": it raises, and /faces answers 502, which the API never remembers."""
+    ran = []
+
+    def run(args, capture_output, timeout):
+        ran.append(args)
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr(svc.empty_spots.subprocess, 'run', run)
+    with pytest.raises(svc.empty_spots.FramesUnreadable):
+        svc.empty_spots.remote_frames(SOURCE, 291.0, 381.0, tmp_path, count=14)
+    args = ran[0]
+    assert args[args.index('-ss') + 1] == '291.000' and args[args.index('-t') + 1] == '90.000'
+    assert args[args.index('-i') + 1] == SOURCE and args[args.index('-frames:v') + 1] == '14'
+
+
+def test_a_read_that_produced_no_frames_is_unreadable_too(monkeypatch, tmp_path):
+    monkeypatch.setattr(svc.empty_spots.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=0))
+    with pytest.raises(svc.empty_spots.FramesUnreadable):
+        svc.empty_spots.remote_frames(SOURCE, 0.0, 30.0, tmp_path)
+
+
+def test_an_unreadable_video_is_a_502_not_a_no_face_404(client, monkeypatch):
+    def broken(*a, **k):
+        raise svc.empty_spots.FramesUnreadable('The video could not be read.')
+    monkeypatch.setattr(svc.empty_spots, 'remote_frames', broken)
+    response = client.post('/faces', json={'source_url': SOURCE, 'start': 0, 'end': 30}, headers=AUTH)
+    assert response.status_code == 502 and response.json()['detail'] == 'The video could not be read.'
+
+
+def test_close_ups_wait_their_turn_beside_a_job(client, monkeypatch):
+    monkeypatch.setattr(svc, 'face_slots', svc.threading.BoundedSemaphore(1))
+    svc.face_slots.acquire()
+    monkeypatch.setattr(svc.face_slots, 'acquire', lambda timeout=None: False)
+    response = client.post('/faces', json={'source_url': SOURCE, 'start': 0, 'end': 30}, headers=AUTH)
+    assert response.status_code == 503
