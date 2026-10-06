@@ -70,6 +70,30 @@ def test_cover_the_verb_is_not_a_cover():
     assert design_noun('Make sure it covers all the details', None, '') == 'flyer'
 
 
+@pytest.mark.parametrize('goal,size,noun', [
+    # A door charge, not a design: named by the shape.
+    ('Saturday party, cover charge $10, bold', None, 'flyer'),
+    ('Saturday party, cover charge $10, bold', '1024x1536', 'flyer'),
+    ('Saturday party, cover charge $10, bold', '1920x1088', 'graphic'),
+    ('Saturday party, $10 cover at the door, bold', None, 'flyer'),
+    ('Saturday party, no cover before 10, bold', None, 'flyer'),
+    ('Jazz night with a cover band, bold', None, 'flyer'),
+    ('Fall cookout, cover-charge $5', '1024x1024', 'graphic'),
+    # A picture to use, not the thing to make.
+    ('Use the cover photo of the venue behind the headline', None, 'flyer'),
+    ('Open house, cover image from our website in the background, then a poster layout', None, 'poster'),
+    # Other non-design uses of the same words.
+    ('Our poster child for the fundraiser, bold', None, 'flyer'),
+    ('Celebrating a banner year for the youth group', '1024x1024', 'graphic'),
+    # Still a cover when it is the thing to make.
+    ('A Facebook cover photo for the church', '1920x1088', 'cover'),
+    ('Album cover art for the choir', '1024x1024', 'cover'),
+    ('A cover for this clip', '1088x1920', 'cover'),
+])
+def test_a_cover_charge_is_not_a_cover(goal, size, noun):
+    assert design_noun(goal, size, '') == noun
+
+
 def test_the_noun_never_reaches_a_machine_key():
     o = thumbnail_order()
     assert o.kind == 'flyer'
@@ -154,6 +178,24 @@ def test_the_step_line_names_the_design_while_it_starts():
     assert chief._humanize_actions([{'type': 'design_flyer', 'goal': GOAL}]) == 'designing your thumbnail'
 
 
+def test_a_broken_name_is_logged_and_never_falls_back_to_the_verb(monkeypatch, caplog):
+    def broken(action):
+        raise KeyError('kind')
+    monkeypatch.setattr(runtime, 'starting_phrase', broken)
+    action = {'type': 'submit_work_order', 'kind': 'flyer', 'facts': {'prompt': GOAL}}
+    with caplog.at_level('WARNING', logger='chief_of_staff'):
+        line = chief._step_phrase('submit_work_order', action)
+        status = chief._humanize_actions([action])
+    assert line == 'Starting the work' and status == 'starting the work'
+    warned = [r for r in caplog.records if 'step phrase for submit_work_order failed' in r.getMessage()]
+    assert len(warned) == 2 and 'KeyError' in warned[0].getMessage()
+    import chief_code
+    monkeypatch.setattr(chief_code, 'design_noun', lambda *a: 1 / 0)
+    with caplog.at_level('WARNING', logger='chief_of_staff'):
+        assert chief._step_phrase('design_flyer', {'goal': GOAL}) == 'Starting the design'
+    assert any('step phrase for design_flyer failed' in r.getMessage() for r in caplog.records)
+
+
 # ── Said once ────────────────────────────────────────────────────────────
 
 def _submit(monkeypatch, payload, words=ASK):
@@ -218,3 +260,91 @@ def test_a_refused_start_still_says_why(monkeypatch):
     reply, _ = asyncio.run(chief_truth.finalize_reply(
         None, '', ctx={}, view_detail='', taken=[out], message=ASK, business_id=BIZ, reviewer=None))
     assert reply == out['label']
+
+
+# ── Said once when the reply did other things too ────────────────────────
+
+TASK = {'type': 'create_task', 'result': 'added', 'label': 'Task: Call Ada about Sunday'}
+
+
+def _started(monkeypatch):
+    return _submit(monkeypatch, {'type': 'submit_work_order', 'kind': 'flyer',
+                                 'facts': {'prompt': GOAL, 'exact_copy': ['Sunday 10 AM'], 'size': '1920x1088'}})
+
+
+def test_a_job_and_a_task_in_one_reply_still_say_they_can_leave(monkeypatch):
+    job = _started(monkeypatch)
+    taken = [job, TASK]
+    reply = "I added a task to call Ada about Sunday. Started your thumbnail."
+    review = json.dumps({'verdict': 'supported', 'claims': [
+        {'text': 'I added a task to call Ada about Sunday', 'kind': 'action', 'source_id': 'result:1',
+         'quote': 'Task: Call Ada about Sunday'},
+        {'text': 'Started your thumbnail', 'kind': 'action', 'source_id': 'result:0',
+         'quote': 'Started your thumbnail'}]})
+
+    async def reviewer(*a, **k):
+        return review
+    text, _ = asyncio.run(chief_truth.finalize_reply(
+        None, reply, ctx={}, view_detail='', taken=taken, message=ASK, business_id=None,
+        reviewer=reviewer, repairer=None, budget_s=20.0))
+    assert text.count('You can leave this chat') == 1
+    assert text.rstrip().endswith(runtime.QUEUED_LABEL)
+    assert 'Ada' in text
+
+
+def test_a_failed_task_beside_a_started_job_says_both(monkeypatch):
+    job = _started(monkeypatch)
+    failed = {'type': 'create_task', 'failed': True, 'result': 'Failed: no title', 'label': 'Task'}
+    text, grounding = asyncio.run(chief_truth.finalize_reply(
+        None, 'Done.', ctx={}, view_detail='', taken=[job, failed], message=ASK, business_id=None,
+        reviewer=None, repairer=None, budget_s=20.0))
+    assert grounding['status'] == 'receipts'
+    assert text.count('You can leave this chat') == 1
+
+
+def test_a_reply_that_already_told_them_is_not_told_twice():
+    job = {'type': 'submit_work_order', 'label': 'Started your thumbnail', 'result': 'Started your thumbnail',
+           'say': runtime.QUEUED_LABEL}
+    told = "Started your thumbnail. You can leave this chat and I'll tell you here."
+    assert chief_truth.with_job_sentences(told, [job, TASK]) == told
+    assert chief_truth.with_job_sentences('Added the task.', [job, TASK]).endswith(runtime.QUEUED_LABEL)
+    assert chief_truth.with_job_sentences('Added the task.', [TASK]) == 'Added the task.'
+    assert chief_truth.with_job_sentences(None, [TASK]) is None
+
+
+def test_the_model_reads_the_sentence_in_the_tool_result(monkeypatch):
+    # Native tool turns: chief_tool_loop hands the model the receipt it
+    # shrank, so `say` (what to tell the owner) reaches the model.
+    import chief_tool_loop as ctl
+    monkeypatch.setenv('CHIEF_BUILDS', 'on')
+
+    async def door(client, biz, actions, user_id=None, prior_results=None, surface='chat', prompted=True):
+        return [await runtime.handle_submit_work_order(client, biz, actions[0])]
+    monkeypatch.setattr(chief, '_execute_actions', door)
+
+    async def database(client, method, path, body=None):
+        return [{'id': BIZ, 'owner_id': USER}] if path.startswith('/businesses') else []
+
+    async def service(client, method, path, body=None):
+        return [{**body, 'build_revision': 0}]
+    import sb_clients
+    monkeypatch.setattr(runtime, 'db', database)
+    monkeypatch.setattr(sb_clients, 'sb_as_service', service)
+    monkeypatch.setattr(runtime, 'launch', lambda job: None)
+
+    async def main():
+        ctl.reset_turn(writes_allowed=True)
+        token = runtime.turn_scope.set({'user_id': USER, 'turn_id': 't-tool', 'surface': 'desktop', 'words': ASK})
+        try:
+            out = await ctl.execute_tool_use(None, {'id': BIZ}, 'submit_work_order',
+                                             {'kind': 'flyer', 'facts': {'prompt': GOAL, 'exact_copy': ['Sunday']}})
+            # The full receipt, say included, is what the turn keeps for its reply.
+            return out, list(ctl.writes_this_turn())
+        finally:
+            runtime.turn_scope.reset(token)
+    (is_error, text), kept = asyncio.run(main())
+    assert not is_error
+    seen = json.loads(text)
+    assert seen['say'] == runtime.QUEUED_LABEL and seen['label'] == 'Started your thumbnail'
+    assert seen['result'] == 'Started your thumbnail' and seen['for_chief']
+    assert kept[-1]['say'] == runtime.QUEUED_LABEL

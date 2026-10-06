@@ -34,10 +34,26 @@ def flyer_verb():
 # but a YouTube thumbnail called "your flyer" reads as the wrong job (live
 # 2026-10-06, Church: "All done with your flyer" for a thumbnail).
 _DESIGN_NOUN = re.compile(
-    r'\b(?:(?P<thumbnail>thumb\s?nails?)'
-    # "a cover", "cover image", not "covers the costs"
-    r'|(?P<cover>covers?)(?!\s+(?:the|a|an|all|it|its|this|that|these|those|your|our|my|their|every)\b)'
+    r'\b(?:(?P<thumbnail>thumb\s?nails?)|(?P<cover>covers?)'
     r'|(?P<poster>posters?)|(?P<banner>banners?)|(?P<flyer>fl[yi]ers?))\b', re.I)
+# The same words when they are not a design: "covers the costs", "cover
+# charge $10", "$10 cover", "the cover photo of the venue" (a picture to
+# use, not the thing to make), "poster child", "a banner year".
+_NOT_A_DESIGN = {
+    'cover': (re.compile(r'[\s-]+(?:(?:the|a|an|all|it|its|this|that|these|those|your|our|my|their|every)\b'
+                         r'|(?:charges?|fees?|prices?|costs?|bands?|songs?|versions?|letters?|stor(?:y|ies)|crops?|up|over)\b'
+                         r'|(?:photo|image|picture|shot)s?\s+(?:of|from)\b)', re.I),
+              re.compile(r'(?:\bno|\$\s?\d[\d.,]*|\b\d+\s+dollars?|\bunder|\btake)\s+$', re.I)),
+    'poster': (re.compile(r'[\s-]+(?:child|children|boy|girl)\b', re.I), None),
+    'banner': (re.compile(r'[\s-]+(?:year|day|week|month)s?\b', re.I), None),
+}
+
+
+def _names_a_design(text, found):
+    after, before = _NOT_A_DESIGN.get(found.lastgroup, (None, None))
+    if after and after.match(text, found.end()):
+        return False
+    return not (before and before.search(text[:found.start()]))
 _YOUTUBE = re.compile(r'\byou\s?tube\b', re.I)
 _GRAPHIC = re.compile(r'\b(?:graphics?|social(?:\s+media)?\s+(?:post|image)|(?:instagram|facebook|ig)\s+(?:post|story))\b', re.I)
 
@@ -51,9 +67,9 @@ def design_noun(goal='', size=None, owner_request=''):
     anything else a graphic. Never a machine key: only words people read."""
     for text in (goal, owner_request):
         text = str(text or '')
-        found = _DESIGN_NOUN.search(text)
-        if found:
-            return found.lastgroup
+        for found in _DESIGN_NOUN.finditer(text):
+            if _names_a_design(text, found):
+                return found.lastgroup
         if _YOUTUBE.search(text):
             return 'thumbnail'
         if _GRAPHIC.search(text):

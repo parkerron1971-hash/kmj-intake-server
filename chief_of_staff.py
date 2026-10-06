@@ -356,6 +356,10 @@ _ACTION_PHRASES = {
     "create_contact": "adding the contact",
     "create_booking": "booking it",
     "draft_email": "writing the email",
+    # Fallbacks when the named line cannot be made (_design_step_phrase):
+    # never the verb ("Design flyer", "Submit work order").
+    "design_flyer": "starting the design",
+    "submit_work_order": "starting the work",
 }
 
 
@@ -403,7 +407,10 @@ def _design_step_phrase(atype: str, action: Optional[Dict[str, Any]]) -> Optiona
         if atype == "submit_work_order":
             import chief_build_runtime
             return chief_build_runtime.starting_phrase(action)
-    except Exception:
+    except Exception as e:
+        # Never break a step line over a name; say so, so a slide back to
+        # the plain phrase is visible in the logs.
+        logger.warning("step phrase for %s failed: %s: %s", atype, type(e).__name__, e)
         return None
     return None
 
