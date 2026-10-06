@@ -581,6 +581,9 @@ from media_library_router import router as media_library_router
 app.include_router(media_library_router)
 from clip_covers import router as clip_covers_router
 app.include_router(clip_covers_router)
+# Post an approved clip with its cover to the connected accounts (owner only).
+from clip_posting import router as clip_posting_router
+app.include_router(clip_posting_router)
 from video_studio_router import router as video_studio_router
 app.include_router(video_studio_router)
 app.include_router(practitioner_profile_router)

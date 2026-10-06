@@ -11,6 +11,8 @@ Post or Schedule on exactly this caption, these photos and these
 accounts. What they approved is fingerprinted (approved_hash) and kept
 with who approved it. Nothing here posts on its own; Chief and the weekly
 plan will come through the same door with their own approval step.
+An approved video clip with its cover (Grow → Video Clips, clip_posting.py)
+already does: it runs its own checks, then send_post below.
 
 Each post is checked before it leaves: every target is one of THIS
 business's connected accounts; Instagram needs a photo or video; TikTok
@@ -25,11 +27,12 @@ error.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -185,39 +188,92 @@ async def publish(business_id: str, body: PublishBody,
     targets = _targets(business_id, body.connection_ids)
     _check(caption, media, targets)
     scheduled_at = _schedule(body.scheduled_at)
+    row, _ = await send_post(business_id, str(session.user.id), caption=caption, media=media,
+                             targets=targets, scheduled_at=scheduled_at,
+                             approved_hash=_fingerprint(caption, media, targets, scheduled_at))
+    return {"ok": True, "publication": _public(row)}
+
+
+REFUSED = "The posting service didn't accept the post. Nothing went out; try again in a minute."
+
+
+def _publication(business_id: str, publication_id: str) -> Optional[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/social_publications?id=eq.{quote(publication_id)}&business_id=eq.{business_id}"
+        f"&select={_SELECT}&limit=1") or []
+    return rows[0] if rows else None
+
+
+async def send_post(business_id: str, approved_by: str, *, caption: str,
+                    media: List[Dict[str, Any]], targets: List[Dict[str, Any]],
+                    scheduled_at: Optional[str], approved_hash: str,
+                    provider_media: Optional[List[Any]] = None,
+                    platform_configurations: Optional[Dict[str, Any]] = None,
+                    publication_id: Optional[str] = None) -> Tuple[Dict[str, Any], bool]:
+    """The one door every post goes through, once its checks have passed:
+    the daily cap, the record of what was approved and by whom, the hand-off
+    with OUR row id as external_id, and a refused hand-off recorded as
+    failed, never as sent. Returns (row, sent_now).
+
+    `media` is what the record keeps and shows; `provider_media` is what the
+    posting service fetches (each media url when left out), so a caller can
+    hand over a short-lived link without keeping it. With publication_id (a
+    caller's idempotency key), a post that already has that id is returned
+    as it is, never sent twice: (row, False); one whose hand-off was refused
+    answers as refused again."""
+    if publication_id:
+        existing = await asyncio.to_thread(_publication, business_id, publication_id)
+        if existing:
+            if existing.get("status") == "failed":
+                raise HTTPException(502, REFUSED)
+            return existing, False
 
     since = (_now() - timedelta(days=1)).isoformat().replace("+", "%2B")
-    today = sb_clients.sb_get_as_service(
+    today = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
         f"/social_publications?business_id=eq.{business_id}&created_at=gte.{since}"
-        f"&status=neq.failed&select=id&limit={POSTS_PER_DAY_CAP + 1}") or []
+        f"&status=neq.failed&select=id&limit={POSTS_PER_DAY_CAP + 1}")
+    if today is None:
+        # A failed read is not "no posts today": the cap must hold.
+        raise HTTPException(503, "Couldn't check today's posts. Nothing was sent; try again in a minute.")
     if len(today) >= POSTS_PER_DAY_CAP:
         raise HTTPException(429, f"That's {POSTS_PER_DAY_CAP} posts in a day. Try again tomorrow.")
 
-    created = sb_clients.sb_post_as_service("/social_publications", {
+    record = {
         "business_id": business_id, "caption": caption, "media": media,
         "targets": targets, "status": "scheduled" if scheduled_at else "posting",
-        "scheduled_at": scheduled_at, "approved_by": str(session.user.id),
-        "approved_hash": _fingerprint(caption, media, targets, scheduled_at),
-    })
+        "scheduled_at": scheduled_at, "approved_by": approved_by,
+        "approved_hash": approved_hash,
+    }
+    if publication_id:
+        record["id"] = publication_id
+    created = await asyncio.to_thread(sb_clients.sb_post_as_service, "/social_publications", record)
     row = (created or [None])[0] if isinstance(created, list) else created
+    if (not row or not row.get("id")) and publication_id:
+        # Two taps at once: the other one saved this id first and is sending it.
+        existing = await asyncio.to_thread(_publication, business_id, publication_id)
+        if existing:
+            return existing, False
     if not row or not row.get("id"):
         raise HTTPException(500, "Couldn't save the post. Nothing was sent.")
     try:
         sent = await post_for_me.create_post(
             caption=caption, account_ids=[t["provider_account_id"] for t in targets],
-            media_urls=[m["url"] for m in media], external_id=row["id"], scheduled_at=scheduled_at)
+            media_urls=provider_media if provider_media is not None else [m["url"] for m in media],
+            external_id=row["id"], scheduled_at=scheduled_at,
+            platform_configurations=platform_configurations)
     except post_for_me.PostForMeError:
-        sb_clients.sb_patch_as_service(f"/social_publications?id=eq.{row['id']}", {
+        await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}", {
             "status": "failed", "updated_at": _now().isoformat(),
             "results": [{"platform": None, "success": False,
                          "error": "The posting service didn't accept it."}]})
-        raise HTTPException(502, "The posting service didn't accept the post. Nothing went out; try again in a minute.")
-    sb_clients.sb_patch_as_service(f"/social_publications?id=eq.{row['id']}", {
+        raise HTTPException(502, REFUSED)
+    await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}", {
         "provider_post_id": sent["id"], "updated_at": _now().isoformat()})
     row["provider_post_id"] = sent["id"]
     logger.info("[social] %s %s to %d account(s)", business_id[:8],
                 "scheduled" if scheduled_at else "posting", len(targets))
-    return {"ok": True, "publication": _public(row)}
+    return row, True
 
 
 # ─── How it went ─────────────────────────────────────────────────────
