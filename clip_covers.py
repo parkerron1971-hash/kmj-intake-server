@@ -61,14 +61,15 @@ def clip_row(business_id, asset_id):
     return rows[0]
 
 
-async def frame_artwork(client, biz, row, user_id):
-    """The clean frame, copied once into the business's private image gallery,
-    so the Director treats it like any picture the owner uploaded."""
-    image_id = str(uuid5(UUID(media_library.key(row['id'])), 'cover-frame'))
+async def frame_artwork(client, biz, row, user_id, kind='frame'):
+    """The clean frame (or the face close-up, kind='face'), copied once into the
+    business's private image gallery, so the Director treats it like any
+    picture the owner uploaded."""
+    image_id = str(uuid5(UUID(media_library.key(row['id'])), f'cover-{kind}'))
     if await images.db(client, 'GET', f"/image_artworks?id=eq.{image_id}&business_id=eq.{UUID(str(biz['id']))}"):
         return image_id
     url = (os.environ.get('SUPABASE_URL', '').rstrip('/') + f'/storage/v1/object/{media_library.BUCKET}/'
-           + clip_finder.frame_path(row))
+           + (clip_finder.face_path(row) if kind == 'face' else clip_finder.frame_path(row)))
     response = await client.get(url, headers=storage_links.service_headers())
     if not response.is_success:
         raise HTTPException(502, 'The clip frame could not be loaded. Try again.')
@@ -77,7 +78,8 @@ async def frame_artwork(client, biz, row, user_id):
     await images.store(client, path, raw, 'image/png')
     await images.db(client, 'POST', '/image_artworks', {
         'id': image_id, 'business_id': str(biz['id']), 'owner_id': str(user_id),
-        'prompt': f"Clean frame: {row.get('name') or 'clip'}"[:180], 'status': 'ready', 'storage_path': path},
+        'prompt': f"{'Face close-up' if kind == 'face' else 'Clean frame'}: {row.get('name') or 'clip'}"[:180],
+        'status': 'ready', 'storage_path': path},
         server_write=True)
     return image_id
 
@@ -119,12 +121,18 @@ async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
         if not words:
             raise HTTPException(422, 'Say what the cover should read, or give the clip a title first.')
         frame_id = await frame_artwork(client, biz, row, session.user.id)
+        references = [{'id': frame_id, 'role': 'subject', 'use': 'The speaker on stage: pose, body and clothes. Keep their exact likeness.'}]
+        if (row.get('configuration') or {}).get('face'):
+            # The face close-up is the authority on the face and hair (likeness over 90%).
+            face_id = await frame_artwork(client, biz, row, session.user.id, kind='face')
+            references.insert(0, {'id': face_id, 'role': 'subject',
+                                  'use': 'Close-up of the same person: match this face, beard, hairline and hairstyle exactly.'})
         turn = images.turn_id.set(f'clip-cover:{asset_id}:{body.request_id}')
         index = images.turn_image_index.set(0)
         try:
             result = await creative_director.handle_design_flyer(client, biz, {
                 'goal': GOAL.format(title=row.get('name') or 'this clip'), 'exact_copy': words, 'size': body.size,
-                'references': [{'id': frame_id, 'role': 'subject', 'use': 'The speaker in this clip. Keep their exact likeness.'}],
+                'references': references,
                 'owner_request': 'Make a cover for this clip', 'clip_id': str(asset_id)})
         finally:
             images.turn_id.reset(turn)

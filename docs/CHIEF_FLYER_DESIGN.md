@@ -129,3 +129,20 @@ made before the clip service took frames (`configuration.frame` false) get a
 409 and keep their poster.
 
 `python -m pytest __tests__/test_clip_covers.py -q`
+
+## Likeness (2026-10-06)
+
+Kevin: a cover of a real person must look "over 90 percent" like them; letters
+partly covered by the person are fine (a graphic device). So:
+
+- The clip service saves a head-and-shoulders close-up from the recording with
+  each clip (`clip_NN_face.jpg` → `<clip>-face.jpg`, `configuration.face`): of
+  five frames within 1.5 s of the poster moment, the one with the largest,
+  surest face, cropped ~3 face-widths at 4:5 and scaled to 1024 tall.
+- Make cover sends the close-up first ("match this face, beard, hairline and
+  hairstyle exactly") and the stage frame second (pose, body, clothes).
+- With subject photos, the render prompt adds LIKENESS FIRST, the planner plans
+  for likeness, and the checker sees the subject photos and judges
+  `likeness_match`; a miss is repaired once (the one-repair ceiling stays, so a
+  design always comes out). The checker no longer reports overlapped letters.
+- `input_fidelity: "high"` is rejected by GPT Image 2.5 (`invalid_input_fidelity_model`).

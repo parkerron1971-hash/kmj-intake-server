@@ -419,3 +419,40 @@ def test_a_clip_cover_design_names_its_clip(monkeypatch):
     with pytest.raises(HTTPException) as bad:
         run(d.prepare_for_business(None, {'id': BIZ}, req, owner_request='x', clip_id='not-a-clip'))
     assert bad.value.status_code == 422
+
+
+# ── Likeness (Kevin, 2026-10-06: "we want over 90 percent looks") ────────
+
+def test_a_person_who_does_not_look_like_their_photo_is_repaired():
+    from creative_director_models import Review
+    ok = Review(observed_text='FEELINGS LIE', reference_match=True, readable=True, composition_coherent=True, brand_assets_clean=True)
+    spec = {'copy': ['Feelings Lie']}
+    assert d.review_verdict(ok, spec)['passed']
+    off = ok.model_copy(update={'likeness_match': False})
+    verdict = d.review_verdict(off, spec)
+    assert not verdict['passed'] and any('face and hair' in i for i in verdict['issues'])
+
+
+def test_drawing_with_a_subject_photo_puts_likeness_first():
+    from creative_director_models import Plan
+    plan = Plan(concept='Bold', reference_analysis='Speaker', typography='Condensed', composition='Big',
+                palette='Navy', materials_light='Grain')
+    with_person = {'copy': ['A'], 'references': [{'id': 'x', 'role': 'subject', 'use': 'face'}]}
+    assert 'LIKENESS FIRST' in d.render_prompt(plan, with_person)
+    assert 'LIKENESS FIRST' not in d.render_prompt(plan, {'copy': ['A'], 'references': []})
+
+
+def test_the_checker_sees_the_subject_photo_and_lets_letters_overlap(monkeypatch):
+    from creative_director_models import Review
+    seen = {}
+    async def structured(client, row, schema, instruction, content):
+        seen['instruction'], seen['content'] = instruction, content
+        return Review(observed_text='A', reference_match=True, readable=True, composition_coherent=True, brand_assets_clean=True)
+    monkeypatch.setattr(d, 'structured', structured)
+    face = str(uuid4())
+    spec = {'copy': ['A'], 'owner_request': '', 'references': [{'id': face, 'role': 'subject', 'use': 'Close-up of the face'}]}
+    plan = SimpleNamespace(model_dump=lambda mode=None: {})
+    run(d.review(None, {'business_id': BIZ}, spec, plan, png(), {face: png()}))
+    texts = [c.get('text', '') for c in seen['content'] if c.get('type') == 'text']
+    assert any(t.startswith('SUBJECT PHOTO') for t in texts) and sum(c.get('type') == 'image' for c in seen['content']) == 2
+    assert 'likeness_match' in seen['instruction'] and 'deliberate graphic device' in seen['instruction']

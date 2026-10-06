@@ -41,7 +41,7 @@ MAX_SOURCE_SECONDS = int(os.getenv('CLIPPER_MAX_SOURCE_SECONDS', '7200'))
 JOB_SECONDS = int(os.getenv('CLIPPER_JOB_SECONDS', '3600'))
 RESULT_TTL = int(os.getenv('CLIPPER_RESULT_TTL', '7200'))
 CAPTION_PRESETS = ('pop', 'spotlight', 'impact', 'glow', 'boxed', 'sweep', 'editorial', 'hype', 'punch', 'neon', 'headline', 'paper', 'subtle')
-FILE_NAME = re.compile(r'^clip_\d{2}(\.mp4|\.jpg|_frame\.jpg)$')
+FILE_NAME = re.compile(r'^clip_\d{2}(\.mp4|\.jpg|_frame\.jpg|_face\.jpg)$')
 # Only these reach the engine process; the service token never does.
 ENGINE_ENV_KEEP = ('PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'LD_LIBRARY_PATH', 'FONTCONFIG_FILE', 'SYSTEMROOT', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA')
 
@@ -310,10 +310,17 @@ def check_clips(state, manifest_path, source=None):
         poster = clip_dir / f'clip_{index:02d}.jpg'
         make_poster(video, found['poster_at'], poster)
         frame = clip_dir / f'clip_{index:02d}_frame.jpg'
+        face = clip_dir / f'clip_{index:02d}_face.jpg'
         if source is not None and source.is_file():
             # A clip is cut straight from [start, end] of the recording, so the
             # poster's moment in the clip is start + poster_at in the source.
-            make_frame(source, (row.get('start_time_ms') or 0) / 1000 + found['poster_at'], frame)
+            moment = (row.get('start_time_ms') or 0) / 1000 + found['poster_at']
+            make_frame(source, moment, frame)
+            try:
+                empty_spots.face_closeup(source, moment, face, detector)
+            except Exception:  # best effort, like the poster: a cover still has the frame
+                log.warning('Face close-up failed at %.2fs', moment)
+                face.unlink(missing_ok=True)
         editorial = row.get('editorial') or {}
         clips.append({
             'index': index,
@@ -328,6 +335,7 @@ def check_clips(state, manifest_path, source=None):
             'video': video.name,
             'poster': poster.name if poster.is_file() else None,
             'frame': frame.name if frame.is_file() else None,
+            'face': face.name if face.is_file() else None,
             'bytes': video.stat().st_size,
             'empty_spots': found['empty_spots'],
             'face_coverage': found['face_coverage'],

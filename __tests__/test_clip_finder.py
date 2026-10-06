@@ -331,13 +331,14 @@ def test_a_run_starts_the_job_follows_it_and_files_every_clip(monkeypatch, worke
 
 
 def test_a_clean_frame_is_filed_beside_the_poster(monkeypatch, worker):
-    with_frame = {**RESULT, 'clips': [dict(RESULT['clips'][0], frame='clip_00_frame.jpg'), RESULT['clips'][1]]}
+    with_frame = {**RESULT, 'clips': [dict(RESULT['clips'][0], frame='clip_00_frame.jpg', face='clip_00_face.jpg'), RESULT['clips'][1]]}
     worker.script['GET'] = [httpx.Response(404), completed(with_frame)]
     store = Store(monkeypatch, reads=lambda path: [ready_source()] if f'id=eq.{SOURCE}' in path else [])
     cf.drive(dict(RUN_ROW))
     clips = [body for path, body in store.posts if path == '/media_assets']
     assert clips[0]['configuration']['frame'] is True and clips[1]['configuration']['frame'] is False
     assert (f'{BIZ}/{clips[0]["id"]}-frame.jpg', 'image/jpeg') in worker.puts
+    assert (f'{BIZ}/{clips[0]["id"]}-face.jpg', 'image/jpeg') in worker.puts and clips[0]['configuration']['face'] is True
     assert cf.frame_path({'business_id': BIZ, 'id': clips[0]['id']}) == f'{BIZ}/{clips[0]["id"]}-frame.jpg'
 
 
@@ -464,6 +465,7 @@ def test_sweep_applies_the_storage_rules(monkeypatch, on):
     cf.sweep()
     assert f'{BIZ}/{UPLOADING}.source' in removed and f'{BIZ}/{SKIPPED}.mp4' in removed and f'{BIZ}/{SKIPPED}.jpg' in removed
     assert f'{BIZ}/{SKIPPED}-frame.jpg' in removed  # the clean frame goes with its clip
+    assert f'{BIZ}/{SKIPPED}-face.jpg' in removed
     assert f'{BIZ}/{OLD}.source' in removed and not any(BUSY in p for p in removed)
     assert any('source_removed_at' in body for _, body in store.patches)
     assert len(store.deletes) == 2

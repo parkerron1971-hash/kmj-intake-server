@@ -49,6 +49,11 @@ class Review(Strict):
     readable: bool
     composition_coherent: bool
     brand_assets_clean: bool
+    # Kevin, 2026-10-06: a cover of a real person must look over 90% like them.
+    likeness_match: bool = Field(default=True, description=(
+        'False only when someone who knows the person in the subject photos would doubt this is them '
+        '(different face shape or features, hairline, hairstyle, skin tone or age). True when there is '
+        'no subject photo. Lighting, expression, pose and graphic treatment may differ.'))
     issues: list[str] = Field(default_factory=list, max_length=8)
     repair_instruction: str = Field(default='', max_length=1500)
 

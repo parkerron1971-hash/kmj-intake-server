@@ -228,6 +228,11 @@ def poster_path(row):
     return media_library.key(row['business_id']) + '/' + media_library.key(row['id']) + '.jpg'
 
 
+def face_path(row):
+    """A head-and-shoulders close-up from the recording: the cover's guide to the face and hair."""
+    return media_library.key(row['business_id']) + '/' + media_library.key(row['id']) + '-face.jpg'
+
+
 def frame_path(row):
     """The clean frame behind a clip's cover: the poster's moment, taken from
     the recording without captions or a title card."""
@@ -444,6 +449,15 @@ def file_clips(run, source, result):
                         poster = True
                     except (ValueError, RunFailed, httpx.HTTPError):
                         log.warning('Poster not saved for clip %s', asset_id)
+                face = False
+                if clip.get('face'):
+                    try:
+                        image = Path(folder) / 'face.jpg'
+                        fetch(f'{job}/files/{clip["face"]}', image)
+                        put_file(image, base + '-face.jpg', 'image/jpeg')
+                        face = True
+                    except (ValueError, RunFailed, httpx.HTTPError):
+                        log.warning('Face close-up not saved for clip %s', asset_id)
                 frame = False
                 if clip.get('frame'):
                     try:
@@ -464,7 +478,7 @@ def file_clips(run, source, result):
                                       'start_seconds': start, 'end_seconds': end, 'score': clip.get('score'),
                                       'tags': clip.get('tags') or [], 'review_flags': clip.get('review_flags') or [],
                                       'empty_spots': clip.get('empty_spots') or [], 'face_coverage': clip.get('face_coverage'),
-                                      'poster': poster, 'frame': frame, 'caption': '', 'destination': ''}})
+                                      'poster': poster, 'frame': frame, 'face': face, 'caption': '', 'destination': ''}})
                 if not saved:
                     # Never report a clip that isn't in the library. Stop here and
                     # let the lease lapse: the next claim resumes, and the stable
@@ -615,7 +629,7 @@ def sweep():
         remove_objects([media_library.object_path(row)])
         sb_clients.sb_delete_as_service(f'/media_assets?id=eq.{row["id"]}&status=eq.uploading')
     for row in media_library.read(f'/media_assets?kind=eq.clip&decision=eq.skipped&decided_at=lt.{_z(now - timedelta(days=30))}&select=id,business_id,kind&limit=200'):
-        remove_objects([media_library.object_path(row), poster_path(row), frame_path(row)])
+        remove_objects([media_library.object_path(row), poster_path(row), frame_path(row), face_path(row)])
         sb_clients.sb_delete_as_service(f'/media_assets?id=eq.{row["id"]}&decision=eq.skipped')
     done = media_library.read(f'/media_clip_runs?status=eq.completed&finished_at=lt.{_z(now - timedelta(days=7))}&select=source_id&limit=500')
     for source_id in {r['source_id'] for r in done}:

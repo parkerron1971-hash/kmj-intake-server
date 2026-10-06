@@ -50,6 +50,55 @@ def poster_time(centred, length):
     return min(1.0, length / 2)
 
 
+def face_closeup(source, at, target, face_detector, window=1.5):
+    """A head-and-shoulders close-up of the speaker from the recording, for
+    designing a cover that looks like them (Kevin, 2026-10-06: "over 90
+    percent looks"). Of five frames within `window` seconds of `at`, it uses
+    the one whose face is largest and surest: more real face pixels for the
+    image model to keep. Crops about three face-widths wide, 4:5, and scales
+    small crops up to 1024 tall. Returns the face size in pixels, or None."""
+    import cv2
+    cap = cv2.VideoCapture(str(source))
+    best = None
+    try:
+        for offset in (-window, -window / 2, 0.0, window / 2, window):
+            cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, at + offset) * 1000)
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            height, width = frame.shape[:2]
+            scale = min(1.0, 640 / width)
+            small = cv2.resize(frame, (round(width * scale), round(height * scale))) if scale < 1 else frame
+            face_detector.setInputSize((small.shape[1], small.shape[0]))
+            _, faces = face_detector.detect(small)
+            if faces is None or not len(faces):
+                continue
+            face = max(faces, key=lambda f: f[2] * f[3])
+            x, y, w, h = (float(v) / scale for v in face[:4])
+            weight = w * h * float(face[-1])
+            if best is None or weight > best[0]:
+                best = (weight, frame, (x, y, w, h))
+    finally:
+        cap.release()
+    if best is None:
+        return None
+    _, frame, (x, y, w, h) = best
+    full_h, full_w = frame.shape[:2]
+    crop_w = min(w * 3.0, full_w)
+    crop_h = min(crop_w * 1.25, full_h)
+    left = int(max(0, min(full_w - crop_w, x + w / 2 - crop_w / 2)))
+    top = int(max(0, min(full_h - crop_h, y - h * 0.9)))
+    crop = frame[top:int(top + crop_h), left:int(left + crop_w)]
+    if crop.size == 0:
+        return None
+    if crop.shape[0] < 1024:
+        factor = 1024 / crop.shape[0]
+        crop = cv2.resize(crop, (round(crop.shape[1] * factor), 1024), interpolation=cv2.INTER_LANCZOS4)
+    if not cv2.imwrite(str(target), crop, [cv2.IMWRITE_JPEG_QUALITY, 92]):
+        return None
+    return round(w), round(h)
+
+
 def scan(path, face_detector):
     """Sample one clip. Returns its length, the share of samples with a face,
     the empty spots, and a poster moment where the speaker is in frame."""

@@ -67,6 +67,7 @@ def fake_pipeline(monkeypatch, final=None, clips=2, spots=None):
         seen.setdefault('frames', []).append((source.name, source.is_file(), at))
         target.write_bytes(b'frame')
     monkeypatch.setattr(svc, 'make_frame', make_frame)
+    monkeypatch.setattr(svc.empty_spots, 'face_closeup', lambda source, at, target, det: target.write_bytes(b'face') or (70, 90))
     return seen
 
 
@@ -375,3 +376,26 @@ def test_a_failed_or_empty_still_is_never_advertised(tmp_path, monkeypatch, retu
     svc.make_frame(tmp_path / 'source.mp4', 9999.0, frame)
     svc.make_poster(tmp_path / 'clip_00.mp4', 9999.0, poster)
     assert not frame.exists() and not poster.exists()
+
+
+def test_each_clip_gets_a_face_close_up_for_its_cover(client, monkeypatch):
+    fake_pipeline(monkeypatch, clips=1)
+    job = uuid4()
+    client.post(f'/jobs/{job}', json={'source_url': SOURCE}, headers=AUTH)
+    body = wait_done(client, job)
+    assert body['result']['clips'][0]['face'] == 'clip_00_face.jpg'
+    assert client.get(f'/jobs/{job}/files/clip_00_face.jpg', headers=AUTH).content == b'face'
+
+
+def test_no_face_in_frame_means_no_close_up(tmp_path):
+    """A blank picture has no face: nothing is written and the cover uses the frame alone."""
+    import cv2
+    import numpy as np
+    video = tmp_path / 'blank.mp4'
+    out = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*'mp4v'), 10, (320, 240))
+    for _ in range(30):
+        out.write(np.zeros((240, 320, 3), dtype=np.uint8))
+    out.release()
+    target = tmp_path / 'face.jpg'
+    assert svc.empty_spots.face_closeup(video, 1.0, target, svc.empty_spots.detector()) is None
+    assert not target.exists()
