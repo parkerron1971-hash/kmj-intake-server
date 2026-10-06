@@ -1,4 +1,5 @@
 """Make cover: a clip's clean frame through the Creative Director. No live services or paid calls."""
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4, uuid5, UUID
@@ -176,3 +177,129 @@ def test_a_close_up_that_cannot_be_read_leaves_the_cover_to_the_frame(app, monke
     post(app)
     refs = app.designed[0][1]['references']
     assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-frame'))]
+
+
+# -- both shapes, a look to follow, and covers made with the clips ---------
+
+def test_one_tap_designs_the_story_cover_and_the_widescreen_thumbnail(app):
+    """Kevin, 2026-10-06: covers in the full-screen shape along with the story size."""
+    response = post(app, sizes=['story', 'wide'])
+    body = response.json()
+    assert response.status_code == 202 and set(body['covers']) == {'story', 'wide'} and body['errors'] == {}
+    (turn_a, story), (turn_b, wide) = app.designed
+    assert story['size'] == '1088x1920' and wide['size'] == '1920x1088'
+    assert turn_a.endswith(':story') and turn_b.endswith(':wide') and turn_a != turn_b
+    assert 'bottom-right corner' in wide['goal'] and 'top 8%' in story['goal']
+    assert 'thumbnail' in wide['owner_request'] and 'cover' in story['owner_request']
+    # The speaker's pictures are copied once and shared by both designs.
+    assert story['references'] == wide['references'] and len(app.stored) == 1
+
+
+def test_a_single_size_keeps_the_original_turn_id(app):
+    """A retried tap from an older app must land on the design it already started."""
+    request_id = str(uuid4())
+    app.client.post(f'/media-library/{BIZ}/clips/{CLIP}/cover', json={'request_id': request_id})
+    assert app.designed[0][0] == f'clip-cover:{CLIP}:{request_id}'
+
+
+def test_a_cover_can_follow_a_picture_and_a_note(app):
+    style = str(uuid4())
+    post(app, sizes=['wide'], style_image_id=style, note='Keep it dark, almost black and white.')
+    action = app.designed[0][1]
+    assert action['references'][-1] == {'id': style, 'role': 'style', 'use': cc.STYLE_USE}
+    assert 'never its words, people or logos' in cc.STYLE_USE
+    assert action['goal'].endswith('The owner asked for this look: Keep it dark, almost black and white.')
+
+
+def test_when_the_second_shape_cannot_start_the_first_still_stands(app, monkeypatch):
+    calls = []
+
+    async def design(client, biz, action):
+        calls.append(action['size'])
+        if action['size'] == '1920x1088':
+            raise HTTPException(402, 'Out of credits.')
+        return {'result': 'Designing.', 'label': 'Designing', 'image': {'id': 'story-id', 'status': 'queued'}}
+    monkeypatch.setattr(cc.creative_director, 'handle_design_flyer', design)
+    body = post(app, sizes=['story', 'wide']).json()
+    assert body['covers'] == {'story': {'id': 'story-id', 'status': 'queued'}} and body['errors'] == {'wide': 'Out of credits.'}
+    assert calls == ['1088x1920', '1920x1088']
+
+
+def test_covers_are_read_back_by_shape(monkeypatch):
+    rows = [
+        {'id': 'w1', 'status': 'ready', 'size': '1920x1088', 'clip_id': CLIP, 'created_at': '2026-10-06T02:00:00Z'},
+        {'id': 's2', 'status': 'failed', 'size': '1088x1920', 'clip_id': CLIP, 'created_at': '2026-10-06T03:00:00Z'},
+        {'id': 's1', 'status': 'ready', 'size': '1088x1920', 'clip_id': CLIP, 'created_at': '2026-10-06T01:00:00Z'},
+    ]
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', lambda path: rows)
+    assert cc.shaped_covers(BIZ, [clip()]) == {CLIP: {'story': 's1', 'wide': 'w1'}}
+    assert cc.covers_for(BIZ, [clip()]) == {CLIP: 's1'}
+
+
+RUN = '33333333-3333-4333-8333-333333333333'
+
+
+def run_row(**covers):
+    return {'id': RUN, 'business_id': BIZ, 'created_by': OWNER, 'options': {'covers': {'sizes': ['story', 'wide'], **covers}}}
+
+
+def test_a_run_covers_its_best_clips_once_as_its_owner(app, monkeypatch):
+    best = dict(clip(score=9.1), id='44444444-4444-4444-8444-444444444444', name='Best')
+    skipped = dict(clip(score=9.9), id='55555555-5555-4555-8555-555555555555', decision='skipped')
+    plain = dict(clip(score=4.0), id='66666666-6666-4666-8666-666666666666', name='Plain')
+    no_frame = dict(clip(score=8.0, frame=False), id='77777777-7777-4777-8777-777777777777')
+    app.rows = [plain, skipped, best, no_frame]
+    monkeypatch.setattr(cc, 'AUTO_CLIP_LIMIT', 1)
+    monkeypatch.setattr(cc, '_tries', {})
+    existing = {}
+    monkeypatch.setattr(cc, 'shaped_covers', lambda biz, rows: existing)
+    actors = []
+
+    async def business(client, biz):
+        actors.append(images.build_actor.get())
+        return {'id': BIZ, 'owner_id': OWNER}
+    monkeypatch.setattr(images, 'business', business)
+    made = asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(style_image_id='88888888-8888-4888-8888-888888888888')))
+    assert made == 2 and [a['clip_id'] for _, a in app.designed] == [best['id'], best['id']]
+    assert [t for t, _ in app.designed] == [f'clip-cover:{best["id"]}:auto-{RUN}:story', f'clip-cover:{best["id"]}:auto-{RUN}:wide']
+    assert app.designed[0][1]['references'][-1]['role'] == 'style'
+    assert actors == [{'business_id': BIZ, 'user_id': OWNER}] and images.build_actor.get() is None
+    # The frame is copied as the server, which must say it cost nothing.
+    assert all(p.get('cost_usd') == 0 for p in app.posted)
+    # Called again with both covers in place: nothing new.
+    existing[best['id']] = {'story': 'a', 'wide': 'b'}
+    assert asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row())) == 0 and len(app.designed) == 2
+
+
+def test_a_cover_that_cannot_start_is_tried_twice_then_left_to_make_cover(app, monkeypatch):
+    monkeypatch.setattr(cc, '_tries', {})
+    monkeypatch.setattr(cc, 'shaped_covers', lambda biz, rows: {})
+    tries = []
+
+    async def broke(client, biz, action):
+        tries.append(action['size'])
+        raise HTTPException(402, 'This business is out of credits.')
+    monkeypatch.setattr(cc.creative_director, 'handle_design_flyer', broke)
+    for _ in range(2):
+        with pytest.raises(HTTPException):
+            asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(sizes=['story'])))
+    assert asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(sizes=['story']))) == 0
+    assert tries == ['1088x1920', '1088x1920']
+
+
+def test_the_owner_is_told_once_when_covers_stop(monkeypatch):
+    monkeypatch.setattr(cc, '_told', set())
+    told = []
+    monkeypatch.setattr(cc.sb_clients, 'sb_post_as_service', lambda path, body: told.append((path, body)) or [body])
+    cc.tell_owner_covers_stopped(run_row(), 'This business is out of credits.')
+    cc.tell_owner_covers_stopped(run_row(), 'This business is out of credits.')
+    assert len(told) == 1 and told[0][0] == '/chief_notifications'
+    assert 'Make cover' in told[0][1]['body'] and told[0][1]['data']['kind'] == 'clip_covers_stopped'
+
+
+def test_the_cover_step_only_looks_at_recent_runs_that_asked(monkeypatch):
+    asked = []
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', lambda path: asked.append(path) or [])
+    cc.runs_wanting_covers()
+    assert 'status=eq.completed' in asked[0] and 'options->covers=not.is.null' in asked[0]
+    assert '+' not in asked[0].split('finished_at=gte.')[1].split('&')[0]
