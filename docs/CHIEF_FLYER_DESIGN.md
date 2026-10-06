@@ -240,3 +240,33 @@ seeing the real face, so:
   "Don't Judge Rightness By Feelings" cover drawn from the wide shot 0.586
   ("75 percent me"); a thumbnail drawn from a close-up 0.931; the close-up
   against itself 1.0.
+
+## The speaker photo and the expression that fits the title (2026-10-06)
+
+Kevin: "does the chief go through the clip to find the best pose that shows
+my face and expressions the best that fit the title". Two additions to
+`clip_covers.subject_references`:
+
+- **The expression.** The face picker ranks close-ups by size, sharpness and
+  facing, not by mood. With two or more close-ups and a title,
+  `pick_expression` shows them to the review-lane model (low effort, so
+  thinking cannot eat the one-number answer) and asks which expression and
+  gesture fit the title. That close-up leads, told to "use this expression
+  and gesture". Asked once per clip per process (the story and wide covers
+  share it); any failure or an answer that is not one of the numbers keeps
+  the face picker's order. Metered with `units=0`, never a design charge.
+- **The speaker photo.** A face in a video frame is small and soft; a photo has
+  the real detail. `GET/PUT/DELETE /media-library/{business_id}/speaker-photo`
+  (owner only) saves one picture from the business's image gallery
+  (`/ai/images/upload` first for a new one). It is copied to its own row with
+  a fixed id (`speaker_id`, uuid5 of the business), `cost_usd` 0 and no model,
+  so it never counts toward the daily design cap, and deleting the original
+  never breaks it. Saving checks a face is in it (`POST /likeness`, the photo
+  against itself, `face_found`); when the clip service cannot answer, the
+  photo is kept. At use, face recognition compares it with the clip's best
+  close-up (or the frame), once per clip and photo: at `SPEAKER_SAME_PERSON`
+  (0.45) or above it leads as the authority on the face and hair, followed by
+  two close-ups and the frame (with a style picture: the photo, one close-up,
+  the frame and the style). Below it, a guest speaker's clip, or any failure:
+  the cover uses the clip's own pictures. The likeness meter then grades the
+  design against all its subject photos, the speaker photo included.
