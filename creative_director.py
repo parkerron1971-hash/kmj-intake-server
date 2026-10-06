@@ -413,8 +413,9 @@ With subject photos of a real person, plan for likeness first: keep them large a
 enough that their own face and hair carry the design; never plan a stylisation that changes who they are.
 Read any words printed on the person's clothing across all the subject photos (a wide photo may show the
 whole print where a close-up cuts it off). By default plan to hide the print gracefully, never to erase
-it: the body fading into a dark gradient or shadow below the chest, or the title set across the chest
-(like a strong sermon thumbnail). Plan to show it only when it is large and part of the message, and
+it: the print stays on the shirt but is fully covered, by the body fading into a dark gradient or shadow
+below the chest, or by the title set across the chest (like a strong sermon thumbnail). Erasing means
+drawing the shirt plain or changed; hiding means covering it completely. Plan to show it only when it is large and part of the message, and
 then write it into preserve exactly and completely, with its colours (for example: shirt print reads
 "HOPE WINS" in black on a white patch). Never plan a print that is cut off. Plain clothing stays plain:
 never add a print the photos do not show.
@@ -478,10 +479,11 @@ plants as decoration, clip-art icons, or soft corporate calm.
 # Then (same day): "I like the design of the thumbnail I sent ... cover up
 # with the gradient shade look ... depends". So a print is hidden gracefully
 # by default, never erased, and shown only when it is big and part of the message.
-CLOTHING = ('Their clothing is part of them. A print on it is best hidden gracefully: let the body fade into a '
-            'dark gradient or shadow, or let the title sit across the chest. Show the print only when it is large '
-            'and part of the message, and then complete and spelled exactly as in the photos, in its colours (a '
-            'white patch stays white). Never erase it, cut it off or half show it.')
+CLOTHING = ('Their clothing is part of them. A print on it is best hidden gracefully: it stays on the shirt but '
+            'is fully covered, by the body fading into a dark gradient or shadow, or by the title across the chest. '
+            'Show the print only when it is large and part of the message, and then complete and spelled exactly as '
+            'in the photos, in its colours (a white patch stays white). Either fully covered or fully shown: never '
+            'erase it (drawing the shirt plain or changed) and never leave part of it readable.')
 LIKENESS = ('LIKENESS FIRST: the person in the subject photos must be recognisably the same individual, close to a photograph of them: the same face shape, eyes, nose, mouth, beard, hairline and hairstyle, skin tone, build and age. Do not beautify, slim, age, restyle or swap their features, and do not invent a new face from the pose. A close-up subject photo is the authority on the face and hair; a wider one shows pose, body and clothes. Graphic treatment (cut-out, light, colour grade) is fine; a different-looking person is not. '
     + CLOTHING)
 
@@ -569,8 +571,9 @@ on is not a backing rectangle. If any of the print shows, it must be complete an
 subject photos (read the whole print in whichever photo shows it, often the wider one); a cut-off or
 changed print (only "HOPE" of "HOPE WINS") is a defect: report it and make the repair instruction
 hide the print gracefully (fade the body into the dark background, a shadow, or the title across
-the chest). A print hidden by a fade, a shadow or the title is correct, not a defect. Plain
-clothing in the photos must stay plain.
+the chest). A print fully covered by a fade, a shadow or the title is correct, not a defect; a cover
+that leaves some of its letters readable is still a cut-off print and a defect. Plain clothing in
+the photos must stay plain.
 ''', content)
     return review_verdict(result, spec)
 

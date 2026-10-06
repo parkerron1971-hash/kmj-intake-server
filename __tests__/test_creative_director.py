@@ -386,7 +386,9 @@ def test_the_planner_and_checker_keep_clothing_words_whole(monkeypatch):
     planner, checker = said
     assert 'words printed on the person' in planner and 'Never plan a print that is cut off' in planner
     assert 'hide the print gracefully, never to erase' in planner and 'title set across the chest' in planner
-    assert 'A print hidden by a fade, a shadow or the title is correct' in checker
+    assert 'A print fully covered by a fade, a shadow or the title is correct' in checker
+    assert 'leaves some of its letters readable is still a cut-off print' in checker
+    assert 'Erasing means' in planner
     assert 'not a backing rectangle' in checker and 'cut-off or' in checker and 'Plain' in checker
     # The examples are generic: the rules run for every practitioner's cover, and
     # a model copies a concrete example (PR #1294 review).
