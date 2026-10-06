@@ -119,9 +119,12 @@ the clip's title; the size defaults to `1088x1920` (`1920x1088` for a YouTube
 thumbnail). 30 credits, like any design. A remembered style (Remember this
 style) gives every cover in a series the same look.
 
-The cover's id is saved as `configuration.cover_image_id` on the clip.
-Configuration is part of the clip's approval fingerprint, so a new cover after
-approval asks for a fresh approval: the cover goes out with the clip. Clips
+The cover names its clip (`director.clip_id`); the library list reads that
+back as `cover_image_id` on each clip (`clip_covers.covers_for`). Nothing is
+written to the clip: the `preserve_media_review` trigger makes a clip's
+configuration (and an approval, once set) permanent, which is why the first
+version, which wrote the id into configuration, failed in production on
+2026-10-06 with "The media change could not be confirmed". Clips
 made before the clip service took frames (`configuration.frame` false) get a
 409 and keep their poster.
 

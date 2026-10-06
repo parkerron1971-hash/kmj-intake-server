@@ -165,7 +165,7 @@ def business_facts(business_id):
     return out
 
 
-async def prepare_for_business(client, biz, req, *, owner_request, owner_context=''):
+async def prepare_for_business(client, biz, req, *, owner_request, owner_context='', clip_id=None):
     """The Director for a practitioner's own business. References are images
     already in its gallery; facts are what the business publishes. Spend is
     held to this business's own daily limit and credits, not the platform's."""
@@ -186,6 +186,10 @@ async def prepare_for_business(client, biz, req, *, owner_request, owner_context
         'owner_request': owner_request[:5000], 'owner_context': owner_context[-5000:],
         'facts': facts, 'preferences': saved, 'max_renders': 2,
         'phase': 'queued', 'attempts': 0, 'review': None}
+    if clip_id:
+        # A clip's cover says which clip it belongs to. The clip itself cannot
+        # carry the link: preserve_media_review makes its configuration permanent.
+        spec['clip_id'] = str(UUID(str(clip_id)))
     if len(json.dumps(spec)) > 19000:
         raise HTTPException(422, 'Shorten this design request or its visible wording.')
     return spec
@@ -237,7 +241,7 @@ async def handle_design_flyer(client, biz, action):
             {'id': iid, 'role': role[0], 'use': role[1]} for iid, role in found if role]
     req = flyer_request(action)
     spec = await prepare_for_business(client, biz, req, owner_request=str(action.get('owner_request') or req.goal),
-        owner_context=str(action.get('owner_context') or ''))
+        owner_context=str(action.get('owner_context') or ''), clip_id=action.get('clip_id'))
     result = await images.create(images.CreateImage(business_id=biz['id'], request_id=request_id, prompt=req.goal,
         quality=req.quality, size=req.size, reference_ids=[r['id'] for r in spec['references']]), client, director=spec)
     return {'type': 'design_flyer', 'label': 'Designing your flyer', 'image': result, 'nav': None,

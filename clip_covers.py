@@ -6,9 +6,10 @@ clean frame as the subject and the clip's title as its words. "Remember this
 style" on one cover gives every later cover the same look, so a sermon series
 reads as a set.
 
-The cover's id is saved in the clip's configuration, which is part of what an
-approval covers: a clip goes out with its cover, so a new cover after approval
-asks for a fresh look first.
+The link lives on the cover (its director record names the clip), never on
+the clip: the database makes a clip's configuration permanent once it exists
+(preserve_media_review), so a reviewed clip cannot change underneath its
+approval. covers_for() reads the links back for the Video Clips list.
 """
 from __future__ import annotations
 
@@ -79,14 +80,20 @@ async def frame_artwork(client, biz, row, user_id):
     return image_id
 
 
-def remember_cover(row, image_id):
-    # Read again: the design took a minute, and the clip may have changed meanwhile.
-    fresh = media_library.read(f"/media_assets?id=eq.{media_library.key(row['id'])}"
-                               f"&business_id=eq.{media_library.key(row['business_id'])}&select=configuration&limit=1")
-    configuration = dict((fresh[0] if fresh else row).get('configuration') or {}, cover_image_id=str(image_id))
-    media_library.one(sb_clients.sb_patch_as_service(
-        f"/media_assets?id=eq.{media_library.key(row['id'])}&business_id=eq.{media_library.key(row['business_id'])}",
-        {'configuration': configuration}))
+def covers_for(business_id, rows):
+    """The newest cover of each clip on the page, read from the designs that
+    name it. One service read for the page; a failed read means no covers
+    shown, never an error on the clips."""
+    clips = [media_library.key(r['id']) for r in rows if r.get('kind') == 'clip']
+    if not clips:
+        return {}
+    found = sb_clients.sb_get_as_service(
+        f"/image_artworks?business_id=eq.{media_library.key(business_id)}&director->>clip_id=in.({','.join(clips)})"
+        "&select=id,director->>clip_id,created_at&order=created_at.desc&limit=500") or []
+    covers = {}
+    for row in found:
+        covers.setdefault(row.get('clip_id'), row['id'])
+    return covers
 
 
 @router.post('/{business_id}/clips/{asset_id}/cover', status_code=202)
@@ -107,11 +114,8 @@ async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
             result = await creative_director.handle_design_flyer(client, biz, {
                 'goal': GOAL.format(title=row.get('name') or 'this clip'), 'exact_copy': words, 'size': body.size,
                 'references': [{'id': frame_id, 'role': 'subject', 'use': 'The speaker in this clip. Keep their exact likeness.'}],
-                'owner_request': 'Make a cover for this clip'})
+                'owner_request': 'Make a cover for this clip', 'clip_id': str(asset_id)})
         finally:
             images.turn_id.reset(turn)
             images.turn_image_index.reset(index)
-    cover = result.get('image') or {}
-    if cover.get('id'):
-        await asyncio.to_thread(remember_cover, row, cover['id'])
-    return {'ok': True, 'cover': cover, 'result': result['result']}
+    return {'ok': True, 'cover': result.get('image') or {}, 'clip_id': str(asset_id), 'result': result['result']}
