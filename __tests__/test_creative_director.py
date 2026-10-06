@@ -385,4 +385,7 @@ def test_the_planner_and_checker_keep_clothing_words_whole(monkeypatch):
         run(d.review(None, row(), spec, plan(), png(), {face: png()}))
     planner, checker = said
     assert 'words printed on the person' in planner and 'Never plan a print that is cut off' in planner
-    assert 'not a backing rectangle' in checker and 'cut-off or' in checker and 'GOD IS DOPE.' in checker
+    assert 'not a backing rectangle' in checker and 'cut-off or' in checker and 'Plain' in checker
+    # The examples are generic: the rules run for every practitioner's cover, and
+    # a model copies a concrete example (PR #1294 review).
+    assert 'GOD IS DOPE' not in planner + checker and 'Plain clothing stays plain' in planner

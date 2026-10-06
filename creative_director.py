@@ -413,8 +413,9 @@ With subject photos of a real person, plan for likeness first: keep them large a
 enough that their own face and hair carry the design; never plan a stylisation that changes who they are.
 Read any words printed on the person's clothing across all the subject photos (a wide photo may show the
 whole print where a close-up cuts it off) and write them into preserve exactly and completely, with
-their colours (for example: shirt print reads "GOD IS DOPE." in black on a white patch), or plan the
-framing so none of the print shows. Never plan a print that is cut off.
+their colours (for example: shirt print reads "HOPE WINS" in black on a white patch), or plan the
+framing so none of the print shows. Never plan a print that is cut off. Plain clothing stays plain:
+never add a print the photos do not show.
 ''' + direction_brief(spec)
     plan = only_protected_placements(await structured(client, row, Plan, instruction, content), spec)
     validate_plan(plan, spec)
@@ -560,8 +561,9 @@ are a deliberate graphic device: do not report them while the words still read.
 Words printed on the person's clothing are part of them, not extra copy, and a patch they are printed
 on is not a backing rectangle. If any of the print shows, it must be complete and spelled as in the
 subject photos (read the whole print in whichever photo shows it, often the wider one); a cut-off or
-changed print (only "GOD" of "GOD IS DOPE.") is a defect: report it and make the repair instruction
-restore the full print in its colours, or turn or frame the person so none of it shows.
+changed print (only "HOPE" of "HOPE WINS") is a defect: report it and make the repair instruction
+restore the full print in its colours, or turn or frame the person so none of it shows. Plain
+clothing in the photos must stay plain.
 ''', content)
     return review_verdict(result, spec)
 
