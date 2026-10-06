@@ -189,7 +189,10 @@ async def prepare_for_business(client, biz, req, *, owner_request, owner_context
     if clip_id:
         # A clip's cover says which clip it belongs to. The clip itself cannot
         # carry the link: preserve_media_review makes its configuration permanent.
-        spec['clip_id'] = str(UUID(str(clip_id)))
+        try:
+            spec['clip_id'] = str(UUID(str(clip_id)))
+        except ValueError:
+            raise HTTPException(422, 'That clip could not be found for this cover.') from None
     if len(json.dumps(spec)) > 19000:
         raise HTTPException(422, 'Shorten this design request or its visible wording.')
     return spec

@@ -416,3 +416,6 @@ def test_a_clip_cover_design_names_its_clip(monkeypatch):
     req = d.flyer_request({'goal': 'Cover', 'exact_copy': ['Feelings Lie']})
     assert run(d.prepare_for_business(None, {'id': BIZ}, req, owner_request='x', clip_id=clip_id))['clip_id'] == clip_id
     assert 'clip_id' not in run(d.prepare_for_business(None, {'id': BIZ}, req, owner_request='x'))
+    with pytest.raises(HTTPException) as bad:
+        run(d.prepare_for_business(None, {'id': BIZ}, req, owner_request='x', clip_id='not-a-clip'))
+    assert bad.value.status_code == 422

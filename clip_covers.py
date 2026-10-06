@@ -14,6 +14,7 @@ approval. covers_for() reads the links back for the Video Clips list.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Literal, Optional
 from uuid import UUID, uuid5
@@ -31,6 +32,7 @@ import storage_links
 from auth_supabase import UserSession
 
 router = APIRouter(prefix='/media-library', tags=['clip covers'])
+log = logging.getLogger(__name__)
 
 GOAL = ('A cover image for a short video clip titled "{title}". The person in the reference photo is the hero: '
         'keep their exact likeness (face, hair, skin tone, build, clothing and anything they hold) and do not change '
@@ -81,19 +83,28 @@ async def frame_artwork(client, biz, row, user_id):
 
 
 def covers_for(business_id, rows):
-    """The newest cover of each clip on the page, read from the designs that
-    name it. One service read for the page; a failed read means no covers
-    shown, never an error on the clips."""
+    """Each clip's cover, read from the designs that name it: the newest one
+    that has not failed. A cover still designing is shown as designing (so the
+    card never offers a second paid Make cover), and a failed attempt never
+    hides an earlier good cover; with only failures, the newest failure shows.
+    A failed read means no covers shown, never an error on the clips."""
     clips = [media_library.key(r['id']) for r in rows if r.get('kind') == 'clip']
-    if not clips:
-        return {}
-    found = sb_clients.sb_get_as_service(
-        f"/image_artworks?business_id=eq.{media_library.key(business_id)}&director->>clip_id=in.({','.join(clips)})"
-        "&select=id,director->>clip_id,created_at&order=created_at.desc&limit=500") or []
-    covers = {}
-    for row in found:
-        covers.setdefault(row.get('clip_id'), row['id'])
-    return covers
+    found = []
+    for start in range(0, len(clips), 100):  # keep each query URL short
+        batch = sb_clients.sb_get_as_service(
+            f"/image_artworks?business_id=eq.{media_library.key(business_id)}"
+            f"&director->>clip_id=in.({','.join(clips[start:start + 100])})"
+            "&select=id,status,director->>clip_id,created_at&order=created_at.desc&limit=1000")
+        if batch is None:
+            log.warning('Clip covers could not be read for business %s', business_id)
+            return {}
+        found.extend(batch)
+    best = {}
+    for row in sorted(found, key=lambda r: r.get('created_at') or '', reverse=True):
+        clip, failed = row.get('clip_id'), row.get('status') == 'failed'
+        if clip not in best or (best[clip][1] and not failed):
+            best[clip] = (row['id'], failed)
+    return {clip: image_id for clip, (image_id, _) in best.items()}
 
 
 @router.post('/{business_id}/clips/{asset_id}/cover', status_code=202)

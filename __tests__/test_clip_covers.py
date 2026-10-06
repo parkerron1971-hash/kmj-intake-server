@@ -116,9 +116,12 @@ def test_each_clip_shows_its_newest_cover(monkeypatch):
     asked = []
     def get(path):
         asked.append(path)
-        return [{'id': 'cover-new', 'clip_id': CLIP}, {'id': 'cover-old', 'clip_id': CLIP}, {'id': 'cover-2', 'clip_id': other}]
+        return [{'id': 'cover-new', 'clip_id': CLIP, 'status': 'ready', 'created_at': '2026-10-06T01:00:00Z'},
+                {'id': 'cover-old', 'clip_id': CLIP, 'status': 'ready', 'created_at': '2026-10-06T00:00:00Z'},
+                {'id': 'cover-2', 'clip_id': other, 'status': 'working', 'created_at': '2026-10-06T00:30:00Z'}]
     monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', get)
     rows = [clip(), dict(clip(), id=other), {'id': 'src', 'kind': 'source'}]
+    # A cover still designing shows as designing, so the card never offers a second paid tap.
     assert cc.covers_for(BIZ, rows) == {CLIP: 'cover-new', other: 'cover-2'}
     assert f'business_id=eq.{BIZ}' in asked[0] and 'director->>clip_id=in.(' in asked[0] and 'order=created_at.desc' in asked[0]
     assert cc.covers_for(BIZ, [{'id': 'src', 'kind': 'source'}]) == {}
@@ -130,3 +133,22 @@ def test_a_cover_needs_a_signed_in_user():
     api = FastAPI(); api.include_router(cc.router)
     response = TestClient(api).post(f'/media-library/{BIZ}/clips/{CLIP}/cover', json={'request_id': str(uuid4())})
     assert response.status_code in (401, 403)
+
+
+def test_a_failed_cover_never_hides_an_earlier_good_one(monkeypatch):
+    rows_back = [{'id': 'failed-new', 'clip_id': CLIP, 'status': 'failed', 'created_at': '2026-10-06T02:00:00Z'},
+                 {'id': 'good-old', 'clip_id': CLIP, 'status': 'ready', 'created_at': '2026-10-06T01:00:00Z'}]
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', lambda path: rows_back)
+    assert cc.covers_for(BIZ, [clip()]) == {CLIP: 'good-old'}
+    # Only failures: the newest failure shows, so the card can say it could not be made.
+    rows_back[1]['status'] = 'failed'
+    assert cc.covers_for(BIZ, [clip()]) == {CLIP: 'failed-new'}
+
+
+def test_many_clips_are_read_in_short_batches(monkeypatch):
+    asked = []
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', lambda path: asked.append(path) or [])
+    many = [dict(clip(), id=f'00000000-0000-4000-8000-{i:012d}') for i in range(250)]
+    cc.covers_for(BIZ, many)
+    ids_per_batch = [len(p.split('in.(')[1].split(')')[0].split(',')) for p in asked]
+    assert ids_per_batch == [100, 100, 50]
