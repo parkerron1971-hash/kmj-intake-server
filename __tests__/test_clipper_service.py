@@ -399,3 +399,14 @@ def test_no_face_in_frame_means_no_close_up(tmp_path):
     target = tmp_path / 'face.jpg'
     assert svc.empty_spots.face_closeup(video, 1.0, target, svc.empty_spots.detector()) is None
     assert not target.exists()
+
+
+def test_the_close_up_box_stays_four_by_five_inside_the_frame():
+    """Review of #1286: a big face in a short frame used to give a wider crop."""
+    box = svc.empty_spots.closeup_box
+    for full_w, full_h, face in ((1920, 1080, (900, 300, 120, 150)),   # a stage shot
+                                 (1280, 720, (500, 100, 400, 480)),    # a big face, short frame
+                                 (300, 1000, (100, 400, 150, 180))):   # a narrow frame
+        left, top, w, h = box(full_w, full_h, *face)
+        assert abs(h / w - 1.25) < 0.01, (full_w, full_h, w, h)
+        assert left >= 0 and top >= 0 and left + w <= full_w and top + h <= full_h

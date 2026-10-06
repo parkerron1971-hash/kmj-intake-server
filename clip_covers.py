@@ -124,9 +124,15 @@ async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
         references = [{'id': frame_id, 'role': 'subject', 'use': 'The speaker on stage: pose, body and clothes. Keep their exact likeness.'}]
         if (row.get('configuration') or {}).get('face'):
             # The face close-up is the authority on the face and hair (likeness over 90%).
-            face_id = await frame_artwork(client, biz, row, session.user.id, kind='face')
-            references.insert(0, {'id': face_id, 'role': 'subject',
-                                  'use': 'Close-up of the same person: match this face, beard, hairline and hairstyle exactly.'})
+            # Best effort, like making it: a close-up that cannot be read leaves the
+            # cover to the stage frame alone instead of failing it.
+            try:
+                face_id = await frame_artwork(client, biz, row, session.user.id, kind='face')
+            except HTTPException:
+                log.warning('Face close-up could not be loaded for clip %s; using the frame alone', asset_id)
+            else:
+                references.insert(0, {'id': face_id, 'role': 'subject',
+                                      'use': 'Close-up of the same person: match this face, beard, hairline and hairstyle exactly.'})
         turn = images.turn_id.set(f'clip-cover:{asset_id}:{body.request_id}')
         index = images.turn_image_index.set(0)
         try:

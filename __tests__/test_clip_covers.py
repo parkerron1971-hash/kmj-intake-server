@@ -163,3 +163,16 @@ def test_a_face_close_up_leads_the_cover_when_the_clip_has_one(app):
     assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-face')), str(uuid5(UUID(CLIP), 'cover-frame'))]
     assert 'face' in refs[0]['use'] and all(r['role'] == 'subject' for r in refs)
     assert any(u.endswith(f'/{BIZ}/{CLIP}-face.jpg') for u in app.fetched)
+
+
+def test_a_close_up_that_cannot_be_read_leaves_the_cover_to_the_frame(app, monkeypatch):
+    """Review of #1286: the close-up is best effort; a missing file never fails the cover."""
+    class Response:
+        def __init__(self, ok): self.is_success, self.content = ok, b'jpg'
+    async def get(self, url, headers=None):
+        app.fetched.append(url); return Response(not url.endswith('-face.jpg'))
+    monkeypatch.setattr(cc.httpx.AsyncClient, 'get', get)
+    app.rows = [clip(face=True)]
+    post(app)
+    refs = app.designed[0][1]['references']
+    assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-frame'))]

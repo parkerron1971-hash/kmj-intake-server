@@ -50,6 +50,17 @@ def poster_time(centred, length):
     return min(1.0, length / 2)
 
 
+def closeup_box(full_w, full_h, x, y, w, h):
+    """The 4:5 box around a face at (x, y, w, h): about three face-widths wide,
+    narrower when the frame is too short or too narrow for that, so the shape
+    stays 4:5. The face sits in the upper part, centred across."""
+    crop_w = min(w * 3.0, full_w, full_h * 0.8)
+    crop_h = crop_w * 1.25
+    left = max(0.0, min(full_w - crop_w, x + w / 2 - crop_w / 2))
+    top = max(0.0, min(full_h - crop_h, y - h * 0.9))
+    return int(left), int(top), int(crop_w), int(crop_h)
+
+
 def face_closeup(source, at, target, face_detector, window=1.5):
     """A head-and-shoulders close-up of the speaker from the recording, for
     designing a cover that looks like them (Kevin, 2026-10-06: "over 90
@@ -83,12 +94,8 @@ def face_closeup(source, at, target, face_detector, window=1.5):
     if best is None:
         return None
     _, frame, (x, y, w, h) = best
-    full_h, full_w = frame.shape[:2]
-    crop_w = min(w * 3.0, full_w)
-    crop_h = min(crop_w * 1.25, full_h)
-    left = int(max(0, min(full_w - crop_w, x + w / 2 - crop_w / 2)))
-    top = int(max(0, min(full_h - crop_h, y - h * 0.9)))
-    crop = frame[top:int(top + crop_h), left:int(left + crop_w)]
+    left, top, crop_w, crop_h = closeup_box(frame.shape[1], frame.shape[0], x, y, w, h)
+    crop = frame[top:top + crop_h, left:left + crop_w]
     if crop.size == 0:
         return None
     if crop.shape[0] < 1024:
