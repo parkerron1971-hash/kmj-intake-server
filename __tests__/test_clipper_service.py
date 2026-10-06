@@ -388,8 +388,9 @@ def test_each_clip_gets_a_face_close_up_for_its_cover(client, monkeypatch):
 
 
 def test_no_face_in_frame_means_no_close_up(tmp_path):
-    """A blank picture has no face: nothing is written and the cover uses the frame alone."""
-    import cv2
+    """A blank picture has no face: nothing is written and the cover uses the frame alone.
+    Runs where the clip service's OpenCV is installed (its image, a dev box); CI has none."""
+    cv2 = pytest.importorskip('cv2')
     import numpy as np
     video = tmp_path / 'blank.mp4'
     out = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*'mp4v'), 10, (320, 240))
