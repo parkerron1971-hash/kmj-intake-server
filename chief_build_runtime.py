@@ -424,10 +424,11 @@ def outcome_message(job, result):
     when there is nothing to tell (cancelled, still running)."""
     params = job.get('params') or {}
     facts = params.get('facts') or {}
-    kind_name = _KIND_NAMES.get(params.get('kind'), 'your build')
+    title = str(facts.get('title') or facts.get('name') or _KIND_NAMES.get(params.get('kind'), 'your build'))[:80]
     if params.get('kind') == 'flyer':
-        kind_name = f"your {_job_noun(params)}"
-    title = str(facts.get('title') or facts.get('name') or kind_name)[:80]
+        # A design by its noun first: its title is the model's and can say
+        # "flyer" for a thumbnail.
+        title = f"your {_job_noun(params)}"
     summary = str(result.get('summary_label') or '').strip()
     status = result.get('status')
     if status == 'done':

@@ -129,6 +129,9 @@ def test_the_build_stages_holds_and_notices_name_the_design():
     assert headline == 'Done: your thumbnail' and 'flyer' not in body
     # The app's "All done with ..." reads the noun the build carries.
     assert runtime.public_job(job)['noun'] == 'thumbnail'
+    # A title the model wrote into the order never names a thumbnail a flyer.
+    titled = {**job, 'params': {**o.payload(), 'facts': {**o.facts, 'title': 'Sunday flyer'}}}
+    assert runtime.outcome_message(titled, {'status': 'done', 'summary_label': 'x'})[0] == 'Done: your thumbnail'
 
 
 def test_a_saved_job_from_before_today_still_reads():
