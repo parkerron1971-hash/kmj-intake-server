@@ -211,3 +211,31 @@ be read (expired link, network blip, ffmpeg failure or timeout at 60 s) is 502,
 a busy service (two close-ups at a time) is 503, and an older clip service's
 plain 404 is asked again later. The API waits at most 75 s for it. Measured on the sermon: 14 frames read in about 4 s, an
 86 px face, facing the camera. Clips that had a close-up are never backfilled.
+
+## The likeness meter (2026-10-06)
+
+Kevin: "we want over 90 percent looks". Upscaling the video face was tried
+first and dropped: a faithful upscaler (EDSR) left the face identical
+(identity cosine 0.998) and no sharper, because the softness is compression;
+face "enhancers" invent detail and change the face. What moves likeness is
+seeing the real face, so:
+
+- **More views.** `POST /faces` takes `count` (1-3); with more than one it
+  answers JSON `{faces: [{jpeg_b64, size}]}`, best first. A cover gets up to
+  three close-ups (`<clip>-face.jpg`, `-face2.jpg`, `-face3.jpg`) plus the
+  stage frame; with a style picture, two close-ups, the frame and the style
+  (a design takes four pictures). `clip_covers.backfill_faces` asks once per
+  clip per process, and only an answer with faces counts as asked.
+- **The meter.** After each draw, `creative_director.measure_likeness` sends
+  the design and its subject photos to the clip service, `POST /likeness`,
+  which scores the largest face against each photo with SFace (OpenCV Zoo,
+  Apache-2.0; downloaded at build, pinned by checksum) and answers the best
+  cosine. Below `LIKENESS_MIN` (0.72) the verdict fails with a face issue and
+  the design takes its one repair; if the face was the only fault and the
+  repair came out less like them, the first draft is kept. No face found, no
+  clip service, any failure: no grade, never a failing one. The score is on
+  the verdict (`review.likeness`) and in `public_state`.
+- **Measured** on Kevin's sermon: two moments of the same man 0.55-0.74; the
+  "Don't Judge Rightness By Feelings" cover drawn from the wide shot 0.586
+  ("75 percent me"); a thumbnail drawn from a close-up 0.931; the close-up
+  against itself 1.0.

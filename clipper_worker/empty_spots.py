@@ -8,6 +8,7 @@ of at least MIN_GAP seconds with no face, so the review screen can say
 flagged 5 of 16 clips and every flagged spot was a real empty stage.
 """
 import math
+import os
 import subprocess
 from pathlib import Path
 
@@ -206,7 +207,35 @@ def pick_closeup(frames, target, face_detector):
     scored by face_score), cropped by closeup_box, scaled up to 1024 tall and
     written to `target` as JPEG. Returns the face size in pixels, or None."""
     import cv2
-    best = None
+    found = best_faces(frames, face_detector, 1)
+    if not found:
+        return None
+    crop = closeup_image(*found[0][1:])
+    if crop is None or not cv2.imwrite(str(target), crop, [cv2.IMWRITE_JPEG_QUALITY, 92]):
+        return None
+    return round(found[0][2][2]), round(found[0][2][3])
+
+
+def closeup_image(frame, box):
+    """The 4:5 head-and-shoulders crop around `box`, scaled up to 1024 tall."""
+    import cv2
+    x, y, w, h = box
+    left, top, crop_w, crop_h = closeup_box(frame.shape[1], frame.shape[0], x, y, w, h)
+    crop = frame[top:top + crop_h, left:left + crop_w]
+    if crop.size == 0:
+        return None
+    if crop.shape[0] < 1024:
+        factor = 1024 / crop.shape[0]
+        crop = cv2.resize(crop, (round(crop.shape[1] * factor), 1024), interpolation=cv2.INTER_LANCZOS4)
+    return crop
+
+
+def best_faces(frames, face_detector, count=1):
+    """The `count` best-scoring frames (score, frame, box), best first: each
+    frame's speaker is its largest face, scored by face_score. Several give
+    a cover more real views of the face than one (Kevin, 2026-10-06)."""
+    import cv2
+    ranked = []
     for frame in frames:
         height, width = frame.shape[:2]
         scale = min(1.0, 640 / width)
@@ -219,21 +248,55 @@ def pick_closeup(frames, target, face_detector):
         full = [float(v) / scale for v in face[:14]] + [float(face[14])]
         x, y, w, h = full[:4]
         score = face_score(full, width, height, face_sharpness(frame, x, y, w, h))
-        if score is not None and (best is None or score > best[0]):
-            best = (score, frame, (x, y, w, h))
-    if best is None:
+        if score is not None:
+            ranked.append((score, frame, (x, y, w, h)))
+    ranked.sort(key=lambda found: -found[0])
+    return ranked[:count]
+
+
+# ── The likeness meter (2026-10-06) ──────────────────────────────────
+# SFace (OpenCV Zoo, Apache-2.0) turns a face into a fingerprint; the cosine
+# of two fingerprints says how alike two faces are. Measured on Kevin's
+# sermon: two moments of the same man score 0.55 to 0.74; a cover drawn from
+# the wide shot alone 0.59 ("75 percent me"); covers drawn from a close-up
+# 0.82 to 0.93. SFace's own same-person line is 0.363.
+SFACE = Path(os.environ.get('SFACE_MODEL', '/app/models/face_recognition_sface_2021dec.onnx'))
+LIKENESS_SCORE = 0.5   # a stylised cover's face can be less sure than a photo's
+FR_COSINE = 0          # cv2.FaceRecognizerSF_FR_COSINE
+
+
+def recognizer():
+    import cv2
+    return cv2.FaceRecognizerSF.create(str(SFACE), '')
+
+
+def face_fingerprint(image, recognizer_, detector_width=640):
+    """The fingerprint of the largest face in a BGR image, or None."""
+    import cv2
+    k = min(1.0, detector_width / image.shape[1])
+    small = cv2.resize(image, (round(image.shape[1] * k), round(image.shape[0] * k)), interpolation=cv2.INTER_AREA) if k < 1 else image
+    found = cv2.FaceDetectorYN.create(str(MODEL), '', (small.shape[1], small.shape[0]), LIKENESS_SCORE, 0.3, 5000)
+    _, faces = found.detect(small)
+    if faces is None or not len(faces):
         return None
-    _, frame, (x, y, w, h) = best
-    left, top, crop_w, crop_h = closeup_box(frame.shape[1], frame.shape[0], x, y, w, h)
-    crop = frame[top:top + crop_h, left:left + crop_w]
-    if crop.size == 0:
-        return None
-    if crop.shape[0] < 1024:
-        factor = 1024 / crop.shape[0]
-        crop = cv2.resize(crop, (round(crop.shape[1] * factor), 1024), interpolation=cv2.INTER_LANCZOS4)
-    if not cv2.imwrite(str(target), crop, [cv2.IMWRITE_JPEG_QUALITY, 92]):
-        return None
-    return round(w), round(h)
+    face = max(faces, key=lambda f: f[2] * f[3]).copy()
+    face[:14] = face[:14] / k
+    return recognizer_.feature(recognizer_.alignCrop(image, face))
+
+
+def likeness(image, references, recognizer_, fingerprint=face_fingerprint):
+    """How alike the face in `image` is to the person in `references` (BGR
+    images): the best cosine over the references that show a face. Returns
+    (score or None, per-reference scores with None for no face). None when
+    the cover shows no face the detector can find: never a failing grade."""
+    mine = fingerprint(image, recognizer_)
+    scores = []
+    for ref in references:
+        theirs = fingerprint(ref, recognizer_)
+        scores.append(None if mine is None or theirs is None
+                      else round(float(recognizer_.match(mine, theirs, FR_COSINE)), 3))
+    known = [s for s in scores if s is not None]
+    return (max(known) if known else None), scores
 
 
 def scan(path, face_detector):

@@ -550,6 +550,60 @@ are a deliberate graphic device: do not report them while the words still read.
     return review_verdict(result, spec)
 
 
+# The likeness meter (Kevin, 2026-10-06: "we want over 90 percent looks").
+# Face recognition on the clip service scores the finished design's face
+# against the subject photos (SFace cosine). Measured on Kevin's sermon: a
+# cover drawn from the wide shot alone 0.59 ("75 percent me"), covers drawn
+# from close-ups 0.82 to 0.93; two moments of the same man in one video
+# 0.55 to 0.74. Below LIKENESS_MIN the design takes its one repair with a
+# face instruction; the closer of the two is kept when the face is the only fault.
+LIKENESS_MIN = float(os.environ.get('LIKENESS_MIN', '0.72'))
+LIKENESS_ISSUE = 'The face does not match the photos of the person closely enough'
+
+
+def _jpeg_b64(raw, side=1024):
+    with Image.open(io.BytesIO(raw)) as im:
+        im = im.convert('RGB')
+        im.thumbnail((side, side))
+        out = io.BytesIO()
+        im.save(out, 'JPEG', quality=90)
+    return base64.b64encode(out.getvalue()).decode()
+
+
+async def measure_likeness(finished, spec, loaded):
+    """The likeness score of a finished design, or None (no subject photo, no
+    clip service, no face found on either side, any failure: never a grade)."""
+    refs = [loaded[r['id']] for r in spec['references'] if r['role'] == 'subject' and r['id'] in loaded][:4]
+    if not refs or not os.environ.get('CLIPPER_URL') or not os.environ.get('CLIPPER_TOKEN'):
+        return None
+    import clip_finder
+    try:
+        body = {'image_b64': _jpeg_b64(finished), 'references_b64': [_jpeg_b64(r) for r in refs]}
+        response = await asyncio.to_thread(clip_finder.clipper, 'POST', '/likeness', json=body, timeout=httpx.Timeout(10, read=40))
+        score = response.json().get('score') if response.status_code == 200 else None
+    except Exception:
+        return None
+    return float(score) if isinstance(score, (int, float)) else None
+
+
+def judge_likeness(verdict, score):
+    """Put the meter's reading on the verdict: a failing grade below the bar."""
+    if score is None:
+        return verdict
+    verdict = dict(verdict, likeness=round(score, 3))
+    if score < LIKENESS_MIN:
+        verdict['passed'] = False
+        verdict['issues'] = (list(verdict.get('issues') or []) + [
+            f'{LIKENESS_ISSUE} (likeness {score:.2f}, needs {LIKENESS_MIN:.2f}): redraw the face and hair '
+            'from the close-up photos exactly.'])[:12]
+    return verdict
+
+
+def only_the_face(verdict):
+    issues = verdict.get('issues') or []
+    return bool(issues) and all(i.startswith(LIKENESS_ISSUE) for i in issues)
+
+
 async def run(client, row):
     spec = dict(row['director'])
     async def update(phase, **values):
@@ -561,7 +615,7 @@ async def run(client, row):
     plan = await make_plan(client, row, spec, loaded)
     await update('generating', plan=plan.model_dump(mode='json'))
     raw_refs = [loaded[r['id']] for r in spec['references'] if r['role'] not in ('logo', 'product')]
-    repair = ''; total_cost = 0; unknown_cost = False; last_good = None
+    repair = ''; total_cost = 0; unknown_cost = False; last_good = None; drafts = []
     for attempt in range(spec['max_renders']):
         await update('repairing' if attempt else 'generating', attempts=attempt+1)
         try:
@@ -596,6 +650,19 @@ async def run(client, row):
         except Exception:
             await update('needs_review', review=None, warning='Visual review could not finish. Inspect this draft before using it.')
             return
+        try:
+            verdict = judge_likeness(verdict, await measure_likeness(finished, spec, loaded))
+        except Exception:
+            pass
+        drafts.append((verdict, path, art_path))
+        if (not verdict['passed'] and attempt+1 >= spec['max_renders'] and only_the_face(verdict)
+                and drafts[0][0].get('likeness') is not None and only_the_face(drafts[0][0])
+                and drafts[0][0]['likeness'] > (verdict.get('likeness') or 0)):
+            # The repair came out less like them than the first draft, and the
+            # face was the only fault in both: keep the closer one.
+            verdict, path, art_path = drafts[0]
+            await images.db(client, 'PATCH', f"/image_artworks?id=eq.{row['id']}", {'storage_path': path}, server_write=True)
+            await update('needs_review', art_path=art_path)
         await update('complete' if verdict['passed'] else 'needs_review', review=verdict)
         if verdict['passed'] or attempt+1 >= spec['max_renders']:
             return
@@ -610,7 +677,7 @@ def public_state(spec):
     verdict = spec.get('review') or {}
     return {'phase': spec.get('phase', 'queued'), 'attempts': spec.get('attempts', 0),
         'max_renders': spec.get('max_renders', 2), 'review_passed': verdict.get('passed'),
-        'issues': verdict.get('issues', []), 'warning': spec.get('warning')}
+        'issues': verdict.get('issues', []), 'warning': spec.get('warning'), 'likeness': verdict.get('likeness')}
 
 
 async def local_context(owner):

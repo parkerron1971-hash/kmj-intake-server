@@ -7,6 +7,7 @@ and keeps the clips until the API collects them. It has no database or storage
 credentials, runs one job at a time, and forgets a job when the API deletes it
 or when it is RESULT_TTL seconds old.
 """
+import base64
 import hmac
 import json
 import logging
@@ -83,12 +84,22 @@ class JobRequest(BaseModel):
 
 
 class FaceRequest(BaseModel):
-    """A face close-up for a clip made before close-ups existed: the clip's
-    stretch of the recording (or the clip itself), read over the network."""
+    """Face close-ups for a clip: the clip's stretch of the recording (or the
+    clip itself), read over the network. count 1 answers one JPEG; more
+    answers JSON with up to that many, best first."""
     model_config = ConfigDict(extra='forbid')
     source_url: str = Field(max_length=4096)
     start: float = Field(ge=0, le=MAX_SOURCE_SECONDS)
     end: float = Field(gt=0, le=MAX_SOURCE_SECONDS)
+    count: int = Field(default=1, ge=1, le=3)
+
+
+class LikenessRequest(BaseModel):
+    """A finished cover and the photos of the person it must look like, as
+    base64 images (JPEG or PNG)."""
+    model_config = ConfigDict(extra='forbid')
+    image_b64: str = Field(max_length=16_000_000)
+    references_b64: list[str] = Field(min_length=1, max_length=4)
 
 
 class JobError(Exception):
@@ -500,12 +511,57 @@ def faces(request: FaceRequest):
             except empty_spots.FramesUnreadable as error:
                 # Not a verdict on the clip: the caller may ask again.
                 raise HTTPException(502, str(error)) from None
+            if request.count > 1:
+                found = []
+                for _, frame, box in empty_spots.best_faces(frames, empty_spots.detector(), request.count):
+                    jpeg = encode_jpeg(empty_spots.closeup_image(frame, box))
+                    if jpeg:
+                        found.append({'jpeg_b64': base64.b64encode(jpeg).decode(), 'size': [round(box[2]), round(box[3])]})
+                if not found:
+                    raise HTTPException(404, 'No usable face in that stretch')
+                return {'faces': found}
             size = empty_spots.pick_closeup(frames, target, empty_spots.detector())
             if not size or not target.is_file():
                 raise HTTPException(404, 'No usable face in that stretch')
             return Response(content=target.read_bytes(), media_type='image/jpeg', headers={'X-Face-Size': f'{size[0]}x{size[1]}'})
     finally:
         face_slots.release()
+
+
+def encode_jpeg(image):
+    if image is None:
+        return None
+    import cv2
+    ok, data = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return data.tobytes() if ok else None
+
+
+def decode_image(text):
+    try:
+        raw = base64.b64decode(text, validate=True)
+    except ValueError:
+        raise HTTPException(422, 'An image is not valid base64') from None
+    import cv2
+    import numpy as np
+    image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(422, 'An image could not be read')
+    return image
+
+
+@app.post('/likeness', dependencies=[Depends(authorized)])
+def likeness_check(request: LikenessRequest):
+    """How much the face on a finished cover looks like the person in the
+    reference photos (face recognition, SFace cosine; see empty_spots)."""
+    image = decode_image(request.image_b64)
+    references = [decode_image(text) for text in request.references_b64]
+    if not face_slots.acquire(timeout=5):
+        raise HTTPException(503, 'Busy; try again')
+    try:
+        score, scores = empty_spots.likeness(image, references, empty_spots.recognizer())
+    finally:
+        face_slots.release()
+    return {'score': score, 'scores': scores, 'face_found': score is not None}
 
 
 @app.get('/jobs/{job_id}', dependencies=[Depends(authorized)])

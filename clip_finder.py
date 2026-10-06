@@ -246,9 +246,10 @@ def poster_path(row):
     return media_library.key(row['business_id']) + '/' + media_library.key(row['id']) + '.jpg'
 
 
-def face_path(row):
-    """A head-and-shoulders close-up from the recording: the cover's guide to the face and hair."""
-    return media_library.key(row['business_id']) + '/' + media_library.key(row['id']) + '-face.jpg'
+def face_path(row, n=1):
+    """A head-and-shoulders close-up from the recording: the cover's guide to
+    the face and hair. n 2 and 3 are more close-ups from other moments."""
+    return media_library.key(row['business_id']) + '/' + media_library.key(row['id']) + ('-face.jpg' if n == 1 else f'-face{n}.jpg')
 
 
 def frame_path(row):
@@ -657,7 +658,7 @@ def sweep():
         remove_objects([media_library.object_path(row)])
         sb_clients.sb_delete_as_service(f'/media_assets?id=eq.{row["id"]}&status=eq.uploading')
     for row in media_library.read(f'/media_assets?kind=eq.clip&decision=eq.skipped&decided_at=lt.{_z(now - timedelta(days=30))}&select=id,business_id,kind&limit=200'):
-        remove_objects([media_library.object_path(row), poster_path(row), frame_path(row), face_path(row)])
+        remove_objects([media_library.object_path(row), poster_path(row), frame_path(row), face_path(row), face_path(row, 2), face_path(row, 3)])
         sb_clients.sb_delete_as_service(f'/media_assets?id=eq.{row["id"]}&decision=eq.skipped')
     done = media_library.read(f'/media_clip_runs?status=eq.completed&finished_at=lt.{_z(now - timedelta(days=7))}&select=source_id&limit=500')
     for source_id in {r['source_id'] for r in done}:

@@ -91,15 +91,18 @@ def clip_row(business_id, asset_id):
     return rows[0]
 
 
+FACE_KINDS = {'face': 1, 'face2': 2, 'face3': 3}
+
+
 async def frame_artwork(client, biz, row, user_id, kind='frame'):
-    """The clean frame (or the face close-up, kind='face'), copied once into the
-    business's private image gallery, so the Director treats it like any
-    picture the owner uploaded."""
+    """The clean frame (or a face close-up, kind 'face', 'face2', 'face3'),
+    copied once into the business's private image gallery, so the Director
+    treats it like any picture the owner uploaded."""
     image_id = str(uuid5(UUID(media_library.key(row['id'])), f'cover-{kind}'))
     if await images.db(client, 'GET', f"/image_artworks?id=eq.{image_id}&business_id=eq.{UUID(str(biz['id']))}"):
         return image_id
     url = (os.environ.get('SUPABASE_URL', '').rstrip('/') + f'/storage/v1/object/{media_library.BUCKET}/'
-           + (clip_finder.face_path(row) if kind == 'face' else clip_finder.frame_path(row)))
+           + (clip_finder.face_path(row, FACE_KINDS[kind]) if kind in FACE_KINDS else clip_finder.frame_path(row)))
     response = await client.get(url, headers=storage_links.service_headers())
     if not response.is_success:
         raise HTTPException(502, 'The clip frame could not be loaded. Try again.')
@@ -108,7 +111,7 @@ async def frame_artwork(client, biz, row, user_id, kind='frame'):
     await images.store(client, path, raw, 'image/png')
     await images.db(client, 'POST', '/image_artworks', {
         'id': image_id, 'business_id': str(biz['id']), 'owner_id': str(user_id),
-        'prompt': f"{'Face close-up' if kind == 'face' else 'Clean frame'}: {row.get('name') or 'clip'}"[:180],
+        'prompt': f"{'Face close-up' if kind in FACE_KINDS else 'Clean frame'}: {row.get('name') or 'clip'}"[:180],
         'status': 'ready', 'storage_path': path, 'cost_usd': 0},
         server_write=True)
     return image_id
@@ -154,15 +157,26 @@ def shaped_covers(business_id, rows):
 _no_face = set()
 
 
+# Clips the clip service has answered with close-ups, in this process: one call each.
+_asked = set()
+
+
 def backfill_face(row):
-    """A close-up for a clip made before close-ups existed (2026-10-06: Kevin's
-    "Don't Judge Rightness By Feelings" cover was about 75% him, drawn from a
-    wide shot where his face was 30 px and turned). The clip service reads the
-    clip's stretch of the recording while it is kept (7 days), else the clip
-    itself, and the close-up is saved where a clip run would have put it. The
-    clip's configuration stays as it is: it is permanent once it exists."""
+    """backfill_faces for a clip with no close-up at all: True when one was made."""
+    return backfill_faces(row, need_first=True) > 0
+
+
+def backfill_faces(row, need_first=False):
+    """Close-ups made on demand: the clip service reads the clip's stretch of
+    the recording while it is kept (7 days), else the clip itself, and answers
+    up to three, best first. With need_first (a clip from before close-ups:
+    Kevin's "Don't Judge Rightness By Feelings" cover was about 75% him,
+    drawn from a wide shot where his face was 30 px), the best is saved as the
+    close-up; the next ones as face2 and face3 either way, more real views of
+    the face for the cover (2026-10-06). Saved where a run would put them; the
+    clip's configuration stays as it is. Returns how many were saved."""
     if str(row['id']) in _no_face or not os.environ.get('CLIPPER_URL') or not os.environ.get('CLIPPER_TOKEN'):
-        return False
+        return 0
     cfg = row.get('configuration') or {}
     source = media_library.read(f"/media_assets?id=eq.{media_library.key(row.get('source_id') or row['id'])}"
                                 f"&business_id=eq.{media_library.key(row['business_id'])}&select=*&limit=1") if row.get('source_id') else []
@@ -172,14 +186,14 @@ def backfill_face(row):
     else:
         url, start, end = storage_links.signed_url_sync(media_library.BUCKET, media_library.object_path(row), ttl=900), 0.0, float(row.get('duration_seconds') or 0)
     if not url or not end:
-        return False
+        return 0
     try:
         # Bounded: a cover request waits for this, and the service reads for at most 60 s.
-        response = clip_finder.clipper('POST', '/faces', json={'source_url': url, 'start': float(start), 'end': float(end)},
+        response = clip_finder.clipper('POST', '/faces', json={'source_url': url, 'start': float(start), 'end': float(end), 'count': 3},
                                        timeout=httpx.Timeout(10, read=75))
     except httpx.HTTPError:
-        log.warning('Face close-up could not be requested for clip %s', row['id'])
-        return False
+        log.warning('Face close-ups could not be requested for clip %s', row['id'])
+        return 0
     if response.status_code == 404:
         # Remember only the endpoint's own answer: a clip service from before
         # /faces existed also says 404 (Not Found), and that is not this clip's fault.
@@ -189,21 +203,34 @@ def backfill_face(row):
             said = None
         if said == 'No usable face in that stretch':
             _no_face.add(str(row['id']))
-        return False
-    if response.status_code != 200 or not response.content:
-        log.warning('Face close-up for clip %s: clip service answered %s', row['id'], response.status_code)
-        return False
+        return 0
+    try:
+        faces = (response.json() or {}).get('faces') if response.status_code == 200 else None
+    except ValueError:
+        faces = None
+    if not faces:
+        log.warning('Face close-ups for clip %s: clip service answered %s', row['id'], response.status_code)
+        return 0
+    # An answer is final for this process (a clip with one usable face has no
+    # second); a failure above is not, and the next cover asks again.
+    _asked.add(str(row['id']))
+    import base64
     import tempfile
+    slots = [1, 2, 3] if need_first else [2, 3]
+    picks = faces if need_first else faces[1:]
+    saved = 0
     with tempfile.TemporaryDirectory(prefix='clip-face-') as folder:
-        local = os.path.join(folder, 'face.jpg')
-        with open(local, 'wb') as out:
-            out.write(response.content)
-        try:
-            clip_finder.put_file(local, clip_finder.face_path(row), 'image/jpeg')
-        except clip_finder.RunFailed:
-            log.warning('Face close-up for clip %s could not be saved', row['id'])
-            return False
-    return True
+        for n, face in zip(slots, picks):
+            local = os.path.join(folder, f'face{n}.jpg')
+            try:
+                with open(local, 'wb') as out:
+                    out.write(base64.b64decode(face['jpeg_b64'], validate=True))
+                clip_finder.put_file(local, clip_finder.face_path(row, n), 'image/jpeg')
+            except (ValueError, KeyError, TypeError, clip_finder.RunFailed):
+                log.warning('Face close-up %s for clip %s could not be saved', n, row['id'])
+                continue
+            saved += 1
+    return saved
 
 
 async def subject_references(client, biz, row, user_id):
@@ -212,23 +239,28 @@ async def subject_references(client, biz, row, user_id):
     A clip from before close-ups gets one made now (backfill_face)."""
     references = [{'id': await frame_artwork(client, biz, row, user_id), 'role': 'subject',
                    'use': 'The speaker on stage: pose, body and clothes. Keep their exact likeness.'}]
-    # Best effort, like making it: a close-up that cannot be read or made
-    # leaves the cover to the stage frame alone instead of failing it.
-    face_id = None
-    try:
-        face_id = await frame_artwork(client, biz, row, user_id, kind='face')
-    except HTTPException:
-        if not (row.get('configuration') or {}).get('face') and await asyncio.to_thread(backfill_face, row):
-            try:
-                face_id = await frame_artwork(client, biz, row, user_id, kind='face')
-            except HTTPException:
-                face_id = None
-        if face_id is None:
-            log.warning('No face close-up for clip %s; using the frame alone', row['id'])
-    if face_id:
-        references.insert(0, {'id': face_id, 'role': 'subject',
-                              'use': 'Close-up of the same person: match this face, beard, hairline and hairstyle exactly.'})
-    return references
+
+    async def load(kind):
+        # Best effort, like making them: a close-up that cannot be read or
+        # made leaves the cover to the pictures it has, never fails it.
+        try:
+            return await frame_artwork(client, biz, row, user_id, kind=kind)
+        except HTTPException:
+            return None
+    first, second = await load('face'), await load('face2')
+    if second is None and str(row['id']) not in _asked:
+        need_first = first is None and not (row.get('configuration') or {}).get('face')
+        if await asyncio.to_thread(backfill_faces, row, need_first):
+            first, second = first or await load('face'), await load('face2')
+    third = await load('face3') if second else None
+    if first is None:
+        log.warning('No face close-up for clip %s; using the frame alone', row['id'])
+    faces = [{'id': first, 'role': 'subject',
+              'use': 'Close-up of the same person: match this face, beard, hairline and hairstyle exactly.'}] if first else []
+    faces += [{'id': extra, 'role': 'subject',
+               'use': 'Another close-up of the same person at a different moment: the same face, to get every feature exactly right.'}
+              for extra in (second, third) if extra]
+    return faces + references
 
 
 def cover_action(row, *, size, words, references, style_image_id=None, note=None):
@@ -239,6 +271,10 @@ def cover_action(row, *, size, words, references, style_image_id=None, note=None
         goal += ' The owner asked for this look: ' + note
     references = list(references)
     if style_image_id:
+        # A design takes four pictures: with a style to follow, two close-ups,
+        # the stage frame and the style (never drop the frame or the style).
+        faces = [r for r in references if 'close-up' in (r.get('use') or '').lower()]
+        references = faces[:2] + [r for r in references if r not in faces]
         references.append({'id': str(style_image_id), 'role': 'style', 'use': STYLE_USE})
     noun = 'thumbnail' if size == SHAPES['wide'] else 'cover'
     return {'goal': goal, 'exact_copy': words, 'size': size, 'references': references,

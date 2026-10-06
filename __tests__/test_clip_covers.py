@@ -25,7 +25,7 @@ def clip(**configuration):
 @pytest.fixture
 def app(monkeypatch):
     s = SimpleNamespace(rows=[clip()], patched=[], designed=[], stored=[], posted=[], fetched=[], artworks=[], busy=set(),
-                        faces=False, backfilled=[])
+                        faces=False, extra=False, backfilled=[])
     monkeypatch.setattr(cc.media_library, 'read', lambda path: list(s.rows))
     monkeypatch.setattr(cc, 'designing_now', lambda biz, clip_id: set(s.busy))
     monkeypatch.setattr(cc.sb_clients, 'sb_patch_as_service', lambda path, body: s.patched.append((path, body)) or [body])
@@ -43,9 +43,13 @@ def app(monkeypatch):
         def __init__(self, ok): self.is_success, self.content = ok, b'jpg'
     async def get(self, url, headers=None):
         # A face close-up is in storage only when the test says one is.
-        s.fetched.append(url); return Response(s.faces or not url.endswith('-face.jpg'))
+        s.fetched.append(url)
+        if url.endswith('-face.jpg'):
+            return Response(s.faces)
+        return Response(s.extra if url.endswith(('-face2.jpg', '-face3.jpg')) else True)
     monkeypatch.setattr(cc.httpx.AsyncClient, 'get', get)
-    monkeypatch.setattr(cc, 'backfill_face', lambda row: s.backfilled.append(row['id']) or False)
+    monkeypatch.setattr(cc, 'backfill_faces', lambda row, need_first=False: s.backfilled.append((row['id'], need_first)) or 0)
+    monkeypatch.setattr(cc, '_asked', set())
 
     async def design(client, biz, action):
         s.designed.append((images.turn_id.get(), action))
@@ -175,7 +179,7 @@ def test_a_close_up_that_cannot_be_read_leaves_the_cover_to_the_frame(app, monke
     class Response:
         def __init__(self, ok): self.is_success, self.content = ok, b'jpg'
     async def get(self, url, headers=None):
-        app.fetched.append(url); return Response(not url.endswith('-face.jpg'))
+        app.fetched.append(url); return Response(url.endswith('-frame.jpg'))
     monkeypatch.setattr(cc.httpx.AsyncClient, 'get', get)
     app.rows = [clip(face=True)]
     post(app)
@@ -353,43 +357,69 @@ def test_the_cover_step_only_looks_at_recent_runs_that_asked(monkeypatch):
 def test_an_older_clip_gets_its_close_up_made_then_leads_the_cover(app, monkeypatch):
     """Kevin's "Don't Judge Rightness By Feelings" cover was about 75% him: the
     clip predates close-ups, so only a wide shot with a 30 px face guided it."""
-    def backfill(row):
-        app.backfilled.append(row['id'])
-        app.faces = True  # the clip service made it and it was saved
-        return True
-    monkeypatch.setattr(cc, 'backfill_face', backfill)
+    def backfill(row, need_first=False):
+        app.backfilled.append((row['id'], need_first))
+        app.faces = app.extra = True  # the clip service made three and they were saved
+        return 3
+    monkeypatch.setattr(cc, 'backfill_faces', backfill)
     post(app)
     refs = app.designed[0][1]['references']
-    assert app.backfilled == [CLIP]
-    assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-face')), str(uuid5(UUID(CLIP), 'cover-frame'))]
+    assert app.backfilled == [(CLIP, True)]
+    assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), k)) for k in ('cover-face', 'cover-face2', 'cover-face3', 'cover-frame')]
+    assert 'Another close-up' in refs[1]['use']
 
 
 def test_no_close_up_to_be_had_leaves_the_cover_to_the_frame(app):
     post(app)
-    assert app.backfilled == [CLIP]
+    assert app.backfilled == [(CLIP, True)]
     assert [r['id'] for r in app.designed[0][1]['references']] == [str(uuid5(UUID(CLIP), 'cover-frame'))]
 
 
-def test_a_clip_that_had_a_close_up_is_never_backfilled(app):
+def test_a_clip_that_had_a_close_up_is_only_asked_for_more_views(app):
     """configuration.face says it was made; a storage miss is not a reason to remake it."""
     app.rows = [clip(face=True)]
     post(app)
-    assert app.backfilled == []
+    assert app.backfilled == [(CLIP, False)]
+
+
+def test_a_style_picture_keeps_the_frame_and_two_close_ups(app):
+    """Four pictures a design: never drop the stage frame or the look to follow."""
+    app.faces = app.extra = True
+    style = str(uuid4())
+    post(app, style_image_id=style)
+    refs = app.designed[0][1]['references']
+    assert [r['id'] for r in refs] == [str(uuid5(UUID(CLIP), 'cover-face')), str(uuid5(UUID(CLIP), 'cover-face2')),
+                                       str(uuid5(UUID(CLIP), 'cover-frame')), style]
+
+
+def test_three_close_ups_and_the_frame_without_a_style(app):
+    app.faces = app.extra = True
+    post(app)
+    assert len(app.designed[0][1]['references']) == 4 and app.backfilled == []
+
+
+import base64 as _b64
+
+
+def faces_payload(*names):
+    return {'faces': [{'jpeg_b64': _b64.b64encode(n).decode(), 'size': [80, 100]} for n in names]}
 
 
 class Clipper:
-    def __init__(self, status=200, content=b'jpeg', detail=None):
-        self.calls, self.status, self.content, self.detail = [], status, content, detail
+    def __init__(self, status=200, payload=None, detail=None):
+        self.calls, self.status = [], status
+        self.payload = payload if payload is not None else (faces_payload(b'one', b'two', b'three') if status == 200 else {'detail': detail})
 
     def __call__(self, method, path, **kw):
         self.calls.append((method, path, kw.get('json')))
-        return SimpleNamespace(status_code=self.status, content=self.content, json=lambda: {'detail': self.detail})
+        return SimpleNamespace(status_code=self.status, content=b'', json=lambda: self.payload)
 
 
 def backfill_env(monkeypatch, source_rows, clipper):
     monkeypatch.setenv('CLIPPER_URL', 'https://clipper.example.test')
     monkeypatch.setenv('CLIPPER_TOKEN', 't' * 40)
     monkeypatch.setattr(cc, '_no_face', set())
+    monkeypatch.setattr(cc, '_asked', set())
     monkeypatch.setattr(cc.media_library, 'read', lambda path: list(source_rows))
     monkeypatch.setattr(cc.storage_links, 'signed_url_sync', lambda bucket, path, ttl=0: f'https://store.example.test/{path}')
     monkeypatch.setattr(cc.clip_finder, 'clipper', clipper)
@@ -410,9 +440,25 @@ def test_the_close_up_comes_from_the_recording_while_it_is_kept(monkeypatch):
     saved = backfill_env(monkeypatch, [{'id': SOURCE, 'business_id': BIZ, 'kind': 'source', 'status': 'ready'}], clipper)
     assert cc.backfill_face(older()) is True
     method, path, body = clipper.calls[0]
-    assert (method, path) == ('POST', '/faces') and body['start'] == 291.0 and body['end'] == 381.0
+    assert (method, path) == ('POST', '/faces') and body['start'] == 291.0 and body['end'] == 381.0 and body['count'] == 3
     assert body['source_url'].endswith(f'{BIZ}/{SOURCE}.source')
-    assert saved == [(b'jpeg', f'{BIZ}/{CLIP}-face.jpg', 'image/jpeg')]
+    assert saved == [(b'one', f'{BIZ}/{CLIP}-face.jpg', 'image/jpeg'), (b'two', f'{BIZ}/{CLIP}-face2.jpg', 'image/jpeg'),
+                     (b'three', f'{BIZ}/{CLIP}-face3.jpg', 'image/jpeg')]
+
+
+def test_a_clip_with_its_close_up_only_gets_the_extra_views(monkeypatch):
+    clipper = Clipper()
+    saved = backfill_env(monkeypatch, [{'id': SOURCE, 'business_id': BIZ, 'kind': 'source', 'status': 'ready'}], clipper)
+    assert cc.backfill_faces(older(face=True), need_first=False) == 2
+    assert [p for _, p, _ in saved] == [f'{BIZ}/{CLIP}-face2.jpg', f'{BIZ}/{CLIP}-face3.jpg']
+    assert CLIP in cc._asked
+
+
+def test_a_failure_is_never_the_final_answer(monkeypatch):
+    """Only an answer with faces marks the clip asked; a 502 lets the next cover try again."""
+    clipper = Clipper(status=502, detail='The video could not be read.')
+    backfill_env(monkeypatch, [], clipper)
+    assert cc.backfill_faces(older(), need_first=True) == 0 and CLIP not in cc._asked
 
 
 def test_after_the_recording_is_gone_the_clip_itself_is_read(monkeypatch):
@@ -456,6 +502,6 @@ def test_a_failed_read_is_asked_again(monkeypatch):
 
 def test_the_face_request_is_bounded(monkeypatch):
     seen = []
-    backfill_env(monkeypatch, [], lambda method, path, **kw: seen.append(kw.get('timeout')) or SimpleNamespace(status_code=200, content=b'j'))
+    backfill_env(monkeypatch, [], lambda method, path, **kw: seen.append(kw.get('timeout')) or SimpleNamespace(status_code=200, content=b'', json=lambda: faces_payload(b'j')))
     cc.backfill_face(older())
     assert seen[0].read == 75

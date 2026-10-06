@@ -297,3 +297,69 @@ def test_storage_errors_are_actionable_and_do_not_leak_provider_details(status,b
     from platform_marketing import storage_upload_error
     error=storage_upload_error(httpx.Response(status,json=body),60*1024*1024,'video/mp4')
     assert error.status_code==expected and 'secret details' not in error.detail
+
+
+# -- the likeness meter (Kevin, 2026-10-06: "we want over 90 percent looks") --
+
+def test_the_meter_grades_only_below_the_bar():
+    passed = dict(passed=True, issues=[], repair_instruction='')
+    assert d.judge_likeness(passed, None) == passed
+    near = d.judge_likeness(passed, 0.83)
+    assert near['passed'] and near['likeness'] == 0.83 and near['issues'] == []
+    far = d.judge_likeness(passed, 0.59)
+    assert not far['passed'] and far['likeness'] == 0.59
+    assert far['issues'][0].startswith(d.LIKENESS_ISSUE) and '0.59' in far['issues'][0] and 'close-up' in far['issues'][0]
+    assert d.only_the_face(far) and not d.only_the_face(dict(far, issues=far['issues'] + ['Title clipped']))
+
+
+def test_a_face_that_is_not_them_takes_the_repair(pipeline, monkeypatch):
+    pipeline.reviews = [dict(passed=True, issues=[], repair_instruction=''), dict(passed=True, issues=[], repair_instruction='')]
+    scores = [0.6, 0.84]
+    monkeypatch.setattr(d, 'measure_likeness', AsyncMock(side_effect=lambda *a: scores.pop(0)))
+    run(d.run(None, row()))
+    assert len(pipeline.renders) == 2 and pipeline.charges == [True, False]
+    final = pipeline.writes[-1]['director']
+    assert final['phase'] == 'complete' and final['review']['likeness'] == 0.84
+    # The first verdict sent the face back for repair.
+    first = next(w['director']['review'] for w in pipeline.writes if w and w.get('director', {}).get('review'))
+    assert first['likeness'] == 0.6 and not first['passed']
+
+
+def test_the_closer_draft_is_kept_when_the_repair_moves_away(pipeline, monkeypatch):
+    pipeline.reviews = [dict(passed=True, issues=[], repair_instruction=''), dict(passed=True, issues=[], repair_instruction='')]
+    scores = [0.68, 0.61]
+    monkeypatch.setattr(d, 'measure_likeness', AsyncMock(side_effect=lambda *a: scores.pop(0)))
+    run(d.run(None, row()))
+    paths = [w['storage_path'] for w in pipeline.writes if w and 'storage_path' in w]
+    assert paths[-1].endswith('-1.png')
+    final = pipeline.writes[-1]['director']
+    assert final['phase'] == 'needs_review' and final['review']['likeness'] == 0.68
+
+
+def test_a_face_the_meter_cannot_read_is_never_a_failing_grade(pipeline, monkeypatch):
+    pipeline.reviews = [dict(passed=True, issues=[], repair_instruction='')]
+    monkeypatch.setattr(d, 'measure_likeness', AsyncMock(return_value=None))
+    run(d.run(None, row()))
+    assert len(pipeline.renders) == 1 and pipeline.writes[-1]['director']['phase'] == 'complete'
+
+
+def test_the_meter_sends_the_design_and_the_subject_photos(monkeypatch):
+    monkeypatch.setenv('CLIPPER_URL', 'https://clipper.example.test')
+    monkeypatch.setenv('CLIPPER_TOKEN', 't' * 40)
+    import clip_finder
+    sent = []
+
+    def clipper(method, path, **kw):
+        sent.append((method, path, kw))
+        return SimpleNamespace(status_code=200, json=lambda: {'score': 0.88})
+    monkeypatch.setattr(clip_finder, 'clipper', clipper)
+    ids = [str(uuid4()) for _ in range(3)]
+    spec = {'references': [dict(id=ids[0], role='subject', use='Close-up'), dict(id=ids[1], role='style', use='Look'),
+                           dict(id=ids[2], role='subject', use='Frame')]}
+    loaded = {i: png() for i in ids}
+    assert run(d.measure_likeness(png(), spec, loaded)) == 0.88
+    method, path, kw = sent[0]
+    assert (method, path) == ('POST', '/likeness') and len(kw['json']['references_b64']) == 2
+    assert kw['timeout'].read == 40
+    monkeypatch.delenv('CLIPPER_URL')
+    assert run(d.measure_likeness(png(), spec, loaded)) is None
