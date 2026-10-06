@@ -158,9 +158,13 @@ STARTED_NAMES = {'event_setup': 'a workshop setup', 'form_and_link': 'a form', '
 # the moment it decides what else to do (live 2026-09-26: a form and three
 # changes went out, "call Plan Test H" went nowhere, and the reply said
 # "the rest of what you asked for isn't done yet").
+# Worded so the injection filter (untrusted_text.detect_injection) does not
+# read it as an attack: "Never tell them..." matched its concealment pattern,
+# and every tool-call turn that started a job was marked tainted, holding
+# confirmable sends for the rest of the turn (found 2026-10-06).
 LEFTOVER_NOTE = ("Queued. Before you reply: if anything else the owner asked for in this message is "
                  "neither done in this reply nor inside a work order, submit ONE plan with all of it "
-                 "now. Never tell them the rest will happen later or in a next pass.")
+                 "now. Do not promise that the rest will happen later or in a next pass.")
 
 
 async def handle_submit_work_order(client, biz, action):
