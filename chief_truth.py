@@ -2459,7 +2459,11 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     import chief_of_staff as chief
     receipts = [r for r in taken if isinstance(r, dict)]
     if receipts and all(r.get('type') in ('submit_work_order','respond_work_order') for r in receipts):
-        return '\n\n'.join(str(r.get('label') or r.get('result') or '') for r in receipts), {'status':'receipts','sources':[]}
+        # A started job's sentence ("I'm on it ... you can leave this chat")
+        # is its `say`, said here once, even when one message started
+        # several jobs; its label is the short step/receipt line.
+        said = [str(r.get('say') or r.get('label') or r.get('result') or '') for r in receipts]
+        return '\n\n'.join(dict.fromkeys(s for s in said if s)), {'status':'receipts','sources':[]}
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):
         return chief._deterministic_fallback_reply(receipts), {'status': 'receipts', 'sources': []}

@@ -383,11 +383,29 @@ def _turn_status(text: str) -> None:
 STEP_PREFIX = "\x00step:"
 
 
-def _step_phrase(atype: str) -> str:
-    """The starting line for an action: the status phrase, sentence case."""
+def _step_phrase(atype: str, action: Optional[Dict[str, Any]] = None) -> str:
+    """The starting line for an action: the status phrase, sentence case.
+    A design or a background job is named by what was asked for
+    ("Designing your thumbnail", "Starting your form"), never by its verb."""
     t = str(atype or "").strip()
-    p = _ACTION_PHRASES.get(t) or (t.replace("_", " ") if t else "working")
+    p = _design_step_phrase(t, action) or _ACTION_PHRASES.get(t) or (t.replace("_", " ") if t else "working")
     return p[:1].upper() + p[1:]
+
+
+def _design_step_phrase(atype: str, action: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(action, dict):
+        return None
+    try:
+        if atype == "design_flyer":
+            from chief_code import design_noun
+            return "designing your " + design_noun(action.get("goal") or action.get("prompt"),
+                                                   action.get("size"), action.get("owner_request"))
+        if atype == "submit_work_order":
+            import chief_build_runtime
+            return chief_build_runtime.starting_phrase(action)
+    except Exception:
+        return None
+    return None
 
 
 def _emit_stream_step(body: Dict[str, Any]) -> None:
@@ -400,7 +418,7 @@ def _emit_stream_step(body: Dict[str, Any]) -> None:
         sink(STEP_PREFIX + json.dumps(body))
 
 
-def _turn_step_start(atype: str, n0: int = 0) -> Optional[Dict[str, Any]]:
+def _turn_step_start(atype: str, n0: int = 0, action: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Announce one action starting. Returns the pending step to finish
     later, or None when nobody is listening — so the door pays nothing
     on the plain endpoint."""
@@ -413,7 +431,7 @@ def _turn_step_start(atype: str, n0: int = 0) -> Optional[Dict[str, Any]]:
     step = {
         "id": uuid.uuid4().hex[:10],
         "type": str(atype or ""),
-        "label": _step_phrase(atype),
+        "label": _step_phrase(atype, action),
         "n0": n0,
         "t0": time.monotonic(),
     }
@@ -459,7 +477,7 @@ def _humanize_actions(actions: List[Dict[str, Any]]) -> str:
         t = str((a or {}).get("type") or "").strip() if isinstance(a, dict) else ""
         if not t:
             continue
-        p = _ACTION_PHRASES.get(t) or (t.replace("_", " "))
+        p = _design_step_phrase(t, a) or _ACTION_PHRASES.get(t) or (t.replace("_", " "))
         if p not in phrases:
             phrases.append(p)
         if len(phrases) == 2:
@@ -12770,7 +12788,7 @@ async def _execute_actions(client, biz, actions: List[Dict],
                 and not worker_scope.get() and atype in ("ensure_module", "create_module_entry", "set_site_capability")):
             results.append(_fail(atype, "Your build is already handling those steps. Check its progress card."))
             continue
-        pending_step = _turn_step_start(atype, len(results))
+        pending_step = _turn_step_start(atype, len(results), action)
         handler = ACTION_HANDLERS.get(atype)
         if not handler:
             # Lookup MISS. Instead of dead-ending, REASON the intent into a

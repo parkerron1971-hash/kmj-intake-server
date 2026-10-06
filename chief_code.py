@@ -29,6 +29,46 @@ def flyer_verb():
     return 'generate_image' if off else 'design_flyer'
 
 
+# The words people read about a design follow what they asked for. Every
+# design goes through the same flyer machinery (design_flyer, kind flyer),
+# but a YouTube thumbnail called "your flyer" reads as the wrong job (live
+# 2026-10-06, Church: "All done with your flyer" for a thumbnail).
+_DESIGN_NOUN = re.compile(
+    r'\b(?:(?P<thumbnail>thumb\s?nails?)'
+    # "a cover", "cover image", not "covers the costs"
+    r'|(?P<cover>covers?)(?!\s+(?:the|a|an|all|it|its|this|that|these|those|your|our|my|their|every)\b)'
+    r'|(?P<poster>posters?)|(?P<banner>banners?)|(?P<flyer>fl[yi]ers?))\b', re.I)
+_YOUTUBE = re.compile(r'\byou\s?tube\b', re.I)
+_GRAPHIC = re.compile(r'\b(?:graphics?|social(?:\s+media)?\s+(?:post|image)|(?:instagram|facebook|ig)\s+(?:post|story))\b', re.I)
+
+
+def design_noun(goal='', size=None, owner_request=''):
+    """What a design is called where people read about it: thumbnail,
+    cover, poster, banner, graphic or flyer. The design's own brief speaks
+    first (one message can ask for a flyer and a thumbnail), then the
+    owner's words; within one text the first noun named wins. With no
+    noun at all, the shape decides: the portrait default is a flyer,
+    anything else a graphic. Never a machine key: only words people read."""
+    for text in (goal, owner_request):
+        text = str(text or '')
+        found = _DESIGN_NOUN.search(text)
+        if found:
+            return found.lastgroup
+        if _YOUTUBE.search(text):
+            return 'thumbnail'
+        if _GRAPHIC.search(text):
+            return 'graphic'
+    return 'flyer' if str(size or '1024x1536').strip().lower() == '1024x1536' else 'graphic'
+
+
+def flyer_noun(order):
+    """The noun for a work order's design: its brief (a workshop's flyer
+    has none, and is a flyer), its size, the owner's words."""
+    f = order.facts or {}
+    goal = f.get('prompt') or ('' if order.kind == 'flyer' else 'A flyer for the workshop')
+    return design_noun(goal, f.get('size'), order.practitioner_words)
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
@@ -130,10 +170,10 @@ def question(order):
         ('starts_at', 'What date and time does it start?'), ('timezone', 'Which time zone is the workshop in?'),
         ('location', 'Where will the workshop take place?')],
         'form_and_link': [('name', 'What should the form be called?')],
-        'flyer': [('prompt', 'What should the flyer show?')], 'site_door': [], 'plan': []}[order.kind]
+        'flyer': [('prompt', f'What should the {flyer_noun(order)} show?')], 'site_door': [], 'plan': []}[order.kind]
     if order.kind == 'flyer' and flyer_verb() == 'design_flyer':
         # The Director prints only approved words; it never writes a headline or a price itself.
-        needed = needed + [('exact_copy', 'What should the flyer say, word for word? For example the headline, the date and how to book.')]
+        needed = needed + [('exact_copy', f'What should the {flyer_noun(order)} say, word for word? For example the headline, the date and how to book.')]
     for key, text in needed:
         if not f.get(key):
             return {'field': key, 'text': text}
@@ -184,7 +224,7 @@ def plan(order, state=None):
             steps.append(Step('registration', 'verify_registration', 'Registration is connected to your workshop.', requires=('events_page',)))
         steps.append(Step('site_link', 'connect_events', 'Your website links to Events.', requires=('events_page',)))
         if f.get('wants_flyer'):
-            steps.append(Step('flyer', flyer_verb(), 'Your flyer is ready in Media Library.', sensitive=True))
+            steps.append(Step('flyer', flyer_verb(), f'Your {flyer_noun(order)} is ready in Media Library.', sensitive=True))
         return steps
     if order.kind == 'form_and_link':
         steps = [Step('form', 'create_client_form', 'Your form is ready.',
@@ -193,7 +233,7 @@ def plan(order, state=None):
             steps.append(Step('send', 'send_form_link', 'Your form link was sent.', requires=('form',), sensitive=True))
         return steps
     if order.kind == 'flyer':
-        return [Step('flyer', flyer_verb(), 'Your flyer is ready in Media Library.', sensitive=True)]
+        return [Step('flyer', flyer_verb(), f'Your {flyer_noun(order)} is ready in Media Library.', sensitive=True)]
     return [Step('events_module', 'ensure_module', 'Events is ready in Build.', {'module_name':'Events','archetype':'event_roster'}),
             Step('events_page', 'set_site_capability', 'Your events page is available.', {'capability':'events','on':True}, ('events_module',)),
             Step('site_link', 'connect_events', 'Your website links to Events.', requires=('events_page',))]
