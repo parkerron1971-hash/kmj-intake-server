@@ -1609,6 +1609,11 @@ async def startup():
                           "interval", seconds=15, id="clip_finder", max_instances=1)
         scheduler.add_job(g("clip_finder_sweep", _clip_finder.sweep_tick),
                           "interval", hours=6, id="clip_finder_sweep", max_instances=1)
+        # Covers designed along with the clips (2026-10-06): a run that asked
+        # for them gets its best clips covered once it completes.
+        import clip_covers as _clip_covers
+        scheduler.add_job(g("clip_covers", _clip_covers.cover_tick),
+                          "interval", seconds=30, id="clip_covers", max_instances=1)
     except Exception as e:
         print(f"   [warn] clip finder not scheduled: {e}")
     try:

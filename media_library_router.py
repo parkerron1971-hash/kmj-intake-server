@@ -18,9 +18,11 @@ def library(business_id: UUID, user: AuthedUser = Depends(require_user)):
     rows = media_library.read(f'/media_assets?business_id=eq.{business_id}&select={media_library.PUBLIC_COLUMNS}&order=created_at.desc&limit=500')
     posters = clip_finder.poster_urls(rows)
     import clip_covers
-    covers = clip_covers.covers_for(business_id, rows)
+    shaped = clip_covers.shaped_covers(business_id, rows)
+    covers = {clip: shapes['story'] for clip, shapes in shaped.items() if 'story' in shapes}
     assets = [media_library.public(r) | ({'poster_url': posters[str(r['id'])]} if str(r['id']) in posters else {})
-              | ({'cover_image_id': covers[str(r['id'])]} if str(r['id']) in covers else {}) for r in rows]
+              | ({'cover_image_id': covers[str(r['id'])]} if str(r['id']) in covers else {})
+              | ({'covers': shaped[str(r['id'])]} if str(r['id']) in shaped else {}) for r in rows]
     return {'ok': True, 'configuration': media_library.configuration(), 'assets': assets,
             'clip_finder': clip_finder.configuration(business_id), 'runs': clip_finder.runs(business_id, user)}
 

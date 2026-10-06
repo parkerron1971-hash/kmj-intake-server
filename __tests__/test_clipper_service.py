@@ -2,6 +2,7 @@
 and the empty-spot check. The engine, the download and the face detector are
 faked; nothing here needs FFmpeg, OpenCV or a network."""
 import json
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -34,7 +35,7 @@ def client(monkeypatch, tmp_path):
     svc.jobs.clear()
 
 
-def fake_pipeline(monkeypatch, final=None, clips=2, spots=None):
+def fake_pipeline(monkeypatch, final=None, clips=2, spots=None, layouts=None):
     """Swap the slow parts for fakes that write what the real engine writes."""
     monkeypatch.setattr(svc, 'download', lambda url, target, state: target.write_bytes(b'video') or 5)
     monkeypatch.setattr(svc, 'probe', lambda path: 60.0)
@@ -50,7 +51,8 @@ def fake_pipeline(monkeypatch, final=None, clips=2, spots=None):
         for i in range(clips):
             (out / f'clip_{i:02d}.mp4').write_bytes(b'mp4')
             rows.append({'clip_index': i, 'summary': f'Moment {i}', 'start_time_ms': 1000 * i, 'end_time_ms': 1000 * i + 30000,
-                         'duration_ms': 30000, 'virality_score': 0.8, 'tags': ['faith'], 'layout_type': 'talking_head',
+                         'duration_ms': 30000, 'virality_score': 0.8, 'tags': ['faith'],
+                         'layout_type': (layouts or {}).get(i, 'talking_head'),
                          'editorial': {'flags': ['uncertain_unresolved_payoff']}})
         metrics = {'api_costs': {'total_estimated_cost_usd': 0.37}, 'stage_durations_seconds': {'transcription': 72.0},
                    'planned_clip_count': clips + 1, 'rendered_clip_count': clips, 'failed_clip_count': 1}
@@ -67,7 +69,11 @@ def fake_pipeline(monkeypatch, final=None, clips=2, spots=None):
         seen.setdefault('frames', []).append((source.name, source.is_file(), at))
         target.write_bytes(b'frame')
     monkeypatch.setattr(svc, 'make_frame', make_frame)
-    monkeypatch.setattr(svc.empty_spots, 'face_closeup', lambda source, at, target, det: target.write_bytes(b'face') or (70, 90))
+    def face_closeup(source, at, target, det, **span):
+        seen.setdefault('faces', []).append((at, span))
+        target.write_bytes(b'face')
+        return 70, 90
+    monkeypatch.setattr(svc.empty_spots, 'face_closeup', face_closeup)
     return seen
 
 
@@ -411,3 +417,157 @@ def test_the_close_up_box_stays_four_by_five_inside_the_frame():
         left, top, w, h = box(full_w, full_h, *face)
         assert abs(h / w - 1.25) < 0.01, (full_w, full_h, w, h)
         assert left >= 0 and top >= 0 and left + w <= full_w and top + h <= full_h
+
+
+def face_row(w=80, turn=0.0, tilt=0.0, eyes=0.42, confidence=0.92, x=600, y=200):
+    """A YuNet row laid out like a real face: the eyes `eyes` face-widths apart,
+    the nose tip `turn` eye-distances off their midpoint, one eye `tilt`
+    eye-distances above the other."""
+    h = w * 1.3
+    d = eyes * w
+    cx, eye_y = x + w / 2, y + h * 0.4
+    mouth_y = y + h * 0.78
+    return [x, y, w, h, cx - d / 2, eye_y - tilt * d / 2, cx + d / 2, eye_y + tilt * d / 2,
+            cx + turn * d, y + h * 0.6, cx - d * 0.4, mouth_y, cx + d * 0.4, mouth_y, confidence]
+
+
+def score(sharpness=40.0, frame=(1280, 720), **face):
+    return svc.empty_spots.face_score(face_row(**face), *frame, sharpness)
+
+
+def test_a_face_turned_to_the_camera_beats_one_looking_aside():
+    """Kevin, 2026-10-06: the close-up chose a serious, looking-aside frame;
+    a cover wants the person facing the camera."""
+    assert score(turn=0.05) > score(turn=0.2) > score(turn=0.35)
+    assert score(turn=0.6) is None                  # the nose far off the eyes' midpoint
+    assert score(eyes=0.18) is None                 # the eyes collapsed together: a profile
+    assert score(tilt=0.0) > score(tilt=0.3)
+
+
+def test_a_slightly_smaller_face_on_face_beats_a_bigger_turned_one():
+    # What the sermon check showed: a 76 px face-on frame over the 83 px poster frame looking aside.
+    assert score(w=76, turn=0.05) > score(w=84, turn=0.3, sharpness=45.0)
+
+
+def test_a_sharp_face_beats_a_blurred_one():
+    assert score(sharpness=60.0) > score(sharpness=8.0) > 0
+
+
+def test_a_bigger_face_beats_a_small_one_and_a_tiny_face_is_never_used():
+    assert score(w=160) > score(w=60)
+    assert score(w=20) is None                      # 20 px in a 720-tall frame: too few pixels for a likeness
+    assert score(w=20, frame=(320, 240)) is not None
+
+
+def test_an_unsure_face_loses_and_a_coin_flip_is_never_used():
+    """A hand or the microphone across the face lowers the detector's confidence."""
+    assert score(confidence=0.93) > score(confidence=0.7)
+    assert score(confidence=0.5) is None
+
+
+def test_the_face_is_looked_for_across_the_whole_clip():
+    times = svc.empty_spots.sample_times(100.0, 1.5, start=90.0, end=150.0, spread=12)
+    assert times == sorted(times)
+    assert {98.5, 99.25, 100.0, 100.75, 101.5} <= set(times)        # around the poster moment
+    across = [t for t in times if t not in (98.5, 99.25, 100.0, 100.75, 101.5)]
+    assert len(across) == 12 and across[0] == 92.5 and across[-1] == 147.5   # the middle of each slice
+    assert svc.empty_spots.sample_times(100.0, 1.5) == [98.5, 99.25, 100.0, 100.75, 101.5]
+    assert svc.empty_spots.sample_times(0.5, 1.5)[0] == 0.0                   # never before the recording
+
+
+def test_the_close_up_looks_across_each_clip_but_not_across_a_two_person_shot(client, monkeypatch):
+    seen = fake_pipeline(monkeypatch, clips=2, layouts={1: 'two_shot'})
+    job = uuid4()
+    client.post(f'/jobs/{job}', json={'source_url': SOURCE}, headers=AUTH)
+    assert wait_done(client, job)['status'] == 'completed'
+    # Clip 0 is [0 s, 30 s] of the recording; clip 1 is two people, so only its poster moment.
+    assert seen['faces'] == [(2.0, {'start': 0.0, 'end': 30.0}), (3.0, {})]
+
+
+def test_face_sharpness_sees_blur():
+    cv2 = pytest.importorskip('cv2')
+    import numpy as np
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    frame[::8, :] = 255
+    frame[:, ::8] = 255
+    blurred = cv2.GaussianBlur(frame, (0, 0), 3)
+    sharp = svc.empty_spots.face_sharpness(frame, 100, 100, 150, 180)
+    assert sharp > svc.empty_spots.face_sharpness(blurred, 100, 100, 150, 180) * 4
+    assert svc.empty_spots.face_sharpness(frame, 500, 500, 50, 60) == 0.0   # off the frame
+
+
+class FakeImage:
+    """Just enough of a picture for face_closeup: a shape, a size, slicing that
+    remembers where in the source frame the slice came from, and a tag naming
+    the frame it was read as."""
+    def __init__(self, tag, width, height, box=None):
+        self.tag, self.shape = tag, (height, width, 3)
+        self.box = box or (0, 0, width, height)
+
+    @property
+    def size(self):
+        return self.shape[0] * self.shape[1] * 3
+
+    def __getitem__(self, key):
+        rows, cols = key
+        top, bottom = rows.start, min(rows.stop, self.shape[0])
+        left, right = cols.start, min(cols.stop, self.shape[1])
+        return FakeImage(self.tag, max(0, right - left), max(0, bottom - top), (left, top, right - left, bottom - top))
+
+
+def test_the_close_up_crops_the_best_scoring_frame_at_full_resolution(tmp_path, monkeypatch):
+    """The picking loop itself, with a fake reader, detector and OpenCV: a
+    1280-wide recording is detected at 640 wide (scale 0.5), so every YuNet
+    coordinate must be doubled back before scoring and cropping. The biggest
+    face (turned away) loses to a smaller one facing the camera."""
+    full = {   # each frame's faces in the recording's own pixels
+        'small': [face_row(w=60, x=300, y=200)],
+        'turned': [face_row(w=120, turn=0.3, x=500, y=150)],
+        'best': [face_row(w=40, x=100, y=100), face_row(w=100, x=900, y=150)],  # someone in the front row, then the speaker
+    }
+    frames = {8.5: 'small', 9.25: 'empty', 10.0: 'turned', 11.5: 'best'}   # 10.75 cannot be read
+    sizes, sharp_boxes, written = [], {}, []
+
+    class Reader:
+        def set(self, prop, ms):
+            self.at = round(ms / 1000, 2)
+
+        def read(self):
+            tag = frames.get(self.at)
+            return (True, FakeImage(tag, 1280, 720)) if tag else (False, None)
+
+        def release(self):
+            pass
+
+    class Detector:
+        def setInputSize(self, size):
+            sizes.append(size)
+
+        def detect(self, small):
+            rows = full.get(small.tag)
+            return 1, None if rows is None else [[v * 0.5 for v in row[:14]] + [row[14]] for row in rows]
+
+    def imwrite(path, image, params):
+        written.append((path, image.tag, image.box, image.shape[:2], params))
+        return True
+
+    fake_cv2 = SimpleNamespace(
+        CAP_PROP_POS_MSEC=0, INTER_LANCZOS4=4, IMWRITE_JPEG_QUALITY=1, imwrite=imwrite,
+        VideoCapture=lambda path: Reader(),
+        resize=lambda image, size, interpolation=None: FakeImage(image.tag, *size, image.box))
+    monkeypatch.setitem(sys.modules, 'cv2', fake_cv2)
+
+    def sharpness(frame, x, y, w, h):
+        sharp_boxes[frame.tag] = (x, y, w, h)
+        return 40.0
+    monkeypatch.setattr(svc.empty_spots, 'face_sharpness', sharpness)
+
+    target = tmp_path / 'clip_00_face.jpg'
+    assert svc.empty_spots.face_closeup('source.mp4', 10.0, target, Detector()) == (100, 130)
+    assert sizes and set(sizes) == {(640, 360)}
+    # Scored at full resolution, and the speaker, not the smaller face in the same frame.
+    assert sharp_boxes['best'] == pytest.approx((900, 150, 100, 130))
+    assert sharp_boxes['turned'] == pytest.approx((500, 150, 120, 156))
+    # closeup_box(1280, 720, 900, 150, 100, 130) = (800, 33, 300, 375), scaled up to 1024 tall.
+    assert svc.empty_spots.closeup_box(1280, 720, 900, 150, 100, 130) == (800, 33, 300, 375)
+    assert written == [(str(target), 'best', (800, 33, 300, 375), (1024, 819), [1, 92])]

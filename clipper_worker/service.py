@@ -314,10 +314,15 @@ def check_clips(state, manifest_path, source=None):
         if source is not None and source.is_file():
             # A clip is cut straight from [start, end] of the recording, so the
             # poster's moment in the clip is start + poster_at in the source.
-            moment = (row.get('start_time_ms') or 0) / 1000 + found['poster_at']
+            start = (row.get('start_time_ms') or 0) / 1000
+            moment = start + found['poster_at']
             make_frame(source, moment, frame)
+            # The cover's face is the best one anywhere in the clip, except in
+            # a two-person shot, where another moment can be the other person.
+            end = (row.get('end_time_ms') or 0) / 1000 or start + found['length']
+            span = {} if row.get('layout_type') == 'two_shot' else {'start': start, 'end': end}
             try:
-                empty_spots.face_closeup(source, moment, face, detector)
+                empty_spots.face_closeup(source, moment, face, detector, **span)
             except Exception:  # best effort, like the poster: a cover still has the frame
                 log.warning('Face close-up failed at %.2fs', moment)
                 face.unlink(missing_ok=True)
