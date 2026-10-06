@@ -4,7 +4,7 @@ date: 2026-10-06
 agent: Claude Code (Claude Opus 5.5)
 asked: "Build post a clip with its cover: post an approved clip to the connected accounts, with its story or wide cover as the thumbnail"
 status: waiting on Kevin
-prs: [kmj-intake-server clip-post-with-cover, solutionist-studio clip-post-with-cover]
+prs: [kmj-intake-server PR 1298, solutionist-studio PR 1157]
 migrations: []
 left_undone: ["Not proven live: no real post was made and the posting service was never called; the first real post should go to a test account", "A Chief action that posts a clip with a caption Chief writes is not built", "The wide cover is mapped only for LinkedIn, which is not switched on; every network switched on today gets the story cover"]
 decisions: ["Owner only (auth plus a service-role owner check), like covers", "Same door as Social Media posts: social_publish_router.send_post (record, daily cap, hand-off, results, cancel)", "The clip must be approved as it is now and be the one the app showed (fingerprint), else a plain 409 before anything is signed or sent", "Story cover on vertical players (Instagram and Facebook Reels, TikTok, YouTube Shorts, X); wide only where a 16:9 card is used (LinkedIn), falling back to story, then none", "A cover is used only if it is a ready design of this business naming this clip in that shape", "The cover goes as a JPEG at Image Studio's public published-artwork path (a Reel cover must be JPEG)", "The video goes by a signed link: an hour for a post now, an hour past the time for a scheduled one; handed over, never stored", "request_id per tap becomes the post id (uuid5), so a retried tap never posts twice; the same post within a day returns the first"]
