@@ -171,22 +171,34 @@ def face_closeup(source, at, target, face_detector, window=1.5, start=None, end=
         cap.release()
 
 
+class FramesUnreadable(Exception):
+    """The video could not be read (an expired or bad link, a network blip,
+    an unreadable file): never the same as "no face in it"."""
+
+
+READ_SECONDS = 60
+
+
 def remote_frames(url, start, end, folder, count=SPREAD):
     """`count` frames spread across [start, end] of a video at `url`, read by
     ffmpeg over the network: it seeks with range requests, so only that
-    stretch of the recording is fetched, never the whole file. Yields BGR
-    frames; nothing when ffmpeg cannot read the link."""
-    import cv2
+    stretch of the recording is fetched, never the whole file. Returns BGR
+    frames; raises FramesUnreadable when ffmpeg fails or reads none."""
     length = max(0.5, float(end) - float(start))
-    done = subprocess.run(['ffmpeg', '-nostdin', '-loglevel', 'error', '-ss', f'{max(0.0, float(start)):.3f}', '-t', f'{length:.3f}',
-                           '-i', url, '-vf', f'fps={count / length:.6f}', '-frames:v', str(count), '-q:v', '2',
-                           str(Path(folder) / 'frame_%03d.jpg')], capture_output=True, timeout=180)
-    if done.returncode != 0:
-        return
-    for path in sorted(Path(folder).glob('frame_*.jpg')):
-        frame = cv2.imread(str(path))
-        if frame is not None:
-            yield frame
+    try:
+        done = subprocess.run(['ffmpeg', '-nostdin', '-loglevel', 'error', '-ss', f'{max(0.0, float(start)):.3f}', '-t', f'{length:.3f}',
+                               '-i', url, '-vf', f'fps={count / length:.6f}', '-frames:v', str(count), '-q:v', '2',
+                               str(Path(folder) / 'frame_%03d.jpg')], capture_output=True, timeout=READ_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise FramesUnreadable('Reading the video took too long.') from None
+    paths = sorted(Path(folder).glob('frame_*.jpg'))
+    if done.returncode != 0 or not paths:
+        raise FramesUnreadable('The video could not be read.')
+    import cv2
+    frames = [frame for frame in (cv2.imread(str(path)) for path in paths) if frame is not None]
+    if not frames:
+        raise FramesUnreadable('The video could not be read.')
+    return frames
 
 
 def pick_closeup(frames, target, face_detector):

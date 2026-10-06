@@ -444,3 +444,18 @@ def test_without_the_clip_service_nothing_is_asked(monkeypatch):
     backfill_env(monkeypatch, [], clipper)
     monkeypatch.delenv('CLIPPER_URL')
     assert cc.backfill_face(older()) is False and clipper.calls == []
+
+
+def test_a_failed_read_is_asked_again(monkeypatch):
+    """502 from /faces (an expired link, a network blip) is never the clip's verdict."""
+    clipper = Clipper(status=502, detail='The video could not be read.')
+    backfill_env(monkeypatch, [], clipper)
+    assert cc.backfill_face(older()) is False and cc.backfill_face(older()) is False
+    assert len(clipper.calls) == 2
+
+
+def test_the_face_request_is_bounded(monkeypatch):
+    seen = []
+    backfill_env(monkeypatch, [], lambda method, path, **kw: seen.append(kw.get('timeout')) or SimpleNamespace(status_code=200, content=b'j'))
+    cc.backfill_face(older())
+    assert seen[0].read == 75

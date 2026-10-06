@@ -48,6 +48,9 @@ ENGINE_ENV_KEEP = ('PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL', 'L
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 log = logging.getLogger('clipper')
 lock = threading.Lock()
+# POST /faces runs beside a job; two at a time keeps it from crowding one.
+FACE_SLOTS = 2
+face_slots = threading.BoundedSemaphore(FACE_SLOTS)
 jobs = {}
 
 
@@ -486,13 +489,23 @@ def faces(request: FaceRequest):
         raise HTTPException(422, 'Source link not allowed')
     if request.end <= request.start:
         raise HTTPException(422, 'The end must come after the start')
-    with tempfile.TemporaryDirectory(prefix='clipper-face-') as folder:
-        target = Path(folder) / 'face.jpg'
-        frames = empty_spots.remote_frames(request.source_url, request.start, min(request.end, request.start + 600), folder)
-        size = empty_spots.pick_closeup(frames, target, empty_spots.detector())
-        if not size or not target.is_file():
-            raise HTTPException(404, 'No usable face in that stretch')
-        return Response(content=target.read_bytes(), media_type='image/jpeg', headers={'X-Face-Size': f'{size[0]}x{size[1]}'})
+    # At most FACE_SLOTS at once beside a job: a sync endpoint uses the threadpool.
+    if not face_slots.acquire(timeout=5):
+        raise HTTPException(503, 'Busy making close-ups; try again')
+    try:
+        with tempfile.TemporaryDirectory(prefix='clipper-face-') as folder:
+            target = Path(folder) / 'face.jpg'
+            try:
+                frames = empty_spots.remote_frames(request.source_url, request.start, min(request.end, request.start + 600), folder)
+            except empty_spots.FramesUnreadable as error:
+                # Not a verdict on the clip: the caller may ask again.
+                raise HTTPException(502, str(error)) from None
+            size = empty_spots.pick_closeup(frames, target, empty_spots.detector())
+            if not size or not target.is_file():
+                raise HTTPException(404, 'No usable face in that stretch')
+            return Response(content=target.read_bytes(), media_type='image/jpeg', headers={'X-Face-Size': f'{size[0]}x{size[1]}'})
+    finally:
+        face_slots.release()
 
 
 @app.get('/jobs/{job_id}', dependencies=[Depends(authorized)])

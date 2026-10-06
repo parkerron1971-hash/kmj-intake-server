@@ -206,6 +206,8 @@ video) with one ffmpeg pass over range requests, runs the same picker as a clip
 run (`empty_spots.pick_closeup`), and returns the JPEG, which is saved at
 `<clip>-face.jpg`. The clip's configuration is not touched (it is permanent).
 A stretch with no usable face answers 404 "No usable face in that stretch" and
-is remembered for the process; any other 404 (a clip service from before
-`/faces`) is not. Measured on the sermon: 14 frames read in about 4 s, an
+is remembered for the process; any other answer is not: a video that could not
+be read (expired link, network blip, ffmpeg failure or timeout at 60 s) is 502,
+a busy service (two close-ups at a time) is 503, and an older clip service's
+plain 404 is asked again later. The API waits at most 75 s for it. Measured on the sermon: 14 frames read in about 4 s, an
 86 px face, facing the camera. Clips that had a close-up are never backfilled.

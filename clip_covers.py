@@ -174,7 +174,9 @@ def backfill_face(row):
     if not url or not end:
         return False
     try:
-        response = clip_finder.clipper('POST', '/faces', json={'source_url': url, 'start': float(start), 'end': float(end)})
+        # Bounded: a cover request waits for this, and the service reads for at most 60 s.
+        response = clip_finder.clipper('POST', '/faces', json={'source_url': url, 'start': float(start), 'end': float(end)},
+                                       timeout=httpx.Timeout(10, read=75))
     except httpx.HTTPError:
         log.warning('Face close-up could not be requested for clip %s', row['id'])
         return False
