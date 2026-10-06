@@ -24,8 +24,9 @@ def clip(**configuration):
 
 @pytest.fixture
 def app(monkeypatch):
-    s = SimpleNamespace(rows=[clip()], patched=[], designed=[], stored=[], posted=[], fetched=[], artworks=[])
+    s = SimpleNamespace(rows=[clip()], patched=[], designed=[], stored=[], posted=[], fetched=[], artworks=[], busy=set())
     monkeypatch.setattr(cc.media_library, 'read', lambda path: list(s.rows))
+    monkeypatch.setattr(cc, 'designing_now', lambda biz, clip_id: set(s.busy))
     monkeypatch.setattr(cc.sb_clients, 'sb_patch_as_service', lambda path, body: s.patched.append((path, body)) or [body])
     monkeypatch.setattr(images, 'business', AsyncMock(return_value={'id': BIZ, 'owner_id': OWNER}))
 
@@ -259,8 +260,8 @@ def test_a_run_covers_its_best_clips_once_as_its_owner(app, monkeypatch):
         actors.append(images.build_actor.get())
         return {'id': BIZ, 'owner_id': OWNER}
     monkeypatch.setattr(images, 'business', business)
-    made = asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(style_image_id='88888888-8888-4888-8888-888888888888')))
-    assert made == 2 and [a['clip_id'] for _, a in app.designed] == [best['id'], best['id']]
+    made, stopped = asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(style_image_id='88888888-8888-4888-8888-888888888888')))
+    assert made == 2 and stopped is None and [a['clip_id'] for _, a in app.designed] == [best['id'], best['id']]
     assert [t for t, _ in app.designed] == [f'clip-cover:{best["id"]}:auto-{RUN}:story', f'clip-cover:{best["id"]}:auto-{RUN}:wide']
     assert app.designed[0][1]['references'][-1]['role'] == 'style'
     assert actors == [{'business_id': BIZ, 'user_id': OWNER}] and images.build_actor.get() is None
@@ -268,7 +269,7 @@ def test_a_run_covers_its_best_clips_once_as_its_owner(app, monkeypatch):
     assert all(p.get('cost_usd') == 0 for p in app.posted)
     # Called again with both covers in place: nothing new.
     existing[best['id']] = {'story': 'a', 'wide': 'b'}
-    assert asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row())) == 0 and len(app.designed) == 2
+    assert asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row())) == (0, None) and len(app.designed) == 2
 
 
 def test_a_cover_that_cannot_start_is_tried_twice_then_left_to_make_cover(app, monkeypatch):
@@ -280,21 +281,60 @@ def test_a_cover_that_cannot_start_is_tried_twice_then_left_to_make_cover(app, m
         tries.append(action['size'])
         raise HTTPException(402, 'This business is out of credits.')
     monkeypatch.setattr(cc.creative_director, 'handle_design_flyer', broke)
-    for _ in range(2):
-        with pytest.raises(HTTPException):
-            asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(sizes=['story'])))
-    assert asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(sizes=['story']))) == 0
+    run = lambda: asyncio.run(cc.cover_run(cc.httpx.AsyncClient(), run_row(sizes=['story'])))
+    # The first miss is not the end: the owner is not told yet.
+    assert run() == (0, None)
+    # The second spends the last try: now the reason comes back, once.
+    assert run() == (0, 'This business is out of credits.')
+    assert run() == (0, None)
     assert tries == ['1088x1920', '1088x1920']
 
 
 def test_the_owner_is_told_once_when_covers_stop(monkeypatch):
     monkeypatch.setattr(cc, '_told', set())
+    told, answers = [], [None, [{}], [{}]]
+    monkeypatch.setattr(cc.sb_clients, 'sb_post_as_service', lambda path, body: told.append((path, body)) or answers.pop(0))
+    # A notice that could not be written is not "told": the next stop tries again.
+    cc.tell_owner_covers_stopped(run_row(), 'This business is out of credits.')
+    cc.tell_owner_covers_stopped(run_row(), 'This business is out of credits.')
+    cc.tell_owner_covers_stopped(run_row(), 'This business is out of credits.')
+    assert len(told) == 2 and told[1][0] == '/chief_notifications'
+    assert 'Make cover' in told[1][1]['body'] and told[1][1]['data']['kind'] == 'clip_covers_stopped'
+
+
+def test_the_tick_tells_the_owner_only_when_every_try_is_spent(monkeypatch):
+    monkeypatch.setattr(cc.clip_finder, 'enabled', lambda business_id=None: True)
+    monkeypatch.setattr(cc, 'runs_wanting_covers', lambda: [run_row()])
     told = []
-    monkeypatch.setattr(cc.sb_clients, 'sb_post_as_service', lambda path, body: told.append((path, body)) or [body])
-    cc.tell_owner_covers_stopped(run_row(), 'This business is out of credits.')
-    cc.tell_owner_covers_stopped(run_row(), 'This business is out of credits.')
-    assert len(told) == 1 and told[0][0] == '/chief_notifications'
-    assert 'Make cover' in told[0][1]['body'] and told[0][1]['data']['kind'] == 'clip_covers_stopped'
+    monkeypatch.setattr(cc, 'tell_owner_covers_stopped', lambda run, reason: told.append(reason))
+    outcomes = [(0, None), (0, 'Out of credits.'), HTTPException(503, 'Storage is unavailable.'), RuntimeError('boom')]
+
+    async def cover_run(client, run):
+        out = outcomes.pop(0)
+        if isinstance(out, Exception):
+            raise out
+        return out
+    monkeypatch.setattr(cc, 'cover_run', cover_run)
+    for _ in range(4):
+        asyncio.run(cc.cover_tick())
+    assert told == ['Out of credits.']
+
+
+def test_the_tick_does_nothing_when_switched_off(monkeypatch):
+    monkeypatch.setattr(cc.clip_finder, 'enabled', lambda business_id=None: False)
+    monkeypatch.setattr(cc, 'runs_wanting_covers', lambda: pytest.fail('read while switched off'))
+    asyncio.run(cc.cover_tick())
+
+
+def test_make_cover_never_pays_twice_for_a_shape_still_designing(app):
+    """The cover made with the clips may still be designing when the owner taps."""
+    app.busy = {'1920x1088'}
+    body = post(app, sizes=['story', 'wide']).json()
+    assert set(body['covers']) == {'story'} and body['errors'] == {'wide': 'A cover in this shape is already being designed.'}
+    assert [a['size'] for _, a in app.designed] == ['1088x1920']
+    app.busy = {'1088x1920', '1920x1088'}
+    response = post(app, sizes=['story', 'wide'])
+    assert response.status_code == 409 and len(app.designed) == 1
 
 
 def test_the_cover_step_only_looks_at_recent_runs_that_asked(monkeypatch):

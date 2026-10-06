@@ -177,8 +177,12 @@ along with the video clips".
   It acts as the run's owner (`image_studio.build_actor`), so the copied frames
   carry `cost_usd: 0`. Stable turn ids make it safe to repeat. A design that
   cannot start (credits, spend limit, the 20-designs-a-day cap in
-  `reserve_image_artwork`) is tried twice; then the owner gets one Chief
-  notification and the clips keep Make cover.
+  `reserve_image_artwork`) is tried twice; once every missing cover has used
+  its tries, the owner gets one Chief notification (marked sent only when it
+  is written) and the clips keep Make cover. Make cover skips a shape that
+  already has a cover designing (`designing_now`), so a tap while the
+  automatic cover is still being drawn never pays twice (409 when every
+  asked-for shape is busy).
 - **Pricing for the app.** `clip_finder.configuration().covers` =
   `{available, credits_each, clip_limit, shapes}`.
 

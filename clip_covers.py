@@ -211,9 +211,15 @@ async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
         row = await asyncio.to_thread(clip_row, business_id, asset_id)
         words = words_for(row, body.words)
         references = await subject_references(client, biz, row, session.user.id)
+        busy = await asyncio.to_thread(designing_now, business_id, asset_id)
         covers, errors, result = {}, {}, None
         for size in sizes:
             shape = SHAPE_OF[size]
+            if size in busy:
+                # A cover in this shape is still being designed (the one made
+                # with the clips, or a tap a moment ago): never pay twice.
+                errors[shape] = 'A cover in this shape is already being designed.'
+                continue
             action = cover_action(row, size=size, words=words, references=references,
                                   style_image_id=body.style_image_id, note=body.note)
             # A single-shape request keeps the original turn id, so a retried
@@ -230,7 +236,8 @@ async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
                 continue
             covers[shape] = result.get('image') or {}
     if not covers:
-        raise HTTPException(402, next(iter(errors.values()), 'The cover could not be started.'))
+        raise HTTPException(409 if all('already being designed' in e for e in errors.values()) else 402,
+                            next(iter(errors.values()), 'The cover could not be started.'))
     return {'ok': True, 'cover': next(iter(covers.values())), 'covers': covers, 'errors': errors,
             'clip_id': str(asset_id), 'result': (result or {}).get('result') or ''}
 
@@ -238,10 +245,21 @@ async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
 # -- designed along with the clips ---------------------------------------
 
 # Attempts per (clip, shape) in this process: a design that cannot start
-# (no credits) is tried twice, then the owner is told and the clip keeps its
-# Make cover button.
+# (no credits, the spend limit, the daily cap) is tried twice, then the owner
+# is told once and the clip keeps its Make cover button. Kept in memory on
+# purpose: a restart allows two more tries (they cost nothing until a design
+# starts) and at most one more notice, inside the 6-hour window.
 _tries = {}
 _told = set()
+TRIES = 2
+
+
+def designing_now(business_id, clip_id):
+    """The sizes this clip has a cover still being designed in."""
+    rows = sb_clients.sb_get_as_service(
+        f"/image_artworks?business_id=eq.{media_library.key(business_id)}&director->>clip_id=eq.{media_library.key(clip_id)}"
+        "&status=in.(queued,working)&select=size&limit=20") or []
+    return {r.get('size') for r in rows}
 
 
 def run_clips(run):
@@ -255,37 +273,46 @@ def run_clips(run):
 
 
 async def cover_run(client, run):
-    """Design every cover the run asked for that does not exist yet. Stable
-    turn ids make it safe to call again: a design already made is skipped,
-    and a second call for the same clip and shape lands on the same design."""
+    """Design every cover the run asked for that does not exist yet, and
+    return (made, why_stopped). why_stopped is the last reason a design could
+    not start, once every missing cover has used its tries; None otherwise.
+    Stable turn ids make it safe to call again: a design already made is
+    skipped, and a second call for the same clip and shape lands on it."""
     plan = (run.get('options') or {}).get('covers') or {}
     shapes = [s for s in dict.fromkeys(plan.get('sizes') or ['story', 'wide']) if s in SHAPES]
     rows = await asyncio.to_thread(run_clips, run)
     if not rows or not shapes:
-        return 0
+        return 0, None
     existing = await asyncio.to_thread(shaped_covers, run['business_id'], rows)
-    todo = [(row, [s for s in shapes if s not in existing.get(str(row['id']), {})
-                   and _tries.get((str(row['id']), s), 0) < 2]) for row in rows]
-    todo = [(row, missing) for row, missing in todo if missing]
+    missing = [(row, s) for row in rows for s in shapes if s not in existing.get(str(row['id']), {})]
+    todo = [(row, s) for row, s in missing if _tries.get((str(row['id']), s), 0) < TRIES]
     if not todo:
-        return 0
+        return 0, None
+    if len(_tries) > 5000:
+        _tries.clear()
     # The run's owner, checked again by images.business: covers spend credits.
     actor = images.build_actor.set({'business_id': str(run['business_id']), 'user_id': str(run['created_by'])})
-    made = 0
+    made, reason, pictures = 0, None, {}
     try:
         biz = await images.business(client, run['business_id'])
-        for row, missing in todo:
-            references = await subject_references(client, biz, row, run['created_by'])
-            for shape in missing:
-                key = (str(row['id']), shape)
-                _tries[key] = _tries.get(key, 0) + 1
-                action = cover_action(row, size=SHAPES[shape], words=words_for(row), references=references,
+        for row, shape in todo:
+            key = (str(row['id']), shape)
+            _tries[key] = _tries.get(key, 0) + 1
+            try:
+                if key[0] not in pictures:
+                    pictures[key[0]] = await subject_references(client, biz, row, run['created_by'])
+                action = cover_action(row, size=SHAPES[shape], words=words_for(row), references=pictures[key[0]],
                                       style_image_id=plan.get('style_image_id'), note=plan.get('note'))
                 await design(client, biz, action, f'clip-cover:{row["id"]}:auto-{run["id"]}:{shape}')
                 made += 1
+            except HTTPException as error:
+                reason = str(error.detail)
+                log.warning('Clip cover not started for %s (%s): %s', key[0], shape, reason)
     finally:
         images.build_actor.reset(actor)
-    return made
+    spent = all(_tries.get((str(row['id']), s), 0) >= TRIES for row, s in missing
+                if s not in existing.get(str(row['id']), {}))
+    return made, (reason if reason and spent else None)
 
 
 def runs_wanting_covers():
@@ -296,15 +323,19 @@ def runs_wanting_covers():
 
 
 def tell_owner_covers_stopped(run, reason):
+    """One Chief notice per run, marked as told only once it is written."""
     if run['id'] in _told:
         return
-    _told.add(run['id'])
     try:
-        sb_clients.sb_post_as_service('/chief_notifications', {
+        written = sb_clients.sb_post_as_service('/chief_notifications', {
             'business_id': str(run['business_id']), 'type': 'warning', 'title': 'Some covers were not designed',
             'body': f'{reason} The clips are ready; tap Make cover on any clip when you want one.'[:400],
             'status': 'unread', 'data': {'kind': 'clip_covers_stopped', 'run_id': str(run['id'])}})
     except Exception:
+        written = None
+    if written:
+        _told.add(run['id'])
+    else:
         log.warning('Clip covers notice failed for run %s', run['id'])
 
 
@@ -319,9 +350,14 @@ async def cover_tick():
     async with httpx.AsyncClient(timeout=60) as client:
         for run in runs:
             try:
-                await cover_run(client, run)
+                _, stopped = await cover_run(client, run)
             except HTTPException as error:
-                log.warning('Clip covers stopped for run %s: %s', run['id'], error.detail)
-                await asyncio.to_thread(tell_owner_covers_stopped, run, str(error.detail))
+                # The run as a whole could not be read or acted for (the owner
+                # changed, storage unavailable): logged, tried again next tick.
+                log.warning('Clip covers paused for run %s: %s', run['id'], error.detail)
+                continue
             except Exception:
                 log.exception('Clip covers failed for run %s', run['id'])
+                continue
+            if stopped:
+                await asyncio.to_thread(tell_owner_covers_stopped, run, stopped)
