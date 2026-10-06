@@ -210,7 +210,8 @@ is remembered for the process; any other answer is not: a video that could not
 be read (expired link, network blip, ffmpeg failure or timeout at 60 s) is 502,
 a busy service (two close-ups at a time) is 503, and an older clip service's
 plain 404 is asked again later. The API waits at most 75 s for it. Measured on the sermon: 14 frames read in about 4 s, an
-86 px face, facing the camera. Clips that had a close-up are never backfilled.
+86 px face, facing the camera. A clip that had a close-up never has it remade;
+since the likeness meter it is only asked for more views (face2, face3).
 
 ## The likeness meter (2026-10-06)
 

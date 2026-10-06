@@ -454,6 +454,22 @@ def test_a_clip_with_its_close_up_only_gets_the_extra_views(monkeypatch):
     assert CLIP in cc._asked
 
 
+def test_every_save_failing_is_not_the_final_answer_either(monkeypatch):
+    clipper = Clipper()
+    backfill_env(monkeypatch, [{'id': SOURCE, 'business_id': BIZ, 'kind': 'source', 'status': 'ready'}], clipper)
+
+    def broken(local, path, kind):
+        raise cc.clip_finder.RunFailed('storage blip')
+    monkeypatch.setattr(cc.clip_finder, 'put_file', broken)
+    assert cc.backfill_faces(older(), need_first=True) == 0 and CLIP not in cc._asked
+
+
+def test_one_usable_face_is_a_final_answer_for_more_views(monkeypatch):
+    clipper = Clipper(payload=faces_payload(b'only'))
+    saved = backfill_env(monkeypatch, [{'id': SOURCE, 'business_id': BIZ, 'kind': 'source', 'status': 'ready'}], clipper)
+    assert cc.backfill_faces(older(face=True), need_first=False) == 0 and saved == [] and CLIP in cc._asked
+
+
 def test_a_failure_is_never_the_final_answer(monkeypatch):
     """Only an answer with faces marks the clip asked; a 502 lets the next cover try again."""
     clipper = Clipper(status=502, detail='The video could not be read.')

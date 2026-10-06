@@ -557,6 +557,8 @@ are a deliberate graphic device: do not report them while the words still read.
 # from close-ups 0.82 to 0.93; two moments of the same man in one video
 # 0.55 to 0.74. Below LIKENESS_MIN the design takes its one repair with a
 # face instruction; the closer of the two is kept when the face is the only fault.
+# A dial, not a law: 0.72 sits between the wide-shot cover and the close-up
+# ones; review.likeness on real covers says where it should settle.
 LIKENESS_MIN = float(os.environ.get('LIKENESS_MIN', '0.72'))
 LIKENESS_ISSUE = 'The face does not match the photos of the person closely enough'
 

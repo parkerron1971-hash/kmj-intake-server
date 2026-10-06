@@ -211,9 +211,6 @@ def backfill_faces(row, need_first=False):
     if not faces:
         log.warning('Face close-ups for clip %s: clip service answered %s', row['id'], response.status_code)
         return 0
-    # An answer is final for this process (a clip with one usable face has no
-    # second); a failure above is not, and the next cover asks again.
-    _asked.add(str(row['id']))
     import base64
     import tempfile
     slots = [1, 2, 3] if need_first else [2, 3]
@@ -230,6 +227,11 @@ def backfill_faces(row, need_first=False):
                 log.warning('Face close-up %s for clip %s could not be saved', n, row['id'])
                 continue
             saved += 1
+    # Final for this process once something was saved, or when the answer had
+    # nothing new to save (a clip with one usable face has no second); a
+    # failure, including every save failing, lets the next cover ask again.
+    if saved or not picks:
+        _asked.add(str(row['id']))
     return saved
 
 
