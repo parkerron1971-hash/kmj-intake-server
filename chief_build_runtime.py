@@ -12,7 +12,7 @@ from urllib.parse import quote, urlparse
 from uuid import UUID, uuid4
 import httpx
 from fastapi import HTTPException
-from chief_code import WorkOrder, BuildQuestion, run, receipt, stable_id, worker_scope, turn_scope, entity_id, digest
+from chief_code import WorkOrder, BuildQuestion, run, receipt, stable_id, worker_scope, turn_scope, entity_id, digest, flyer_noun
 
 log = logging.getLogger(__name__)
 _tasks = {}
@@ -120,8 +120,37 @@ async def submit(client, biz, payload):
     if job['status'] in ('queued','running'):
         launch(job)
     summary = (job.get('result') or {}).get('summary_label') or queued_label(order)
-    return {'type':'submit_work_order','result':summary,'label':summary,'nav':None,'job_id':job['id'],
+    # The reply says the sentence (`say`); the step line and the receipt
+    # carry one short line naming what started. All three used to carry the
+    # same sentence, so one reply printed it three or four times (live
+    # 2026-10-06): as the step, after the reply, and as the receipt's label
+    # and again as its result.
+    line = started_label(order) if not existing else f"Your {order_name(order)}"
+    return {'type':'submit_work_order','result':line,'label':line,'say':summary,'nav':None,'job_id':job['id'],
             'build':public_job(job),'frontend_event':{'name':'solutionist-builds-changed'}}
+
+
+_ORDER_NAMES = {'event_setup': 'workshop setup', 'form_and_link': 'form', 'site_door': 'events page', 'plan': 'plan'}
+
+
+def order_name(order):
+    """What the work is called where people read it; a design by what was
+    asked for (thumbnail, cover, poster...), never by its order kind."""
+    return flyer_noun(order) if order.kind == 'flyer' else _ORDER_NAMES.get(order.kind, 'work')
+
+
+def started_label(order):
+    """The step line and receipt for work that just went to the background."""
+    return f"Started your {order_name(order)}"
+
+
+def starting_phrase(action):
+    """The step line while a submit_work_order action is starting, from the
+    action as the model sent it (the order is not made yet)."""
+    from types import SimpleNamespace
+    facts = action.get('facts') if isinstance(action.get('facts'), dict) else {}
+    words = str((turn_scope.get() or {}).get('words') or '')
+    return 'starting your ' + order_name(SimpleNamespace(kind=action.get('kind'), facts=facts, practitioner_words=words))
 
 
 def note_done_in_turn(results_so_far):
@@ -141,7 +170,7 @@ def note_done_in_turn(results_so_far):
         if r.get('type') == 'submit_work_order':
             # Another job this message started: done by it, not missing.
             build = r.get('build') or {}
-            what = STARTED_NAMES.get(build.get('build_kind'), 'a job')
+            what = f"a {build['noun']}" if build.get('noun') else STARTED_NAMES.get(build.get('build_kind'), 'a job')
             title = str(build.get('title') or '').strip()
             labels.append(f"Started in the background: {what}" + (f" ({title})" if title else ""))
             continue
@@ -239,9 +268,13 @@ def public_job(job):
         safe['notes'] = notes
     params=job.get('params') or {}
     facts=params.get('facts') or {}
-    return {k:job.get(k) for k in ('id','kind','status','created_at','build_revision')} | {
+    out = {k:job.get(k) for k in ('id','kind','status','created_at','build_revision')} | {
         'result':safe,'build_kind':params.get('kind'),'title':str(facts.get('title') or facts.get('name') or '')[:120],
         'conversation_id':params.get('conversation_id') or None,'finished_at':job.get('finished_at')}
+    if params.get('kind') == 'flyer':
+        # What the app calls it ("All done with your thumbnail"), not "your flyer".
+        out['noun'] = _job_noun(params)
+    return out
 
 
 async def context(client, bid, uid):
@@ -383,12 +416,23 @@ _KIND_NAMES = {'event_setup': 'your event', 'form_and_link': 'your form', 'flyer
                'site_door': 'your events page', 'plan': 'your plan'}
 
 
+def _job_noun(params):
+    """A saved design job's noun, read from its own order (thumbnail, cover...)."""
+    from types import SimpleNamespace
+    return flyer_noun(SimpleNamespace(kind=params.get('kind'), facts=params.get('facts') or {},
+                                      practitioner_words=params.get('practitioner_words') or ''))
+
+
 def outcome_message(job, result):
     """(headline, body, priority) for a build that stopped working, or None
     when there is nothing to tell (cancelled, still running)."""
     params = job.get('params') or {}
     facts = params.get('facts') or {}
     title = str(facts.get('title') or facts.get('name') or _KIND_NAMES.get(params.get('kind'), 'your build'))[:80]
+    if params.get('kind') == 'flyer':
+        # A design by its noun first: its title is the model's and can say
+        # "flyer" for a thumbnail.
+        title = f"your {_job_noun(params)}"
     summary = str(result.get('summary_label') or '').strip()
     status = result.get('status')
     if status == 'done':
@@ -480,8 +524,10 @@ class Adapter:
             raise PermissionError('This build action is not allowed.')
 
     def stage(self, step):
+        if step.name == 'flyer':
+            return f'Creating {flyer_noun(self.order)}'
         return {'events_module':'Preparing Events','occasion':'Saving workshop','events_page':'Checking events page',
-          'registration':'Checking registration','site_link':'Connecting website','form':'Checking form','flyer':'Creating flyer','send':'Sending link'}[step.name]
+          'registration':'Checking registration','site_link':'Connecting website','form':'Checking form','send':'Sending link'}[step.name]
 
     def retry_safe(self, step):
         return step.name != 'send'
@@ -542,9 +588,9 @@ class Adapter:
 
     async def confirmation(self, step, params):
         if step.name == 'flyer' and step.verb == 'design_flyer':
-            return 'Your flyer is ready to design: planned, drawn and checked before you see it. Say “go ahead” to start.'
+            return f'Your {flyer_noun(self.order)} is ready to design: planned, drawn and checked before you see it. Say “go ahead” to start.'
         if step.name == 'flyer':
-            return 'Your flyer is waiting for approval to generate one image. Say “go ahead” to continue.'
+            return f'Your {flyer_noun(self.order)} is waiting for approval to generate one image. Say “go ahead” to continue.'
         return f"Your form link is ready to send to {params['to']}. Say “go ahead” to send it."
 
     async def rows(self, table, extra=''):
@@ -703,7 +749,7 @@ class Adapter:
                         # A designed flyer plans, draws, checks and may repair: give it the
                         # same 20 minutes image_studio allows before calling it interrupted.
                         if age<(1200 if row.get('director') else 600):
-                            return receipt(step,'queued','Your flyer is generating. It will appear in Media Library.',ids=ids)
+                            return receipt(step,'queued',f'Your {flyer_noun(self.order)} is generating. It will appear in Media Library.',ids=ids)
                     if ok:
                         import image_studio
                         actor=image_studio.build_actor.set({'business_id':self.bid,'user_id':self.uid})

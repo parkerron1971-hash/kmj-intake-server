@@ -222,15 +222,19 @@ async def handle_design_flyer(client, biz, action):
     """Chief's flyer for a practitioner: planned, drawn, checked, repaired once.
 
     The request identity is generate_image's, so a replayed turn, or a build
-    checking its own step, finds this one row instead of paying twice."""
+    checking its own step, finds this one row instead of paying twice.
+    What people read names what they asked for (a thumbnail, a cover...);
+    the verb and the machinery stay design_flyer."""
+    from chief_code import design_noun
+    noun = design_noun(action.get('goal') or action.get('prompt'), action.get('size'), action.get('owner_request'))
     identity = images.turn_id.get() or str(uuid4())
     index = images.turn_image_index.get()
     images.turn_image_index.set(index + 1)
     request_id = uuid5(NAMESPACE_URL, f"{biz['id']}:{identity}:image:{index}")
     existing = await images.db(client, 'GET', f"/image_artworks?id=eq.{request_id}&business_id=eq.{UUID(str(biz['id']))}")
     if existing:
-        return {'type': 'design_flyer', 'result': 'This flyer is already in your gallery. The card shows where it stands.',
-            'label': 'Your flyer', 'image': await images.present(client, existing[0]), 'nav': None}
+        return {'type': 'design_flyer', 'result': f'This {noun} is already in your gallery. The card shows where it stands.',
+            'label': f'Your {noun}', 'image': await images.present(client, existing[0]), 'nav': None}
     action = dict(action)
     if action.get('website_url'):
         # Capture before any paid step; the screenshot is placed as-is, never redrawn.
@@ -247,8 +251,8 @@ async def handle_design_flyer(client, biz, action):
         owner_context=str(action.get('owner_context') or ''), clip_id=action.get('clip_id'))
     result = await images.create(images.CreateImage(business_id=biz['id'], request_id=request_id, prompt=req.goal,
         quality=req.quality, size=req.size, reference_ids=[r['id'] for r in spec['references']]), client, director=spec)
-    return {'type': 'design_flyer', 'label': 'Designing your flyer', 'image': result, 'nav': None,
-        'result': 'Your flyer is being designed: planned, drawn, then checked before you see it. It lands in Media Library.'}
+    return {'type': 'design_flyer', 'label': f'Designing your {noun}', 'image': result, 'nav': None,
+        'result': f'Your {noun} is being designed: planned, drawn, then checked before you see it. It lands in Media Library.'}
 
 
 async def start(client, biz, action, request_id):

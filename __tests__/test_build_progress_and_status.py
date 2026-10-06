@@ -33,9 +33,10 @@ from __tests__.test_chief_builds import BIZ, USER, MemoryAdapter, order
 
 
 class StagedAdapter(MemoryAdapter):
-    # The real stage names ("Preparing Events", "Creating flyer", ...).
+    # The real stage names ("Preparing Events", "Creating flyer", ...); a
+    # design's stage names what was asked for, so it reads the order.
     def stage(self, step):
-        return runtime.Adapter.stage(None, step)
+        return runtime.Adapter.stage(SimpleNamespace(order=order()), step)
 
 
 def _says(adapter):

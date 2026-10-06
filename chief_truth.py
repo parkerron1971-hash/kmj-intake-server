@@ -2445,8 +2445,39 @@ async def review_stream_prefix(client, prefix, *, sources, message, business_id)
     return verdict == 'supported'
 
 
+def with_job_sentences(text, taken):
+    """The reply plus, once, what each job this turn started says (its
+    `say`: "I'm on it ... you can leave this chat; I'll let you know").
+    A turn that started a job AND did something else (a task, a contact)
+    is reviewed as prose, and the review never adds the sentence, so the
+    owner never heard they could leave. Server-written, so it is added
+    after the review, and never twice."""
+    out = text
+    flat = lambda t: re.sub(r'\s+', ' ', t or '').strip()
+    for r in taken or []:
+        if not isinstance(r, dict) or r.get('type') != 'submit_work_order' or r.get('failed'):
+            continue
+        say = str(r.get('say') or '').strip()
+        if not say or flat(say) in flat(out):
+            continue
+        if 'leave this chat' in say.lower() and 'leave this chat' in (out or '').lower():
+            continue  # the reply already told them, in its own words
+        out = f"{out.rstrip()}\n\n{say}" if (out or '').strip() else say
+    return out
+
+
 async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, business_id, reviewer,
                          conversation_history=None, repairer=None, budget_s=45.0):
+    """The checked reply, then each started job's sentence once."""
+    clean, grounding = await _finalize_reply(
+        client, reply, ctx=ctx, view_detail=view_detail, taken=taken, message=message,
+        business_id=business_id, reviewer=reviewer, conversation_history=conversation_history,
+        repairer=repairer, budget_s=budget_s)
+    return with_job_sentences(clean, taken), grounding
+
+
+async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, business_id, reviewer,
+                          conversation_history=None, repairer=None, budget_s=45.0):
     """`budget_s` is the whole check's wall-clock allowance: review, then
     repair, then re-review. A spoken turn cannot afford 15 s + 15 s of
     repair after a 25 s review — "give me an update" took 58 s and ended
@@ -2459,7 +2490,11 @@ async def finalize_reply(client, reply, *, ctx, view_detail, taken, message, bus
     import chief_of_staff as chief
     receipts = [r for r in taken if isinstance(r, dict)]
     if receipts and all(r.get('type') in ('submit_work_order','respond_work_order') for r in receipts):
-        return '\n\n'.join(str(r.get('label') or r.get('result') or '') for r in receipts), {'status':'receipts','sources':[]}
+        # A started job's sentence ("I'm on it ... you can leave this chat")
+        # is its `say`, said here once, even when one message started
+        # several jobs; its label is the short step/receipt line.
+        said = [str(r.get('say') or r.get('label') or r.get('result') or '') for r in receipts]
+        return '\n\n'.join(dict.fromkeys(s for s in said if s)), {'status':'receipts','sources':[]}
     # A deterministic failure report always wins, including on native-tool turns.
     if any(chief._action_failed(r) for r in receipts):
         return chief._deterministic_fallback_reply(receipts), {'status': 'receipts', 'sources': []}

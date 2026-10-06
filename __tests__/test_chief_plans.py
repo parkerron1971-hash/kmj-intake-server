@@ -399,7 +399,9 @@ def test_a_plan_submitted_in_a_turn_is_saved_as_one_build(monkeypatch):
         result = asyncio.run(runtime.submit(None, {'id': BIZ}, {'kind': 'plan', 'facts': {'steps': [ADD_ADA, CALL_ADA]}}))
     finally:
         runtime.turn_scope.reset(token)
-    assert result['label'].startswith('Working on these in the background: Add Ada and Call Ada.')
+    # The reply says the sentence once; the step and receipt carry a short line.
+    assert result['say'].startswith('Working on these in the background: Add Ada and Call Ada.')
+    assert result['label'] == result['result'] == 'Started your plan'
     assert saved[-1] == 'launched'
     assert saved[0]['params']['kind'] == 'plan' and saved[0]['params']['facts']['title'] == 'Add Ada'
 
