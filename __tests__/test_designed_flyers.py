@@ -406,3 +406,16 @@ def test_a_stray_placement_for_the_speaker_photo_no_longer_stops_a_cover(monkeyp
     spec['references'].append({'id': logo, 'role': 'logo', 'use': ''})
     with pytest.raises(HTTPException):
         run(d.make_plan(None, {'business_id': BIZ}, spec, {photo: png(), logo: png()}))
+
+
+def test_a_clip_cover_design_names_its_clip(monkeypatch):
+    clip_id = str(uuid4())
+    monkeypatch.setattr(images, 'business', AsyncMock(return_value={'id': BIZ, 'owner_id': USER}))
+    monkeypatch.setattr(d, 'profile', AsyncMock(return_value={}))
+    monkeypatch.setattr(d, 'business_facts', lambda business_id: {})
+    req = d.flyer_request({'goal': 'Cover', 'exact_copy': ['Feelings Lie']})
+    assert run(d.prepare_for_business(None, {'id': BIZ}, req, owner_request='x', clip_id=clip_id))['clip_id'] == clip_id
+    assert 'clip_id' not in run(d.prepare_for_business(None, {'id': BIZ}, req, owner_request='x'))
+    with pytest.raises(HTTPException) as bad:
+        run(d.prepare_for_business(None, {'id': BIZ}, req, owner_request='x', clip_id='not-a-clip'))
+    assert bad.value.status_code == 422

@@ -6,13 +6,15 @@ clean frame as the subject and the clip's title as its words. "Remember this
 style" on one cover gives every later cover the same look, so a sermon series
 reads as a set.
 
-The cover's id is saved in the clip's configuration, which is part of what an
-approval covers: a clip goes out with its cover, so a new cover after approval
-asks for a fresh look first.
+The link lives on the cover (its director record names the clip), never on
+the clip: the database makes a clip's configuration permanent once it exists
+(preserve_media_review), so a reviewed clip cannot change underneath its
+approval. covers_for() reads the links back for the Video Clips list.
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Literal, Optional
 from uuid import UUID, uuid5
@@ -30,6 +32,7 @@ import storage_links
 from auth_supabase import UserSession
 
 router = APIRouter(prefix='/media-library', tags=['clip covers'])
+log = logging.getLogger(__name__)
 
 GOAL = ('A cover image for a short video clip titled "{title}". The person in the reference photo is the hero: '
         'keep their exact likeness (face, hair, skin tone, build, clothing and anything they hold) and do not change '
@@ -79,14 +82,29 @@ async def frame_artwork(client, biz, row, user_id):
     return image_id
 
 
-def remember_cover(row, image_id):
-    # Read again: the design took a minute, and the clip may have changed meanwhile.
-    fresh = media_library.read(f"/media_assets?id=eq.{media_library.key(row['id'])}"
-                               f"&business_id=eq.{media_library.key(row['business_id'])}&select=configuration&limit=1")
-    configuration = dict((fresh[0] if fresh else row).get('configuration') or {}, cover_image_id=str(image_id))
-    media_library.one(sb_clients.sb_patch_as_service(
-        f"/media_assets?id=eq.{media_library.key(row['id'])}&business_id=eq.{media_library.key(row['business_id'])}",
-        {'configuration': configuration}))
+def covers_for(business_id, rows):
+    """Each clip's cover, read from the designs that name it: the newest one
+    that has not failed. A cover still designing is shown as designing (so the
+    card never offers a second paid Make cover), and a failed attempt never
+    hides an earlier good cover; with only failures, the newest failure shows.
+    A failed read means no covers shown, never an error on the clips."""
+    clips = [media_library.key(r['id']) for r in rows if r.get('kind') == 'clip']
+    found = []
+    for start in range(0, len(clips), 100):  # keep each query URL short
+        batch = sb_clients.sb_get_as_service(
+            f"/image_artworks?business_id=eq.{media_library.key(business_id)}"
+            f"&director->>clip_id=in.({','.join(clips[start:start + 100])})"
+            "&select=id,status,director->>clip_id,created_at&order=created_at.desc&limit=1000")
+        if batch is None:
+            log.warning('Clip covers could not be read for business %s', business_id)
+            return {}
+        found.extend(batch)
+    best = {}
+    for row in sorted(found, key=lambda r: r.get('created_at') or '', reverse=True):
+        clip, failed = row.get('clip_id'), row.get('status') == 'failed'
+        if clip not in best or (best[clip][1] and not failed):
+            best[clip] = (row['id'], failed)
+    return {clip: image_id for clip, (image_id, _) in best.items()}
 
 
 @router.post('/{business_id}/clips/{asset_id}/cover', status_code=202)
@@ -107,11 +125,8 @@ async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
             result = await creative_director.handle_design_flyer(client, biz, {
                 'goal': GOAL.format(title=row.get('name') or 'this clip'), 'exact_copy': words, 'size': body.size,
                 'references': [{'id': frame_id, 'role': 'subject', 'use': 'The speaker in this clip. Keep their exact likeness.'}],
-                'owner_request': 'Make a cover for this clip'})
+                'owner_request': 'Make a cover for this clip', 'clip_id': str(asset_id)})
         finally:
             images.turn_id.reset(turn)
             images.turn_image_index.reset(index)
-    cover = result.get('image') or {}
-    if cover.get('id'):
-        await asyncio.to_thread(remember_cover, row, cover['id'])
-    return {'ok': True, 'cover': cover, 'result': result['result']}
+    return {'ok': True, 'cover': result.get('image') or {}, 'clip_id': str(asset_id), 'result': result['result']}

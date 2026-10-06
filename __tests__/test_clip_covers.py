@@ -69,9 +69,10 @@ def test_a_cover_is_designed_from_the_clean_frame_with_the_clip_title(app):
     # The frame comes from the clip's private storage and lands in the owner's gallery.
     assert app.fetched[0].endswith(f'/storage/v1/object/program-media/{BIZ}/{CLIP}-frame.jpg')
     assert app.stored == [f'{BIZ}/{frame_id}.png'] and app.posted[0]['owner_id'] == OWNER
-    # The cover is remembered on the clip without losing anything else there.
-    saved = app.patched[0][1]['configuration']
-    assert saved['cover_image_id'] == response.json()['cover']['id'] and saved['poster'] is True and saved['origin'] == 'ai'
+    # The design names its clip; the clip itself is never written (its configuration is
+    # permanent in the database: preserve_media_review).
+    assert action['clip_id'] == CLIP and response.json()['clip_id'] == CLIP
+    assert not app.patched
 
 
 def test_the_frame_is_copied_once_and_each_request_is_its_own_design(app):
@@ -107,16 +108,47 @@ def test_only_the_owner_makes_covers(app, monkeypatch):
     assert post(app).status_code == 403
 
 
-def test_the_cover_is_saved_onto_the_clip_as_it_is_now(app, monkeypatch):
-    """The design takes a minute; a caption saved meanwhile must survive."""
-    reads = iter([[clip()], [clip(caption='Saved while the cover was designing')]])
-    monkeypatch.setattr(cc.media_library, 'read', lambda path: next(reads))
-    post(app)
-    saved = app.patched[0][1]['configuration']
-    assert saved['caption'] == 'Saved while the cover was designing' and saved['cover_image_id']
+def test_each_clip_shows_its_newest_cover(monkeypatch):
+    """2026-10-06: writing the cover id into the clip failed in production (the
+    trigger keeps a clip's configuration permanent). The link is read back from
+    the designs that name the clip, newest first."""
+    other = '33333333-3333-4333-8333-333333333333'
+    asked = []
+    def get(path):
+        asked.append(path)
+        return [{'id': 'cover-new', 'clip_id': CLIP, 'status': 'ready', 'created_at': '2026-10-06T01:00:00Z'},
+                {'id': 'cover-old', 'clip_id': CLIP, 'status': 'ready', 'created_at': '2026-10-06T00:00:00Z'},
+                {'id': 'cover-2', 'clip_id': other, 'status': 'working', 'created_at': '2026-10-06T00:30:00Z'}]
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', get)
+    rows = [clip(), dict(clip(), id=other), {'id': 'src', 'kind': 'source'}]
+    # A cover still designing shows as designing, so the card never offers a second paid tap.
+    assert cc.covers_for(BIZ, rows) == {CLIP: 'cover-new', other: 'cover-2'}
+    assert f'business_id=eq.{BIZ}' in asked[0] and 'director->>clip_id=in.(' in asked[0] and 'order=created_at.desc' in asked[0]
+    assert cc.covers_for(BIZ, [{'id': 'src', 'kind': 'source'}]) == {}
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', lambda path: None)
+    assert cc.covers_for(BIZ, rows) == {}
 
 
 def test_a_cover_needs_a_signed_in_user():
     api = FastAPI(); api.include_router(cc.router)
     response = TestClient(api).post(f'/media-library/{BIZ}/clips/{CLIP}/cover', json={'request_id': str(uuid4())})
     assert response.status_code in (401, 403)
+
+
+def test_a_failed_cover_never_hides_an_earlier_good_one(monkeypatch):
+    rows_back = [{'id': 'failed-new', 'clip_id': CLIP, 'status': 'failed', 'created_at': '2026-10-06T02:00:00Z'},
+                 {'id': 'good-old', 'clip_id': CLIP, 'status': 'ready', 'created_at': '2026-10-06T01:00:00Z'}]
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', lambda path: rows_back)
+    assert cc.covers_for(BIZ, [clip()]) == {CLIP: 'good-old'}
+    # Only failures: the newest failure shows, so the card can say it could not be made.
+    rows_back[1]['status'] = 'failed'
+    assert cc.covers_for(BIZ, [clip()]) == {CLIP: 'failed-new'}
+
+
+def test_many_clips_are_read_in_short_batches(monkeypatch):
+    asked = []
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service', lambda path: asked.append(path) or [])
+    many = [dict(clip(), id=f'00000000-0000-4000-8000-{i:012d}') for i in range(250)]
+    cc.covers_for(BIZ, many)
+    ids_per_batch = [len(p.split('in.(')[1].split(')')[0].split(',')) for p in asked]
+    assert ids_per_batch == [100, 100, 50]
