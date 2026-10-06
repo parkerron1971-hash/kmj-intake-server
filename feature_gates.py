@@ -110,7 +110,9 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
 # Gated but not yet on sale: kept off the plan cards (/billing/plans) until
 # the screen that sells it is live, so a card never lists a raw key or a
 # feature nobody can open. Remove a key here when its screen ships.
-UNANNOUNCED_FEATURES = frozenset({"ai_clips"})
+# (ai_clips left 2026-10-05: Kevin opened Find my best clips to every
+# business on the plan, after the live Church proof.)
+UNANNOUNCED_FEATURES: frozenset = frozenset()
 
 # ─── Plans for one kind of business ──────────────────────────────────
 # Solo = everything Starter carries (derived, so a new Starter feature

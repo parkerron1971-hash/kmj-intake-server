@@ -2423,9 +2423,8 @@ _ALL = "__every_plan__"
 # Keys deliberately not sold as their own row. Same two the in-app cards
 # hide (BillingPanel.HIDDEN_FEATURES), for the same reasons: seats show
 # as a number, and chief_unlimited gates nothing an allowance row does
-# not already say honestly. ai_clips waits here until its screen ships
-# (Find my best clips in Video Clips); then it becomes a row.
-_NOT_A_ROW = ("multi_seat", "chief_unlimited", "ai_clips")
+# not already say honestly.
+_NOT_A_ROW = ("multi_seat", "chief_unlimited")
 
 _COMPARE_GROUPS = (
     ("The day-to-day work", (
@@ -2470,6 +2469,11 @@ _COMPARE_GROUPS = (
          "Designed in the same brand, ready to hand out or post."),
         ("Facebook &amp; Instagram publishing", _ALL,
          "Draft, schedule, post, and read the engagement back."),
+        # Announced 2026-10-05 (Kevin: "you can go"). The numbers are
+        # clip_finder.INCLUDED_SECONDS and UNITS_PER_EXTRA_HOUR.
+        ("Find my best clips: a recording becomes short clips", "ai_clips",
+         "Upload a sermon, talk or class. Chief finds the strongest moments, cuts them with captions, "
+         "and can design a cover for each. Ten hours of recordings a month included."),
     )),
     ("Chief, your AI Chief of Staff", (
         ("Chief on every screen, chat and voice", _ALL,

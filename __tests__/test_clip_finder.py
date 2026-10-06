@@ -471,15 +471,22 @@ def test_sweep_applies_the_storage_rules(monkeypatch, on):
 
 # ── the plan and the rest of the system ─────────────────────────────
 
-def test_the_gate_is_growth_and_stays_off_the_cards_until_the_screen_ships():
+def test_the_gate_is_growth_and_is_sold_on_the_cards_and_the_compare_table():
+    import clip_finder
     import feature_gates
     import marketing_pages
     assert feature_gates.FEATURE_MIN_PLAN['ai_clips'] == 'practice'
-    assert 'ai_clips' in feature_gates.UNANNOUNCED_FEATURES
+    assert 'ai_clips' not in feature_gates.UNANNOUNCED_FEATURES
     assert set(feature_gates.UNANNOUNCED_FEATURES) <= set(feature_gates.FEATURE_MIN_PLAN)
-    assert 'ai_clips' in marketing_pages._NOT_A_ROW
+    assert 'ai_clips' not in marketing_pages._NOT_A_ROW
+    assert 'ai_clips' in feature_gates.plan_features('practice')
+    assert 'ai_clips' not in feature_gates.plan_features('professional')
     for audience in feature_gates.AUDIENCE_PLAN_FEATURES.values():
         assert 'ai_clips' not in audience
+    html = marketing_pages.render_compare()
+    assert 'Find my best clips' in html
+    # The row's allowance is the code's allowance.
+    assert clip_finder.INCLUDED_SECONDS == 10 * 3600 and 'Ten hours of recordings a month' in html
 
 
 def test_runs_travel_with_the_account_but_are_never_restored():
