@@ -2,7 +2,7 @@
 title: Covers look like the person (face close-up, likeness-first drawing and checking)
 date: 2026-10-06
 agent: Claude Code (Claude Opus 5.5)
-asked: 'my big issue is the person not looking like the original person ... we want over 90 percent looks ... tighten the checker but don't have it so tight nothing is produced'
+asked: "my big issue is the person not looking like the original person ... we want over 90 percent looks ... tighten the checker but don't have it so tight nothing is produced"
 status: in progress
 prs: [kmj-intake-server covers-look-like-the-person]
 migrations: []
