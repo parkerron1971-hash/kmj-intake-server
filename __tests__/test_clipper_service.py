@@ -722,5 +722,6 @@ def test_the_image_builds_from_inside_its_own_folder():
                if line.startswith('COPY ') and '--from=' not in line]
     assert sources and all(not s.startswith('clipper_worker') for s in sources)
     assert (here / '.dockerignore').exists()
-    toml = (here / 'railway.toml').read_text(encoding='utf-8')
-    assert 'dockerfilePath = "Dockerfile"' in toml and '/clipper_worker' in toml
+    import tomllib
+    build = tomllib.loads((here / 'railway.toml').read_text(encoding='utf-8'))['build']
+    assert build['dockerfilePath'] == 'Dockerfile' and build['watchPatterns'] == ['/clipper_worker/**']
