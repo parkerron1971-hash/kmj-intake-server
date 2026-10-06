@@ -136,9 +136,15 @@ Kevin: a cover of a real person must look "over 90 percent" like them; letters
 partly covered by the person are fine (a graphic device). So:
 
 - The clip service saves a head-and-shoulders close-up from the recording with
-  each clip (`clip_NN_face.jpg` → `<clip>-face.jpg`, `configuration.face`): of
-  five frames within 1.5 s of the poster moment, the one with the largest,
-  surest face, cropped ~3 face-widths at 4:5 and scaled to 1024 tall.
+  each clip (`clip_NN_face.jpg` → `<clip>-face.jpg`, `configuration.face`),
+  cropped ~3 face-widths at 4:5 and scaled to 1024 tall. The expression comes
+  from the frame chosen, so it is the best face in the clip, not the biggest:
+  of 14 moments spread across the clip plus five within 1.5 s of the poster,
+  the one scoring highest on `size × sure × frontal × sharp`
+  (`empty_spots.face_score`: facing the camera from the nose and eye
+  landmarks, sharp eyes by Laplacian variance, confidence, size). Profiles and
+  tiny faces are never used; a two-person shot looks only around the poster,
+  since another moment can be the other person.
 - Make cover sends the close-up first ("match this face, beard, hairline and
   hairstyle exactly") and the stage frame second (pose, body, clothes).
 - With subject photos, the render prompt adds LIKENESS FIRST, the planner plans
