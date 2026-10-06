@@ -2,6 +2,7 @@
 and the empty-spot check. The engine, the download and the face detector are
 faked; nothing here needs FFmpeg, OpenCV or a network."""
 import json
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -493,3 +494,80 @@ def test_face_sharpness_sees_blur():
     sharp = svc.empty_spots.face_sharpness(frame, 100, 100, 150, 180)
     assert sharp > svc.empty_spots.face_sharpness(blurred, 100, 100, 150, 180) * 4
     assert svc.empty_spots.face_sharpness(frame, 500, 500, 50, 60) == 0.0   # off the frame
+
+
+class FakeImage:
+    """Just enough of a picture for face_closeup: a shape, a size, slicing that
+    remembers where in the source frame the slice came from, and a tag naming
+    the frame it was read as."""
+    def __init__(self, tag, width, height, box=None):
+        self.tag, self.shape = tag, (height, width, 3)
+        self.box = box or (0, 0, width, height)
+
+    @property
+    def size(self):
+        return self.shape[0] * self.shape[1] * 3
+
+    def __getitem__(self, key):
+        rows, cols = key
+        top, bottom = rows.start, min(rows.stop, self.shape[0])
+        left, right = cols.start, min(cols.stop, self.shape[1])
+        return FakeImage(self.tag, max(0, right - left), max(0, bottom - top), (left, top, right - left, bottom - top))
+
+
+def test_the_close_up_crops_the_best_scoring_frame_at_full_resolution(tmp_path, monkeypatch):
+    """The picking loop itself, with a fake reader, detector and OpenCV: a
+    1280-wide recording is detected at 640 wide (scale 0.5), so every YuNet
+    coordinate must be doubled back before scoring and cropping. The biggest
+    face (turned away) loses to a smaller one facing the camera."""
+    full = {   # each frame's faces in the recording's own pixels
+        'small': [face_row(w=60, x=300, y=200)],
+        'turned': [face_row(w=120, turn=0.3, x=500, y=150)],
+        'best': [face_row(w=40, x=100, y=100), face_row(w=100, x=900, y=150)],  # someone in the front row, then the speaker
+    }
+    frames = {8.5: 'small', 9.25: 'empty', 10.0: 'turned', 11.5: 'best'}   # 10.75 cannot be read
+    sizes, sharp_boxes, written = [], {}, []
+
+    class Reader:
+        def set(self, prop, ms):
+            self.at = round(ms / 1000, 2)
+
+        def read(self):
+            tag = frames.get(self.at)
+            return (True, FakeImage(tag, 1280, 720)) if tag else (False, None)
+
+        def release(self):
+            pass
+
+    class Detector:
+        def setInputSize(self, size):
+            sizes.append(size)
+
+        def detect(self, small):
+            rows = full.get(small.tag)
+            return 1, None if rows is None else [[v * 0.5 for v in row[:14]] + [row[14]] for row in rows]
+
+    def imwrite(path, image, params):
+        written.append((path, image.tag, image.box, image.shape[:2], params))
+        return True
+
+    fake_cv2 = SimpleNamespace(
+        CAP_PROP_POS_MSEC=0, INTER_LANCZOS4=4, IMWRITE_JPEG_QUALITY=1, imwrite=imwrite,
+        VideoCapture=lambda path: Reader(),
+        resize=lambda image, size, interpolation=None: FakeImage(image.tag, *size, image.box))
+    monkeypatch.setitem(sys.modules, 'cv2', fake_cv2)
+
+    def sharpness(frame, x, y, w, h):
+        sharp_boxes[frame.tag] = (x, y, w, h)
+        return 40.0
+    monkeypatch.setattr(svc.empty_spots, 'face_sharpness', sharpness)
+
+    target = tmp_path / 'clip_00_face.jpg'
+    assert svc.empty_spots.face_closeup('source.mp4', 10.0, target, Detector()) == (100, 130)
+    assert sizes and set(sizes) == {(640, 360)}
+    # Scored at full resolution, and the speaker, not the smaller face in the same frame.
+    assert sharp_boxes['best'] == pytest.approx((900, 150, 100, 130))
+    assert sharp_boxes['turned'] == pytest.approx((500, 150, 120, 156))
+    # closeup_box(1280, 720, 900, 150, 100, 130) = (800, 33, 300, 375), scaled up to 1024 tall.
+    assert svc.empty_spots.closeup_box(1280, 720, 900, 150, 100, 130) == (800, 33, 300, 375)
+    assert written == [(str(target), 'best', (800, 33, 300, 375), (1024, 819), [1, 92])]
