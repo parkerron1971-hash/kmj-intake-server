@@ -11,9 +11,12 @@ RUN useradd -m -u 10001 clipper
 WORKDIR /app
 COPY clipper_worker/vendor/bridgeclip/engine/requirements.lock /app/clipper_worker/vendor/bridgeclip/engine/requirements.lock
 RUN pip install --no-cache-dir --require-hashes -r clipper_worker/vendor/bridgeclip/engine/requirements.lock
+# Face recognition for the cover likeness meter: SFace from the OpenCV Model
+# Zoo (Apache-2.0), pinned by checksum; the build fails on any other file.
+RUN python -c "import hashlib, os, urllib.request; p = '/app/models/face_recognition_sface_2021dec.onnx'; os.makedirs('/app/models', exist_ok=True); urllib.request.urlretrieve('https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx', p); h = hashlib.sha256(open(p, 'rb').read()).hexdigest(); assert h == '0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79', h"
 COPY clipper_worker /app/clipper_worker
 # The face detector must load, or every clip would be framed blind.
-RUN python -c "import cv2; cv2.FaceDetectorYN.create('/app/clipper_worker/vendor/bridgeclip/engine/assets/models/face_detection_yunet_2023mar.onnx', '', (320, 320))"
+RUN python -c "import cv2; cv2.FaceDetectorYN.create('/app/clipper_worker/vendor/bridgeclip/engine/assets/models/face_detection_yunet_2023mar.onnx', '', (320, 320)); cv2.FaceRecognizerSF.create('/app/models/face_recognition_sface_2021dec.onnx', '')"
 ENV PYTHONUNBUFFERED=1 HOME=/home/clipper CLIPPER_WORK_DIR=/home/clipper/jobs
 RUN chown -R clipper:clipper /app /home/clipper
 USER clipper

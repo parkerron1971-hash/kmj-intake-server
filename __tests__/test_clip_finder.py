@@ -465,6 +465,8 @@ def test_sweep_applies_the_storage_rules(monkeypatch, on):
     cf.sweep()
     assert f'{BIZ}/{UPLOADING}.source' in removed and f'{BIZ}/{SKIPPED}.mp4' in removed and f'{BIZ}/{SKIPPED}.jpg' in removed
     assert f'{BIZ}/{SKIPPED}-frame.jpg' in removed  # the clean frame goes with its clip
+    # So do its face close-ups, the extra views included.
+    assert {f'{BIZ}/{SKIPPED}-face.jpg', f'{BIZ}/{SKIPPED}-face2.jpg', f'{BIZ}/{SKIPPED}-face3.jpg'} <= set(removed)
     assert f'{BIZ}/{SKIPPED}-face.jpg' in removed
     assert f'{BIZ}/{OLD}.source' in removed and not any(BUSY in p for p in removed)
     assert any('source_removed_at' in body for _, body in store.patches)

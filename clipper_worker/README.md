@@ -40,7 +40,8 @@ One job at a time. A second `POST` while busy gets `409`; the API queues.
 | `POST /jobs/{uuid}` | `{source_url, options}` → `202`. Options: `durations` (`xshort` `short` `medium` `long`), `caption_preset`, `aspect_ratio` (`9:16` or `16:9`), `clip_request`, `keyterms`, `max_clips`. |
 | `GET /jobs/{uuid}` | `{status, stage, percent, clips_done, clips_total, error, result}`. `status` is `working`, `completed`, `failed` or `cancelled`. `stage` is `downloading`, `listening`, `choosing`, `framing`, `checking` or `done`. |
 | `GET /jobs/{uuid}/files/{clip_NN.mp4, clip_NN.jpg, clip_NN_frame.jpg or clip_NN_face.jpg}` | One finished clip, poster, clean frame or face close-up. |
-| `POST /faces` `{source_url, start, end}` | A face close-up (JPEG) from that stretch of a video, read with one ffmpeg pass over range requests; 404 when no usable face. For clips made before close-ups. |
+| `POST /faces` `{source_url, start, end, count?}` | A face close-up (JPEG) from that stretch of a video, read with one ffmpeg pass over range requests; with `count` 2-3, JSON with that many, best first. 404 when no usable face, 502 when the video cannot be read. |
+| `POST /likeness` `{image_b64, references_b64[1-4]}` | How much the face on a design looks like the person in the photos: SFace cosine, best over the photos (`score`, `scores`, `face_found`). |
 | `DELETE /jobs/{uuid}` | Stops a running job, or forgets a finished one and deletes its files. |
 
 `result.clips[]` carries `index`, `title`, `start_ms`, `end_ms`, `duration_ms`,

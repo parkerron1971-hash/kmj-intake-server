@@ -646,3 +646,64 @@ def test_close_ups_wait_their_turn_beside_a_job(client, monkeypatch):
     monkeypatch.setattr(svc.face_slots, 'acquire', lambda timeout=None: False)
     response = client.post('/faces', json={'source_url': SOURCE, 'start': 0, 'end': 30}, headers=AUTH)
     assert response.status_code == 503
+
+
+# -- the likeness meter and several close-ups (2026-10-06) --------------
+
+class FakeRecognizer:
+    """Fingerprints are plain numbers; a match is how close they are."""
+    def match(self, a, b, kind):
+        assert kind == svc.empty_spots.FR_COSINE
+        return 1 - abs(a - b)
+
+
+def test_likeness_is_the_best_match_over_the_photos_that_show_a_face():
+    prints = {'cover': 0.5, 'close': 0.62, 'frame': 0.95, 'empty': None}
+    score, scores = svc.empty_spots.likeness('cover', ['close', 'frame', 'empty'], FakeRecognizer(),
+                                             fingerprint=lambda image, rec: prints[image])
+    assert scores == [0.88, 0.55, None] and score == 0.88
+
+
+def test_a_cover_with_no_face_found_is_not_graded():
+    score, scores = svc.empty_spots.likeness('cover', ['close'], FakeRecognizer(), fingerprint=lambda image, rec: None)
+    assert score is None and scores == [None]
+
+
+def test_the_likeness_endpoint_scores_a_cover_against_the_photos(client, monkeypatch):
+    import base64
+    seen = []
+    monkeypatch.setattr(svc, 'decode_image', lambda text: base64.b64decode(text).decode())
+    monkeypatch.setattr(svc.empty_spots, 'recognizer', lambda: 'rec')
+
+    def likeness(image, references, rec):
+        seen.append((image, references, rec))
+        return 0.91, [0.91, None]
+    monkeypatch.setattr(svc.empty_spots, 'likeness', likeness)
+    b64 = lambda s: base64.b64encode(s.encode()).decode()
+    response = client.post('/likeness', json={'image_b64': b64('cover'), 'references_b64': [b64('face'), b64('frame')]}, headers=AUTH)
+    assert response.status_code == 200
+    assert response.json() == {'score': 0.91, 'scores': [0.91, None], 'face_found': True}
+    assert seen == [('cover', ['face', 'frame'], 'rec')]
+
+
+def test_the_likeness_endpoint_guards_its_input(client):
+    body = {'image_b64': 'aGk=', 'references_b64': ['aGk=']}
+    assert client.post('/likeness', json=body).status_code == 401
+    assert client.post('/likeness', json=dict(body, references_b64=[]), headers=AUTH).status_code == 422
+    assert client.post('/likeness', json=dict(body, references_b64=['aGk='] * 5), headers=AUTH).status_code == 422
+    assert client.post('/likeness', json=dict(body, image_b64='not base64!'), headers=AUTH).status_code == 422
+
+
+def test_several_close_ups_come_back_best_first(client, monkeypatch):
+    monkeypatch.setattr(svc.empty_spots, 'remote_frames', lambda *a, **k: ['f1', 'f2', 'f3'])
+    monkeypatch.setattr(svc.empty_spots, 'detector', lambda: 'det')
+    monkeypatch.setattr(svc.empty_spots, 'best_faces',
+                        lambda frames, det, count: [(0.9, 'f2', (1, 2, 80, 100)), (0.7, 'f1', (1, 2, 60, 75))][:count])
+    monkeypatch.setattr(svc.empty_spots, 'closeup_image', lambda frame, box: frame)
+    monkeypatch.setattr(svc, 'encode_jpeg', lambda image: image.encode())
+    response = client.post('/faces', json={'source_url': SOURCE, 'start': 0, 'end': 30, 'count': 3}, headers=AUTH)
+    import base64
+    faces = response.json()['faces']
+    assert response.status_code == 200 and [base64.b64decode(f['jpeg_b64']) for f in faces] == [b'f2', b'f1']
+    assert faces[0]['size'] == [80, 100]
+    assert client.post('/faces', json={'source_url': SOURCE, 'start': 0, 'end': 30, 'count': 4}, headers=AUTH).status_code == 422
