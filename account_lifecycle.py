@@ -521,6 +521,14 @@ async def _erase_ledger(client: httpx.AsyncClient, business_id: str,
         return 0
 
 
+# Tables whose rows have no `id` column: the delete asks for a column that
+# exists, or PostgREST answers 400 and the delete is skipped as "missing".
+_DELETE_SELECT = {
+    "marketing_desks": "business_id",       # keyed by the business
+    "marketing_link_clicks": "post_id",     # keyed by (post_id, day)
+}
+
+
 async def _delete_table_rows(client: httpx.AsyncClient, table: str, business_id: str) -> int:
     # audit_log never takes the plain path — see _erase_ledger.
     if table == "audit_log":
@@ -528,7 +536,7 @@ async def _delete_table_rows(client: httpx.AsyncClient, table: str, business_id:
     r = await client.delete(
         f"{SUPABASE_URL}/rest/v1/{table}",
         headers={**_service_headers(), "Prefer": "return=representation"},
-        params={"business_id": f"eq.{business_id}", "select": "id"},
+        params={"business_id": f"eq.{business_id}", "select": _DELETE_SELECT.get(table, "id")},
     )
     if r.status_code >= 400:
         # 404/42P01 table missing, or no business_id column — skip.
@@ -670,11 +678,13 @@ _IMPORT_SKIP = {
     "social_publications",
     # Marketing history: weekly runs, posts (approvals, accounts, publication
     # ids), their clicks and audit trail. History in the export; a restored
-    # business must never resend or re-approve from a file. The desk's own
-    # settings (marketing_desks) are restored; its connection_ids and
-    # work_photo_ids name rows that are not, so whatever reads them checks
-    # them against the business's own accounts and photos.
+    # business must never resend or re-approve from a file.
     "marketing_runs", "marketing_posts", "marketing_link_clicks", "marketing_post_events",
+    # The desk's settings are not restored either (review of #1307): an
+    # uploaded file could switch the weekly plan on or name another
+    # business's accounts and photos. The owner sets the desk up again; the
+    # export keeps the old settings for reference.
+    "marketing_desks",
 }
 
 # Columns the platform owns. Carrying them across would let an import

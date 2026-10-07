@@ -393,7 +393,33 @@ def test_the_five_tables_are_exported_and_deleted_with_the_business():
     assert order["marketing_posts"] < order["audit_log"]
 
 
-def test_history_is_never_restored_from_a_file_but_the_desk_settings_are():
-    for t in ("marketing_runs", "marketing_posts", "marketing_link_clicks", "marketing_post_events"):
+def test_nothing_of_the_desk_is_restored_from_a_file():
+    """Review of #1307: history never re-sends, and an uploaded file must not
+    switch the weekly plan on or name another business's accounts."""
+    for t in TABLES:
         assert t in al._IMPORT_SKIP, t
-    assert "marketing_desks" not in al._IMPORT_SKIP
+
+
+def test_the_tables_without_an_id_column_are_still_deleted():
+    """Review of #1307: select=id on a table with no id is a 400 that the
+    delete reads as "table missing", so the rows were silently left."""
+    import asyncio
+    sent = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return [{}]
+
+    class Client:
+        async def delete(self, url, headers=None, params=None):
+            sent.append((url.rsplit('/', 1)[-1], params['select']))
+            return Response()
+
+    for t in TABLES:
+        asyncio.run(al._delete_table_rows(Client(), t, BIZ))
+    selects = dict(sent)
+    assert selects["marketing_desks"] == "business_id"
+    assert selects["marketing_link_clicks"] == "post_id"
+    assert selects["marketing_posts"] == selects["marketing_runs"] == selects["marketing_post_events"] == 'id'
