@@ -1534,6 +1534,18 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         _tools_arr.extend(read_tools or [])
     if _tools_arr:
         payload["tools"] = _tools_arr
+    # Which part of the request the prompt cache is keyed on moved since
+    # this business's last call (tools, model, effort, cached system
+    # blocks). Log-only; the big re-writes are explained after the reply.
+    _cache_seen = None
+    if isinstance(sys_payload, list):
+        try:
+            import cache_watch
+            _cache_seen = cache_watch.note_request(
+                business_id or (tool_biz or {}).get("id"), payload,
+                ttl="1h" if _extended else "5m", role=timing_role)
+        except Exception as e:  # never let a diagnostic touch the turn
+            logger.warning("cache watch (request) failed: %s", e)
     started_ms = int(time.time() * 1000)
 
     # Voice streaming arc — SSE from Anthropic, text deltas forwarded to
@@ -1711,6 +1723,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       business_id=business_id, task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms)
                   route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok)
+                  if _round == 0:
+                      try:
+                          import cache_watch
+                          cache_watch.report_write(business_id or (tool_biz or {}).get("id"),
+                                                   _cache_seen, cache_read_tok, cache_write_tok)
+                      except Exception:
+                          pass
                   if stop_reason == "refusal":
                       category = stop_details.get("category")
                       logger.warning("[chief] %s declined the turn (category=%s)", model, category)
@@ -1923,6 +1942,14 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
       )
       route_ledger.tally_usage(str((data.get("model") if isinstance(data, dict) else None) or model),
                                usage)
+      if _round == 0:
+          try:
+              import cache_watch
+              cache_watch.report_write(business_id or (tool_biz or {}).get("id"), _cache_seen,
+                                       usage.get("cache_read_input_tokens"),
+                                       usage.get("cache_creation_input_tokens"))
+          except Exception:
+              pass
       content = data.get("content", []) if isinstance(data, dict) else []
       if isinstance(data, dict) and data.get("stop_reason") == "refusal":
           category = (data.get("stop_details") or {}).get("category")
