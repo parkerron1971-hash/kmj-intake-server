@@ -139,18 +139,32 @@ def leads_from(rows: Optional[List[Dict[str, Any]]], now: datetime, limit: int =
 
 
 def bookings_from(rows: Optional[List[Dict[str, Any]]], now: datetime, limit: int = BOOKING_ROWS) -> Optional[Dict[str, Any]]:
-    """Appointments in the next 7 days against the weekly average of the 4 weeks before now."""
+    """Appointments booked SO FAR for the next 7 days, against what was
+    already booked at the same point in each of the 4 weeks before (7 days
+    ahead of that week). A week ahead is still filling in, so setting it
+    against past weeks' final totals made every normal week look slow
+    (review of #1314). A past booking without its booking time cannot be
+    placed, so the whole reading is unknown: None."""
     if rows is None or len(rows) >= limit:
         return None
-    ahead = before = 0
+    ahead = 0
+    before = 0
     for row in rows:
         at = _when(row.get('appointment_at'))
         if at is None:
             continue
         if now <= at < now + WEEK:
             ahead += 1
-        elif now - WEEK * BEFORE_WEEKS <= at < now:
-            before += 1
+            continue
+        for k in range(1, BEFORE_WEEKS + 1):
+            moment = now - WEEK * k
+            if moment <= at < moment + WEEK:
+                made = _when(row.get('created_at'))
+                if made is None:
+                    return None
+                if made <= moment:
+                    before += 1
+                break
     return {'next_7_days': ahead, 'weekly_before': _average(before)}
 
 
@@ -179,7 +193,7 @@ def capacity_from(slots: List[Dict[str, Any]], offering: Dict[str, Any], now: da
 
 def posts_from(desk_rows: List[Dict[str, Any]], social_rows: List[Dict[str, Any]],
                now: datetime) -> Optional[Dict[str, Any]]:
-    """When the business last posted from Solutionist, and what is approved
+    """When the business last posted through its marketing desk or its connected accounts, and what is approved
     ahead. A desk post that went out through Post for Me also has a
     social_publications row; it is counted once."""
     if len(desk_rows) >= POST_ROWS or len(social_rows) >= POST_ROWS:
@@ -274,7 +288,7 @@ def _bookings(business_id: str, now: datetime) -> Optional[Dict[str, Any]]:
     rows = _get(f'/module_entries?business_id=eq.{business_id}&status=eq.active'
                 f'&appointment_at=gte.{query_time(now - WEEK * BEFORE_WEEKS)}'
                 f'&appointment_at=lt.{query_time(now + WEEK)}'
-                f'&select=appointment_at&order=appointment_at.asc&limit={BOOKING_ROWS}')
+                f'&select=appointment_at,created_at&order=appointment_at.asc&limit={BOOKING_ROWS}')
     out = bookings_from(rows, now, BOOKING_ROWS)
     if out is None:
         raise Unread('module_entries: more bookings than one read counts')
@@ -379,6 +393,13 @@ async def read_signals(business_id: Any, *, now: Optional[datetime] = None,
         row = await safe('business', lambda: asyncio.to_thread(marketing_profile.read_business, bid))
     elif str(row.get('id')) != bid:
         raise ValueError('That business row is not this business.')
+    if tz is None and row is not None:
+        # The business's own clock when the caller did not pass it, so dates
+        # in the diagnosis never fall back to UTC (review of #1314).
+        try:
+            tz = marketing_profile.time_zone(row)
+        except Exception:
+            tz = None
 
     async def capacity():
         if row is None:

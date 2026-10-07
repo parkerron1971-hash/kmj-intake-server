@@ -26,7 +26,7 @@ read) is skipped: a failed read is never an empty calendar or a quiet week.
   3. something_new         tell_about_new           an offering or news post from the last 21 days no plan has been about
   4. visits_without_leads  turn_visits_into_leads   20 or more visits in 7 days and no new contact
   5. traffic_down          get_found                visits < 70% of the weekly average before (at least 10 a week)
-  6. gone_quiet            stay_visible             nothing posted from Solutionist in 14 days and nothing approved ahead
+  6. gone_quiet            stay_visible             nothing posted in 14 days and nothing approved ahead
   7. barely_seen           get_found                fewer than 10 visits in 7 days on a site whose counter works
   8. steady                stay_visible             nothing is off
 The calendar comes first because an empty chair this week cannot be sold
@@ -162,8 +162,8 @@ def diagnose(s: Dict[str, Any]) -> Dict[str, Any]:
     if b and b['weekly_before'] >= MIN_WEEKLY_BOOKINGS and b['next_7_days'] < BOOKINGS_DOWN * b['weekly_before']:
         n, avg = b['next_7_days'], b['weekly_before']
         return _found('fill_the_calendar', 'bookings_down', 'high',
-                      f'{n} booking{_s(n)} in the next 7 days, against about {round(avg)} a week over the last '
-                      f'4 weeks.', bookings_next_7_days=n, weekly_bookings_before=avg)
+                      f'{n} booking{_s(n)} in the next 7 days so far, against about {round(avg)} at this point in '
+                      f'each of the last 4 weeks.', bookings_next_7_days=n, weekly_bookings_before=avg)
     if b is not None and b['next_7_days'] == 0 and cap and cap.get('open_days', 0) >= EMPTY_WEEK_OPEN_DAYS:
         return _found('fill_the_calendar', 'empty_week', 'high',
                       f'Nothing is booked for the next 7 days, and {cap["open_days"]} of them still have open times.',
@@ -197,7 +197,7 @@ def diagnose(s: Dict[str, Any]) -> Dict[str, Any]:
         since = (f'since {platform._day(p["last_published"], tz)}' if p.get('last_published')
                  else f'in the last {p.get("looked_back_days") or 90} days')
         return _found('stay_visible', 'gone_quiet', 'high',
-                      f'No post has gone out from Solutionist {since}, and none is approved for the week ahead.',
+                      f'No post has gone out {since}, and none is approved for the week ahead.',
                       published_last_14_days=0, approved_next_7_days=0)
     if t and t.get('counted_any') and t['visits'] < FEW_VISITS and (before is None or before < FEW_VISITS):
         v = t['visits']

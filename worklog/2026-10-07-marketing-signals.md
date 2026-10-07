@@ -12,7 +12,7 @@ related: [2026-10-07-marketing-desk-api.md, 2026-10-07-marketing-suite-storage.m
 ---
 B7 of docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md, without its endpoint.
 marketing_signals.py reads one business's numbers (visits, new contacts,
-bookings ahead against the 4-week average, open chairs for a chair business
+bookings booked so far for the next 7 days against the same point in the 4 weeks before, open chairs for a chair business
 with a live calendar, new offerings, site news, the last post, what past
 plans were about), bounded and None-not-0. marketing_profile.py says who the
 marketing speaks for and to (audience, voice, clock, host, landing page,

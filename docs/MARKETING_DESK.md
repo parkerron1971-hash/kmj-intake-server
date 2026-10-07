@@ -196,8 +196,12 @@ suggestion.
     average of the 28 days before (`site_analytics.business_rows`, at most
     5,000 rows, not the 50,000-row traffic report).
   - New contacts in the same windows.
-  - Bookings (`module_entries`, `appointment_at`, status active): the next 7
-    days against the trailing 4-week weekly average.
+  - Bookings (`module_entries`, `appointment_at` and `created_at`, status
+    active): what is booked so far for the next 7 days, against what had been
+    booked at the same point (7 days ahead) in each of the 4 weeks before. A
+    week ahead is still filling in, so it is never set against past weeks'
+    final totals; a past booking without its booking time makes the reading
+    unknown.
   - Open chairs, for a personal_services business with a live calendar and
     weekly hours set: open times in the next 7 days for its shortest bookable
     offering (`agent_site.slots_for`). No count of them goes in a caption.
@@ -213,12 +217,12 @@ suggestion.
 
   | # | Rule | Problem | When |
   | --- | --- | --- | --- |
-  | 1 | bookings_down | fill_the_calendar | next 7 days under 70% of the weekly average (at least 3 a week) |
+  | 1 | bookings_down | fill_the_calendar | booked so far for the next 7 days under 70% of what was booked at the same point (7 days ahead) in each of the 4 weeks before (at least 3 a week) |
   | 2 | empty_week | fill_the_calendar | nothing booked in the next 7 days, open times on 2 or more of them |
   | 3 | something_new | tell_about_new | an offering or news post from the last 21 days no plan has been about |
   | 4 | visits_without_leads | turn_visits_into_leads | 20 or more visits in 7 days, no new contact |
   | 5 | traffic_down | get_found | visits under 70% of the weekly average before (at least 10 a week) |
-  | 6 | gone_quiet | stay_visible | nothing posted from Solutionist in 14 days, nothing approved ahead |
+  | 6 | gone_quiet | stay_visible | nothing posted in 14 days, nothing approved ahead |
   | 7 | barely_seen | get_found | under 10 visits in 7 days, on a site whose counter has counted |
   | 8 | steady | stay_visible | nothing is off |
 

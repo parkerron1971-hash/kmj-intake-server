@@ -153,7 +153,9 @@ def world(monkeypatch):
         module_entries=[
             # 2 ahead, 12 in the 4 weeks before: about 3 a week
             *[{'business_id': BIZ, 'status': 'active', 'appointment_at': ahead(days=d)} for d in (1, 2)],
-            *[{'business_id': BIZ, 'status': 'active', 'appointment_at': ago(days=d)} for d in range(1, 25, 2)],
+            # booked a week ahead, so each counts at the same point in its week
+            *[{'business_id': BIZ, 'status': 'active', 'appointment_at': ago(days=d), 'created_at': ago(days=d + 7)}
+              for d in range(1, 25, 2)],
             {'business_id': BIZ, 'status': 'cancelled', 'appointment_at': ahead(days=3)},
             {'business_id': BIZ, 'status': 'active', 'appointment_at': ago(days=40)},
         ],
@@ -581,15 +583,15 @@ def test_the_rules_go_in_order():
 
 def test_each_problem_carries_the_number_that_proves_it():
     d = eng.diagnose(signals(bookings={'next_7_days': 4, 'weekly_before': 11.0}))
-    assert d['evidence'] == '4 bookings in the next 7 days, against about 11 a week over the last 4 weeks.'
+    assert d['evidence'] == ('4 bookings in the next 7 days so far, against about 11 at this point in each of the '
+                             'last 4 weeks.')
     assert d['numbers'] == {'bookings_next_7_days': 4, 'weekly_bookings_before': 11.0}
     d = eng.diagnose(signals(bookings={'next_7_days': 0, 'weekly_before': 0.0}, capacity=CAP))
     assert d['evidence'] == 'Nothing is booked for the next 7 days, and 5 of them still have open times.'
     d = eng.diagnose(signals(unmarketed_offerings=[{'name': 'Beard trim', 'created_at': '2026-10-03T15:00:00Z'}]))
     assert d['evidence'] == '"Beard trim" was added on October 3 and no post has told anyone yet.'
     d = eng.diagnose(signals(posts=QUIET, traffic=None))
-    assert d['evidence'] == ('No post has gone out from Solutionist since September 8, and none is approved for '
-                             'the week ahead.')
+    assert d['evidence'] == 'No post has gone out since September 8, and none is approved for the week ahead.'
 
 
 def test_none_is_never_zero():
@@ -690,3 +692,29 @@ def test_the_slot_filler_is_the_platforms_own():
     assert [s['play_id'] for s in slots] == ['a', 'b', 'a', 'c', 'b']
     assert counts == {'a': 2, 'b': 2, 'c': 1}
     assert platform.fill_slots([], {}, {}, 5) == ([], {})
+
+
+# -- review of #1314 -----------------------------------------------------------
+
+def test_a_week_still_filling_in_is_compared_like_for_like():
+    """Past weeks count only what was booked by the same point (7 days
+    ahead): last-minute bookings never make a normal week look slow."""
+    rows = [{'appointment_at': ahead(days=d)} for d in (1, 2)]
+    # Each past week had 4 appointments, all booked the same day (12 hours ahead).
+    for k in range(1, 5):
+        for d in (1, 2, 3, 4):
+            at = NOW - timedelta(days=7 * k) + timedelta(days=d)
+            rows.append({'appointment_at': at.isoformat(), 'created_at': (at - timedelta(hours=12)).isoformat()})
+    b = sig.bookings_from(rows, NOW)
+    assert b == {'next_7_days': 2, 'weekly_before': 0.0}
+    assert eng.diagnose(signals(bookings=b))['rule'] != 'bookings_down'
+
+
+def test_a_past_booking_without_its_booking_time_makes_bookings_unknown():
+    rows = [{'appointment_at': ahead(days=1)}, {'appointment_at': ago(days=3)}]
+    assert sig.bookings_from(rows, NOW) is None
+
+
+def test_the_business_clock_is_used_when_no_zone_is_passed(world):
+    s = run(sig.read_signals(BIZ, now=NOW))
+    assert s['time_zone'] == 'America/Chicago'
