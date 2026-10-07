@@ -1591,6 +1591,18 @@ async def startup():
                           "interval", hours=1, id="platform_marketing_engine", max_instances=1)
     except Exception as e:
         print(f"   [warn] platform marketing not scheduled: {e}")
+    # The marketing desk for every business (marketing suite B5): send due
+    # approved posts through Post for Me every minute; watch how each went
+    # every 5 minutes and tell the owner once per problem. Both do nothing
+    # until MARKETING_DESK_PUBLISHING=on (default off).
+    try:
+        import business_marketing_dispatch as _business_marketing
+        scheduler.add_job(g("business_marketing_due", _business_marketing.due_tick),
+                          "interval", minutes=1, id="business_marketing_due", max_instances=1)
+        scheduler.add_job(g("business_marketing_delivery", _business_marketing.delivery_tick),
+                          "interval", minutes=5, id="business_marketing_delivery", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] business marketing sending not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:
     # every minute, execute due chief_scheduled_actions rows through
     # the same ACTION_HANDLERS registry. Kill switch: CHIEF_SCHEDULER=off.

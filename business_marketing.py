@@ -104,6 +104,10 @@ NOT_CONNECTED = "One of those accounts isn't connected to this business."
 STORE_DOWN = 'The marketing desk could not be reached just now. Nothing was changed. Try again in a minute.'
 READ_DOWN = "The marketing desk couldn't be read just now. Try again in a minute."
 OWNER_ONLY = 'Only the business owner can change its marketing.'
+# The owner's own "not sent" (an unconfirmed delivery they checked). The
+# sender's delivery watch (business_marketing_dispatch) does not announce a
+# failure the owner made themselves.
+NOT_SENT_NOTE = 'Checked the accounts and marked not sent. Change it or give it a new time to post it again.'
 
 
 def now() -> datetime:
@@ -1087,7 +1091,7 @@ async def mark_not_sent(business_id: UUID, post_id: UUID, req: Revision, user: A
         'PATCH', f'/marketing_posts?id=eq.{post_id}&business_id=eq.{bid}&revision=eq.{req.revision}'
                  '&status=eq.uncertain',
         {'status': 'failed', 'revision': req.revision + 1, 'checked_at': now().isoformat(),
-         'error': 'Checked the accounts and marked not sent. Change it or give it a new time to post it again.'}))
+         'error': NOT_SENT_NOTE}))
     if not rows:
         raise HTTPException(409, 'Only an unconfirmed delivery can be marked not sent. Refresh the desk.')
     return {'post': reading.public_post(rows[0])}
