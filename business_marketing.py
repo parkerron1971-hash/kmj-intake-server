@@ -610,6 +610,34 @@ async def _write_all(business_id: str, pairs, statuses, what: str) -> List[Dict[
     return done
 
 
+# What a post-now restores when its approval is refused: the post's own
+# time, state and approval, exactly as the owner left them.
+_RESTORED = ('run_at', 'expires_at', 'status', 'content_hash', 'approved_hash', 'approved_by',
+             'approved_at', 'approved_via', 'error')
+
+
+async def _put_back(business_id: str, moved: List[Dict[str, Any]], originals: List[Dict[str, Any]]) -> bool:
+    """Undo a post-now move whose approval was refused. Each write only lands
+    if the post is still the draft the move made (nothing else touched it);
+    the revision moves on once more so an open screen refreshes. True when
+    every post is back."""
+    by_id = {str(o['id']): o for o in originals}
+    ok = True
+    for row in moved:
+        original = by_id.get(str(row['id']))
+        if not original:
+            ok = False
+            continue
+        patch = {k: original.get(k) for k in _RESTORED}
+        patch['revision'] = int(row['revision']) + 1
+        try:
+            saved = await _write_post(business_id, row, patch, ('draft',))
+        except HTTPException:
+            saved = None
+        ok = ok and saved is not None
+    return ok
+
+
 async def approve_rows(business_id: str, rows: List[Dict[str, Any]], actor: str) -> int:
     items = [{'id': str(r['id']), 'revision': int(r['revision']), 'content_hash': r['content_hash']} for r in rows]
     return await _call(store.approve(business_id, items, actor=actor, via='owner'))
@@ -947,7 +975,20 @@ async def post_existing_now(business_id: str, items: List[ReviewItem], actor: st
     run_at, expires_at = schedule(now() + POST_NOW_LEAD)
     moved = await _write_all(bid, [(r, changed(r, run_at=run_at, expires_at=expires_at)) for r in rows],
                              SENDABLE, 'moved')
-    await approve_rows(bid, moved, actor)
+    try:
+        await approve_rows(bid, moved, actor)
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            # The store did not answer: the approval may or may not have
+            # happened, so nothing is undone on a guess.
+            raise HTTPException(exc.status_code, 'The posts were moved to now, but the approval could not be '
+                                                 'confirmed. Refresh the desk before trying again.') from None
+        # marketing_approve is all-or-nothing, so none was approved: put each
+        # post back exactly as it was (review of #1313), or say what moved.
+        back = await _put_back(bid, moved, rows)
+        raise HTTPException(409, (f'{exc.detail} Nothing was sent, and the posts are back as they were.' if back else
+                                  f'{exc.detail} Nothing was sent, but the posts were moved to now and are drafts '
+                                  'again: review and approve them on the desk.')) from None
     after = [await _call(store.get_post(bid, r['id']), down=READ_DOWN) or r for r in moved]
     return {'posts': [reading.public_post(r) for r in after], 'posting': True, 'run_at': after[0]['run_at']}
 

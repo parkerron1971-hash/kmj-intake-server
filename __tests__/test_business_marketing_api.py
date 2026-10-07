@@ -691,6 +691,36 @@ def test_post_now_moves_the_reviewed_post_two_minutes_out_and_approves_it(s):
     assert r.json()['posting'] is True
 
 
+def test_a_refused_post_now_puts_an_approved_post_back_as_it_was(s, monkeypatch):
+    """Review of #1313: post-now moves the post, then approves it. If the
+    approval is refused, the post must not quietly stop being approved."""
+    p = seed(s)
+    s.db.approve({'p_items': [item(p)], 'p_business_id': BIZ, 'p_actor': OWNER, 'p_via': 'owner'})
+    before = copy.deepcopy(s.db.posts[p['id']])
+    assert before['status'] == 'approved'
+
+    def refuse(body):
+        raise store.StoreConflict('A flyer is still being made; approve that post when it is ready')
+    monkeypatch.setattr(s.db, 'approve', refuse)
+    r = call(s, 'POST', '/post-now', {'items': [item(before)]})
+    assert r.status_code == 409 and 'back as they were' in r.json()['detail']
+    row = s.db.posts[p['id']]
+    for key in ('run_at', 'expires_at', 'status', 'content_hash', 'approved_hash', 'approved_by', 'approved_via'):
+        assert row[key] == before[key], key
+    assert row['revision'] == before['revision'] + 2 and row['approved_hash'] == store.digest(row)
+
+
+def test_a_post_now_whose_approval_cannot_be_confirmed_undoes_nothing(s, monkeypatch):
+    p = seed(s)
+
+    def down(body):
+        raise store.StoreUnavailable('down')
+    monkeypatch.setattr(s.db, 'approve', down)
+    r = call(s, 'POST', '/post-now', {'items': [item(p)]})
+    assert r.status_code == 503 and 'could not be confirmed' in r.json()['detail']
+    assert s.db.posts[p['id']]['run_at'] == (NOW + bm.POST_NOW_LEAD).isoformat()
+
+
 def test_a_new_post_now_is_saved_and_approved_in_one_step(s):
     r = call(s, 'POST', '/ideas', {'caption': 'Walk-ins welcome today.', 'post_now': True})
     assert r.status_code == 200, r.text
