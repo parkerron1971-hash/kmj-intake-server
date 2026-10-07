@@ -55,7 +55,7 @@ def test_nothing_unlisted_is_guessed_at():
     """No fallback that invents an inverse — same discipline as
     action_registry's default-deny."""
     for verb in ("delete_contact", "send_sms", "approve_draft", "create_invoice",
-                 "publish_post", "batch_email", "not_a_real_verb"):
+                 "publish_post", "post_clip", "batch_email", "not_a_real_verb"):
         assert ai.can_undo(verb) is False
         assert ai.build_inverse(verb, {}, {}) is None
 

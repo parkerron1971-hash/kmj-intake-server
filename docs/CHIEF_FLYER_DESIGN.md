@@ -270,3 +270,7 @@ my face and expressions the best that fit the title". Two additions to
   the frame and the style). Below it, a guest speaker's clip, or any failure:
   the cover uses the clip's own pictures. The likeness meter then grades the
   design against all its subject photos, the speaker photo included.
+
+## Chief posts a clip (2026-10-06)
+
+`post_clip` (`chief_clip_actions.py`, class C) posts an approved clip with its cover through `clip_posting.post_clip_for`, the same function as the Post tap, only when the owner asks in chat: unattended runs are held, the clip must already be approved in Video Clips, and the post id comes from the chat turn so a retried turn never posts twice.

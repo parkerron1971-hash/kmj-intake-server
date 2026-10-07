@@ -79,6 +79,7 @@ CLIENT_FACING = frozenset({
     "create_recurring_booking",   # writes a series onto a client's calendar
     "cancel_recurring_booking",   # removes appointments a client is holding
     "publish_post",               # public, via Meta
+    "post_clip",                  # public, to the connected social accounts
     "launch_campaign",            # arms sends to a whole audience
     "send_purchase_order",        # emails the supplier — leaves the app
 })
