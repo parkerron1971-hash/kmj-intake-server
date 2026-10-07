@@ -112,3 +112,29 @@ def test_a_draft_the_builder_renders_wears_the_library(monkeypatch):
                                screenshots=lambda html: seen.append(html) or [("1440px top", b"jpeg")])
     box.render(_page(TICKET))
     assert seen and so.OBJECTS["ticket"].css in seen[0]
+
+
+def test_repair_edits_land_on_the_page_the_model_was_shown(monkeypatch):
+    """An edit copied from the shown page (no library block) is placed on
+    that same page; the finishing pass wears the library again."""
+    import re
+    standin = '<div class="slot-frame"><p class="slot-note">Braids from behind, clean parts.</p></div>'
+
+    def _drop(user):
+        shown = user.split(v2.page_part(""), 1)[1].split(v2.CACHE_BREAK, 1)[0]
+        run = re.search(r'<div class="slot-frame".*?</p></div>', shown, re.DOTALL).group(0)
+        return "\n".join(["<<<<<<< SEARCH", run, "=======", "", ">>>>>>> REPLACE"])
+    replies = [_page(TICKET + standin), _drop]
+    calls = []
+
+    def _fake_call(system, user, business_id, spend=None):
+        calls.append(user)
+        r = replies.pop(0)
+        return r(user) if callable(r) else r
+    monkeypatch.setattr(v2, "_call", _fake_call)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: x")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: EP)
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert len(calls) == 2 and out["report"]["repair_modes"] == [{"stage": "surgical", "how": "edits"}]
+    assert "slot-frame" not in out["html"] and out["html"].count("<style data-sx-library>") == 1

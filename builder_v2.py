@@ -498,7 +498,10 @@ def repair_page(spec_text: str, real_data: str, doc: str, items: List[str],
     (the repaired page or None, how it was repaired)."""
     raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data, violations=items,
                                            prior_doc=doc), business_id, spend=spend)
-    new, how = apply_edits(doc, raw or "")
+    # the edits are placed on the page exactly as the model was shown it
+    # (page_part leaves out the library block); the caller's finishing
+    # pass puts the library back
+    new, how = apply_edits(_strip_library(doc), raw or "")
     if new:
         return new, how
     logger.warning(f"[v2] repair edits did not apply ({how}) — one whole-page pass")
