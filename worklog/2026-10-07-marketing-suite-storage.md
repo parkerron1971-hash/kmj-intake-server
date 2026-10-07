@@ -4,7 +4,7 @@ date: 2026-10-07
 agent: Claude Code (Claude Opus 5.5)
 asked: "This will work. let's build this."
 status: waiting on Kevin
-prs: []
+prs: [kmj-intake-server#1307]
 migrations: [supabase/APPLY-2026-10-07-marketing-suite.sql]
 left_undone: ["Kevin applies supabase/APPLY-2026-10-07-marketing-suite.sql by hand after merge", "B4 desk API is next and depends on the migration being applied"]
 decisions: ["new marketing_* tenant tables; platform_marketing_* untouched until step 5", "one row per post idea with targets jsonb, like social_publications", "owner + member SELECT only, service-role writes, clicks and events service-role only", "content_hash binds id, business, caption, publish_text, landing_url, media (artwork ids in order, or clip + fingerprint + covers), sorted accounts, run_at, expires_at", "a post with no desk row is never claimed; a paused desk hands nothing over", "follow counts clicks for submitted, published and partly_published posts", "run, post, click and event history is exported and deleted with the business but never restored from a file; desk settings are"]
