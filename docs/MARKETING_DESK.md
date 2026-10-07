@@ -122,8 +122,8 @@ B4 of `docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md` (2026-10-07). The same
 desk, for one business, on the `marketing_*` tables through
 `business_marketing_store`. `business_marketing.py` is mounted at
 `/marketing/{business_id}`, after `clip_posting` and before the public-site
-catch-all. **Nothing here sends.** B5's sender claims approved posts
-(`marketing_claim_due`) and re-checks everything at send time.
+catch-all. **Nothing in the API sends.** The sender (B5, below) claims
+approved posts (`marketing_claim_due`) and re-checks everything at send time.
 
 | Route | Who | What |
 | --- | --- | --- |
@@ -182,3 +182,69 @@ and a Chief digest. They are on the business's clock: `marketing_desk`'s
 wording helpers now take `tz`, and the platform desk's default is unchanged.
 It promises no weekly plan until a planner exists (B8/B9). Nothing calls
 `today_items` or `chief_digest` yet.
+
+### Sending and the delivery watch (B5)
+
+`business_marketing_dispatch.py`, two scheduled jobs registered beside the
+platform desk's. They run only where scheduled jobs run (`PROCESS_ROLE`
+worker or all), on the scheduler leader, and **do nothing until
+`MARKETING_DESK_PUBLISHING=on`** (default off; set it on the worker). The
+sender also waits while `POST_FOR_ME_API_KEY` is missing, so a server
+without Post for Me never fails anyone's posts.
+
+| Job | Every | What |
+| --- | --- | --- |
+| `business_marketing_due` | 1 min (`max_instances=1`) | claim up to 5 due approved posts and send each |
+| `business_marketing_delivery` | 5 min (`max_instances=1`) | settle each post handed over; tell the owner once per problem |
+
+**One door.** Every post goes through `social_publish_router.send_post`
+(daily cap, the record of who approved what, our row id as `external_id`, a
+refused hand-off recorded as failed), so it also shows in Build, Social
+Media's recent posts. A picture or words go straight there; a clip goes
+through `clip_posting.post_clip_for`, which adds its covers.
+
+**Checked again at send time:** the content still hashes to the approval
+(`digest == approved_hash == content_hash`) and its window is open; the desk
+is not paused; the pilot is on (`post_for_me.allowed_for`); every account is
+still connected to this business and is the same account
+(`social._targets`, with a fail-closed second read so a failed read is never
+"disconnected"); the picture is a ready artwork of this business; a clip is
+approved as it is now, at the fingerprint the post was approved with.
+
+**The build actor.** On the worker there is no JWT, so
+`image_studio.build_actor` is bound to `{business_id, user_id: owner}` (the
+owner read as the service role) for one post only and reset in a `finally`.
+Storage then refuses any path outside that business's folder.
+
+**The publication id** is `uuid5(post id, 'rev:<revision>')` (for a clip,
+`post_clip_for`'s id from that request id). A retry of the same approved
+version is answered by the door from its record, never posted twice; an
+edited, re-approved post is a new send.
+
+| What happened | The post becomes |
+| --- | --- |
+| sent | `submitted`, with `publication_id` |
+| nothing left the server (a storage blip, a failed read, the door's cap read) | `approved` again; the next minute retries until the window closes |
+| the desk was paused after the claim | `approved` again, quietly: it waits for Resume, as the desk says |
+| a check said no (changed, window closed, account gone, clip changed, pilot off, the daily cap) | `failed`, in plain words |
+| the posting service refused the hand-off (`send_post` 502) | `failed` |
+| anything else once the hand-off began | `uncertain` (the owner checks, or the watch settles it) |
+| the result could not be written | left `dispatching`; the claim RPC makes it `uncertain` after 10 min |
+
+**The delivery watch** (no webhook) refreshes posts that are `submitted`, and
+`uncertain` ones claimed in the last two days, through `social._refresh`
+(whose write now runs off the event loop): all accounts took it →
+`published`, some → `partly_published`, none → `failed`, with each live
+post's link in `external_urls`. A post still in flight two hours after its
+claim becomes `uncertain`; a late answer still settles it. The network's own
+error text stays on the publication; the post says which accounts did not
+take it, in plain words.
+
+**Telling the owner.** Each problem (`failed`, `partly_published`,
+`uncertain`, including the claim RPC's own "time passed") gets one Today
+item (`chief_notifications`, type `reminder`, navigate to Grow → Marketing)
+and one push (`nav: grow:marketing`), keyed by post, revision and status in
+`action_payload.dedup_key`, so it is said exactly once, and again only if a
+fixed post fails again. A success is never pushed, and a failure the owner
+made (marking a post not sent) is not announced back. If the dedup read
+fails, nothing is said until it can be checked.

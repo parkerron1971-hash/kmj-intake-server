@@ -307,8 +307,10 @@ async def _refresh(row: Dict[str, Any]) -> Dict[str, Any]:
         return row
     settled = _settle(row, results)
     if settled["status"] != row.get("status") or settled["results"] != (row.get("results") or []):
-        sb_clients.sb_patch_as_service(f"/social_publications?id=eq.{row['id']}",
-                                       {**settled, "updated_at": _now().isoformat()})
+        # A blocking write: off the event loop (the marketing desk's delivery
+        # watch calls this every five minutes on the worker).
+        await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}",
+                                {**settled, "updated_at": _now().isoformat()})
         row = {**row, **settled}
     return row
 
