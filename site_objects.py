@@ -1744,28 +1744,27 @@ def director_block() -> str:
 
 
 def builder_block(keys: Iterable[str]) -> str:
-    """The source for exactly the named objects, or '' when none are
-    named. Shared tokens first, then each object's structure, styles,
-    script and phone behavior."""
+    """What the builder needs to place exactly the named objects, or ''
+    when none are named: each object's structure and phone behavior. Their
+    styles and script are NOT here: the server adds them to the finished
+    page (inject_library), exactly as the library holds them."""
     picked = [k for k in OBJECT_KEYS if k in set(keys or ())]
     if not picked:
         return ""
     lines = [
-        "== THE OBJECTS YOUR BLUEPRINT NAMES: WORKING SOURCE ==",
-        "Build each named object from its source below. KEEP the structure, "
+        "== THE OBJECTS YOUR BLUEPRINT NAMES: THEIR STRUCTURE ==",
+        "Place each named object with the structure below. KEEP the structure, "
         "the class names and the data-sx-object attribute; REPLACE every word "
         "of the example copy (it belongs to an imaginary pottery studio) with "
         "this business's real data; repeat an element (a ticket, a card, a "
-        "row) once per real item. Map the seven object tokens ONCE in :root "
-        "to your own tokens: --obj-paper, --obj-ink, --obj-accent, --obj-line, "
-        "--obj-display, --obj-body, --obj-label. Set data-finish on the root "
-        "when the blueprint names a finish. Copy the CSS into your <style> "
-        "unchanged apart from sizes and spacing; the shared block below "
-        "is needed once. This CSS is the one place a url() may appear (the "
-        "library's paper grain). Any script line goes inside your one script.",
-        "",
-        "--- SHARED (once per page)",
-        BASE_CSS,
+        "row) once per real item. THEIR STYLES AND SCRIPT ARE ADDED TO THE PAGE "
+        "FOR YOU when you hand it in, exactly as the library holds them: do not "
+        "write or copy them. Map the seven object tokens ONCE in :root to your "
+        "own tokens: --obj-paper, --obj-ink, --obj-accent, --obj-line, "
+        "--obj-display, --obj-body, --obj-label (and --obj-script when the page "
+        "loads a script face). Set data-finish on the root when the blueprint "
+        "names a finish. To change a size or a spacing, add your own rule in "
+        "your <style>: the library's styles load before yours, so yours win.",
         "",
     ]
     for key in picked:
@@ -1773,15 +1772,64 @@ def builder_block(keys: Iterable[str]) -> str:
         lines.append(f"--- {key}: {o.intent}")
         lines.append("STRUCTURE:")
         lines.append(o.html)
-        lines.append("CSS:")
-        lines.append(o.css)
-        if o.js:
-            lines.append("SCRIPT (inside your one script):")
-            lines.append(o.js)
         if o.phone:
             lines.append(f"ON A PHONE: {o.phone}.")
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+# ─── THE SERVER WEARS THE LIBRARY (2026-10-07, the build-cost plan, step 2)
+# The builder used to retype every named object's CSS and script into the
+# page, on every whole-page write: output tokens at five times the price
+# of input, and a copy that could drift from the library. Now the builder
+# writes only the objects' structure, and every pass that finishes a page
+# adds exactly the styles and script of the objects actually on it, from
+# the library itself. Idempotent: an earlier copy is stripped first.
+
+LIBRARY_ATTR = "data-sx-library"
+_LIB_STYLE_RE = re.compile(r"<style data-sx-library>.*?</style>\s*", re.DOTALL)
+_LIB_SCRIPT_RE = re.compile(r"<script data-sx-library>.*?</script>\s*", re.DOTALL)
+
+
+def library_assets(keys: Iterable[str]) -> Tuple[str, str]:
+    """(css, js) for exactly these objects: the shared tokens once, then
+    each object's styles, in library order. ('', '') when none."""
+    picked = [k for k in OBJECT_KEYS if k in set(keys or ())]
+    if not picked:
+        return "", ""
+    css = "\n".join([BASE_CSS] + [OBJECTS[k].css for k in picked])
+    js = "".join(OBJECTS[k].js for k in picked if OBJECTS[k].js)
+    return css, js
+
+
+def strip_library(html: str) -> str:
+    """The page without the library block (what the builder wrote)."""
+    return _LIB_SCRIPT_RE.sub("", _LIB_STYLE_RE.sub("", html or ""))
+
+
+def inject_library(html: str) -> str:
+    """The page wearing the library's styles and script for the objects on
+    it. The style goes before the page's own styles (theirs win) and after
+    the head's meta tags (the charset stays in the first bytes); the
+    script goes before </body>. A page with no library object is returned
+    without a library block."""
+    html = strip_library(html)
+    css, js = library_assets(page_objects(html))
+    if not css:
+        return html
+    style = f"<style {LIBRARY_ATTR}>{css}</style>"
+    head = re.search(r"<head\b[^>]*>(.*?)</head>", html, re.IGNORECASE | re.DOTALL)
+    if head:
+        own = re.search(r"<(?:style|link)\b", head.group(1), re.IGNORECASE)
+        at = head.start(1) + own.start() if own else head.end(1)
+        html = html[:at] + style + html[at:]
+    else:
+        html = style + html
+    if js:
+        script = f"<script {LIBRARY_ATTR}>{js}</script>"
+        i = html.lower().rfind("</body>")
+        html = html[:i] + script + html[i:] if i >= 0 else html + script
+    return html
 
 
 def contact_sheet_html(themes: Iterable[Dict[str, str]]) -> str:

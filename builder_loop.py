@@ -196,8 +196,10 @@ class ToolBox:
         if not doc:
             return [{"type": "text", "text": "That is not a complete HTML document "
                                              "(<!DOCTYPE html> … </html>). Send the whole page."}]
-        armored, dropped = v2.armor_scripts(doc, allowed_fetch=self.endpoint)
+        armored, dropped = v2.armor_scripts(v2._strip_library(doc), allowed_fetch=self.endpoint)
         armored, stripped = v2.armor_external(armored)
+        # the draft is looked at the way it will ship: wearing the library
+        armored = v2._wear_library(armored)
         laws = (v2.check_truth(armored, self.real_data)
                 + v2.check_tenure(armored, self.real_data)
                 + v2.check_coverage(armored, self.real_data)

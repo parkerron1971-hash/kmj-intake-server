@@ -337,9 +337,30 @@ def stable_part(spec_text: str, real_data: str) -> str:
     ])
 
 
+def _strip_library(doc: str) -> str:
+    try:
+        import site_objects
+        return site_objects.strip_library(doc or "")
+    except Exception:
+        return doc or ""
+
+
+def _wear_library(doc: str) -> str:
+    """Step 2 of the build-cost plan: the library's styles and script for
+    the objects on the page, added by the server, never retyped."""
+    try:
+        import site_objects
+        return site_objects.inject_library(doc or "")
+    except Exception as e:
+        logger.info(f"[v2] library styles not added: {e}")
+        return doc or ""
+
+
 def page_part(doc: str) -> str:
-    """The page as it stands: shared by every repair of the same draft."""
-    return "THE PAGE AS IT STANDS:\n" + (doc or "")
+    """The page as it stands: shared by every repair of the same draft
+    (without the library block the server adds; it is not the builder's
+    to edit, and it would only cost tokens)."""
+    return "THE PAGE AS IT STANDS:\n" + _strip_library(doc)
 
 
 # ─── EDITS, NOT THE PAGE (2026-10-07, the build-cost plan, step 3) ──
@@ -2200,12 +2221,13 @@ def refine_section_doc(doc: str, spec_text: str, ctx: Dict[str, Any],
     mech: Dict[str, Any] = {}
 
     def _mechanical(d: str) -> str:
+        d = _strip_library(d)
         d, dropped = armor_scripts(d, allowed_fetch=endpoint)
         d, _stripped = armor_external(d)
         d, _typeset = _craft().typographer(d)
         d, _added = annotate_editability(d)
         mech["scripts_dropped"] = dropped
-        return d
+        return _wear_library(d)
 
     def _laws(d: str) -> List[str]:
         return (check_truth(d, real_data) + check_tenure(d, real_data)
@@ -2410,6 +2432,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     endpoint = contact_endpoint(business_id)
 
     def _mechanical(d: str) -> str:
+        d = _strip_library(d)
         d, dropped = armor_scripts(d, allowed_fetch=endpoint)
         d, stripped = armor_external(d)
         d, typeset = _craft().typographer(d)
@@ -2418,7 +2441,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                                 "externals_stripped": stripped,
                                 "typography_fixes": typeset,
                                 "override_targets_added": added}
-        return d
+        return _wear_library(d)
 
     def _soft(d: str) -> List[str]:
         # THE SOFT TIER: quality defects that earn the repair round and
