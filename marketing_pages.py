@@ -5014,9 +5014,10 @@ def render_features() -> str:
     <div class="fs-grid">
       <div class="reveal">
         <div class="fs-eyebrow"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3-1.9 5.8L4 10.7l6.1 1.9L12 18.4l1.9-5.8 6.1-1.9-6.1-1.9z"/><path d="M19 3v4M21 5h-4"/></svg>Chief of Staff</div>
-        <h2>An AI that knows your business.</h2>
-        <p>Not a generic LLM. Chief reads your real contacts, invoices, goals, content, and brand on every turn. Ask for input, delegate actions, get tactical guidance, by chat or by voice.</p>
+        <h2>Not just AI. Solutionist Intelligence.</h2>
+        <p>Chief is an AI built to solve, not just to answer. It reads your real contacts, invoices, goals, content, and brand on every turn, finds what&rsquo;s really behind a problem, fixes it with you, and checks on the day it said whether it worked. Ask for input, delegate actions, get tactical guidance, by chat or by voice.</p>
         <ul class="fs-list">
+          <li>Finds the real cause</li><li>Checks its fixes worked</li>
           <li>Voice mode</li><li>Memory + standing instructions</li>
           <li>Action delegation</li><li>Goal coaching</li><li>Content drafting</li>
           <li>Direct publishing</li><li>Report generation</li><li>Insight + tactical input</li>
@@ -5378,6 +5379,7 @@ def render_compare() -> str:
         <h3>From &ldquo;I&rsquo;ll just build my own agent&rdquo;</h3>
         <p>You can. The tools are genuinely good now, and you&rsquo;ll have something impressive running in an afternoon.</p>
         <p>Then it double-books a client. Then it promises a refund policy you don&rsquo;t have. Then it forgets what happened last Tuesday. Not because the AI isn&rsquo;t smart, but because smart isn&rsquo;t the same as dependable, and dependable is built, not prompted.</p>
+        <p>We call what we built Solutionist Intelligence: it finds what&rsquo;s really behind a problem, fixes it with you, and checks on the day it said whether it worked.</p>
         <p>That&rsquo;s the part that took us since January: knowing what a booking agent must never do, what has to be logged, what has to ask first, what a week in your line of work actually looks like. You&rsquo;d be starting that from zero, and everything your business teaches it would live in a tool you have to maintain forever.</p>
         <p>Ours shows up already knowing your business. And it keeps everything it learns about yours specifically.</p>
       </div>
@@ -5447,9 +5449,9 @@ def render_faq() -> str:
 <section>
   <div class="container-narrow">
     <div class="faq-filter reveal" id="faqFilter" role="group" aria-label="Filter questions">
-      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>11</span></button>
+      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>12</span></button>
       <button type="button" class="faq-f" data-f="fit"   aria-pressed="false">Is it for me<span>3</span></button>
-      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>4</span></button>
+      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>5</span></button>
       <button type="button" class="faq-f" data-f="money" aria-pressed="false">Money<span>2</span></button>
       <button type="button" class="faq-f" data-f="data"  aria-pressed="false">Your data<span>2</span></button>
     </div>
@@ -5479,6 +5481,10 @@ def render_faq() -> str:
       <details class="faq-item" data-g="how">
         <summary>Does the AI replace my judgment?</summary>
         <div class="faq-body"><p>No. Chief drafts, suggests, and assists. It never sends without you approving (except for explicit actions you ask it to take, like "send this email" or "publish this post"). It's an instrument, not a replacement.</p></div>
+      </details>
+      <details class="faq-item" data-g="how">
+        <summary>What is Solutionist Intelligence?</summary>
+        <div class="faq-body"><p>It's how Chief works. Chief is an AI, and it's built to solve problems, not just answer questions. When something's off (slow days, late payments, too few new clients), it looks in your real records for what's really behind it and suggests one fix. Once you agree, it keeps an eye on it: on the day it said, it checks your numbers and tells you straight whether it worked. It reports what happened without claiming credit it can't prove, and sending, booking, and charging still wait for your OK unless you've told Chief otherwise.</p></div>
       </details>
       <details class="faq-item" data-g="data">
         <summary>What about my existing tools? Do I have to move everything?</summary>
@@ -5854,6 +5860,8 @@ def render_about() -> str:
       <p class="about-engine-close">We are not in the AI business. We&rsquo;re in the
          <b>how-your-business-actually-runs business.</b> The AI is just the engine, and engines are
          supposed to get better.</p>
+      <p>Solutionist Intelligence is how we drive it: find what&rsquo;s really behind the problem,
+         fix it with you, and check that it worked.</p>
     </div>
   </div>
 </section>
