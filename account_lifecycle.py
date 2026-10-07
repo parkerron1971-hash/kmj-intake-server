@@ -292,6 +292,15 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "social_connections",
     # Posts the business sent through Post for Me, with how each went.
     "social_publications",
+    # The marketing desk (APPLY-2026-10-07-marketing-suite.sql). Clicks and
+    # the audit trail before the posts they cite; posts before the weekly
+    # runs they belong to; the desk's settings last. All cascade with the
+    # business too; listing them is what makes them EXPORTABLE.
+    "marketing_post_events",
+    "marketing_link_clicks",
+    "marketing_posts",
+    "marketing_runs",
+    "marketing_desks",
     "design_rationales",
     "design_feedback",
     "goals",
@@ -659,6 +668,13 @@ _IMPORT_SKIP = {
     # Its posts point at those connections and at Post for Me post ids;
     # they are history in the export, not something to re-send.
     "social_publications",
+    # Marketing history: weekly runs, posts (approvals, accounts, publication
+    # ids), their clicks and audit trail. History in the export; a restored
+    # business must never resend or re-approve from a file. The desk's own
+    # settings (marketing_desks) are restored; its connection_ids and
+    # work_photo_ids name rows that are not, so whatever reads them checks
+    # them against the business's own accounts and photos.
+    "marketing_runs", "marketing_posts", "marketing_link_clicks", "marketing_post_events",
 }
 
 # Columns the platform owns. Carrying them across would let an import
