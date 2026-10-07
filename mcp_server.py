@@ -229,13 +229,14 @@ from booking_rehearsal import READ_SCHEMA as BOOKING_REHEARSAL_SCHEMA
 TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     "rehearse_booking_plan": BOOKING_REHEARSAL_SCHEMA,
     "responsibility_status": (
-        "What Chief is handling across assignments, plans, builds, errands and approvals. "
+        "What Chief is handling across assignments, plans, builds, errands, approvals and the "
+        "problems it is keeping an eye on. "
         "Returns what needs the owner, recorded next checks, observed outcomes and unavailable sources. "
         "Use for 'what are you working on?' or 'what is waiting on me?'. Does not run or retry work. "
         "Use source to narrow the report. For a full responsibility check, follow next_offset "
         "until more_items is zero before answering; do not stop at the first page. "
         "If the reading budget runs out, explicitly name what remains unread.",
-        _obj({'source': {'type':'string','enum':['assignments','missions','jobs','errands','approvals','events']},
+        _obj({'source': {'type':'string','enum':['assignments','missions','jobs','errands','approvals','cases','events']},
               'offset': {'type':'integer','minimum':0,'maximum':240}})),
     "inspect_course": ACADEMY_READ_SCHEMA,
     "recall_business_knowledge": (
