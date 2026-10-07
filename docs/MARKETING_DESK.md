@@ -115,3 +115,70 @@ What is still platform-only:
 
 Tenant social publishing today is separate: Meta only, through
 `content_calendar` and `post_approval`.
+
+## The desk for every business — API
+
+B4 of `docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md` (2026-10-07). The same
+desk, for one business, on the `marketing_*` tables through
+`business_marketing_store`. `business_marketing.py` is mounted at
+`/marketing/{business_id}`, after `clip_posting` and before the public-site
+catch-all. **Nothing here sends.** B5's sender claims approved posts
+(`marketing_claim_due`) and re-checks everything at send time.
+
+| Route | Who | What |
+| --- | --- | --- |
+| `GET /engine` | owner + members | settings, this and next week's posts, Chief's read, attention, `level`, `upgrade`, accounts |
+| `GET /ideas/next-slot` | owner | the next open time |
+| `POST /ideas` | owner | a new post as a draft (`post_now`: saved and approved, out in two minutes) |
+| `POST /approve` | owner | `[{id, revision, content_hash}]`, all or nothing (`marketing_approve`) |
+| `POST /slot/edit` | owner | words, time, accounts, picture or link; back to draft |
+| `POST /slot/cancel` | owner | skip a post or let missed drafts go |
+| `POST /post-now` | owner | a reviewed post goes out in two minutes |
+| `POST /posts/{id}/not-sent` | owner | an unconfirmed delivery becomes a failure |
+| `PUT /settings` | owner | paused, plan_enabled, accounts, hour (6-21), audience, link; makes the desk row |
+
+- **Who.** Reads use `business_access('viewer')`. Writes use `require_user`
+  plus an owner check: a service-role read of `businesses.owner_id`. A member
+  never approves, edits or posts.
+- **One row per post.** Its accounts are in `targets`. The post id is a uuid5
+  of the business and the caller's idea id, so a retried save is the same
+  post.
+- **Defaults for a new post.** It goes to the desk's accounts that are still
+  connected, or to every connected Post for Me account when the desk names
+  none. Instagram is left out without a picture, and TikTok and YouTube
+  without a video; `dropped` and `note` say so. Its time is the next weekday
+  at the desk's hour or 3:00 PM on the business's own clock, at least an hour
+  away and not already taken. The clock is `availability.timezone`, then the
+  owner's `practitioner_profiles.timezone`, then `PLATFORM_DEFAULT_TZ`, then
+  UTC. A post may still go out up to six hours after its time.
+- **The approval.** `content_hash` is `business_marketing_store.digest`. Any
+  change bumps `revision`, recomputes the hash and drops the approval.
+- **Post now** refuses, before anything is written, unless all of these hold:
+  `MARKETING_DESK_PUBLISHING=on` (B5's switch, off by default), the posting
+  pilot is on for the business, the desk is not paused, every account is
+  still connected, Instagram has a picture, and the caption fits each network.
+- **This business's rows only.** Every post, picture, clip and account is
+  read with the business id in the filter, so another business's id answers
+  exactly like a missing one.
+- **Links.** `landing_url` must be https on the business's own host: its
+  `mysolutionist.app` subdomain, or its custom domain once verified.
+  `publish_text` is the caption until B6 adds the tracked short link.
+- **Fail closed.** A failed read is a 503 in plain words, never an empty desk.
+- **`level`** comes from the real plan (`feature_gates.plan_includes`, which
+  ignores `BILLING_ENFORCE`). `upgrade` is the next level's feature and
+  `upgrade_plan_for`'s plan.
+
+| Plan | `level` | `upgrade` |
+| --- | --- | --- |
+| Starter, no plan | suggest | marketing_week → Professional |
+| Solo, Booked | suggest | marketing_week → Boss |
+| Professional, Boss | week | marketing_autopilot → Solutionist |
+| Professional, Boss: a personal_services business with a live booking calendar | openings | marketing_autopilot → Solutionist |
+| Solutionist (practice) | autopilot | none |
+
+`business_marketing_desk.py` computes the business desk's words from rows,
+with no model call: Chief's read, the masthead, "Needs a look", Today items
+and a Chief digest. They are on the business's clock: `marketing_desk`'s
+wording helpers now take `tz`, and the platform desk's default is unchanged.
+It promises no weekly plan until a planner exists (B8/B9). Nothing calls
+`today_items` or `chief_digest` yet.
