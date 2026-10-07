@@ -32,7 +32,7 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _brand_footer_html(business_id: str) -> str:
@@ -706,6 +706,14 @@ def _traffic_beacon(business_id: str) -> str:
     referrer reduced to a host server-side. DNT is honoured here as well
     as on the server, so a visitor who has asked not to be tracked costs
     nothing at all.
+
+    CAMPAIGN TAGS (2026-10-07, the marketing suite's B6). A visit that
+    arrives with campaign tags (a desk post's /go/ link adds
+    utm_content=<post id>) keeps them for the tab's session, first touch
+    wins, and every event reports them as `c` (site_analytics whitelists
+    them again). That is how a business's results count a visit as having
+    come through a post; the platform's own pages have done this since the
+    growth arc.
     """
     return (
         "<script>(function(){try{"
@@ -716,12 +724,19 @@ def _traffic_beacon(business_id: str) -> str:
         "if(!sid){sid=(Math.random().toString(36).slice(2)+Date.now()"
         ".toString(36)).slice(0,24);sessionStorage.setItem(K,sid);}}"
         "catch(e){return;}"
+        "var C=null;try{var q=new URLSearchParams(location.search),f={},n=0;"
+        "['utm_source','utm_medium','utm_campaign','utm_term','utm_content',"
+        "'gclid','fbclid','ref'].forEach(function(k){var v=q.get(k);"
+        "if(v){f[k]=String(v).slice(0,120);n++;}});"
+        "if(n&&!sessionStorage.getItem('sol_c'))"
+        "sessionStorage.setItem('sol_c',JSON.stringify(f));"
+        "C=JSON.parse(sessionStorage.getItem('sol_c')||'null');}catch(e){C=null;}"
         "var w=window.innerWidth||1024;"
         "var d=w<700?'mobile':(w<1024?'tablet':'desktop');"
         "function send(ev){try{fetch(B+'/api/track',{method:'POST',"
         "headers:{'Content-Type':'application/json'},keepalive:true,"
         "body:JSON.stringify({s:sid,p:location.pathname,"
-        "r:document.referrer||null,d:d,e:ev,b:ID})}).catch(function(){});"
+        "r:document.referrer||null,d:d,e:ev,b:ID,c:C})}).catch(function(){});"
         "}catch(e){}}"
         "send('view');"
         "document.addEventListener('click',function(e){"
@@ -7284,27 +7299,39 @@ async def static_widget_embed():
 # the platform's page; on a practitioner subdomain or custom domain it
 # belongs to their site (their real page, or their branded 404).
 
+def _site_host(request: Request) -> Optional[Tuple[str, str]]:
+    """Which practitioner site this host names: ("slug", slug) for a
+    platform subdomain, ("domain", host) for a custom domain, or None when
+    the host is the platform's (or the API's). The one host rule, shared by
+    _site_response_or_none and the /go/ short links."""
+    slug = extract_slug_from_host(request)
+    if slug:
+        return ("slug", slug)
+    host = public_host(request)
+    if not _is_api_host(host):
+        is_known_base = any(host == base or host.endswith(f".{base}")
+                            for base in BASE_DOMAINS)
+        if not is_known_base and "." in host:
+            return ("domain", host)
+    return None
+
+
 async def _site_response_or_none(request: Request):
     """The site half of the rule above: this path's response when the
     host belongs to a practitioner, or None when it belongs to the
     platform. Split out so robots.txt and sitemap.xml can apply exactly
     the same host rule while answering with something that is not HTML.
     """
-    host = public_host(request)
     path = "/" + (request.url.path or "").lstrip("/")
-
-    slug = extract_slug_from_host(request)
-    if slug:
-        if not _check_rate(slug):
+    site_host = _site_host(request)
+    if site_host is None:
+        return None
+    kind, name = site_host
+    if kind == "slug":
+        if not _check_rate(name):
             raise HTTPException(429, "Rate limit exceeded")
-        return await _serve_site_by_slug(slug, path)
-
-    if not _is_api_host(host):
-        is_known_base = any(host == base or host.endswith(f".{base}")
-                            for base in BASE_DOMAINS)
-        if not is_known_base and "." in host:
-            return await _serve_site_by_custom_domain(host, path)
-    return None
+        return await _serve_site_by_slug(name, path)
+    return await _serve_site_by_custom_domain(name, path)
 
 
 async def _platform_page_or_site(request: Request, render):
@@ -7397,29 +7424,54 @@ async def public_news_post(request: Request, post_slug: str):
 # A click counts only from a person: link-preview fetchers (Facebook,
 # LinkedIn and X all fetch every link in a post) and Do Not Track are
 # redirected without being counted.
+#
+# A business's own posts carry the same kind of link on ITS host
+# (slug.mysolutionist.app/go/<code> or its verified custom domain; the
+# marketing suite, B6). On a practitioner host the host's business is
+# resolved first, and the redirect happens only for that business's own
+# post and only to that business's own site (business_marketing_links.
+# follow_on_host). Anything else on that host is the site's normal answer
+# for the path: its 404. A platform code never resolves there.
 
 # The analytics bot pattern misses the unfurlers that carry no "bot" in
 # their name; Facebook's is the one every Page post triggers.
 _LINK_PREVIEW = re.compile(
     r"facebookexternalhit|facebookcatalog|whatsapp|telegram|discord|skypeuripreview"
     r"|embedly|vkshare|redditbot|iframely|outbrain|quora link preview", re.I)
+_GO_HEADERS = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
+
+
+def _counts_as_person(request: Request) -> bool:
+    """A click worth counting: a browser, not a link-preview fetcher, and
+    not a visitor who asked not to be tracked."""
+    import site_analytics
+    agent = request.headers.get("user-agent") or ""
+    return (bool(agent) and not site_analytics._BOT.search(agent)
+            and not _LINK_PREVIEW.search(agent)
+            and (request.headers.get("dnt") or "").strip() != "1")
 
 
 @router.get("/go/{code}", include_in_schema=False)
 async def public_marketing_link(request: Request, code: str):
     from fastapi.responses import RedirectResponse
+    site_host = _site_host(request)
+    if site_host is not None:
+        kind, name = site_host
+        if kind == "slug" and not _check_rate(name):
+            raise HTTPException(429, "Rate limit exceeded")
+        import business_marketing_links
+        url = await business_marketing_links.follow_on_host(
+            kind, name, code, person=_counts_as_person(request))
+        if url:
+            return RedirectResponse(url=url, status_code=302, headers=_GO_HEADERS)
     site = await _site_response_or_none(request)
     if site is not None:
         return site
     import platform_marketing
-    import site_analytics
-    agent = request.headers.get("user-agent") or ""
-    person = (bool(agent) and not site_analytics._BOT.search(agent)
-              and not _LINK_PREVIEW.search(agent)
-              and (request.headers.get("dnt") or "").strip() != "1")
+    person = _counts_as_person(request)
     url = await platform_marketing.follow(code.strip().lower(), count_click=person)
     return RedirectResponse(url=url or "https://mysolutionist.app/", status_code=302,
-                            headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+                            headers=_GO_HEADERS)
 
 
 # ─── robots.txt + sitemap.xml, for the apex ───────────────────────────
