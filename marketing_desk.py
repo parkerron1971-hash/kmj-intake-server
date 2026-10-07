@@ -77,9 +77,12 @@ def _z(d):
     return d.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
 
-def _local(value):
+def _local(value, tz=None):
+    """The instant on the owner's clock: Eastern for Solutionist's own desk
+    (the default), the business's own zone for a business desk
+    (business_marketing_desk passes it)."""
     d = _stamp(value) if not isinstance(value, datetime) else value
-    return d.astimezone(TZ) if d else None
+    return d.astimezone(tz or TZ) if d else None
 
 
 def _word(n):
@@ -99,18 +102,18 @@ def _cap(text):
     return text[:1].upper() + text[1:] if text else text
 
 
-def day_name(value):
-    d = _local(value)
+def day_name(value, tz=None):
+    d = _local(value, tz)
     return f'{d:%A}' if d else 'The next'
 
 
-def clock(value):
-    d = _local(value)
+def clock(value, tz=None):
+    d = _local(value, tz)
     return f'{d:%I:%M %p}'.lstrip('0') if d else ''
 
 
-def short_day(value):
-    d = _local(value)
+def short_day(value, tz=None):
+    d = _local(value, tz)
     return f'{d:%a} {d:%b} {d.day}' if d else ''
 
 
@@ -119,9 +122,9 @@ def week_label(week_of):
     return f'{d:%B} {d.day}' if d else ''
 
 
-def span(slots):
+def span(slots, tz=None):
     """'October 5–9' for a plan's posting days ('September 28–October 2' across months)."""
-    days = sorted(d for d in (_local(s['run_at']) for s in slots) if d)
+    days = sorted(d for d in (_local(s['run_at'], tz) for s in slots) if d)
     if not days:
         return ''
     a, b = days[0], days[-1]
@@ -178,9 +181,9 @@ def slots(posts):
     return list(out.values())
 
 
-def _week_over(run, now):
+def _week_over(run, now, tz=None):
     start = datetime.fromisoformat(str(run['week_of'])).date()
-    return now.astimezone(TZ).date() >= start + timedelta(days=7)
+    return now.astimezone(tz or TZ).date() >= start + timedelta(days=7)
 
 
 def facts(state):
@@ -222,9 +225,10 @@ def facts(state):
 
 # ── what needs a look ─────────────────────────────────────────────────
 
-def _missed_when(missed, now):
-    monday = now.astimezone(TZ).date() - timedelta(days=now.astimezone(TZ).weekday())
-    return 'this week' if all(_local(s['run_at']).date() >= monday for s in missed) else 'the last two weeks'
+def _missed_when(missed, now, tz=None):
+    local = now.astimezone(tz or TZ)
+    monday = local.date() - timedelta(days=local.weekday())
+    return 'this week' if all(_local(s['run_at'], tz).date() >= monday for s in missed) else 'the last two weeks'
 
 
 def attention(f):

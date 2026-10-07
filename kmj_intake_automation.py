@@ -584,6 +584,10 @@ app.include_router(clip_covers_router)
 # Post an approved clip with its cover to the connected accounts (owner only).
 from clip_posting import router as clip_posting_router
 app.include_router(clip_posting_router)
+# The marketing desk for one business (/marketing/{business_id}/*): members
+# read, the owner writes. Nothing here sends (marketing suite B4).
+from business_marketing import router as business_marketing_router
+app.include_router(business_marketing_router)
 from video_studio_router import router as video_studio_router
 app.include_router(video_studio_router)
 app.include_router(practitioner_profile_router)
