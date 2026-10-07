@@ -365,6 +365,23 @@ def _with_note(turns: List[Dict[str, Any]], note: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _cached_turns(turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The turns as sent: the opening message and the last block of the
+    newest turn carry cache breakpoints (with the system prompt, three of
+    the API's four), so each tool round re-reads the conversation so far
+    from the cache instead of paying for it again. The stored turns are
+    not changed."""
+    out: List[Dict[str, Any]] = []
+    for n, turn in enumerate(turns):
+        content = turn["content"]
+        blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
+                  else [dict(b) if isinstance(b, dict) else b for b in content])
+        if (n == 0 or n == len(turns) - 1) and blocks and isinstance(blocks[-1], dict):
+            blocks[-1] = {**blocks[-1], "cache_control": dict(v2._CACHE)}
+        out.append({**turn, "content": blocks})
+    return out
+
+
 def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
              spend: Dict[str, Any], progress_cb: Optional[Callable[[int, str], None]] = None,
              toolbox: Optional[ToolBox] = None, client: Any = None,
@@ -396,7 +413,7 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
             return {"html": None, "report": {**report, "error": "no ANTHROPIC_API_KEY"}}
         client = llm_call.sdk_client(key=key, timeout=900.0, max_retries=1)
 
-    system = v2._SYSTEM + "\n\n" + ROOM.format(n=max_tools())
+    system = v2._system_blocks(v2._SYSTEM + "\n\n" + ROOM.format(n=max_tools()))
     user = v2.build_user_prompt(spec_text, real_data)
     turns: List[Dict[str, Any]] = [{"role": "user", "content": user}]
     sampling = v2._gen_kwargs(model, v2.V2_TEMPERATURE)
@@ -408,7 +425,7 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
         force = (report["tool_calls"] >= cap) or not budget_ok
         _progress(48 + min(20, round_no * 3),
                   "The builder looks, renders, corrects" if not force else "Handing in")
-        tools, choice, sent = TOOLS, None, list(turns)
+        tools, choice, sent = TOOLS, None, _cached_turns(turns)
         if force:
             if model_ladder.supports_forced_tool_choice(model):
                 choice = {"type": "tool", "name": "finish"}
@@ -427,15 +444,8 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
             logger.error(f"[loop] call failed: {type(e).__name__}: {e}")
             break
         v2._record_spend(spend, model, getattr(msg, "usage", None))
-        try:
-            from api_usage_logger import log_api_usage_sync
-            u = getattr(msg, "usage", None)
-            log_api_usage_sync(endpoint="/composer/builder-v2", model=model,
-                               input_tokens=getattr(u, "input_tokens", 0) or 0,
-                               output_tokens=getattr(u, "output_tokens", 0) or 0,
-                               business_id=business_id, task_type="builder_v2_loop")
-        except Exception:
-            pass
+        v2._log_api_usage(endpoint="/composer/builder-v2", model=model, usage=getattr(msg, "usage", None),
+                      business_id=business_id, task_type="builder_v2_loop")
         uses = _tool_uses(msg)
         if not uses:
             # the model answered in prose — a whole document in the text

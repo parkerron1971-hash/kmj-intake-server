@@ -87,7 +87,7 @@ def _wire(monkeypatch, verdict, section_reply=NEW_PRICES, rounds=1):
 
     def _fake_call(system, user, business_id, spend=None):
         calls.append((system, user))
-        if user.startswith("SECTION REPAIR"):
+        if "SECTION REPAIR:" in user:
             return section_reply
         return _doc()
 
@@ -107,7 +107,9 @@ def test_section_defects_rebuild_only_those_sections(monkeypatch):
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert len(calls) == 2, "the author, then one section call; no whole-page pass"
     system, user = calls[1]
-    assert system.startswith("THIS CALL REPAIRS ONE SECTION")
+    # one cached system prompt for every builder call; the section
+    # preamble rides at the head of the call's own task
+    assert system == v2._SYSTEM and v2.SECTION_PREAMBLE in user
     assert 'the <section id="prices">' in user and "a flat list" in user
     assert "Rebuilt as a letterboard." in out["html"]
     assert "Opened in the spring." in out["html"]
@@ -140,7 +142,7 @@ def test_a_page_wide_defect_takes_one_whole_page_pass(monkeypatch):
     calls = _wire(monkeypatch, verdict)
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert len(calls) == 2
-    assert not calls[1][1].startswith("SECTION REPAIR")
+    assert "SECTION REPAIR:" not in calls[1][1]
     assert "palette drifts" in calls[1][1] and "flat" in calls[1][1]
     assert out["report"]["vision"]["section_repairs"] == []
 
@@ -169,7 +171,7 @@ def test_the_same_section_flagged_every_look_is_rethought_then_left_for_the_owne
     calls = _wire(monkeypatch, _PRICES_FLAT, rounds=3)
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out["report"]["vision"]["looks"] == 3
-    repairs = [c[1] for c in calls if c[1].startswith("SECTION REPAIR")]
+    repairs = [c[1] for c in calls if "SECTION REPAIR:" in c[1]]
     assert len(repairs) == 2
     assert "SECOND TRY" not in repairs[0] and "SECOND TRY" in repairs[1]
     assert [r["round"] for r in out["report"]["vision"]["section_repairs"]] == [1, 2]

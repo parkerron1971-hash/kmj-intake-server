@@ -144,7 +144,12 @@ def test_loop_renders_corrects_and_finishes(monkeypatch):
     assert tr["type"] == "tool_result" and tr["tool_use_id"] == "t1"
     assert "VISIBLE STAND-IN" in tr["content"][0]["text"]
     assert any(c.get("type") == "image" for c in tr["content"])
-    assert "THE ROOM" in client.seen[0]["system"] and spend["calls"] == 2
+    sys_block = client.seen[0]["system"][0]
+    assert "THE ROOM" in sys_block["text"] and sys_block["cache_control"] == {"type": "ephemeral"}
+    # the second round re-reads the brief and the first round from the cache
+    assert second[0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert tr["cache_control"] == {"type": "ephemeral"}
+    assert spend["calls"] == 2
 
 
 def test_loop_keeps_the_last_render_when_the_purse_or_the_cap_runs_out(monkeypatch):
