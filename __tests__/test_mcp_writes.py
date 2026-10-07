@@ -199,7 +199,7 @@ def test_instructions_match_the_scope():
 # ─── refusals ────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("verb", ["send_sms", "create_invoice", "delete_contact",
-                                  "publish_post", "post_clip", "approve_draft", "start_mission"])
+                                  "publish_post", "post_clip", "post_image", "approve_draft", "start_mission"])
 def test_class_c_is_refused_even_with_the_write_scope(verb, biz):
     allowed, ok, msg, _ = _run(mcp._call_tool(verb, {}, _writer()))
     assert allowed is False and ok is False

@@ -274,3 +274,7 @@ my face and expressions the best that fit the title". Two additions to
 ## Chief posts a clip (2026-10-06)
 
 `post_clip` (`chief_clip_actions.py`, class C) posts an approved clip with its cover through `clip_posting.post_clip_for`, the same function as the Post tap, only when the owner asks in chat: unattended runs are held, the clip must already be approved in Video Clips, and the post id comes from the chat turn so a retried turn never posts twice.
+
+## Chief posts a picture (2026-10-07)
+
+`post_image` (`chief_social_actions.py`, class C) posts a finished design, a photo or words to the accounts connected in Build, Social Media through `image_posting.post_image_for` (a ready design of this business only, its JPEG made under the build actor, the shared `send_post` door), only when the owner asks in chat: unattended runs are held, `"image":"latest"` asks which when two designs were made together, words-only posts leave Instagram out and say so, and the post id comes from the chat turn so a retried turn never posts twice.

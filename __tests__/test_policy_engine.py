@@ -140,7 +140,7 @@ def test_client_facing_set_is_curated_from_real_verbs():
     from chief_of_staff import ACTION_HANDLERS
     assert pe.CLIENT_FACING <= set(ACTION_HANDLERS)
     for outbound in ("send_sms", "draft_and_send", "batch_email",
-                     "approve_draft", "send_invoice", "publish_post", "post_clip"):
+                     "approve_draft", "send_invoice", "publish_post", "post_clip", "post_image"):
         assert outbound in pe.CLIENT_FACING
     # Creating a bill is bookkeeping; SENDING it is the client-facing act.
     assert "create_invoice" not in pe.CLIENT_FACING

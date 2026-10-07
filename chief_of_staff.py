@@ -177,6 +177,8 @@ from chief_grow_actions import (
 )
 # Video Clips — post an approved clip with its cover (2026-10-06).
 from chief_clip_actions import handle_post_clip
+# Post a design, a photo or words to the connected accounts (2026-10-07).
+from chief_social_actions import handle_post_image
 # Custom modules — propose / accept / inspect / extend / summarize / upgrade
 # (2026-09-04, third slice). _has_dup_override is shared with the turn.
 from chief_module_actions import (
@@ -3344,6 +3346,11 @@ def _confirmation_subject(action: Dict[str, Any]) -> str:
         if val:
             bits.append(val)
             break
+    if a.get('type') == 'post_image':
+        # Where the picture goes is the who of a post.
+        nets = a.get('platforms')
+        nets = [nets] if isinstance(nets, str) else [str(n) for n in (nets or []) if str(n).strip()]
+        bits.append('to ' + (', '.join(nets) if nets else 'every connected account'))
     for key in ("amount", "total", "price"):
         val = a.get(key)
         if isinstance(val, (int, float)) and val:
@@ -11677,6 +11684,7 @@ ACTION_HANDLERS = {
     "publish_post":           handle_publish_post,
     "publish_to_site":        handle_publish_to_site,
     "post_clip":              handle_post_clip,
+    "post_image":             handle_post_image,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "update_module_entry":   handle_update_module_entry,

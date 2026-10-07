@@ -615,6 +615,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "be cancelled until it goes out; a sent one cannot be recalled, and "
                                     "a post that was seen cannot be unseen. Owner only; never unattended "
                                     "(chief_clip_actions holds every run nobody asked for)"),
+    "post_image":           _w("C", "posts a finished design, a photo or words publicly to the "
+                                    "business's connected social accounts (image_posting.post_image_for, "
+                                    "through the same door as every post, social_publish_router.send_post). "
+                                    "A scheduled one can be cancelled until it goes out; a sent one cannot "
+                                    "be recalled, and a post that was seen cannot be unseen. Owner only; "
+                                    "never unattended (chief_social_actions holds every run nobody asked for)"),
     "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
                                     "(send_confirmation defaults true). The send is what makes this "
                                     "C while cancel/reschedule are A"),
