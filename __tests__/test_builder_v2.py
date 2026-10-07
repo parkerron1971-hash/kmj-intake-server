@@ -816,17 +816,20 @@ def test_craft_render_findings_ride_the_measured_list(monkeypatch):
 
 # ─── THE OBJECT LIBRARY (2026-10-01, the concept-layer plan) ──────────
 
-def test_named_objects_arrive_with_their_source():
+def test_named_objects_arrive_with_their_structure():
+    """Build cost, step 2: the named objects arrive with their structure;
+    their styles and script are added by the server (inject_library)."""
     import site_objects
     spec = ("0. CONCEPT\nINTENSITY: world\nOBJECTS: tear-off tickets (paper), seal (metal)\n"
             "1. OVERVIEW\nA take-a-number counter.")
     user = v2.build_user_prompt(spec, "BUSINESS: x")
-    assert site_objects.OBJECTS["ticket"].css in user
-    assert site_objects.OBJECTS["seal"].css in user
-    assert site_objects.OBJECTS["letter"].css not in user
-    assert user.index("THE APPROVED SPEC") < user.index("WORKING SOURCE") < user.index("THE REAL DATA")
+    assert site_objects.OBJECTS["ticket"].html in user
+    assert site_objects.OBJECTS["seal"].html in user
+    assert site_objects.OBJECTS["ticket"].css not in user, "the server adds the styles"
+    assert site_objects.OBJECTS["letter"].html not in user
+    assert user.index("THE APPROVED SPEC") < user.index("THEIR STRUCTURE") < user.index("THE REAL DATA")
     plain = v2.build_user_prompt("0. CONCEPT\nINTENSITY: plain\n1. OVERVIEW\nx", "BUSINESS: x")
-    assert "WORKING SOURCE" not in plain
+    assert "THEIR STRUCTURE" not in plain
 
 
 def test_url_is_allowed_only_for_the_library_grain():
@@ -876,4 +879,4 @@ def test_a_page_that_ignores_its_concept_earns_the_repair(monkeypatch):
     assert out["report"]["concept"]["intensity"] == "world"
     assert len(calls) == 2 and "CONCEPT:" in calls[1]
     assert "ticket" in calls[1] and "letterboard" in calls[1]
-    assert "WORKING SOURCE" in calls[0], "the named objects arrived with the author's brief"
+    assert "THEIR STRUCTURE" in calls[0], "the named objects arrived with the author's brief"
