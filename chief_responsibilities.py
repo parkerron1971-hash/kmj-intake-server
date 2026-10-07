@@ -39,6 +39,9 @@ def source_queries(bid):
         'jobs': f'/chief_jobs?business_id=eq.{bid}&or=(status.in.(queued,running,failed),result->>status.in.(held,needs_answer,needs_hand,done_with_gaps),created_at.gte.{since})&select=id,kind,status,params,result,created_at,finished_at&order=created_at.desc&limit={LIMIT}',
         'errands': f'/chief_errands?business_id=eq.{bid}&status=in.(planned,approved,running,needs_you,paused,interrupted,failed)&select=id,job_id,title,status,created_at&order=created_at.desc&limit={LIMIT}',
         'approvals': f'/agent_queue?business_id=eq.{bid}&status=eq.draft&select=id,subject,channel,created_at&order=created_at.desc&limit={LIMIT}',
+        # Problems Chief is keeping an eye on (chief_cases, 2026-10-05): open
+        # ones, and results from the last week the owner has not closed.
+        'cases': f'/chief_cases?business_id=eq.{bid}&or=(status.eq.open,and(status.eq.checked,checked_at.gte.{since}))&select=id,status,symptom,cause,fix,measure,baseline,expected,check_on,result,verdict,created_at,updated_at,checked_at&order=updated_at.desc&limit={LIMIT}',
     }
 
 
@@ -82,6 +85,24 @@ def normalize(source, row):
                     summary='Check the supplier before starting again.' if status in ('interrupted','failed') else status.replace('_',' '))
     elif source == 'approvals':
         item.update(status='awaiting_approval', needs_you=True, summary='Waiting for your decision; not sent.')
+    elif source == 'cases':
+        import chief_cases
+        pub = chief_cases.public_row(row)
+        title = _text(pub.get('symptom') or 'A problem Chief is keeping an eye on', 160)
+        if status == 'open':
+            item.update(title=title, status='keeping_an_eye_on', next_check_at=pub.get('check_on'),
+                        summary=_text(f"Keeping an eye on it. Before: {pub.get('before')}. "
+                                      f"Hoping for: {pub.get('forecast')}."),
+                        attribution='Observed business numbers; not proof that Chief caused them.')
+        else:
+            # A checked result waits on the owner: fixed, drop it, or try
+            # another fix. Words match the alert they were sent.
+            word = {'met': 'It worked', 'partly': 'It helped', 'not_met': 'No change yet',
+                    'unmeasured': "Couldn't check"}.get(row.get('verdict'), 'Checked')
+            item.update(title=title, status='checked', needs_you=True,
+                        summary=_text(f"{word}. Before: {pub.get('before')}. Now: {pub.get('result')}. "
+                                      "Tell Chief it's fixed, to drop it, or to try another fix."),
+                        attribution='Observed business numbers; not proof that Chief caused them.')
     elif source == 'events':
         item.update(title='Interrupted business follow-up', status='needs_review', needs_you=True,
                     summary=_text(row.get('summary')), source_id=_text(row.get('event_id'),100),
@@ -124,7 +145,7 @@ async def handle_responsibility_status(client, biz, action):
     out = await snapshot(biz['id'])
     source = action.get('source')
     if source:
-        if source not in ('assignments','missions','jobs','errands','approvals','events'):
+        if source not in ('assignments','missions','jobs','errands','approvals','cases','events'):
             raise ValueError('Unknown responsibility source.')
         out['items'] = [i for i in out['items'] if i['source'] == source]
     offset = action.get('offset', 0)
