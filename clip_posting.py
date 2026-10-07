@@ -35,6 +35,10 @@ IDEMPOTENT. The app sends a request_id per Post tap; the post's id is derived
 from it, so a retried tap returns the first post instead of a second. The same
 clip, caption, covers, accounts and time again within a day is returned as
 already sent (`already: true`), not posted twice.
+
+TWO CALLERS, ONE POST. post_clip_for is the post itself; the endpoint below and
+Chief's post_clip (chief_clip_actions.py) both call it, so every check above
+holds the same way for a tap and for "Chief, post that clip".
 """
 from __future__ import annotations
 
@@ -43,7 +47,8 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Literal, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID, uuid5
 
 import httpx
@@ -118,14 +123,25 @@ def _clip(business_id: str, asset_id: str) -> Dict[str, Any]:
     return row
 
 
+def approval_problem(row: Dict[str, Any]) -> Optional[str]:
+    """'unapproved', 'changed' (approved, then changed), or None when the clip
+    is approved as it is now."""
+    approval = row.get('approval') or {}
+    if not approval:
+        return 'unapproved'
+    if approval.get('fingerprint') != media_library.fingerprint(row):
+        return 'changed'
+    return None
+
+
 def check_approved(row: Dict[str, Any], shown: str) -> str:
     """The clip's fingerprint, once it is approved as it is now and is the one
     the owner is looking at. A 409 in plain words otherwise."""
     current = media_library.fingerprint(row)
-    approval = row.get('approval') or {}
-    if not approval:
+    problem = approval_problem(row)
+    if problem == 'unapproved':
         raise HTTPException(409, 'Approve this clip in Ready to post before posting it.')
-    if approval.get('fingerprint') != current:
+    if problem == 'changed':
         raise HTTPException(409, 'This clip changed after it was approved. Check it and approve it again before posting.')
     if shown != current:
         raise HTTPException(409, 'This clip changed since you opened it. Open it again and check it before posting.')
@@ -220,22 +236,42 @@ def recent_duplicate(business_id: str, digest: str) -> Optional[Dict[str, Any]]:
 @router.post('/{business_id}/clips/{asset_id}/post')
 async def post_clip(business_id: UUID, asset_id: UUID, body: ClipPost,
                     session: UserSession = Depends(sb_clients.authed_request)):
-    biz, clip_id = str(business_id), str(asset_id)
+    return await post_clip_for(
+        str(business_id), str(session.user.id), str(asset_id), request_id=body.request_id,
+        fingerprint=body.fingerprint, caption=body.caption, connection_ids=body.connection_ids,
+        scheduled_at=body.scheduled_at, covers=body.covers)
+
+
+async def post_clip_for(business_id: str, user_id: str, clip_id: str, *,
+                        request_id: Union[UUID, str], fingerprint: str, caption: Optional[str],
+                        connection_ids: List[str], scheduled_at: Optional[str],
+                        covers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Post one approved clip for the person `user_id`, who must own the
+    business. The endpoint above and Chief's post_clip both come here.
+    Raises HTTPException in plain words; nothing is signed or sent until every
+    check has passed. `fingerprint` is the clip as the caller showed it;
+    `covers` None = the newest ready cover of each shape, {} = none."""
+    biz = business_id
+    user = SimpleNamespace(id=str(user_id))
     # Every database read runs in a thread: never on the event loop.
-    await asyncio.to_thread(_require_owner, biz, session.user)
+    await asyncio.to_thread(_require_owner, biz, user)
     await asyncio.to_thread(social._require_pilot, biz)
+    try:
+        clip_id = str(UUID(str(clip_id)))
+    except ValueError:
+        raise HTTPException(404, 'That clip is not in this business.')
     row = await asyncio.to_thread(_clip, biz, clip_id)
-    fingerprint = check_approved(row, body.fingerprint)
-    targets = await asyncio.to_thread(social._targets, biz, body.connection_ids)
-    scheduled_at = social._schedule(body.scheduled_at)
-    caption = (body.caption if body.caption is not None else default_caption(row)).strip()
-    covers = await asyncio.to_thread(ready_covers, biz, clip_id, body.covers)
+    fingerprint = check_approved(row, fingerprint)
+    targets = await asyncio.to_thread(social._targets, biz, connection_ids)
+    scheduled_at = social._schedule(scheduled_at)
+    caption = (caption if caption is not None else default_caption(row)).strip()
+    covers = await asyncio.to_thread(ready_covers, biz, clip_id, covers)
     platforms = list(dict.fromkeys(t['platform'] for t in targets))
     shape_for = {p: cover_for(p, covers) for p in platforms}
     chosen = {p: (str(covers[s]['id']) if s else None) for p, s in shape_for.items()}
     used = {p: ({'shape': s, 'image_id': chosen[p]} if s else None) for p, s in shape_for.items()}
     digest = approved_hash(clip_id, fingerprint, caption, chosen, targets, scheduled_at)
-    publication_id = str(uuid5(UUID(clip_id), f'post:{body.request_id}'))
+    publication_id = str(uuid5(UUID(clip_id), f'post:{request_id}'))
 
     # Already sent: this tap again, or the same post a moment ago.
     again = await asyncio.to_thread(social._publication, biz, publication_id)
@@ -282,9 +318,9 @@ async def post_clip(business_id: UUID, asset_id: UUID, body: ClipPost,
              'covers': {p: c for p, c in chosen.items() if c}}]
 
     publication, sent_now = await social.send_post(
-        biz, str(session.user.id), caption=caption, media=kept, targets=targets,
+        biz, user.id, caption=caption, media=kept, targets=targets,
         scheduled_at=scheduled_at, approved_hash=digest, provider_media=[item(top)],
         platform_configurations=configurations, publication_id=publication_id)
     if sent_now:
-        media_library.audit(biz, session.user, 'post', clip_id)
+        media_library.audit(biz, user, 'post', clip_id)
     return {'ok': True, 'already': not sent_now, 'publication': social._public(publication), 'covers': used}

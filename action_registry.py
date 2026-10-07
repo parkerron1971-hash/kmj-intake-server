@@ -609,6 +609,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "server, nobody else's terms, and removing the post removes "
                                     "the page. That reasoning does not reach publish_post and the "
                                     "allow-list is written so it cannot be made to"),
+    "post_clip":            _w("C", "posts an approved video clip, with its cover, publicly to the "
+                                    "business's connected social accounts (clip_posting.post_clip_for, "
+                                    "the same door as the Post tap in Video Clips). A scheduled one can "
+                                    "be cancelled until it goes out; a sent one cannot be recalled, and "
+                                    "a post that was seen cannot be unseen. Owner only; never unattended "
+                                    "(chief_clip_actions holds every run nobody asked for)"),
     "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
                                     "(send_confirmation defaults true). The send is what makes this "
                                     "C while cancel/reschedule are A"),

@@ -175,6 +175,8 @@ from chief_grow_actions import (
     handle_publish_post,
     handle_publish_to_site,
 )
+# Video Clips — post an approved clip with its cover (2026-10-06).
+from chief_clip_actions import handle_post_clip
 # Custom modules — propose / accept / inspect / extend / summarize / upgrade
 # (2026-09-04, third slice). _has_dup_override is shared with the turn.
 from chief_module_actions import (
@@ -3337,7 +3339,7 @@ def _confirmation_subject(action: Dict[str, Any]) -> str:
     # over, with no numbers, could not be checked by ear (2026-09-23).
     if a.get('invoice_number') or a.get('invoice_id'):
         bits.append('invoice ' + str(a.get('invoice_number') or a['invoice_id']))
-    for key in ("to", "recipient", "contact_name", "client_name", "name", "email"):
+    for key in ("to", "recipient", "contact_name", "client_name", "name", "email", "clip_name"):
         val = str(a.get(key) or "").strip()
         if val:
             bits.append(val)
@@ -11674,6 +11676,7 @@ ACTION_HANDLERS = {
     "capture_idea":           handle_capture_idea,
     "publish_post":           handle_publish_post,
     "publish_to_site":        handle_publish_to_site,
+    "post_clip":              handle_post_clip,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "update_module_entry":   handle_update_module_entry,

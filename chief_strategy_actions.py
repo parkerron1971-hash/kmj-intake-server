@@ -188,6 +188,12 @@ async def handle_schedule_action(client, biz, action) -> Dict:
     if itype in _UNSCHEDULABLE:
         return _fail("schedule_action", f"'{itype}' can't be scheduled "
                      f"(client-only or self-nesting)")
+    if itype == "post_clip":
+        # A scheduled run is unattended, and an unattended clip post is
+        # always held (chief_clip_actions). Its time goes with the post
+        # instead, where it can be cancelled in Video Clips.
+        return _fail("schedule_action", "a clip post is scheduled with its own time: "
+                     "use post_clip with \"when\" instead, so nothing was scheduled")
     if itype not in _handlers():
         return _fail("schedule_action", f"unknown action '{itype}'")
 
