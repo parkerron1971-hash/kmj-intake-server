@@ -273,3 +273,13 @@ def test_the_design_title(s):
 def test_one_door():
     src = inspect.getsource(ip.post_image_for)
     assert 'social.send_post(' in src and 'publication_id=publication_id' in src
+
+
+def test_the_fake_database_rejects_an_unencoded_plus_in_a_time_filter():
+    """Review of #1306: real PostgREST reads a raw '+' as a space, so the fake
+    must not accept what production would break on."""
+    import pytest as _pytest
+    from __tests__._social_fakes import _query_when
+    with _pytest.raises(AssertionError):
+        _query_when('2026-10-07T10:00:00+00:00')
+    assert _query_when('2026-10-07T10:00:00%2B00:00').utcoffset().total_seconds() == 0

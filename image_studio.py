@@ -119,7 +119,11 @@ def token() -> str:
     return jwt
 
 
-# Only the durable build runner binds this capability after checking the job owner.
+# Bound only by server code that has already checked the business owner, and
+# reset right after: the durable build runner (chief_build_runtime), the cover
+# worker (clip_covers), the marketing desk (marketing_design) and Chief's
+# picture posts (image_posting, for the one JPEG delivery). Nothing reads it
+# from a request.
 build_actor = contextvars.ContextVar('image_build_actor', default=None)
 
 

@@ -44,6 +44,14 @@ def _when(raw):
     return datetime.fromisoformat(raw.replace('%2B', '+').replace('Z', '+00:00'))
 
 
+def _query_when(raw):
+    """A timestamp read from a query string. Real PostgREST reads a raw '+'
+    there as a space, so a filter that forgot to encode it would silently
+    break in production: fail the test instead."""
+    assert '+' not in raw, f'unencoded + in a PostgREST timestamp filter: {raw!r}'
+    return _when(raw)
+
+
 def png() -> bytes:
     out = io.BytesIO()
     Image.new('RGBA', (8, 12), (200, 40, 40, 255)).save(out, 'PNG')
@@ -89,7 +97,7 @@ class FakeDB:
             if p.get('storage_path') == 'not.is.null':
                 rows = [a for a in rows if a.get('storage_path')]
             if 'created_at' in p:
-                since = _when(p['created_at'][4:])
+                since = _query_when(p['created_at'][4:])
                 rows = [a for a in rows if _when(a['created_at']) >= since]
             if p.get('director->>clip_id') == 'is.null':
                 rows = [a for a in rows if not a.get('clip_id')]
