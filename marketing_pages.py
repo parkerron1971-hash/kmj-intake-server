@@ -2424,7 +2424,10 @@ _ALL = "__every_plan__"
 # hide (BillingPanel.HIDDEN_FEATURES), for the same reasons: seats show
 # as a number, and chief_unlimited gates nothing an allowance row does
 # not already say honestly.
-_NOT_A_ROW = ("multi_seat", "chief_unlimited")
+_NOT_A_ROW = ("multi_seat", "chief_unlimited",
+              # The marketing suite's levels: unannounced until the desk
+              # ships (feature_gates.UNANNOUNCED_FEATURES; plan B14).
+              "marketing_suggestion", "marketing_week", "marketing_autopilot")
 
 _COMPARE_GROUPS = (
     ("The day-to-day work", (

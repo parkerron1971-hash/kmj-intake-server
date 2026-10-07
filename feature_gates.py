@@ -105,6 +105,14 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # Kevin 2026-10-05: the Growth marketing
                                            # level (the Solutionist plan), 10 hours a
                                            # month included, then 75 actions an hour.
+    # The marketing suite (Kevin 2026-10-07, docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md):
+    # one desk for every business; the plan decides how much of the work
+    # Chief does. Posting what the owner asks stays on every plan (the
+    # pricing page promises it) and needs no key.
+    "marketing_suggestion": "starter",     # one suggested post a week to approve
+    "marketing_week": "professional",      # the Thursday plan: five posts with flyers
+                                           # (Boss gets it barber-sized, below)
+    "marketing_autopilot": "practice",     # standing permissions for marketing posts
 }
 
 # Gated but not yet on sale: kept off the plan cards (/billing/plans) until
@@ -112,7 +120,11 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
 # feature nobody can open. Remove a key here when its screen ships.
 # (ai_clips left 2026-10-05: Kevin opened Find my best clips to every
 # business on the plan, after the live Church proof.)
-UNANNOUNCED_FEATURES: frozenset = frozenset()
+UNANNOUNCED_FEATURES: frozenset = frozenset({
+    # The marketing suite's levels: on the map so the code can check them,
+    # off the plan cards until the desk ships (plan B14 takes them out).
+    "marketing_suggestion", "marketing_week", "marketing_autopilot",
+})
 
 # ─── Plans for one kind of business ──────────────────────────────────
 # Solo = everything Starter carries (derived, so a new Starter feature
@@ -127,7 +139,10 @@ AUDIENCE_PLAN_FEATURES: Dict[str, frozenset] = {
     "booked": _STARTER_FEATURES | {"dedicated_sms_number"},
     "boss":   _STARTER_FEATURES | {"dedicated_sms_number", "period_close", "reports_full",
                                    "chief_bookkeeping", "accountant_package",
-                                   "contractor_payments"},
+                                   "contractor_payments",
+                                   # Kevin 2026-10-07: the weekly plan, barber-sized
+                                   # (open chairs, work photos, three posts).
+                                   "marketing_week"},
 }
 
 # Who may buy each audience plan: canonical vertical keys
@@ -464,6 +479,17 @@ def has_feature(business_row: Optional[Dict[str, Any]], feature: str) -> bool:
     if not plan:
         return False
     return feature in plan_features(plan)
+
+
+def plan_includes(business_row: Optional[Dict[str, Any]], feature: str) -> bool:
+    """Whether the business's actual plan includes `feature`, whatever
+    BILLING_ENFORCE says. has_feature() lets everything through while
+    enforcement is off, which is right for opening a screen and wrong for
+    spending money nobody asked for: the marketing suite's weekly work
+    (drafted posts, flyers) checks this instead. A comp counts; no plan in
+    good standing includes nothing."""
+    plan = plan_of(business_row)
+    return bool(plan) and feature in plan_features(plan)
 
 
 def entitlements(business_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:

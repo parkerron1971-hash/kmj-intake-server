@@ -243,3 +243,43 @@ def test_wrong_kind_of_business_is_refused_even_by_raw_price(checkout, monkeypat
         _buy(price_id="price_solo")
     assert e.value.status_code == 409
     assert _sessions(posted) == []
+
+
+# -- the marketing suite's levels (2026-10-07) -------------------------------
+
+def test_the_marketing_levels_follow_the_ladder():
+    """Kevin 2026-10-07: every plan gets the weekly suggestion; the weekly
+    plan starts at Professional and comes to Boss barber-sized; autopilot is
+    the Solutionist plan's."""
+    import feature_gates as fg
+    for plan in ("starter", "solo", "booked", "boss", "professional", "practice"):
+        assert "marketing_suggestion" in fg.plan_features(plan), plan
+    assert {p for p in fg.ALL_PLANS if "marketing_week" in fg.plan_features(p)} == {"professional", "practice", "boss"}
+    assert {p for p in fg.ALL_PLANS if "marketing_autopilot" in fg.plan_features(p)} == {"practice"}
+    # Upgrade prompts stay inside the barber ladder.
+    assert fg.upgrade_plan_for("marketing_week", "solo") == "boss"
+    assert fg.upgrade_plan_for("marketing_week", "booked") == "boss"
+    assert fg.upgrade_plan_for("marketing_week", "starter") == "professional"
+
+
+def test_the_marketing_levels_are_not_on_sale_yet():
+    import feature_gates as fg
+    import marketing_pages as mp
+    for key in ("marketing_suggestion", "marketing_week", "marketing_autopilot"):
+        assert key in fg.UNANNOUNCED_FEATURES and key in mp._NOT_A_ROW
+
+
+def test_plan_includes_reads_the_real_plan_even_with_enforcement_off(monkeypatch):
+    """has_feature() lets everyone through while BILLING_ENFORCE is off;
+    spending money unasked must not."""
+    import feature_gates as fg
+    monkeypatch.delenv("BILLING_ENFORCE", raising=False)
+    starter = {"comp_tier": "starter"}
+    assert fg.has_feature(starter, "marketing_week") is True
+    assert fg.plan_includes(starter, "marketing_week") is False
+    assert fg.plan_includes(starter, "marketing_suggestion") is True
+    assert fg.plan_includes({"comp_tier": "boss"}, "marketing_week") is True
+    assert fg.plan_includes({"comp_tier": "practice"}, "marketing_autopilot") is True
+    # No plan in good standing includes nothing.
+    assert fg.plan_includes({"subscription_status": "canceled"}, "marketing_suggestion") is False
+    assert fg.plan_includes(None, "marketing_suggestion") is False
