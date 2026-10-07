@@ -49,7 +49,7 @@ import re
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
@@ -379,6 +379,44 @@ def _require_business_access(business_id: str, user: AuthedUser) -> Dict[str, An
     return row
 
 
+async def business_rows(business_id: str, since: str, *, limit: int = MAX_ROWS,
+                        lead_limit: int = 1000
+                        ) -> Tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
+    """The two reads behind one business's traffic, as the service role and
+    with NO access check of its own: business_traffic checks the person
+    first, and marketing_signals reads for the business itself (a weekly
+    plan, no person asking). `since` is an ISO instant written with Z.
+
+    Returns (site_events rows newest first, contacts created since). Raises
+    HTTPException(502) when site_events cannot be read. The contacts are
+    None, not [], when they cannot be read, so a caller can tell "nobody
+    new" from "could not count"."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/site_events",
+            headers=_service_headers(),
+            params={"select": "ts,session_id,path,referrer_host,device,event",
+                    "business_id": f"eq.{business_id}", "ts": f"gte.{since}",
+                    "order": "ts.desc", "limit": str(limit)},
+        )
+        if r.status_code >= 400:
+            raise HTTPException(502, f"traffic read failed: {r.text[:200]}")
+        rows: List[Dict[str, Any]] = r.json() or []
+
+        # The numerator. Leads created in the same window, whichever of
+        # the five doors they came through — the whole finding of the
+        # lead arc was surfaces that only ever counted one of them.
+        lr = await client.get(
+            f"{SUPABASE_URL}/rest/v1/contacts",
+            headers=_service_headers(),
+            params={"select": "id,created_at,source",
+                    "business_id": f"eq.{business_id}",
+                    "created_at": f"gte.{since}", "limit": str(lead_limit)},
+        )
+        leads: Optional[List[Dict[str, Any]]] = lr.json() if lr.status_code < 400 else None
+    return rows, leads
+
+
 @router.get("/sites/{business_id}/traffic", include_in_schema=False)
 async def business_traffic(business_id: str,
                            days: int = Query(30, ge=1, le=365),
@@ -400,29 +438,9 @@ async def business_traffic(business_id: str,
     since_dt = datetime.now(timezone.utc) - timedelta(days=days)
     since = since_dt.isoformat().replace("+00:00", "Z")
 
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        r = await client.get(
-            f"{SUPABASE_URL}/rest/v1/site_events",
-            headers=_service_headers(),
-            params={"select": "ts,session_id,path,referrer_host,device,event",
-                    "business_id": f"eq.{business_id}", "ts": f"gte.{since}",
-                    "order": "ts.desc", "limit": str(MAX_ROWS)},
-        )
-        if r.status_code >= 400:
-            raise HTTPException(502, f"traffic read failed: {r.text[:200]}")
-        rows: List[Dict[str, Any]] = r.json() or []
-
-        # The numerator. Leads created in the same window, whichever of
-        # the five doors they came through — the whole finding of the
-        # lead arc was surfaces that only ever counted one of them.
-        lr = await client.get(
-            f"{SUPABASE_URL}/rest/v1/contacts",
-            headers=_service_headers(),
-            params={"select": "id,created_at,source",
-                    "business_id": f"eq.{business_id}",
-                    "created_at": f"gte.{since}", "limit": "1000"},
-        )
-        leads: List[Dict[str, Any]] = lr.json() if lr.status_code < 400 else []
+    rows, read_leads = await business_rows(business_id, since)
+    # This report has always shown a contacts read that failed as no leads.
+    leads: List[Dict[str, Any]] = read_leads if read_leads is not None else []
 
     views = [x for x in rows if x.get("event") == "view"]
     sessions = {x.get("session_id") for x in rows if x.get("session_id")}

@@ -182,3 +182,65 @@ and a Chief digest. They are on the business's clock: `marketing_desk`'s
 wording helpers now take `tz`, and the platform desk's default is unchanged.
 It promises no weekly plan until a planner exists (B8/B9). Nothing calls
 `today_items` or `chief_digest` yet.
+
+### How Chief reads a business
+
+B7 (2026-10-07): the business's own numbers, facts and profile, read-only.
+Nothing calls these yet; B8 adds the preview endpoint and the weekly
+suggestion.
+
+- **Signals** (`marketing_signals.read_signals`): service-role reads of one
+  business, each bounded by a date window and a row limit, so a Thursday
+  fan-out stays cheap.
+  - Site visits: distinct sessions in the last 7 days, against the weekly
+    average of the 28 days before (`site_analytics.business_rows`, at most
+    5,000 rows, not the 50,000-row traffic report).
+  - New contacts in the same windows.
+  - Bookings (`module_entries`, `appointment_at`, status active): the next 7
+    days against the trailing 4-week weekly average.
+  - Open chairs, for a personal_services business with a live calendar and
+    weekly hours set: open times in the next 7 days for its shortest bookable
+    offering (`agent_site.slots_for`). No count of them goes in a caption.
+  - Offerings and site news posts from the last 21 days, and whether a plan
+    has been about them yet (`marketing_runs.slots[].subject_key`).
+  - The last post, from `marketing_posts` and `social_publications` (a desk
+    post sent through Post for Me is counted once).
+- **None, never 0.** A read that fails, or reaches its row limit, is None and
+  is named in `unread`. Zero means it was counted. A rule whose signal is
+  None is skipped, so a failed bookings read never says "fill the calendar".
+- **The diagnosis** (`business_marketing_engine.diagnose`): first match wins,
+  and each names the number that proves it.
+
+  | # | Rule | Problem | When |
+  | --- | --- | --- | --- |
+  | 1 | bookings_down | fill_the_calendar | next 7 days under 70% of the weekly average (at least 3 a week) |
+  | 2 | empty_week | fill_the_calendar | nothing booked in the next 7 days, open times on 2 or more of them |
+  | 3 | something_new | tell_about_new | an offering or news post from the last 21 days no plan has been about |
+  | 4 | visits_without_leads | turn_visits_into_leads | 20 or more visits in 7 days, no new contact |
+  | 5 | traffic_down | get_found | visits under 70% of the weekly average before (at least 10 a week) |
+  | 6 | gone_quiet | stay_visible | nothing posted from Solutionist in 14 days, nothing approved ahead |
+  | 7 | barely_seen | get_found | under 10 visits in 7 days, on a site whose counter has counted |
+  | 8 | steady | stay_visible | nothing is off |
+
+  The calendar comes first because an empty chair this week cannot be sold
+  next week. The rest follow the platform's order.
+- **Plays:** `offer_spotlight`, `book_a_time`, `whats_new`, `useful_tip`,
+  `meet_us` and `come_back`. None names a person. `pick_plays` uses the
+  platform's own `_rank` and `fill_slots`, and every slot links to the
+  business's own site (the desk's link, its booking page or its home page).
+- **Facts:** `creative_director.business_facts` through `verified_facts`. A
+  hidden price stays out, and so do inactive or archived offerings, brand
+  colours and web addresses. Every number in a caption must be in the facts.
+  A dollar amount must be a stated price, and in a post about one offering it
+  must be that offering's price. The only address a caption may name is the
+  business's own host (`marketing_engine.check_caption(..., own_hosts=...)`).
+  The platform's default is unchanged.
+- **The profile** (`marketing_profile.read_profile`) holds:
+  - the audience: the desk's, then the owner's `voice_profile.audience`, then
+    a default for the business type;
+  - the voice and the desk's clock;
+  - the host and the landing page;
+  - the shape: `openings` for a chair business with a live calendar, else
+    `week`;
+  - the caption writer's instructions, where "we" is the business;
+  - the flyer footer: the business's name and host, never Solutionist's.
