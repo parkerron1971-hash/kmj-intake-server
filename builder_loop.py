@@ -444,7 +444,7 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
             logger.error(f"[loop] call failed: {type(e).__name__}: {e}")
             break
         v2._record_spend(spend, model, getattr(msg, "usage", None))
-        v2._log_usage(endpoint="/composer/builder-v2", model=model, usage=getattr(msg, "usage", None),
+        v2._log_api_usage(endpoint="/composer/builder-v2", model=model, usage=getattr(msg, "usage", None),
                       business_id=business_id, task_type="builder_v2_loop")
         uses = _tool_uses(msg)
         if not uses:

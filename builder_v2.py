@@ -184,7 +184,7 @@ def _record_spend(spend: Optional[Dict[str, Any]], model: str,
         pass
 
 
-def _log_usage(endpoint: str, model: str, usage: Any, business_id: str,
+def _log_api_usage(endpoint: str, model: str, usage: Any, business_id: str,
                task_type: str, units: Optional[int] = None) -> None:
     """One api_usage row, cached tokens included so the ledger prices them."""
     try:
@@ -1575,7 +1575,7 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="builder_v2_eyes",
             business_id=business_id, max_tokens=INSPECTOR_MAX_TOKENS)
-        _log_usage(endpoint="/composer/builder-v2-eyes", model=used_model or "", usage=getattr(msg, "usage", None),
+        _log_api_usage(endpoint="/composer/builder-v2-eyes", model=used_model or "", usage=getattr(msg, "usage", None),
                    business_id=business_id, task_type="builder_v2_eyes")
         raw = "".join(b.text for b in msg.content
                       if getattr(b, "type", None) == "text")
@@ -1646,7 +1646,7 @@ def _call(system: str, user: str, business_id: str,
             _do, model=_model(), task="builder_v2",
             business_id=business_id, max_tokens=_max_tokens())
         _record_spend(spend, used_model or "", getattr(msg, "usage", None))
-        _log_usage(endpoint="/composer/builder-v2", model=used_model or "", usage=getattr(msg, "usage", None),
+        _log_api_usage(endpoint="/composer/builder-v2", model=used_model or "", usage=getattr(msg, "usage", None),
                    business_id=business_id, task_type=task_type, units=units)
         text = "".join(b.text for b in msg.content
                        if getattr(b, "type", None) == "text")
@@ -1669,7 +1669,7 @@ def _call(system: str, user: str, business_id: str,
                     sampling=_gen_kwargs(used_model or _model(),
                                                           V2_TEMPERATURE))
                 _record_spend(spend, used_model or "", getattr(more, "usage", None))
-                _log_usage(endpoint="/composer/builder-v2", model=used_model or "", usage=getattr(more, "usage", None),
+                _log_api_usage(endpoint="/composer/builder-v2", model=used_model or "", usage=getattr(more, "usage", None),
                            business_id=business_id, task_type="builder_v2_continue")
                 text += "".join(b.text for b in more.content
                                 if getattr(b, "type", None) == "text")
