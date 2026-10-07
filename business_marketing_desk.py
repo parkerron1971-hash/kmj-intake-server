@@ -24,7 +24,8 @@ Where it differs from the platform desk, on purpose:
   * Nothing promises a weekly plan. The business planner is not built yet
     (B8/B9), so a sentence about the next plan appears only when the caller
     passes next_run.
-  * Nothing pushes. Telling the owner by phone comes with sending (B5).
+  * Nothing pushes here. Telling the owner by phone, once per failed or
+    unconfirmed post, is the sender's (business_marketing_dispatch, B5).
 
 A source that cannot be read is never "nothing there". With strict=True
 (the API) read_state raises and the desk answers 503. With strict=False (a

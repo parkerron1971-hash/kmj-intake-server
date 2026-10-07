@@ -220,7 +220,9 @@ async def send_post(business_id: str, approved_by: str, *, caption: str,
     hand over a short-lived link without keeping it. With publication_id (a
     caller's idempotency key), a post that already has that id is returned
     as it is, never sent twice: (row, False); one whose hand-off was refused
-    answers as refused again."""
+    answers as refused again. A returned row without provider_post_id was
+    not confirmed: an earlier record that never got the posting service's id,
+    or a hand-off whose receipt could not be written to the record."""
     if publication_id:
         existing = await asyncio.to_thread(_publication, business_id, publication_id)
         if existing:
@@ -268,11 +270,23 @@ async def send_post(business_id: str, approved_by: str, *, caption: str,
             "results": [{"platform": None, "success": False,
                          "error": "The posting service didn't accept it."}]})
         raise HTTPException(502, REFUSED)
-    await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}", {
-        "provider_post_id": sent["id"], "updated_at": _now().isoformat()})
-    row["provider_post_id"] = sent["id"]
+    receipt = None
+    for _ in range(2):                      # one retry: without it the post can't be followed up
+        receipt = await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}", {
+            "provider_post_id": sent["id"], "updated_at": _now().isoformat()})
+        if receipt:
+            break
     logger.info("[social] %s %s to %d account(s)", business_id[:8],
                 "scheduled" if scheduled_at else "posting", len(targets))
+    if not receipt:
+        # Handed over, but our record does not carry the posting service's id,
+        # so how it went can't be read back. The returned row has no
+        # provider_post_id: a caller that needs a confirmed hand-off can tell.
+        logger.warning("[social] %s went to the posting service as %s, but the record could not be updated; "
+                       "its delivery is unconfirmed", row["id"], sent["id"])
+        row["unrecorded_provider_post_id"] = sent["id"]
+        return row, True
+    row["provider_post_id"] = sent["id"]
     return row, True
 
 
@@ -307,8 +321,10 @@ async def _refresh(row: Dict[str, Any]) -> Dict[str, Any]:
         return row
     settled = _settle(row, results)
     if settled["status"] != row.get("status") or settled["results"] != (row.get("results") or []):
-        sb_clients.sb_patch_as_service(f"/social_publications?id=eq.{row['id']}",
-                                       {**settled, "updated_at": _now().isoformat()})
+        # A blocking write: off the event loop (the marketing desk's delivery
+        # watch calls this every five minutes on the worker).
+        await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/social_publications?id=eq.{row['id']}",
+                                {**settled, "updated_at": _now().isoformat()})
         row = {**row, **settled}
     return row
 

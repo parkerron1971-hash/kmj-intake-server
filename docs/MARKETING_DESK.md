@@ -122,8 +122,8 @@ B4 of `docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md` (2026-10-07). The same
 desk, for one business, on the `marketing_*` tables through
 `business_marketing_store`. `business_marketing.py` is mounted at
 `/marketing/{business_id}`, after `clip_posting` and before the public-site
-catch-all. **Nothing here sends.** B5's sender claims approved posts
-(`marketing_claim_due`) and re-checks everything at send time.
+catch-all. **Nothing in the API sends.** The sender (B5, below) claims
+approved posts (`marketing_claim_due`) and re-checks everything at send time.
 
 | Route | Who | What |
 | --- | --- | --- |
@@ -182,6 +182,85 @@ and a Chief digest. They are on the business's clock: `marketing_desk`'s
 wording helpers now take `tz`, and the platform desk's default is unchanged.
 It promises no weekly plan until a planner exists (B8/B9). Nothing calls
 `today_items` or `chief_digest` yet.
+
+### Sending and the delivery watch (B5)
+
+`business_marketing_dispatch.py`, two scheduled jobs registered beside the
+platform desk's. They run only where scheduled jobs run (`PROCESS_ROLE`
+worker or all), on the scheduler leader, and **do nothing until
+`MARKETING_DESK_PUBLISHING=on`** (default off; set it on the worker). The
+sender also claims nothing while `POST_FOR_ME_API_KEY` is missing or
+`POST_FOR_ME_PILOT_BUSINESSES` is empty, so a configuration slip on the
+worker never fails anyone's posts.
+
+| Job | Every | What |
+| --- | --- | --- |
+| `business_marketing_due` | 1 min (`max_instances=1`) | claim up to 5 due approved posts and send each |
+| `business_marketing_delivery` | 5 min (`max_instances=1`) | settle each post handed over; tell the owner once per problem |
+
+**One door.** Every post goes through `social_publish_router.send_post`
+(daily cap, the record of who approved what, our row id as `external_id`, a
+refused hand-off recorded as failed), so it also shows in Build, Social
+Media's recent posts. A picture or words go straight there; a clip goes
+through `clip_posting.post_clip_for`, which adds its covers.
+
+**Checked again at send time:** the content still hashes to the approval
+(`digest == approved_hash == content_hash`) and its window is open; the desk
+is not paused; the pilot is on (`post_for_me.allowed_for`); every account is
+still connected to this business and is the same account
+(`social._targets`, with a fail-closed second read so a failed read is never
+"disconnected"); the picture is a ready artwork of this business; a clip is
+approved as it is now, at the fingerprint the post was approved with.
+
+**The build actor.** On the worker there is no JWT, so
+`image_studio.build_actor` is bound to `{business_id, user_id: owner}` (the
+owner read as the service role) for one post only and reset in a `finally`.
+Storage then refuses any path outside that business's folder.
+
+**The publication id** is `uuid5(post id, 'rev:<revision>')` (for a clip,
+`post_clip_for`'s id from that request id). A retry of the same approved
+version is answered by the door from its record, never posted twice; an
+edited, re-approved post is a new send.
+
+| What happened | The post becomes |
+| --- | --- |
+| sent, with the posting service's id on the record | `submitted`, with `publication_id` |
+| sent, but the record has no posting-service id (an earlier record that never got one, or a receipt write that failed twice) | `uncertain`, with `publication_id`: never `submitted` unconfirmed |
+| nothing left the server (a storage blip, a failed read, the door's cap read) | `approved` again; the next minute retries until the window closes |
+| the desk was paused after the claim | `approved` again, quietly: it waits for Resume, as the desk says |
+| posting is not switched on for this business (the pilot) | `approved` again, saying so, no push: it goes out if the business is switched back on while its window is open. Held posts stay claimed to the end of the tick, so they never crowd out other businesses |
+| a check said no (changed, window closed, account gone, clip changed, the daily cap) | `failed`, in plain words |
+| the posting service refused the hand-off (`send_post` 502) | `failed` |
+| anything else once the hand-off began | `uncertain` (the owner checks, or the watch settles it) |
+| the result could not be written | left `dispatching`; the claim RPC makes it `uncertain` after 10 min |
+
+`send_post` itself now checks that the posting service's id reached the
+record (one retry). If it did not, it still answers `(row, True)` with the
+same public shape for `/social/publish`, but the row it hands back has no
+`provider_post_id`, so a caller that needs a confirmed hand-off can tell.
+
+**The delivery watch** (no webhook) refreshes posts that are `submitted`, and
+`uncertain` ones claimed in the last two days, through `social._refresh`
+(whose write now runs off the event loop): all accounts took it →
+`published`, some → `partly_published`, none → `failed`, with each live
+post's link in `external_urls`. A post still in flight two hours after its
+claim becomes `uncertain`; a late answer still settles it. The publication
+is read fail-closed: a read that fails leaves the post exactly as it is until
+the next tick, so a failed read never makes a post `uncertain` or pushes. The
+network's own error text stays on the publication; the post says which
+accounts did not take it, in plain words.
+
+**Telling the owner.** Each problem (`failed`, `partly_published`,
+`uncertain`, including the claim RPC's own "time passed") gets one Today
+item (`chief_notifications`, type `reminder`, navigate to Grow → Marketing)
+and one push (`nav: grow:marketing`), keyed by post, revision and status in
+`action_payload.dedup_key`, so it is said exactly once, and again only if a
+fixed post fails again. A success is never pushed, and a failure the owner
+made (marking a post not sent) is not announced back. The announcements
+already made are read first and those posts left out, then problems are read
+newest first, page by page, up to 100 announcements a tick: a post that just
+became a problem is always considered, however many older ones there are. If
+the announcements cannot be read, nothing is said until they can.
 
 ### How Chief reads a business
 
