@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import copy
+import fnmatch
 import inspect
 import pathlib
 import sys
@@ -98,6 +99,8 @@ def matches(row, column, expr):
         return {'gte': a >= b, 'gt': a > b, 'lte': a <= b, 'lt': a < b}[op]
     if op == 'eq':
         return _norm(value) == unquote(arg)
+    if op == 'like':
+        return value is not None and fnmatch.fnmatchcase(str(value), arg)
     if op == 'neq':
         return _norm(value) != arg
     raise AssertionError(f'unexpected filter {column}={expr}')
@@ -105,7 +108,7 @@ def matches(row, column, expr):
 
 def select(rows, path):
     query = path.split('?', 1)[1] if '?' in path else ''
-    out, order, limit = list(rows), None, None
+    out, order, limit, offset = list(rows), None, None, 0
     for key, expr in (p.split('=', 1) for p in query.split('&') if '=' in p):
         if key == 'select':
             continue
@@ -113,11 +116,18 @@ def select(rows, path):
             order = expr
         elif key == 'limit':
             limit = int(expr)
+        elif key == 'offset':
+            offset = int(expr)
         else:
             out = [r for r in out if matches(r, key, expr)]
-    if order:
-        column, _, direction = order.partition('.')
-        out.sort(key=lambda r: str(r.get(column) or ''), reverse=direction.startswith('desc'))
+    for term in reversed((order or '').split(',') if order else []):
+        column, _, direction = term.partition('.')
+        if column in TIMES:
+            out.sort(key=lambda r: _when(r.get(column)) if r.get(column) else datetime.min.replace(tzinfo=timezone.utc),
+                     reverse=direction.startswith('desc'))
+        else:
+            out.sort(key=lambda r: str(r.get(column) or ''), reverse=direction.startswith('desc'))
+    out = out[offset:]
     return out[:limit] if limit else out
 
 
@@ -211,6 +221,8 @@ class FakeService:
         self.pubs, self.notes = [], []
         self.fail = ()
         self.patch_threads = []
+        self.receipt_fails = False       # the provider_post_id write after a hand-off does not land
+        self.receipt_writes = 0
 
     def get(self, path):
         if any(f in path for f in self.fail):
@@ -242,6 +254,10 @@ class FakeService:
     def patch(self, path, body):
         self.patch_threads.append(threading.get_ident())
         assert path.startswith('/social_publications?')
+        if 'provider_post_id' in body:
+            self.receipt_writes += 1
+            if self.receipt_fails:
+                return None
         hit = select(self.pubs, path)
         for row in hit:
             row.update(copy.deepcopy(body))
@@ -546,11 +562,52 @@ def test_a_post_whose_content_changed_after_approval_is_not_sent(s):
     assert s.sent == []
 
 
-def test_the_pilot_gate_is_checked_at_send_time(s, monkeypatch):
+def test_a_business_whose_pilot_is_off_is_held_not_failed(s, monkeypatch):
+    """A business can be switched back on: its posts wait, saying why, and
+    nobody is pushed."""
     pid = seed(s)
     monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', OTHER)
+    out = run(d.due_tick())
+    assert out == {'claimed': 1, 'held': 1}
+    row = post(s, pid)
+    assert row['status'] == 'approved' and row['claimed_at'] is None and row['error'] == d.PILOT_HELD
+    assert s.sent == [] and s.jpegs == []
+    run(d.delivery_tick())
+    assert s.svc.notes == [] and s.pushes == []
+    monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', f'{BIZ},{OTHER}')
     run(d.due_tick())
-    assert post(s, pid)['status'] == 'failed' and post(s, pid)['error'] == d.NOT_ALLOWED and s.sent == []
+    assert post(s, pid)['status'] == 'submitted' and post(s, pid)['error'] is None and len(s.sent) == 1
+
+
+def test_a_pilot_switched_off_in_the_instant_before_sending_holds_too(s, monkeypatch):
+    pid = seed(s)
+    claimed = run(store.claim_due(5))
+    monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', OTHER)
+    run(d.dispatch(claimed[0]))
+    assert post(s, pid)['status'] == 'approved' and post(s, pid)['error'] == d.PILOT_HELD and s.sent == []
+    # ...and if it flips inside the shared door, the door's own refusal holds as well.
+    assert d._after_handoff(d.HTTPException(403, d._PILOT_OFF)) == {
+        'status': 'approved', 'claimed_at': None, 'error': d.PILOT_HELD}
+    assert d._PILOT_OFF in inspect.getsource(social._require_pilot)
+
+
+def test_held_posts_never_crowd_out_other_businesses(s, monkeypatch):
+    monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', OTHER)
+    held = [seed(s, run_at=NOW - timedelta(minutes=30 - i)) for i in range(6)]       # older, so claimed first
+    theirs = seed(s, biz=OTHER, targets=(THEIR_FB,), media={'artwork_ids': [THEIR_ART]})
+    out = run(d.due_tick())
+    assert post(s, theirs)['status'] == 'submitted' and len(s.sent) == 1
+    assert out['held'] == 6 and out['submitted'] == 1
+    assert all(post(s, p)['status'] == 'approved' and post(s, p)['error'] == d.PILOT_HELD for p in held)
+
+
+def test_an_empty_pilot_list_claims_nothing(s, monkeypatch):
+    """A configuration slip on the worker never becomes failed posts."""
+    for value in ('', ' , '):
+        monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', value)
+        pid = seed(s)
+        assert run(d.due_tick()) == {'skipped': 'not configured'}
+        assert s.db.calls == [] and post(s, pid)['status'] == 'approved' and s.sent == []
 
 
 # ── clips ─────────────────────────────────────────────────────────────
@@ -846,3 +903,123 @@ def test_the_ticks_take_no_arguments_from_the_scheduler():
         params = inspect.signature(fn).parameters.values()
         assert all(p.default is not inspect.Parameter.empty for p in params)
         assert inspect.iscoroutinefunction(fn)
+
+
+# ── review of #1315: unconfirmed hand-offs ────────────────────────────
+
+def test_an_earlier_record_without_a_receipt_is_uncertain_not_submitted(s):
+    """The door answers (row, False) for a publication this id already has.
+    Without the posting service's id on it, nothing confirms it went out."""
+    pid = seed(s)
+    s.svc.pubs.append({'id': expected_id(pid), 'business_id': BIZ, 'status': 'posting', 'provider_post_id': None,
+                       'results': [], 'targets': [], 'created_at': s.now.isoformat()})
+    run(d.due_tick())
+    row = post(s, pid)
+    assert row['status'] == 'uncertain' and row['error'] == d.UNCONFIRMED
+    assert row['publication_id'] == expected_id(pid) and s.sent == []
+
+
+def test_a_receipt_that_could_not_be_written_is_uncertain(s):
+    pid = seed(s)
+    s.svc.receipt_fails = True
+    run(d.due_tick())
+    row = post(s, pid)
+    assert len(s.sent) == 1 and s.svc.receipt_writes == 2          # tried twice
+    assert row['status'] == 'uncertain' and row['error'] == d.UNCONFIRMED
+    assert row['publication_id'] == expected_id(pid)
+    # Never resent; the watch can't follow it up without the id, so it stays
+    # for the owner to check, and the owner is told once.
+    s.now = NOW + timedelta(hours=3)
+    run(d.due_tick())
+    run(d.delivery_tick())
+    run(d.delivery_tick())
+    assert len(s.sent) == 1 and post(s, pid)['status'] == 'uncertain'
+    assert len(s.svc.notes) == 1 and len(s.pushes) == 1
+
+
+def test_the_door_says_when_its_receipt_was_not_written(s):
+    """send_post's own answer: still (row, True), the same public shape for
+    /social/publish, but no provider_post_id on the row it hands back."""
+    s.svc.receipt_fails = True
+    targets = [{'connection_id': IG, 'platform': 'instagram', 'username': 'x', 'provider_account_id': 'spc_ig'}]
+    row, sent_now = run(social.send_post(BIZ, OWNER, caption='Hi', media=[{'url': 'https://x.test/a.jpg', 'kind': 'image'}],
+                                         targets=targets, scheduled_at=None, approved_hash='h' * 64))
+    assert sent_now is True and not row.get('provider_post_id') and row['unrecorded_provider_post_id'] == 'sp_1'
+    assert set(social._public(row)) == {'id', 'caption', 'media', 'targets', 'status', 'scheduled_at', 'results',
+                                        'created_at'}
+    s.svc.receipt_fails = False
+    row, sent_now = run(social.send_post(BIZ, OWNER, caption='Hi again', media=[], targets=targets,
+                                         scheduled_at=None, approved_hash='i' * 64))
+    assert sent_now is True and row['provider_post_id'] == 'sp_2' and 'unrecorded_provider_post_id' not in row
+
+
+def test_a_clip_whose_receipt_was_not_written_is_uncertain(s):
+    pid = seed(s, media=clip_media())
+    s.svc.receipt_fails = True
+    run(d.due_tick())
+    row = post(s, pid)
+    assert len(s.sent) == 1
+    assert row['status'] == 'uncertain' and row['error'] == d.UNCONFIRMED
+    assert row['publication_id'] == d.publication_id_for(row)
+
+
+# ── review of #1315: a failed read is never a verdict ─────────────────
+
+def test_a_failed_publication_read_changes_nothing_even_past_two_hours(s):
+    pid = seed(s)
+    run(d.due_tick())
+    before = copy.deepcopy(post(s, pid))
+    s.now = NOW + timedelta(hours=3)
+    s.svc.fail = ('/social_publications',)
+    out = run(d.delivery_tick())
+    assert out['unreadable'] == 1
+    assert post(s, pid) == before                                  # not uncertain, not even checked_at
+    assert s.svc.notes == [] and s.pushes == []
+    s.svc.fail = ()
+    run(d.delivery_tick())                                         # readable again: now the two hours count
+    assert post(s, pid)['status'] == 'uncertain' and post(s, pid)['error'] == d.STILL_GOING
+    assert len(s.pushes) == 1
+
+
+# ── review of #1315: the newest problem is always considered ──────────
+
+def failed_post(s, minutes_ago, *, told):
+    pid = seed(s, status='failed', error='The posting service did not take it.',
+               updated_at=(NOW - timedelta(minutes=minutes_ago)).isoformat())
+    if told:
+        s.svc.notes.append({'id': str(uuid4()), 'business_id': BIZ, 'created_at': (NOW - timedelta(minutes=minutes_ago)).isoformat(),
+                            'action_payload': {'dedup_key': d.dedup_key(post(s, pid))}})
+    return pid
+
+
+def test_posts_already_told_never_crowd_out_a_new_problem(s):
+    for i in range(120):
+        failed_post(s, 10 + i, told=True)
+    newest = failed_post(s, 1, told=False)
+    out = run(d.delivery_tick())
+    assert out['told'] == 1
+    new = [n for n in s.svc.notes if n['action_payload'].get('post_id')]
+    assert [n['action_payload']['post_id'] for n in new] == [newest] and len(s.pushes) == 1
+
+
+def test_more_problems_than_one_tick_tells_are_all_told_once(s):
+    order = [failed_post(s, i, told=False) for i in range(130)]      # newest first
+    pids = set(order)
+    assert run(d.delivery_tick())['told'] == d.TELL_LIMIT
+    # The tick that cannot tell them all tells the newest ones first.
+    assert {n['action_payload']['post_id'] for n in s.svc.notes} == set(order[:d.TELL_LIMIT])
+    assert run(d.delivery_tick())['told'] == 30
+    assert run(d.delivery_tick())['told'] == 0
+    keys = [n['action_payload']['dedup_key'] for n in s.svc.notes]
+    assert len(keys) == len(set(keys)) == 130 and {n['action_payload']['post_id'] for n in s.svc.notes} == pids
+    assert len(s.pushes) == 130
+
+
+def test_when_the_announcements_cannot_be_read_nothing_is_said(s):
+    failed_post(s, 1, told=False)
+    s.svc.fail = ('like.marketing_post',)
+    run(d.delivery_tick())
+    assert s.svc.notes == [] and s.pushes == []
+    s.svc.fail = ()
+    run(d.delivery_tick())
+    assert len(s.svc.notes) == 1 and len(s.pushes) == 1

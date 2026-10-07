@@ -189,8 +189,9 @@ It promises no weekly plan until a planner exists (B8/B9). Nothing calls
 platform desk's. They run only where scheduled jobs run (`PROCESS_ROLE`
 worker or all), on the scheduler leader, and **do nothing until
 `MARKETING_DESK_PUBLISHING=on`** (default off; set it on the worker). The
-sender also waits while `POST_FOR_ME_API_KEY` is missing, so a server
-without Post for Me never fails anyone's posts.
+sender also claims nothing while `POST_FOR_ME_API_KEY` is missing or
+`POST_FOR_ME_PILOT_BUSINESSES` is empty, so a configuration slip on the
+worker never fails anyone's posts.
 
 | Job | Every | What |
 | --- | --- | --- |
@@ -223,22 +224,31 @@ edited, re-approved post is a new send.
 
 | What happened | The post becomes |
 | --- | --- |
-| sent | `submitted`, with `publication_id` |
+| sent, with the posting service's id on the record | `submitted`, with `publication_id` |
+| sent, but the record has no posting-service id (an earlier record that never got one, or a receipt write that failed twice) | `uncertain`, with `publication_id`: never `submitted` unconfirmed |
 | nothing left the server (a storage blip, a failed read, the door's cap read) | `approved` again; the next minute retries until the window closes |
 | the desk was paused after the claim | `approved` again, quietly: it waits for Resume, as the desk says |
-| a check said no (changed, window closed, account gone, clip changed, pilot off, the daily cap) | `failed`, in plain words |
+| posting is not switched on for this business (the pilot) | `approved` again, saying so, no push: it goes out if the business is switched back on while its window is open. Held posts stay claimed to the end of the tick, so they never crowd out other businesses |
+| a check said no (changed, window closed, account gone, clip changed, the daily cap) | `failed`, in plain words |
 | the posting service refused the hand-off (`send_post` 502) | `failed` |
 | anything else once the hand-off began | `uncertain` (the owner checks, or the watch settles it) |
 | the result could not be written | left `dispatching`; the claim RPC makes it `uncertain` after 10 min |
+
+`send_post` itself now checks that the posting service's id reached the
+record (one retry). If it did not, it still answers `(row, True)` with the
+same public shape for `/social/publish`, but the row it hands back has no
+`provider_post_id`, so a caller that needs a confirmed hand-off can tell.
 
 **The delivery watch** (no webhook) refreshes posts that are `submitted`, and
 `uncertain` ones claimed in the last two days, through `social._refresh`
 (whose write now runs off the event loop): all accounts took it →
 `published`, some → `partly_published`, none → `failed`, with each live
 post's link in `external_urls`. A post still in flight two hours after its
-claim becomes `uncertain`; a late answer still settles it. The network's own
-error text stays on the publication; the post says which accounts did not
-take it, in plain words.
+claim becomes `uncertain`; a late answer still settles it. The publication
+is read fail-closed: a read that fails leaves the post exactly as it is until
+the next tick, so a failed read never makes a post `uncertain` or pushes. The
+network's own error text stays on the publication; the post says which
+accounts did not take it, in plain words.
 
 **Telling the owner.** Each problem (`failed`, `partly_published`,
 `uncertain`, including the claim RPC's own "time passed") gets one Today
@@ -246,5 +256,8 @@ item (`chief_notifications`, type `reminder`, navigate to Grow → Marketing)
 and one push (`nav: grow:marketing`), keyed by post, revision and status in
 `action_payload.dedup_key`, so it is said exactly once, and again only if a
 fixed post fails again. A success is never pushed, and a failure the owner
-made (marking a post not sent) is not announced back. If the dedup read
-fails, nothing is said until it can be checked.
+made (marking a post not sent) is not announced back. The announcements
+already made are read first and those posts left out, then problems are read
+newest first, page by page, up to 100 announcements a tick: a post that just
+became a problem is always considered, however many older ones there are. If
+the announcements cannot be read, nothing is said until they can.

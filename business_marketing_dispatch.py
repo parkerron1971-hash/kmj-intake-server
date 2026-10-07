@@ -25,7 +25,10 @@ RE-CHECKED AT SEND TIME, whatever happened since the approval:
     digest == approved_hash == content_hash), and its window is still open;
   * the desk is not paused (a pause wins even after the claim: the post goes
     back to approved and waits, as the desk tells the owner it will);
-  * the posting pilot is on for the business (post_for_me.allowed_for);
+  * the posting pilot is on for the business (post_for_me.allowed_for). Off,
+    the post is held, not failed: back to approved, saying why, no push; it
+    goes out if the business is switched back on while its window is open.
+    A server with no posting key or an empty pilot list claims nothing;
   * every account is still connected to THIS business, and is the same
     account the owner approved (social._targets);
   * the picture is a ready artwork of THIS business; the clip is approved as
@@ -47,7 +50,11 @@ WHAT HAPPENS WHEN SOMETHING GOES WRONG (the platform desk's dispatch rules):
   * a check said no, or the posting service refused the hand-off: `failed`,
     with the reason in plain words;
   * anything else once the hand-off is under way: `uncertain`, until the
-    delivery watch or the owner settles it. Never sent again automatically.
+    delivery watch or the owner settles it. Never sent again automatically;
+  * a hand-off whose receipt is not on the record (the door answered with a
+    publication that has no provider_post_id: an earlier record that never
+    got one, or a receipt that could not be written) is `uncertain` too,
+    never `submitted`.
 A result that cannot be recorded is logged and left `dispatching`; the claim
 RPC's sweep makes it `uncertain` after ten minutes, and never resends it.
 
@@ -55,11 +62,14 @@ THE DELIVERY WATCH. There is no webhook: every five minutes the posts handed
 over (submitted, and uncertain ones from the last two days) are refreshed
 through social._refresh and mapped to published, partly_published or failed,
 with each live post's link in external_urls. A post still in flight two hours
-after it was claimed becomes uncertain. Then each problem (failed,
-partly_published, uncertain) gets one push to the owner and one Today item,
-deduplicated by post, revision and status, so it is said exactly once. A
-success is never pushed. A failure the owner made themselves (marking an
-unconfirmed post not sent) is not announced back to them.
+after it was claimed becomes uncertain. The publication is read fail-closed:
+a read that fails leaves the post exactly as it is until the next tick. Then
+each problem (failed, partly_published, uncertain) gets one push to the owner
+and one Today item, deduplicated by post, revision and status, so it is said
+exactly once; the newest problems are considered first and the ones already
+told are left out before any limit. A success is never pushed. A failure the
+owner made themselves (marking an unconfirmed post not sent) is not announced
+back to them.
 
 All blocking Supabase calls run in a thread. Each post has its own try: one
 bad post never stops the batch.
@@ -90,11 +100,15 @@ from marketing_desk import _join
 log = logging.getLogger(__name__)
 
 CLAIM_LIMIT = 5                        # posts per minute; each send may take a while
+CLAIM_ROUNDS = 4                       # more claims in a tick only while every claimed post was held
 IN_FLIGHT_LIMIT = timedelta(hours=2)   # handed over, no answer yet: uncertain after this
 WATCH_WINDOW = timedelta(days=2)       # how long an uncertain post is still looked up
 WATCH_LIMIT = 50
 TELL_WINDOW = timedelta(hours=6)       # a problem is announced within this long of happening
-TELL_LIMIT = 100
+TELL_LIMIT = 100                       # announcements per tick
+TELL_PAGE = 200
+TELL_PAGES = 5
+ANNOUNCED_LOOKBACK = timedelta(days=1)  # announcements read back beyond TELL_WINDOW
 MAX_PICTURES = 10                      # the posting door takes at most ten
 PROBLEMS = ('failed', 'partly_published', 'uncertain')
 NAV = reading.NAV                      # 'grow:marketing'
@@ -104,7 +118,8 @@ CHANGED = ('This post changed after it was approved, so it was not sent. Review 
 UNREADABLE = ("This post couldn't be read as it was approved, so it was not sent. Open it, check it and "
               'approve it again.')
 EXPIRED = 'Its time to post passed before it went out. Edit it and approve a new time.'
-NOT_ALLOWED = ("Posting to your social accounts isn't switched on for this business yet, so it was not sent.")
+PILOT_HELD = ("Posting to your social accounts isn't switched on for this business right now. It goes out once "
+              'it is, while its time to post is still open.')
 NO_OWNER = 'This business has no owner on record, so nothing was posted for it.'
 NO_ACCOUNTS = "This post has no accounts to go to. Choose its accounts and approve it again."
 REFUSED = ("The posting service didn't accept the post. Nothing went out. Change it or give it a new time "
@@ -119,6 +134,8 @@ INTERRUPTED = ('Sending was interrupted after the post was handed to the posting
                'if it is not there, mark it not sent and give it a new time.')
 STILL_GOING = ('Two hours on, the posting service still has not said whether it went out. Check your accounts; '
                'if it is not there, mark it not sent and give it a new time.')
+UNCONFIRMED = ("Sending could not be confirmed: the posting service's receipt for this post was not recorded. "
+               'Check your accounts; if it is not there, mark it not sent and give it a new time.')
 CANCELLED = 'It was cancelled before it went out.'
 
 # Refusals from inside the shared door that a failed READ can also produce
@@ -126,18 +143,26 @@ CANCELLED = 'It was cancelled before it went out.'
 # sender has already checked both fail-closed, so one of these right after
 # means a blip: the post is retried, and the next tick's own checks decide.
 _AMBIGUOUS = frozenset({"One of those accounts isn't connected to this business.", 'Business not found.'})
+# social._require_pilot's refusal: the pilot was switched off in the instant
+# after the sender's own check. Held, like the sender's own pilot check.
+_PILOT_OFF = "Posting to your social accounts isn't switched on for this business yet."
 
 
 class Hold(Exception):
-    """Nothing left this server: back to approved, the next tick tries again."""
+    """Nothing left this server: back to approved, the next tick tries again.
+    `note` is what the post says meanwhile (None: nothing)."""
 
-    def __init__(self, why: str, *, quiet: bool = False):
+    def __init__(self, why: str, *, note: Optional[str] = RETRY):
         super().__init__(why)
-        self.quiet = quiet
+        self.note = note
 
 
 class Refuse(Exception):
     """A check said no: the post fails, with this reason in plain words."""
+
+
+class Unreadable(Exception):
+    """A read that failed: not the same as "nothing there"."""
 
 
 def now() -> datetime:
@@ -170,6 +195,18 @@ def publication_id_for(row: Dict[str, Any]) -> str:
     if clip:
         return str(uuid5(UUID(str(clip)), f'post:{rid}'))
     return str(rid)
+
+
+def read_publication(business_id: str, publication_id: str) -> Optional[Dict[str, Any]]:
+    """One of this business's publications, or None when there is none.
+    Unlike social._publication, a failed read raises Unreadable: it is never
+    "no publication"."""
+    rows = sb_clients.sb_get_as_service(
+        f'/social_publications?id=eq.{UUID(str(publication_id))}&business_id=eq.{business_id}'
+        f'&select={social._SELECT}&limit=1')
+    if rows is None:
+        raise Unreadable('the publication could not be read')
+    return rows[0] if rows else None
 
 
 # ── checks at send time (each runs in a thread) ──────────────────────
@@ -291,6 +328,8 @@ def _after_handoff(exc: HTTPException) -> Dict[str, Any]:
         return {'status': 'failed', 'error': REFUSED}
     if code == 429:
         return {'status': 'failed', 'error': CAPPED}
+    if code == 403 and detail == _PILOT_OFF:
+        return {'status': 'approved', 'claimed_at': None, 'error': PILOT_HELD}
     if code >= 500 or detail in _AMBIGUOUS:
         return {'status': 'approved', 'claimed_at': None, 'error': RETRY}
     return {'status': 'failed', 'error': detail or 'A check before sending said no. Nothing went out.'}
@@ -319,9 +358,10 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
             raise Refuse(EXPIRED)
         desk = await store.get_desk(biz)
         if desk is None or desk.get('paused'):
-            raise Hold('the desk is paused', quiet=True)
+            raise Hold('the desk is paused', note=None)
         if not post_for_me.allowed_for(biz):
-            raise Refuse(NOT_ALLOWED)
+            # The pilot can be switched back on: the post waits, it does not fail.
+            raise Hold('posting is not switched on for this business', note=PILOT_HELD)
         owner = await asyncio.to_thread(_owner_of, biz)
         targets = await asyncio.to_thread(_live_targets, biz, row)
         media = row.get('media') or {}
@@ -336,7 +376,13 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
                 fingerprint=str(media.get('clip_fingerprint')), caption=caption,
                 connection_ids=[str(t['connection_id']) for t in targets], scheduled_at=None,
                 covers={str(k): str(v) for k, v in (media.get('covers') or {}).items()})
-            publication = done.get('publication') or {}
+            sent_id = str((done.get('publication') or {}).get('id') or pub_id)
+            # post_clip_for answers with the public shape (no provider id), so
+            # the record itself says whether the hand-off was confirmed.
+            try:
+                sent = await asyncio.to_thread(read_publication, biz, sent_id) or {'id': sent_id}
+            except Unreadable:
+                sent = {'id': sent_id}
         else:
             pictures = await _pictures(biz, media)
             try:
@@ -344,13 +390,19 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
             except HTTPException as exc:
                 raise Refuse(f'{exc.detail} Nothing went out.') from None
             attempted = True
-            publication, _ = await social.send_post(
+            sent, _ = await social.send_post(
                 biz, str(row.get('approved_by') or owner), caption=caption, media=pictures, targets=targets,
                 scheduled_at=None, approved_hash=row['approved_hash'], publication_id=pub_id)
-        patch = {'status': 'submitted', 'publication_id': str(publication.get('id') or pub_id), 'error': None}
+        sent_id = str(sent.get('id') or pub_id)
+        if sent.get('provider_post_id'):
+            patch = {'status': 'submitted', 'publication_id': sent_id, 'error': None}
+        else:
+            # An earlier record that never got the posting service's id, or a
+            # hand-off whose receipt could not be written: maybe out, unconfirmed.
+            patch = {'status': 'uncertain', 'publication_id': sent_id, 'error': UNCONFIRMED}
     except Hold as hold:
         log.info('marketing send %s held: %s', post_id[:8], hold)
-        patch = {'status': 'approved', 'claimed_at': None, 'error': None if hold.quiet else RETRY}
+        patch = {'status': 'approved', 'claimed_at': None, 'error': hold.note}
     except Refuse as refusal:
         patch = {'status': 'failed', 'error': str(refusal)}
     except store.StoreError:
@@ -391,24 +443,44 @@ async def _record(row: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def due_tick(limit: int = CLAIM_LIMIT) -> Dict[str, Any]:
-    """Every minute: claim the approved posts that are due and send each."""
+    """Every minute: claim the approved posts that are due and send each.
+
+    A server without the posting key or the pilot list claims nothing: a
+    configuration slip never becomes a failed post. A business whose pilot is
+    off has its claimed posts held (back to approved, saying why, no push).
+    They stay claimed until the end of the tick, so while a whole claim was
+    held the tick claims again and that business never crowds out the rest."""
     if not publishing_on():
         return {'skipped': 'off'}
-    if not post_for_me.configured():
+    if not post_for_me.configured() or not post_for_me.pilot_businesses():
         return {'skipped': 'not configured'}
-    try:
-        rows = await store.claim_due(limit)
-    except store.StoreError:
-        log.warning('marketing send: could not claim due posts this minute.')
-        return {'skipped': 'storage'}
     tally: Counter = Counter()
-    for row in rows:
-        try:
-            tally[str((await dispatch(row)).get('status'))] += 1
-        except Exception:                          # dispatch never raises; one post never stops the rest
-            log.exception('marketing send %s failed unexpectedly', row.get('id'))
-            tally['error'] += 1
-    return {'claimed': len(rows), **tally}
+    claimed, held = 0, []
+    try:
+        for _ in range(CLAIM_ROUNDS):
+            try:
+                rows = await store.claim_due(limit)
+            except store.StoreError:
+                log.warning('marketing send: could not claim due posts this minute.')
+                if not claimed:
+                    return {'skipped': 'storage'}
+                break
+            claimed += len(rows)
+            sendable = [r for r in rows if post_for_me.allowed_for(str(r.get('business_id')))]
+            held += [r for r in rows if r not in sendable]
+            for row in sendable:
+                try:
+                    tally[str((await dispatch(row)).get('status'))] += 1
+                except Exception:                  # dispatch never raises; one post never stops the rest
+                    log.exception('marketing send %s failed unexpectedly', row.get('id'))
+                    tally['error'] += 1
+            if sendable or len(rows) < limit:
+                break
+    finally:
+        for row in held:
+            done = await _record(row, {'status': 'approved', 'claimed_at': None, 'error': PILOT_HELD})
+            tally['held' if done.get('status') == 'approved' else str(done.get('status'))] += 1
+    return {'claimed': claimed, **tally}
 
 
 # ── the delivery watch ────────────────────────────────────────────────
@@ -452,10 +524,15 @@ def outcome_of(publication: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 async def watch(row: Dict[str, Any], at: datetime) -> str:
-    """Settle one handed-over post from its publication. Returns what it is now."""
+    """Settle one handed-over post from its publication. Returns what it is now.
+    A publication that cannot be read leaves the post exactly as it is until
+    the next tick: a failed read never makes a post uncertain or pushes."""
     biz, status = str(UUID(str(row['business_id']))), row.get('status')
     pub_id = str(row.get('publication_id') or publication_id_for(row))
-    publication = await asyncio.to_thread(social._publication, biz, pub_id)
+    try:
+        publication = await asyncio.to_thread(read_publication, biz, pub_id)
+    except Unreadable:
+        return 'unreadable'
     if publication and publication.get('status') in social._IN_FLIGHT and publication.get('provider_post_id'):
         publication = await social._refresh(publication)
     outcome = outcome_of(publication) if publication else None
@@ -507,6 +584,18 @@ def _owners(business_ids: List[str]) -> Optional[Dict[str, str]]:
     return {str(r.get('id')): str(r['owner_id']) for r in rows if r.get('owner_id')}
 
 
+def _announced(since: datetime) -> Optional[set]:
+    """The marketing posts' announcements made since then, by dedup key, for
+    every business, so the ones already told never crowd out a new one.
+    None when it could not be read."""
+    rows = sb_clients.sb_get_as_service(
+        f'/chief_notifications?action_payload->>dedup_key=like.marketing_post:*'
+        f'&created_at=gte.{reading.query_time(since)}&select=dedup_key:action_payload->>dedup_key&limit=20000')
+    if rows is None:
+        return None
+    return {str(r.get('dedup_key') or (r.get('action_payload') or {}).get('dedup_key') or '') for r in rows}
+
+
 def _already_told(business_id: str, key: str) -> Optional[bool]:
     """True when told, False when not, None when it could not be read (then
     nothing is said this time, rather than risk saying it twice)."""
@@ -542,12 +631,25 @@ async def tell_owners(at: datetime) -> int:
     """One Today item and one push per problem, never twice. Reads every
     business's recent problems, so a failure the claim RPC made (a window
     that closed, an interrupted send) is told the same way as the sender's
-    own."""
-    rows = await store.rows(
-        f"/marketing_posts?status=in.({','.join(PROBLEMS)})&updated_at=gte.{reading.query_time(at - TELL_WINDOW)}"
-        f'&select={TELL_COLUMNS}&order=updated_at.asc&limit={TELL_LIMIT}')
-    rows = [r for r in rows if r.get('status') in PROBLEMS
-            and not str(r.get('error') or '').startswith(NOT_SENT_NOTE)]
+    own.
+
+    Posts already told are left out before the limit applies, and the newest
+    problems come first, so one that just happened is always considered: the
+    announcements are read back first, then the problems page by page."""
+    announced = await asyncio.to_thread(_announced, at - TELL_WINDOW - ANNOUNCED_LOOKBACK)
+    if announced is None:
+        return 0                                     # cannot tell what was said: say nothing this time
+    rows: List[Dict[str, Any]] = []
+    for page in range(TELL_PAGES):
+        batch = await store.rows(
+            f"/marketing_posts?status=in.({','.join(PROBLEMS)})&updated_at=gte.{reading.query_time(at - TELL_WINDOW)}"
+            f'&select={TELL_COLUMNS}&order=updated_at.desc,id.asc&limit={TELL_PAGE}&offset={page * TELL_PAGE}')
+        rows += [r for r in batch if r.get('status') in PROBLEMS
+                 and not str(r.get('error') or '').startswith(NOT_SENT_NOTE)
+                 and dedup_key(r) not in announced]
+        if len(batch) < TELL_PAGE or len(rows) >= TELL_LIMIT:
+            break
+    rows = rows[:TELL_LIMIT]
     if not rows:
         return 0
     owners = await asyncio.to_thread(_owners, sorted({str(UUID(str(r['business_id']))) for r in rows}))
