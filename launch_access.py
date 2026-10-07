@@ -491,7 +491,7 @@ async def _send_invite_email(email: str, invite_url: str) -> bool:
             body=("You're in.\n\n"
                   "The Solutionist System is invite-only right now, and this "
                   "is yours — your whole practice (bookings, invoices, real "
-                  "bookkeeping, and Chief, your AI chief of staff) in one place.\n\n"
+                  "bookkeeping, and Chief, your AI chief of staff, built on Solutionist Intelligence) in one place.\n\n"
                   f"Create your account here:\n{invite_url}\n\n"
                   "The link is yours alone and expires in 30 days.\n\n"
                   "— Kevin\nKMJ Creative Solutions · mysolutionist.app"))
