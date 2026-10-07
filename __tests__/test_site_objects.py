@@ -147,10 +147,13 @@ def test_the_builder_gets_exactly_the_named_objects():
     assert so.builder_block([]) == ""
     assert so.builder_block(["jukebox"]) == ""
     block = so.builder_block(["ticket", "typed-caption"])
-    assert block.count(so.BASE_CSS) == 1, "the shared tokens once"
-    assert OBJECTS["ticket"].css in block and OBJECTS["typed-caption"].js in block
-    assert OBJECTS["letter"].css not in block
+    assert OBJECTS["ticket"].html in block and OBJECTS["typed-caption"].html in block
+    # build cost, step 2: styles and script are the server's, never retyped
+    assert so.BASE_CSS not in block and OBJECTS["ticket"].css not in block
+    assert OBJECTS["typed-caption"].js not in block
+    assert OBJECTS["letter"].html not in block
     assert "REPLACE every word" in block and "--obj-paper" in block
+    assert "ADDED TO THE PAGE FOR YOU" in block
 
 
 def test_the_contact_sheet_renders_every_object_in_every_theme():
@@ -220,7 +223,8 @@ def test_the_grown_objects_are_in_the_catalog_and_built_from_source():
     block = so.director_block()
     for key in GROWN:
         assert f"- {key}:" in block, key
-    assert OBJECTS["times-strip"].js in so.builder_block(["times-strip"])
+    css, js = so.library_assets(["times-strip"])
+    assert OBJECTS["times-strip"].css in css and js == OBJECTS["times-strip"].js
 
 
 def test_a_plain_word_on_the_objects_line_never_names_a_grown_object():
