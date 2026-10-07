@@ -3913,6 +3913,11 @@ def compose_site(business_id: str, brief_notes: str = "",
     dro_id: Optional[str] = None
     source = "llm"
     dro_fail_reason: Optional[str] = None
+    canvas_html: Optional[str] = None
+    canvas_report: Optional[Dict[str, Any]] = None
+    # BLUEPRINT FIRST (2026-10-07, the build-cost plan, step 4): see below.
+    v2_attempted = False
+    blueprint_built = False
 
     # Arc 5 — ACTUALLY STUDY the reference sites the owner named (cached
     # by URL set; ≤20s budget; fail-soft). Runs before intake assembly so
@@ -3950,8 +3955,23 @@ def compose_site(business_id: str, brief_notes: str = "",
             else:
                 logger.info(f"[composer] refine requested but no stored "
                             f"rationale for {business_id[:8]} — authoring fresh")
+        # BLUEPRINT FIRST (2026-10-07, the build-cost plan, step 4). Kevin:
+        # "maintain the quality with decreasing the cost". With an approved
+        # blueprint and the one-mind builder on, the page is authored from
+        # the blueprint alone; the design-rationale passes (two to four
+        # directions, a signal read and a judge: about 55c a build) fed only
+        # the canvas and module paths further down the ladder, and the
+        # builder never read them. So the builder goes first. When it hands
+        # back a page the passes are skipped; when it falls back they run
+        # exactly as before. The copy spec below still runs (4c): the
+        # build's price is counted from it, so what an owner pays is unchanged.
+        if _blueprint_first(ctx):
+            v2_attempted = True
+            _plan_offer_page(ctx)
+            canvas_html, canvas_report = _run_builder_v2(ctx, business_id, progress_cb)
+            blueprint_built = bool(canvas_html)
         # 1) Author the rationale from the practitioner's own words.
-        if dro is None:
+        if dro is None and not blueprint_built:
             _report_progress(progress_cb, 30, "Authoring the design brief")
             try:
                 from agents.composer.drl.passes import produce_dro
@@ -4046,12 +4066,15 @@ def compose_site(business_id: str, brief_notes: str = "",
                     "— reporting applied_thin")
         except Exception as e:
             logger.info(f"[composer] thin-brief status check skipped: {e}")
+    if blueprint_built and not dro:
+        # the approved blueprint drove the page; nothing failed or fell back
+        dro_status, dro_failure, dro_fail_reason = "blueprint", None, None
     dro_summary: Optional[str] = None
     if dro:
         dro_summary = ((((dro.get("decisions") or {}).get("hero_concept") or {})
                         .get("concept_statement"))
                        or dro.get("summary_for_practitioner") or None)
-    else:
+    elif not blueprint_built:
         logger.warning(f"[composer] DRO FALLBACK compose for business "
                        f"{business_id}: {dro_fail_reason or 'unknown reason'}")
 
@@ -4123,9 +4146,6 @@ def compose_site(business_id: str, brief_notes: str = "",
     # population. Any failure falls back to today's module+atelier path
     # (the §9 degradation ladder). Default OFF: unset SITE_CANVAS leaves
     # the deterministic path byte-identical.
-    canvas_html: Optional[str] = None
-    canvas_report: Optional[Dict[str, Any]] = None
-
     def _try_canvas(the_spec: List[Dict[str, Any]], notes: str = ""):
         import canvas as _canvas_mod
         return _canvas_mod.run_canvas(the_spec, ctx, dro, business_id,
@@ -4152,38 +4172,10 @@ def compose_site(business_id: str, brief_notes: str = "",
     # THE OFFER PAGE (2026-10-01, Kevin: World lives on one offer page by
     # default). Named before the home is built, so the home links to it.
     if use_llm and _has_spec:
-        try:
-            import site_concept as _sconcept
-            import site_pages as _spages
-            _sheet = _sconcept.parse_sheet(ctx.get("design_spec_text") or "")
-            if _sheet.get("intensity") == "world" and _sheet.get("scope") == "offer" \
-                    and _offer_pages_enabled():
-                ctx["offer_page"] = {"path": _spages.offer_path(_sheet),
-                                     "name": _spages.offer_name(_sheet)}
-        except Exception as _oe:
-            logger.info(f"[composer] offer page not planned: {_oe}")
-    if use_llm and _has_spec and canvas_html is None:
-        try:
-            import builder_v2 as _bv2
-            if _bv2.enabled():
-                _report_progress(progress_cb, 47, "Builder v2 — one mind")
-                _v2 = _bv2.run_builder_v2(
-                    ctx.get("design_spec_text") or "", ctx, business_id,
-                    progress_cb=lambda pct, stage: _report_progress(
-                        progress_cb, pct, stage))
-                canvas_report = (_v2 or {}).get("report") or canvas_report
-                if (_v2 or {}).get("html"):
-                    canvas_html = _v2["html"]
-                    logger.info(f"[composer] BUILDER V2 composed for "
-                                f"{business_id[:8]}")
-                else:
-                    logger.warning(f"[composer] builder v2 fell back for "
-                                   f"{business_id[:8]}: "
-                                   f"{(canvas_report or {}).get('fallbacks')}")
-        except Exception as _v2e:
-            logger.warning(f"[composer] builder v2 crashed (non-fatal — "
-                           f"the ladder continues): "
-                           f"{type(_v2e).__name__}: {_v2e}")
+        _plan_offer_page(ctx)
+    if use_llm and _has_spec and canvas_html is None and not v2_attempted:
+        canvas_html, _rep = _run_builder_v2(ctx, business_id, progress_cb)
+        canvas_report = _rep or canvas_report
 
     if use_llm and (dro or _has_spec) and canvas_html is None:
         try:
@@ -6263,6 +6255,67 @@ def build_charge(sections: int, refine: bool, offer_built: bool) -> Tuple[int, s
         return (pricing_config.revamp_price()
                 + (pricing_config.offer_page_price() if offer_built else 0)), "site_revamp"
     return pricing_config.price_for_build(sections, offer_page=offer_built), "site_build_marker"
+
+
+def _blueprint_first(ctx: Dict[str, Any]) -> bool:
+    """The one-mind builder can author this page from the approved
+    blueprint alone (step 4 of the build-cost plan). BLUEPRINT_FIRST=off
+    restores the old order (direction passes before the builder)."""
+    if (os.environ.get("BLUEPRINT_FIRST") or "on").strip().lower() in ("off", "0", "false", "no"):
+        return False
+    if not str(ctx.get("design_spec_text") or "").strip():
+        return False
+    try:
+        import builder_v2 as _bv2
+        return bool(_bv2.enabled())
+    except Exception:
+        return False
+
+
+def _plan_offer_page(ctx: Dict[str, Any]) -> None:
+    """THE OFFER PAGE (2026-10-01, Kevin: World lives on one offer page by
+    default). Named before the home is built, so the home links to it.
+    Idempotent: a page already planned is left as it is."""
+    if ctx.get("offer_page"):
+        return
+    try:
+        import site_concept as _sconcept
+        import site_pages as _spages
+        _sheet = _sconcept.parse_sheet(ctx.get("design_spec_text") or "")
+        if _sheet.get("intensity") == "world" and _sheet.get("scope") == "offer" \
+                and _offer_pages_enabled():
+            ctx["offer_page"] = {"path": _spages.offer_path(_sheet),
+                                 "name": _spages.offer_name(_sheet)}
+    except Exception as _oe:
+        logger.info(f"[composer] offer page not planned: {_oe}")
+
+
+def _run_builder_v2(ctx: Dict[str, Any], business_id: str,
+                    progress_cb=None) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """BUILDER V2 (Revamp Phase 2, SITE_BUILDER_V2=on): one mind, one call,
+    the whole page from the APPROVED SPEC; the contract armor (annotator,
+    JS/external armor, truth + coverage, one scoped repair) runs after
+    authorship. (html, report); html is None when the builder is off,
+    falls back or crashes, and the ladder continues (canvas, modules)."""
+    try:
+        import builder_v2 as _bv2
+        if not _bv2.enabled():
+            return None, None
+        _report_progress(progress_cb, 47, "Builder v2 — one mind")
+        _v2 = _bv2.run_builder_v2(
+            ctx.get("design_spec_text") or "", ctx, business_id,
+            progress_cb=lambda pct, stage: _report_progress(progress_cb, pct, stage))
+        report = (_v2 or {}).get("report")
+        if (_v2 or {}).get("html"):
+            logger.info(f"[composer] BUILDER V2 composed for {business_id[:8]}")
+            return _v2["html"], report
+        logger.warning(f"[composer] builder v2 fell back for {business_id[:8]}: "
+                       f"{(report or {}).get('fallbacks')}")
+        return None, report
+    except Exception as _v2e:
+        logger.warning(f"[composer] builder v2 crashed (non-fatal — the ladder "
+                       f"continues): {type(_v2e).__name__}: {_v2e}")
+        return None, None
 
 
 def _offer_pages_enabled() -> bool:
