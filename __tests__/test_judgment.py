@@ -123,8 +123,8 @@ def _wire(monkeypatch, looks, rounds=3, per_round=3):
 
     def _fake_call(system, user, business_id, spend=None):
         calls.append(user)
-        if user.startswith("SECTION REPAIR"):
-            sid = user.split('<section id="', 1)[1].split('"', 1)[0]
+        if "SECTION REPAIR:" in user:
+            sid = user.split("SECTION REPAIR:", 1)[1].split('<section id="', 1)[1].split('"', 1)[0]
             return _new(sid, f"rebuilt {sid} {len(calls)}")
         return _doc()
 
@@ -150,7 +150,7 @@ def test_a_round_that_can_afford_one_section_takes_the_biggest(monkeypatch):
     calls = _wire(monkeypatch, [_flag("story", "top", biggest="top"),
                                 {"verdict": "ship", "violations": []}], per_round=1)
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
-    repairs = [c for c in calls if c.startswith("SECTION REPAIR")]
+    repairs = [c for c in calls if "SECTION REPAIR:" in c]
     assert len(repairs) == 1 and '<section id="top">' in repairs[0]
     assert "THE BIGGEST PROBLEM ON THE PAGE" in repairs[0]
     assert out["report"]["vision"]["rounds"][0]["biggest"]["section"] == "top"
@@ -161,7 +161,7 @@ def test_a_round_that_can_afford_one_section_takes_the_biggest(monkeypatch):
 def test_a_section_flagged_again_is_rethought_and_a_third_flag_goes_to_the_owner(monkeypatch):
     calls = _wire(monkeypatch, [_flag("top", biggest="top")])
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
-    repairs = [c for c in calls if c.startswith("SECTION REPAIR")]
+    repairs = [c for c in calls if "SECTION REPAIR:" in c]
     assert len(repairs) == 2, "rebuilt, rethought, then no third paid rebuild"
     assert "SECOND TRY" not in repairs[0]
     assert "SECOND TRY: this section was already rebuilt once, for: THE BIGGEST PROBLEM" in repairs[1]
@@ -176,6 +176,6 @@ def test_different_sections_each_round_still_run_to_the_round_cap(monkeypatch):
     out = v2.run_builder_v2("SPEC", {}, "biz-1")
     assert out["report"]["vision"]["looks"] == 3
     assert [r["round"] for r in out["report"]["vision"]["section_repairs"]] == [1, 2, 3]
-    repairs = [c for c in calls if c.startswith("SECTION REPAIR")]
+    repairs = [c for c in calls if "SECTION REPAIR:" in c]
     assert "SECOND TRY" in repairs[2], "top's second rebuild is a rethink"
     assert out["report"]["vision"]["for_the_owner"] == []
