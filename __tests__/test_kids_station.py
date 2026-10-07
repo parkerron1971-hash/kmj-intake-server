@@ -16,6 +16,7 @@
 
 import importlib.util
 import pathlib
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -125,6 +126,22 @@ def unlocked(token, pin="2468"):
     return r.json()["unlock"]
 
 
+def _holds_pin(value, pin):
+    """A stored value that IS the PIN, or human text that contains it. The
+    row's ids and hashes are random hex, where the digits turn up by chance
+    (a plain substring check over the whole row failed about 1 run in 250)."""
+    if value == pin or value == int(pin):
+        return True
+    return isinstance(value, str) and pin in value and not re.fullmatch(r"[0-9a-fA-F:.\-+TZ ]+", value)
+
+
+def test_the_pin_check_reads_values_not_random_hex():
+    assert _holds_pin("2468", "2468") and _holds_pin(2468, "2468") and _holds_pin("PIN 2468", "2468")
+    assert not _holds_pin("9f02468ab1c3", "2468")                          # a hash
+    assert not _holds_pin("5a2468e1-0c1d-4b3a-9f00-1234abcd5678", "2468")  # a uuid
+    assert not _holds_pin("2026-10-07T12:24:68+00:00", "2468")             # a timestamp
+
+
 # ── 1. managing stations ─────────────────────────────────────────────
 
 def test_manager_creates_member_cannot_and_no_secrets_listed(store):
@@ -134,7 +151,8 @@ def test_manager_creates_member_cannot_and_no_secrets_listed(store):
     listed = app_client(MANAGER).get(f"/kids/stations?business_id={BIZ}").json()["stations"]
     assert listed[0]["name"] == "Welcome desk" and listed[0]["pairing"] is True
     assert not any(k in str(listed) for k in ("pin_hash", "token_hash", "pair_code_hash"))
-    assert "2468" not in str(store.t["checkin_stations"])
+    rows = store.t["checkin_stations"]
+    assert rows and not any(_holds_pin(v, "2468") for row in rows for v in row.values())
 
 
 def test_pin_must_be_digits(store):
