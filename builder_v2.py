@@ -342,17 +342,86 @@ def page_part(doc: str) -> str:
     return "THE PAGE AS IT STANDS:\n" + (doc or "")
 
 
+# ─── EDITS, NOT THE PAGE (2026-10-07, the build-cost plan, step 3) ──
+# A whole-page repair used to write the whole page back to fix one rule:
+# 18 to 28 thousand output tokens (output costs five times input), twice a
+# build. Now it returns only its edits, as search-and-replace blocks the
+# server applies; every other byte of the page is untouched by
+# construction, so a repair can no longer disturb a section that was
+# right. If an edit cannot be placed exactly, the old whole-page pass runs
+# once, so a build never ends worse than it did before.
+EDITS_PREAMBLE = ("THIS CALL EDITS A FINISHED PAGE. Where the system rules say to output "
+                  "the HTML document, output only your edits in the form below; the page "
+                  "itself is already written.")
+EDITS_FORM = "\n".join([
+    "RETURN ONLY YOUR EDITS, never the whole page. One block per change, in exactly this form:",
+    "<<<<<<< SEARCH",
+    "(an exact run of the page above, copied character for character, long enough to occur once)",
+    "=======",
+    "(what replaces it; leave it empty to delete the run)",
+    ">>>>>>> REPLACE",
+    "Copy each SEARCH run byte for byte from the page; keep it short but unique (a few lines). "
+    "Edits apply top to bottom. No commentary, no code fences.",
+])
+_EDIT_RE = re.compile(r"<{7} SEARCH[ \t]*\r?\n(.*?)\r?\n={7}[ \t]*\r?\n(.*?)(?:\r?\n)?>{7} REPLACE",
+                      re.DOTALL)
+
+
+def _locate(doc: str, find: str) -> Optional[Tuple[int, int]]:
+    """Where `find` sits in `doc`, exactly once: verbatim first, then with
+    every run of whitespace allowed to differ (a model re-indents). None
+    when it is missing or ambiguous."""
+    if not find.strip():
+        return None
+    if doc.count(find) == 1:
+        i = doc.index(find)
+        return i, i + len(find)
+    tokens = find.split()
+    if not tokens:
+        return None
+    pattern = r"\s+".join(re.escape(t) for t in tokens)
+    hits = list(re.finditer(pattern, doc))
+    if len(hits) == 1:
+        return hits[0].start(), hits[0].end()
+    return None
+
+
+def apply_edits(doc: str, raw: str) -> Tuple[Optional[str], str]:
+    """(the page with the reply's edits applied, how). how is "edits",
+    "document" (the reply was a whole page; accepted as before), or why it
+    failed: "no edits", "edit N not found" (missing or ambiguous), "not a
+    page" (the result no longer parses). A failure returns (None, why)."""
+    text = _FENCE_RE.sub("", raw or "")
+    blocks = _EDIT_RE.findall(text)
+    if not blocks:
+        whole = _parse_doc(text)
+        return (whole, "document") if whole else (None, "no edits")
+    out = doc
+    for n, (find, replace) in enumerate(blocks, 1):
+        span = _locate(out, find)
+        if span is None:
+            return None, f"edit {n} not found"
+        out = out[:span[0]] + replace + out[span[1]:]
+    if not _parse_doc(out):
+        return None, "not a page"
+    return out, "edits"
+
+
 def build_user_prompt(spec_text: str, real_data: str,
                       violations: Optional[List[str]] = None,
-                      prior_doc: str = "", page_brief: str = "") -> str:
+                      prior_doc: str = "", page_brief: str = "",
+                      edits: bool = True) -> str:
     """Pure prompt assembly (testable). With violations + prior_doc it
     becomes the ONE surgical repair prompt (Amendment 1: minimal edits,
-    never a fresh re-roll): the shared parts first (cached), the task last."""
+    never a fresh re-roll): the shared parts first (cached), the task last.
+    The repair returns its edits; edits=False asks for the whole corrected
+    document (the fallback when an edit could not be placed)."""
     if violations:
         return CACHE_BREAK.join([
             stable_part(spec_text, real_data),
             page_part(prior_doc),
             "\n".join([
+                *([EDITS_PREAMBLE, ""] if edits else []),
                 "SURGICAL REPAIR — the page above failed validation on these exact "
                 "points. Fix ONLY what each violation requires; every other "
                 "byte of the document stays as you wrote it. Do not redesign, "
@@ -361,7 +430,7 @@ def build_user_prompt(spec_text: str, real_data: str,
                 "VIOLATIONS:",
                 *[f"- {v}" for v in violations[:12]],
                 "",
-                "Output the corrected complete HTML document only.",
+                EDITS_FORM if edits else "Output the corrected complete HTML document only.",
             ]),
         ])
     parts = [
@@ -399,6 +468,26 @@ def build_user_prompt(spec_text: str, real_data: str,
         "Build the complete page now.",
     ]
     return "\n".join(parts)
+
+
+def repair_page(spec_text: str, real_data: str, doc: str, items: List[str],
+                business_id: str, spend: Optional[Dict[str, Any]]) -> Tuple[Optional[str], str]:
+    """A whole-page repair (step 3): ask for edits and apply them; when an
+    edit cannot be placed, one whole-page pass as before (budget allowing).
+    (the repaired page or None, how it was repaired)."""
+    raw = _call(_SYSTEM, build_user_prompt(spec_text, real_data, violations=items,
+                                           prior_doc=doc), business_id, spend=spend)
+    new, how = apply_edits(doc, raw or "")
+    if new:
+        return new, how
+    logger.warning(f"[v2] repair edits did not apply ({how}) — one whole-page pass")
+    if not _budget_left(spend):
+        return None, f"{how}; no budget for the whole-page pass"
+    raw2 = _call(_SYSTEM, build_user_prompt(spec_text, real_data, violations=items,
+                                            prior_doc=doc, edits=False),
+                 business_id, spend=spend)
+    whole = _parse_doc(raw2 or "")
+    return whole, (f"document after {how}" if whole else f"{how}; the whole-page pass failed too")
 
 
 def layout_key_for(spec_text: str) -> Optional[str]:
@@ -2383,12 +2472,9 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
     elif violations or stand_ins:
         report["violations"] = violations + stand_ins
         _progress(56, "Surgical repair")
-        raw2 = _call(_SYSTEM,
-                     build_user_prompt(spec_text, real_data,
-                                       violations=violations + stand_ins,
-                                       prior_doc=doc),
-                     business_id, spend=spend)
-        doc2 = _parse_doc(raw2 or "")
+        doc2, how = repair_page(spec_text, real_data, doc, violations + stand_ins,
+                                business_id, spend)
+        report.setdefault("repair_modes", []).append({"stage": "surgical", "how": how})
         if doc2:
             doc2 = _mechanical(doc2)
             v2 = _laws(doc2)
@@ -2549,12 +2635,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                 # rides the vision repair too
                 seen += [f"STILL ON THE PAGE: {x}" for x in report["stand_ins"]]
                 seen += [f"STILL ON THE PAGE: {x}" for x in report.get("craft") or []]
-                raw3 = _call(_SYSTEM,
-                             build_user_prompt(spec_text, real_data,
-                                               violations=seen,
-                                               prior_doc=doc),
-                             business_id, spend=spend)
-                doc3 = _parse_doc(raw3 or "")
+                doc3, how = repair_page(spec_text, real_data, doc, seen, business_id, spend)
+                report.setdefault("repair_modes", []).append({"stage": f"vision-round-{rnd}", "how": how})
                 if doc3:
                     doc3 = _mechanical(doc3)
                     if not _laws(doc3):
