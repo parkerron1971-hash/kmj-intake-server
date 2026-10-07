@@ -272,11 +272,13 @@ def summary(signals):
 
 # ── diagnosis: a fixed rule set, first match wins ─────────────────────
 
-def _day(iso):
+def _day(iso, tz=None):
+    """'October 2' on the owner's clock: Eastern for Solutionist's own desk
+    (the default), the business's own zone for a business desk."""
     d = _stamp(iso)
     if not d:
         return 'an earlier date'
-    d = d.astimezone(TZ)
+    d = d.astimezone(tz or TZ)
     return f'{d:%B} {d.day}'
 
 
@@ -448,22 +450,20 @@ def _rank(plays, scores):
     return [head] + proven + [p for p in rest if p not in proven]
 
 
-def pick_plays(diagnosis, signals, facts, times):
-    """Up to three plays and one slot per posting time, each with the reason it is there."""
-    problem = diagnosis['primary_problem']
-    ranked = _rank([p for p in PREFERENCE[problem] if _subjects(p, signals, facts)],
-                   signals.get('play_scores') or {})
-    if 'workflow_tip' not in ranked:
-        ranked.append('workflow_tip')      # needs nothing, so a week can always be filled
-    ranked = ranked[:3]
-    queues = {p: list(_subjects(p, signals, facts)) for p in ranked}
+def fill_slots(ranked, queues, caps, count):
+    """Up to `count` slots from ranked plays, each taking the next subject
+    from its queue (queues are consumed). The problem's own play (ranked[0])
+    takes every other slot; the others take turns in between; no play goes
+    past its cap. Returns (slots, posts per play).
+
+    Shared by the platform's week and every business's (business_marketing_engine)."""
     counts = {p: 0 for p in ranked}
 
     def open_(play):
-        return counts[play] < PLAYS[play]['max_per_week'] and queues[play]
+        return counts[play] < caps[play] and queues[play]
 
     slots, turn = [], 0
-    while len(slots) < len(times):
+    while ranked and len(slots) < count:
         # The problem's own play takes every other slot; the others take turns in between.
         support = [p for p in ranked[1:] if open_(p)]
         if len(slots) % 2 == 0 and open_(ranked[0]):
@@ -477,6 +477,19 @@ def pick_plays(diagnosis, signals, facts, times):
             break
         counts[play] += 1
         slots.append({'play_id': play, **queues[play].pop(0)})
+    return slots, counts
+
+
+def pick_plays(diagnosis, signals, facts, times):
+    """Up to three plays and one slot per posting time, each with the reason it is there."""
+    problem = diagnosis['primary_problem']
+    ranked = _rank([p for p in PREFERENCE[problem] if _subjects(p, signals, facts)],
+                   signals.get('play_scores') or {})
+    if 'workflow_tip' not in ranked:
+        ranked.append('workflow_tip')      # needs nothing, so a week can always be filled
+    ranked = ranked[:3]
+    queues = {p: list(_subjects(p, signals, facts)) for p in ranked}
+    slots, counts = fill_slots(ranked, queues, {p: PLAYS[p]['max_per_week'] for p in ranked}, len(times))
     for i, slot in enumerate(slots):
         slot['slot'] = i + 1
         slot['run_at'] = times[i].isoformat()
@@ -528,13 +541,45 @@ def _numbers(text):
     return out
 
 
-def check_caption(text, allowed_numbers):
-    """Why a caption cannot be used, or None. Every rule is a claim the owner never gave."""
+_LINK = re.compile(r'https?://|www\.|\.app\b|\.com\b', re.I)
+# A web address as written in prose: an optional scheme and www, a dotted
+# name ending in letters (the host), and anything up to the next space.
+_ADDRESS = re.compile(r'(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,24})\b(?:[/?#]\S*)?', re.I)
+
+
+def own_links_out(text, own_hosts):
+    """(text without the business's own web addresses, whether any other
+    address is left in it). A business's caption may name its own site;
+    an address anywhere else is a claim the owner never made."""
+    own = {str(h).lower().removeprefix('www.') for h in own_hosts or ()}
+    elsewhere = False
+
+    def take(match):
+        nonlocal elsewhere
+        if match.group(1).lower().removeprefix('www.') in own:
+            return ' '
+        elsewhere = True
+        return match.group(0)
+    kept = _ADDRESS.sub(take, text)
+    return kept, elsewhere or bool(_LINK.search(kept))
+
+
+def check_caption(text, allowed_numbers, own_hosts=None):
+    """Why a caption cannot be used, or None. Every rule is a claim the owner never gave.
+
+    own_hosts: None for Solutionist's own desk (no address at all; the link
+    is added after the caption). A business's desk passes its own hosts, so
+    its caption may name its own site and nothing else."""
     text = (text or '').strip()
     if not 20 <= len(text) <= CAPTION_MAX:
         return 'length'
-    if re.search(r'https?://|www\.|\.app\b|\.com\b', text, re.I):
-        return 'link in the caption'
+    if own_hosts is None:
+        if _LINK.search(text):
+            return 'link in the caption'
+    else:
+        text, elsewhere = own_links_out(text, own_hosts)
+        if elsewhere:
+            return "link to somewhere other than the business's own site"
     if '#' in text:
         return 'hashtag'
     stray = _numbers(text) - allowed_numbers
@@ -546,8 +591,9 @@ def check_caption(text, allowed_numbers):
 FLYER_LIMITS = {'headline': (6, 42), 'line': (10, 120), 'cta': (3, 22)}
 
 
-def check_flyer(copy, allowed_numbers):
-    """The flyer's words, held to the caption's rules plus tighter lengths. None when usable."""
+def check_flyer(copy, allowed_numbers, own_hosts=None):
+    """The flyer's words, held to the caption's rules plus tighter lengths. None when usable.
+    own_hosts as in check_caption."""
     if not isinstance(copy, dict):
         return 'no flyer copy'
     for field, (low, high) in FLYER_LIMITS.items():
@@ -555,8 +601,13 @@ def check_flyer(copy, allowed_numbers):
         if not isinstance(value, str) or not low <= len(value.strip()) <= high:
             return f'flyer {field} length'
     text = ' '.join(copy[f] for f in FLYER_LIMITS)
-    if re.search(r'https?://|www\.|\.app\b|\.com\b', text, re.I):
-        return 'link on the flyer'
+    if own_hosts is None:
+        if _LINK.search(text):
+            return 'link on the flyer'
+    else:
+        text, elsewhere = own_links_out(text, own_hosts)
+        if elsewhere:
+            return "link on the flyer to somewhere other than the business's own site"
     if '#' in text:
         return 'hashtag on the flyer'
     stray = _numbers(text) - allowed_numbers
