@@ -136,6 +136,7 @@ approved posts (`marketing_claim_due`) and re-checks everything at send time.
 | `POST /post-now` | owner | a reviewed post goes out in two minutes |
 | `POST /posts/{id}/not-sent` | owner | an unconfirmed delivery becomes a failure |
 | `PUT /settings` | owner | paused, plan_enabled, accounts, hour (6-21), audience, link; makes the desk row |
+| `GET /results` | owner + members | what came through the post links in the last 30 days, per post and in total (B6) |
 
 - **Who.** Reads use `business_access('viewer')`. Writes use `require_user`
   plus an owner check: a service-role read of `businesses.owner_id`. A member
@@ -162,7 +163,7 @@ approved posts (`marketing_claim_due`) and re-checks everything at send time.
   exactly like a missing one.
 - **Links.** `landing_url` must be https on the business's own host: its
   `mysolutionist.app` subdomain, or its custom domain once verified.
-  `publish_text` is the caption until B6 adds the tracked short link.
+  `publish_text` is the caption with the post's short link (B6, below).
 - **Fail closed.** A failed read is a 503 in plain words, never an empty desk.
 - **`level`** comes from the real plan (`feature_gates.plan_includes`, which
   ignores `BILLING_ENFORCE`). `upgrade` is the next level's feature and
@@ -327,3 +328,77 @@ suggestion.
     `week`;
   - the caption writer's instructions, where "we" is the business;
   - the flyer footer: the business's name and host, never Solutionist's.
+
+### Tracked links and results (B6)
+
+The platform desk's `/go/` links and results, for every business
+(`business_marketing_links.py`, `business_marketing_outcomes.py`, the `/go/`
+route in `public_site.py`). No migration: the columns, `marketing_link_clicks`
+and `marketing_follow` came with B3.
+
+- **The short link** is `{origin}/go/{code}`. The origin is the business's
+  verified custom domain, else `https://{slug}.mysolutionist.app`. The code is
+  `business_marketing_store.link_code(post id)`: 8 characters from
+  `sha256('marketing-go:' + id)`, so a retry or an edit keeps it, and it never
+  equals the platform's code for the same id.
+- **Where it goes** (`landing_url`): the post's own link, else the desk's
+  (while it is still on the site), else `/book` when anything is bookable
+  (booking page published, an active booking calendar and an active service
+  or session with a duration), else the site's home when the site is
+  published. With none of these, a post has no link: `tracked_url` is empty
+  and the caption goes out as written.
+- **`tracked_url`** is the landing page with `utm_source=social`,
+  `utm_medium=organic_social`, `utm_campaign=marketing_desk` and
+  `utm_content=<post id>`. Its host is always one of the business's own
+  hosts; anything else is refused when the post is saved.
+- **`publish_text`** is the caption with the short link: a mention of the
+  landing page is swapped for it, otherwise it is added once
+  (`platform_marketing.caption_with_landing_link`, now given the business's
+  hosts). Each network's length limit is checked on these words.
+- **The approval.** `publish_text` and `landing_url` are inside
+  `content_hash`, and `tracked_url` follows from `landing_url` and the id. A
+  new link is a new revision, back to draft. An edit rebuilds the link on the
+  site as it is now; a post whose link has left the site (a domain no longer
+  verified) is refused until its link changes (`''` means the default).
+- **The redirect.** `/go/{code}` on a business host (`slug.<base domain>`, or
+  a custom domain, with or without `www`, also through `X-Original-Host`)
+  resolves the host's business first. `marketing_follow` is asked without
+  counting. The visitor is redirected (302, `no-store`, `noindex`) only when
+  the post is that business's and its `tracked_url` is https on that
+  business's own hosts. Only then, and only for a person, is the click
+  counted (`marketing_follow(code, true)`). Link-preview fetchers, bots and
+  Do Not Track are redirected and not counted, and a post that never went out
+  never counts (the RPC). An unknown code, another business's code, an
+  off-site destination or a failed read gets the site's own answer for the
+  path: its 404. On the platform's hosts, `/go/` calls
+  `platform_marketing.follow` exactly as before.
+- **Its own rate bucket.** On a business host, `/go/` is limited per host
+  (`go:<slug>` or `go:<domain>`, www sharing the apex) to
+  `GO_RATE_LIMIT_PER_MIN` (600 a minute), charged once per hit, a miss
+  included. It never charges the site's page-view bucket (the bare slug, 100
+  a minute). A post that takes off, or a crawler walking dead codes, cannot
+  429 the business's pages or booking, and busy pages cannot 429 its links.
+- **Visits carry the post.** The business site's traffic beacon now keeps a
+  visit's campaign tags for the tab's session (first touch) and sends them
+  with every event as `c`, as the platform's pages do, so `site_events.data`
+  holds `utm_content`. Before this, business-site events carried no campaign
+  tags at all.
+- **`GET /results`** covers the posts that went out (submitted, published,
+  partly published) in the last 30 days:
+  - clicks from `marketing_link_clicks`;
+  - visits as distinct sessions in this business's `site_events` whose
+    `data.utm_content` is the post;
+  - leads from this business's `contacts` whose `attribution.utm_content` is
+    the post.
+
+  It returns `totals`, `posts` (each with `has_link`), `sources` (`loaded`,
+  `partial` at a row limit, or `unavailable`), `site.state` (`ready`, `none`
+  or `unavailable`) and one `headline` worded "came through", never
+  "brought". A source that cannot be read is `null` and named, never 0. A
+  post with no link has `null` measures. The posts unreadable is a 503.
+- **Leads are a floor.** `lead_attribution.capture` reads campaign tags off
+  the form's `Referer`. Business-site forms and the booking widget post
+  cross-origin to the API, and browsers send only the origin then, so most
+  leads arrive without `utm_content` today. Counting them needs the forms
+  and the booking widget to send the session's tags (frontend and
+  site-module work, not built).

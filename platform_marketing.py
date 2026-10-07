@@ -98,7 +98,7 @@ def short_link(code):
 GO_CODE = re.compile(r'^[a-z2-7]{8}$')
 
 
-def caption_with_landing_link(text, url, link):
+def caption_with_landing_link(text, url, link, hosts=('mysolutionist.app',)):
     """Keep public captions clean; attribution metadata is not public copy.
 
     The public text carries the post's short link, never a tagged URL. The
@@ -107,6 +107,10 @@ def caption_with_landing_link(text, url, link):
     arrived untracked. A caption that already names the landing page has
     that mention swapped for the short link; otherwise the link is appended
     once. The caller validates the destination through tracked_link first.
+
+    `hosts` are the site's own hosts a mention may name (www optional): the
+    platform's by default; a business's own when its desk posts
+    (business_marketing_links, marketing suite B6).
     """
     parts = urlsplit(url)
     query = urlencode([(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
@@ -122,7 +126,9 @@ def caption_with_landing_link(text, url, link):
             return None
 
     # Match entire URLs, not substrings of another host, path or email address.
-    pattern = re.compile(r'(?<![\w@./-])(?:https?://)?(?:www\.)?mysolutionist\.app\b[^\s<>"\u201c\u201d]*', re.I)
+    names = sorted({str(h).lower().removeprefix('www.') for h in hosts}, key=len, reverse=True)
+    pattern = re.compile(r'(?<![\w@./-])(?:https?://)?(?:www\.)?(?:' + '|'.join(map(re.escape, names))
+                         + r')\b[^\s<>"\u201c\u201d]*', re.I)
     if link in text:
         return text
     target = destination(clean)

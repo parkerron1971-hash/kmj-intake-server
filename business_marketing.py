@@ -9,6 +9,7 @@
   POST /marketing/{business_id}/post-now                  owner             a reviewed post goes out in two minutes
   POST /marketing/{business_id}/posts/{post_id}/not-sent  owner             an unconfirmed delivery did not go out
   PUT  /marketing/{business_id}/settings                  owner             the desk's settings
+  GET  /marketing/{business_id}/results                   owner + members   what came through the post links (B6)
 
 B4 of docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md: Mission Control's
 marketing desk (platform_marketing, /platform/marketing/*) for every business,
@@ -27,8 +28,16 @@ approved post to Post for Me, and it re-checks everything at send time. "Post
 now" therefore refuses until sending is switched on (MARKETING_DESK_PUBLISHING,
 B5's switch, default off): an approval that nothing would act on is not a post.
 
+THE LINK (B6, business_marketing_links). Every post of a business with a
+site carries its own short link, {origin}/go/{code}, in publish_text; the
+redirect behind it adds the tags (tracked_url) that let /results follow a
+visit or a lead back to the post. Where it goes: the post's own link, else
+the desk's, else the booking page when anything is bookable, else the site's
+home. A business with no site posts with no link.
+
 THE APPROVAL. A post's content_hash is business_marketing_store.digest: its
-words, link, media, accounts and time. /approve binds exactly what the owner
+words (publish_text, short link included), where its link goes, media,
+accounts and time. /approve binds exactly what the owner
 reviewed ({id, revision, content_hash}) through marketing_approve, all or
 nothing; any change to a post bumps its revision, recomputes the hash and puts
 it back to draft.
@@ -61,6 +70,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 import business_marketing_desk as reading
+import business_marketing_links as links
 import business_marketing_store as store
 import feature_gates
 import post_for_me
@@ -113,7 +123,8 @@ def publishing_on() -> bool:
 
 def _owner_row(business_id: str, user_id: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
-        f'/businesses?id=eq.{business_id}&select=id,owner_id,type,availability:settings->availability&limit=1')
+        f'/businesses?id=eq.{business_id}&select=id,owner_id,type,availability:settings->availability,'
+        'booking_page:settings->booking_page&limit=1')
     if rows is None:
         raise HTTPException(503, "Couldn't confirm this business just now. Nothing was changed. Try again in a minute.")
     if not rows:
@@ -328,14 +339,19 @@ def check_rules(caption: str, kind: Optional[str], targets: List[Dict[str, Any]]
         raise HTTPException(422, exc.detail) from None
 
 
-def ready_to_post(fitted: List[Dict[str, Any]], kind: Optional[str], caption: str) -> List[Dict[str, Any]]:
-    """The accounts left once fitted, or a plain refusal when none is."""
+def ready_to_post(fitted: List[Dict[str, Any]], kind: Optional[str], caption: str,
+                  text: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The accounts left once fitted, or a plain refusal when none is. The
+    caption must have words or a picture; what goes out (`text`: the
+    caption with its short link) must fit each network."""
     kept, dropped = fit(fitted, kind)
     if not kept:
         import image_posting
         why = image_posting.why_dropped(dropped)
         raise HTTPException(422, f"None of those accounts can take this post ({'; '.join(why)}). Nothing was saved.")
     check_rules(caption, kind, kept)
+    if text and text != caption:
+        check_rules(text, kind, kept)
     return kept
 
 
@@ -395,29 +411,32 @@ async def build_media(business_id: str, *, artwork_id=None, clip_id=None, clip_f
 
 # ── the link a post carries ───────────────────────────────────────────
 
+SITE_DOWN = "Couldn't read this business's site just now. Nothing was changed. Try again in a minute."
+OFF_SITE = ('Use a link to your own site or booking page. Links elsewhere are not tracked '
+            'or checked, so the desk does not post them.')
+
+
+def _site(business_id: str) -> Optional[Dict[str, Any]]:
+    """The business's site (business_marketing_links.site_for), or None when it has none."""
+    try:
+        return links.site_for(business_id)
+    except links.LinksUnavailable:
+        raise HTTPException(503, SITE_DOWN) from None
+
+
 def _own_hosts(business_id: str) -> set:
     """The hosts this business's site and booking page answer on: its
     platform subdomain, and its custom domain once verified (a pending one
     has no DNS yet, and a dead link in a post is worse than none)."""
-    from business_sites_helpers import PUBLIC_DOMAIN
-    rows = sb_clients.sb_get_as_service(f'/business_sites?business_id=eq.{business_id}&select=slug,site_config&limit=1')
-    if rows is None:
-        raise HTTPException(503, "Couldn't read this business's site just now. Nothing was changed. Try again in a minute.")
-    hosts = set()
-    for site in rows:
-        if site.get('slug'):
-            hosts.add(f"{str(site['slug']).lower()}.{PUBLIC_DOMAIN}")
-        cfg = site.get('site_config') if isinstance(site.get('site_config'), dict) else {}
-        domain = str(cfg.get('custom_domain') or '').strip().lower().removeprefix('https://').removeprefix('http://')
-        domain = domain.strip('/').removeprefix('www.')
-        if domain and str(cfg.get('custom_domain_status') or '').strip().lower() == 'verified':
-            hosts.update({domain, f'www.{domain}'})
-    return hosts
+    return set(links.own_hosts(_site(business_id)))
 
 
-def landing_url(business_id: str, raw: Optional[str]) -> Optional[str]:
+_UNREAD = object()
+
+
+def landing_url(business_id: str, raw: Optional[str], site: Any = _UNREAD) -> Optional[str]:
     """A post's link: empty, or an https page on the business's own site or
-    booking page."""
+    booking page. `site`: the business's site when the caller already read it."""
     value = (raw or '').strip()
     if not value:
         return None
@@ -429,16 +448,33 @@ def landing_url(business_id: str, raw: Optional[str]) -> Optional[str]:
     host = (parts.hostname or '').lower()
     if parts.scheme != 'https' or not host or parts.username or parts.password or port not in (None, 443):
         raise HTTPException(422, "Use an https link to your own site or booking page.")
-    if host not in _own_hosts(business_id):
-        raise HTTPException(422, 'Use a link to your own site or booking page. Links elsewhere are not tracked '
-                                 'or checked, so the desk does not post them.')
+    hosts = _own_hosts(business_id) if site is _UNREAD else links.own_hosts(site)
+    if host not in hosts:
+        raise HTTPException(422, OFF_SITE)
     return value
 
 
-def publish_text(caption: str) -> str:
-    """The words that go out. The tracked short link (/go/ on the business's
-    own site) is B6; until then the caption goes out as written."""
-    return caption
+def default_landing(business_id: str, business: Dict[str, Any], site: Optional[Dict[str, Any]],
+                    desk: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Where a post goes when it names no link of its own: the desk's link
+    (while it is still on the business's own site), else the booking page
+    when anything is bookable, else the site's home, else nowhere (no site)."""
+    chosen = (desk or {}).get('landing_url')
+    if chosen and links.on_site(chosen, site):
+        return chosen
+    try:
+        return links.default_landing(business_id, business, site)
+    except links.LinksUnavailable:
+        raise HTTPException(503, "Couldn't read this business's booking page just now. Nothing was changed. "
+                                 'Try again in a minute.') from None
+
+
+def link_fields(post_id: str, caption: str, landing: Optional[str], site: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """landing_url, tracked_url, link_code and publish_text for a post."""
+    try:
+        return links.fields(post_id, caption, landing, site)
+    except ValueError:
+        raise HTTPException(422, OFF_SITE) from None
 
 
 # ── time ──────────────────────────────────────────────────────────────
@@ -547,9 +583,12 @@ def idea_post_id(business_id: str, idea_id: Any) -> str:
 
 def new_post(business_id: str, post_id: str, *, caption: str, media: Dict[str, Any],
              targets: List[Dict[str, Any]], run_at: datetime, expires_at: datetime,
-             landing: Optional[str], source: str = 'owner') -> Dict[str, Any]:
+             landing: Optional[str], source: str = 'owner',
+             site: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A draft row. With a landing on the business's site, it carries its
+    tracked link (link_fields); without one, the caption goes out as written."""
     row = {'id': post_id, 'business_id': business_id, 'source': source, 'caption': caption,
-           'publish_text': publish_text(caption), 'landing_url': landing, 'link_code': store.link_code(post_id),
+           **link_fields(post_id, caption, landing, site),
            'media': media, 'targets': targets, 'run_at': run_at.isoformat(), 'expires_at': expires_at.isoformat(),
            'status': 'draft', 'revision': 1, 'design_status': 'none'}
     row['content_hash'] = store.digest(row)
@@ -558,10 +597,12 @@ def new_post(business_id: str, post_id: str, *, caption: str, media: Dict[str, A
 
 def changed(row: Dict[str, Any], **content) -> Dict[str, Any]:
     """The patch for a changed post: the new content, the next revision, a
-    fresh content_hash, and back to draft with its approval dropped."""
+    fresh content_hash, and back to draft with its approval dropped. A new
+    caption or link comes with its publish_text (link_fields), so the words
+    that go out are never stale."""
     patch = dict(content)
-    if 'caption' in patch:
-        patch['publish_text'] = publish_text(patch['caption'])
+    if ('caption' in patch or 'landing_url' in patch) and 'publish_text' not in patch:
+        raise ValueError('A changed caption or link needs its publish_text (link_fields).')
     for key in ('run_at', 'expires_at'):
         if isinstance(patch.get(key), datetime):
             patch[key] = patch[key].isoformat()
@@ -671,7 +712,8 @@ class Idea(BaseModel):
     connection_ids: Optional[List[UUID]] = Field(default=None, min_length=1, max_length=10)
     run_at: Optional[datetime] = None                # None: the next open time
     expires_at: Optional[datetime] = None
-    landing_url: Optional[str] = Field(default=None, max_length=1500)   # None: the desk's link
+    # None or '': the desk's link, else the booking page (anything bookable), else the site's home
+    landing_url: Optional[str] = Field(default=None, max_length=1500)
     post_now: bool = False                           # the owner's own "Post now": approved, out in minutes
 
 
@@ -707,7 +749,7 @@ class SlotEdit(BaseModel):
     clip_fingerprint: Optional[str] = Field(default=None, pattern=HEX64)
     covers: Optional[Dict[Shape, UUID]] = None
     remove_media: bool = False
-    landing_url: Optional[str] = Field(default=None, max_length=1500)   # '' removes the link
+    landing_url: Optional[str] = Field(default=None, max_length=1500)   # '': back to the default link
 
 
 class SlotCancel(BaseModel):
@@ -794,10 +836,13 @@ async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, act
     caption = (req.caption or '').strip()
     chosen = pick_targets(accounts, desk, req.connection_ids)
     _, dropped = fit(chosen, kind)
-    targets = ready_to_post(chosen, kind, caption)
-    landing = (await asyncio.to_thread(landing_url, bid, req.landing_url) if req.landing_url is not None
-               else (desk or {}).get('landing_url'))
+    site = await asyncio.to_thread(_site, bid)
+    landing = await asyncio.to_thread(landing_url, bid, req.landing_url, site)
+    if landing is None:
+        landing = await asyncio.to_thread(default_landing, bid, business, site, desk)
     post_id = idea_post_id(bid, req.id)
+    link = link_fields(post_id, caption, landing, site)
+    targets = ready_to_post(chosen, kind, caption, link['publish_text'])
     if req.post_now:
         run_at, expires_at = schedule(now() + POST_NOW_LEAD)
     elif req.run_at is not None:
@@ -807,14 +852,15 @@ async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, act
         run_at, expires_at = schedule(await next_open_slot(bid, tz, (desk or {}).get('post_hour', 11)),
                                       req.expires_at)
     out = {'dropped': _public_dropped(dropped), 'note': dropped_note(dropped),
-           'accounts': [social.post_for_me_label(t['platform']) for t in targets]}
+           'accounts': [social.post_for_me_label(t['platform']) for t in targets],
+           'link': links.short_link(site, link['link_code']) if link['tracked_url'] else None}
 
     existing = await _call(store.get_post(bid, post_id), down=READ_DOWN)
     if existing is None:
         if desk is None:
             await ensure_desk(bid)
         row = new_post(bid, post_id, caption=caption, media=media, targets=targets, run_at=run_at,
-                       expires_at=expires_at, landing=landing)
+                       expires_at=expires_at, landing=landing, site=site)
         try:
             saved = await store.request('POST', '/marketing_posts', row)
             existing, already = (saved[0] if isinstance(saved, list) and saved else row), False
@@ -875,10 +921,26 @@ async def approve_route(business_id: UUID, req: Review, user: AuthedUser = Depen
 
 # ── change, skip ──────────────────────────────────────────────────────
 
-async def edit_slot(business_id: str, req: SlotEdit) -> Dict[str, Any]:
+LINK_GONE = ("This post's link no longer goes to your own site. Choose a new link for it (or leave the link "
+             'empty for your booking page or home), then save again. Nothing was changed.')
+
+
+def _business_row(business_id: str) -> Dict[str, Any]:
+    rows = sb_clients.sb_get_as_service(
+        f'/businesses?id=eq.{business_id}&select=id,booking_page:settings->booking_page&limit=1')
+    if rows is None:
+        raise HTTPException(503, "Couldn't confirm this business just now. Nothing was changed. Try again in a minute.")
+    if not rows:
+        raise HTTPException(404, 'Business not found.')
+    return rows[0]
+
+
+async def edit_slot(business_id: str, req: SlotEdit, business: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Change the words, time, accounts, picture or link of a post. Every post
     is checked and every changed post validated before any is saved; each
-    goes back to draft with a new revision and content_hash."""
+    goes back to draft with a new revision and content_hash. Its link is
+    rebuilt on the business's site as it is now: the link sent, else the
+    post's own (refused if it has left the site), else the default."""
     bid = business_id
     sent = {k for k in ('caption', 'run_at', 'connection_ids', 'artwork_id', 'clip_id') if getattr(req, k) is not None}
     if req.remove_media:
@@ -897,9 +959,11 @@ async def edit_slot(business_id: str, req: SlotEdit) -> Dict[str, Any]:
     elif req.remove_media:
         new_media = {}
     accounts = await connected(bid) if req.connection_ids is not None else None
-    landing = None
+    site = await asyncio.to_thread(_site, bid)
+    sent_landing = None
     if 'landing_url' in sent:
-        landing = await asyncio.to_thread(landing_url, bid, req.landing_url)
+        sent_landing = await asyncio.to_thread(landing_url, bid, req.landing_url, site)
+    fallback: Any = _UNREAD
     moved = schedule(req.run_at) if req.run_at is not None else None
     pairs, notes, dropped_all = [], [], []
     for row in rows:
@@ -909,11 +973,23 @@ async def edit_slot(business_id: str, req: SlotEdit) -> Dict[str, Any]:
         chosen = (pick_targets(accounts, None, req.connection_ids) if accounts is not None
                   else list(row.get('targets') or []))
         _, dropped = fit(chosen, kind)
-        targets = ready_to_post(chosen, kind, caption)
+        if sent_landing is not None:
+            landing = sent_landing
+        elif 'landing_url' not in sent and row.get('landing_url'):
+            landing = row['landing_url']
+            if not links.on_site(landing, site):
+                raise HTTPException(422, LINK_GONE)
+        else:
+            if fallback is _UNREAD:
+                desk = await _call(store.get_desk(bid), down=READ_DOWN)
+                if business is None:
+                    business = await asyncio.to_thread(_business_row, bid)
+                fallback = await asyncio.to_thread(default_landing, bid, business, site, desk)
+            landing = fallback
+        link = link_fields(str(row['id']), caption, landing, site)
+        targets = ready_to_post(chosen, kind, caption, link['publish_text'])
         dropped_all += dropped
-        content = {'caption': caption, 'media': media, 'targets': targets}
-        if 'landing_url' in sent:
-            content['landing_url'] = landing
+        content = {'caption': caption, 'media': media, 'targets': targets, **link}
         if moved:
             # A new time gets a fresh delivery window; the old one would end before it.
             content['run_at'], content['expires_at'] = moved
@@ -927,8 +1003,8 @@ async def edit_slot(business_id: str, req: SlotEdit) -> Dict[str, Any]:
 @router.post('/slot/edit')
 async def edit_slot_route(business_id: UUID, req: SlotEdit, user: AuthedUser = Depends(require_user)):
     bid = str(business_id)
-    await _require_owner(bid, user)
-    return await edit_slot(bid, req)
+    business = await _require_owner(bid, user)
+    return await edit_slot(bid, req, business)
 
 
 @router.post('/slot/cancel')
@@ -974,7 +1050,7 @@ async def post_existing_now(business_id: str, items: List[ReviewItem], actor: st
             import image_posting
             raise HTTPException(409, f"{'; '.join(image_posting.why_dropped(dropped))}. Change the post's accounts "
                                      'or add a picture. Nothing was sent.')
-        check_rules(row.get('caption') or '', kind, kept)
+        check_rules(row.get('publish_text') or row.get('caption') or '', kind, kept)
         rows.append(row)
     run_at, expires_at = schedule(now() + POST_NOW_LEAD)
     moved = await _write_all(bid, [(r, changed(r, run_at=run_at, expires_at=expires_at)) for r in rows],
@@ -1061,3 +1137,18 @@ async def save_settings(business_id: UUID, req: Settings, user: AuthedUser = Dep
     if not saved:
         raise HTTPException(503, STORE_DOWN)
     return {'desk': public_desk(saved[0])}
+
+
+# ── results ───────────────────────────────────────────────────────────
+
+@router.get('/results')
+async def results_route(business_id: UUID, biz: dict = Depends(business_access('viewer'))):
+    """What came through the links in this business's posts over the last 30
+    days, per post and in total (business_marketing_outcomes). Recorded, never
+    causal: "came through", not "brought". A source that cannot be read is
+    unavailable, never 0; the posts themselves unreadable is a 503."""
+    import business_marketing_outcomes as outcomes
+    try:
+        return await outcomes.for_business(str(business_id), now=now())
+    except store.StoreError:
+        raise HTTPException(503, READ_DOWN) from None
