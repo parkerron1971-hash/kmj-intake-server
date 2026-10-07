@@ -5446,9 +5446,9 @@ def render_faq() -> str:
 <section>
   <div class="container-narrow">
     <div class="faq-filter reveal" id="faqFilter" role="group" aria-label="Filter questions">
-      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>11</span></button>
+      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>12</span></button>
       <button type="button" class="faq-f" data-f="fit"   aria-pressed="false">Is it for me<span>3</span></button>
-      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>4</span></button>
+      <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>5</span></button>
       <button type="button" class="faq-f" data-f="money" aria-pressed="false">Money<span>2</span></button>
       <button type="button" class="faq-f" data-f="data"  aria-pressed="false">Your data<span>2</span></button>
     </div>
