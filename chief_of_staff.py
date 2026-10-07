@@ -1315,6 +1315,20 @@ def _cache_control(extended: bool) -> Dict[str, Any]:
     return cc
 
 
+def _keep_brief_warm(business_id: Optional[str], payload: Dict[str, Any],
+                     timing_role: str, prompt_shape: str, extended: bool) -> None:
+    """After the owner's own Chief call, keep its cached brief alive while
+    the business is active (chief_keep_warm). Only the main turn's brief,
+    and only when it is cached for an hour; never raises into the turn."""
+    if timing_role != "chief_main" or not extended or not str(prompt_shape).startswith("cached-4seg"):
+        return
+    try:
+        import chief_keep_warm
+        chief_keep_warm.remember(business_id, payload, _beta_headers(extended))
+    except Exception as e:
+        logger.warning("keep-warm scheduling failed: %s", e)
+
+
 def _beta_headers(extended: bool) -> Optional[Dict[str, str]]:
     return {"anthropic-beta": _EXTENDED_CACHE_BETA} if extended else None
 
@@ -1730,6 +1744,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                                    _cache_seen, cache_read_tok, cache_write_tok)
                       except Exception:
                           pass
+                      _keep_brief_warm(business_id or (tool_biz or {}).get("id"), payload,
+                                       timing_role, prompt_shape, _extended)
                   if stop_reason == "refusal":
                       category = stop_details.get("category")
                       logger.warning("[chief] %s declined the turn (category=%s)", model, category)
@@ -1950,6 +1966,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                        usage.get("cache_creation_input_tokens"))
           except Exception:
               pass
+          _keep_brief_warm(business_id or (tool_biz or {}).get("id"), payload,
+                           timing_role, prompt_shape, _extended)
       content = data.get("content", []) if isinstance(data, dict) else []
       if isinstance(data, dict) and data.get("stop_reason") == "refusal":
           category = (data.get("stop_details") or {}).get("category")
