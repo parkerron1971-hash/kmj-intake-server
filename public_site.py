@@ -1299,13 +1299,24 @@ def _supabase_service(): return os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 # In-memory rate limiter
 _rate_buckets: Dict[str, Dict[str, Any]] = {}
 
-def _check_rate(slug: str) -> bool:
+_RATE_BUCKETS_MAX = 20000
+
+
+def _check_rate(slug: str, limit: Optional[int] = None) -> bool:
+    """One request against the bucket `slug` (a key: the site's page views
+    use the bare slug, other surfaces a prefixed key such as "go:<host>").
+    `limit` per window, RATE_LIMIT_PER_MIN by default."""
     now = time.time()
+    limit = RATE_LIMIT_PER_MIN if limit is None else limit
     bucket = _rate_buckets.get(slug)
     if not bucket or now - bucket["start"] > RATE_WINDOW_SEC:
+        if len(_rate_buckets) > _RATE_BUCKETS_MAX:
+            # Hosts come from a header anyone can write: drop spent windows.
+            for key in [k for k, b in _rate_buckets.items() if now - b["start"] > RATE_WINDOW_SEC]:
+                _rate_buckets.pop(key, None)
         _rate_buckets[slug] = {"start": now, "count": 1}
         return True
-    if bucket["count"] >= RATE_LIMIT_PER_MIN:
+    if bucket["count"] >= limit:
         return False
     bucket["count"] += 1
     return True
@@ -7316,11 +7327,15 @@ def _site_host(request: Request) -> Optional[Tuple[str, str]]:
     return None
 
 
-async def _site_response_or_none(request: Request):
+async def _site_response_or_none(request: Request, *, charge_page_views: bool = True):
     """The site half of the rule above: this path's response when the
     host belongs to a practitioner, or None when it belongs to the
     platform. Split out so robots.txt and sitemap.xml can apply exactly
     the same host rule while answering with something that is not HTML.
+
+    charge_page_views=False: the caller has already charged its own rate
+    bucket (/go/ on a site host), so the site's page-view bucket is left
+    alone.
     """
     path = "/" + (request.url.path or "").lstrip("/")
     site_host = _site_host(request)
@@ -7328,7 +7343,7 @@ async def _site_response_or_none(request: Request):
         return None
     kind, name = site_host
     if kind == "slug":
-        if not _check_rate(name):
+        if charge_page_views and not _check_rate(name):
             raise HTTPException(429, "Rate limit exceeded")
         return await _serve_site_by_slug(name, path)
     return await _serve_site_by_custom_domain(name, path)
@@ -7432,6 +7447,12 @@ async def public_news_post(request: Request, post_slug: str):
 # post and only to that business's own site (business_marketing_links.
 # follow_on_host). Anything else on that host is the site's normal answer
 # for the path: its 404. A platform code never resolves there.
+#
+# /go/ on a practitioner host has its OWN rate bucket ("go:<slug or
+# domain>", GO_RATE_LIMIT_PER_MIN), charged once per hit, a miss included.
+# It never touches the site's page-view bucket (the bare slug, 100 a
+# minute), so a post that takes off, or a crawler walking dead codes, can't
+# 429 the business's pages and booking, and a busy site can't 429 its links.
 
 # The analytics bot pattern misses the unfurlers that carry no "bot" in
 # their name; Facebook's is the one every Page post triggers.
@@ -7439,6 +7460,13 @@ _LINK_PREVIEW = re.compile(
     r"facebookexternalhit|facebookcatalog|whatsapp|telegram|discord|skypeuripreview"
     r"|embedly|vkshare|redditbot|iframely|outbrain|quora link preview", re.I)
 _GO_HEADERS = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
+GO_RATE_LIMIT_PER_MIN = 600
+
+
+def _go_bucket(kind: str, name: str) -> str:
+    """/go/'s rate bucket for a site host. www and the apex share one."""
+    name = str(name or "").strip().lower()
+    return f"go:{name.removeprefix('www.') if kind == 'domain' else name}"
 
 
 def _counts_as_person(request: Request) -> bool:
@@ -7457,14 +7485,17 @@ async def public_marketing_link(request: Request, code: str):
     site_host = _site_host(request)
     if site_host is not None:
         kind, name = site_host
-        if kind == "slug" and not _check_rate(name):
+        if not _check_rate(_go_bucket(kind, name), GO_RATE_LIMIT_PER_MIN):
             raise HTTPException(429, "Rate limit exceeded")
         import business_marketing_links
         url = await business_marketing_links.follow_on_host(
             kind, name, code, person=_counts_as_person(request))
         if url:
             return RedirectResponse(url=url, status_code=302, headers=_GO_HEADERS)
-    site = await _site_response_or_none(request)
+        # A miss: the site's own 404 for the path, already charged to /go/'s bucket.
+        site = await _site_response_or_none(request, charge_page_views=False)
+    else:
+        site = await _site_response_or_none(request)
     if site is not None:
         return site
     import platform_marketing

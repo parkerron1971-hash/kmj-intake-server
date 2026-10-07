@@ -435,9 +435,12 @@ def go(t, monkeypatch):
     app.include_router(public_site.router)
 
     def hit(host, code, agent=PERSON, **headers):
+        return page(host, f'/go/{code}', agent, **headers)
+
+    def page(host, path, agent=PERSON, **headers):
         client = TestClient(app, base_url=f'https://{host}')
-        return client.get(f'/go/{code}', headers={'user-agent': agent, **headers}, follow_redirects=False)
-    t.hit = hit
+        return client.get(path, headers={'user-agent': agent, **headers}, follow_redirects=False)
+    t.hit, t.page = hit, page
     return t
 
 
@@ -532,6 +535,48 @@ def test_an_unknown_site_host_is_the_site_answer(go):
     p = put(go)
     r = go.hit('nobody-here.mysolutionist.app', p['link_code'])
     assert r.status_code == 404 and go.db.follows == []
+
+
+def test_a_go_flood_never_429s_the_site_pages(go, monkeypatch):
+    import public_site
+    monkeypatch.setattr(public_site, 'GO_RATE_LIMIT_PER_MIN', 3)
+    p = put(go)
+    for _ in range(3):
+        assert go.hit('fade-street.mysolutionist.app', p['link_code']).status_code == 302
+    assert go.hit('fade-street.mysolutionist.app', p['link_code']).status_code == 429
+    assert go.hit('fade-street.mysolutionist.app', 'zzzzzzzz').status_code == 429      # dead codes too
+    assert go.db.counted(p['id']) == 3
+    assert 'fade-street' not in public_site._rate_buckets                 # the page bucket was never charged
+    r = go.page('fade-street.mysolutionist.app', '/')
+    assert r.status_code == 404 and r.text == 'their own 404'              # pages still answer
+    theirs = put(go, biz=OTHER, landing='https://elsewhere.mysolutionist.app/')
+    assert go.hit('elsewhere.mysolutionist.app', theirs['link_code']).status_code == 302   # another host's links too
+
+
+def test_busy_pages_never_429_the_links(go, monkeypatch):
+    import public_site
+    monkeypatch.setattr(public_site, 'RATE_LIMIT_PER_MIN', 2)
+    for _ in range(2):
+        assert go.page('fade-street.mysolutionist.app', '/').status_code == 404
+    assert go.page('fade-street.mysolutionist.app', '/').status_code == 429
+    p = put(go)
+    r = go.hit('fade-street.mysolutionist.app', p['link_code'])
+    assert r.status_code == 302 and r.headers['location'] == p['tracked_url'] and go.db.counted(p['id']) == 1
+    r = go.hit('fade-street.mysolutionist.app', 'zzzzzzzz')               # a miss still gets the site's 404
+    assert r.status_code == 404 and r.text == 'their own 404'
+
+
+def test_each_go_hit_is_charged_once_to_its_own_bucket(go):
+    import public_site
+    p = put(go)
+    assert go.hit('fade-street.mysolutionist.app', 'zzzzzzzz').status_code == 404       # a miss
+    assert public_site._rate_buckets.keys() == {'go:fade-street'}
+    assert public_site._rate_buckets['go:fade-street']['count'] == 1
+    assert go.hit('fade-street.mysolutionist.app', p['link_code']).status_code == 302   # a hit
+    assert public_site._rate_buckets['go:fade-street']['count'] == 2
+    go.hit('fadestreet.com', 'zzzzzzzz'), go.hit('www.fadestreet.com', p['link_code'])
+    assert public_site._rate_buckets.keys() == {'go:fade-street', 'go:fadestreet.com'}  # www shares the apex
+    assert public_site._rate_buckets['go:fadestreet.com']['count'] == 2
 
 
 def test_the_apex_still_follows_the_platform_link(go, monkeypatch):

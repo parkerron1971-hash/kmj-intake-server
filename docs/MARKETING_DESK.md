@@ -293,6 +293,12 @@ and `marketing_follow` came with B3.
   off-site destination or a failed read gets the site's own answer for the
   path: its 404. On the platform's hosts, `/go/` calls
   `platform_marketing.follow` exactly as before.
+- **Its own rate bucket.** On a business host, `/go/` is limited per host
+  (`go:<slug>` or `go:<domain>`, www sharing the apex) to
+  `GO_RATE_LIMIT_PER_MIN` (600 a minute), charged once per hit, a miss
+  included. It never charges the site's page-view bucket (the bare slug, 100
+  a minute). A post that takes off, or a crawler walking dead codes, cannot
+  429 the business's pages or booking, and busy pages cannot 429 its links.
 - **Visits carry the post.** The business site's traffic beacon now keeps a
   visit's campaign tags for the tab's session (first touch) and sends them
   with every event as `c`, as the platform's pages do, so `site_events.data`
