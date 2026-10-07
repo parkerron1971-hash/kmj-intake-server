@@ -189,7 +189,7 @@ CASES: List[Dict[str, Any]] = [
     {"id": "plan_post",
      "message": "Plan a LinkedIn post for Thursday about building trust",
      "expect": ["plan_content"],
-     "must_not": ["publish_post", "post_clip"],
+     "must_not": ["publish_post", "post_clip", "post_image"],
      "encoding": "tool",
      "tool_call": {"name": "plan_content",
                    "input": {"title": "3 ways to build trust", "platform": "linkedin",
