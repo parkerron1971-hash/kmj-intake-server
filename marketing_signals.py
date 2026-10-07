@@ -31,7 +31,8 @@ Zero means it was counted and there were none. The diagnosis
 (business_marketing_engine.diagnose) skips any rule whose signal is None,
 so a database blip never reads as an empty calendar.
 
-Read-only, no model call. Nothing calls this yet (B8 does).
+Read-only, no model call. Read by the weekly suggestion and the preview
+(business_marketing_planner, B8).
 """
 from __future__ import annotations
 

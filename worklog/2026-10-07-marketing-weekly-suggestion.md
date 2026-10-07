@@ -1,0 +1,27 @@
+---
+title: The weekly suggestion for every business, the hourly fan-out and the preview (marketing suite B8)
+date: 2026-10-07
+agent: Claude Code (Claude Opus 5.5)
+asked: "yes to all recommendations"
+status: waiting on Kevin
+prs: [kmj-intake-server marketing-weekly-suggestion]
+migrations: []
+left_undone: ["Kevin: set MARKETING_DESK (off | comma ids | *) on the PROCESS_ROLE=worker service AND the web service; default off, nothing runs. MARKETING_MAX_PER_TICK defaults to 10", "Kevin: drafts are never sent unless MARKETING_DESK_PUBLISHING=on and the owner approves; POST_FOR_ME_API_KEY and POST_FOR_ME_PILOT_BUSINESSES must be set on the worker too", "B9: the five-post week for Professional and Boss (week levels get nothing from B8; their manual request answers 409)", "Frontend F4: the suggestion card, 'Suggest a post now' (POST /engine/run) and the preview; F2's desk shows the draft like any other", "The business desk's words (business_marketing_desk) still promise no plan time (next_run is None) and read a suggestion run as 'the week'; a suggest-level wording pass belongs with F4", "today_items and chief_digest are still not called by Today or Chief (B10)", "Not proven live: the composer flyer in a business's colours has only been rendered against fakes; the first real suggestion should go to a test business with MARKETING_DESK set to its id"]
+decisions: ["Kevin 2026-10-07: business captions may carry up to three hashtags (marketing_profile.HASHTAGS_MAX, business_marketing_engine.check_caption's max_hashtags); a stray '#' and a fourth tag are refused; flyers carry none; the platform's captions still take none", "Kevin 2026-10-07: TikTok and YouTube are not gated by plan; a picture post leaves them out by the shared door's fit rules (recorded in the run's design.left_out)", "Kevin 2026-10-07: the suggest-level flyer is the free composer flyer (marketing_design.flyer_layout generalized: the business's palette from settings.brand_kit, its eyebrow, its own name and host as the footer), cost_usd 0, never a Creative Director render; no credits are charged (units=0)", "Kevin 2026-10-07: owners are told by one push (nav grow:marketing) and one Today item per suggestion, keyed by the post in chief_notifications.action_payload.dedup_key; never by text", "Due on the business's own clock: Thursday from 7:00 + jitter (sha256 of the id % 120 minutes, stable across processes) through Sunday for next week; Monday to Wednesday this week only when the claim would allow it (never planned, or failed fewer than three times); never before 7:00 + jitter or from 21:00", "The fan-out reads the weeks already planned first, so a planned week never counts against MARKETING_MAX_PER_TICK; it defers every remaining business once today's platform spend reaches 60% of DAILY_SPEND_CAP_USD (new spend_guard.platform_share) or the platform ceiling, and skips a business over its own", "The owner's 'run now' never calls the model on the web: it claims the week as a manual start-over (a waiting draft is cancelled and replaced, an approved week is refused), marks design.queued_at, and the worker's manual_tick (every minute) starts it once with a write conditional on design.started_at; one request a day on the business's clock, plus a rate_limit bucket", "A caption that breaks a rule is never saved (the run fails with the reason); flyer words that break one cost only the picture; a flyer that cannot be rendered leaves a words-only post", "The time zones for the fan-out are read in one batch (availability, then the owners' practitioner_profiles, then PLATFORM_DEFAULT_TZ, then UTC); a failed profile read skips those businesses for the hour instead of guessing UTC", "No migration: the queue marker lives in marketing_runs.design (queued_at, queued_by, started_at), which the claim RPC does not reset"]
+related: [2026-10-07-marketing-signals.md, 2026-10-07-marketing-desk-send.md, 2026-10-07-marketing-desk-links.md, 2026-10-07-marketing-desk-api.md, 2026-10-07-marketing-plan-gates.md]
+---
+B8 of docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md. New
+business_marketing_planner.py: run_suggestion writes one business's weekly
+suggested post (claim the week, read its numbers/profile/facts, diagnose, one
+play and one time, one metered low-effort caption call held to the business
+caption checks, the free composer flyer in its own colours and name, one draft
+with its tracked link, one push and one Today item); marketing_tick (hourly,
+worker, leader-gated) fans out to every due suggest-level business with the
+jitter, the per-tick cap and the spend headroom; manual_tick (every minute)
+writes what owners queued through POST /marketing/{business_id}/engine/run;
+GET /marketing/{business_id}/preview reads only. marketing_design.flyer_layout
+takes a business's palette, eyebrow and footer (the platform flyer is
+unchanged); marketing_engine.check_caption takes max_hashtags (platform default
+0). No migration, Chief action or frontend. Tests:
+__tests__/test_business_marketing_planner.py (no live calls). Docs:
+docs/MARKETING_DESK.md, "The weekly suggestion and the fan-out (B8)".
