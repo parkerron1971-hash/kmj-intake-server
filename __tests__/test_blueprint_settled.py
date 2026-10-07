@@ -56,7 +56,7 @@ def test_the_eyes_questions_reach_the_report_once(monkeypatch):
         return looks[min(seen["n"], len(looks)) - 1]
 
     def _fake_call(system, user, business_id, spend=None):
-        if user.startswith("SECTION REPAIR"):
+        if "SECTION REPAIR:" in user:
             return '<section id="begin"><h2>Three ways in</h2><p>Rebuilt.</p></section>'
         return DOC
 

@@ -150,24 +150,84 @@ def new_spend() -> Dict[str, Any]:
     what a page cost. cost_cents comes from api_usage_logger's price
     table (the one that also writes the api_usage row)."""
     return {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
             "cost_cents": 0.0, "skipped": []}
+
+
+def _usage_counts(usage: Any) -> Tuple[int, int, int, int]:
+    """(fresh input, output, cache read, cache write) from a usage object.
+    input_tokens counts only the uncached part once a prompt is cached."""
+    def _n(name: str) -> int:
+        try:
+            return int(getattr(usage, name, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+    return (_n("input_tokens"), _n("output_tokens"),
+            _n("cache_read_input_tokens"), _n("cache_creation_input_tokens"))
 
 
 def _record_spend(spend: Optional[Dict[str, Any]], model: str,
                   usage: Any) -> None:
     if spend is None:
         return
-    i = int(getattr(usage, "input_tokens", 0) or 0)
-    o = int(getattr(usage, "output_tokens", 0) or 0)
+    i, o, cr, cw = _usage_counts(usage)
     spend["calls"] += 1
     spend["input_tokens"] += i
     spend["output_tokens"] += o
+    spend["cache_read_tokens"] = spend.get("cache_read_tokens", 0) + cr
+    spend["cache_write_tokens"] = spend.get("cache_write_tokens", 0) + cw
     try:
         from api_usage_logger import _compute_cost_cents
         spend["cost_cents"] = round(spend["cost_cents"]
-                                    + _compute_cost_cents(model, i, o, 0, 0), 4)
+                                    + _compute_cost_cents(model, i, o, cr, cw), 4)
     except Exception:
         pass
+
+
+def _log_api_usage(endpoint: str, model: str, usage: Any, business_id: str,
+               task_type: str, units: Optional[int] = None) -> None:
+    """One api_usage row, cached tokens included so the ledger prices them."""
+    try:
+        from api_usage_logger import log_api_usage_sync
+        i, o, cr, cw = _usage_counts(usage)
+        log_api_usage_sync(endpoint=endpoint, model=model or "", input_tokens=i,
+                           output_tokens=o, cache_read_tokens=cr, cache_creation_tokens=cw,
+                           business_id=business_id, task_type=task_type, units=units)
+    except Exception:
+        pass
+
+
+# ─── THE CACHE (2026-10-07, the build-cost plan, step 1) ─────────────
+# Kevin: "is there a way to ... maintain the quality with decreasing the
+# cost?" A build makes four to eight builder calls, and every one re-sent
+# the same system prompt, blueprint, real data and (within a round) the
+# same page at full price. Now the parts that repeat go first, each closed
+# by a cache breakpoint, and the call's own task goes last; a cached read
+# costs a tenth of a fresh one. Proven on the production SDK (anthropic
+# 0.34.2, streaming): 14,713 tokens written on one call, read back on the
+# next. A prompt is still ONE string everywhere (tests and stubs read it
+# whole); CACHE_BREAK marks where _user_blocks cuts it into blocks.
+CACHE_BREAK = "\n\n[[cache-break]]\n\n"
+_CACHE = {"type": "ephemeral"}
+
+
+def _system_blocks(system: str) -> List[Dict[str, Any]]:
+    return [{"type": "text", "text": system, "cache_control": dict(_CACHE)}]
+
+
+def _user_blocks(user: str) -> List[Dict[str, Any]]:
+    """The user message as content blocks. Every part before the last
+    CACHE_BREAK is cached; the API allows four breakpoints and the system
+    prompt holds one, so the earliest parts merge when there are more than
+    three. A prompt with no break is one plain block."""
+    parts = [p for p in (user or "").split(CACHE_BREAK) if p.strip()]
+    if len(parts) <= 1:
+        return [{"type": "text", "text": parts[0] if parts else (user or " ")}]
+    head, task = parts[:-1], parts[-1]
+    if len(head) > 3:
+        head = ["\n\n".join(head[:len(head) - 2])] + head[-2:]
+    return ([{"type": "text", "text": h, "cache_control": dict(_CACHE)} for h in head]
+            + [{"type": "text", "text": task}])
 
 
 def _budget_left(spend: Optional[Dict[str, Any]]) -> bool:
@@ -263,34 +323,46 @@ def eyes_blueprint_block(spec_text: str) -> str:
             "settled, judge how well the page carries them out):\n" + _blueprint(spec_text))
 
 
+def stable_part(spec_text: str, real_data: str) -> str:
+    """What every repair in a build shares, byte for byte, so one cache
+    write serves them all: the settled blueprint and the real data."""
+    return "\n".join([
+        BLUEPRINT_SETTLED,
+        "",
+        "THE APPROVED BLUEPRINT (settled; the law of the page):",
+        _blueprint(spec_text),
+        "",
+        "THE REAL DATA (the only source of facts):",
+        (real_data or "").strip()[:12000],
+    ])
+
+
+def page_part(doc: str) -> str:
+    """The page as it stands: shared by every repair of the same draft."""
+    return "THE PAGE AS IT STANDS:\n" + (doc or "")
+
+
 def build_user_prompt(spec_text: str, real_data: str,
                       violations: Optional[List[str]] = None,
                       prior_doc: str = "", page_brief: str = "") -> str:
     """Pure prompt assembly (testable). With violations + prior_doc it
     becomes the ONE surgical repair prompt (Amendment 1: minimal edits,
-    never a fresh re-roll)."""
+    never a fresh re-roll): the shared parts first (cached), the task last."""
     if violations:
-        return "\n".join([
-            "SURGICAL REPAIR — your page failed validation on these exact "
-            "points. Fix ONLY what each violation requires; every other "
-            "byte of the document stays as you wrote it. Do not redesign, "
-            "do not rewrite unaffected sections.",
-            "",
-            "VIOLATIONS:",
-            *[f"- {v}" for v in violations[:12]],
-            "",
-            BLUEPRINT_SETTLED,
-            "",
-            "THE APPROVED BLUEPRINT (settled; the law of the page):",
-            _blueprint(spec_text),
-            "",
-            "THE REAL DATA (the only source of facts):",
-            real_data.strip()[:12000],
-            "",
-            "YOUR DOCUMENT:",
-            prior_doc,
-            "",
-            "Output the corrected complete HTML document only.",
+        return CACHE_BREAK.join([
+            stable_part(spec_text, real_data),
+            page_part(prior_doc),
+            "\n".join([
+                "SURGICAL REPAIR — the page above failed validation on these exact "
+                "points. Fix ONLY what each violation requires; every other "
+                "byte of the document stays as you wrote it. Do not redesign, "
+                "do not rewrite unaffected sections.",
+                "",
+                "VIOLATIONS:",
+                *[f"- {v}" for v in violations[:12]],
+                "",
+                "Output the corrected complete HTML document only.",
+            ]),
         ])
     parts = [
         "== THE APPROVED SPEC (the law of the page — the owner read and "
@@ -1465,12 +1537,11 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
         if not key:
             _why("no ANTHROPIC_API_KEY")
             return None
+        # the blueprint and the layout are the same on every look of a
+        # build: they go first and are cached; the outline and the shots
+        # change with the page, so they follow the breakpoint
         content: List[Dict[str, Any]] = [
             {"type": "text", "text": eyes_blueprint_block(spec_text)}]
-        outline = section_outline(doc)
-        if outline:
-            content.append({"type": "text", "text": "SECTIONS ON THE PAGE (id: "
-                            "heading), top to bottom:\n" + outline})
         try:
             import site_layouts
             _lk = layout_key_for(spec_text)
@@ -1480,6 +1551,11 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
                                 f"{_L['structure']} PHONE: {_L['phone']}"})
         except Exception:
             pass
+        content[-1]["cache_control"] = dict(_CACHE)
+        outline = section_outline(doc)
+        if outline:
+            content.append({"type": "text", "text": "SECTIONS ON THE PAGE (id: "
+                            "heading), top to bottom:\n" + outline})
         for label, shot in shots:
             content.append({"type": "text", "text": f"View — {label}:"})
             content.append({"type": "image", "source": {
@@ -1491,7 +1567,7 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
 
         def _do(model: str, max_tokens: int, timeout: float):
             return client.messages.create(
-                model=model, max_tokens=max_tokens, system=_INSPECTOR,
+                model=model, max_tokens=max_tokens, system=_system_blocks(_INSPECTOR),
                 messages=[{"role": "user", "content": content}],
                 timeout=max(timeout, 180.0),
                 **_gen_kwargs(model, 0.2))
@@ -1499,17 +1575,8 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_model(), task="builder_v2_eyes",
             business_id=business_id, max_tokens=INSPECTOR_MAX_TOKENS)
-        try:
-            from api_usage_logger import log_api_usage_sync
-            u = getattr(msg, "usage", None)
-            log_api_usage_sync(
-                endpoint="/composer/builder-v2-eyes",
-                model=used_model or "",
-                input_tokens=getattr(u, "input_tokens", 0) or 0,
-                output_tokens=getattr(u, "output_tokens", 0) or 0,
-                business_id=business_id, task_type="builder_v2_eyes")
-        except Exception:
-            pass
+        _log_api_usage(endpoint="/composer/builder-v2-eyes", model=used_model or "", usage=getattr(msg, "usage", None),
+                   business_id=business_id, task_type="builder_v2_eyes")
         raw = "".join(b.text for b in msg.content
                       if getattr(b, "type", None) == "text")
         verdict = _parse_inspector(raw)
@@ -1565,11 +1632,13 @@ def _call(system: str, user: str, business_id: str,
         # the first attempt real room — a slow masterpiece beats a fast
         # miniature.
         client = llm_call.sdk_client(key=key, timeout=900.0, max_retries=1)
-        turns: List[Dict[str, Any]] = [{"role": "user", "content": user}]
+        sys_blocks = _system_blocks(system)
+        user_blocks = _user_blocks(user)
+        turns: List[Dict[str, Any]] = [{"role": "user", "content": user_blocks}]
 
         def _do(model: str, max_tokens: int, timeout: float):
             return _stream_message(
-                client, model=model, max_tokens=max_tokens, system=system,
+                client, model=model, max_tokens=max_tokens, system=sys_blocks,
                 messages=turns, timeout=max(timeout, 900.0),
                 sampling=_gen_kwargs(model, V2_TEMPERATURE))
 
@@ -1577,16 +1646,8 @@ def _call(system: str, user: str, business_id: str,
             _do, model=_model(), task="builder_v2",
             business_id=business_id, max_tokens=_max_tokens())
         _record_spend(spend, used_model or "", getattr(msg, "usage", None))
-        try:
-            from api_usage_logger import log_api_usage_sync
-            u = getattr(msg, "usage", None)
-            log_api_usage_sync(
-                endpoint="/composer/builder-v2", model=used_model or "",
-                input_tokens=getattr(u, "input_tokens", 0) or 0,
-                output_tokens=getattr(u, "output_tokens", 0) or 0,
-                business_id=business_id, task_type=task_type, units=units)
-        except Exception:
-            pass
+        _log_api_usage(endpoint="/composer/builder-v2", model=used_model or "", usage=getattr(msg, "usage", None),
+                   business_id=business_id, task_type=task_type, units=units)
         text = "".join(b.text for b in msg.content
                        if getattr(b, "type", None) == "text")
         # THE CUT SENTENCE: a response that hit the cap is CONTINUED from
@@ -1598,26 +1659,18 @@ def _call(system: str, user: str, business_id: str,
                 and _budget_left(spend):
             logger.warning(f"[v2] {used_model} hit max_tokens — continuing "
                            f"the document, not re-rolling it")
-            turns = [{"role": "user", "content": user},
+            turns = [{"role": "user", "content": user_blocks},
                      {"role": "assistant", "content": text},
                      {"role": "user", "content": CONTINUE_PROMPT}]
             try:
                 more = _stream_message(
                     client, model=used_model or _model(), max_tokens=_max_tokens(),
-                    system=system, messages=turns, timeout=900.0,
+                    system=sys_blocks, messages=turns, timeout=900.0,
                     sampling=_gen_kwargs(used_model or _model(),
                                                           V2_TEMPERATURE))
                 _record_spend(spend, used_model or "", getattr(more, "usage", None))
-                try:
-                    from api_usage_logger import log_api_usage_sync
-                    u2 = getattr(more, "usage", None)
-                    log_api_usage_sync(
-                        endpoint="/composer/builder-v2", model=used_model or "",
-                        input_tokens=getattr(u2, "input_tokens", 0) or 0,
-                        output_tokens=getattr(u2, "output_tokens", 0) or 0,
-                        business_id=business_id, task_type="builder_v2_continue")
-                except Exception:
-                    pass
+                _log_api_usage(endpoint="/composer/builder-v2", model=used_model or "", usage=getattr(more, "usage", None),
+                           business_id=business_id, task_type="builder_v2_continue")
                 text += "".join(b.text for b in more.content
                                 if getattr(b, "type", None) == "text")
             except Exception as e:
@@ -1668,9 +1721,11 @@ def look_fix_sections() -> int:
 def look_fix_max_cents() -> int:
     return _dial_int("LOOK_FIX_MAX_CENTS", 150, 0, 2000)
 
-_SECTION_SYSTEM = ("THIS CALL REPAIRS ONE SECTION OF A FINISHED PAGE. Where the "
-                   "rules below say document or page, read section: you output ONE "
-                   "<section> element and nothing else.\n\n" + "{SYSTEM}")
+# The section preamble rides at the head of the call's own task (not the
+# system prompt), so every builder call shares one cached system prompt.
+SECTION_PREAMBLE = ("THIS CALL REPAIRS ONE SECTION OF A FINISHED PAGE. Where the "
+                    "system rules say document or page, read section: you output ONE "
+                    "<section> element and nothing else.")
 
 
 def _section_id(open_tag: str) -> str:
@@ -1706,31 +1761,27 @@ def build_section_prompt(spec_text: str, real_data: str, doc: str, sid: str,
                          issues: List[str]) -> str:
     span = next(((a, z) for i, a, z in section_spans(doc) if i == sid), None)
     current = doc[span[0]:span[1]] if span else ""
-    return "\n".join([
-        f"SECTION REPAIR: rebuild ONE section of your page, the <section id=\"{sid}\">. "
-        "Every other byte of the page is final and stays exactly as it is.",
-        "",
-        "WHAT TO FIX IN THIS SECTION:",
-        *[f"- {x}" for x in issues[:6]],
-        "",
-        BLUEPRINT_SETTLED,
-        "",
-        f"Return ONLY the complete replacement element: it starts with <section, keeps "
-        f"id=\"{sid}\", uses the page's existing classes, tokens and fonts, keeps every "
-        "data-override-target it already has, and ends with </section>. New styles go in a "
-        "<style> element inside the section. No commentary, no code fences.",
-        "",
-        "THE APPROVED BLUEPRINT (settled; this section's plan is in it):",
-        _blueprint(spec_text),
-        "",
-        "THE REAL DATA (the only source of facts):",
-        (real_data or "").strip()[:10000],
-        "",
-        "THE WHOLE PAGE (context; do not return it):",
-        doc,
-        "",
-        "THE SECTION TO REBUILD:",
-        current,
+    return CACHE_BREAK.join([
+        stable_part(spec_text, real_data),
+        page_part(doc),
+        "\n".join([
+            SECTION_PREAMBLE,
+            "",
+            f"SECTION REPAIR: rebuild ONE section of the page above, the <section id=\"{sid}\">. "
+            "Every other byte of the page is final and stays exactly as it is; do not "
+            "return the page.",
+            "",
+            "WHAT TO FIX IN THIS SECTION:",
+            *[f"- {x}" for x in issues[:6]],
+            "",
+            f"Return ONLY the complete replacement element: it starts with <section, keeps "
+            f"id=\"{sid}\", uses the page's existing classes, tokens and fonts, keeps every "
+            "data-override-target it already has, and ends with </section>. New styles go in a "
+            "<style> element inside the section. No commentary, no code fences.",
+            "",
+            "THE SECTION TO REBUILD:",
+            current,
+        ]),
     ])
 
 
@@ -2079,7 +2130,7 @@ def refine_section_doc(doc: str, spec_text: str, ctx: Dict[str, Any],
               "job on the page, every real fact, and the page's look.",
               "Photos: use only image urls in THE REAL DATA, each photo once on "
               "the page; never a visible box standing in for one."]
-    raw = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
+    raw = _call(_SYSTEM,
                 build_section_prompt(spec_text, real_data, doc, sid, issues),
                 business_id, spend=new_spend(), units=units,
                 task_type="builder_v2_refine")
@@ -2463,7 +2514,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
                     if tried.get(sid):
                         asked = [second_try_line(tried[sid][-1])] + asked
                     rebuilt_here += 1
-                    raw_s = _call(_SECTION_SYSTEM.replace("{SYSTEM}", _SYSTEM),
+                    raw_s = _call(_SYSTEM,
                                   build_section_prompt(spec_text, real_data, doc, sid, asked),
                                   business_id, spend=spend)
                     cand = splice_section(doc, sid, raw_s or "")

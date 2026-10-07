@@ -79,7 +79,7 @@ def test_the_loop_rebuilds_an_empty_section_even_when_the_eyes_pass_it(monkeypat
 
     def _fake_call(system, user, business_id, spend=None):
         calls.append(user)
-        if user.startswith("SECTION REPAIR"):
+        if "SECTION REPAIR:" in user:
             return FILLED
         return _law_passing_doc(EP, EMPTY)
 
@@ -92,7 +92,7 @@ def test_the_loop_rebuilds_an_empty_section_even_when_the_eyes_pass_it(monkeypat
                         lambda doc, spec, biz, why=None: {"verdict": "ship", "violations": [],
                                                           "weakest": None})
     out = v2.run_builder_v2(SPEC, {}, "biz-1")
-    repairs = [c for c in calls if c.startswith("SECTION REPAIR")]
+    repairs = [c for c in calls if "SECTION REPAIR:" in c]
     assert repairs and 'the <section id="process">' in repairs[0]
     assert "THIS SECTION IS EMPTY" in repairs[0]
     assert "Most people start" not in out["html"] and "six weekly sessions in the study" in out["html"]
