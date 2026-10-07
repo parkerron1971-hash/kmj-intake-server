@@ -211,7 +211,7 @@ def test_unknown_tool_is_an_error_not_a_remap():
 
 
 @pytest.mark.parametrize("verb", ["send_sms", "create_invoice", "delete_contact",
-                                  "publish_post", "post_clip", "mark_invoice_paid"])
+                                  "publish_post", "post_clip", "post_image", "mark_invoice_paid"])
 def test_class_c_verbs_are_refused_at_call_time(verb):
     """Not merely absent from the list — refused if asked for directly.
     A client that hardcodes a name must not get further than one that

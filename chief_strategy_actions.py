@@ -194,6 +194,11 @@ async def handle_schedule_action(client, biz, action) -> Dict:
         # instead, where it can be cancelled in Video Clips.
         return _fail("schedule_action", "a clip post is scheduled with its own time: "
                      "use post_clip with \"when\" instead, so nothing was scheduled")
+    if itype == "post_image":
+        # The same rule for a picture or words-only post (chief_social_actions):
+        # its time goes with the post, cancellable in Build, Social Media.
+        return _fail("schedule_action", "a post is scheduled with its own time: "
+                     "use post_image with \"when\" instead, so nothing was scheduled")
     if itype not in _handlers():
         return _fail("schedule_action", f"unknown action '{itype}'")
 
