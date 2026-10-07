@@ -3156,7 +3156,11 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # WHY — {stage: signals|authoring|validation|exception|skipped,
         # detail, at} — served by GET /composer/spec; an applied compose
         # clears it (stale blame must never outlive a successful rationale).
-        if dro_status in ("applied", "applied_thin"):
+        # A "blueprint" build (the approved blueprint drove the builder and
+        # the passes were skipped by design) is no failure either: without
+        # it here, every such build saved "authoring: unknown" and Chief's
+        # site check told the owner to pay for a recompose.
+        if dro_status in ("applied", "applied_thin", "blueprint"):
             cfg.pop("dro_failure", None)
         else:
             df = dro_failure if isinstance(dro_failure, dict) else {}
