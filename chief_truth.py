@@ -1705,9 +1705,26 @@ def evidence_for_review(ctx, view_detail, taken):
 # on how much this turn read, so it can differ between turns on the same day.
 _REVIEW_PROSE = ('blueprint_block', 'playbook_block', 'voice_block', 'brand_block',
                  'practitioner_block', 'business_profile_block', 'foundation_block')
-# What moves while Chief works: recent activity, queues, the inbox.
+# What moves while Chief works: recent activity, queues, the inbox. And
+# (2026-10-07) the records the cache watch saw change between two messages
+# of one conversation while they sat in the steady group, so every check
+# re-wrote that whole group: the mentor switch, the habit and relationship
+# notes (optional reads that come back empty on a timeout), the read-quality
+# note, the voice examples.
 _REVIEW_ACTIVITY = ('events', 'queue', 'image_jobs', 'recent_queue_24h', 'auto_recent',
-                    'notifications', 'insights', 'learning_lines', 'email_replies')
+                    'notifications', 'insights', 'learning_lines', 'email_replies',
+                    'mentor_active', 'habit_block', 'relationship_insights',
+                    'context_quality', 'voice_examples')
+# What changes with every message, so it is never worth caching: the clock.
+# It sat in the steady group and re-wrote it on every review (the watch
+# named it on 7 Oct, 13:04 UTC). It now rides with the turn's own parts.
+_REVIEW_PER_MESSAGE = ('time_block',)
+
+
+def _cached_record(key):
+    """A business record that goes in a cached group of the review."""
+    return (key.startswith('context:') and key != 'context:current_view'
+            and key[8:] not in _REVIEW_PER_MESSAGE)
 
 
 def _cacheable_review_messages(messages):
@@ -1732,7 +1749,7 @@ def _cacheable_review_messages(messages):
             return messages
     except (ValueError, TypeError, AttributeError):
         return messages
-    records = [k for k in sources if k.startswith('context:') and k != 'context:current_view']
+    records = [k for k in sources if _cached_record(k)]
     if not records:
         return messages
     group = lambda k: 1 if k[8:] in _REVIEW_PROSE else 2 if k[8:] in _REVIEW_ACTIVITY else 0
@@ -1850,7 +1867,7 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
             srcs = json.loads(messages[0]['content']).get('sources') or {}
             cache_watch.note('review_records', business_id, {
                 k: json.dumps(v, sort_keys=True, ensure_ascii=False) for k, v in srcs.items()
-                if k.startswith('context:') and k != 'context:current_view'})
+                if _cached_record(k)})
         except Exception as e:  # never let a diagnostic touch the review
             logger.warning('cache watch failed: %s', e)
     response = await llm_call.apost(client, payload,

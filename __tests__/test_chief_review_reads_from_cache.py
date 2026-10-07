@@ -133,3 +133,30 @@ def test_the_prose_repair_is_sent_as_given(monkeypatch):
                 [{"role": "user", "content": content}], max_tokens=100))
     assert sent["system"] == truth.REPAIR_SYSTEM
     assert sent["messages"] == [{"role": "user", "content": content}]
+
+
+# ─── 2026-10-07: what the watch saw moving inside the steady group ───────
+
+def test_the_clock_is_never_cached():
+    src = {**SOURCES, "context:time_block": {"kind": "context", "text": "Wednesday 9:02 AM"}}
+    blocks = _split(_doc(src))
+    assert "context:time_block" in blocks[-1]["text"] and "cache_control" not in blocks[-1]
+    assert all("context:time_block" not in b["text"] for b in blocks[:-1])
+    assert json.loads("".join(b["text"] for b in blocks)) == _doc(src)
+
+
+def test_a_new_minute_leaves_every_cached_group_alone():
+    a = _split(_doc({**SOURCES, "context:time_block": {"kind": "context", "text": "9:02 AM"}}))
+    b = _split(_doc({**SOURCES, "context:time_block": {"kind": "context", "text": "9:05 AM"}}))
+    assert [x["text"] for x in a[:-1]] == [x["text"] for x in b[:-1]]
+
+
+def test_records_seen_moving_ride_the_activity_group():
+    moving = {f"context:{k}": {"kind": "context", "text": "x"} for k in
+              ("mentor_active", "habit_block", "relationship_insights", "context_quality", "voice_examples")}
+    steady, prose, activity, _ = (b["text"] for b in _split(_doc({**SOURCES, **moving})))
+    for k in moving:
+        assert k in activity and k not in steady, k
+    flipped = {**moving, "context:mentor_active": {"kind": "context", "text": "y"}}
+    later = _split(_doc({**SOURCES, **flipped}))
+    assert later[0]["text"] == steady and later[1]["text"] == prose
