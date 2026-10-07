@@ -132,14 +132,16 @@ def _holds_pin(value, pin):
     (a plain substring check over the whole row failed about 1 run in 250)."""
     if value == pin or value == int(pin):
         return True
-    return isinstance(value, str) and pin in value and not re.fullmatch(r"[0-9a-fA-F:.\-+TZ ]+", value)
+    return isinstance(value, str) and pin in value and not re.fullmatch(r"[0-9a-fA-F:.\-+TZ]+", value)
 
 
 def test_the_pin_check_reads_values_not_random_hex():
     assert _holds_pin("2468", "2468") and _holds_pin(2468, "2468") and _holds_pin("PIN 2468", "2468")
     assert not _holds_pin("9f02468ab1c3", "2468")                          # a hash
     assert not _holds_pin("5a2468e1-0c1d-4b3a-9f00-1234abcd5678", "2468")  # a uuid
-    assert not _holds_pin("2026-10-07T12:24:68+00:00", "2468")             # a timestamp
+    assert not _holds_pin("2026-10-07T12:00:00.246800+00:00", "2468")      # a timestamp
+    # Readable text is always checked, hex-looking words included once spaced.
+    assert _holds_pin("dead 2468", "2468") and _holds_pin("pin=2468", "2468")
 
 
 # ── 1. managing stations ─────────────────────────────────────────────
