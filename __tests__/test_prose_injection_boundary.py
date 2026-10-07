@@ -105,7 +105,7 @@ def test_sms_block_taints_on_prose_and_says_bodies_are_data():
 
 
 def test_invoice_and_session_names_are_defused():
-    src_ctx = inspect.getsource(cos._format_context_for_prompt)
+    src_ctx = inspect.getsource(cos._format_context_parts)
     assert "_neutralize_untrusted(inv.get('client')" in src_ctx
     assert "_neutralize_untrusted(s.get('title')" in src_ctx
 

@@ -22,7 +22,7 @@ import chief_truth as truth
 
 
 def test_the_prompt_and_the_evidence_share_the_headings():
-    src = inspect.getsource(cos._format_context_for_prompt)
+    src = inspect.getsource(cos._format_context_parts)
     assert "{SESSIONS_HEADING}:" in src and "{AT_RISK_HEADING}:" in src
     assert "next 7 days" in cos.SESSIONS_HEADING and "30+ days quiet" in cos.AT_RISK_HEADING
 
