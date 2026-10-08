@@ -543,7 +543,7 @@ desk's own (`business_marketing.level_for`, from the real plan through
 | Level | Who | What B9 does |
 | --- | --- | --- |
 | week | Professional; a Boss business without a live chair calendar | the weekly plan |
-| autopilot | Practice (Solutionist) | the same plain week, until clips (B12) and standing permissions (B13) |
+| autopilot | Practice (Solutionist) | the same week plus up to two of its own clips (B12, below); standing permissions are B13 |
 | openings | Boss: a chair business with a live booking calendar | nothing: it gets the open-chairs week instead (B11, below) |
 | suggest | Starter, Solo, Booked | B8's one suggestion, unchanged |
 
@@ -886,3 +886,114 @@ stand in. The pictures are local renders (`cost_usd` 0); no credits
 No migration (`marketing_posts.opening`, status `pulled`, source `opening`,
 run kind `openings` and `marketing_desks.work_photo_ids` came with B3), no
 Chief action, no frontend (F5 is the Boss view).
+
+### Clips in the week (B12)
+
+Solutionist (the desk's `autopilot` level: the real plan includes
+`marketing_autopilot` and `ai_clips`, which is Practice alone) gets Chief's
+weekly plan (B9's five flyer posts) with **up to two of its own video clips
+folded in** (D6, Kevin's design of 2026-10-07). `business_marketing_clips.py`
+is the clips' half; `business_marketing_planner._plan_week` folds them into
+the same run, the same caption call and the same insert. Professional and
+Boss never get clips (`clips.takes_clips` is False for every plan but
+Practice; Boss is "No Video Clips"), and neither does the suggest level.
+**No eligible clip: the week is exactly B9's** (the same posts, the same
+caption call; the run only records `design.clips`).
+
+**Which clips.** Every one of these:
+
+| Check | Where it is read |
+| --- | --- |
+| a ready clip of this business, still stored | `media_assets`: `kind clip`, `status ready`, `source_removed_at` empty |
+| kept by the owner (not skipped, not undecided) | `media_assets.decision = 'kept'` (Video Clips' Keep) |
+| approved at the fingerprint it has now | `media_assets.approval.fingerprint == media_library.fingerprint(row)` (`clip_posting.approval_problem`) |
+| not posted anywhere | no `social_publications` row naming it (`media->0->>clip_id`), status other than failed or cancelled: Chief's `post_clip`, the clip screen and the desk all post through that door |
+| not already in a waiting post | no `marketing_posts` row naming it (`media->>clip_id`), status other than cancelled, failed or pulled, except this week's own drafts a replan is about to retire |
+| covers ready | a ready story (9:16) cover (`image_artworks`, `director->>clip_id`, `status ready`): the cover every vertical network shows |
+
+A read that fails picks no clip (`design.clips.state = 'unreadable'`): never
+a guess that could post a clip twice. The week itself goes out as B9's.
+A post the owner skipped (cancelled) or that failed lets its clip be picked
+again; one that is waiting, sending or went out holds it.
+
+**The pick.** Best first: the clip finder's score (`configuration.score`,
+highest first; a clip without one after every scored clip), then the newest,
+then the id. At most two a week, each clip once.
+
+**When.** Each clip on its own weekday, Tuesday first, then Thursday,
+Wednesday, Monday, Friday (two clips land two days apart when they can),
+never two the same day. At the desk's hour or the next free hour up to
+21:00, then 3:00 PM and after, on the business's clock; at least an hour
+from now; and **at least three hours from every other post of the business
+that day** (the week's flyer posts, the owner's own, anything planned).
+With the default 11:00, the flyer goes at 11:00 and the clip at 2:00 PM.
+
+**Add, not replace.** The clips come on top of the five flyer posts: seven
+posts at most a week, two on a clip day. No limit is near: the posting
+door's daily cap is 25 posts a business per rolling day; the week's five
+included flyers and `MARKETING_DESIGNS_AT_ONCE` count designs, and a clip
+needs none; `marketing_approve` takes 50 at once. A clip post's
+`design_status` is `none`, so it never waits on the design tick.
+
+**The post** (`source 'clip'`, `play_id 'video_clip'`, so the clips' own
+results show in `play_scores` without ever reordering B9's plays):
+
+- `media` is `business_marketing.build_media`'s for a clip, re-read
+  fail-closed just before it is saved: `{clip_id, clip_fingerprint, covers:
+  {story, wide}}` (the newest ready cover of each shape). The fingerprint and
+  the covers are inside `content_hash`.
+- `targets`: the desk's accounts (or every connected one when the desk
+  names none) on a network `clip_posting` can place a vertical clip on
+  (`COVER_SHAPES`: Instagram, Facebook, TikTok, YouTube, X, Threads,
+  Pinterest, LinkedIn). TikTok and YouTube are included (Kevin's decision
+  3: no plan gates a network). An account on any other network is left out
+  (`design.clips.left_out`).
+- The cover each network shows is `clip_posting.cover_for`'s at send time:
+  the story cover everywhere a vertical clip plays (Reels, TikTok, Shorts,
+  X, Threads, Pinterest), the wide cover on LinkedIn (else the story one).
+  The run records it per network (`design.clips.picked[].covers`).
+- `publish_text` carries the post's tracked short link (B6), as every desk
+  post does. `post_clip_for` sends one caption to every account, so on
+  Instagram and TikTok the link shows as plain text.
+
+**The caption.** One more slot in the week's ONE caption call
+(`write_week_captions`, `max_tokens` 300 more per clip, no new call): the
+clip's title, the words the owner checked and its tags as data, a brief
+that says nobody has watched it (nothing beyond its title and words) and
+that it takes no flyer. The same business checks as every caption: numbers
+and prices only from the facts, links only to its own site, **at most three
+hashtags** (Kevin's decision 2). A caption that breaks one costs only that
+clip, which stays eligible next week.
+
+**The approval and the send.** Nothing posts without the owner's OK
+(standing permissions are B13). The sender (B5) already re-checks a clip
+post: the content still hashes to the approval, and the clip is approved as
+it is now at the fingerprint the post was approved with
+(`_clip_ready`); `clip_posting.post_clip_for` checks again. New here: a
+clip Chief folded in (`source 'clip'`) that the owner has since taken off
+the kept clips is refused in plain words. A clip post goes out through
+`post_clip_for` (the request id `uuid5(post, 'rev:<revision>')`, so a retry
+never posts twice).
+
+**Telling the owner.** The week's one Today item and push now name the
+clips: "Chief planned next week: 7 posts wait for your OK" / "5 have a flyer
+and 2 are your own video clips, with their covers. Nothing posts until you
+approve them." A clip is never counted as words only. The owner's request
+(`POST /engine/run`) says the week comes with up to two clips.
+
+**Replans.** A replan picks again; the week's own drafts do not hold their
+clips, so the same clips can come back in new posts, saved before the old
+drafts are retired. A worker that stops after saving keeps the attempt's
+clip posts as it keeps its flyer posts.
+
+**Cost.** No new paid call: each clip is one more caption in the week's
+call, about 250 tokens in and 75 out on the `draft` lane, under half a cent
+a week for two. Posting a clip calls no model (a signed link, the cover as a
+JPEG). A business-week stays about $1.35 (up to about $2.50 when every flyer
+takes its repair); the fan-out's $2.55 reservation is unchanged.
+
+No migration (`source 'clip'`, `media` jsonb and `play_id` came with B3), no
+Chief action, no frontend (F6 is the Solutionist view). Not yet seen live:
+the `media->0->>clip_id` filter on `social_publications` (a PostgREST JSON
+path with an array index; a 400 there reads as a failed read, so the week
+goes without clips, never with a clip posted twice).

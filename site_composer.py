@@ -3160,7 +3160,13 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # the passes were skipped by design) is no failure either: without
         # it here, every such build saved "authoring: unknown" and Chief's
         # site check told the owner to pay for a recompose.
-        if dro_status in ("applied", "applied_thin", "blueprint"):
+        # A re-render (shuffle, the catalog/gallery refresh, one-section
+        # rework) passes no status: like dro_status above, it leaves the
+        # stored verdict as it is. It used to fall through to the failure
+        # branch and stamp "authoring: unknown" on a page whose brief ran.
+        if not dro_status:
+            pass
+        elif dro_status in ("applied", "applied_thin", "blueprint"):
             cfg.pop("dro_failure", None)
         else:
             df = dro_failure if isinstance(dro_failure, dict) else {}

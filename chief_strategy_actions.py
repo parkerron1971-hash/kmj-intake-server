@@ -408,7 +408,13 @@ async def handle_site_health(client, biz, action) -> Dict:
         if not any(i.startswith("gate") for i in issues):
             healthy.append("quality gate clean")
 
-    if cfg.get("dro_failure") and not hand_built:
+    # The saved status is the verdict on the last full compose: when it says
+    # the brief ran ("applied", "applied_thin") or the approved blueprint
+    # drove the page ("blueprint"), a dro_failure beside it is stale (re-
+    # renders used to stamp one), and telling the owner to pay for a
+    # recompose over it would be wrong.
+    if cfg.get("dro_failure") and not hand_built \
+            and cfg.get("dro_status") not in ("applied", "applied_thin", "blueprint"):
         issues.append("last compose ran WITHOUT its design brief "
                       f"({str((cfg.get('dro_failure') or {}).get('detail'))[:80]}) "
                       "— fix: run a recompose (refine keeps the current look)")
