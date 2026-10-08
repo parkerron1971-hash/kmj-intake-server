@@ -827,10 +827,14 @@ async def next_slot_route(business_id: UUID, user: AuthedUser = Depends(require_
 
 # ── new posts ─────────────────────────────────────────────────────────
 
-async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, actor: str) -> Dict[str, Any]:
+async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, actor: str,
+                      *, source: str = 'owner') -> Dict[str, Any]:
     """Save one post (a draft) for every chosen account; with post_now, also
     approve it as the owner's, due in two minutes. Every check runs before
-    anything is written."""
+    anything is written. `source`: 'owner' from the desk, 'chief' when Chief
+    saves it in chat at the owner's ask (chief_marketing_actions, B10)."""
+    if source not in ('owner', 'chief'):
+        raise ValueError('A new post comes from the owner or from Chief.')
     bid = business_id
     desk = await _call(store.get_desk(bid), down=READ_DOWN)
     if req.post_now:
@@ -866,7 +870,7 @@ async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, act
         if desk is None:
             await ensure_desk(bid)
         row = new_post(bid, post_id, caption=caption, media=media, targets=targets, run_at=run_at,
-                       expires_at=expires_at, landing=landing, site=site)
+                       expires_at=expires_at, landing=landing, source=source, site=site)
         try:
             saved = await store.request('POST', '/marketing_posts', row)
             existing, already = (saved[0] if isinstance(saved, list) and saved else row), False

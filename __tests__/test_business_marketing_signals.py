@@ -9,6 +9,7 @@ modules call, and nothing is written or sent.
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import pathlib
 import sys
@@ -67,16 +68,58 @@ def barber(**settings):
 # ── a small PostgREST ─────────────────────────────────────────────────
 
 def _when(value):
-    return datetime.fromisoformat(unquote(str(value)).replace('Z', '+00:00'))
+    """timestamptz input as Postgres reads it with the session in UTC: a bare date is midnight."""
+    d = datetime.fromisoformat(unquote(str(value)).replace('Z', '+00:00'))
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def _value(row, column):
+    """A column, or `data->>key` as Postgres gives it: text."""
+    base, _, key = column.partition('->>')
+    value = row.get(base)
+    if key:
+        value = value.get(key) if isinstance(value, dict) else None
+        return None if value is None else str(value)
+    return value
+
+
+def _split_top(body):
+    out, depth, cur = [], 0, ''
+    for ch in body:
+        if ch == ',' and depth == 0:
+            out.append(cur)
+            cur = ''
+            continue
+        depth += ch == '('
+        depth -= ch == ')'
+        cur += ch
+    return out + [cur] if cur else out
+
+
+def _logic(row, mode, body):
+    """or=(...) / and(...): the shared bookings read's column-or-data window."""
+    results = []
+    for item in _split_top(body):
+        nested = re.fullmatch(r'(and|or)\((.*)\)', item)
+        if nested:
+            results.append(_logic(row, nested.group(1), nested.group(2)))
+        else:
+            column, _, expr = item.partition('.')
+            results.append(_matches(row, column, expr))
+    return all(results) if mode == 'and' else any(results)
 
 
 def _matches(row, column, expr):
-    value = row.get(column)
+    if column in ('or', 'and'):
+        return _logic(row, column, expr[1:-1])
+    value = _value(row, column)
     op, _, arg = expr.partition('.')
     if op == 'in':
         return str(value) in arg[1:-1].split(',')
+    if op in ('gte', 'lt', 'lte', 'gt') and value is None:
+        return False                                            # NULL compares false, like SQL
     if op in ('gte', 'lt', 'lte', 'gt'):
-        a, b = _when(value), _when(arg)
+        a, b = (value, unquote(arg)) if '->>' in column else (_when(value), _when(arg))   # text vs timestamps
         return {'gte': a >= b, 'lt': a < b, 'lte': a <= b, 'gt': a > b}[op]
     if op == 'eq':
         return str(value).lower() == arg.lower() if isinstance(value, bool) else str(value) == arg

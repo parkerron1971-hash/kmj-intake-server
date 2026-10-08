@@ -18,7 +18,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
-from availability_engine import compute_slots
+from availability_engine import DEFAULT_BOOKED_MIN, compute_slots
 from chief_host import _sb
 from chief_availability import _busy_get, _pages, _settings, Unavailable
 
@@ -121,9 +121,13 @@ def rehearse(plan: BookingPlan, *, business_id: str, availability: dict,
     for row in bookings:
         if row.get("business_id") != business_id or row.get("status") != "active":
             raise RehearsalUnavailable("The booking records could not be verified for this business.")
+        # No length saved: the booking holds DEFAULT_BOOKED_MIN, the rule
+        # every bookings read shares (see chief_availability.evaluate). A
+        # length that is there but not 1-1440 minutes still refuses.
+        length = row.get("duration_min_at_booking")
         occupied.append({
             "appointment_at": _timestamp(row.get("appointment_at")).isoformat(),
-            "duration_min_at_booking": _duration(row.get("duration_min_at_booking")),
+            "duration_min_at_booking": DEFAULT_BOOKED_MIN if length is None else _duration(length),
         })
     if len(occupied) > MAX_BOOKINGS:
         raise RehearsalUnavailable("The calendar exceeds this rehearsal's 500-booking inspection limit.")

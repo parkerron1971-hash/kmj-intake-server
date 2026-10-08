@@ -81,6 +81,7 @@ CLIENT_FACING = frozenset({
     "publish_post",               # public, via Meta
     "post_clip",                  # public, to the connected social accounts
     "post_image",                 # public, to the connected social accounts
+    "marketing_post_now",         # public, the marketing desk's Post now (B10)
     "launch_campaign",            # arms sends to a whole audience
     "send_purchase_order",        # emails the supplier — leaves the app
 })

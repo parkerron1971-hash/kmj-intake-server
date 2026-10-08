@@ -26,6 +26,11 @@ Where it differs from the platform desk, on purpose:
     passes next_run.
   * Nothing pushes here. Telling the owner by phone, once per failed or
     unconfirmed post, is the sender's (business_marketing_dispatch, B5).
+  * A run is named for what it wrote (run_kind, B10): a suggestion is "a
+    suggested post", a week "next week's posts", the open-chairs week
+    "open-chair posts". The desk used to call every run "the week", which
+    read wrong for a Starter's one suggested post. A run without a kind
+    reads as a week, exactly as before.
 
 A source that cannot be read is never "nothing there". With strict=True
 (the API) read_state raises and the desk answers 503. With strict=False (a
@@ -37,7 +42,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
 import business_marketing_store as store
@@ -84,6 +89,28 @@ def relation(week_of: Any, now: datetime, tz) -> Optional[str]:
     monday = local.date() - timedelta(days=local.weekday())
     week = week_of if isinstance(week_of, date) else date.fromisoformat(str(week_of)[:10])
     return 'next week' if week > monday else 'this week' if week == monday else 'an earlier week'
+
+
+RUN_KINDS = ('suggestion', 'week', 'openings')
+
+
+def run_kind(run: Optional[Dict[str, Any]]) -> str:
+    """What a run wrote: 'suggestion' (the suggest level's one post), 'week'
+    (the week and autopilot levels' plan) or 'openings' (the open-chairs
+    week). A run without a kind is a week, as the desk always read it."""
+    kind = (run or {}).get('kind')
+    return kind if kind in RUN_KINDS else 'week'
+
+
+def run_subject(kind: str, which: Optional[str]) -> Tuple[str, str]:
+    """(what the run wrote as a masthead subject, its verb): ('Next week', 'is'),
+    ("Next week's suggested post", 'is'), ("Next week's open-chair posts", 'are')."""
+    week = _cap(which or 'this week')
+    if kind == 'suggestion':
+        return f"{week}'s suggested post", 'is'
+    if kind == 'openings':
+        return f"{week}'s open-chair posts", 'are'
+    return week, 'is'
 
 
 def channels_of(post: Dict[str, Any]) -> List[str]:
@@ -178,6 +205,7 @@ def facts(state: Dict[str, Any]) -> Dict[str, Any]:
     connections = state.get('connections')
     return {
         'now': now, 'tz': tz, 'latest': latest, 'current': current,
+        'kind': run_kind(current or latest),
         'planning': engine.is_planning(latest, now),
         'which_week': relation(current['week_of'], now, tz) if current else None,
         'readable': state['posts'] is not None,
@@ -210,6 +238,18 @@ def _next_plan_sentence(f) -> str:
 
 def _it_them(n, one, many):
     return one if n == 1 else many
+
+
+def _not_written(run: Dict[str, Any]) -> str:
+    """'The plan for the week of October 12 could not be written', named for
+    what the run was writing."""
+    week = week_label(run['week_of'])
+    kind = run_kind(run)
+    if kind == 'suggestion':
+        return f'The suggested post for the week of {week} could not be written'
+    if kind == 'openings':
+        return f'The open-chair posts for the week of {week} could not be written'
+    return f'The plan for the week of {week} could not be written'
 
 
 def attention(f: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -261,7 +301,7 @@ def attention(f: Dict[str, Any]) -> List[Dict[str, Any]]:
     if (latest and not f['planning'] and latest.get('status') in ('failed', 'skipped')
             and not words._week_over(latest, now, tz)):
         items.append({'id': f"marketing:plan:{latest['id']}", 'kind': 'plan_failed', 'tone': 'amber',
-                      'title': f"The plan for the week of {week_label(latest['week_of'])} could not be written",
+                      'title': _not_written(latest),
                       'detail': (latest.get('error') or 'Nothing was saved.')[:220], 'slots': []})
     if f['connections_readable'] and not f['channels']:
         items.append({'id': 'marketing:connect', 'kind': 'connect', 'tone': 'gold',
@@ -316,24 +356,33 @@ def note(f: Dict[str, Any], items: Optional[List[Dict[str, Any]]] = None) -> Dic
     items = attention(f) if items is None else items
     tz, now = f['tz'], f['now']
     latest, current = f['latest'], f['current']
+    kind, which = f.get('kind') or 'week', f['which_week'] or 'next week'
     extra = [i['title'] + '.' for i in items if i['kind'] in PROBLEMS]
     red = any(i['tone'] == 'red' for i in items)
     if not f['readable']:
         headline = "The posts couldn't be read just now."
         body, tone = ['That is not the same as nothing waiting. Try again in a minute.'], 'push'
     elif f['planning']:
-        headline, body, tone = ('Chief is writing the week.',
-                                ['It reads your numbers and writes the posts. This takes a minute or two.'], 'steady')
+        headline, body, tone = {
+            'suggestion': ('Chief is writing a suggested post.',
+                           ['It reads your numbers and writes one post. This takes a minute or two.'], 'steady'),
+            'openings': (f"Chief is writing {which}'s open-chair posts.",
+                         ['It reads your booking calendar and writes the posts. This takes a minute or two.'], 'steady'),
+        }.get(kind, (f"Chief is writing {which}'s posts.",
+                     ['It reads your numbers and writes the posts. This takes a minute or two.'], 'steady'))
     elif current and current.get('status') == 'succeeded':
         diagnosis = current.get('diagnosis') or {}
-        headline = diagnosis.get('headline') or 'Here is the week.'
+        headline = diagnosis.get('headline') or {
+            'suggestion': 'Here is your suggested post.',
+            'openings': f"Here are {which}'s open-chair posts.",
+        }.get(kind, f"Here are {which}'s posts.")
         body = [diagnosis.get('evidence') or '', _deadline_sentence(f)] + extra
         urgency = diagnosis.get('urgency')
         soon = f['plan_waiting'] and (_stamp(f['plan_waiting'][0]['run_at']) - now) < SOON
         tone = ('attention' if red or urgency == 'high'
                 else 'push' if urgency == 'medium' or soon or extra else 'steady')
     elif latest and latest.get('status') in ('failed', 'skipped') and not words._week_over(latest, now, tz):
-        headline = f"The plan for the week of {week_label(latest['week_of'])} could not be written."
+        headline = _not_written(latest) + '.'
         body = [latest.get('error') or 'Nothing was saved.',
                 'Ask me what went wrong, or write a post yourself.'] + extra
         tone = 'attention'
@@ -356,7 +405,8 @@ def note(f: Dict[str, Any], items: Optional[List[Dict[str, Any]]] = None) -> Dic
     body = [b for b in body if b]
     replies = []
     if current and current.get('status') == 'succeeded':
-        replies.append('Walk me through the week')
+        replies.append({'suggestion': 'Walk me through the suggested post',
+                        'openings': 'Walk me through the open-chair posts'}.get(kind, 'Walk me through the week'))
     if f['waiting']:
         replies.append('Which post is strongest?')
     if any(i['kind'] == 'missed' for i in items):
@@ -375,13 +425,22 @@ def note(f: Dict[str, Any], items: Optional[List[Dict[str, Any]]] = None) -> Dic
 def masthead(f: Dict[str, Any]) -> Dict[str, Any]:
     tz = f['tz']
     current, latest = f['current'], f['latest']
+    kind = f.get('kind') or 'week'
     week = (f['which_week'] or 'this week').capitalize()
+    # What the run wrote, as the title's subject: "Next week is" for a week,
+    # "Next week's suggested post is" for a suggestion (run_subject).
+    subject, verb = run_subject(kind, f['which_week'])
     kicker = 'GROW · MARKETING'
     if current:
         kicker += f" · WEEK OF {week_label(current['week_of']).upper()}"
     if f['planning']:
-        return {'kicker': kicker, 'title': 'The week is', 'accent': 'being written.',
-                'sub': 'Chief is reading your numbers and drafting the posts.'}
+        return {
+            'suggestion': {'kicker': kicker, 'title': 'A suggested post is', 'accent': 'being written.',
+                           'sub': 'Chief is reading your numbers and drafting one post.'},
+            'openings': {'kicker': kicker, 'title': 'Open-chair posts are', 'accent': 'being written.',
+                         'sub': 'Chief is reading your booking calendar and drafting the posts.'},
+        }.get(kind, {'kicker': kicker, 'title': f"{week}'s posts are", 'accent': 'being written.',
+                     'sub': 'Chief is reading your numbers and drafting the posts.'})
     if current and current.get('status') == 'succeeded' and f['plan']:
         plan, g = f['plan'], _progress(f)
         made = words._local(current.get('finished_at') or current.get('created_at'), tz)
@@ -392,27 +451,36 @@ def masthead(f: Dict[str, Any]) -> Dict[str, Any]:
             first = g['waiting'][0]
             due = f"{day_name(first['run_at'], tz)} {clock(first['run_at'], tz)}"
             if not g['done']:
-                return {'kicker': kicker, 'title': f'{week} is', 'accent': 'drafted.',
-                        'sub': f"Chief planned {span(plan, tz)}{when}: {_plural(len(plan), 'post')} on {channels}. "
-                               f"Approve by {due} and {day_name(first['run_at'], tz)}'s post goes out on time."}
-            return {'kicker': kicker, 'title': f'{week} is', 'accent': 'under way.',
+                wrote = {'suggestion': f"Chief suggested a post for {span(plan, tz)}{when}, on {channels}.",
+                         'openings': (f"Chief turned open chairs into {_plural(len(plan), 'post')}{when}, "
+                                      f"on {channels}."),
+                         }.get(kind, f"Chief planned {span(plan, tz)}{when}: {_plural(len(plan), 'post')} on {channels}.")
+                return {'kicker': kicker, 'title': f'{subject} {verb}', 'accent': 'drafted.',
+                        'sub': f"{wrote} Approve by {due} and {day_name(first['run_at'], tz)}'s post goes out on time."}
+            return {'kicker': kicker, 'title': f'{subject} {verb}', 'accent': 'under way.',
                     'sub': f"{_approved_of(g['done'], g['n'])}. {day_name(first['run_at'], tz)}'s still needs "
                            f"your OK by {clock(first['run_at'], tz)}."}
         if g['out'] and g['out'] == g['n']:
-            return {'kicker': kicker, 'title': f'{week}', 'accent': 'went out.',
-                    'sub': f"All {_word(g['n'])} posts have gone out."}
+            return {'kicker': kicker, 'title': subject, 'accent': 'went out.',
+                    'sub': 'It has gone out.' if g['n'] == 1 else f"All {_word(g['n'])} posts have gone out."}
         if g['out']:
-            return {'kicker': kicker, 'title': f'{week} is', 'accent': 'going out.',
+            return {'kicker': kicker, 'title': f'{subject} {verb}', 'accent': 'going out.',
                     'sub': f"{_cap(_word(g['out']))} of {_word(g['n'])} posts have gone out; "
                            'the approved ones go out at their times.'}
         if g['done']:
-            return {'kicker': kicker, 'title': f'{week} is', 'accent': 'ready.',
-                    'sub': f"{_approved_of(g['done'], g['n'])}. They go out at their times."}
-        return {'kicker': kicker, 'title': f'{week}', 'accent': 'needs you.',
-                'sub': 'None of its posts can go out as they are. Reschedule the missed ones.'}
+            return {'kicker': kicker, 'title': f'{subject} {verb}', 'accent': 'ready.',
+                    'sub': ('It is approved. It goes out at its time.' if g['n'] == 1 else
+                            f"{_approved_of(g['done'], g['n'])}. They go out at their times.")}
+        return {'kicker': kicker, 'title': subject, 'accent': 'needs you.' if verb == 'is' else 'need you.',
+                'sub': ("It can't go out as it is. Reschedule it or let it go." if g['n'] == 1 else
+                        'None of its posts can go out as they are. Reschedule the missed ones.')}
     if latest and latest.get('status') in ('failed', 'skipped') and not words._week_over(latest, f['now'], tz):
-        return {'kicker': kicker, 'title': 'The week', 'accent': 'needs you.',
-                'sub': latest.get('error') or 'The plan could not be written.'}
+        failed_kind = run_kind(latest)
+        title, accent, sub = {
+            'suggestion': ('The suggested post', 'needs you.', 'The suggested post could not be written.'),
+            'openings': ('The open-chair posts', 'need you.', 'The open-chair posts could not be written.'),
+        }.get(failed_kind, ('The week', 'needs you.', 'The plan could not be written.'))
+        return {'kicker': kicker, 'title': title, 'accent': accent, 'sub': latest.get('error') or sub}
     if f['waiting']:
         n, first = len(f['waiting']), f['waiting'][0]
         return {'kicker': kicker, 'title': _cap(_plural(n, 'post')), 'accent': 'needs your OK.' if n == 1 else 'need your OK.',
@@ -472,8 +540,15 @@ def today_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         n = len(f['waiting'])
         first = f['waiting'][0]
         whole_plan = f['plan_waiting'] and len(f['plan_waiting']) == len(f['plan']) == n
-        title = (f"Chief drafted {f['which_week']}. {_cap(_plural(n, 'post'))} wait for your OK"
-                 if whole_plan else f"{_cap(_plural(n, 'post'))} {'waits' if n == 1 else 'wait'} for your OK")
+        if whole_plan and f.get('kind') == 'suggestion':
+            title = f"Chief suggested a post for {f['which_week']}. It waits for your OK"
+        elif whole_plan and f.get('kind') == 'openings':
+            title = (f"Chief drafted {f['which_week']}'s open-chair posts. "
+                     f"{_cap(_word(n))} {'waits' if n == 1 else 'wait'} for your OK")
+        elif whole_plan:
+            title = f"Chief drafted {f['which_week']}. {_cap(_plural(n, 'post'))} wait for your OK"
+        else:
+            title = f"{_cap(_plural(n, 'post'))} {'waits' if n == 1 else 'wait'} for your OK"
         due = _stamp(first['run_at']) - f['now']
         out.append({
             'id': f'marketing:{biz}:waiting', 'kind': 'posts', 'source': 'Marketing', 'title': title,
@@ -515,7 +590,7 @@ def chief_digest(state: Dict[str, Any]) -> Dict[str, Any]:
         'time_zone': getattr(tz, 'key', str(tz)),
         'plan': None if not current else {
             'week_of': current['week_of'], 'which_week': f['which_week'], 'status': current.get('status'),
-            'evidence': (current.get('diagnosis') or {}).get('evidence')},
+            'kind': run_kind(current), 'evidence': (current.get('diagnosis') or {}).get('evidence')},
         'planning_now': f['planning'],
         'posts_waiting_for_approval': len(f['waiting']),
         'first_waiting_goes_out': (f"{day_name(f['waiting'][0]['run_at'], tz)} {clock(f['waiting'][0]['run_at'], tz)}"

@@ -457,6 +457,25 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
               "category": {"type": "string",
                            "description": "Optional. One of the five "
                                           "expense buckets."}})),
+    # Deliberately exposed (tripwire bump 37 → 38, 2026-10-08, B10).
+    # marketing_desk reads the business's own marketing desk: its posts'
+    # words, times, statuses and the account handles they go to, what waits
+    # for the owner's OK, and on request the click/visit/lead counts that
+    # came through the posts' links. The business's own published-or-about-
+    # to-be marketing, counted never named: campaign_status's class. Every
+    # desk write (new post, change, skip, post now, the week again) is the
+    # owner's on a chat turn and stays OFF this surface; there is no
+    # approve verb anywhere.
+    "marketing_desk": (
+        "The business's own marketing desk (Grow → Marketing): this week's and next week's social "
+        "posts, each with its post_id and revision, when it goes out, its status (waiting for the "
+        "owner's OK, approved, sent, posted, didn't go out), its words, accounts and picture; what "
+        "waits for the owner's OK; Chief's read of where marketing stands; the plan level. Pass "
+        "results:true for what came through the posts' links in the last 30 days. Read-only: "
+        "approving happens only on the desk.",
+        _obj({"results": {"type": "boolean",
+                          "description": "Also read the last 30 days' results (clicks, visits and "
+                                         "leads through the post links). Default false."}})),
     # Deliberately exposed (tripwire bump 21 → 22). check_inventory is
     # operational store state — stock counts and low-stock flags for the
     # business's own products, the same class as list_offerings and

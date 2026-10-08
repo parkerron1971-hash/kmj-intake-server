@@ -179,6 +179,16 @@ from chief_grow_actions import (
 from chief_clip_actions import handle_post_clip
 # Post a design, a photo or words to the connected accounts (2026-10-07).
 from chief_social_actions import handle_post_image
+# The business's own marketing desk, worked from chat (marketing suite B10,
+# 2026-10-08): read it, new post, change, skip, write the week again, post now.
+from chief_marketing_actions import (
+    handle_marketing_desk,
+    handle_marketing_edit_post,
+    handle_marketing_new_post,
+    handle_marketing_post_now,
+    handle_marketing_replan,
+    handle_marketing_skip_post,
+)
 # Custom modules — propose / accept / inspect / extend / summarize / upgrade
 # (2026-09-04, third slice). _has_dup_override is shared with the turn.
 from chief_module_actions import (
@@ -1629,7 +1639,12 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   client, system, messages, max_tokens=max_tokens,
                                   enable_web_search=enable_web_search,
                                   business_id=business_id, model=model,
-                                  stream_sink=stream_sink, timing_role=timing_role)
+                                  stream_sink=stream_sink, timing_role=timing_role,
+                                  # The same request: without its tools and
+                                  # effort the turn lost them, and the cache
+                                  # key changed under it.
+                                  read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                                  stable_tools=stable_tools)
                           logger.warning(
                               f"Claude stream error (attempt {attempt + 1}/3): "
                               f"{resp.status_code} {body[:300]}")
@@ -1891,7 +1906,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       client, system, messages, max_tokens=max_tokens,
                       enable_web_search=enable_web_search,
                       business_id=business_id, model=model, stream_sink=stream_sink, timing_role=timing_role,
-                      read_tools=read_tools, tool_biz=tool_biz)
+                      read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                      stable_tools=stable_tools)
               if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
                   resp = None
                   continue
@@ -3396,6 +3412,15 @@ def _confirmation_subject(action: Dict[str, Any]) -> str:
         nets = a.get('platforms')
         nets = [nets] if isinstance(nets, str) else [str(n) for n in (nets or []) if str(n).strip()]
         bits.append('to ' + (', '.join(nets) if nets else 'every connected account'))
+    if a.get('type') == 'marketing_post_now':
+        # A desk post: its words, and where it goes (its own accounts on the
+        # desk unless the new post names networks).
+        words = ' '.join(str(a.get('caption') or '').split())
+        if words:
+            bits.append('“' + (words if len(words) <= 60 else words[:59] + '…') + '”')
+        nets = a.get('platforms')
+        nets = [nets] if isinstance(nets, str) else [str(n) for n in (nets or []) if str(n).strip()]
+        bits.append('to ' + (', '.join(nets) if nets else 'its accounts on the marketing desk'))
     for key in ("amount", "total", "price"):
         val = a.get(key)
         if isinstance(val, (int, float)) and val:
@@ -11749,6 +11774,14 @@ ACTION_HANDLERS = {
     "publish_to_site":        handle_publish_to_site,
     "post_clip":              handle_post_clip,
     "post_image":             handle_post_image,
+    # The marketing desk (B10). No approve verb, by design: the owner
+    # approves on the desk (chief_marketing_actions).
+    "marketing_desk":         handle_marketing_desk,
+    "marketing_new_post":     handle_marketing_new_post,
+    "marketing_edit_post":    handle_marketing_edit_post,
+    "marketing_skip_post":    handle_marketing_skip_post,
+    "marketing_replan":       handle_marketing_replan,
+    "marketing_post_now":     handle_marketing_post_now,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "update_module_entry":   handle_update_module_entry,
@@ -13835,13 +13868,19 @@ async def _analyze_relationships(client: httpx.AsyncClient, biz_id: str) -> List
 
 
 async def _get_time_context(client: httpx.AsyncClient, biz_id: str) -> str:
-    """Build a small block about the moment — time of day, day of week,
-    and any recurring activity pattern from chief_patterns."""
+    """Build a small block about the moment — today's date, time of day,
+    day of week, and any recurring activity pattern from chief_patterns.
+
+    Today's date lives HERE, in the per-message tail, and nowhere in the
+    cached operating manual. It used to sit in the manual ("today is
+    2026-10-08"), so the manual changed at midnight UTC and the first
+    message after it re-wrote ~90k cached tokens, even mid-conversation
+    (8 pm Eastern) and right after a keep-warm ping (2026-10-08)."""
     now = datetime.now(timezone.utc)
     hour = now.hour
     day = now.strftime("%A")
 
-    parts: List[str] = []
+    parts: List[str] = [f"Today is {day}, {now.date().isoformat()} (UTC)."]
     if hour < 9:
         parts.append("It's early morning — keep it focused, lead with priorities.")
     elif hour >= 17:
@@ -13866,8 +13905,6 @@ async def _get_time_context(client: httpx.AsyncClient, biz_id: str) -> str:
     except Exception:
         pass
 
-    if not parts:
-        return ""
     return "TIME CONTEXT:\n" + "\n".join(f"- {p}" for p in parts)
 
 
@@ -15022,6 +15059,24 @@ async def chief_chat(
                 )
             except Exception as e:  # pragma: no cover
                 logger.warning(f"growth doctrine block failed: {e}")
+            # THE MARKETING DESK (B10) — on a marketing-shaped turn, a compact
+            # read of the business's own desk (its posts with post_id and
+            # revision, what waits for the owner's OK, the plan level). It
+            # changes with the desk, so it rides the same per-message tail as
+            # the doctrine, never a cached segment. Nothing unless
+            # MARKETING_DESK covers the business; a failed read says so.
+            try:
+                import chief_marketing_actions as _cma
+                _view = req.current_context
+                _desk_block = await _cma.context_block(
+                    biz, req.message or "", mode=req.mode,
+                    tab=(_view.tab if _view else None),
+                    sub_tab=(_view.sub_tab if _view else None))
+                if _desk_block:
+                    chief_truth.record('context:marketing_desk', _desk_block, kind='context')
+                    growth_turn_block = (growth_turn_block.rstrip() + "\n\n" + _desk_block).strip() + "\n"
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"marketing desk block failed: {e}")
 
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,

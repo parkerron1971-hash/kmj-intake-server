@@ -175,3 +175,4 @@ jobs:
           node __tests__/marketing_campaigns_db.mjs
           node __tests__/chief_local_work_db.mjs
           node __tests__/business_marketing_db.mjs
+          node __tests__/booking_columns_db.mjs

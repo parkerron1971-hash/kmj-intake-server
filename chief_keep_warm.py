@@ -5,12 +5,18 @@ Chief sends a ~100k-token brief with every message. Anthropic keeps the
 cached copy for an hour after its last use; the first message after that
 re-writes it at twice the input price (~35c on KMJ's brief), and over 30
 days 37 of those re-writes came 1-4 hours after the business's previous
-message. A read of the cached copy costs a tenth of the input price and
-resets its hour, so a ping with no reply (max_tokens 0) every 55 minutes
-costs ~2c and one re-write pays for ~17 of them.
+message. A read of the cached copy costs a twentieth of the input price on
+Sonnet 5.5 and resets its hour, so a ping with no reply (max_tokens 0)
+every 55 minutes costs ~1c and one re-write pays for ~40 of them.
 
 The ping only runs while the business is active: it is scheduled after each
 main Chief call and stops WINDOW minutes after the last one (default 4 h).
+A business that uses Chief most days keeps it warm for 24 hours instead,
+through the night, so its first message of the day is a read (~10c) and not
+a re-write (~44c). Simulated on the 30 days to 2026-10-07: the cold starts
+and pings of every business cost $37.27 with no keep-warm, $25.52 at 4 h for
+everyone and $18.56 at 24 h; the long window is only for daily users, so a
+business that tried Chief once doesn't buy a day of pings.
 It re-sends exactly what the last call had in front of its 1-hour cache
 breakpoints (model, effort, tools, the cached system blocks) and nothing
 after them, so it reads and never writes. If a ping ever writes (the copy
@@ -65,6 +71,50 @@ def window_s() -> float:
     return _minutes("CHIEF_KEEP_WARM_WINDOW_MIN", 240) * 60
 
 
+def daily_window_s() -> float:
+    return _minutes("CHIEF_KEEP_WARM_DAILY_WINDOW_MIN", 1440) * 60
+
+
+# business id -> (UTC date checked, daily user?)
+_daily: Dict[str, Any] = {}
+
+
+def _daily_user(business_id: str) -> bool:
+    """Used Chief on at least CHIEF_KEEP_WARM_DAILY_DAYS (default 3) of the
+    last 7 days. Read once a day per business; any failure says no."""
+    from datetime import datetime, timedelta, timezone
+    today = datetime.now(timezone.utc).date()
+    hit = _daily.get(business_id)
+    if hit and hit[0] == today:
+        return hit[1]
+    try:
+        need = int(os.environ.get("CHIEF_KEEP_WARM_DAILY_DAYS") or 3)
+    except ValueError:
+        need = 3
+    answer = False
+    try:
+        import sb_clients
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = sb_clients.sb_get_as_service(
+            f"/api_usage?business_id=eq.{business_id}&endpoint=eq./chief/backend"
+            f"&created_at=gte.{since}&select=created_at&order=created_at.desc&limit=2000") or []
+        days = {str(r.get("created_at") or "")[:10] for r in rows if isinstance(r, dict)}
+        days.discard("")
+        answer = len(days) >= need
+    except Exception as e:  # a failed read keeps the short window
+        logger.info("keep-warm biz=%s: daily-use read failed (%s)", business_id[:8], type(e).__name__)
+    _daily[business_id] = (today, answer)
+    return answer
+
+
+def window_for(business_id: str) -> float:
+    """How long this business's brief stays warm after its last call."""
+    base = window_s()
+    if _daily_user(business_id):
+        return max(base, daily_window_s())
+    return base
+
+
 def ping_payload(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The last call's request cut at its last 1-hour cache breakpoint, with
     no reply asked for. None when nothing in it is cached for an hour."""
@@ -110,9 +160,10 @@ def remember(business_id: Optional[str], payload: Dict[str, Any],
 async def _keep_warm(business_id: str, ping: Dict[str, Any], headers: Dict[str, str]) -> None:
     started = time.monotonic()
     try:
+        window = await asyncio.to_thread(window_for, business_id)
         while True:
             await asyncio.sleep(every_s())
-            if time.monotonic() - started > window_s():
+            if time.monotonic() - started > window:
                 logger.info("keep-warm biz=%s: idle past the window, stopping", business_id[:8])
                 return
             if not await _ping(business_id, ping, headers):
