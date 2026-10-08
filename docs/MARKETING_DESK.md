@@ -1362,9 +1362,11 @@ While the suite is active nothing new goes to Buffer: the Buffer desk
 refuses a new post (`POST /ideas`, a new `POST /posts`), an approval
 (`/approve`), `/post-now` and a planned week (`/engine/run`) with 409 and
 "Solutionist's marketing runs on the marketing suite now..."; Platform Chief's
-`marketing_new_post`, a new `marketing_save_draft`, `marketing_post_now`,
-`marketing_run_week` and `marketing_replan_week` say the same, and its
-snapshot carries `suite`. A post-now card refused while it is being prepared
+Buffer-desk handlers (`platform_chief_marketing`: `new_post`, a new
+`save_draft`, `post_now`, `run_week`, `replan_week`) say the same, and the
+Buffer snapshot carries `suite`. Since B15b Platform Chief's `marketing_new_post`
+and `marketing_post_now` tags go to the suite desk instead while it is active
+(below). A post-now card refused while it is being prepared
 is that action's own answer in the reply (`platform_chief_authority.dispatch`
 turns a refusal from `propose` into `{ok: false, label}`), never the whole
 reply's failure; that holds for any action whose card cannot be prepared. Editing, skipping, cancelling and pausing posts
@@ -1397,13 +1399,10 @@ switching it on is part of the switch-over (below).
 
 ### Platform Chief
 
-The smaller safe change: Platform Chief's marketing verbs stay on the Buffer
-desk's path for managing what is draining, and refuse anything new (above).
-Routing them through B10's desk verbs (`chief_marketing_actions`) for the
-platform business is left for a follow-up: those check the signed-in owner on
-a practitioner chat turn, and the Mission Control prompt and review cards
-describe Buffer channels. On the suite, Kevin works the desk directly, or asks
-the Chief of the platform business itself.
+B15 shipped the smaller safe change: Platform Chief's marketing verbs stayed
+on the Buffer desk's path for managing what is draining, and refused anything
+new (above). B15b routes them through B10's desk verbs for the platform
+business: see "With the suite on, Platform Chief and MC Today" below.
 
 ### Kevin's switch-over
 
@@ -1420,9 +1419,122 @@ the Chief of the platform business itself.
 5. Watch `GET /platform/marketing/drain` reach `safe_to_switch_off: true`,
    then set `BUFFER_PUBLISHING=off`.
 
-Not built here: Mission Control's frontend on the suite (F7); MC Today and
-the Mission Control Chief digest still read the Buffer desk (the suite's
-Today items land on the platform business's own Today); signups in the
-suite's results.
+Not built here: Mission Control's frontend on the suite (F7); signups in the
+suite's results. (MC Today and the Mission Control Chief digest: B15b, below.)
 
 Tests: `__tests__/test_platform_marketing_suite.py`.
+
+### With the suite on, Platform Chief and MC Today
+
+B15b, 2026-10-08 (`platform_chief_suite.py`). While the suite is active
+(`platform_suite`'s one predicate: `MC_MARKETING_SUITE` on AND a validated
+`PLATFORM_BUSINESS_ID`), Platform Chief's marketing verbs, MC Today and the
+Mission Control Chief digest work the suite desk for Solutionist's own
+business. **Switch off, nothing here is reached**: no verdict is read, the
+suite's handler maps are empty (a suite-only tag is "This action is not
+permitted." exactly as before, with no card written), and the post-now card,
+Today, the digest, the prompt and the snapshot are the Buffer desk's own. The
+existing platform marketing, Platform Chief, Today and digest suites run
+unchanged. Switch on but the suite not active (the id unset, invalid or
+unconfirmed): the shared verbs, Today and the digest stay on the Buffer desk as
+B15 left them, and the suite-only verbs refuse in `platform_suite`'s own
+sentence. No migration; no change for any tenant.
+
+**Platform Chief's verbs.** Each calls B10's own handler
+(`chief_marketing_actions`), which calls the desk's own functions: no second
+write path, and every B10 rule holds (revision and content hash, the owner
+check, flyer words, the level, "couldn't read").
+
+| Verb | Group (`platform_chief_authority.GROUPS`) | B10 handler |
+| --- | --- | --- |
+| `marketing_desk` | read | `handle_marketing_desk` |
+| `marketing_new_post` | drafts (as on the Buffer desk) | `handle_marketing_new_post` (`source 'chief'`) |
+| `marketing_edit_post` | drafts | `handle_marketing_edit_post` |
+| `marketing_skip_post` | marketing_stop | `handle_marketing_skip_post` |
+| `marketing_replan` | review: a card every time | `handle_marketing_replan` |
+| `marketing_post_now` | review: a card every time (as before) | `handle_marketing_post_now` |
+
+- **Which business.** Always the validated platform business, read as the
+  service role and checked against the signed-in platform owner
+  (`platform_marketing_suite._platform_row`), never an id from the tag. A tag
+  naming another business is refused before anything is read; a tenant's
+  post_id reads as not found (B10 reads posts by business). B10's own owner
+  check runs too: the turn's user is set to the platform owner for the call.
+- **Class C.** Platform Chief's yes is the owner's approval on the action's
+  card (model output is never consent there). Post-now and replan are
+  `review`: whatever the owner's policy says, a card. Their handlers refuse,
+  before anything is read, unless they run from a card the owner approved
+  (`current_authorization`, automatic false): "Posting right away needs your
+  approval on its card, so nothing was posted." B10's own `_unattended` gate
+  is set from that, never from the tag (the tag's underscore fields and
+  business id are dropped).
+- **The post-now card** (`platform_chief_suite.post_now_review`, called by
+  `propose`) freezes a desk post exactly as read (post_id, revision, content
+  hash, words, accounts, picture) or a new post's words, networks, picture
+  and link. On approval a desk post whose revision or content hash moved on
+  is refused ("That post changed after its card was made"); otherwise B10's
+  Post now approves it as the owner's and it goes out in about two minutes.
+  A new flyer is not posted from a card (save it as a draft first). A card
+  that cannot be made (no such post, a network with no account, another
+  business) is that action's own plain answer.
+- **Replan** keeps Mission Control's own one-loop rule (`POST
+  /suite/engine/run`): a week the Buffer desk has live is not planned again,
+  and an unreadable Buffer week plans nothing.
+- **No approve verb.** `marketing_approve` is in no group and no handler map.
+  The owner approves on the desk; the only other approval is B13's standing
+  OK, which the planner applies itself.
+- **Answers** keep Platform Chief's reply shape: `ok`, `label` (B10's
+  sentence, with "Grow → Marketing" said as "Mission Control → Growth →
+  Marketing"), `result` (the same), `title` (B10's short label) and the
+  post's id, revision and status.
+- **Buffer spellings** in a tag (`text`, `channels`, `run_at`) are read as
+  B10's (`caption`, `platforms`, `when`). The Buffer desk's own verbs
+  (`marketing_save_draft` edits, `marketing_edit_slot`, `marketing_skip_slot`,
+  `marketing_cancel_post`, `marketing_pause`) still manage what is draining;
+  `marketing_run_week`, `marketing_replan_week` and a new
+  `marketing_save_draft` still refuse.
+- **The drawer.** In the marketing context Platform Chief gets
+  `platform_chief_suite.PROMPT` (the verbs above, no approve, the drain) and
+  `snapshot`: the suite desk as B10 reads it (`desk_digest`: posts with
+  post_id and revision), its link results, the founder offer, and what the
+  Buffer desk still needs (`buffer_drain`, with post_ids for a skip). Each
+  source that fails is named unavailable.
+
+**MC Today** (`platform_today._marketing`) reads, for the platform business:
+
+| Item | From |
+| --- | --- |
+| posts waiting for Kevin's OK; failed, partly sent, unconfirmed, paused, missed; a plan not written; no accounts; quiet | the business desk's own Today items (`business_marketing_desk.today_items`), in Mission Control's room (`growth`, nav `platform-growth`) |
+| "Chief approved N posts on your standing OK" (the next one's time, take back) | approved posts with `approved_via 'standing'` still to go out |
+| "A post was pulled before it went out" | posts `pulled` in the last 7 days, with the post's own reason |
+| the Buffer desk's leftovers, titled "(Buffer desk)" | its failed, unconfirmed, paused-with-approved-posts and missed items (missed now says nothing new is approved there), plus approved posts that missed their window and will not go out |
+
+The Buffer desk's waiting drafts are not asked about: nothing is approved
+there now. A desk that couldn't be read is one item saying so ("couldn't be
+read just now... not the same as nothing waiting"), for each desk.
+
+**The Chief digest** (`snapshot.marketing`) is the business desk's
+`chief_digest` for the platform business with `desk: "suite"`, `where`
+Mission Control's, `approved_on_standing_ok`, `pulled_last_7_days`,
+`buffer_drain` and those items in `needs_owner`; the system prompt carries
+`platform_chief_suite.DIGEST_PROMPT` in place of the Buffer desk's.
+`posts_readable: false` comes with "couldn't be read" first in
+`needs_owner`.
+
+**Prepare post / Flyer Studio.** The backend has no hand-off that makes a
+Buffer draft: "Save to marketing" is `POST /platform/marketing/assets/from-chief`
+(a copy into the Buffer desk's asset library, no post), and "Prepare post"
+is frontend-only (Mission Control's `ChiefCreativeResults` stores the asset
+id and opens the Buffer composer). With the suite on, the frontend should
+hand the artwork to the suite desk instead: `POST
+/platform/marketing/suite/ideas {"artwork_id": <the Image Studio artwork id>}`
+(Mission Control's creative tools save artwork under the owner's
+`platform_books` business, `platform_console._find_platform_business`,
+normally the same row `PLATFORM_BUSINESS_ID` names; the desk's own
+`build_media` refuses a picture of any other business).
+
+Not built here: the frontend for all of it (the suite's post-now and replan
+cards, Prepare post on the suite, F7); `GET /platform/chief/permissions`
+still lists "Posting right away" as always reviewed, not planning again.
+
+Tests: `__tests__/test_platform_chief_suite.py`.

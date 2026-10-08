@@ -323,7 +323,15 @@ async def _marketing() -> List[Dict[str, Any]]:
     that missed their time or failed, paused publishing, a plan that could not
     be written (marketing_desk). Until 2026-10-02 this counted the platform
     business's content calendar, a different pipeline, so the weekly plan's
-    drafts never reached Today."""
+    drafts never reached Today.
+
+    B15b: while Solutionist's desk is on the marketing suite (platform_suite
+    active), the suite desk for its own business instead, plus what Chief
+    approved on the standing OK, pulled posts, and the Buffer desk's
+    leftovers that need a hand while it drains (platform_chief_suite)."""
+    import platform_chief_suite
+    if platform_chief_suite.active():
+        return await platform_chief_suite.today_items()
     import marketing_desk
     return marketing_desk.today_items(await marketing_desk.read_state())
 

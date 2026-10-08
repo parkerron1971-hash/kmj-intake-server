@@ -33,6 +33,11 @@ GROUPS = {
     'marketing_skip_slot': 'marketing_stop', 'marketing_replan_week': 'marketing_stop',
     'send_practitioner_email': 'review', 'resend_invite': 'review',
     'marketing_post_now': 'review',      # posting right away: always the owner's yes on its card
+    # B15b: the suite desk's own verbs (platform_chief_suite). Their handlers
+    # exist only while MC_MARKETING_SUITE is on; off, they are "not permitted"
+    # exactly as before. Planning again is class C there: always a card.
+    'marketing_desk': 'read', 'marketing_edit_post': 'drafts', 'marketing_skip_post': 'marketing_stop',
+    'marketing_replan': 'review',
     'extend_trial': 'review', 'mark_lead_status': 'review',
     'queue_build': 'review', 'send_to_solution_space': 'review',
 }
@@ -143,8 +148,9 @@ async def propose(owner_id, request_id, index, action, *, automatic=False):
         payload['recipient'] = await recipient(payload)
     if payload.get('type') == 'marketing_post_now':
         # Freeze the exact caption and channels the card shows; the approval binds them.
-        import platform_chief_marketing
-        payload = await platform_chief_marketing.post_now_review(payload)
+        # The Buffer desk's own review, unless the suite is active (B15b).
+        import platform_chief_suite
+        payload = await platform_chief_suite.post_now_review(payload)
     if payload.get('type') in ('queue_build', 'send_to_solution_space'):
         repo = payload.get('repo', 'frontend')
         if repo not in ('frontend', 'backend'):
@@ -325,5 +331,9 @@ async def decide(approval_id: UUID, body: Decision, owner=Depends(require_owner)
         return action_result(claimed)
     from platform_chief_actions import HANDLERS
     import platform_chief_creative
-    handlers = {**HANDLERS, **platform_chief_creative.handlers(owner, UUID(row['request_id']))}
+    import platform_chief_suite
+    request = UUID(row['request_id'])
+    # A card the suite desk made runs on the suite desk (B15b); any other card exactly as before.
+    handlers = {**HANDLERS, **platform_chief_suite.card_handlers(owner, request, row['action']),
+                **platform_chief_creative.handlers(owner, request)}
     return await execute(claimed, owner, handlers)
