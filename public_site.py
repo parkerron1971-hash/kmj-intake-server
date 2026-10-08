@@ -7501,6 +7501,12 @@ async def public_marketing_link(request: Request, code: str):
     import platform_marketing
     person = _counts_as_person(request)
     url = await platform_marketing.follow(code.strip().lower(), count_click=person)
+    if not url:
+        # Solutionist's own desk on the marketing suite (B15): its posts carry
+        # mysolutionist.app/go/<code> too, kept in marketing_posts. Read only
+        # once the Buffer desk's code missed, and only with PLATFORM_BUSINESS_ID set.
+        import business_marketing_links
+        url = await business_marketing_links.follow_platform(code, person=person)
     return RedirectResponse(url=url or "https://mysolutionist.app/", status_code=302,
                             headers=_GO_HEADERS)
 

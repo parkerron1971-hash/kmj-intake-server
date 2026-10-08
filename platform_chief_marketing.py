@@ -271,8 +271,20 @@ async def _desk():
                              for i in items]}
 
 
+def _closed():
+    """B15: while Solutionist's desk is on the marketing suite, Chief's verbs
+    here make nothing new for Buffer (a post, a plan, an approval); they say
+    so in the desk's words. Editing, skipping, cancelling and pausing posts
+    already on the Buffer desk still work while it drains."""
+    import platform_suite
+    if platform_suite.suite_on():
+        return {'ok': False, 'label': platform_suite.BUFFER_CLOSED}
+    return None
+
+
 async def marketing_snapshot():
     import platform_marketing as marketing
+    import platform_suite
     result = {
         'fetched_at': datetime.now(timezone.utc).isoformat(),
         'source_status': {'buffer_calendar': {'status': 'not_loaded',
@@ -296,6 +308,10 @@ async def marketing_snapshot():
         result['source_status'][key] = status
         return data
 
+    if platform_suite.suite_on():
+        result['suite'] = {'on': True, 'note': 'Solutionist\'s marketing now runs on the marketing suite desk: new '
+                           'posts, the weekly plan and posting right away happen there, not here. This snapshot is the '
+                           'Buffer desk, which is draining: posts approved before the switch still go out.'}
     await read('founder_offer', founder_offer)
     await read('config', marketing.config)
     await read('recent_posts', lambda: marketing.db('GET', '/platform_marketing_posts?order=run_at.desc&limit=31'), 30)
@@ -318,6 +334,8 @@ async def marketing_snapshot():
 async def save_draft(action):
     import platform_marketing as marketing
     draft = marketing.Draft.model_validate({**action.get('draft', {}), 'ai_assisted': True})
+    if draft.revision is None and _closed():
+        return _closed()
     if draft.revision is None:
         existing = await marketing.db('GET', f'/platform_marketing_posts?id=eq.{draft.id}&limit=1')
         if existing:
@@ -335,6 +353,8 @@ async def new_post(action):
     """Chief makes a post: every connected channel and the next open slot unless the owner chose."""
     import platform_marketing as marketing
     from marketing_desk import _join, clock, day_name
+    if _closed():
+        return _closed()
     text = str(action.get('text') or '').strip()
     if not text:
         return {'ok': False, 'label': 'There was no caption to save.'}
@@ -373,7 +393,9 @@ async def post_now_review(payload):
     where it goes. The approval binds this frozen payload (its hash), and the
     handler re-checks it, so what goes out is exactly what was approved."""
     import platform_marketing as marketing
+    import platform_suite
     from marketing_desk import SERVICE
+    platform_suite.close_buffer()           # B15: no card for a Buffer post while the suite is on
     cfg = await marketing.config()
     connected = cfg.get('channels') or []
     review = {'type': 'marketing_post_now', 'goes_out': 'Within a few minutes of your approval'}
@@ -426,6 +448,8 @@ async def post_now(action):
     import platform_chief_authority as authority
     import platform_marketing as marketing
     from marketing_desk import _join
+    if _closed():
+        return _closed()
     ctx = authority.current_authorization.get()
     if not ctx or ctx[1].get('automatic', True) is not False:
         return {'ok': False, 'label': 'Posting right away needs your approval on its card.'}
@@ -464,6 +488,8 @@ async def run_week(action):
     import marketing_engine
     import platform_marketing as marketing
     from marketing_desk import week_label
+    if _closed():
+        return _closed()
     now = marketing.now()
     week_of, _ = marketing_engine.week_window(now)
     which = marketing_engine.relation(week_of, now)
@@ -486,6 +512,8 @@ async def replan_week(action):
     first instead of answering "started" for a run that will not start."""
     import marketing_engine
     import platform_marketing as marketing
+    if _closed():
+        return _closed()
     now = marketing.now()
     week_of, _ = marketing_engine.week_window(now)
     which = marketing_engine.relation(week_of, now)

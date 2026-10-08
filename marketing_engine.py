@@ -720,7 +720,10 @@ async def run_week(trigger, now=None, replan=False):
 
     A scheduled week tells the owner how it went (a push; Today reads the same
     rows): drafts ready with their deadline, or why it could not be planned. A
-    week the owner started from the desk says nothing extra; they are watching."""
+    week the owner started from the desk says nothing extra; they are watching.
+    Never while Solutionist's desk is on the marketing suite (B15)."""
+    import platform_suite
+    platform_suite.close_buffer()
     now = now or marketing.now()
     week_of, times = week_window(now)
     run_id = run_id_for(week_of)
@@ -854,11 +857,27 @@ async def engine_tick():
     """Hourly. From Thursday morning it plans next week; Monday to Wednesday it
     plans the rest of this week only if this week was never planned. A planned
     week is not redone, and a failing week stops after a capped number of
-    attempts (the claim counts them) and says so on Today."""
+    attempts (the claim counts them) and says so on Today.
+
+    B15: one loop a week. While Solutionist's desk is on the marketing suite
+    (MC_MARKETING_SUITE=on) this job does nothing: the suite's planner plans
+    the platform business's week. Off the suite, a week whose suite plan
+    already has a post approved or out is not planned here (only with
+    PLATFORM_BUSINESS_ID set; unset, nothing is read)."""
+    import platform_suite
     if not enabled():
         return
-    if marketing.now().astimezone(TZ).hour < RUN_HOUR:
+    if platform_suite.suite_on():
+        log.info('marketing engine: Solutionist\'s desk is on the marketing suite; the suite plans the week.')
+        return
+    now = marketing.now()
+    if now.astimezone(TZ).hour < RUN_HOUR:
         return            # never overnight: a plan (and its push) lands in the morning
+    live = await platform_suite.suite_week_live(week_window(now)[0])
+    if live is not False:
+        log.info('marketing engine: the suite %s this week; nothing planned here.',
+                 'already has posts approved for' if live else 'could not be read for')
+        return
     try:
         await run_week('scheduled')
     except Exception:
@@ -953,7 +972,9 @@ class RunRequest(BaseModel):
 
 @router.post('/run', status_code=202)
 async def run_now(req: RunRequest | None = None, owner=Depends(require_owner)):
+    import platform_suite
     import rate_limit
+    platform_suite.close_buffer()           # B15: plan the week on the suite desk
     if not rate_limit.allow('platform_marketing_engine', str(owner.id)):
         raise HTTPException(429, 'Please wait a moment before planning again.')
     started = start_week(replan=bool(req and req.replan))

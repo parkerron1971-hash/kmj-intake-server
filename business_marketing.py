@@ -186,8 +186,13 @@ def business_tz(row: Dict[str, Any]) -> ZoneInfo:
     availability.timezone, then the owner's practitioner_profiles.timezone,
     then PLATFORM_DEFAULT_TZ, then UTC. A name that does not resolve is
     skipped. A failed read of the profile refuses: posting at the wrong hour
-    is not a safe default."""
+    is not a safe default. Solutionist's own business on the suite (B15)
+    keeps the platform desk's clock, America/New_York."""
+    import platform_suite
     from availability import BusinessAvailability
+    fixed = platform_suite.zone_for(row.get('id'))
+    if fixed:
+        return fixed
     zone = _zone(BusinessAvailability.from_settings_dict(_availability(row)).timezone)
     if zone:
         return zone
@@ -235,8 +240,11 @@ def level_for(row: Dict[str, Any]) -> Dict[str, Any]:
     business with a live calendar: Boss), week (marketing_week), else suggest.
     `upgrade` is the next level's feature and the cheapest plan that has it
     from where the business stands (feature_gates.upgrade_plan_for), or None
-    at the top."""
+    at the top. Solutionist's own business on the suite (B15) is autopilot
+    whatever its billing row says (platform_suite.effective_row)."""
+    import platform_suite
     from billing_limits import PLAN_DISPLAY
+    row = platform_suite.effective_row(row)
     plan = feature_gates.plan_of(row)
     if feature_gates.plan_includes(row, 'marketing_autopilot'):
         level = 'autopilot'
