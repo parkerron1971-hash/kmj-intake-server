@@ -93,3 +93,37 @@ def test_owner_instruction_needs_no_subject():
     assert truth.is_owner_instruction("reach out personally to Ada and Sam")
     assert not truth.is_owner_instruction("I'll send Ada the invoice")
     assert not truth.is_owner_instruction("sent Ada the invoice")
+
+
+# ── Two records in one claim (2026-10-08) ────────────────────────────
+# "Your 1:1 Session is $150 and the 3-Month Package is $1,200" cites one
+# quote; each figure is held to its own clause's record.
+
+OFFERS = {"context:offerings": {"kind": "context", "complete": True, "text": json.dumps([
+    {"name": "1:1 Coaching Session", "price": 150},
+    {"name": "3-Month Coaching Package", "price": 1200}])}}
+
+
+def _fact(text, quote):
+    return {"text": text, "kind": "fact", "source_id": "context:offerings", "quote": quote}
+
+
+def test_two_offerings_in_one_claim_each_check_against_their_own_record():
+    text = "Your 1:1 Coaching Session is $150 and the 3-Month Coaching Package is $1,200"
+    verdict, _, reason = truth.assess_review(
+        _review(_fact(text, '"price": 150'), verdict="supported"), text + ".", dict(OFFERS))
+    assert verdict == "supported", reason
+
+
+def test_a_wrong_price_in_the_second_clause_is_still_held():
+    text = "Your 1:1 Coaching Session is $150 and the 3-Month Coaching Package is $1,647"
+    verdict, _, reason = truth.assess_review(
+        _review(_fact(text, '"price": 150'), verdict="supported"), text + ".", dict(OFFERS))
+    assert verdict == "unsupported" and "1647" in reason, reason
+
+
+def test_a_price_moved_to_the_wrong_offering_is_still_held():
+    text = "Your 1:1 Coaching Session is $1,200 and the 3-Month Coaching Package is $150"
+    verdict, _, reason = truth.assess_review(
+        _review(_fact(text, '"price": 150'), verdict="supported"), text + ".", dict(OFFERS))
+    assert verdict == "unsupported", reason

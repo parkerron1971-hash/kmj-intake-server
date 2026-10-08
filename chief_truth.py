@@ -41,6 +41,7 @@ MAX_EVIDENCE_CHARS = 50000
 # long ordinary answer (output_tokens == cap in api_usage), which discarded the
 # whole review and replaced the answer with UNVERIFIED_REPLY.
 REVIEW_MAX_TOKENS = 4000
+REVIEW_THINKING_MAX_TOKENS = 12000
 MAX_SOURCE_CHARS = 10000
 MAX_REPLY_CHARS = 16000
 MAX_REVIEW_HISTORY_MESSAGES = 30
@@ -2006,11 +2007,19 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # previous setting without a deploy.
     # Only where the API accepts it: Opus 5.5 cannot turn thinking off, and
     # Sonnet 5.5 spells "off" as between_tools (disabled is a 400 there).
-    off = model_ladder.thinking_off_kwargs(model) if _review_thinking() == 'off' else {}
+    # CHIEF_REVIEW_THINKING (off | low | medium | high) sets the review
+    # lane's thinking; the fallback review, the repair and the sentence
+    # check keep it off. A model that thinks spends its thinking from
+    # max_tokens, so a thinking review gets room for it on top of the
+    # verdict (a Haiku 5.5 verdict on a long answer is ~1,500 tokens).
+    level = _review_thinking() if model_lane == 'review' else 'off'
+    off = model_ladder.thinking_off_kwargs(model) if level == 'off' else {}
     if off:
         payload.update(off)
     else:
-        payload.update(model_ladder.effort_kwargs(model, 'low'))
+        payload.update(model_ladder.effort_kwargs(model, level if level in ('low', 'medium', 'high') else 'low'))
+        if level != 'off':
+            payload['max_tokens'] = max(int(payload.get('max_tokens') or 0), REVIEW_THINKING_MAX_TOKENS)
     if schema and _review_schema_on():
         payload['output_config'] = {**(payload.get('output_config') or {}),
                                     'format': {'type': 'json_schema', 'schema': schema}}
@@ -2338,7 +2347,21 @@ class _SentenceProver:
     def corroborates(self, figure, claim_text):
         """Does one trusted record item hold this figure together with
         every name in the claim (or, when it names no one, its record
-        words)? A claim naming nothing and no record proves nothing."""
+        words)? A claim naming nothing and no record proves nothing.
+
+        "Your 1:1 Session is $150 and the 3-Month Package is $1,200" joins
+        two records in one claim, and no single record holds both names
+        (2026-10-07 replay: withheld as "claim number 1200 is not in the
+        quote"). Each figure is first held to the part of the claim it sits
+        in — the clause up to a comma, "and" or semicolon — the way a
+        reviewer that splits the claim would cite it. A wrong figure finds
+        no record in its own clause either."""
+        for part in re.split(r',\s+|;\s*|\s+and\s+', claim_text or ''):
+            if part != claim_text and figure in _numbers(part) and self._corroborates(figure, part):
+                return True
+        return self._corroborates(figure, claim_text)
+
+    def _corroborates(self, figure, claim_text):
         names = [n.lower() for n in _fast_lane_names(claim_text)]
         keywords = _state_keywords(claim_text)
         if not names and not keywords:
@@ -2972,5 +2995,8 @@ async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, bu
 
 
 async def repair_reply(client, system, messages, **kwargs):
-    """Use the metered, tool-free reviewer transport for a single prose repair."""
+    """Use the metered, tool-free reviewer transport for a single prose repair.
+    On its own lane: the repair writes words the owner reads, so it stays on
+    the strongest writer whatever model checks the answer."""
+    kwargs.setdefault('model_lane', 'repair')
     return await review_reply(client, system, messages, schema=None, **kwargs)
