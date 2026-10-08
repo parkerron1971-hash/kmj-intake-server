@@ -32,7 +32,9 @@ RE-CHECKED AT SEND TIME, whatever happened since the approval:
   * every account is still connected to THIS business, and is the same
     account the owner approved (social._targets);
   * the picture is a ready artwork of THIS business; the clip is approved as
-    it is now, at the fingerprint the post was approved with;
+    it is now, at the fingerprint the post was approved with (the
+    fingerprint is in the post's content hash); a clip Chief folded into the
+    week (source 'clip', B12) is still among the owner's kept clips;
   * an open-chairs post (source 'opening', B11) still has its chairs: its
     window is recounted on the calendar (business_marketing_openings.
     recheck). Booked into, filled up or too close: the post is `pulled`
@@ -148,6 +150,8 @@ CHAIRS_UNCHECKED = ("The booking calendar couldn't be checked just before sendin
                     'again in a minute.')
 OPENING_UNREADABLE = ("This post's open chairs couldn't be read, so it was not sent. Skip it, or write a new post "
                       'for that time.')
+UNKEPT = ("This clip is no longer among your kept clips in Video Clips, so nothing went out. Keep it again, "
+          'then approve the post again.')
 
 # Refusals from inside the shared door that a failed READ can also produce
 # (social._targets and clip_posting._require_owner read with `or []`). The
@@ -307,10 +311,13 @@ def _live_targets(business_id: str, post: Dict[str, Any]) -> List[Dict[str, Any]
     return out
 
 
-async def _clip_ready(business_id: str, media: Dict[str, Any]) -> None:
+async def _clip_ready(business_id: str, media: Dict[str, Any], *, chief_pick: bool = False) -> None:
     """The clip is this business's, ready, and approved as it is now, at the
     fingerprint this post was approved with. post_clip_for checks the same
-    again; checking here first keeps a refusal apart from a hand-off."""
+    again; checking here first keeps a refusal apart from a hand-off.
+    chief_pick: a clip Chief folded into the week (source 'clip', B12) was
+    picked because the owner kept it; one taken off the kept clips since is
+    not sent."""
     try:
         row = await asyncio.to_thread(clip_posting._clip, business_id, str(UUID(str(media['clip_id']))))
     except HTTPException as exc:
@@ -324,6 +331,8 @@ async def _clip_ready(business_id: str, media: Dict[str, Any]) -> None:
     if problem == 'changed' or clip_posting.media_library.fingerprint(row) != media.get('clip_fingerprint'):
         raise Refuse('This clip changed after the post was approved, so nothing went out. Check the clip, '
                      'then approve the post again.')
+    if chief_pick and row.get('decision') != 'kept':
+        raise Refuse(UNKEPT)
 
 
 async def _pictures(business_id: str, media: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -407,7 +416,7 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
         # Bound only now that the owner is known; reset in the finally below.
         token = images.build_actor.set({'business_id': biz, 'user_id': owner})
         if media.get('clip_id'):
-            await _clip_ready(biz, media)
+            await _clip_ready(biz, media, chief_pick=row.get('source') == 'clip')
             attempted = True
             done = await clip_posting.post_clip_for(
                 biz, owner, str(media['clip_id']), request_id=request_id(row),
