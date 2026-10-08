@@ -222,8 +222,11 @@ def test_a_creation_turn_that_must_call_the_tool_uses_the_previous_sonnet(setup,
     monkeypatch.setattr('chief_flyer_direction.attach_review', AsyncMock())
     client_for(monkeypatch).post('/platform/chief/message', json={'message': 'Create the flyer'})
     sent = call.call_args.args[1]
-    assert sent['model'] == console.PLATFORM_CHIEF_FALLBACK_MODEL and sent['tool_choice']['type'] == 'any'
-    assert sent['temperature'] == 0.6 and 'thinking' not in sent, 'Sonnet 4.5 is asked exactly as before'
+    assert sent['model'] == console.PLATFORM_CHIEF_FALLBACK_MODEL == 'claude-sonnet-5'
+    assert sent['tool_choice']['type'] == 'any'
+    # Sonnet 5 (the forced-tool fallback since Sonnet 4.5's retirement)
+    # takes no temperature, and its thinking is off.
+    assert 'temperature' not in sent and sent['thinking'] == {'type': 'disabled'}
 
 
 def test_a_declined_turn_is_asked_once_more_on_the_previous_sonnet(setup, store, monkeypatch):
