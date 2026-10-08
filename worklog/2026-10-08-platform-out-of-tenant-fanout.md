@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "Buffer is for me and post for me is for platform. is the wiring correct in the backend?"
 status: waiting on Kevin
-prs: []
+prs: [kmj-intake-server#1345]
 migrations: []
 left_undone: []
 decisions: ["while the suite is not active, Solutionist's own business is the validated PLATFORM_BUSINESS_ID, else the row platform_suite.books_business finds (platform_books AND the platform owner's), so a tenant that flags its own row is still planned", "a failed lookup keeps out only rows whose own settings say platform_books, that hour (logged); it never stops every tenant", "manual runs of that business on the tenant desk (engine/run, Chief's replan and the other desk verbs) are refused after the owner check in plain words: Solutionist's own marketing runs on the Mission Control desk", "the flag lookup is asked only while MARKETING_DESK names anyone, and ready() reads it off the event loop, so a desk that is off still costs no read", "suite active (switch on, id valid): unchanged"]
