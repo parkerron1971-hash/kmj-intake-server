@@ -31,6 +31,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, EmailStr
 
+import feature_gates
 import platform_addresses
 import site_news
 
@@ -2424,10 +2425,7 @@ _ALL = "__every_plan__"
 # hide (BillingPanel.HIDDEN_FEATURES), for the same reasons: seats show
 # as a number, and chief_unlimited gates nothing an allowance row does
 # not already say honestly.
-_NOT_A_ROW = ("multi_seat", "chief_unlimited",
-              # The marketing suite's levels: unannounced until the desk
-              # ships (feature_gates.UNANNOUNCED_FEATURES; plan B14).
-              "marketing_suggestion", "marketing_week", "marketing_autopilot")
+_NOT_A_ROW = ("multi_seat", "chief_unlimited")
 
 _COMPARE_GROUPS = (
     ("The day-to-day work", (
@@ -2477,6 +2475,18 @@ _COMPARE_GROUPS = (
         ("Find my best clips: a recording becomes short clips", "ai_clips",
          "Upload a sermon, talk or class. Chief finds the strongest moments, cuts them with captions, "
          "and can design a cover for each. Ten hours of recordings a month included."),
+        # Announced 2026-10-08 (plan B14; Kevin opened the marketing desk to
+        # every business). The labels are feature_gates.MARKETING_LADDER's,
+        # the same words the plan cards and the FAQ use.
+        (feature_gates.MARKETING_SUGGEST_WORDS, "marketing_suggestion",
+         "A draft for your own accounts every Thursday, with a flyer. Nothing posts until you approve it. "
+         "On Professional and Solutionist, Chief plans the whole week instead."),
+        (feature_gates.MARKETING_WEEK_WORDS, "marketing_week",
+         "Every Thursday, from your own numbers, each post with its own flyer. Change or skip any of them; "
+         "nothing posts until you approve it."),
+        (feature_gates.MARKETING_AUTOPILOT_WORDS, "marketing_autopilot",
+         "Up to two of your own video clips join the week. Give a standing OK to the kinds of posts you "
+         "trust Chief with: each one waits on your desk until its time, and you can take it back."),
     )),
     ("Chief, your AI Chief of Staff", (
         ("Chief on every screen, chat and voice", _ALL,
@@ -4772,6 +4782,49 @@ def render_home_v1() -> str:
 # FEATURES — surface-by-surface deep dive
 # ══════════════════════════════════════════════════════════════════════
 
+# The public ladder's names, as the price cards and the compare table say them.
+_PUBLIC_PLAN_NAMES = (("starter", "Starter"), ("professional", "Professional"), ("practice", "Solutionist"))
+_NETWORK_NAMES = {"instagram": "Instagram", "facebook": "Facebook", "tiktok": "TikTok", "x": "X",
+                  "linkedin": "LinkedIn", "youtube": "YouTube", "pinterest": "Pinterest", "threads": "Threads"}
+
+
+_AUDIENCE_PLAN_NAMES = (("solo", "Solo"), ("booked", "Booked"), ("boss", "Boss"))
+
+
+def _marketing_ladder_html() -> str:
+    """What Chief does for a business's marketing on each plan on sale
+    (plan B14), in feature_gates.MARKETING_LADDER's words: the same words as
+    the compare table and the plan cards. The barber plans (Solo, Booked,
+    Boss) show only once each is offered (pricing_config), as on the cards;
+    plans with the same words share a line."""
+    import pricing_config
+    shown = list(_PUBLIC_PLAN_NAMES) + [(p, n) for p, n in _AUDIENCE_PLAN_NAMES
+                                        if pricing_config.audience_plan_offered(p)]
+    order = ("starter", "solo", "booked", "professional", "boss", "practice")
+    shown.sort(key=lambda item: order.index(item[0]))
+    lines: Dict[str, List[str]] = {}
+    for plan, name in shown:
+        lines.setdefault(feature_gates.MARKETING_LADDER[plan], []).append(name)
+    return "".join(f'<p style="margin-top:8px;"><b>{_and_words(names)}.</b> {words}.</p>'
+                   for words, names in lines.items())
+
+
+def _and_words(names: List[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _networks_in_words() -> str:
+    """The networks a business can connect and post to, from the posting
+    setup's own list (post_for_me.enabled_platforms), in plain names:
+    "Instagram, Facebook, TikTok, X and YouTube"."""
+    try:
+        import post_for_me
+        names = [_NETWORK_NAMES[p] for p in post_for_me.enabled_platforms() if p in _NETWORK_NAMES]
+    except Exception:
+        names = []
+    return _and_words(names or ["Instagram", "Facebook"])
+
+
 def render_features() -> str:
     extra_css = REPLICA_KIT_CSS + FEATURES_FX_CSS + DEMO_CSS + """
 
@@ -5076,6 +5129,8 @@ def render_features() -> str:
           <li>Per-post pillar tagging</li><li>Reminders before posting</li>
           <li>Real engagement tracking</li><li>Server-side token storage</li>
         </ul>
+        <p style="margin-top:22px;"><b>Chief does your marketing with you.</b> Every Thursday it drafts posts for your own accounts from your own numbers, and how much it does depends on your plan. Nothing posts without your OK.</p>
+        __MARKETING_LADDER__
       </div>
     </div>
   </div>
@@ -5091,6 +5146,7 @@ def render_features() -> str:
   </div>
 </section>
 """
+    body = body.replace("__MARKETING_LADDER__", _marketing_ladder_html())
     return _render_shell(
         title="Features",
         description="Every surface in the Solutionist System: Command Center, Build, Operate, Grow, Chief of Staff, and Publish.",
@@ -5449,9 +5505,10 @@ def render_faq() -> str:
 <section>
   <div class="container-narrow">
     <div class="faq-filter reveal" id="faqFilter" role="group" aria-label="Filter questions">
-      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>12</span></button>
+      <button type="button" class="faq-f" data-f="all"   aria-pressed="true">Everything<span>16</span></button>
       <button type="button" class="faq-f" data-f="fit"   aria-pressed="false">Is it for me<span>3</span></button>
       <button type="button" class="faq-f" data-f="how"   aria-pressed="false">How it works<span>5</span></button>
+      <button type="button" class="faq-f" data-f="marketing" aria-pressed="false">Marketing<span>4</span></button>
       <button type="button" class="faq-f" data-f="money" aria-pressed="false">Money<span>2</span></button>
       <button type="button" class="faq-f" data-f="data"  aria-pressed="false">Your data<span>2</span></button>
     </div>
@@ -5506,6 +5563,22 @@ def render_faq() -> str:
         <summary>Can the AI publish to my social accounts?</summary>
         <div class="faq-body"><p>Yes, once you connect your Facebook Page (and linked Instagram Business account). Chief can draft, schedule, and publish directly. You approve each post; nothing goes out without your action. Connect from <strong>Build → Integrations → Social Publishing</strong>.</p></div>
       </details>
+      <details class="faq-item" data-g="marketing">
+        <summary>What does Chief do for my marketing?</summary>
+        <div class="faq-body"><p>Every Thursday morning Chief drafts posts for your own social accounts from your own numbers, and puts them on your marketing desk in <strong>Grow → Marketing</strong>. How much it does depends on your plan:</p>__MARKETING_LADDER__<p>Read each post, then change the words, the picture or the time, skip it, or approve it. A whole week can be approved in one tap.</p></div>
+      </details>
+      <details class="faq-item" data-g="marketing">
+        <summary>Does anything post without my OK?</summary>
+        <div class="faq-body"><p>No. Every post Chief writes waits on your desk as a draft until you approve it, and Chief never posts on its own. Change a post after you approved it and it waits for your OK again. The one thing you can hand over is a standing OK on the Solutionist plan: you choose the kinds of posts Chief may approve for you, each one still waits on your desk until its time, and you can take any of them back before it goes out, or turn the standing OK off.</p></div>
+      </details>
+      <details class="faq-item" data-g="marketing">
+        <summary>How do I turn off Chief&rsquo;s weekly posts?</summary>
+        <div class="faq-body"><p>In <strong>Grow → Marketing → Settings</strong>, switch off Chief&rsquo;s Thursday work (&ldquo;Plan my week every Thursday&rdquo;, or &ldquo;Suggest a post every Thursday&rdquo; on Starter). Chief stops writing posts for you; you can still write your own, and ask Chief for one whenever you like. To hold posts you already approved, use <strong>Pause posting</strong> on the same screen.</p></div>
+      </details>
+      <details class="faq-item" data-g="marketing">
+        <summary>Which social networks can it post to?</summary>
+        <div class="faq-body"><p>__SOCIAL_NETWORKS__, through your own accounts, connected once in <strong>Build → Social Media</strong>. Instagram needs a picture, and TikTok and YouTube take videos, so a post with a picture goes to the others. When your business has a site, every post carries a short link back to it, so the desk can show you what came through.</p></div>
+      </details>
       <details class="faq-item" data-g="money">
         <summary>When can I sign up?</summary>
         <div class="faq-body"><p>Right now, and you do it yourself. <a href="/start" style="color:var(--accent);">Start your free trial</a>, name your business, and the workspace is built around that trade before you have typed anything else. No application, no waiting list, no call to book. If you would rather talk to a person first, <a href="/get-started" style="color:var(--accent);">we're here</a>.</p></div>
@@ -5517,6 +5590,8 @@ def render_faq() -> str:
   </div>
 </section>
 """
+    body = (body.replace("__MARKETING_LADDER__", _marketing_ladder_html())
+                .replace("__SOCIAL_NETWORKS__", _networks_in_words()))
     return _render_shell(
         title="FAQ",
         description="Answers to common questions about the Solutionist System: who it's for, pricing, how it compares to other tools, security, and signup.",

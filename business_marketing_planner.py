@@ -34,14 +34,16 @@ ONE SUGGESTION
   by push and a Today item. The run is marked succeeded, skipped or failed
   with its reason. Nothing here approves or sends: the post waits for the
   owner's OK on the desk, and only the sender (B5) ever posts it, and only
-  while MARKETING_DESK_PUBLISHING=on.
+  while MARKETING_DESK_PUBLISHING is not off.
 
 THE FAN-OUT (marketing_tick, hourly, worker only, leader-gated)
-  Does nothing unless MARKETING_DESK names the business (comma-separated ids)
-  or is '*'. Candidates: a desk row with plan_enabled (none is made here), at
-  least one connected account, the posting pilot on, the suggest level by the
-  real plan (feature_gates.plan_includes, whatever BILLING_ENFORCE says),
-  access full or grace, automations not paused.
+  Open to every business since 2026-10-08 (marketing_switches): it covers a
+  business unless MARKETING_DESK is 'off' or a list of ids that leaves it
+  out. Candidates: at least one connected account, a desk whose weekly plan
+  is on (plan_enabled; a business with no saved desk row has it on, and none
+  is made here; an owner who turned it off stays off), the posting pilot on,
+  the level by the real plan (feature_gates.plan_includes, whatever
+  BILLING_ENFORCE says), access full or grace, automations not paused.
   Due, on the business's own clock:
     * Thursday from 7:00 + a jitter of 0-119 minutes (a stable hash of the
       business id; Python's hash() changes per process), through Sunday:
@@ -160,6 +162,7 @@ import feature_gates
 import marketing_desk as words
 import marketing_profile
 import marketing_signals
+import marketing_switches
 import post_for_me
 import sb_clients
 from auth_supabase import AuthedUser, require_user
@@ -315,41 +318,23 @@ def _now() -> datetime:
 # ── the switches ──────────────────────────────────────────────────────
 
 def desk_scope() -> Any:
-    """MARKETING_DESK: None (off: unset, empty or 'off'), '*' (every
-    business), or the set of business ids it names. A token that is not a
-    business id is ignored, so a typo switches nobody on. Solutionist's own
-    business is in it while its desk is on the suite and out of it while not
-    (B15, platform_suite.with_platform), whatever MARKETING_DESK says."""
+    """MARKETING_DESK (marketing_switches, the one reader): '*' (every
+    business: unset or empty since 2026-10-08), None ('off': nobody), or the
+    set of business ids it names (a token that is not a business id is
+    ignored, so a typo switches nobody on). Solutionist's own business is in
+    it while its desk is on the suite and out of it while not (B15,
+    platform_suite.with_platform), whatever MARKETING_DESK says."""
     import platform_suite
     return platform_suite.with_platform(_named_scope())
 
 
 def _named_scope() -> Any:
-    raw = (os.environ.get('MARKETING_DESK') or '').strip()
-    if not raw or raw.lower() == 'off':
-        return None
-    if raw == '*':
-        return '*'
-    ids = set()
-    for part in raw.split(','):
-        try:
-            ids.add(str(UUID(part.strip())))
-        except ValueError:
-            continue
-    return frozenset(ids) or None
+    return marketing_switches.desk_scope()
 
 
 def _named(business_id: Any) -> bool:
     """MARKETING_DESK, as written, names this business (or every business)."""
-    scope = _named_scope()
-    if scope is None:
-        return False
-    if scope == '*':
-        return True
-    try:
-        return str(UUID(str(business_id))) in scope
-    except ValueError:
-        return False
+    return marketing_switches.desk_names(business_id)
 
 
 def desk_on_for(business_id: Any, row: Any = None) -> bool:
@@ -619,33 +604,39 @@ def zones(rows: List[Dict[str, Any]]) -> Dict[str, Optional[ZoneInfo]]:
     return out
 
 
-async def _desk_ids(scope: Any) -> List[str]:
-    """Businesses whose desk has the weekly suggestion on (plan_enabled).
-    No desk row is made here: a business without one has not switched it on."""
-    out: List[str] = []
+def _connected_ids(scope: Any) -> List[str]:
+    """The businesses in scope ('*' or a set of ids) with at least one
+    connected account, sorted: the only businesses a week could post for."""
+    out = set()
     if scope != '*':
         for chunk in _chunks(sorted(scope)):
-            found = await store.rows(f"/marketing_desks?plan_enabled=eq.true&business_id=in.({','.join(chunk)})"
-                                     f'&select=business_id&limit={len(chunk)}')
-            out += [str(r['business_id']) for r in found]
-        return out
+            rows = _get(f"/social_connections?provider=eq.{bm.PROVIDER}&status=eq.connected"
+                        f"&business_id=in.({','.join(chunk)})&select=business_id")
+            out |= {str(r.get('business_id')) for r in rows}
+        return sorted(out)
     for page in range(DESK_PAGES):
-        found = await store.rows(f'/marketing_desks?plan_enabled=eq.true&select=business_id'
-                                 f'&order=business_id.asc&limit={DESK_PAGE}&offset={page * DESK_PAGE}')
-        out += [str(r['business_id']) for r in found]
-        if len(found) < DESK_PAGE:
-            break
-    return out
-
-
-def _connected_ids(ids: List[str]) -> set:
-    """The businesses among these with at least one connected account."""
-    out = set()
-    for chunk in _chunks(ids):
-        rows = _get(f"/social_connections?provider=eq.{bm.PROVIDER}&status=eq.connected"
-                    f"&business_id=in.({','.join(chunk)})&select=business_id")
+        rows = _get(f'/social_connections?provider=eq.{bm.PROVIDER}&status=eq.connected&select=business_id'
+                    f'&order=business_id.asc&limit={DESK_PAGE}&offset={page * DESK_PAGE}')
         out |= {str(r.get('business_id')) for r in rows}
-    return out
+        if len(rows) < DESK_PAGE:
+            break
+    else:
+        log.warning('marketing planner: more than %s connected accounts; the rest wait for a later hour.',
+                    DESK_PAGE * DESK_PAGES)
+    return sorted(out)
+
+
+async def _plan_on_ids(ids: List[str]) -> List[str]:
+    """These businesses less the ones whose saved desk has the weekly plan
+    turned off (plan_enabled false). A business with no saved desk row has it
+    on (business_marketing.plan_on, since 2026-10-08). No desk row is made
+    here."""
+    off = set()
+    for chunk in _chunks(ids):
+        found = await store.rows(f"/marketing_desks?plan_enabled=eq.false&business_id=in.({','.join(chunk)})"
+                                 f'&select=business_id&limit={len(chunk)}')
+        off |= {str(r['business_id']) for r in found}
+    return [i for i in ids if i not in off]
 
 
 def _business_rows(ids: List[str]) -> List[Dict[str, Any]]:
@@ -671,12 +662,13 @@ def _eligible_kind(row: Dict[str, Any]) -> Optional[str]:
 async def candidates(scope: Any) -> List[Dict[str, Any]]:
     """Every business the fan-out may write for, each with the kind of run
     it gets (`_kind`: a suggestion, the weekly plan or the open-chairs
-    week). Raises on a failed read: a blip never reads as "nobody to do"."""
-    ids = await _desk_ids(scope)
+    week). Every business in scope with a connected account, less those whose
+    saved desk turned the weekly plan off. Raises on a failed read: a blip
+    never reads as "nobody to do"."""
+    ids = await asyncio.to_thread(_connected_ids, scope)
     if not ids:
         return []
-    with_accounts = await asyncio.to_thread(_connected_ids, ids)
-    ids = [i for i in ids if i in with_accounts]
+    ids = await _plan_on_ids(ids)
     if not ids:
         return []
     rows = await asyncio.to_thread(_business_rows, ids)
@@ -1025,7 +1017,7 @@ async def run_suggestion(business_id: Any, *, trigger: str, now: Optional[dateti
         return await stop('failed', READ_FAILED, {'status': 'unavailable', 'reason': READ_FAILED})
 
     reason = eligibility(row, scheduled=not manual)
-    if reason is None and not manual and not (desk or {}).get('plan_enabled'):
+    if reason is None and not manual and not bm.plan_on(desk):
         reason = NOT_SWITCHED_ON
     if reason:
         return await stop('skipped', reason, {'status': 'not_eligible', 'reason': reason})
@@ -1498,7 +1490,7 @@ async def run_week(business_id: Any, *, trigger: str, now: Optional[datetime] = 
     except (Unavailable, marketing_profile.ProfileUnavailable, store.StoreError):
         return await stop('failed', READ_FAILED, {'status': 'unavailable', 'reason': READ_FAILED})
 
-    if reason is None and not manual and not (desk or {}).get('plan_enabled'):
+    if reason is None and not manual and not bm.plan_on(desk):
         reason = NOT_SWITCHED_ON
     if reason:
         return await stop('skipped', reason, {'status': 'not_eligible', 'reason': reason})
@@ -2269,7 +2261,7 @@ async def run_openings(business_id: Any, *, trigger: str, now: Optional[datetime
     except (Unavailable, marketing_profile.ProfileUnavailable, store.StoreError):
         return await stop('failed', READ_FAILED, {'status': 'unavailable', 'reason': READ_FAILED})
 
-    if reason is None and not manual and not (desk or {}).get('plan_enabled'):
+    if reason is None and not manual and not bm.plan_on(desk):
         reason = NOT_SWITCHED_ON
     if reason:
         return await stop('skipped', reason, {'status': 'not_eligible', 'reason': reason})
