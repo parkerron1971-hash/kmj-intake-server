@@ -543,7 +543,7 @@ desk's own (`business_marketing.level_for`, from the real plan through
 | Level | Who | What B9 does |
 | --- | --- | --- |
 | week | Professional; a Boss business without a live chair calendar | the weekly plan |
-| autopilot | Practice (Solutionist) | the same week plus up to two of its own clips (B12, below); standing permissions are B13 |
+| autopilot | Practice (Solutionist) | the same week plus up to two of its own clips (B12, below); the kinds the owner's standing OK covers are approved by Chief (B13, below) |
 | openings | Boss: a chair business with a live booking calendar | nothing: it gets the open-chairs week instead (B11, below) |
 | suggest | Starter, Solo, Booked | B8's one suggestion, unchanged |
 
@@ -966,7 +966,7 @@ hashtags** (Kevin's decision 2). A caption that breaks one costs only that
 clip, which stays eligible next week.
 
 **The approval and the send.** Nothing posts without the owner's OK
-(standing permissions are B13). The sender (B5) already re-checks a clip
+(standing permissions, B13 below). The sender (B5) already re-checks a clip
 post: the content still hashes to the approval, and the clip is approved as
 it is now at the fingerprint the post was approved with
 (`_clip_ready`); `clip_posting.post_clip_for` checks again. New here: a
@@ -1077,3 +1077,165 @@ hash.
 
 No migration (`source='chief'` came with B3). Tests:
 `__tests__/test_chief_marketing_desk.py`.
+
+### Standing permissions (B13)
+
+`business_marketing_standing.py` (2026-10-08), D6 of the plan. At the
+`autopilot` level (Practice, the Solutionist plan) the owner can let Chief
+**approve** chosen kinds of posts without asking each time. Chief never sends
+anything itself: the approval is the desk's own (`marketing_approve`, the
+same revision and content-hash binding as the owner's tap) and B5's sender
+sends it as it sends every approved post. Each one can be taken back until it
+goes out.
+
+| Kind | The posts it covers |
+| --- | --- |
+| `marketing_post` | Chief's weekly flyer posts (`source 'plan'`) |
+| `post_clip` | the owner's own clips Chief folded into the week (`source 'clip'`, B12) |
+
+Nothing else is ever approved on a standing OK: the weekly suggestion
+(Starter, Solo, Booked), open chairs (Boss), the owner's and Chief's one-off
+posts, and Post now.
+
+**The grant** is `standing_permissions`' own, extended rather than forked:
+the same storage (`businesses.settings.autonomy.standing[kind] =
+{granted_at, granted_by, via}`), the same owner-only door
+(`POST /agents/chief/standing {business_id, verb, grant}`; `grant: false`
+revokes, or declines a question not yet answered), the same audit rows
+(`standing_grant`, `standing_revoke`). The marketing kinds are kept apart
+from the proposal kinds (`MARKETING_KINDS`, not `ELIGIBLE`): they never get a
+release time, never ride the release tick and are never asked about by the
+Approval Queue, so Chief's own `post_clip` proposal is not covered by the
+week's clip grant. Chat never grants one ("the owner turns that on
+themselves on the marketing desk"); chat may revoke one only on the owner's
+own turn. `GET /agents/chief/standing` lists them under `marketing`, apart
+from the send switches.
+
+**Covered** (`covers`) only while every one of these holds:
+
+| Check | Read from |
+| --- | --- |
+| the grant exists and was given by the business's current owner | `settings.autonomy.standing[kind].granted_by == businesses.owner_id` |
+| the real plan includes it | `feature_gates.plan_includes(row, 'marketing_autopilot')`, and `ai_clips` for `post_clip` (ignores `BILLING_ENFORCE`; a comp counts; a subscription not trialing or active has no plan) |
+| client-facing autonomy is enabled | `policy_engine.client_facing_autonomy(row) == 'enabled'` (a regulated practice defaults to disabled) |
+| automations are not paused | `policy_engine.is_paused(row)` |
+| standing permissions are not switched off | `STANDING_PERMISSIONS` (default on) |
+
+**Where each check sits.**
+
+| When | Where | Not covered |
+| --- | --- | --- |
+| grant | `standing_permissions.grant` (plan and autonomy) behind the door's owner check | 400 in plain words; a member gets 403 |
+| approval | `approve_run`, from the planner's `tell_week` | the post stays a draft for the owner |
+| send | `business_marketing_dispatch.dispatch`, for a post `approved_via 'standing'`, after the pause and pilot checks | the post goes back to a **draft**, unsent; the rest of its kind goes back too; the owner is told once. A business that cannot be read holds the post (back to approved, tried again next minute), never sent on a guess |
+| every 2 minutes | `lapse_sweep`, at the end of the design tick (`business_marketing_designs`) | approved standing posts of that kind go back to drafts at once; the owner is told, unless they turned the permission off themselves |
+
+A post put back carries the reason in its note: "Chief's standing OK no
+longer covers this post (client-facing autonomy is off for this business), so
+it waits for your OK."
+Its content and hash are unchanged, so the owner can approve it as it is.
+
+**When Chief approves.** Once the week has settled (the design tick's
+`tell_week`: no post of the run still designing, so a post whose flyer is
+being made is never approved early; `marketing_approve` refuses a designing
+post anyway). Then each draft of a covered kind that is as Chief meant it:
+
+- a flyer post whose flyer is ready with **no note** to the owner (a flyer
+  Chief's own check was unsure about, and a words-only post whose flyer
+  failed or ran late, wait for the owner);
+- a clip post whose clip is still the owner's kept clip, approved at the
+  fingerprint the post carries;
+- every account still connected, and none that cannot take it;
+- due at least an hour from now, so there is time to take it back.
+
+One RPC call per post (`marketing_approve` is all-or-nothing per call, so a
+post that moved on never holds up the rest), `p_via 'standing'`, `p_actor` the
+business's owner, at the revision and content hash read. A refused one (the
+owner changed it meanwhile, its time passed) is left alone.
+
+**Chief's log.** Each standing approval writes an `audit_log` row (verb
+`marketing_standing_approve`, actor `chief`/`standing`, `authorized_by
+standing:<kind>`, payload: post, run, kind, revision, content hash, time,
+and the grant's `granted_at`/`granted_by`) and a `chief_activity` row for the
+owner ("Approved on your standing OK: Monday 11:00 AM post", `nav
+grow:marketing`).
+
+**Telling the owner.** The week's one Today item and one push (keyed by the
+run and attempt, as B9) say it: "Chief approved 5 posts for next week under
+your standing OK" / "Review or take back any before they go out: each one
+waits on the desk until its time. 2 more wait for your OK; nothing else posts
+until you approve it." With nothing approved on a standing OK the words are
+B9's and B12's, unchanged.
+
+**Take back** (`POST /marketing/{business_id}/posts/{post_id}/take-back
+{revision}`, owner only): an approved post, the owner's or Chief's, goes back
+to a draft (the next revision, the approval dropped, its words, picture,
+accounts and time unchanged). A post already claimed for sending answers 409.
+
+**Ask after three** (Kevin's "approval earns permission" rule, D6). When the
+owner's last three approvals of a kind were each of Chief's draft unchanged
+and stood (not edited or skipped afterwards), Chief asks **once**: `POST
+/approve` answers with `standing_offer` (`{verb, kind, count, question}`), and
+one Today item (`action_payload.standing_offer`, key
+`marketing_standing_offer:<kind>`) and one push say "Want Chief to approve
+your weekly posts?" with the question. That it asked is remembered first
+(`settings.autonomy.standing_offered[kind]`); if that cannot be written, it
+does not ask. The owner taps to grant through the door; `grant: false`
+declines. `GET /engine`'s `standing` keeps showing the open question until
+it is answered. Only on the Solutionist plan with client-facing autonomy on.
+
+**Retire after three.** When the owner edits, takes back, skips or marks not
+sent the last three posts of a kind Chief approved on the standing OK since
+the grant (by when each happened; one that went out, or that the owner posted
+now, ends the run, as `outcome_ledger.retired_verbs` does), the permission
+retires itself: `standing_permissions.revoke(..., via='retire')`, its other
+waiting posts go back to drafts, and one Today item and push say "I'm back to
+asking before your weekly posts". Checked after each of those four owner
+actions, on the desk or by Chief at the owner's ask: B10's
+`marketing_edit_post` and `marketing_skip_post` call the same `edit_slot`
+and `cancel_slot_route`, so they count exactly like the owner's own. Chief's
+Post now on an approved post is read as posted now (kept), not as an edit.
+
+**A write that did not land is never reported as done.**
+`standing_permissions._write_autonomy` now raises `WriteFailed` when the
+business cannot be read (it used to write `settings` as just the autonomy
+block over every other setting) or the write answers nothing (None on any
+error, [] when no row matched). A grant then answers 503 with nothing on the
+record; a revoke or a "no" answers 503 and the grant or question stands; chat
+says it could not be saved. A retire is confirmed before anything follows:
+the revoke must land and a fresh read must show the grant gone (a read that
+fails then trusts the landed write). If not, no post is withdrawn and nothing
+is said; it is tried again at the next override, and before Chief next
+approves anything on that grant (`approve_run` retires first and does not use
+it). The question is asked only once remembering it has landed; otherwise
+it comes on a later approval.
+
+**Read off the posts' own history.** Ask and retire never use a counter: they
+read `marketing_post_events` (the database's snapshot of every insert and
+update of a post, B3's trigger) for the kind's posts over the last 120 days
+(`snapshot->>source`, JSON-path select, at most 1,500 rows), and
+`approvals_from` works out each approval and what became of it: sent,
+posted now, edited (changed or taken back while waiting), skipped, not sent
+(the owner's mark), withdrawn (Chief's own, by its note), failed, pulled or
+waiting. "Chief's draft" is the content hash once its flyer settled. A post
+whose first snapshot is older than the window is left out. A history that
+cannot be read asks nothing and retires nothing.
+
+**What the desk shows.** `GET /engine` (owner and members) adds `standing`:
+per kind `available` (and `why` not), `granted`, `since`, `active`, `held`
+(why a grant does not cover posts right now) and `offer`. Only the owner
+changes it. Posts already carry `approved_via`.
+
+**No migration.** `kind` is not a column anywhere: grants, the declined
+answers and the question asked live in `businesses.settings.autonomy`
+(jsonb). `marketing_posts.approved_via` already allows `'standing'` and
+`marketing_approve` already takes `p_via`
+(`supabase/APPLY-2026-10-07-marketing-suite.sql`); `marketing_claim_due`
+already sends a post with `approved_by` and `approved_via` set; the history
+is B3's `marketing_post_events`.
+
+No new Chief action, no new job, no new switch (`STANDING_PERMISSIONS=off`
+stops these too), no frontend (F6 is the Solutionist view). Not yet seen
+live: the `snapshot->>source` filter and the JSON-path select on
+`marketing_post_events` through PostgREST (a 400 there reads as a failed
+read: no question, no retire, never a guess).
