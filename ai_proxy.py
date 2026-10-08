@@ -101,7 +101,8 @@ TASK_MODEL_MAP: Dict[str, str] = {
     "build":    "claude-opus-4-8",
     "score":    "claude-sonnet-4-5-20250929",
     "draft":    "claude-sonnet-4-5-20250929",
-    "volume":   "claude-haiku-4-5-20251001",
+    # AI_PROXY_VOLUME_MODEL rolls the volume tier back without a deploy.
+    "volume":   os.environ.get("AI_PROXY_VOLUME_MODEL") or "claude-haiku-5-5",
     "briefing": "claude-sonnet-4-5-20250929",
 }
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
@@ -114,7 +115,7 @@ DEFAULT_MAX_TOKENS = 4096
 MAX_PROXY_TOKENS = 8192
 _ALLOWED_OVERRIDE_MODELS = set(TASK_MODEL_MAP.values()) | {
     DEFAULT_MODEL, "claude-opus-4-8", "claude-sonnet-5",
-    "claude-haiku-4-5-20251001",
+    "claude-haiku-4-5-20251001", "claude-haiku-5-5",
 }
 DEFAULT_TEMPERATURE = 1.0
 
@@ -278,12 +279,20 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
     model = _select_model(req.task_type, req.model_override)
 
     # Build the Anthropic payload. Only include fields Anthropic expects.
+    import chief_models
+    import model_ladder
     anthropic_payload: Dict[str, Any] = {
         "model": model,
         "max_tokens": min(int(req.max_tokens or DEFAULT_MAX_TOKENS), MAX_PROXY_TOKENS),
-        "temperature": req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE,
         "messages": [m.model_dump() for m in req.messages],
     }
+    # Only where the model takes one: Haiku 5.5, Sonnet 5, Opus 4.7+ and
+    # Fable 400 on a temperature (model_ladder.supports_sampling).
+    anthropic_payload.update(model_ladder.sampling_kwargs(
+        model, req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE))
+    # Haiku 5.5 thinks by default and its thinking counts against the
+    # caller's max_tokens; the volume tier never thought on Haiku 4.5.
+    anthropic_payload.update(chief_models.quick_call_kwargs(model))
     if req.system:
         anthropic_payload["system"] = req.system
     if req.metadata:

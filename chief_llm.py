@@ -7,7 +7,7 @@ Cost + trust discipline:
     analyzers deflected (no Plaid bucket, ambiguous merchant), plus the
     practitioner-initiated "Ask Chief" surface.
   - One batched call per analyze-hard run (≤15 transactions). Haiku by
-    default (CHIEF_LLM_MODEL overrides). max_tokens ≤ 700.
+    default (CHIEF_LLM_MODEL overrides). max_tokens ≤ 1500.
   - Prompt budget kept: archetype voice fragment (~4 lines) + the I.5
     five-line GL block + a ≤5-line learning digest + the transaction rows.
   - Kill switch: CHIEF_LLM=off. Missing ANTHROPIC_API_KEY → graceful
@@ -38,7 +38,7 @@ import bank_money
 logger = logging.getLogger("chief_llm")
 
 ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_MODEL = "claude-haiku-5-5"
 
 _HARD_BATCH_LIMIT = 15
 _LLM_CONFIDENCE_CAP = 0.75
@@ -181,9 +181,11 @@ async def _call_claude(business_id: str, system: str, user_content: str,
     except Exception as _g_err:
         logger.warning(f"[chief_llm] gate failed open: {_g_err}")
     model = _model()
+    import chief_models
     payload = {
         "model": model, "max_tokens": max_tokens, "system": system,
         "messages": [{"role": "user", "content": user_content}],
+        **chief_models.quick_call_kwargs(model),
     }
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
@@ -399,8 +401,12 @@ async def analyze_hard(business_id: str, business_type: Optional[str]) -> Dict[s
         + ['Reply as JSON: [{"transaction_id": "...", "business_category": "<bucket>",',
            '  "business_subcategory": "<short label or null>",',
            '  "confidence": 0.0-1.0, "reasoning": "<one sentence>"}]'])
+    # 1500, not 700: a batch of 15 used 590 tokens on Haiku 4.5 and 994 on
+    # Haiku 5.5 (the same text is ~30% more tokens, and it proposes more);
+    # at 700 Haiku 5.5's JSON was cut off mid-list and the whole batch was
+    # lost (2026-10-07). Only the tokens written are billed.
     text = await _call_claude(business_id, _system_prompt(business_id, business_type),
-                              user, max_tokens=700, endpoint="/chief/analyze-hard")
+                              user, max_tokens=1500, endpoint="/chief/analyze-hard")
     parsed = _parse_json(text)
     created: List[Dict[str, Any]] = []
     valid_ids = {t["transaction_id"] for t in candidates}

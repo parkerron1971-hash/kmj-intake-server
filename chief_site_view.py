@@ -123,12 +123,15 @@ def describe(jpeg, business_id=''):
                    {'type': 'text', 'text': 'Describe this screenshot.'}]
         started = time.monotonic()
 
+        import chief_models
+
         def _do(model, max_tokens, timeout):
             return client.messages.create(model=model, max_tokens=max_tokens, system=DESCRIBE_SYSTEM,
-                                          messages=[{'role': 'user', 'content': content}], timeout=timeout)
+                                          messages=[{'role': 'user', 'content': content}], timeout=timeout,
+                                          **chief_models.quick_call_kwargs(model))
 
         msg, used = model_ladder.call_with_ladder(
-            _do, model=(os.environ.get('CHIEF_VIEW_MODEL') or 'claude-haiku-4-5-20251001').strip(),
+            _do, model=(os.environ.get('CHIEF_VIEW_MODEL') or 'claude-haiku-5-5').strip(),
             task='view_website', business_id=business_id, max_tokens=300)
         usage = getattr(msg, 'usage', None)
         tokens = {'input_tokens': getattr(usage, 'input_tokens', 0) or 0,
