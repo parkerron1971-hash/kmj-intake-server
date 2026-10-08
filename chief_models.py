@@ -70,7 +70,18 @@ _LANE_DEFAULTS = {
     # model: measured first token 383ms median, 433ms p95.
     # Same model id as `background`, so metering and pricing already know it.
     "fast":       "claude-haiku-4-5-20251001",
-    "route":      "claude-haiku-4-5-20251001",
+    # The opening line and the router's tie-breaker moved to Haiku 5.5 on
+    # 2026-10-07 (Kevin: "move those two"), measured on 12 real-shaped
+    # messages against Haiku 4.5: the same opener gate pass rate (11/12),
+    # first word 409ms vs 356ms median (p90 478 vs 464), the classifier
+    # 520ms vs 762ms with valid JSON 12/12, about 7x cheaper. Haiku 4.5's
+    # classifier missed its 0.9 s deadline on 5 of its last 14 calls.
+    # Thinking is off for both (chief_fast_track.stream_text). `fast` (the
+    # answers Haiku gives alone, the headline, the voice preview, the small
+    # helpers) stays on Haiku 4.5 until it is measured the same way.
+    # Roll back with CHIEF_MODEL_OPENER / CHIEF_MODEL_ROUTE.
+    "opener":     "claude-haiku-5-5",
+    "route":      "claude-haiku-5-5",
 }
 
 # Per-lane reply budgets. Voice is deliberately tight: replies are read

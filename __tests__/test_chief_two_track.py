@@ -414,8 +414,10 @@ def test_an_unsure_instruction_goes_to_the_full_turn_whatever_the_classifier_say
 
     def script(ep):
         if ep == "/chief/route":
-            return [(0.05, '"needs_records": false, "needs_action": false, '
-                           '"complexity": "low", "confidence": 0.95')]
+            # The route lane runs Haiku 5.5 (2026-10-07): no prefill, so the
+            # classifier writes the whole object itself.
+            return [(0.05, '{"needs_records": false, "needs_action": false, '
+                           '"complexity": "low", "confidence": 0.95}')]
         return [(0.05, "Sure thing!")]
     fake, calls = _fake_stream(script)
     monkeypatch.setattr(cft, "stream_text", fake)
