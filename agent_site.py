@@ -697,32 +697,67 @@ def parse_window(from_: Optional[str], to: Optional[str]) -> Tuple[date, date]:
     return start, end
 
 
+BOOKING_ROWS = 2000
+
+# module_entries has no `duration_min` column (only appointment_at and
+# duration_min_at_booking are columns; the widget and Chief write the rest
+# into `data`). Naming it made this read a 400 in production, which the
+# `or []` below turned into "no bookings", so every slot read as open. The
+# booked length is read from the column, else from data (2026-10-07, B11).
+BOOKING_SELECT = "appointment_at,duration_min_at_booking,booked_min:data->>duration_min_at_booking"
+
+
+def _booked(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each booking with its length: the column, else the length in data."""
+    out = []
+    for r in rows:
+        minutes = r.get("duration_min_at_booking")
+        if minutes in (None, "") and r.get("booked_min") not in (None, ""):
+            try:
+                minutes = int(float(r["booked_min"]))
+            except (TypeError, ValueError):
+                minutes = None
+        out.append({"appointment_at": r.get("appointment_at"), "duration_min_at_booking": minutes})
+    return out
+
+
 def slots_for(b: Dict[str, Any], off: Dict[str, Any],
-              start: date, end: date) -> List[Dict[str, Any]]:
+              start: date, end: date, *, strict: bool = False,
+              now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     """Open slots for ONE offering in [start, end] — the one slot
     computation every client surface shares (this agent surface and the
     Site Concierge's in-chat picker), so two surfaces can never quote
-    two different truths. Raises 503 when the engine is unavailable."""
+    two different truths. Raises 503 when the engine is unavailable.
+
+    strict (the marketing desk's open chairs, B11): a bookings read that
+    fails, or comes back at its row limit, and an outside-calendar read that
+    fails, raise 503 instead of counting as "nothing booked". A post that
+    says a chair is open must never be planned, sent or kept on a guess.
+    now: the clock compute_slots measures "still ahead" against (tests)."""
     try:
         from availability import BusinessAvailability
         from availability_engine import compute_slots
         av = BusinessAvailability.from_settings_dict(b["facts"].get("availability"))
         lo = (start - timedelta(days=1)).isoformat()
         hi = (end + timedelta(days=1)).isoformat()
-        bookings = sb_clients.sb_get_as_service(
+        rows = sb_clients.sb_get_as_service(
             f"/module_entries?business_id=eq.{b['facts']['id']}"
             f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}&status=eq.active"
-            "&select=appointment_at,duration_min_at_booking,duration_min&limit=2000") or []
+            f"&select={BOOKING_SELECT}&limit={BOOKING_ROWS}")
+        if strict and (not isinstance(rows, list) or len(rows) >= BOOKING_ROWS):
+            raise HTTPException(status_code=503, detail="the bookings could not be read")
+        bookings = _booked(rows) if isinstance(rows, list) else []
         # The practitioner's other calendar (outside_calendar) — busy there
-        # is busy here. Fails soft to [] when nothing is connected.
+        # is busy here. Fails soft to [] when nothing is connected (strict:
+        # only when it is not set up, never when a read fails).
         import outside_calendar
-        outside_busy = outside_calendar.busy_blocks_for_dates(b["facts"]["id"], start, end)
+        outside_busy = outside_calendar.busy_blocks_for_dates(b["facts"]["id"], start, end, strict=strict)
         return compute_slots(
             availability=av,
             practitioner_tz=b["facts"].get("timezone") or None,
-            existing_bookings=bookings if isinstance(bookings, list) else [],
+            existing_bookings=bookings,
             offering_duration_min=int(off.get("duration_min") or 60),
-            from_date=start, to_date=end,
+            from_date=start, to_date=end, now=now,
             busy_blocks=outside_busy)
     except HTTPException:
         raise
