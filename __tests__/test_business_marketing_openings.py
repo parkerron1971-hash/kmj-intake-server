@@ -34,6 +34,7 @@ import pytest
 from fastapi import HTTPException
 
 import agent_site
+import availability_engine
 import business_marketing as bm
 import business_marketing_dispatch as dispatch
 import business_marketing_links as links
@@ -847,7 +848,7 @@ def test_slots_for_reads_the_booked_length_and_strict_never_counts_a_failed_read
                                  strict=True, now=now)
     # 2:30-3:30 pm is booked (its length is in data): 2:00 is free, 2:30 and 3:00 are not, 3:30 is.
     assert [s['start_local'][11:16] for s in slots] == ['14:00', '15:30']
-    assert 'select=appointment_at,duration_min_at_booking,booked_min:data->>duration_min_at_booking' in reads[0]
+    assert f'select={availability_engine.BOOKING_SELECT}' in reads[0]                   # the shared read (2026-10-08)
     assert ',duration_min&' not in reads[0]                                   # a column module_entries does not have
 
     monkeypatch.setattr(sb_clients, 'sb_get_as_service', lambda path: None)
