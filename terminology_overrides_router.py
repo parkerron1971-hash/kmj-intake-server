@@ -244,12 +244,14 @@ async def generate_overrides_via_chief(
         import os
         import json as _json
         import httpx
+        import chief_models
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        model = os.environ.get("TERMINOLOGY_MODEL") or "claude-haiku-5-5"
         if anthropic_key:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await llm_call.apost(client, {
-                        "model": "claude-haiku-4-5-20251001",
-                        "max_tokens": 800,
+                        "model": model,
+                        "max_tokens": 800, **chief_models.quick_call_kwargs(model),
                         "system": "Return only valid JSON, no prose.",
                         "messages": [{"role": "user", "content": prompt}],
                     })
