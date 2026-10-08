@@ -146,14 +146,14 @@ def test_with_the_switch_off_no_business_is_the_platform_business(monkeypatch):
     assert platform_suite.platform_id() is None and platform_suite.is_platform(PID) is False
 
 
-def test_marketing_desk_is_unchanged_without_the_id(monkeypatch):
+def test_marketing_desk_is_unchanged_without_the_id_but_for_solutionists_own_business(monkeypatch):
     switch(monkeypatch, on=True, pid=None)
     other = str(uuid4())
     for raw, scope in (('', None), ('off', None), ('*', '*'), (other, frozenset({other}))):
         monkeypatch.setenv('MARKETING_DESK', raw)
         assert plan.desk_scope() == scope
         assert plan.desk_on_for(other) is (scope is not None)
-        assert plan.desk_on_for(PID) is (scope == '*')
+        assert plan.desk_on_for(PID) is False          # found by books_business: it runs on Buffer
 
 
 def test_the_platform_business_is_in_the_suite_fan_out_only_while_the_switch_is_on(monkeypatch):

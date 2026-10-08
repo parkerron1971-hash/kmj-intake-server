@@ -73,9 +73,11 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # rationing tokens across sections that had nothing to do with each
 # other — and the last one in the JSON object was the one that got
 # truncated. Budget per section, with a floor and a ceiling.
-TOKENS_PER_DRAFTED_SECTION = 700
-MIN_DRAFT_TOKENS = 1200
-MAX_DRAFT_TOKENS = 4000
+# ~30% larger since the drafter moved to Sonnet 5.5: the same text is
+# more tokens on it.
+TOKENS_PER_DRAFTED_SECTION = 900
+MIN_DRAFT_TOKENS = 1600
+MAX_DRAFT_TOKENS = 5200
 
 
 def _model() -> str:
@@ -276,8 +278,10 @@ async def _draft_sections(business: Dict[str, Any], template: Dict[str, Any],
         "no invented facts beyond what the briefs give you. Respond with "
         "ONLY a JSON object mapping each section number to its text, e.g. "
         '{"0": "..."}.')
+    import model_ladder
     payload = {
         "model": _model(), "max_tokens": _draft_budget(len(todo)), "system": system,
+        **model_ladder.thinking_off_kwargs(_model()),
         "messages": [{"role": "user", "content":
                       f'Document: {template["title"]}, dated {variables["date"]}, '
                       f'from {variables["business_name"]} to {variables["client_name"]}.'
@@ -329,8 +333,10 @@ async def _state_notes(business: Dict[str, Any], template: Dict[str, Any],
     if not state or not llm_call.api_key():
         return None
     headings = [s.get("heading") for s in template["sections"] if s.get("heading")]
+    import model_ladder
     payload = {
-        "model": _learn_model(), "max_tokens": 500,
+        "model": _learn_model(), "max_tokens": 650,
+        **model_ladder.thinking_off_kwargs(_learn_model()),
         "system": ("You are a cautious contracts-practice assistant writing "
                    "advisory notes for a business OWNER about their own "
                    "document. Not legal advice; never addressed to their "
@@ -754,7 +760,10 @@ async def doctemplates_history_verify(queue_id: str, biz: str,
 _STANDARD_VARS = {"business_name", "practitioner_name", "client_name", "date"}
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
-LEARN_MODEL_DEFAULT = "claude-sonnet-4-5"
+# Sonnet 4.5 retires 2026-11-30. Learning a template and composing an
+# agreement write the client's paper: Sonnet 5.5. DOCTEMPLATES_LEARN_MODEL
+# still pins it.
+LEARN_MODEL_DEFAULT = "claude-sonnet-5-5"
 
 
 def _learn_model() -> str:
@@ -873,8 +882,10 @@ async def doctemplates_learn(body: LearnBody,
         blob = await di._download(client, path)
     block = di._content_block(path, blob)
 
+    import model_ladder
     payload = {
-        "model": _learn_model(), "max_tokens": 4000,
+        "model": _learn_model(), "max_tokens": 5200,
+        **model_ladder.thinking_off_kwargs(_learn_model()),
         "system": ("You convert real business documents into reusable "
                    "templates, preserving their wording faithfully. "
                    "Respond with ONLY the requested JSON."),
@@ -1055,8 +1066,10 @@ async def compose_document_template(business: Dict[str, Any],
     # one on file — the model leans toward patterns valid there, and
     # the deterministic spine + state_notes still backstop it.
     gov_state = dt.us_state_full(get_doc_defaults(business).get("state", ""))
+    import model_ladder
     payload = {
-        "model": _learn_model(), "max_tokens": 4000,
+        "model": _learn_model(), "max_tokens": 5200,
+        **model_ladder.thinking_off_kwargs(_learn_model()),
         "system": ("You draft clean, professional business agreements as "
                    "reusable templates, in the exact JSON structure "
                    "requested. "

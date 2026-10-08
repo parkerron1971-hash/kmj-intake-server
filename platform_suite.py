@@ -63,9 +63,17 @@ page and the Buffer desk's flyers use, with the same owner check, so a
 tenant's flag never makes its row the platform's.
 
 ONE LOOP A WEEK. Off (or not active), the platform business is never in the
-suite's fan-out once the id validates (desk_on_for answers False for it), and
-marketing_engine's Thursday job plans the week. Active, the old job does
-nothing and the suite plans. Across the switch: the suite does not plan a
+suite's fan-out (desk_on_for answers False for it), and marketing_engine's
+Thursday job plans the week on Buffer. Buffer is for Solutionist's own
+marketing; Post for Me (the tenant suite) is for businesses on the platform.
+So while the suite is not active, Solutionist's own business is the validated
+id, or, with the id unset, invalid or unread, the row books_business() finds
+(platform_books AND the platform owner's): never a tenant that flags its own
+row. A lookup that fails keeps out, for that hour, only the rows whose own
+settings say platform_books (logged); every other business is planned as
+usual. Its manual runs on the tenant desk (POST /marketing/{id}/engine/run,
+Chief's replan) are refused in plain words (OWN_DESK). Active, the old job
+does nothing and the suite plans. Across the switch: the suite does not plan a
 week whose Buffer plan already has a post approved or out
 (buffer_week_live), and the old job does not plan a week whose suite plan
 does (suite_week_live). A read that fails plans nothing that hour.
@@ -111,6 +119,10 @@ BUFFER_WEEK = ("That week was planned on the Buffer desk before the switch, and 
                'next week from Thursday.')
 BUFFER_WEEK_UNREAD = ("The Buffer desk's plan for that week couldn't be read just now, so Chief didn't plan it "
                       'here. It tries again later.')
+# A manual run of Solutionist's own business on the tenant desk while the
+# suite is not active (only its owner, the platform owner, ever reaches it).
+OWN_DESK = ("Solutionist's own marketing runs on the Mission Control desk, so this desk doesn't plan it. "
+            'Plan and post it there.')
 
 LIVE_BUFFER = ('approved', 'dispatching', 'submitted', 'published', 'uncertain')
 LIVE_SUITE = ('approved', 'dispatching', 'submitted', 'published', 'partly_published', 'uncertain')
@@ -347,9 +359,22 @@ async def state_async() -> Tuple[str, Optional[str]]:
 
 
 async def ready() -> None:
-    """Have the verdict read (off the event loop) before async code calls a
-    sync helper that asks it (desk_on_for, desk_scope, level_for...)."""
-    await state_async()
+    """Have the verdicts read (off the event loop) before async code calls a
+    sync helper that asks them (desk_on_for, desk_scope, level_for...): the
+    id's, and while it does not validate and MARKETING_DESK names anyone, the
+    flag lookup's (books_business), which keeps Solutionist's own business
+    out of the tenant suite (kept_out)."""
+    verdict, _ = await state_async()
+    if verdict != VALID and _tenant_desk_on():
+        await books_business_async()
+
+
+def _tenant_desk_on() -> bool:
+    """MARKETING_DESK (the tenant suite's switch, business_marketing_planner)
+    names anyone: only then is the flag lookup asked, so a desk that is off
+    costs no read."""
+    raw = (os.environ.get('MARKETING_DESK') or '').strip()
+    return bool(raw) and raw.lower() != 'off'
 
 
 def valid_id() -> Optional[str]:
@@ -457,11 +482,11 @@ async def chief_closed_async() -> Optional[str]:
 
 
 def desk_switch(business_id: Any) -> Optional[bool]:
-    """MARKETING_DESK's answer for the platform business, or None for any
-    other business (an unset or invalid id included: it gets nothing
-    special). Valid: on the suite it is always switched on, off the suite
-    never, so the two loops never both plan its week. Unknown: not this
-    hour."""
+    """MARKETING_DESK's answer for the platform business by its id, or None
+    for any other business (an unset or invalid id included: it gets nothing
+    special here; kept_out finds Solutionist's own business then). Valid: on
+    the suite it is always switched on, off the suite never, so the two loops
+    never both plan its week. Unknown: not this hour."""
     pid = platform_id()
     if not _same(business_id, pid):
         return None
@@ -471,24 +496,58 @@ def desk_switch(business_id: Any) -> Optional[bool]:
     return verdict == VALID and suite_on()
 
 
+OWN, UNSURE = 'own', 'unsure'
+
+
+def kept_out(business_id: Any, row: Any = None) -> Optional[str]:
+    """Whether the tenant suite keeps this business out because it is
+    Solutionist's own and its desk is not on the suite (Buffer is for
+    Solutionist's own marketing, Post for Me for the businesses on the
+    platform): OWN (it is), UNSURE (it might be and couldn't be confirmed:
+    not this hour) or None (a tenant, or the platform business on the suite).
+
+    The validated id names it. With the id unset, invalid or unread, the
+    flag lookup does (books_business: platform_books AND the platform
+    owner's), so a tenant that flags its own row is still a tenant. When that
+    lookup fails, only a row whose own settings say platform_books (`row`,
+    when the caller has it) waits this hour; every other business goes on.
+    Asked only for a business MARKETING_DESK names, so a desk that is off
+    costs no read."""
+    pid = platform_id()
+    verdict = state()[0] if pid else UNSET
+    if verdict == VALID:
+        return OWN if _same(business_id, pid) and not suite_on() else None
+    if verdict == UNKNOWN and _same(business_id, pid):
+        return UNSURE                          # the id itself, unread: not this hour
+    found, books = books_business()
+    if found == VALID:
+        return OWN if _same(business_id, books['id']) else None
+    if found == UNKNOWN and isinstance(row, dict) and _books(row):
+        log.warning("platform suite: Solutionist's own business couldn't be confirmed, so %s (its settings say "
+                    'platform_books) is left out of the tenant marketing suite this hour.',
+                    str(business_id)[:8])
+        return UNSURE
+    return None
+
+
+def own_desk(business_id: Any) -> bool:
+    """Solutionist's own business, confirmed, while its desk is not on the
+    suite: the tenant desk's manual runs refuse it in plain words (OWN_DESK)."""
+    return kept_out(business_id) == OWN
+
+
 def with_platform(scope: Any) -> Any:
     """MARKETING_DESK's scope (None, '*' or a frozenset of ids) with the
-    platform business in it while the suite is active, and out of it
-    otherwise once the id validates (or cannot be read). Unchanged when the
-    id is unset or invalid."""
+    platform business in it while the suite is active, and Solutionist's own
+    business out of it otherwise (kept_out)."""
     pid = platform_id()
-    if not pid:
-        return scope
-    verdict, _ = state()
-    if verdict in (UNSET, INVALID):
-        return scope
-    if verdict == VALID and suite_on():
+    if pid and suite_on() and state()[0] == VALID:
         if scope is None:
             return frozenset({pid})
         return scope if scope == '*' else frozenset(scope) | {pid}
     if scope is None or scope == '*':
         return scope                       # '*': desk_on_for answers False for it
-    return (frozenset(scope) - {pid}) or None
+    return frozenset(i for i in scope if not kept_out(i)) or None
 
 
 def effective_row(row: Any) -> Any:
@@ -526,6 +585,16 @@ def books_business() -> Tuple[str, Optional[Dict[str, Any]]]:
         if verdict[0] == VALID:
             return verdict
     return _remember('books', _find_books)
+
+
+async def books_business_async() -> Tuple[str, Optional[Dict[str, Any]]]:
+    """books_business(), its reads in a worker thread: the form for async code."""
+    pid = platform_id()
+    if pid:
+        verdict = await _remember_async(f'id:{pid}', lambda: _check_id(pid), loud=True)
+        if verdict[0] == VALID:
+            return verdict
+    return await _remember_async('books', _find_books)
 
 
 # ── one loop a week ───────────────────────────────────────────────────
