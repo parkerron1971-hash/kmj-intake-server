@@ -133,12 +133,13 @@ async def scan_receipt(
         raise HTTPException(502, "couldn't store the receipt image")
 
     # 2) Chief reads it.
-    model = os.environ.get("RECEIPT_MODEL", "claude-haiku-4-5-20251001")
+    model = os.environ.get("RECEIPT_MODEL", "claude-haiku-5-5")
     try:
         import asyncio
+        import chief_models
         resp = await asyncio.to_thread(llm_call.post, {
             "model": model,
-            "max_tokens": 400,
+            "max_tokens": 400, **chief_models.quick_call_kwargs(model),
             "messages": [{
                 "role": "user",
                 "content": [

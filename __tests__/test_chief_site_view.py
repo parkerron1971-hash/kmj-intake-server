@@ -185,9 +185,9 @@ def test_describe_reads_the_screenshot_once_logs_its_cost_and_fails_soft(monkeyp
     monkeypatch.setattr(route_ledger, 'tally_usage', lambda model, usage: tallied.append((model, usage)))
     text = sv.describe(b'jpeg-bytes', 'biz-1')
     assert text.startswith('A navy header with "Book now"') and '[ACTION:' not in text
-    assert calls[0]['model'] == 'claude-haiku-4-5-20251001' and calls[0]['messages'][0]['content'][0]['type'] == 'image'
+    assert calls[0]['model'] == 'claude-haiku-5-5' and calls[0]['messages'][0]['content'][0]['type'] == 'image'
     assert logged[0]['endpoint'] == 'view_website' and logged[0]['input_tokens'] == 1600
-    assert tallied == [('claude-haiku-4-5-20251001', {'input_tokens': 1600, 'output_tokens': 90})]
+    assert tallied == [('claude-haiku-5-5', {'input_tokens': 1600, 'output_tokens': 90})]
     monkeypatch.setattr(llm_call, 'sdk_client', lambda **kw: (_ for _ in ()).throw(RuntimeError('no key')))
     assert sv.describe(b'jpeg-bytes', 'biz-1') == ''
 

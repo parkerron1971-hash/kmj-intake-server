@@ -420,12 +420,13 @@ def _sellable_offerings(business_id: str) -> List[Dict[str, Any]]:
 async def _read_label(blob: bytes, media_type: str) -> Dict[str, Any]:
     """Chief reads the packaging. Never raises — a failed read still has
     to leave the practitioner a usable form."""
-    model = os.environ.get("PRODUCT_SCAN_MODEL", "claude-haiku-4-5-20251001")
+    model = os.environ.get("PRODUCT_SCAN_MODEL", "claude-haiku-5-5")
     try:
         import asyncio
+        import chief_models
         resp = await asyncio.to_thread(llm_call.post, {
             "model": model,
-            "max_tokens": 400,
+            "max_tokens": 400, **chief_models.quick_call_kwargs(model),
             "messages": [{
                 "role": "user",
                 "content": [
