@@ -517,6 +517,11 @@ app.include_router(platform_marketing_campaigns_router)
 # The Monday plan: signals -> diagnosis -> plays -> a week of drafts for review.
 from marketing_engine import router as marketing_engine_router
 app.include_router(marketing_engine_router)
+# Mission Control's Marketing desk on the marketing suite (B15): Solutionist's
+# own business on the desk every business uses, behind MC_MARKETING_SUITE
+# (off: the Buffer desk above, unchanged), and the Buffer drain report.
+from platform_marketing_suite import router as platform_marketing_suite_router
+app.include_router(platform_marketing_suite_router)
 # Arc 25 - practitioner referral loop (codes + attribution + rewards)
 from referrals import router as referrals_router
 app.include_router(referrals_router)

@@ -32,6 +32,17 @@ read) is skipped: a failed read is never an empty calendar or a quiet week.
   8. steady                stay_visible             nothing is off
 The calendar comes first because an empty chair this week cannot be sold
 next week; the rest follow the platform's order.
+
+SOLUTIONIST'S OWN (B15). The platform business on the suite
+(platform_suite.is_platform) keeps the platform desk's own engine: its
+signals carry profile 'platform' (marketing_signals.platform_signals) and its
+profile platform True (marketing_profile.platform_profile), and diagnose,
+pick_plays, check_caption and check_flyer then answer with
+marketing_engine's rules (its problems, its five plays, no hashtag, no
+address in a caption, a founding-seat post quotes only the founding price).
+platform_facts is its facts. PLAYS still lists only the business plays; a
+platform play's entry is found through it (PLAYS[id]) for the planner's
+caption request and flyer, and never offered to a business.
 """
 from __future__ import annotations
 
@@ -56,7 +67,17 @@ PROBLEMS = {
 
 NO_NAMES = 'Name no person: no owner, staff, client or customer.'
 
-PLAYS = {
+
+class _Library(dict):
+    """The business plays. A missing id is looked up among Solutionist's own
+    plays (B15), so the planner's PLAYS[play_id] serves both; `in`,
+    iteration and .get() see the business plays alone."""
+
+    def __missing__(self, key):
+        return PLATFORM_PLAYS[key]
+
+
+PLAYS = _Library({
     'offer_spotlight': {
         'label': 'Show one offering',
         'solves': ('fill_the_calendar', 'turn_visits_into_leads', 'tell_about_new', 'stay_visible', 'get_found'),
@@ -112,7 +133,13 @@ PLAYS = {
         'brief': 'A warm invitation to people who have been before to come back. No discount, offer or deadline '
                  'unless the facts state it. ' + NO_NAMES,
     },
-}
+})
+
+# Solutionist's own plays (marketing_engine.PLAYS), with a flyer eyebrow
+# each, for the platform business on the suite (B15).
+PLATFORM_EYEBROWS = {'feature_spotlight': 'NEW', 'founder_invitation': 'FOUNDING SEAT', 'workflow_tip': 'TIP',
+                     'behind_the_build': 'WHY WE BUILT IT', 'question_answered': 'YOUR QUESTION'}
+PLATFORM_PLAYS = {k: {**v, 'eyebrow': PLATFORM_EYEBROWS.get(k, 'SOLUTIONIST')} for k, v in platform.PLAYS.items()}
 
 # Which plays each problem reaches for first, before any results exist.
 PREFERENCE = {
@@ -157,7 +184,10 @@ def _found(problem, rule, urgency, evidence, **numbers):
 def diagnose(s: Dict[str, Any]) -> Dict[str, Any]:
     """One problem from the closed set, the sentence that proves it, its
     numbers and how urgent it is. Dates are on the business's clock
-    (signals['time_zone'])."""
+    (signals['time_zone']). Solutionist's own signals (profile 'platform',
+    B15) get the platform desk's own rules."""
+    if s.get('profile') == 'platform':
+        return platform_diagnose(s)
     tz = _zone(s.get('time_zone')) or ZoneInfo('UTC')
     t, leads, b, cap, p = s.get('traffic'), s.get('leads'), s.get('bookings'), s.get('capacity'), s.get('posts')
 
@@ -325,7 +355,10 @@ def check_caption(text: str, facts: Dict[str, Any], profile: Dict[str, Any],
     every number from the facts) with the business's own site as the only
     address it may name, its own prices, and up to three hashtags (Kevin,
     2026-10-07; Solutionist's own desk still takes none). The flyer takes
-    no hashtag (check_flyer)."""
+    no hashtag (check_flyer). Solutionist's own profile (B15) gets the
+    platform desk's rules."""
+    if (profile or {}).get('platform'):
+        return platform_check_caption(text, facts, offering)
     return (platform.check_caption(text, allowed_numbers(facts), own_hosts=own_hosts(profile),
                                    max_hashtags=max_hashtags)
             or price_problem(text, facts, offering))
@@ -333,6 +366,8 @@ def check_caption(text: str, facts: Dict[str, Any], profile: Dict[str, Any],
 
 def check_flyer(copy: Any, facts: Dict[str, Any], profile: Dict[str, Any],
                 offering: Optional[str] = None) -> Optional[str]:
+    if (profile or {}).get('platform'):
+        return platform_check_flyer(copy, facts, offering)          # B15
     problem = platform.check_flyer(copy, allowed_numbers(facts), own_hosts=own_hosts(profile))
     if problem:
         return problem
@@ -408,7 +443,10 @@ def pick_plays(problem: Any, n: int, signals: Dict[str, Any], profile: Dict[str,
     problem: diagnose()'s result or its primary_problem. facts: verified_facts()
     (offerings to spotlight; none without them). The slots have no times yet:
     the week's posting times belong to the planner (B8/B9). Every slot's
-    landing_url is the business's own page."""
+    landing_url is the business's own page. Solutionist's own profile (B15)
+    picks from the platform desk's library."""
+    if (profile or {}).get('platform'):
+        return platform_pick_plays(problem, n, signals, facts or {})
     problem_id = problem['primary_problem'] if isinstance(problem, dict) else str(problem)
     if problem_id not in PREFERENCE:
         raise ValueError(f'Unknown problem: {problem_id}')
@@ -433,3 +471,83 @@ def pick_plays(problem: Any, n: int, signals: Dict[str, Any], profile: Dict[str,
 def library() -> Dict[str, Any]:
     return {'problems': PROBLEMS,
             'plays': {k: {'label': v['label'], 'solves': list(v['solves'])} for k, v in PLAYS.items()}}
+
+
+# ── Solutionist's own (B15) ───────────────────────────────────────────
+# The platform business on the suite keeps the platform desk's engine
+# (marketing_engine): its problems, plays, facts and caption rules. Only its
+# posting times and its store are the suite's.
+
+FOUNDING = 'founding seat'        # a founder_invitation slot's offering: its price is the founding price
+
+
+def platform_facts(signals: Dict[str, Any]) -> Dict[str, Any]:
+    """marketing_engine.verified_facts: live pricing and trial settings, the
+    founding-seat offer as billing reads it, the public pages' own claims
+    and the news page. Reads the pages it quotes (no database)."""
+    return platform.verified_facts(signals)
+
+
+def platform_diagnose(s: Dict[str, Any]) -> Dict[str, Any]:
+    return {**platform.diagnose(s), 'numbers': {}}
+
+
+def merge_scores(*parts: Optional[Dict[str, Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    """Play results from both stores (the Buffer desk's and the suite's),
+    weighted by their samples."""
+    total: Dict[str, List[float]] = {}
+    for part in parts:
+        for play, score in (part or {}).items():
+            n = int((score or {}).get('samples') or 0)
+            if n > 0 and isinstance(score.get('average'), (int, float)):
+                acc = total.setdefault(play, [0, 0.0])
+                acc[0] += n
+                acc[1] += n * float(score['average'])
+    return {play: {'samples': n, 'average': round(s / n, 2)} for play, (n, s) in total.items()}
+
+
+def platform_pick_plays(problem: Any, n: int, signals: Dict[str, Any], facts: Dict[str, Any]) -> Dict[str, Any]:
+    """marketing_engine.pick_plays without its times (the planner owns them):
+    up to three plays and n slots, each with its reason and its landing page
+    on mysolutionist.app. The plays lean on what did well through the links
+    of both desks once a play has three results."""
+    diagnosis = problem if isinstance(problem, dict) else {'primary_problem': str(problem)}
+    problem_id = diagnosis['primary_problem']
+    if problem_id not in platform.PREFERENCE:
+        raise ValueError(f'Unknown problem: {problem_id}')
+    scores = merge_scores(signals.get('play_scores'), signals.get('buffer_play_scores'))
+    sig = {**signals, 'play_scores': scores}
+    ranked = platform._rank([p for p in platform.PREFERENCE[problem_id] if platform._subjects(p, sig, facts)], scores)
+    if 'workflow_tip' not in ranked:
+        ranked.append('workflow_tip')          # needs nothing, so a week can always be filled
+    ranked = ranked[:3]
+    queues = {p: list(platform._subjects(p, sig, facts)) for p in ranked}
+    slots, counts = platform.fill_slots(ranked, queues, {p: platform.PLAYS[p]['max_per_week'] for p in ranked},
+                                        max(0, int(n)))
+    for i, slot in enumerate(slots):
+        slot['slot'] = i + 1
+        slot['offering'] = FOUNDING if slot['play_id'] == 'founder_invitation' else None
+        slot['landing_url'] = (slot.get('landing_url') or platform.LANDING.get(slot['play_id'])
+                               or 'https://mysolutionist.app/')
+    plays = [{'play_id': p, 'label': platform.PLAYS[p]['label'], 'posts': counts[p],
+              'reason': platform._reason(p, diagnosis, sig)} for p in ranked if counts[p]]
+    return {'plays': plays, 'slots': slots}
+
+
+def _founder_price(text: str, facts: Dict[str, Any], offering: Optional[str]) -> Optional[str]:
+    return platform.price_problem(text, 'founder_invitation' if offering == FOUNDING else None, facts)
+
+
+def platform_check_caption(text: str, facts: Dict[str, Any], offering: Optional[str] = None) -> Optional[str]:
+    """The platform desk's caption rules: 20 to 220 characters, no address
+    (the post adds its own link), no hashtag, every number from the facts,
+    and a founding-seat post quotes only the founding price."""
+    return (platform.check_caption(text, allowed_numbers(facts))
+            or _founder_price(text or '', facts, offering))
+
+
+def platform_check_flyer(copy: Any, facts: Dict[str, Any], offering: Optional[str] = None) -> Optional[str]:
+    problem = platform.check_flyer(copy, allowed_numbers(facts))
+    if problem:
+        return problem
+    return _founder_price(' '.join(str(v) for v in copy.values()), facts, offering)

@@ -316,7 +316,14 @@ def _now() -> datetime:
 def desk_scope() -> Any:
     """MARKETING_DESK: None (off: unset, empty or 'off'), '*' (every
     business), or the set of business ids it names. A token that is not a
-    business id is ignored, so a typo switches nobody on."""
+    business id is ignored, so a typo switches nobody on. Solutionist's own
+    business is in it while its desk is on the suite and out of it while not
+    (B15, platform_suite.with_platform), whatever MARKETING_DESK says."""
+    import platform_suite
+    return platform_suite.with_platform(_named_scope())
+
+
+def _named_scope() -> Any:
     raw = (os.environ.get('MARKETING_DESK') or '').strip()
     if not raw or raw.lower() == 'off':
         return None
@@ -332,6 +339,10 @@ def desk_scope() -> Any:
 
 
 def desk_on_for(business_id: Any) -> bool:
+    import platform_suite
+    platform = platform_suite.desk_switch(business_id)     # B15: on the suite, or not at all
+    if platform is not None:
+        return platform
     scope = desk_scope()
     if scope is None:
         return False
@@ -540,11 +551,14 @@ def _get(path: str) -> List[Dict[str, Any]]:
 
 def read_business(business_id: str) -> Dict[str, Any]:
     """The whole row a suggestion reads (the profile's columns and the
-    plan's). A failed read raises Unavailable; a missing one LookupError."""
+    plan's). A failed read raises Unavailable; a missing one LookupError.
+    Solutionist's own business on the suite reads as the autopilot level
+    (B15, platform_suite.effective_row)."""
+    import platform_suite
     rows = _get(f'/businesses?id=eq.{UUID(str(business_id))}&select={FULL_COLUMNS}&limit=1')
     if not rows:
         raise LookupError('Business not found.')
-    return rows[0]
+    return platform_suite.effective_row(rows[0])
 
 
 def zones(rows: List[Dict[str, Any]]) -> Dict[str, Optional[ZoneInfo]]:
@@ -552,14 +566,17 @@ def zones(rows: List[Dict[str, Any]]) -> Dict[str, Optional[ZoneInfo]]:
     business_tz): availability.timezone, the owner's practitioner_profiles.
     timezone, PLATFORM_DEFAULT_TZ, UTC. The profiles are read in one go for
     the businesses that need them; a failed read leaves those None (skipped
-    this tick), never UTC by accident."""
+    this tick), never UTC by accident. Solutionist's own business on the
+    suite keeps the platform desk's clock (B15)."""
+    import platform_suite
     from availability import BusinessAvailability
     default = bm._zone(os.environ.get('PLATFORM_DEFAULT_TZ')) or ZoneInfo('UTC')
     out: Dict[str, Optional[ZoneInfo]] = {}
     need: List[Dict[str, Any]] = []
     for row in rows:
         bid = str(row['id'])
-        zone = bm._zone(BusinessAvailability.from_settings_dict(bm._availability(row)).timezone)
+        zone = (platform_suite.zone_for(bid)
+                or bm._zone(BusinessAvailability.from_settings_dict(bm._availability(row)).timezone))
         if zone:
             out[bid] = zone
         elif row.get('owner_id'):
@@ -612,10 +629,11 @@ def _connected_ids(ids: List[str]) -> set:
 
 
 def _business_rows(ids: List[str]) -> List[Dict[str, Any]]:
+    import platform_suite
     out = []
     for chunk in _chunks(ids):
         out += _get(f"/businesses?id=in.({','.join(chunk)})&select={CANDIDATE_COLUMNS}")
-    return out
+    return [platform_suite.effective_row(r) for r in out]       # B15: the platform's own level
 
 
 def _eligible_kind(row: Dict[str, Any]) -> Optional[str]:
@@ -1473,6 +1491,16 @@ async def run_week(business_id: Any, *, trigger: str, now: Optional[datetime] = 
     if not times:
         return await stop('skipped', NO_TIME, {'status': 'no_time', 'reason': NO_TIME, 'week_of': week_of.isoformat()})
 
+    import platform_suite
+    if platform_suite.is_platform(bid):
+        # B15: one loop a week. A week the Buffer desk planned, with a post
+        # of it approved or out, is never planned again here.
+        held = await platform_suite.buffer_week_live(week_of)
+        if held is not False:
+            why = platform_suite.BUFFER_WEEK if held else platform_suite.BUFFER_WEEK_UNREAD
+            return await stop('skipped', why, {'status': 'buffer_week' if held else 'unavailable', 'reason': why,
+                                               'week_of': week_of.isoformat()})
+
     if run is None:
         try:
             if not await store.claim_run(bid, week_of, kind=WEEK_KIND, source=trigger):
@@ -1557,9 +1585,14 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
             scores = {}
         signals['play_scores'] = scores
         profile = await marketing_profile.read_profile(bid, business=row)
-        raw_facts = await asyncio.to_thread(creative_director.business_facts, bid)
-        facts = engine.verified_facts(raw_facts, new_offerings=signals.get('new_offerings'),
-                                      news=signals.get('fresh_news'))
+        if profile.get('platform'):
+            # B15: Solutionist's own facts (pricing, the founding seat, the
+            # public pages, the news page), not a business site's.
+            facts = await asyncio.to_thread(engine.platform_facts, signals)
+        else:
+            raw_facts = await asyncio.to_thread(creative_director.business_facts, bid)
+            facts = engine.verified_facts(raw_facts, new_offerings=signals.get('new_offerings'),
+                                          news=signals.get('fresh_news'))
         diagnosis = engine.diagnose(signals)
         plan = engine.pick_plays(diagnosis, len(times), signals, profile, facts)
         if not plan['slots']:
@@ -2806,9 +2839,12 @@ async def preview(business_id: str, *, at: Optional[datetime] = None) -> Dict[st
     tz = await asyncio.to_thread(marketing_profile.time_zone, row)
     profile = await marketing_profile.read_profile(business_id, business=row)
     signals = await marketing_signals.read_signals(business_id, now=at, business=row, tz=tz)
-    raw_facts = await asyncio.to_thread(creative_director.business_facts, business_id)
-    facts = engine.verified_facts(raw_facts, new_offerings=signals.get('new_offerings'),
-                                  news=signals.get('fresh_news'))
+    if profile.get('platform'):
+        facts = await asyncio.to_thread(engine.platform_facts, signals)          # B15
+    else:
+        raw_facts = await asyncio.to_thread(creative_director.business_facts, business_id)
+        facts = engine.verified_facts(raw_facts, new_offerings=signals.get('new_offerings'),
+                                      news=signals.get('fresh_news'))
     diagnosis = engine.diagnose(signals)
     n = 1 if level['level'] == LEVEL else WEEK_SLOTS
     if level['level'] != LEVEL:

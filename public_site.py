@@ -7390,10 +7390,19 @@ async def _platform_news_posts() -> List[Dict[str, Any]]:
     Bypassing RLS is worth doing narrowly: that blob also holds the
     platform's Stripe state, and none of it belongs in a request that
     only renders posts.
+
+    The row is Solutionist's own business: flagged platform_books AND owned
+    by the platform owner (platform_suite.books_business). Any business
+    admin can set the flag on their own row, so the flag alone could let a
+    tenant's posts stand in for the platform's (B15 review).
     """
+    import platform_suite
+    verdict, books = await asyncio.to_thread(platform_suite.books_business)
+    if not books:
+        return []
     async with httpx.AsyncClient() as client:
         rows = await _sb_service(client,
-            "/businesses?settings->>platform_books=eq.true"
+            f"/businesses?id=eq.{books['id']}&settings->>platform_books=eq.true"
             "&select=news:settings->website_content->news&limit=1")
     if not rows:
         return []
@@ -7501,6 +7510,12 @@ async def public_marketing_link(request: Request, code: str):
     import platform_marketing
     person = _counts_as_person(request)
     url = await platform_marketing.follow(code.strip().lower(), count_click=person)
+    if not url:
+        # Solutionist's own desk on the marketing suite (B15): its posts carry
+        # mysolutionist.app/go/<code> too, kept in marketing_posts. Read only
+        # once the Buffer desk's code missed, and only with PLATFORM_BUSINESS_ID set.
+        import business_marketing_links
+        url = await business_marketing_links.follow_platform(code, person=person)
     return RedirectResponse(url=url or "https://mysolutionist.app/", status_code=302,
                             headers=_GO_HEADERS)
 

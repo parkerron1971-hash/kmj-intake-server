@@ -241,7 +241,15 @@ async def dispatch(actions, owner, request_id, handlers):
             results.append({**await handlers[kind](action), 'type': kind})
             continue
         automatic = group != 'review' and settings.get(group) == 'allow'
-        row = await propose(owner.id, request_id, index, action, automatic=automatic)
+        try:
+            row = await propose(owner.id, request_id, index, action, automatic=automatic)
+        except HTTPException as exc:
+            # A refusal while preparing the card (a post-now while the Buffer
+            # desk is closed, B15; a malformed field) is this action's answer,
+            # in its own words, never the whole reply's failure.
+            detail = exc.detail if isinstance(exc.detail, str) else 'This action could not be prepared.'
+            results.append({'ok': False, 'type': kind, 'label': detail})
+            continue
         if automatic and row['status'] == 'pending' and row['automatic']:
             claimed = await claim(row, owner.id, 'approve')
             if claimed:

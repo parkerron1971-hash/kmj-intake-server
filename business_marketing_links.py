@@ -95,6 +95,9 @@ def own_hosts(site: Optional[Mapping[str, Any]]) -> FrozenSet[str]:
     none."""
     if not site:
         return frozenset()
+    if site.get("platform"):
+        # Solutionist's own desk on the suite (B15): its site is the platform's own.
+        return frozenset({PUBLIC_DOMAIN, f"www.{PUBLIC_DOMAIN}"})
     hosts = {f"{site['slug']}.{PUBLIC_DOMAIN}"}
     if site.get("domain"):
         hosts |= {site["domain"], f"www.{site['domain']}"}
@@ -113,7 +116,11 @@ def short_link(site: Mapping[str, Any], code: str) -> str:
 
 
 def site_for(business_id: Any) -> Optional[Dict[str, Any]]:
-    """The business's site, or None when it has none. Raises on a failed read."""
+    """The business's site, or None when it has none. Raises on a failed read.
+    Solutionist's own business on the suite (B15) has mysolutionist.app."""
+    import platform_suite
+    if platform_suite.is_platform(business_id):
+        return platform_suite.platform_site(business_id)
     rows = sb_clients.sb_get_as_service(
         f"/business_sites?business_id=eq.{UUID(str(business_id))}&select={SITE_COLUMNS}"
         "&order=updated_at.desc&limit=1")
@@ -275,6 +282,37 @@ async def follow_on_host(kind: str, name: str, code: str, *, person: bool) -> Op
         found = await store.follow(code, count_click=False)
     except (LinksUnavailable, store.StoreError):
         logger.warning("marketing link %s on a %s host could not be resolved", code, kind)
+        return None
+    url = destination(found, site)
+    if url is None:
+        return None
+    if person:
+        try:
+            await store.follow(code, count_click=True)
+        except store.StoreError:
+            logger.warning("marketing link %s: the click could not be counted", code)
+    return url
+
+
+async def follow_platform(code: str, *, person: bool) -> Optional[str]:
+    """Where a short link on mysolutionist.app goes when it is a post of
+    Solutionist's own business on the suite (B15), or None. Asked only after
+    the Buffer desk's own code missed (public_site's apex /go/). The same
+    rule as a business host: the post must be the platform business's and
+    its tracked_url https on mysolutionist.app; the click is counted only
+    then, and only for a person. Keyed on the validated PLATFORM_BUSINESS_ID
+    (platform_suite.valid_id), not the switch, so a link already out keeps
+    working; unset, nothing is read."""
+    import platform_suite
+    pid = platform_suite.valid_id() if platform_suite.platform_id() else None
+    code = (code or "").strip().lower()
+    if not pid or not store.GO_CODE.match(code):
+        return None
+    site = platform_suite.platform_site(pid)
+    try:
+        found = await store.follow(code, count_click=False)
+    except store.StoreError:
+        logger.warning("marketing link %s on the platform host could not be resolved", code)
         return None
     url = destination(found, site)
     if url is None:

@@ -33,6 +33,13 @@ so a database blip never reads as an empty calendar.
 
 Read-only, no model call. Read by the weekly suggestion and the preview
 (business_marketing_planner, B8).
+
+SOLUTIONIST'S OWN (B15). For the platform business on the suite
+(platform_suite.is_platform) read_signals answers platform_signals instead:
+the platform desk's own numbers (marketing_engine.read_signals:
+growth_summary, founder_offer, the news page, site_events with no business,
+the Buffer desk's posts and plans) with the suite's own posts and plans
+added in, so a week posted on either desk counts. Marked profile 'platform'.
 """
 from __future__ import annotations
 
@@ -392,6 +399,9 @@ async def read_signals(business_id: Any, *, now: Optional[datetime] = None,
     capacity window's days."""
     now = now or datetime.now(timezone.utc)
     bid = str(UUID(str(business_id)))
+    import platform_suite
+    if platform_suite.is_platform(bid):
+        return await platform_signals(bid, now=now)
     unread: List[str] = []
 
     async def safe(name, fetch):
@@ -452,6 +462,9 @@ async def read_signals(business_id: Any, *, now: Optional[datetime] = None,
 
 def summary(signals: Dict[str, Any]) -> Dict[str, Any]:
     """What a run records about its inputs: the numbers and titles, not page bodies."""
+    if signals.get('profile') == 'platform':
+        import marketing_engine as platform
+        return {**platform.summary(signals), 'profile': 'platform', 'unread': signals.get('unread') or []}
     cap = signals.get('capacity')
 
     def names(items, field):
@@ -465,3 +478,59 @@ def summary(signals: Dict[str, Any]) -> Dict[str, Any]:
             'unmarketed_offerings': names(signals.get('unmarketed_offerings'), 'name'),
             'unmarketed_news': names(signals.get('unmarketed_news'), 'title'),
             'unread': signals.get('unread') or []}
+
+
+# ── Solutionist's own (B15) ───────────────────────────────────────────
+
+def _merge_posts(buffer: Optional[Dict[str, Any]], suite: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """What went out (and is approved ahead) on either desk. Unknown on
+    either side is unknown: never a quiet week by accident."""
+    if buffer is None or suite is None:
+        return None
+    stamps = [s for s in (buffer.get('last_published'), suite.get('last_published')) if s]
+    return {'last_published': max(stamps, key=lambda s: _when(s)) if stamps else None,
+            'published_last_7_days': int(buffer.get('published_last_7_days') or 0)
+            + int(suite.get('published_last_7_days') or 0),
+            'approved_next_7_days': int(buffer.get('approved_next_7_days') or 0)
+            + int(suite.get('approved_next_7_days') or 0)}
+
+
+async def platform_signals(business_id: Any, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Everything Solutionist's own week may look at. The platform desk's
+    reads (each None when unread, never 0) plus the suite's: its posts (the
+    last post and what is approved, counted with the Buffer desk's) and its
+    plans' subjects (so a news post told on either desk is not told again).
+    play_scores is left for the planner (the suite's own links);
+    buffer_play_scores carries the Buffer desk's, and the platform's plays
+    weigh both."""
+    import marketing_engine as platform
+    now = now or datetime.now(timezone.utc)
+    bid = str(UUID(str(business_id)))
+    unread: List[str] = []
+
+    async def safe(name, fetch):
+        try:
+            return await fetch()
+        except Exception:
+            log.warning('marketing signals: %s could not be read for the platform', name, exc_info=True)
+            unread.append(name)
+            return None
+
+    base, suite_posts, suite_used = await asyncio.gather(
+        platform.read_signals(now), safe('suite_posts', lambda: _posts(bid, now)),
+        safe('suite_subjects', lambda: _used(bid, now)))
+    for key in ('traffic', 'posts', 'news', 'founder'):
+        if base.get(key) is None:
+            unread.append(key)
+    used = sorted(set(base.get('used_subjects') or []) | set(suite_used or []))
+    news = base.get('news')
+    fresh_news = None
+    if news is not None and suite_used is not None:
+        since = now - timedelta(days=NEW_DAYS)
+        fresh_news = [n for n in news if _when(n.get('published_at')) and _when(n['published_at']) >= since
+                      and news_key(n) not in used]
+    return {**base, 'profile': 'platform', 'business_id': bid, 'time_zone': platform.TZ.key,
+            'posts': _merge_posts(base.get('posts'), suite_posts),
+            'used_subjects': used, 'unmarketed_news': fresh_news,
+            'buffer_play_scores': base.get('play_scores') or {}, 'play_scores': {},
+            'unread': sorted(set(unread))}

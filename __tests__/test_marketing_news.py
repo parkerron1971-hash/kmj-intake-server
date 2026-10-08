@@ -116,7 +116,19 @@ def test_paragraph_helper_leaves_styling_to_the_caller():
 # and _sb turns any 4xx into None — so the archive 404ed with a
 # published post in the row, looking identical to "nothing posted yet".
 
+PLATFORM_ID = "b1500000-0000-4000-8000-000000000015"
+
+
+def _the_platforms_books(monkeypatch):
+    """Solutionist's own business, as platform_suite.books_business finds it
+    (the platform_books row owned by the platform owner, B15 review)."""
+    import platform_suite
+    monkeypatch.setattr(platform_suite, "books_business",
+                        lambda: ("valid", {"id": PLATFORM_ID, "owner_id": "owner"}))
+
+
 def test_platform_news_reads_with_the_service_role(monkeypatch):
+    _the_platforms_books(monkeypatch)
     seen = {"anon": 0, "service": []}
 
     async def fake_anon(client, path):
@@ -142,6 +154,7 @@ def test_platform_news_asks_only_for_the_posts(monkeypatch):
     """Bypassing RLS is worth doing narrowly. The same settings blob
     holds the platform's Stripe state, and a select of the whole thing
     would drag it into a request that only renders posts."""
+    _the_platforms_books(monkeypatch)
     captured = {}
 
     async def fake_service(client, path):
@@ -153,6 +166,7 @@ def test_platform_news_asks_only_for_the_posts(monkeypatch):
 
     path = captured["path"]
     assert "platform_books" in path, "must select the platform's own row"
+    assert f"id=eq.{PLATFORM_ID}" in path, "the owner-checked row, never the first flagged one"
     assert "settings->website_content->news" in path
     assert "select=settings&" not in path and not path.endswith("select=settings")
 

@@ -30,6 +30,13 @@ offering list (agent_site and booking_widget_router fail soft) lands posts
 on the site's home page, which is still the business's own page.
 
 Read by the weekly suggestion and the preview (business_marketing_planner, B8).
+
+SOLUTIONIST'S OWN (B15). For the platform business on the suite
+(platform_suite.is_platform) read_profile answers platform_profile instead:
+marketing_engine's AUDIENCE, SYSTEM and clock, mysolutionist.app as its site
+and landing page, "THE SOLUTIONIST SYSTEM" on its flyers, no hashtags
+(max_hashtags 0) and `platform` True, which the engine reads to use the
+platform desk's own rules. No other business ever gets it.
 """
 from __future__ import annotations
 
@@ -259,8 +266,10 @@ def booking_open(business: Dict[str, Any]) -> bool:
 
 
 async def read_profile(business_id: Any, *, business: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """One business's marketing profile, read as the service role."""
+    """One business's marketing profile, read as the service role.
+    Solutionist's own business on the suite gets platform_profile (B15)."""
     import business_marketing
+    import platform_suite
     bid = str(UUID(str(business_id)))
     row = business if business is not None else await asyncio.to_thread(read_business, bid)
     if str(row.get('id')) != bid:
@@ -269,9 +278,47 @@ async def read_profile(business_id: Any, *, business: Optional[Dict[str, Any]] =
         desk = await store.get_desk(bid)
     except store.StoreError:
         raise ProfileUnavailable("The marketing desk couldn't be read just now.") from None
+    if platform_suite.is_platform(bid):
+        return platform_profile(row, desk=desk)
     hosts, chair, tz, live = await asyncio.gather(
         asyncio.to_thread(_strict, business_marketing._own_hosts, bid),
         asyncio.to_thread(_strict, business_marketing.has_chair_calendar, row),
         asyncio.to_thread(time_zone, row),
         asyncio.to_thread(booking_open, row))
     return build_profile(row, desk=desk, hosts=hosts, booking_live=live, chair_calendar=chair, tz=tz)
+
+
+# ── Solutionist's own (B15) ───────────────────────────────────────────
+
+PLATFORM_NAME = 'The Solutionist System'
+
+
+def platform_profile(business: Dict[str, Any], *, desk: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Solutionist's own profile, for the platform business on the suite
+    only: marketing_engine's constants as a profile. The audience is the
+    desk's own words when Kevin set them, else the platform's AUDIENCE; the
+    link is the desk's (while it is on mysolutionist.app), else the home
+    page (each play still picks its own page: marketing_engine.LANDING)."""
+    import marketing_engine as platform
+    business = business or {}
+    hosts = sorted({PUBLIC_DOMAIN, f'www.{PUBLIC_DOMAIN}'})     # business_marketing_links' platform site
+    site_url = f'https://{PUBLIC_DOMAIN}/'
+    desk_audience = _text((desk or {}).get('audience'), 600)
+    desk_landing = str((desk or {}).get('landing_url') or '').strip() or None
+    on_site = bool(desk_landing and on_own_site(desk_landing, hosts))
+    return {
+        'business_id': str(business.get('id') or ''),
+        'brand_name': PLATFORM_NAME,
+        'business_type': str(business.get('type') or '') or None,
+        'vertical': kind_of(business.get('type')),
+        'audience': desk_audience or platform.AUDIENCE, 'audience_from': 'desk' if desk_audience else 'platform',
+        'voice': {'tone': None, 'personality': None, 'communication_style': None},
+        'timezone': platform.TZ.key,
+        'site_host': PUBLIC_DOMAIN, 'own_hosts': hosts, 'site_url': site_url, 'booking_url': None,
+        'landing_url': desk_landing if on_site else site_url, 'landing_from': 'desk' if on_site else 'platform',
+        'shape': 'week',
+        'system_prompt': platform.SYSTEM,
+        'flyer_footer': {'label': PLATFORM_NAME.upper(), 'host': PUBLIC_DOMAIN},
+        'max_hashtags': 0,
+        'platform': True,
+    }

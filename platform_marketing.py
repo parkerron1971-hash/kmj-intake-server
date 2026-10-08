@@ -21,6 +21,7 @@ from PIL import Image
 from buffer_client import BufferClient, BufferError
 from lead_admin import require_owner
 from auth_supabase import UserSession
+import platform_suite
 import sb_clients
 
 router = APIRouter(prefix='/platform/marketing', tags=['platform-marketing'], dependencies=[Depends(require_owner)])
@@ -437,6 +438,8 @@ async def follow(code, *, count_click):
 
 @router.post('/posts')
 async def save_draft(req: Draft):
+    if req.revision is None:
+        platform_suite.close_buffer()       # B15: a new post goes on the suite desk while it is on
     if req.revision is not None:
         # Preserve the campaign when legacy clients/Chief omit its ID on edit.
         current = await db('GET', f'/platform_marketing_posts?id=eq.{req.id}&limit=1')
@@ -514,6 +517,7 @@ SERVICE_NAMES = {'twitter': 'X', 'facebook': 'Facebook', 'instagram': 'Instagram
 async def create_idea(req: Idea):
     """Save one post for every chosen channel in a single insert: all of them or none."""
     import marketing_engine
+    platform_suite.close_buffer()           # B15
     cfg = await config()
     connected = cfg.get('channels') or []
     if req.channel_ids is None:
@@ -568,6 +572,7 @@ async def _approve_rows(rows, owner):
 async def post_new_now(req: Idea, owner):
     """The owner wrote it and pressed Post now: save it for every chosen channel
     two minutes out and approve it as theirs in the same step."""
+    platform_suite.close_buffer()           # B15
     cfg = await config()
     problem = publishing_ready(cfg)
     if problem:
@@ -606,6 +611,7 @@ async def post_existing_now(items, owner, *, caption=None):
     post must still carry the revision and words the owner saw (content hash,
     or the caption Chief froze on its card); only its time changes, to two
     minutes from now, and the owner's approval follows in the same step."""
+    platform_suite.close_buffer()           # B15
     cfg = await config()
     problem = publishing_ready(cfg)
     if problem:
@@ -652,6 +658,8 @@ async def live_destinations(cfg):
 
 @router.post('/approve')
 async def approve(req: Review, owner=Depends(require_owner)):
+    # B15: while the suite is on, an approval here would be a new Buffer post.
+    platform_suite.close_buffer()
     # Refresh channel health once per batch before approving exact snapshots.
     cfg = await config()
     live = await live_destinations(cfg)
@@ -880,6 +888,10 @@ async def due_tick():
                 rows = await db('POST', '/rpc/platform_marketing_claim', {})
                 if not rows:
                     break
+                if platform_suite.buffer_state() == 'closed':
+                    # B15: nothing new reaches this queue; what was approved before the switch drains.
+                    logger.info('Buffer drain: sending post %s, approved before the marketing suite took over.',
+                                rows[0].get('id'))
                 patch = await dispatch(rows[0], api)
                 if patch.get('status') in ('failed', 'uncertain'):
                     trouble.append({**rows[0], **patch})

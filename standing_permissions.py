@@ -178,9 +178,13 @@ def marketing_eligible(biz: Dict[str, Any], verb: str) -> Tuple[bool, str]:
     the Solutionist plan) and client-facing autonomy is enabled. A post
     goes out under the business's name, so a practice that keeps
     client-facing sends to itself keeps these too. Fails closed: anything
-    that cannot be read says no."""
+    that cannot be read says no. Solutionist's own business on the marketing
+    suite is at the autopilot level whatever its billing (B15,
+    platform_suite.effective_row; that id only, never from a request)."""
     try:
         import feature_gates
+        import platform_suite
+        biz = platform_suite.effective_row(biz)
         if not all(feature_gates.plan_includes(biz, f) for f in MARKETING_FEATURES[verb]):
             return False, NOT_ON_PLAN
     except Exception:

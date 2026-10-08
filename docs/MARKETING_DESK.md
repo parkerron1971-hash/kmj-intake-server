@@ -1239,3 +1239,190 @@ stops these too), no frontend (F6 is the Solutionist view). Not yet seen
 live: the `snapshot->>source` filter and the JSON-path select on
 `marketing_post_events` through PostgREST (a 400 there reads as a failed
 read: no question, no retire, never a guess).
+
+## Solutionist's own desk on the suite (B15)
+
+Step 5 of the marketing-suite plan
+(`docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md`: D1-D3, B15 and "Kevin, by
+hand" 5), 2026-10-08. Mission Control's Marketing desk stops being a separate
+single-tenant system and becomes the desk for Solutionist's own business on
+the suite every business uses: one posting path (Post for Me, through its own
+connected accounts), one store (`marketing_*`), one planner. Behind
+`MC_MARKETING_SUITE` (off by default). **Off, the Buffer desk above is exactly
+as it was** (its tests run unchanged). `platform_suite.py` holds the
+switches; `platform_marketing_suite.py` holds Mission Control's routes. No
+migration.
+
+### Which business is Solutionist's own
+
+Today Mission Control finds it as the row with `settings.platform_books`
+true under the signed-in owner's account
+(`platform_console._find_platform_business`). The worker has no signed-in
+owner, and `settings` is the owner's own JSON: any business admin can set
+`platform_books` on their own row (the `businesses_admin_update` policy), so
+the flag alone is not an identity a server-side grant can rest on. New env
+`PLATFORM_BUSINESS_ID` names it, and **one predicate validates it
+everywhere** (`platform_suite.state`, service-role reads, remembered 5
+minutes, a failed read 1 minute): its row is readable, `platform_books` is
+true, and its owner is the platform owner's user (the auth user whose email
+is `PLATFORM_OWNER_EMAIL`, read by id as `platform_chief_authority` reads a
+business owner's address).
+
+| State | What happens |
+| --- | --- |
+| valid, switch on | the suite is **active**: everything below applies; the Buffer desk drains |
+| valid, switch off | the Buffer desk as before; the suite's fan-out leaves the platform business out |
+| unset or invalid (a tenant's id put in by mistake, a row not flagged, an owner who is not the platform owner), switch on | the Buffer desk and its Thursday job keep working exactly as before, a loud error is logged, and `GET /suite/status` and `/drain` say so in a plain sentence. The id gets nothing special (no level, no profile, no exclusion from its own desk) |
+| unknown (a read failed), switch on | fail closed: neither desk takes anything new that minute (503 in plain words), neither loop plans the week that hour, nothing is the platform business |
+
+Mission Control's routes also check that the row's owner is the signed-in
+platform owner (`require_owner`) and refuse in plain words otherwise.
+
+The same owner check now guards the two places that took the first
+`platform_books` row on its own (B15 review): the public news page
+(`public_site._platform_news_posts`, mysolutionist.app/news) and the Buffer
+desk's flyers and numbers (`marketing_design.platform_owner`,
+`marketing_engine._news`) read `platform_suite.books_business`: the validated
+id, else the oldest flagged row whose owner is the platform owner. A tenant
+that flags its own row is never it.
+
+### What that business gets (the suite active, that id only)
+
+- **The autopilot level** (the week, its clips, standing OKs) whatever its
+  billing row says: `platform_suite.effective_row` reads it as `comp_tier`
+  practice, in memory only, in `business_marketing.level_for`, the
+  planner's business reads and `standing_permissions.marketing_eligible`
+  (B13: a standing OK still needs Kevin's grant and client-facing autonomy
+  on that business). Never from a request; never for another id (a tenant
+  setting `platform_books` on its own row gets nothing).
+- **Its own profile** (`marketing_profile.platform_profile`):
+  `marketing_engine`'s AUDIENCE (or the desk's own audience words), SYSTEM
+  (no hashtags, no address in a caption), the clock America/New_York
+  (`business_tz` and the fan-out's `zones` both), mysolutionist.app as its
+  site and landing page, "THE SOLUTIONIST SYSTEM" in its flyer footer,
+  `max_hashtags` 0. The business rule of up to three hashtags stays for every
+  other business.
+- **Its own numbers** (`marketing_signals.platform_signals`): the platform
+  desk's reads (`growth_summary`, `founder_offer`, the news page, site_events
+  with no business, the Buffer desk's posts, plans and play results) with the
+  suite's own posts and plan subjects added in, so a week posted on either
+  desk counts and a news post told on either is not told again. A side that
+  cannot be read leaves the posts unknown (never a quiet week).
+- **Its own plays and rules** (`business_marketing_engine`'s platform half):
+  the platform's problems, five plays and `_rank`/`fill_slots`, leaning on the
+  results of both desks (`merge_scores`); facts from
+  `marketing_engine.verified_facts`; captions held to the platform's checks
+  (20-220 characters, no link, no hashtag, numbers only from the facts, a
+  founding-seat post quotes only the founding price). `PLAYS` still lists the
+  business plays only; a platform play's entry is found through it for the
+  caption request and the flyer.
+- **Its links on mysolutionist.app.** `business_marketing_links.site_for`
+  answers the platform's own site: hosts `mysolutionist.app` and www, origin
+  `https://mysolutionist.app`, so a post's short link is
+  `https://mysolutionist.app/go/<code>` and its `tracked_url` carries the
+  desk's utm tags. The apex `/go/` asks the Buffer desk's codes first, then
+  (`follow_platform`) the suite's: redirected only for a post of the platform
+  business whose `tracked_url` is https on mysolutionist.app, counted only
+  for a person. That lookup is keyed on the id, not the switch, so a link
+  already out keeps working if the switch goes back off. **Results** read the
+  platform's own pages (site_events with no business) and its own leads
+  (`marketing_leads`). Not counted here: signups (`businesses.attribution`),
+  which the Buffer desk's results count and the suite's measures do not have.
+- **The suite's fan-out includes it whatever `MARKETING_DESK` says**
+  (`desk_scope` adds it, `desk_on_for` answers True). Its desk's own
+  `plan_enabled` is still its switch for Chief's weekly plan, as for every
+  business.
+
+### Mission Control's routes
+
+The business desk's own paths and answers under `/platform/marketing/suite`,
+so Mission Control mounts the shared `BusinessMarketingDesk` with one
+`request` prop (F7). Each calls the business route itself, so the business
+desk's owner check runs too.
+
+| Route | Same as |
+| --- | --- |
+| `GET /suite/status` | (new) `{on, ready, business_id, reason}`: which desk Mission Control shows |
+| `GET /suite/engine` | `GET /marketing/{id}/engine` (level autopilot, America/New_York) |
+| `GET /suite/ideas/next-slot`, `POST /suite/ideas` | the same |
+| `POST /suite/approve`, `/suite/slot/edit`, `/suite/slot/cancel`, `/suite/post-now` | the same |
+| `POST /suite/posts/{id}/not-sent`, `POST /suite/posts/{id}/take-back`, `PUT /suite/settings`, `GET /suite/results` | the same |
+| `POST /suite/engine/run` | `POST /marketing/{id}/engine/run`, refused while the Buffer desk's plan for that week has a post approved or out |
+| `GET /suite/preview` | `GET /marketing/{id}/preview` |
+| `GET /platform/marketing/drain` | (new) the Buffer posts still to go out |
+
+All are the platform owner's alone (`require_owner`); a tenant owner gets 403
+before anything is read. Granting a standing OK is
+`POST /agents/chief/standing` as for any business (Kevin, signed in to the
+platform business).
+
+### Buffer drains
+
+While the suite is active nothing new goes to Buffer: the Buffer desk
+refuses a new post (`POST /ideas`, a new `POST /posts`), an approval
+(`/approve`), `/post-now` and a planned week (`/engine/run`) with 409 and
+"Solutionist's marketing runs on the marketing suite now..."; Platform Chief's
+`marketing_new_post`, a new `marketing_save_draft`, `marketing_post_now`,
+`marketing_run_week` and `marketing_replan_week` say the same, and its
+snapshot carries `suite`. A post-now card refused while it is being prepared
+is that action's own answer in the reply (`platform_chief_authority.dispatch`
+turns a refusal from `propose` into `{ok: false, label}`), never the whole
+reply's failure; that holds for any action whose card cannot be prepared. Editing, skipping, cancelling and pausing posts
+already there still work. Posts approved before the switch are left to go
+out: the minute job keeps sending them (logged "Buffer drain"), and nothing
+in Buffer is ever cancelled automatically.
+
+`GET /platform/marketing/drain` (owner, either switch state, reads the
+platform tables only, no Buffer call): `queued` (approved, window open),
+`sending`, `in_buffer` (handed over, still being checked every 10 minutes
+while `BUFFER_API_KEY` is set), `unconfirmed`, `missed`, `drafts`,
+`last_goes_out`, `paused`, `buffer_publishing`, `suite_active`,
+`suite_problem` (why the switch is on and the suite is not), and
+`safe_to_switch_off` (the suite active, queued and sending both 0), with one
+plain sentence. A failed read is a 503,
+never "0 left". Do not pause the Buffer desk to drain it: a paused desk holds
+its approved posts.
+
+### One loop a week
+
+| Switch | Who plans Solutionist's week |
+| --- | --- |
+| off, or on without a valid id | `marketing_engine.engine_tick` (the Buffer desk), as before. The suite's fan-out leaves the platform business out once its id validates (`desk_on_for` False even with `MARKETING_DESK=*`), and the old job skips a week whose suite plan has a post approved or out |
+| on, valid id (active) | the suite's fan-out (`marketing_tick`, kind week). `engine_tick` does nothing; the suite does not plan a week whose Buffer plan has a post approved or out (`buffer_week_live`; the owner's request is refused the same way) |
+| on, unconfirmed | neither, that hour |
+
+A read across the two that fails plans nothing that hour on either side.
+With the switch on and its desk's `plan_enabled` off, no loop plans the week:
+switching it on is part of the switch-over (below).
+
+### Platform Chief
+
+The smaller safe change: Platform Chief's marketing verbs stay on the Buffer
+desk's path for managing what is draining, and refuse anything new (above).
+Routing them through B10's desk verbs (`chief_marketing_actions`) for the
+platform business is left for a follow-up: those check the signed-in owner on
+a practitioner chat turn, and the Mission Control prompt and review cards
+describe Buffer channels. On the suite, Kevin works the desk directly, or asks
+the Chief of the platform business itself.
+
+### Kevin's switch-over
+
+1. In the practitioner app, signed in to The Solutionist System, connect its
+   social accounts (Build, Social Media, Post for Me).
+2. Set `PLATFORM_BUSINESS_ID` to that business's id (web and worker), and make
+   sure `POST_FOR_ME_PILOT_BUSINESSES` includes it (or is `*`) and
+   `MARKETING_DESK_PUBLISHING=on`.
+3. Set `MC_MARKETING_SUITE=on` (web and worker). `GET
+   /platform/marketing/suite/status` says `ready: true`.
+4. Turn on Chief's weekly plan on the suite desk (`PUT
+   /platform/marketing/suite/settings {"plan_enabled": true}` until F7 shows
+   the switch).
+5. Watch `GET /platform/marketing/drain` reach `safe_to_switch_off: true`,
+   then set `BUFFER_PUBLISHING=off`.
+
+Not built here: Mission Control's frontend on the suite (F7); MC Today and
+the Mission Control Chief digest still read the Buffer desk (the suite's
+Today items land on the platform business's own Today); signups in the
+suite's results.
+
+Tests: `__tests__/test_platform_marketing_suite.py`.

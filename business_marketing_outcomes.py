@@ -145,15 +145,23 @@ async def _measure_posts(bid: str, ids: List[str],
         return per, sources
     day = since.date().isoformat()
     stamp = query_time(since)
+    import platform_suite
+    if platform_suite.is_platform(bid):
+        # Solutionist's own desk on the suite (B15): its pages are the
+        # platform's (site_events with no business) and its leads the
+        # platform's own (marketing_leads), as marketing_outcomes reads them.
+        visits_at, leads_at = "business_id=is.null", "/marketing_leads?"
+    else:
+        visits_at, leads_at = f"business_id=eq.{bid}", f"/contacts?business_id=eq.{bid}&"
     (clicks, sources["clicks"]), (events, sources["visits"]), (leads, sources["leads"]) = await asyncio.gather(
         _measure(lambda: _batched(_store, lambda s: (
             f"/marketing_link_clicks?business_id=eq.{bid}&post_id=in.({s})&day=gte.{day}"
             "&select=post_id,clicks"), ids, LIMITS["clicks"])),
         _measure(lambda: _batched(_service, lambda s: (
-            f"/site_events?business_id=eq.{bid}&data->>utm_content=in.({s})&ts=gte.{stamp}"
+            f"/site_events?{visits_at}&data->>utm_content=in.({s})&ts=gte.{stamp}"
             "&select=session_id,data"), ids, LIMITS["visits"])),
         _measure(lambda: _batched(_service, lambda s: (
-            f"/contacts?business_id=eq.{bid}&attribution->>utm_content=in.({s})&created_at=gte.{stamp}"
+            f"{leads_at}attribution->>utm_content=in.({s})&created_at=gte.{stamp}"
             "&select=id,attribution"), ids, LIMITS["leads"])),
     )
     for row in clicks:
