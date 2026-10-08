@@ -54,7 +54,7 @@ logger = logging.getLogger("lead_scoring")
 
 # Cheap by design: this is a triage pass on an anonymous endpoint, not a
 # thinker. Same model the concierge and the ledger navigator use.
-REFINE_MODEL = os.environ.get("LEAD_SCORE_MODEL", "claude-haiku-4-5-20251001")
+REFINE_MODEL = os.environ.get("LEAD_SCORE_MODEL", "claude-haiku-5-5")
 
 # How far the AI may move the deterministic score in either direction.
 # Narrow on purpose — the rubric is the instrument, the model is a
@@ -364,11 +364,12 @@ def refine(base: LeadScore, submission: Dict[str, Any], *,
         pass  # a missing/broken guard must not block the scoring path
 
     try:
+        import chief_models
         import llm_call
         resp = llm_call.post(
             {
                 "model": REFINE_MODEL,
-                "max_tokens": 300,
+                "max_tokens": 300, **chief_models.quick_call_kwargs(REFINE_MODEL),
                 "system": REFINE_SYSTEM.format(band=REFINE_BAND),
                 "messages": [{
                     "role": "user",

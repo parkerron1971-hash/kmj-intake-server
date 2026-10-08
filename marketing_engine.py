@@ -564,12 +564,33 @@ def own_links_out(text, own_hosts):
     return kept, elsewhere or bool(_LINK.search(kept))
 
 
-def check_caption(text, allowed_numbers, own_hosts=None):
+_HASHTAG = re.compile(r'#\w+')
+
+
+def hashtag_problem(text, max_hashtags=0):
+    """Why the caption's hashtags cannot stand, or None. Solutionist's own
+    desk takes none (max_hashtags=0, the default). A business's caption may
+    carry up to max_hashtags (Kevin, 2026-10-07: three); a stray '#' that
+    starts no tag is refused either way."""
+    if '#' not in text:
+        return None
+    if not max_hashtags:
+        return 'hashtag'
+    tags = _HASHTAG.findall(text)
+    if len(tags) != text.count('#'):
+        return 'hashtag'
+    if len(tags) > max_hashtags:
+        return f'more than {max_hashtags} hashtags'
+    return None
+
+
+def check_caption(text, allowed_numbers, own_hosts=None, max_hashtags=0):
     """Why a caption cannot be used, or None. Every rule is a claim the owner never gave.
 
     own_hosts: None for Solutionist's own desk (no address at all; the link
     is added after the caption). A business's desk passes its own hosts, so
-    its caption may name its own site and nothing else."""
+    its caption may name its own site and nothing else. max_hashtags: 0 for
+    Solutionist's own desk; a business's desk passes its own allowance."""
     text = (text or '').strip()
     if not 20 <= len(text) <= CAPTION_MAX:
         return 'length'
@@ -580,8 +601,9 @@ def check_caption(text, allowed_numbers, own_hosts=None):
         text, elsewhere = own_links_out(text, own_hosts)
         if elsewhere:
             return "link to somewhere other than the business's own site"
-    if '#' in text:
-        return 'hashtag'
+    problem = hashtag_problem(text, max_hashtags)
+    if problem:
+        return problem
     stray = _numbers(text) - allowed_numbers
     if stray:
         return f'number not in the facts ({", ".join(sorted(stray))})'

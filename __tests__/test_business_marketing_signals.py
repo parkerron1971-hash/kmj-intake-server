@@ -510,7 +510,11 @@ FACTS = {'name': "Kev's Fades", 'books_online': True,
      "link to somewhere other than the business's own site"),
     ('Follow along at www.instagram.com/kevsfades for fresh cuts.', None,
      "link to somewhere other than the business's own site"),
-    ('A fresh cut for the weekend, book online today. #barber', None, 'hashtag'),
+    # Kevin, 2026-10-07: a business caption may carry up to three hashtags (B8).
+    ('A fresh cut for the weekend, book online today. #barber', None, None),
+    ('Fresh cuts this weekend. #barber #fades #cleancut', None, None),
+    ('Fresh cuts this weekend. #barber #fades #cleancut #weekend', None, 'more than 3 hashtags'),
+    ('Fresh cuts this weekend, # book online today.', None, 'hashtag'),
 ])
 def test_business_captions(text, offering, problem):
     assert eng.check_caption(text, FACTS, profile_of(), offering) == problem

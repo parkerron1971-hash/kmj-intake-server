@@ -9,15 +9,16 @@ engine over its own numbers (marketing_signals), its own facts
   diagnose(signals)                          one problem, the sentence that proves it, its numbers
   pick_plays(problem, n, signals, profile)   up to three plays and n slots, each with its reason
   verified_facts(facts)                      what a caption may state (a hidden price stays out)
-  check_caption / check_flyer                the platform's checks, with the business's own site
-                                             and its own prices
+  check_caption / check_flyer                the platform's checks, with the business's own site,
+                                             its own prices, and up to three hashtags in a caption
 
 The slot assignment, the ranking by results, the number rule and the link
 rule are marketing_engine's own functions, called with the business's
 parameters; Solutionist's desk is unchanged by them.
 
-PURE. No reads, no writes, no model call. The caption writer and the weekly
-run come with B8/B9; nothing calls this yet.
+PURE. No reads, no writes, no model call. The weekly suggestion
+(business_marketing_planner, B8) and the preview call it; the five-post week
+comes with B9.
 
 THE RULES, first match wins. A rule whose signal is None (it could not be
 read) is skipped: a failed read is never an empty calendar or a quiet week.
@@ -40,6 +41,7 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import marketing_engine as platform
+from marketing_profile import HASHTAGS_MAX
 from marketing_signals import news_key, offering_key
 
 # ── the closed library ─────────────────────────────────────────────────
@@ -318,11 +320,14 @@ def own_hosts(profile: Dict[str, Any]) -> List[str]:
 
 
 def check_caption(text: str, facts: Dict[str, Any], profile: Dict[str, Any],
-                  offering: Optional[str] = None) -> Optional[str]:
+                  offering: Optional[str] = None, *, max_hashtags: int = HASHTAGS_MAX) -> Optional[str]:
     """Why a caption cannot be used, or None: the platform's rules (length,
-    no hashtag, every number from the facts) with the business's own site as
-    the only address it may name, and its own prices."""
-    return (platform.check_caption(text, allowed_numbers(facts), own_hosts=own_hosts(profile))
+    every number from the facts) with the business's own site as the only
+    address it may name, its own prices, and up to three hashtags (Kevin,
+    2026-10-07; Solutionist's own desk still takes none). The flyer takes
+    no hashtag (check_flyer)."""
+    return (platform.check_caption(text, allowed_numbers(facts), own_hosts=own_hosts(profile),
+                                   max_hashtags=max_hashtags)
             or price_problem(text, facts, offering))
 
 

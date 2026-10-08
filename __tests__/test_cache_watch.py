@@ -162,3 +162,126 @@ def test_the_main_turn_falls_back_to_the_business_it_serves(monkeypatch):
     asyncio.run(cos._call_claude(None, system, [{"role": "user", "content": "hi"}],
                                  stable_tools=True, tool_biz={"id": "biz-from-tools"}))
     assert seen == ["biz-from-tools"]
+
+
+# ─── The whole request (2026-10-07) ──────────────────────────────────────
+# 48 calls in 30 days re-wrote Chief's whole brief within the hour and read
+# nothing back: the start of the prefix moved. The API renders tools first
+# and keys the cache to the model and effort, none of which the system-part
+# watch could see.
+
+def _fresh_requests():
+    _fresh()
+    cache_watch._last_call.clear()
+
+
+def _payload(tools=("get_contacts", "show_view"), effort="low", model="claude-sonnet-5-5"):
+    return {
+        "model": model,
+        "output_config": {"effort": effort},
+        "tools": [{"name": n, "description": f"{n} tool", "input_schema": {}} for n in tools],
+        "system": [
+            {"type": "text", "text": "UNIVERSAL", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"type": "text", "text": "MANUAL", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"type": "text", "text": "STATE", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "THIS TURN at 09:02"},
+        ],
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+
+def test_request_parts_cover_what_the_cache_is_keyed_on_and_not_the_tail():
+    parts = cache_watch.request_parts(_payload(), ttl="1h")
+    assert list(parts)[:3] == ["model", "effort", "ttl"]
+    assert "tool get_contacts" in parts and "tool show_view" in parts
+    assert [k for k in parts if k.startswith("system")] == ["system 0", "system 1", "system 2"]
+    assert not any("THIS TURN" in v for v in parts.values())
+
+
+def test_a_tool_that_comes_and_goes_is_named(caplog):
+    _fresh_requests()
+    cache_watch.note_request("biz-t", _payload(), ttl="1h", role="chief_main")
+    _capture(caplog)
+    s = cache_watch.note_request("biz-t", _payload(tools=("get_contacts", "show_view", "generate_image")),
+                                 ttl="1h", role="chief_main")
+    assert "tool generate_image" in s["changed"] and "(order)" in s["changed"]
+    assert not s["first"] and s["prev_role"] == "chief_main"
+
+
+def test_effort_and_model_changes_are_named():
+    _fresh_requests()
+    cache_watch.note_request("biz-e", _payload(), role="chief_main")
+    s = cache_watch.note_request("biz-e", _payload(effort=None), role="retry")
+    assert s["changed"] == ["effort"]
+    s = cache_watch.note_request("biz-e", _payload(effort=None, model="claude-sonnet-5"), role="retry")
+    assert s["changed"] == ["model"]
+
+
+def test_an_unchanged_request_logs_nothing(caplog):
+    _fresh_requests()
+    cache_watch.note_request("biz-q", _payload())
+    _capture(caplog)
+    before = len(caplog.records)
+    assert cache_watch.note_request("biz-q", _payload())["changed"] == []
+    assert len(caplog.records) == before
+
+
+def test_a_rewrite_says_why(caplog):
+    _fresh_requests()
+    _capture(caplog)
+    first = cache_watch.note_request("biz-w", _payload(), role="chief_main")
+    cache_watch.report_write("biz-w", first, 0, 106000)
+    assert "first call for this business" in caplog.records[-1].getMessage()
+    moved = cache_watch.note_request("biz-w", _payload(tools=("get_contacts",)), role="chief_main")
+    cache_watch.report_write("biz-w", moved, 0, 106000)
+    line = caplog.records[-1].getMessage()
+    assert "wrote 106000, read 0" in line and "'(order)'" in line and "min after a chief_main call" in line
+    same = cache_watch.note_request("biz-w", _payload(tools=("get_contacts",)), role="chief_main")
+    cache_watch.report_write("biz-w", same, 0, 106000)
+    assert "nothing in the request changed" in caplog.records[-1].getMessage()
+
+
+def test_small_writes_are_not_reported(caplog):
+    _fresh_requests()
+    _capture(caplog)
+    s = cache_watch.note_request("biz-s", _payload())
+    before = len(caplog.records)
+    cache_watch.report_write("biz-s", s, 90000, 3000)
+    cache_watch.report_write("biz-s", None, 0, 90000)
+    cache_watch.report_write(None, s, 0, 90000)
+    assert len(caplog.records) == before
+
+
+class _RespWithUsage:
+    status_code = 200
+    text = ""
+
+    def __init__(self, write):
+        self._write = write
+
+    def json(self):
+        return {"stop_reason": "end_turn", "model": "claude-sonnet-5-5",
+                "usage": {"input_tokens": 10, "output_tokens": 5,
+                          "cache_read_input_tokens": 0, "cache_creation_input_tokens": self._write},
+                "content": [{"type": "text", "text": "ok"}]}
+
+
+def test_chiefs_call_explains_a_big_rewrite(monkeypatch, caplog):
+    import chief_of_staff as cos
+    import llm_call
+    import spend_guard
+    _fresh_requests()
+
+    async def apost(client, payload, **kw):
+        return _RespWithUsage(106000)
+    monkeypatch.setattr(llm_call, "apost", apost)
+    monkeypatch.setattr(cos, "_anthropic_key", lambda: "k")
+    monkeypatch.setattr(cos, "log_api_usage", AsyncMock())
+    monkeypatch.setattr(spend_guard, "over_budget", lambda *a, **k: False)
+    system = ("U " * 600 + "[[CHIEF_GLOBAL_SPLIT]]" + "M " * 900 + "[[CHIEF_CACHE_SPLIT]]"
+              + "STATE A\n\nSTATE B " * 300 + "[[CHIEF_TURN_SPLIT]]" + "TURN")
+    _capture(caplog)
+    asyncio.run(cos._call_claude(None, system, [{"role": "user", "content": "hi"}],
+                                 business_id="biz-c", stable_tools=True, timing_role="chief_main"))
+    lines = [r.getMessage() for r in caplog.records if "cache rewrite" in r.getMessage()]
+    assert lines and "biz=biz-c" in lines[-1] and "role=chief_main" in lines[-1] and "wrote 106000" in lines[-1]

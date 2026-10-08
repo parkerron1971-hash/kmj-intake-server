@@ -114,9 +114,17 @@ class Tally:
         for model, row in items:
             pin, pout = _price(model)
             total += (row["in"] * pin + row["out"] * pout
-                      + row["cache_read"] * pin * 0.1
+                      + row["cache_read"] * pin * _read_mult(model)
                       + row["cache_write"] * pin * 1.25) / 1_000_000.0
         return round(total, 4)
+
+
+def _read_mult(model: str) -> float:
+    try:
+        import api_usage_logger
+        return float(api_usage_logger.cache_read_mult(model))
+    except Exception:
+        return 0.1
 
 
 def _price(model: str) -> Tuple[float, float]:

@@ -278,9 +278,10 @@ def _distil(vertical: str, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any
 
     try:
         with httpx.Client(timeout=60.0) as client:
+            model = chief_models.model_for("background")
             resp = llm_call.post_with(client, {
-                "model": chief_models.model_for("background"),
-                "max_tokens": 1200,
+                "model": model,
+                "max_tokens": 1200, **chief_models.quick_call_kwargs(model),
                 "system": _SYSTEM,
                 "messages": [{"role": "user", "content": user}],
             }, task="vertical_distill")

@@ -24,6 +24,10 @@ from typing import Dict, Optional, Tuple
 _LIMITS: Dict[str, Tuple[int, int]] = {
     "platform_chief_creative": (12, 3600),
     "platform_marketing_week": (6, 3600),
+    # A business owner asking Chief for this week's suggested post (marketing
+    # suite B8). The model runs on the worker, at most once a day per business
+    # (business_marketing_planner checks that); this only stops a tap loop.
+    "business_marketing_engine": (int(os.environ.get("RL_BUSINESS_MARKETING_ENGINE_PER_HOUR", "6")), 3600),
     "business_learning": (int(os.environ.get("RL_BUSINESS_LEARNING_PER_HOUR", "24")), 3600),
     "chief":  (int(os.environ.get("RL_CHIEF_PER_MIN", "30")), 60),
     "voice":  (int(os.environ.get("RL_VOICE_PER_MIN", "40")), 60),

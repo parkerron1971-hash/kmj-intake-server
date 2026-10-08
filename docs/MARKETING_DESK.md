@@ -137,6 +137,8 @@ approved posts (`marketing_claim_due`) and re-checks everything at send time.
 | `POST /posts/{id}/not-sent` | owner | an unconfirmed delivery becomes a failure |
 | `PUT /settings` | owner | paused, plan_enabled, accounts, hour (6-21), audience, link; makes the desk row |
 | `GET /results` | owner + members | what came through the post links in the last 30 days, per post and in total (B6) |
+| `POST /engine/run` | owner | queue this week's suggested post; the worker writes it (B8, below) |
+| `GET /preview` | owner | what Chief would write about now: numbers, profile, facts, diagnosis, plays; reads only (B8) |
 
 - **Who.** Reads use `business_access('viewer')`. Writes use `require_user`
   plus an owner check: a service-role read of `businesses.owner_id`. A member
@@ -266,8 +268,7 @@ the announcements cannot be read, nothing is said until they can.
 ### How Chief reads a business
 
 B7 (2026-10-07): the business's own numbers, facts and profile, read-only.
-Nothing calls these yet; B8 adds the preview endpoint and the weekly
-suggestion.
+The weekly suggestion and `GET /preview` (B8, below) read them.
 
 - **Signals** (`marketing_signals.read_signals`): service-role reads of one
   business, each bounded by a date window and a row limit, so a Thursday
@@ -318,7 +319,10 @@ suggestion.
   A dollar amount must be a stated price, and in a post about one offering it
   must be that offering's price. The only address a caption may name is the
   business's own host (`marketing_engine.check_caption(..., own_hosts=...)`).
-  The platform's default is unchanged.
+  A business caption may carry up to three hashtags (Kevin, 2026-10-07;
+  `max_hashtags`, `marketing_profile.HASHTAGS_MAX`); a stray `#` and a fourth
+  tag are refused, and a flyer carries none. The platform's default is
+  unchanged: Solutionist's own captions take no hashtag and no address.
 - **The profile** (`marketing_profile.read_profile`) holds:
   - the audience: the desk's, then the owner's `voice_profile.audience`, then
     a default for the business type;
@@ -402,3 +406,324 @@ and `marketing_follow` came with B3.
   leads arrive without `utm_content` today. Counting them needs the forms
   and the booking widget to send the session's tags (frontend and
   site-module work, not built).
+
+### The weekly suggestion and the fan-out (B8)
+
+`business_marketing_planner.py` (2026-10-07). A business at the `suggest`
+level (its real plan includes `marketing_suggestion` and not
+`marketing_week`: Starter, Solo, Booked) gets **one suggested post a week**, a
+draft on its desk to approve, change or skip. Professional and Boss (the week
+levels) get nothing from B8; their five-post week is B9 (below). **Nothing runs until
+`MARKETING_DESK` names the business or is `*`** (default off), and nothing a
+suggestion writes is ever sent unless `MARKETING_DESK_PUBLISHING=on` and the
+owner approves it on the desk.
+
+**One suggestion** (`run_suggestion(business_id, trigger=)`):
+
+1. Claim the week: `marketing_claim_run`, kind `suggestion`, run id
+   `run_id_for(business, week)`. One run per business per week; a week
+   already planned is left alone.
+2. Read the business's numbers, profile and facts (B7), `diagnose`, and pick
+   ONE play and ONE time: the first open weekday slot of that week at the
+   desk's hour or 3:00 PM on the business's clock (`next_open_slot`).
+3. ONE caption call: `llm_call.apost(task='business_marketing_suggestion',
+   business_id=..., units=0)`, the `draft` lane's model, `max_tokens` 1200 at
+   low effort (`model_ladder.effort_kwargs`). The caption must pass the
+   business checks: numbers and prices only from the facts, links only to its
+   own site, at most three hashtags. One that does not is never saved (the
+   run fails with the reason; the scheduler retries a failed week at most
+   three times, as the claim allows).
+4. The **free composer flyer** (`chief_flyer_composer` over
+   `marketing_design.flyer_layout`, `cost_usd` 0, never a Creative Director
+   render): the business's own colours (`brand_palette` over
+   `settings.brand_kit`, darkened until white words read at 7:1), the play's
+   eyebrow, and the business's own name and site in the footer, never "THE
+   SOLUTIONIST SYSTEM". Made under `image_studio.build_actor` bound to the
+   business and its owner (read as the service role), reset in a `finally`.
+   A flyer that cannot be made leaves a words-only post; flyer words that
+   break a rule cost the picture, not the post.
+5. ONE draft in `marketing_posts`: `source='suggestion'`, `run_id`, `play_id`,
+   the desk's accounts (or every connected one) fitted by the shared door's
+   rules (no plan gates a network: TikTok and YouTube take only videos, so a
+   picture post leaves them out, recorded in the run's `design.left_out`;
+   Instagram needs a picture), its tracked link (B6) and content hash.
+6. The owner is told once: a Today item (`chief_notifications`, type
+   `reminder`, "Chief has a post ready for next week", saying what it is
+   about and when it goes out once approved) and a push
+   (`send_to_user(owner, nav='grow:marketing')`), keyed by the post in
+   `action_payload.dedup_key`. Never by text. If what was said cannot be read,
+   nothing is said.
+7. The run is marked `succeeded`, `skipped` or `failed`, with the reason in
+   plain words (the desk shows it). A crashed attempt's saved draft is found
+   by `run_id` and kept. Nothing approves or sends.
+
+**The fan-out** (`marketing_tick`, job `business_marketing_suggest`, hourly,
+worker only, leader-gated, `max_instances=1`):
+
+- Candidates: a desk with `plan_enabled` (no desk row is made here), at least
+  one connected account, the posting pilot on (`post_for_me.allowed_for`), the
+  suggest level by `feature_gates.plan_includes` (whatever `BILLING_ENFORCE`
+  says), `access_state` full or grace, automations not paused
+  (`policy_engine.is_paused`).
+- Due, on each business's own clock (the desk's one chain; the owners'
+  profiles are read in one go, and a failed read skips those businesses for
+  the hour rather than guess UTC):
+  - Thursday from 7:00 + a jitter of 0-119 minutes (sha256 of the business
+    id, the same on every server; Python's `hash()` is not), through Sunday:
+    next week;
+  - Monday to Wednesday: this week, only when it was never planned (or its
+    plan failed fewer than three times: the claim's own rule, read first so a
+    planned week costs nothing);
+  - never overnight: nothing before 7:00 + jitter or from 21:00.
+- At most `MARKETING_MAX_PER_TICK` businesses a tick (default 10, at most
+  100); the rest wait for the next hour.
+- Spend: before the tick and before each business, today's platform spend
+  must be under 60% of `DAILY_SPEND_CAP_USD` (`spend_guard.platform_share`)
+  and the platform under its ceiling, or every remaining business waits; a
+  business over its own ceiling is skipped. Each business has its own try and
+  its own claim: one failure never stops the batch.
+
+**The owner's own request** (`POST /marketing/{business_id}/engine/run`): the
+owner only (`require_user` + the owner check), the suggest level, the switch,
+a connected account, the pilot, `rate_limit` (`business_marketing_engine`, 6
+an hour) and **one request a day** on the business's clock. The web process
+never calls the model, and **a request never loses the suggestion already
+waiting**:
+
+- The route claims the week and marks it queued (`design.queued_at`) in ONE
+  write (`queue_request`): an insert for a week with no run, else a write
+  conditional on the run's status and attempt count (a failed or skipped
+  week, one stuck 15 minutes, or a succeeded one whose posts are all still
+  drafts). It does not use `marketing_claim_run`, whose manual start-over
+  cancels the waiting drafts at claim time. A week that is being written, or
+  has an approved or sent post, is busy (409). If the write fails (503),
+  nothing has changed: no run, no post and no desk row is touched.
+- `manual_tick` (job `business_marketing_requests`, every minute, worker)
+  takes each queued run once (a write conditional on `design.started_at`),
+  saves the new draft, and **only then** cancels the week's earlier
+  suggestion draft, each cancel conditional on the draft still being at the
+  revision read. A draft that moved on (approved meanwhile) or a cancel that
+  fails is left standing: the owner sees two and can skip one, never none.
+- A request that writes nothing (over a spend ceiling, the pilot off, no
+  time left that week, a caption that broke a rule, the model down, a save
+  that failed, or the earlier one approved meanwhile) leaves the earlier
+  suggestion exactly as it was: the run goes back to `succeeded` over it,
+  with the reason in its `error` and `design.outcome = kept`. With no earlier
+  suggestion it is `skipped` or `failed` as usual.
+- Only a request that saved a new post (`design.made`) counts as the day's;
+  one that wrote nothing leaves the owner free to ask again.
+- A request not started within the claim's 15 minutes is left to the claim's
+  own reclaim.
+
+**The preview** (`GET /marketing/{business_id}/preview`, owner only): the
+numbers, profile, facts, diagnosis and the plays Chief would pick (one slot
+at the suggest level, five at a week level), with the week and whether the
+switch is on. No model call, no write, no spend.
+
+**Kevin's decisions (2026-10-07) as built here:** business captions may carry
+up to three hashtags (the platform's stay at none); TikTok and YouTube are not
+gated by plan (a picture post simply leaves them out); the Starter/Solo/Booked
+suggestion uses the free composer flyer, `cost_usd` 0, never a Creative
+Director render; owners are told by push plus a Today item, never by text. No
+credits are charged for any of it (`units=0`).
+
+**Switches** (`.env.example`): `MARKETING_DESK` (off | comma-separated ids |
+`*`; set on the worker and the web), `MARKETING_MAX_PER_TICK` (default 10).
+Cost: one Sonnet-class call of about 2,000 tokens in and 200 out, about 1-2
+cents a suggestion; the flyer is a local render.
+
+### The weekly plan (B9)
+
+`business_marketing_planner.py` again (2026-10-07). A business at a **week
+level** gets Chief's weekly plan: up to five drafts a week, each with a
+Creative Director flyer, to approve in one go or one by one. The level is the
+desk's own (`business_marketing.level_for`, from the real plan through
+`feature_gates.plan_includes`):
+
+| Level | Who | What B9 does |
+| --- | --- | --- |
+| week | Professional; a Boss business without a live chair calendar | the weekly plan |
+| autopilot | Practice (Solutionist) | the same plain week, until clips (B12) and standing permissions (B13) |
+| openings | Boss: a chair business with a live booking calendar | nothing: its open-chairs week is B11. It is never a candidate, and its own request answers 409 |
+| suggest | Starter, Solo, Booked | B8's one suggestion, unchanged |
+
+**Nothing runs until `MARKETING_DESK` names the business or is `*`**, and
+nothing the plan writes is sent unless `MARKETING_DESK_PUBLISHING=on` and the
+owner approves it on the desk.
+
+**One week** (`run_week(business_id, trigger=)`):
+
+1. Claim the week (`marketing_claim_run`, kind `week`, the same run id
+   rule). A week already planned answers `exists` and costs nothing.
+2. The times: each weekday of that week at the desk's hour, or 3:00 PM when
+   the desk's hour already has a post, on the business's clock, at least an
+   hour away (`week_times`, like the platform's `week_window`). A week
+   planned Monday to Wednesday gets the weekdays it has left.
+3. The business's numbers, profile and facts (B7), `diagnose`, then
+   `pick_plays` for those slots (`fill_slots`). **The plays lean on what did
+   well through the business's own links**:
+   `business_marketing_outcomes.play_scores` scores each post that went out
+   in the last 120 days with its own link (a lead counts 4, plus the larger
+   of clicks and visits) and averages them by play. `marketing_engine._rank`
+   lets a play's results move it only once it has 3 samples; with fewer,
+   the default order stands. A source that cannot be read gives no scores
+   (the default order), never a guess. The run records the scores it used.
+4. **One caption call** for every slot (`task=business_marketing_week`,
+   the `draft` lane, low effort, `units=0`), each caption held to the same
+   business checks as the suggestion (numbers and prices only from the
+   facts, links only to its own site, at most three hashtags). A caption
+   that breaks a rule costs only its own slot; flyer words that break one
+   cost only that post's flyer. Every caption broken: nothing is saved.
+5. **All the drafts in one insert**, `source='plan'`, with `run_id`,
+   `play_id`, the desk's accounts (or every connected one), the tracked
+   link (B6) and the content hash. A post with a flyer on the way is saved
+   `design_status='designing'`, with Instagram among its accounts (the
+   picture is coming); TikTok and YouTube take only videos, so a picture
+   post leaves them out (`design.left_out`).
+6. The flyers start (below). The run is `succeeded` with
+   `design.tell = 'pending'`; the owner is told once the week has settled.
+
+**The flyers.** One Creative Director design per post
+(`creative_director.prepare_for_business` + `image_studio.create`), made
+under `image_studio.build_actor` bound to the business and its owner (read
+as the service role) and reset in a `finally`. **4:5, 1088x1360** (`high`
+quality): the tallest picture Instagram's feed takes (4:5 to 1.91:1) and
+shows whole, so every desk picture is Instagram-safe as delivered. Both
+sides are multiples of 16, through the same custom-size path the clip
+covers' 1088x1920 and 1920x1088 use live; `image_studio` offers 1088x1360
+only on the models that take custom sizes (GPT Image 2 keeps its three, and
+on it the plan falls back to a 1024x1024 square). The first live plan flyer
+is the proof of 1088x1360 on the image model. The brief keeps every word,
+the button and the main subject a twentieth of the width in from every edge
+(Instagram's profile grid trims a 3:4 crop, 34 pixels off each side). B8's
+free composer flyer was already 4:5 (1080x1350). The business's own colours (its facts carry `brand_colors`) and its saved style
+and logo apply as in any of its designs. The words are the checked flyer
+copy plus the business's name. The request id is
+`uuid5(run id, 'flyer:' + post id)`, and a post's id is
+`uuid5(run id, '<attempt>:week:<slot>')`: a retried run lands on the same
+designs and never pays twice; a replan's new posts get new ones. A post
+is never given up on while its design exists: if a start meets the daily
+limit or an error but the design's row is there (a retried run, a race),
+it stays `designing` and the design tick settles it; if that cannot be
+read, it waits for the tick too.
+
+**Included in the plan** (Kevin, 2026-10-07). A plan flyer is never charged
+in credits, and is still:
+
+- metered as cost: every planning, render and review call logs its dollars
+  through `api_usage_logger` with `units=0`;
+- checked against the spend guards before every paid call
+  (`creative_director.guard`, business and platform ceilings);
+- one of the business's 20 designs a day (`reserve_image_artwork`).
+
+The flag is `director.billing = 'included'`, set by
+`creative_director.include_in_plan`, which only the planner calls, on a spec
+it built itself. `creative_director.included(spec)` honours it only on a
+business design. With it, `run` renders with `charge=False`, planning checks
+`guard(credits=False)`, and `image_studio.create` skips
+`billing_limits.require_units`. **Nothing a request or Chief sends can set
+it**: the Director's contract (`DesignRequest`) forbids extra keys,
+`flyer_request` picks named fields, `prepare_for_business` builds the spec
+dict itself, the platform door `start()` drops `billing` from an action's
+spec, Image Studio's own route takes no director at all, and
+`image_artworks` is read-only to signed-in callers (only the server writes
+`director`).
+
+**Caps.**
+
+- At most **5 plan flyers per business per week**, replans included (the
+  image rows that exist for the run's posts are counted). A replan gets
+  what is left; past that its posts go as words only, saying so.
+- At most `MARKETING_DESIGNS_AT_ONCE` (default 10, at least 5, at most 50)
+  plan flyers in progress across every business. A week starts only when
+  its five fit; the fan-out leaves it for a later hour, and an owner's
+  request waits up to 10 minutes and then gives up in plain words, keeping
+  the week's earlier plan.
+- The daily limit: `image_studio.create` now reads the business's images
+  started today (UTC, as the RPC counts them) and answers **429** "Daily
+  image limit reached. Try again tomorrow." before reserving (the RPC still
+  enforces it; its refusal used to surface as "storage unavailable", 503).
+  Only a NEW request is refused: a request id that already has a row is
+  answered with that row first, and the count leaves out the request's own
+  id, so a retry racing the first call gets its row back from the RPC,
+  never a 429. This holds for every caller, the owner's own Image Studio
+  included.
+  A plan post whose flyer gets the 429, or cannot start for any other
+  reason, goes as words only **at once**, Instagram left out, instead of
+  waiting.
+
+**The flyers land** (`marketing_design_tick`, job
+`business_marketing_designs`, every 2 minutes, worker only, leader-gated,
+`max_instances=1`, nothing unless `MARKETING_DESK` covers the business):
+
+| The flyer | The post |
+| --- | --- |
+| finished (`ready`) | `media` = the artwork, a new revision and content hash, `design_status='ready'`, still a **draft**. A design Chief's own check was unsure about (`needs_review`) is attached with a note in `error` asking the owner to look before approving |
+| failed | words only: `design_status='failed'`, Instagram left out, a new revision and hash, a plain note in `error` |
+| not ready 20 minutes after it started (or after its post was saved, when it never started) | the same, "The flyer wasn't ready in time, so this post goes as words only, and Instagram is left out." |
+| still within 20 minutes | waits |
+
+Every write lands only on the draft as it was read (same revision, still
+`designing`). When Instagram is the post's only account, it stays and the
+note asks for a picture; `/approve` now refuses a post whose accounts need a
+picture it does not have, so it is never approved only to fail at send time.
+A late design that finishes after its post gave up stays in the Media
+Library. A week is never held up: within 20 minutes every post has settled.
+
+**A designing post cannot be approved.** `marketing_approve` refuses it
+(the migration), and `POST /approve` now says so first, in the desk's words;
+edit, skip and post-now already refused it.
+
+**Telling the owner, once.** When no post of the run is designing, the
+design tick sends one Today item (`chief_notifications`, type `reminder`,
+navigate to Grow → Marketing) and one push (`nav: grow:marketing`): "Chief
+planned next week: 5 posts wait for your OK", with "Each has its flyer." or
+how many go as words only, and "Nothing posts until you approve them." Keyed
+by the run and its attempt in `action_payload.dedup_key`; the run is then
+marked `design.tell = 'done'`. If what was said cannot be read, nothing is
+said until it can. Never by text.
+
+**The fan-out** (`marketing_tick`) takes week-level businesses with the same
+candidates (now with their level: a calendar that cannot be read leaves the
+business out for the hour), due-ness, jitter, per-tick cap and spend rules.
+A week costs more, so it is counted conservatively: before each week, today's
+platform spend plus what is already on its way (flyers in progress at $0.50
+each, and $2.55 for each week this tick started) plus this week's $2.55 must
+stay under 60% of `DAILY_SPEND_CAP_USD`, or the week waits for a later hour
+while suggestions go on. B8's checks (60% before each business, the platform
+ceiling, the business's own ceiling) still come first.
+
+**The owner's own request** (`POST /marketing/{business_id}/engine/run`) at a
+week level queues a week (`kind: week`, "Chief is planning your week") the
+same way as a suggestion: the owner only, the switch, an account, the pilot,
+`rate_limit`, one write that claims and marks it queued, the worker writes
+it. Instead of once a day:
+
+- a planned week is **planned again at most twice** (`design.replans`; a
+  third ask is 429);
+- only while none of its posts is approved or sent (409), and not while a
+  flyer of it is still being made (409);
+- the new drafts are saved first and only then are the old ones retired,
+  each only if still the draft read; a replan that writes nothing keeps the
+  week's earlier plan, saying so.
+
+A week can take over the week's suggestion run when a business moved up a
+level.
+
+**Cost** (estimates, not yet measured on a live business-week): the caption
+call is about 2 cents. A flyer is a planning call and a review on the
+`review` lane (about 4-6 cents together) and a 1088x1360 high-quality render
+(about $0.20 at the image model's rates), about $0.26; one that takes its
+repair render about $0.48. **About $1.35 a business-week, up to about $2.50**
+when every flyer takes its repair. The headroom check reserves $2.55.
+
+**Switches** (`.env.example`): `MARKETING_DESK` (covers the plan too),
+`MARKETING_MAX_PER_TICK`, `MARKETING_DESIGNS_AT_ONCE` (default 10). No
+migration: the run's `design` jsonb carries `flyers`, `tell`, `told_at`,
+`replans` and `left_out`.
+
+**Not built here:** Chief's desk actions (B10), the open-chairs week (B11),
+clips in the week (B12), standing permissions (B13), and the frontend (F4).
+Not yet seen live: a 1088x1360 render from the image model (the custom-size
+path is the clip covers'); the first plan flyer on a test business verifies
+it.

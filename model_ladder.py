@@ -96,7 +96,10 @@ _DEFAULT_TIMEOUTS = (120.0, 240.0)
 _SLOW_FAMILY_MARKERS = ("opus", "fable", "mythos")
 
 # Model families that REJECT sampling params (temperature/top_p/top_k → 400).
-_NO_SAMPLING_MARKERS = ("opus-4-7", "opus-4-8", "opus-5", "fable", "mythos", "sonnet-5")
+# Haiku 5.5 400s on any temperature but 1 and on top_k (migration guide,
+# 2026-10-07).
+_NO_SAMPLING_MARKERS = ("opus-4-7", "opus-4-8", "opus-5", "fable", "mythos", "sonnet-5",
+                        "haiku-5")
 
 # 400s that mean "the model id itself is the problem" (vs. a payload bug).
 _MODEL_ERR_MARKERS = ("not_found", "not found", "does not exist",
@@ -139,7 +142,7 @@ def timeout_for(task: str, model: str, max_tokens: Optional[int] = None) -> floa
 
 def supports_sampling(model: str) -> bool:
     """False for the families where `temperature` returns a 400
-    (Opus 4.7/4.8, Sonnet 5, Fable/Mythos)."""
+    (Opus 4.7/4.8, Sonnet 5, Fable/Mythos, Haiku 5.5)."""
     m = (model or "").lower()
     return not any(k in m for k in _NO_SAMPLING_MARKERS)
 
@@ -158,7 +161,9 @@ def supports_forced_tool_choice(model: str) -> bool:
 # only; everything newer takes the full range). Haiku 4.5 and Sonnet 4.5
 # return a 400 for it.
 _EFFORT_MARKERS = ("opus-4-5", "opus-4-6", "opus-4-7", "opus-4-8", "opus-5",
-                   "sonnet-4-6", "sonnet-5", "fable", "mythos")
+                   "sonnet-4-6", "sonnet-5", "fable", "mythos",
+                   # Haiku 5.5 takes effort (default medium); Haiku 4.5 400s on it.
+                   "haiku-5")
 
 
 def supports_effort(model: str) -> bool:
@@ -206,7 +211,9 @@ def thinking_off_kwargs(model: str) -> dict:
     m = (model or "").lower()
     if "sonnet-5-5" in m:
         return {"thinking": {"type": "between_tools"}}
-    if "sonnet" in m:
+    if "sonnet" in m or "haiku-5" in m:
+        # Haiku 5.5 thinks adaptively by default and accepts "disabled"
+        # (Models API capabilities, 2026-10-07).
         return {"thinking": {"type": "disabled"}}
     return {}
 
