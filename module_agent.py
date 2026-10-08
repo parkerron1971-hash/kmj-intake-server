@@ -43,7 +43,11 @@ from pydantic import BaseModel
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-DRAFT_MODEL = "claude-sonnet-4-5-20250929"
+# Sonnet 4.5 retires 2026-11-30. These are words that reach the
+# practitioner's clients, which stay on the conversational model
+# (Kevin's 2026-07-03 drafts ruling): Sonnet 5.5. MODULE_AGENT_MODEL rolls it
+# back without a deploy.
+DRAFT_MODEL = os.environ.get("MODULE_AGENT_MODEL") or "claude-sonnet-5-5"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 NEW_ENTRY_LOOKBACK_HOURS = 24
@@ -92,10 +96,12 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str, ma
     key = _anthropic_key()
     if not key:
         return ""
+    import model_ladder
     try:
         resp = await llm_call.apost(client, {
-            "model": DRAFT_MODEL, "max_tokens": max_tokens, "system": system,
+            "model": DRAFT_MODEL, "max_tokens": int(max_tokens * 1.3), "system": system,
             "messages": [{"role": "user", "content": user_msg}],
+            **model_ladder.thinking_off_kwargs(DRAFT_MODEL),
         }, timeout=HTTP_TIMEOUT, key=key)
     except httpx.HTTPError as e:
         logger.warning(f"Claude request failed: {e}")
@@ -104,7 +110,9 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str, ma
         logger.warning(f"Claude error: {resp.status_code}")
         return ""
     data = resp.json()
-    return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
+    if data.get("stop_reason") == "refusal":
+        return ""   # the caller falls back to the subject line
+    return llm_call.text_of(data).strip()
 
 
 def _render_template(template: str, data: Dict[str, Any], module_name: str, contact_name: str = "") -> str:

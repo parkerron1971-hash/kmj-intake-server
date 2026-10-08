@@ -37,8 +37,13 @@ from pydantic import BaseModel
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-PLAN_MODEL = "claude-sonnet-4-5-20250929"
-DRAFT_MODEL = "claude-sonnet-4-5-20250929"
+# Sonnet 4.5 retires 2026-11-30. These are words that reach the
+# practitioner's clients, which stay on the conversational model
+# (Kevin's 2026-07-03 drafts ruling): Sonnet 5.5.
+# SESSION_AGENT_PLAN_MODEL / SESSION_AGENT_DRAFT_MODEL roll it back
+# without a deploy.
+PLAN_MODEL = os.environ.get("SESSION_AGENT_PLAN_MODEL") or "claude-sonnet-5-5"
+DRAFT_MODEL = os.environ.get("SESSION_AGENT_DRAFT_MODEL") or "claude-sonnet-5-5"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 # ── PHI gate ──────────────────────────────────────────────────────────
@@ -113,15 +118,19 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,
     key = _anthropic_key()
     if not key:
         return ""
+    import model_ladder
     resp = await llm_call.apost(client, {
-        "model": model, "max_tokens": max_tokens, "system": system,
+        "model": model, "max_tokens": int(max_tokens * 1.3), "system": system,
         "messages": [{"role": "user", "content": user_msg}],
+        **model_ladder.thinking_off_kwargs(model),
     }, timeout=HTTP_TIMEOUT, key=key)
     if resp.status_code >= 400:
         logger.warning(f"Claude error: {resp.status_code}")
         return ""
     data = resp.json()
-    return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
+    if data.get("stop_reason") == "refusal":
+        return ""   # the caller's plain draft takes over
+    return llm_call.text_of(data).strip()
 
 
 def _format_dt(iso_str: str) -> str:

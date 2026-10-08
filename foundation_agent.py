@@ -65,8 +65,21 @@ DISCLAIMER = (
     "on any specific recommendation."
 )
 
-ANTHROPIC_MODEL = "claude-sonnet-4-5"
-ANTHROPIC_MAX_TOKENS = 12000
+# Sonnet 4.5 retires 2026-11-30. Entity advice and the privacy policy /
+# terms are long, careful documents: Sonnet 5.5, with thinking held to
+# between_tools so it cannot spend the budget before the document.
+# FOUNDATION_MODEL rolls it back without a deploy.
+ANTHROPIC_MODEL = os.environ.get("FOUNDATION_MODEL") or "claude-sonnet-5-5"
+ANTHROPIC_MAX_TOKENS = 16000
+
+
+def _sdk_thinking_off() -> Dict[str, Any]:
+    """Thinking off for this SDK call. The pinned SDK (0.34.2) predates the
+    `thinking` keyword, so it rides in extra_body, which merges into the
+    request JSON on every SDK version (see model_ladder.sdk_effort_kwargs)."""
+    import model_ladder
+    off = model_ladder.thinking_off_kwargs(ANTHROPIC_MODEL)
+    return {"extra_body": off} if off else {}
 
 
 # ──────────────────────────────────────────────────────────────
@@ -355,8 +368,11 @@ async def recommend_entity(business_id: str, situation: Dict[str, Any]) -> Dict[
             model=ANTHROPIC_MODEL,
             max_tokens=ANTHROPIC_MAX_TOKENS,
             messages=[{"role": "user", "content": _entity_prompt(situation)}],
+            **_sdk_thinking_off(),
         )
         text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+        if getattr(msg, "stop_reason", None) == "refusal" or not text.strip():
+            return {"ok": False, "error": "The recommendation could not be written. Try again."}
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
@@ -641,8 +657,13 @@ async def _generate_policy(business_id: str, kind: str, business_data: Dict[str,
             model=ANTHROPIC_MODEL,
             max_tokens=ANTHROPIC_MAX_TOKENS,
             messages=[{"role": "user", "content": _policy_prompt(kind, business_data)}],
+            **_sdk_thinking_off(),
         )
         text = "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")
+        # An empty or declined reply must not be saved as a policy with
+        # nothing in it but the disclaimer.
+        if getattr(msg, "stop_reason", None) == "refusal" or not text.strip():
+            return {"ok": False, "error": "The document could not be written. Try again."}
     except Exception as e:
         logger.error(f"_generate_policy {kind} failed: {e}")
         return {"ok": False, "error": str(e)}
