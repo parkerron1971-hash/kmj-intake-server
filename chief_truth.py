@@ -490,6 +490,11 @@ _RECORD_STATE = re.compile(
     r"owing|paid|unpaid|due|booked|scheduled|on file|your\s+(?:\w+\s+)?\$?\d)\b", re.I)
 
 
+_ESTIMATE_HEDGE = re.compile(
+    r"\b(?:about|around|roughly|approximately|estimat\w*|assum\w*|if|projected|likely|"
+    r"probably|ballpark)\b|~", re.I)
+
+
 def _figure_set(matches):
     out = set()
     for m in matches:
@@ -779,6 +784,8 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # turn read something; any write verb in it keeps the old rule.
             if claim['kind'] == 'action' and is_read_narration(text_) and read_anything(sources):
                 continue
+            if claim['kind'] == 'action' and is_owner_instruction(text_):
+                continue
             if (isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip()) \
                     or not (isinstance(quote, str) and quote.strip()):
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
@@ -829,7 +836,14 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 # The reviewer labels totals "estimate" more often than the
                 # rules ask; a total that adds up from the source is a fact
                 # and needs no hedge. A genuine estimate still does.
-                if missing and not re.search(
+                # "about 10 discovery calls, if half of them convert": the
+                # hedge is in the estimate's own sentence (2026-10-07 replay).
+                # Not for a sentence that states a record ("you have about 40
+                # clients" is still a count to prove).
+                own = _sentence_containing(reply, text_)
+                hedged = bool(_ESTIMATE_HEDGE.search(own)) and not (
+                    _RECORD_NOUN.search(own) and _STATE_CLAIM.search(own))
+                if missing and not hedged and not re.search(
                         r'\b(?:estimat\w*|assuming|assumption|hypothetic\w*|project\w*|approximately|roughly)\b',
                         reply, re.I):
                     return 'unsupported', [], _claim_fail('estimate without an explicit label', text_)
@@ -1514,8 +1528,27 @@ _NON_EXECUTION = re.compile(
     r"payment|charge|booking|post|change)s?\b|not (?:yet |been |actually |already )?"
     r"(?:created|sent|booked|saved|paid|published|scheduled|run|done|completed|gone|"
     r"started|texted|emailed|charged|recorded|deleted|updated|made|placed|posted)|"
-    r"(?:has|have|had|was|were|did|is|are)n['’]t|(?:has|have|had|was|were|did|is|are) not)\b",
+    r"(?:has|have|had|was|were|did|is|are)n['’]t|(?:has|have|had|was|were|did|is|are) not|"
+    # "I couldn't pull the full Retention report just now": a read that
+    # failed, not work claimed. Filed as an action, it withheld whole
+    # answers for want of a write receipt (2026-10-07 replay).
+    r"could(?:n['’]t| not)|can(?:['’]t|not)|(?:was|were)(?:n['’]t| not) able to|(?:was|were) unable to)\b",
     re.I)
+
+# "Ask Pat Johnson, Omar King and Lee Wright whether they know a couple...",
+# "reach out personally to Ada and Sam": Chief telling the owner what to do.
+# An instruction has no subject and claims nothing was done; filed as an
+# action it withheld the answer for want of a write receipt (2026-10-07
+# replay). A first-person subject anywhere keeps the action rule.
+_OWNER_INSTRUCTION = re.compile(
+    r"^\s*(?:then\s+|and\s+|so\s+|just\s+|first,?\s+|next,?\s+)?"
+    r"(?:ask|reach out|send|text|email|call|invite|offer|post|follow up|book|schedule|set up|try|"
+    r"share|tell|remind|thank|check in|message|reply to|contact|pick|choose|block|plan)\b", re.I)
+_FIRST_PERSON = re.compile(r"\b(?:I|I['’](?:ve|ll|d|m)|we|we['’](?:ve|ll|d|re)|me|us)\b")
+
+
+def is_owner_instruction(text):
+    return bool(_OWNER_INSTRUCTION.match(text or '')) and not _FIRST_PERSON.search(text or '')
 
 
 def is_non_execution_claim(text):
