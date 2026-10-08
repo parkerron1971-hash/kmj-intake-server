@@ -124,6 +124,7 @@ class Stripe:
 def stripe_policy(monkeypatch):
     monkeypatch.setattr(links, '_secret_key', lambda: 'fake-test-key')
     monkeypatch.setattr(links, 'require_stripe_write', lambda account: None)
+    monkeypatch.setattr(links, 'require_operational_write', lambda bid: None)
 
 
 def test_void_deactivates_owned_link_and_expires_open_checkout(stripe_policy):
@@ -137,14 +138,14 @@ def test_void_deactivates_owned_link_and_expires_open_checkout(stripe_policy):
 
 def test_shared_payment_link_is_never_disabled(stripe_policy):
     stripe = Stripe(metadata={})
-    with pytest.raises(ValueError, match='shared'):
+    with pytest.raises(links.UnverifiedLink, match="couldn't confirm"):
         asyncio.run(links.disable_invoice_payment_link(stripe, BIZ, {**INVOICE, 'stripe_payment_url': 'https://buy.stripe.com/test'}))
     assert not any(call[0] == 'POST' for call in stripe.calls)
 
 
 def test_completed_stripe_checkout_blocks_local_void(stripe_policy):
     stripe = Stripe(sessions=[{'id': 'cs_paid', 'status': 'complete', 'payment_status': 'paid'}])
-    with pytest.raises(ValueError, match='completed payment'):
+    with pytest.raises(ValueError, match='Stripe shows a payment'):
         asyncio.run(links.disable_invoice_payment_link(stripe, BIZ, {**INVOICE, 'stripe_payment_url': 'https://buy.stripe.com/test'}))
 
 
@@ -174,7 +175,7 @@ def test_business_pay_link_needs_no_connected_account(stripe_policy):
 
 def test_an_unknown_link_is_still_refused(stripe_policy):
     biz = {**BIZ, 'settings': {'payments': {'stripe_link': SHARED}}}
-    with pytest.raises(ValueError, match='shared'):
+    with pytest.raises(links.UnverifiedLink):
         asyncio.run(links.disable_invoice_payment_link(Stripe(metadata={}), biz, {**INVOICE, 'stripe_payment_url': 'https://buy.stripe.com/test'}))
 
 
@@ -205,7 +206,7 @@ def api(monkeypatch):
         roles.append((biz_id, user_id, min_role))
         if user_id == 'viewer':
             raise HTTPException(403, 'requires member access or above')
-        return 'owner'
+        return 'member' if user_id == 'member-user' else 'owner'
 
     async def change(client, biz, action, verb):
         changes.append((biz, action, verb))
@@ -246,7 +247,8 @@ def test_void_endpoint_runs_chiefs_void_on_the_invoices_own_business(api):
     assert res.status_code == 200, res.text
     assert res.json()['result'] == 'Invoice INV-001 voided.'
     biz, action, verb = api.changes[0]
-    assert verb == 'void_invoice' and biz['id'] == BIZ['id'] and action == {'invoice_id': INVOICE['id']}
+    assert verb == 'void_invoice' and biz['id'] == BIZ['id']
+    assert action == {'invoice_id': INVOICE['id'], '_owner_confirms_link_off': False}
 
 
 def test_void_endpoint_reports_the_refusal_reason(api, monkeypatch):
@@ -278,7 +280,7 @@ def test_void_endpoint_runs_the_real_void_and_a_blocked_read_is_a_clean_refusal(
 def test_a_lost_race_after_the_link_is_off_says_the_invoice_is_still_open(monkeypatch, db):
     db[0][0].update(status='sent', stripe_payment_url='https://buy.stripe.com/test')
 
-    async def switched_off(client, biz, inv):
+    async def switched_off(client, biz, inv, link_off_confirmed=False):
         return 'disabled'
     monkeypatch.setattr(links, 'disable_invoice_payment_link', switched_off)
 
@@ -292,3 +294,211 @@ def test_a_lost_race_after_the_link_is_off_says_the_invoice_is_still_open(monkey
 def test_disable_reports_that_it_switched_the_link_off(stripe_policy):
     stripe = Stripe()
     assert asyncio.run(links.disable_invoice_payment_link(stripe, BIZ, {**INVOICE, 'stripe_payment_url': 'https://buy.stripe.com/test'})) == 'disabled'
+
+
+# ── links Stripe can't confirm: older tags, the platform account, the owner's word ──
+
+URL = 'https://buy.stripe.com/test'
+
+
+class Accounts:
+    """Stripe, per account: 'connected' (Stripe-Account header) or 'platform'."""
+    def __init__(self, connected=(), platform=(), fail=()):
+        self.rows = {'connected': list(connected), 'platform': list(platform)}
+        self.fail = set(fail)
+        self.calls = []
+    def _on(self, kwargs):
+        return 'connected' if (kwargs.get('headers') or {}).get('Stripe-Account') else 'platform'
+    async def get(self, url, **kwargs):
+        on = self._on(kwargs)
+        self.calls.append(('GET', on, url))
+        if on in self.fail:
+            import httpx
+            request = httpx.Request('GET', url)
+            raise httpx.HTTPStatusError('forbidden', request=request, response=httpx.Response(403, request=request))
+        rows = self.rows[on] if url.endswith('/payment_links') else []
+        return Response({'data': rows, 'has_more': False})
+    async def post(self, url, **kwargs):
+        self.calls.append(('POST', self._on(kwargs), url))
+        return Response({})
+
+
+def _link(**metadata):
+    return {'id': 'plink_x', 'url': URL, 'metadata': metadata}
+
+
+def _disable(stripe, **kw):
+    return asyncio.run(links.disable_invoice_payment_link(stripe, BIZ, {**INVOICE, 'stripe_payment_url': URL}, **kw))
+
+
+def test_a_link_from_before_business_tags_is_still_this_invoices_own(stripe_policy):
+    stripe = Accounts(connected=[_link(source_type='invoice', source_id=INVOICE['id'])])
+    assert _disable(stripe) == 'disabled'
+    assert ('POST', 'connected', f'{links.STRIPE_API_BASE}/payment_links/plink_x') in stripe.calls
+
+
+def test_another_business_tag_is_never_accepted(stripe_policy):
+    stripe = Accounts(connected=[_link(source_type='invoice', source_id=INVOICE['id'], business_id='someone-else')])
+    with pytest.raises(links.UnverifiedLink):
+        _disable(stripe)
+    assert not [c for c in stripe.calls if c[0] == 'POST']
+
+
+def test_a_link_on_the_platform_account_is_found_and_switched_off_there(stripe_policy):
+    stripe = Accounts(platform=[_link(source_type='invoice', source_id=INVOICE['id'])])
+    assert _disable(stripe) == 'disabled'
+    posts = [c for c in stripe.calls if c[0] == 'POST']
+    assert posts and all(on == 'platform' for _, on, _ in posts)
+
+
+def test_a_stripe_error_on_one_account_falls_through_to_the_next(stripe_policy):
+    stripe = Accounts(platform=[_link(source_type='invoice', source_id=INVOICE['id'])], fail={'connected'})
+    assert _disable(stripe) == 'disabled'
+
+
+def test_unverified_link_needs_the_owners_word_and_is_then_left_alone(stripe_policy):
+    stripe = Accounts(connected=[_link()], platform=[])
+    with pytest.raises(links.UnverifiedLink):
+        _disable(stripe)
+    assert _disable(stripe, link_off_confirmed=True) == 'confirmed_off'
+    assert not [c for c in stripe.calls if c[0] == 'POST']
+
+
+def test_void_refusal_for_an_unverified_link_carries_a_code_and_the_override_voids(monkeypatch, db):
+    db[0][0].update(status='sent', stripe_payment_url=URL)
+    async def unverified(client, biz, inv, link_off_confirmed=False):
+        if link_off_confirmed:
+            return 'confirmed_off'
+        raise links.UnverifiedLink(links.UNVERIFIED)
+    monkeypatch.setattr(links, 'disable_invoice_payment_link', unverified)
+    monkeypatch.setattr(actions, '_ANSWER_WINDOW', (0.0, 1800.0))
+    out = run(actions.handle_void_invoice)
+    assert out['failed'] and out['code'] == 'link_unverified' and len(db[1]) == 1
+    out = run(actions.handle_void_invoice, {'invoice_number': 'INV-001', '_owner_confirms_link_off': True})
+    assert not out.get('failed') and 'off in Stripe' in out['result']
+    assert db[1][-1][2]['stripe_payment_url'] is None and db[1][-1][2]['status'] == 'cancelled'
+
+
+OWNER_BIZ = {**BIZ, 'owner_id': 'owner-user'}
+
+
+@pytest.mark.parametrize('said,prompted,user,text,expected', [
+    (True, True, 'owner-user', 'It is off, void it.', True),
+    ('true', True, 'owner-user', 'yes', True),
+    ('false', True, 'owner-user', 'no', False),
+    (None, True, 'owner-user', 'void it', False),
+    (True, False, 'owner-user', 'void it', False),        # unattended: no owner present
+    (True, True, 'member-user', 'void it', False),        # a member's turn
+    (True, True, 'owner-user', '', False),                # no message from the owner
+])
+def test_chief_counts_link_off_only_on_the_owners_own_turn(said, prompted, user, text, expected):
+    got = actions.owner_confirms_link_off({'link_off_confirmed': said}, prompted=prompted,
+                                          user_id=user, biz=OWNER_BIZ, owner_text=text)
+    assert got is expected
+
+
+@pytest.mark.parametrize('payload', [{'link_off_confirmed': True}, {'_owner_confirms_link_off': 'true'}])
+def test_the_payload_alone_never_overrides(monkeypatch, db, payload):
+    seen = []
+    async def unverified(client, biz, inv, link_off_confirmed=False):
+        seen.append(link_off_confirmed)
+        raise links.UnverifiedLink(links.UNVERIFIED)
+    monkeypatch.setattr(links, 'disable_invoice_payment_link', unverified)
+    monkeypatch.setattr(actions, '_ANSWER_WINDOW', (0.0, 1800.0))
+    db[0][0].update(status='sent', stripe_payment_url=URL)
+    run(actions.handle_void_invoice)
+    assert run(actions.handle_void_invoice, {'invoice_number': 'INV-001', **payload})['failed']
+    assert seen == [False, False]
+
+
+def test_an_override_in_the_same_breath_as_the_refusal_is_not_an_answer(monkeypatch, db):
+    """Chief voiding, getting refused and adding the flag in one turn: the
+    yes has to come after someone could read the refusal."""
+    seen = []
+    async def unverified(client, biz, inv, link_off_confirmed=False):
+        seen.append(link_off_confirmed)
+        raise links.UnverifiedLink(links.UNVERIFIED)
+    monkeypatch.setattr(links, 'disable_invoice_payment_link', unverified)
+    db[0][0].update(status='sent', stripe_payment_url=URL)
+    run(actions.handle_void_invoice, {'invoice_number': 'INV-001', '_owner_confirms_link_off': True})
+    run(actions.handle_void_invoice, {'invoice_number': 'INV-001', '_owner_confirms_link_off': True})
+    assert seen == [False, False]
+
+
+def test_the_policy_gate_runs_before_any_stripe_call(monkeypatch):
+    from fastapi import HTTPException
+    monkeypatch.setattr(links, '_secret_key', lambda: 'fake-test-key')
+    def locked(bid):
+        raise HTTPException(403, 'This business is view-only for finances.')
+    monkeypatch.setattr(links, 'require_operational_write', locked)
+    stripe = Accounts(platform=[_link(source_type='invoice', source_id=INVOICE['id'])])
+    with pytest.raises(HTTPException):
+        _disable(stripe)
+    assert stripe.calls == []
+
+
+def test_both_accounts_failing_is_unverified_not_a_crash(stripe_policy):
+    stripe = Accounts(fail={'connected', 'platform'})
+    with pytest.raises(links.UnverifiedLink):
+        _disable(stripe)
+
+
+class Endless(Accounts):
+    """Stripe that always says there is another page."""
+    def __init__(self, endless_on, **kw):
+        super().__init__(**kw)
+        self.endless_on = endless_on
+    async def get(self, url, **kwargs):
+        on = self._on(kwargs)
+        self.calls.append(('GET', on, url))
+        if url.endswith(self.endless_on[1]) and on == self.endless_on[0]:
+            return Response({'data': [{'id': 'x', 'url': 'other'}], 'has_more': True})
+        rows = self.rows[on] if url.endswith('/payment_links') else []
+        return Response({'data': rows, 'has_more': False})
+
+
+def test_a_listing_too_long_to_read_falls_through_to_the_next_account(stripe_policy):
+    stripe = Endless(('connected', '/payment_links'), platform=[_link(source_type='invoice', source_id=INVOICE['id'])])
+    assert _disable(stripe) == 'disabled'
+
+
+def test_checkouts_too_long_to_read_say_the_link_is_already_off(stripe_policy):
+    stripe = Endless(('connected', '/checkout/sessions'), connected=[_link(source_type='invoice', source_id=INVOICE['id'])])
+    with pytest.raises(ValueError, match='pay link is now off') as err:
+        _disable(stripe)
+    assert not isinstance(err.value, links.UnverifiedLink)
+
+
+def test_a_payment_on_the_platform_account_still_blocks_the_void(stripe_policy):
+    class Paid(Accounts):
+        async def get(self, url, **kwargs):
+            if url.endswith('/checkout/sessions'):
+                self.calls.append(('GET', self._on(kwargs), url))
+                return Response({'data': [{'id': 'cs_paid', 'status': 'complete'}], 'has_more': False})
+            return await super().get(url, **kwargs)
+    stripe = Paid(platform=[_link(source_type='invoice', source_id=INVOICE['id'])])
+    with pytest.raises(ValueError, match='Stripe shows a payment'):
+        _disable(stripe)
+
+
+def test_void_endpoint_passes_the_owners_word_and_returns_the_code(api, monkeypatch, caplog):
+    async def change(client, biz, action, verb):
+        api.changes.append((biz, action, verb))
+        if not action['_owner_confirms_link_off']:
+            return actions._fail(verb, links.UNVERIFIED, code='link_unverified')
+        return {'result': 'Invoice INV-001 voided.', 'invoice_id': action['invoice_id'], 'invoice_number': 'INV-001'}
+    monkeypatch.setattr(actions, '_change', change)
+    api.as_user('owner-user')
+    with caplog.at_level('INFO', logger='chief_invoice_actions'):
+        res = api.client.post(f"/invoices/{INVOICE['id']}/void")
+    assert res.status_code == 409 and res.json()['code'] == 'link_unverified'
+    assert any('void refused' in r.getMessage() and 'link_unverified' in r.getMessage() for r in caplog.records)
+    res = api.client.post(f"/invoices/{INVOICE['id']}/void", json={'link_off_confirmed': True})
+    assert res.status_code == 200 and api.changes[-1][1]['_owner_confirms_link_off'] is True
+
+
+def test_only_the_owner_may_send_void_anyway(api):
+    api.as_user('member-user')
+    res = api.client.post(f"/invoices/{INVOICE['id']}/void", json={'link_off_confirmed': True})
+    assert res.status_code == 409 and res.json()['code'] == 'owner_only'
+    assert not api.changes

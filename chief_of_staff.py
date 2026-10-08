@@ -12990,6 +12990,13 @@ async def _execute_actions(client, biz, actions: List[Dict],
             resolved = dict(resolved)
             resolved["_owner_text"] = (owner_text or "") if (
                 prompted and str(user_id) == str(biz.get("owner_id"))) else ""
+        if atype in ("void_invoice", "delete_invoice"):
+            # "Void anyway" for a pay link that couldn't be verified is the
+            # owner's word on a turn they typed, never the model's alone.
+            from chief_invoice_actions import owner_confirms_link_off
+            resolved = dict(resolved)
+            resolved["_owner_confirms_link_off"] = owner_confirms_link_off(
+                resolved, prompted=prompted, user_id=user_id, biz=biz, owner_text=owner_text)
         # ── No card on file yet (no_card_trial.py) ──
         # Before the trust gate on purpose: a held bulk send becomes one
         # draft per contact, approved one at a time, and would no longer
