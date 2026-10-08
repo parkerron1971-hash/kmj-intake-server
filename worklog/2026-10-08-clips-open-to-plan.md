@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "push so this can be accesible for the offer. make sure things are added so we can close this out asap."
 status: in progress
-prs: [kmj-intake-server clips-open-to-plan, solutionist-studio clips-open-to-plan]
+prs: [kmj-intake-server#1351, solutionist-studio#1175]
 migrations: []
 left_undone: ["After merge: CLIP_FINDER_BUSINESSES=* on kmj-intake-server (web) and kmj-intake-worker", "Kevin: a first real clip post to a test account; a spending limit on the clip service's OpenRouter key", "Speed: ~18 min per recording hour on Railway"]
 decisions: ["available = enabled AND plan_allows (the same require_feature rule that gates starting a run; fails open on billing lookup errors)", "locked = enabled but not on the plan, so the app can say what it comes with", "Uploads are refused (403) when neither the hand cutter nor Find my best clips could use the recording"]
