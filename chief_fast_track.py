@@ -590,7 +590,9 @@ async def classify(message: str, prior_assistant: str, *, rec: route_ledger.Rout
                + (f"Chief's previous message: {prior_assistant[-300:]}\n" if prior_assistant else "")
                + f"\nThe message to classify: {message[:800]}")
     messages: List[Dict[str, Any]] = [{"role": "user", "content": content}]
-    prefill = model.startswith("claude-haiku")
+    # Haiku 4.x takes an assistant prefill; the 4.6+ generation (Haiku 5.5
+    # among them) rejects one, so the classifier asks for plain JSON there.
+    prefill = model.startswith("claude-haiku-4")
     if prefill:
         messages.append({"role": "assistant", "content": "{"})
     out: Dict[str, Any] = {}

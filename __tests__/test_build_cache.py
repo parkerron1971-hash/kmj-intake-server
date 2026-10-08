@@ -126,14 +126,15 @@ def test_the_call_sends_a_cached_system_and_cached_parts(monkeypatch):
     assert rows[0]["cache_read_tokens"] == 24000 and rows[0]["input_tokens"] == 900
 
 
-def test_a_cached_read_is_priced_at_a_tenth(monkeypatch):
+def test_a_cached_read_is_priced_at_the_models_read_rate(monkeypatch):
     cold, warm = v2.new_spend(), v2.new_spend()
     v2._record_spend(cold, "claude-opus-5-5", _Usage(input_tokens=25000, output_tokens=2000))
     v2._record_spend(warm, "claude-opus-5-5", _Usage(input_tokens=1000, output_tokens=2000,
                                                      cache_read_input_tokens=24000))
     saved = cold["cost_cents"] - warm["cost_cents"]
-    # 24,000 tokens at $4/M is 9.6c fresh and 0.96c cached
-    assert 8.5 < saved < 8.8, saved
+    # 24,000 tokens at $4/M is 9.6c fresh; Opus 5.5 reads its cache at 0.05x
+    # (pricing page, 2026-10-07), so 0.48c cached
+    assert 9.0 < saved < 9.2, saved
 
 
 def test_a_continuation_reuses_the_cached_opening(monkeypatch):

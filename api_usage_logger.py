@@ -101,6 +101,9 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "claude-sonnet-4":   (300.0, 1500.0),
     # Haiku 4.5 — $1/MTok in, $5/MTok out
     "claude-haiku-4":    (100.0, 500.0),
+    # Haiku 5.5 (2026-10-07) — $0.10/MTok in, $0.50/MTok out for a prompt
+    # up to 100k tokens; a longer prompt pays the _LONG_PROMPT row below.
+    "claude-haiku-5-5":  (10.0, 50.0),
     # Legacy fallbacks for any old model strings still in flight
     "claude-3-5-sonnet": (300.0, 1500.0),
     "claude-3-5-haiku":  (80.0, 400.0),
@@ -131,6 +134,39 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
 _CACHE_READ_MULT = 0.10
 _CACHE_WRITE_MULT = 1.25
 _CACHE_WRITE_1H_MULT = 2.0
+
+# Cache reads are not 0.1x on every model (Anthropic pricing page, checked
+# 2026-10-07): 0.05x on Sonnet 5.5 and Opus 5.5, 0.025x on Fable 5.1 and
+# Mythos 5.1. At 0.1x the ledger priced every Sonnet 5.5 cache read at
+# twice its cost. Longest prefix wins, as in the price table.
+_CACHE_READ_MULT_BY_MODEL: Dict[str, float] = {
+    "claude-sonnet-5-5": 0.05,
+    "claude-opus-5-5":   0.05,
+    "claude-fable-5-1":  0.025,
+    "claude-mythos-5-1": 0.025,
+}
+
+# Models priced by prompt length: above `threshold` prompt tokens (fresh
+# input + cache reads + cache writes) every token category is priced from
+# the long row. Haiku 5.5: 5x above 100k tokens.
+_LONG_PROMPT: Dict[str, tuple] = {
+    "claude-haiku-5-5": (100_000, (50.0, 250.0)),
+}
+
+
+def _longest_prefix(model: str, table: Dict[str, Any]):
+    m = (model or "").lower()
+    best, best_len = None, -1
+    for prefix, value in table.items():
+        if m.startswith(prefix) and len(prefix) > best_len:
+            best, best_len = value, len(prefix)
+    return best
+
+
+def cache_read_mult(model: str) -> float:
+    """What a cache read costs, as a share of the model's input price."""
+    v = _longest_prefix(model, _CACHE_READ_MULT_BY_MODEL)
+    return _CACHE_READ_MULT if v is None else float(v)
 
 
 def cache_write_1h(usage) -> int:
@@ -163,6 +199,11 @@ def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int,
                         cache_creation_tokens: int = 0,
                         cache_creation_1h_tokens: int = 0) -> float:
     in_cents_per_mtok, out_cents_per_mtok = _price_for_model(model)
+    long_row = _longest_prefix(model, _LONG_PROMPT)
+    if long_row:
+        prompt = int(input_tokens or 0) + int(cache_read_tokens or 0) + int(cache_creation_tokens or 0)
+        if prompt > long_row[0]:
+            in_cents_per_mtok, out_cents_per_mtok = long_row[1]
     # Anthropic reports input_tokens as FRESH (uncached) input only; cache
     # reads (0.10×) and cache writes (1.25× / 2× at 1 hour) are separate
     # and were being dropped — understating every cached Chief turn. Fold
@@ -173,7 +214,7 @@ def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int,
     cost = (
         (input_tokens  / 1_000_000.0) * in_cents_per_mtok +
         (output_tokens / 1_000_000.0) * out_cents_per_mtok +
-        (cache_read_tokens     / 1_000_000.0) * in_cents_per_mtok * _CACHE_READ_MULT +
+        (cache_read_tokens     / 1_000_000.0) * in_cents_per_mtok * cache_read_mult(model) +
         ((cache_creation_tokens - one_hour) / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_MULT +
         (one_hour / 1_000_000.0) * in_cents_per_mtok * _CACHE_WRITE_1H_MULT
     )
