@@ -158,7 +158,9 @@ def supports_forced_tool_choice(model: str) -> bool:
 # only; everything newer takes the full range). Haiku 4.5 and Sonnet 4.5
 # return a 400 for it.
 _EFFORT_MARKERS = ("opus-4-5", "opus-4-6", "opus-4-7", "opus-4-8", "opus-5",
-                   "sonnet-4-6", "sonnet-5", "fable", "mythos")
+                   "sonnet-4-6", "sonnet-5", "fable", "mythos",
+                   # Haiku 5.5 takes effort (default medium); Haiku 4.5 400s on it.
+                   "haiku-5")
 
 
 def supports_effort(model: str) -> bool:
@@ -206,7 +208,9 @@ def thinking_off_kwargs(model: str) -> dict:
     m = (model or "").lower()
     if "sonnet-5-5" in m:
         return {"thinking": {"type": "between_tools"}}
-    if "sonnet" in m:
+    if "sonnet" in m or "haiku-5" in m:
+        # Haiku 5.5 thinks adaptively by default and accepts "disabled"
+        # (Models API capabilities, 2026-10-07).
         return {"thinking": {"type": "disabled"}}
     return {}
 
