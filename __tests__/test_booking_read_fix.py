@@ -14,13 +14,15 @@ booked length into `data`. So the reads match the column OR data, and a
 read that fails (or hits its row limit) refuses instead of guessing.
 
 The fake below answers the way PostgREST does: an unknown column in the
-select is a 400 (None), the time lives in data, and the projection of
-`alias:data->>key` is text.
+select is a 400 (None), the time lives in data, the projection of
+`alias:data->>key` is text, and every filter in the query string (eq,
+neq, gte, lt, and(...)/or(...)) is parsed and applied, so a column filter
+compares timestamps while a `data->>key` filter compares TEXT, as
+Postgres does. Nothing is special-cased by the filter's spelling.
 """
 from __future__ import annotations
 
 import ast
-import asyncio
 import pathlib
 import re
 import sys
@@ -37,7 +39,10 @@ import availability_engine as ae
 import booking_series as bs
 import booking_widget_router as bwr
 import chief_booking_actions as cba
+import outside_calendar
 import sb_clients
+
+REAL_BUSY_OVERLAP = outside_calendar.busy_overlap
 
 BIZ = "b1"
 MODULE_ENTRY_COLUMNS = {
@@ -60,6 +65,95 @@ def _entry(start, minutes=60, *, id="e1", status="active", column=False, busines
     return row
 
 
+TIMESTAMP_COLUMNS = {"appointment_at", "created_at", "updated_at"}
+_OPS = {"eq": lambda a, b: a == b, "neq": lambda a, b: a != b,
+        "gt": lambda a, b: a > b, "gte": lambda a, b: a >= b,
+        "lt": lambda a, b: a < b, "lte": lambda a, b: a <= b}
+_NOT_FILTERS = {"select", "limit", "offset", "order"}
+
+
+def _ts(v):
+    """timestamptz input the way Postgres reads it (session zone UTC): a
+    bare date is midnight, a naive time is UTC."""
+    s = str(v).strip().replace(" ", "T")
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _field_value(entry, field):
+    base, _, key = field.partition("->>")
+    v = entry.get(base)
+    if key:
+        v = v.get(key) if isinstance(v, dict) else None
+        return None if v is None else str(v)    # ->> yields text
+    return v
+
+
+def _condition(entry, field, op, raw):
+    """One `field.op.value` filter. NULL compares false, like SQL."""
+    if op == "is":
+        return (_field_value(entry, field) is None) == (raw == "null")
+    if op == "not":
+        inner_op, _, inner_raw = raw.partition(".")
+        return not _condition(entry, field, inner_op, inner_raw)
+    v = _field_value(entry, field)
+    if v is None:
+        return False
+    if "->>" in field:
+        left, right = v, raw                     # text vs text
+    elif field in TIMESTAMP_COLUMNS:
+        left, right = _ts(v), _ts(raw)           # timestamptz vs timestamptz
+    else:
+        left, right = str(v), raw
+    return _OPS[op](left, right)
+
+
+def _split_top(s):
+    """Split on commas that are not inside parentheses."""
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+            continue
+        depth += ch == "("
+        depth -= ch == ")"
+        cur += ch
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _logic(entry, mode, body):
+    """and(...)/or(...) bodies: items are nested logic or field.op.value."""
+    results = []
+    for item in _split_top(body):
+        m = re.fullmatch(r"(and|or)\((.*)\)", item)
+        if m:
+            results.append(_logic(entry, m.group(1), m.group(2)))
+        else:
+            field, op, raw = item.split(".", 2)
+            results.append(_condition(entry, field, op, raw))
+    return all(results) if mode == "and" else any(results)
+
+
+def _matches(entry, params):
+    for key, value in params:
+        if key in _NOT_FILTERS:
+            continue
+        if key in ("or", "and"):
+            assert value.startswith("(") and value.endswith(")"), value
+            if not _logic(entry, key, value[1:-1]):
+                return False
+            continue
+        op, _, raw = value.partition(".")
+        if not _condition(entry, key, op, raw):
+            return False
+    return True
+
+
 class FakePostgrest:
     def __init__(self, entries=(), *, fail=False, settings=None):
         self.entries = list(entries)
@@ -72,32 +166,24 @@ class FakePostgrest:
         if path.startswith("/module_entries"):
             if self.fail:
                 return None                      # a 5xx / transport error
-            params = dict(p.split("=", 1) for p in path.split("?", 1)[1].split("&") if "=" in p)
+            params = [p.split("=", 1) for p in path.split("?", 1)[1].split("&") if "=" in p]
+            opts = dict(params)
             cols = []
-            for col in params.get("select", "*").split(","):
+            for col in opts.get("select", "*").split(","):
                 alias, _, expr = col.rpartition(":")
                 base, _, key = expr.partition("->>")
                 if base not in MODULE_ENTRY_COLUMNS:
                     return None                  # PostgREST 400: no such column
                 cols.append((alias or expr, base, key))
-            rows = [e for e in self.entries
-                    if params.get("business_id", f"eq.{e['business_id']}") == f"eq.{e['business_id']}"
-                    and (params.get("status") != "eq.active" or e["status"] == "active")
-                    and params.get("id") != f"neq.{e['id']}"]
-            rows = rows[: int(params.get("limit", "1000"))]
+            rows = [e for e in self.entries if _matches(e, params)]
+            rows = rows[: int(opts.get("limit", "1000"))]
             out = []
             for e in rows:
                 if cols == [("*", "*", "")]:
                     out.append(dict(e))
                     continue
-                r = {}
-                for name, base, key in cols:
-                    if key:
-                        v = (e.get(base) or {}).get(key)
-                        r[name] = None if v is None else str(v)
-                    else:
-                        r[name] = e.get(base)
-                out.append(r)
+                out.append({name: _field_value(e, f"{base}->>{key}" if key else base)
+                            for name, base, key in cols})
             return out
         if path.startswith("/businesses"):
             return [{"id": BIZ, "owner_id": "o1", "settings": self.settings}]
@@ -108,7 +194,6 @@ class FakePostgrest:
 
 @pytest.fixture
 def no_outside_calendar(monkeypatch):
-    import outside_calendar
     monkeypatch.setattr(outside_calendar, "busy_overlap", lambda *a, **k: False)
     monkeypatch.setattr(outside_calendar, "busy_blocks_for_dates", lambda *a, **k: [])
 
@@ -185,6 +270,80 @@ def test_the_window_filter_matches_column_or_data_and_carries_no_plus():
     assert f == ("or=(and(appointment_at.gte.2026-10-06,appointment_at.lt.2026-10-09),"
                  "and(data->>appointment_at.gte.2026-10-06,data->>appointment_at.lt.2026-10-09))")
     assert "+" not in f
+
+
+def _ids(rows_in, lo, hi):
+    """Which bookings the shared window read returns for [lo, hi), by id."""
+    fake = FakePostgrest(rows_in)
+    rows = fake.get(f"/module_entries?business_id=eq.{BIZ}&status=eq.active"
+                    f"&{ae.booking_window_filter(lo, hi)}&select=id&limit=2000")
+    return {r["id"] for r in rows}
+
+
+def test_the_fake_applies_the_window_filter_it_is_given():
+    """Proves the fake parses the filter rather than passing every row."""
+    rows = [_entry("2026-10-07T10:00:00Z", id="in"), _entry("2026-11-07T10:00:00Z", id="out")]
+    assert _ids(rows, date(2026, 10, 6), date(2026, 10, 9)) == {"in"}
+    assert _ids(rows, date(2026, 11, 1), date(2026, 11, 30)) == {"out"}
+
+
+def test_the_window_includes_inside_and_excludes_outside_for_column_and_data():
+    lo, hi = date(2026, 10, 6), date(2026, 10, 9)        # [Oct 6, Oct 9)
+    rows = [
+        _entry("2026-10-07T14:00:00+00:00", id="col-in", column=True),
+        _entry("2026-10-12T14:00:00+00:00", id="col-after", column=True),
+        _entry("2026-10-05T23:59:00+00:00", id="col-before", column=True),
+        _entry("2026-10-07T14:00:00Z", id="data-in"),
+        _entry("2026-10-12T14:00:00Z", id="data-after"),
+        _entry("2026-10-05T23:59:00Z", id="data-before"),
+        _entry("2026-10-07T14:00:00Z", id="cancelled", status="cancelled"),
+        _entry("2026-10-07T14:00:00Z", id="other-biz", business_id="b2"),
+    ]
+    assert _ids(rows, lo, hi) == {"col-in", "data-in"}
+
+
+@pytest.mark.parametrize("stored", [
+    "2026-10-06",                      # date-only (3 such rows in production)
+    "2026-10-06T00:00:00+00:00",       # +00:00 (3 rows)
+    "2026-10-06T00:00:00Z",            # Z (6 rows)
+    "2026-10-08T23:59:59+00:00",
+    "2026-10-08",
+])
+def test_every_production_format_in_the_window_is_read(stored):
+    lo, hi = date(2026, 10, 6), date(2026, 10, 9)
+    assert _ids([_entry(stored, id="d")], lo, hi) == {"d"}
+    assert _ids([_entry(stored, id="c", column=True)], lo, hi) == {"c"}
+
+
+@pytest.mark.parametrize("stored", [
+    "2026-10-05",
+    "2026-10-05T23:59:59+00:00",
+    "2026-10-05T23:59:59Z",
+    "2026-10-09",                      # the upper bound is exclusive
+    "2026-10-09T00:00:00+00:00",
+    "2026-10-09T00:00:00Z",
+])
+def test_every_production_format_outside_the_window_is_left_out(stored):
+    lo, hi = date(2026, 10, 6), date(2026, 10, 9)
+    assert _ids([_entry(stored, id="d")], lo, hi) == set()
+    assert _ids([_entry(stored, id="c", column=True)], lo, hi) == set()
+
+
+def test_the_guard_sees_a_date_only_and_a_plus_offset_booking(monkeypatch):
+    """A date-only booking is midnight UTC for an hour; +00:00 reads as Z."""
+    _use(monkeypatch, FakePostgrest([_entry("2026-09-14", 60, id="a"),
+                                     _entry("2026-09-15T10:00:00+00:00", 60, id="b")]))
+    assert bwr._check_slot_available(BIZ, "2026-09-14T00:30:00Z", 30) is False
+    assert bwr._check_slot_available(BIZ, "2026-09-14T01:00:00Z", 30) is True
+    assert bwr._check_slot_available(BIZ, "2026-09-15T10:30:00Z", 30) is False
+
+
+def test_the_guard_sees_a_booking_the_day_before_that_spills_in(monkeypatch):
+    """The guard reads from the day before, so a long booking that starts
+    late on the 13th still blocks the small hours of the 14th."""
+    _use(monkeypatch, FakePostgrest([_entry("2026-09-13T23:00:00Z", 180)]))
+    assert bwr._check_slot_available(BIZ, "2026-09-14T01:00:00Z", 30) is False
+    assert bwr._check_slot_available(BIZ, "2026-09-14T02:00:00Z", 30) is True
 
 
 # ─── 2. Booked rows: the time from data, the length from column / data / 60 ─
@@ -284,6 +443,29 @@ def test_the_public_guard_raises_on_a_failed_read_too(monkeypatch, no_outside_ca
         bwr._check_public_slot_available(BIZ, "2026-09-14T14:00:00Z", 60)
 
 
+def _outside_busy_1430_to_1515(monkeypatch):
+    """The real busy_overlap (which does nothing for a length of 0) over
+    one outside busy block, Mon Sep 14 2026 14:30-15:15Z."""
+    monkeypatch.setattr(outside_calendar, "busy_overlap", REAL_BUSY_OVERLAP)
+    lo = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    hi = datetime(2026, 9, 14, 15, 15, tzinfo=timezone.utc)
+    seen = []
+
+    def conflicts(business_id, start, end):
+        seen.append(end - start)
+        return start < hi and lo < end
+    monkeypatch.setattr(outside_calendar, "conflicts_with_outside_calendar", conflicts)
+    return seen
+
+
+def test_the_public_guard_checks_a_request_with_no_length_against_the_other_calendar(monkeypatch):
+    seen = _outside_busy_1430_to_1515(monkeypatch)
+    _use(monkeypatch, FakePostgrest([]))                     # no bookings at all
+    assert bwr._check_public_slot_available(BIZ, "2026-09-14T14:00:00Z", 0) is False
+    assert seen == [timedelta(minutes=ae.DEFAULT_BOOKED_MIN)]
+    assert bwr._check_public_slot_available(BIZ, "2026-09-14T15:15:00Z", 0) is True
+
+
 # ─── 4. The widget's create paths ────────────────────────────────────
 
 MODULE = {"id": "mod1", "archetype_params": {"primary_date_field": "appointment_at"},
@@ -344,6 +526,17 @@ def test_an_overlapping_booking_refuses_with_409(widget, monkeypatch, path, body
     client, created = widget
     _use(monkeypatch, FakePostgrest([_entry("2027-03-01T14:30:00Z", 60)]))
     r = client.post(path, json=body)
+    assert r.status_code == 409, r.text
+    assert created == []
+
+
+def test_book_anon_with_no_length_refuses_an_outside_busy_time(widget, monkeypatch):
+    client, created = widget
+    _outside_busy_1430_to_1515(monkeypatch)
+    _use(monkeypatch, FakePostgrest([]))
+    body = {"name": "Ann", "email": "ann@example.com",
+            "data": {"appointment_at": "2026-09-14T14:00:00Z"}}     # no length
+    r = client.post(f"/widgets/booking/{BIZ}/book-anon", json=body)
     assert r.status_code == 409, r.text
     assert created == []
 

@@ -1299,8 +1299,13 @@ def _check_public_slot_available(
 
     The outside check fails soft (nothing connected, not set up, a read
     error) to "no conflict", and runs first because a feed can gain a
-    busy block between the slot list and the submit."""
-    if appointment_at_iso and duration_min > 0:
+    busy block between the slot list and the submit. A request with no
+    length is checked as DEFAULT_BOOKED_MIN here too, the same length the
+    bookings guard below gives it, so neither check is skipped."""
+    if duration_min <= 0:
+        from availability_engine import DEFAULT_BOOKED_MIN
+        duration_min = DEFAULT_BOOKED_MIN
+    if appointment_at_iso:
         try:
             import outside_calendar
             if outside_calendar.busy_overlap(business_id, appointment_at_iso, duration_min):
