@@ -371,7 +371,6 @@ def test_void_refusal_for_an_unverified_link_carries_a_code_and_the_override_voi
             return 'confirmed_off'
         raise links.UnverifiedLink(links.UNVERIFIED)
     monkeypatch.setattr(links, 'disable_invoice_payment_link', unverified)
-    monkeypatch.setattr(actions, '_ANSWER_WINDOW', (0.0, 1800.0))
     out = run(actions.handle_void_invoice)
     assert out['failed'] and out['code'] == 'link_unverified' and len(db[1]) == 1
     out = run(actions.handle_void_invoice, {'invoice_number': 'INV-001', '_owner_confirms_link_off': True})
@@ -384,12 +383,19 @@ OWNER_BIZ = {**BIZ, 'owner_id': 'owner-user'}
 
 @pytest.mark.parametrize('said,prompted,user,text,expected', [
     (True, True, 'owner-user', 'It is off, void it.', True),
-    ('true', True, 'owner-user', 'yes', True),
+    ('true', True, 'owner-user', "yes, it's off", True),
+    (True, True, 'owner-user', 'yes', False),               # a bare yes is not "the link is off"
+    (True, True, 'owner-user', 'ok', False),
+    (True, True, 'owner-user', 'void it', False),
+    (True, True, 'owner-user', 'Go ahead, do it', False),
     ('false', True, 'owner-user', 'no', False),
     (None, True, 'owner-user', 'void it', False),
     (True, False, 'owner-user', 'void it', False),        # unattended: no owner present
     (True, True, 'member-user', 'void it', False),        # a member's turn
     (True, True, 'owner-user', '', False),                # no message from the owner
+    (True, True, 'owner-user', 'void INV-2026-010', False),   # asked to void, never said the link is off
+    (True, True, 'owner-user', "I turned it off in Stripe", True),
+    (True, True, 'owner-user', 'Go ahead and void it anyway', True),
 ])
 def test_chief_counts_link_off_only_on_the_owners_own_turn(said, prompted, user, text, expected):
     got = actions.owner_confirms_link_off({'link_off_confirmed': said}, prompted=prompted,
@@ -404,25 +410,34 @@ def test_the_payload_alone_never_overrides(monkeypatch, db, payload):
         seen.append(link_off_confirmed)
         raise links.UnverifiedLink(links.UNVERIFIED)
     monkeypatch.setattr(links, 'disable_invoice_payment_link', unverified)
-    monkeypatch.setattr(actions, '_ANSWER_WINDOW', (0.0, 1800.0))
     db[0][0].update(status='sent', stripe_payment_url=URL)
     run(actions.handle_void_invoice)
     assert run(actions.handle_void_invoice, {'invoice_number': 'INV-001', **payload})['failed']
     assert seen == [False, False]
 
 
-def test_an_override_in_the_same_breath_as_the_refusal_is_not_an_answer(monkeypatch, db):
-    """Chief voiding, getting refused and adding the flag in one turn: the
-    yes has to come after someone could read the refusal."""
+def test_the_owners_yes_works_on_a_replica_that_never_saw_the_refusal(monkeypatch, db):
+    """The web tier runs several replicas. Kevin's yes landed on one that had
+    not refused him and was refused again (2026-10-08): no per-process memory."""
     seen = []
     async def unverified(client, biz, inv, link_off_confirmed=False):
         seen.append(link_off_confirmed)
+        if link_off_confirmed:
+            return 'confirmed_off'
         raise links.UnverifiedLink(links.UNVERIFIED)
     monkeypatch.setattr(links, 'disable_invoice_payment_link', unverified)
     db[0][0].update(status='sent', stripe_payment_url=URL)
-    run(actions.handle_void_invoice, {'invoice_number': 'INV-001', '_owner_confirms_link_off': True})
-    run(actions.handle_void_invoice, {'invoice_number': 'INV-001', '_owner_confirms_link_off': True})
-    assert seen == [False, False]
+    out = run(actions.handle_void_invoice, {'invoice_number': 'INV-001', '_owner_confirms_link_off': True})
+    assert not out.get('failed') and seen == [True]
+
+
+def test_an_unverified_link_prints_what_each_account_showed(stripe_policy, capsys):
+    stripe = Accounts(connected=[_link()], fail={'platform'})
+    with pytest.raises(links.UnverifiedLink):
+        _disable(stripe)
+    line = capsys.readouterr().out
+    assert 'pay link unverified' in line and 'connected:found type=- own_id=False biz=-' in line
+    assert 'platform:error 403' in line
 
 
 def test_the_policy_gate_runs_before_any_stripe_call(monkeypatch):
@@ -481,7 +496,7 @@ def test_a_payment_on_the_platform_account_still_blocks_the_void(stripe_policy):
         _disable(stripe)
 
 
-def test_void_endpoint_passes_the_owners_word_and_returns_the_code(api, monkeypatch, caplog):
+def test_void_endpoint_passes_the_owners_word_and_returns_the_code(api, monkeypatch, capsys):
     async def change(client, biz, action, verb):
         api.changes.append((biz, action, verb))
         if not action['_owner_confirms_link_off']:
@@ -489,10 +504,10 @@ def test_void_endpoint_passes_the_owners_word_and_returns_the_code(api, monkeypa
         return {'result': 'Invoice INV-001 voided.', 'invoice_id': action['invoice_id'], 'invoice_number': 'INV-001'}
     monkeypatch.setattr(actions, '_change', change)
     api.as_user('owner-user')
-    with caplog.at_level('INFO', logger='chief_invoice_actions'):
-        res = api.client.post(f"/invoices/{INVOICE['id']}/void")
+    res = api.client.post(f"/invoices/{INVOICE['id']}/void")
     assert res.status_code == 409 and res.json()['code'] == 'link_unverified'
-    assert any('void refused' in r.getMessage() and 'link_unverified' in r.getMessage() for r in caplog.records)
+    printed = capsys.readouterr().out
+    assert 'void refused' in printed and 'link_unverified' in printed and 'override=False' in printed
     res = api.client.post(f"/invoices/{INVOICE['id']}/void", json={'link_off_confirmed': True})
     assert res.status_code == 200 and api.changes[-1][1]['_owner_confirms_link_off'] is True
 

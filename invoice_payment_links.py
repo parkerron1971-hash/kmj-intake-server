@@ -4,14 +4,11 @@ API contracts: https://docs.stripe.com/api/payment-link/update
 https://docs.stripe.com/api/checkout/sessions/list
 https://docs.stripe.com/api/checkout/sessions/expire
 """
-import logging
-
 import httpx
 
 from stripe_checkout_helpers import STRIPE_API_BASE, _secret_key
 from financial_policy import require_operational_write, require_stripe_write
 
-logger = logging.getLogger('invoice_payment_links')
 
 
 class UnverifiedLink(ValueError):
@@ -101,7 +98,9 @@ async def disable_invoice_payment_link(client, biz, invoice, *, link_off_confirm
         require_stripe_write(account)
         places.append({'Stripe-Account': account})
     places.append({})
+    seen = []   # what each account showed, for the log line below
     for headers in places:
+        on = 'connected' if headers else 'platform'
         found, owned = None, []
         try:
             async for links in _pages(client, 'payment_links', {}, headers, auth):
@@ -111,14 +110,21 @@ async def disable_invoice_payment_link(client, biz, invoice, *, link_off_confirm
                     if _owns(link, invoice, biz):
                         owned.append(link)
         except (httpx.HTTPStatusError, _TooMany) as exc:
-            logger.warning('pay link lookup failed: invoice=%s on=%s why=%s', invoice['id'],
-                           'connected' if headers else 'platform',
-                           getattr(getattr(exc, 'response', None), 'status_code', 'too many links'))
+            seen.append(f"{on}:error {getattr(getattr(exc, 'response', None), 'status_code', 'too many links')}")
             continue
         if found and _owns(found, invoice, biz):
             await _switch_off(client, owned, headers, auth)
             return 'disabled'
-    logger.info('pay link unverified: invoice=%s confirmed_off=%s', invoice['id'], bool(link_off_confirmed))
+        if not found:
+            seen.append(f'{on}:not found')
+        else:
+            tags = found.get('metadata') or {}
+            seen.append(f"{on}:found type={tags.get('source_type') or '-'} "
+                        f"own_id={tags.get('source_id') == invoice['id']} "
+                        f"biz={'-' if not tags.get('business_id') else tags.get('business_id') == biz['id']}")
+    # Printed: only stdout reaches the Railway logs here.
+    print(f"[invoice] pay link unverified: invoice={invoice['id']} {'; '.join(seen)} "
+          f"confirmed_off={bool(link_off_confirmed)}", flush=True)
     if link_off_confirmed:
         return 'confirmed_off'
     raise UnverifiedLink(UNVERIFIED)
