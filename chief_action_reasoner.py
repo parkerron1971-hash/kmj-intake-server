@@ -216,7 +216,7 @@ def reason_unknown_action(action_type: str, payload: Dict[str, Any],
     )
     try:
         resp = llm_call.post({
-            "model": model, "max_tokens": 500,
+            "model": model, "max_tokens": 500, **chief_models.quick_call_kwargs(model),
             "system": _SYSTEM.replace("{rubric}", _rubric()),
             "messages": [{"role": "user", "content": user_msg}],
         }, timeout=httpx.Timeout(connect=8.0, read=40.0, write=15.0, pool=8.0), key=key)

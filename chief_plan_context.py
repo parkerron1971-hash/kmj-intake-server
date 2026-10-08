@@ -126,8 +126,9 @@ async def allows_generic_plan(client, req, business_id=None):
         async with asyncio.timeout(BUDGET_S):
             if await asyncio.to_thread(spend_guard.over_budget, business_id):
                 return False
+            model = chief_models.model_for('fast')
             response = await llm_call.apost(client, {
-                'model': chief_models.model_for('fast'), 'max_tokens': 24,
+                'model': model, 'max_tokens': 24, **chief_models.quick_call_kwargs(model),
                 'system': _SYSTEM,
                 'messages': [{'role': 'user', 'content': json.dumps({
                     'current_request': req.message, 'earlier_user_turns': history}, ensure_ascii=False)}],

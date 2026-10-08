@@ -4,8 +4,8 @@ test_opener_classifier_haiku_5_5.py — the opening line and the router's tie-br
 Kevin approved moving those two after a head-to-head on 12 real-shaped
 messages: the same opener gate pass rate, a classifier a third faster with
 valid JSON every time, about 7x cheaper. Both run with thinking off. The
-`fast` lane (answers Haiku gives alone, headline, voice preview, helpers)
-stays on Haiku 4.5 until it is measured the same way.
+`fast` and `background` lanes followed the same day; see
+test_small_lanes_haiku_5_5.py.
 """
 from __future__ import annotations
 
@@ -20,12 +20,11 @@ import chief_fast_track as fast
 import chief_models
 
 
-def test_the_two_lanes_and_the_one_that_stays(monkeypatch):
-    for lane in ("opener", "route", "fast"):
+def test_the_two_lanes(monkeypatch):
+    for lane in ("opener", "route"):
         monkeypatch.delenv(f"CHIEF_MODEL_{lane.upper()}", raising=False)
     assert chief_models.model_for("opener") == "claude-haiku-5-5"
     assert chief_models.model_for("route") == "claude-haiku-5-5"
-    assert chief_models.model_for("fast") == "claude-haiku-4-5-20251001"
 
 
 def test_each_lane_rolls_back_without_a_deploy(monkeypatch):
