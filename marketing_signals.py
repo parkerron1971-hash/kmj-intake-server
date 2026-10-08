@@ -287,10 +287,22 @@ async def _traffic(business_id: str, now: datetime):
 
 
 def _bookings(business_id: str, now: datetime) -> Optional[Dict[str, Any]]:
+    """The shared bookings read (availability_engine.BOOKING_SELECT,
+    booking_window_filter, booked_start): a booking is found by the
+    appointment_at column OR data->>appointment_at and starts at the time in
+    data, else the column (the column alone was empty on every production
+    row until supabase/APPLY-2026-10-08-booking-columns.sql). created_at
+    rides along for the like-for-like count. Whole days are read, 4 weeks
+    back to a week ahead; bookings_from keeps only its own windows, and
+    every row read still counts toward the row limit."""
+    from availability_engine import BOOKING_SELECT, booked_start, booking_window_filter
+    lo = (now - WEEK * BEFORE_WEEKS).astimezone(timezone.utc).date()
+    hi = (now + WEEK).astimezone(timezone.utc).date() + timedelta(days=1)
     rows = _get(f'/module_entries?business_id=eq.{business_id}&status=eq.active'
-                f'&appointment_at=gte.{query_time(now - WEEK * BEFORE_WEEKS)}'
-                f'&appointment_at=lt.{query_time(now + WEEK)}'
-                f'&select=appointment_at,created_at&order=appointment_at.asc&limit={BOOKING_ROWS}')
+                f'&{booking_window_filter(lo, hi)}'
+                f'&select={BOOKING_SELECT},created_at&order=appointment_at.asc&limit={BOOKING_ROWS}')
+    rows = [{'appointment_at': booked_start(r),
+             'created_at': r.get('created_at') if isinstance(r, dict) else None} for r in rows]
     out = bookings_from(rows, now, BOOKING_ROWS)
     if out is None:
         raise Unread('module_entries: more bookings than one read counts')
