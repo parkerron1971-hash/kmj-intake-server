@@ -33,13 +33,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("ledger_navigator")
 
-NAV_MODEL = "claude-haiku-4-5-20251001"     # cheap: this is a parser, not a thinker
+# Cheap: this is a parser, not a thinker. LEDGER_NAV_MODEL rolls it back.
+NAV_MODEL = os.environ.get("LEDGER_NAV_MODEL", "claude-haiku-5-5")
 MAX_TOKENS = 400
 
 # What the model is allowed to emit. Anything else is dropped rather
@@ -192,11 +194,12 @@ def resolve(question: str, *, use_model: bool = True) -> Dict[str, Any]:
 
     if use_model and (question or "").strip():
         try:
+            import chief_models
             import llm_call
             vocab = _vocabulary()
             resp = llm_call.post({
                 "model": NAV_MODEL,
-                "max_tokens": MAX_TOKENS,
+                "max_tokens": MAX_TOKENS, **chief_models.quick_call_kwargs(NAV_MODEL),
                 "system": _SYSTEM + "\n\nVocabulary:\n" + ", ".join(vocab),
                 "messages": [{"role": "user", "content": str(question)[:600]}],
             }, task="ledger_navigator", timeout=20.0)

@@ -377,7 +377,10 @@ def s(monkeypatch):
 
     db.desks[BIZ] = {'business_id': BIZ, 'plan_enabled': True, 'paused': False, 'connection_ids': [],
                      'post_hour': 11}
-    db.desks[PRO] = {'business_id': PRO, 'plan_enabled': True, 'paused': False, 'connection_ids': [],
+    # PRO (Professional) is a week level: since B9 the fan-out plans its week
+    # (test_business_marketing_week.py). Its desk is off here, so these
+    # counts are the suggestion's alone.
+    db.desks[PRO] = {'business_id': PRO, 'plan_enabled': False, 'paused': False, 'connection_ids': [],
                      'post_hour': 11}
 
     api = FastAPI()
@@ -771,7 +774,7 @@ def test_an_offering_post_names_the_offering():
 
 def test_the_fan_out_writes_for_the_due_suggest_businesses_only(s):
     out = run(plan.marketing_tick(THU))
-    assert out['candidates'] == 1 and out['succeeded'] == 1               # PRO is a week level: not a candidate
+    assert out['candidates'] == 1 and out['succeeded'] == 1               # PRO's desk is off here (see the fixture)
     assert len(posts_of(s)) == 1 and posts_of(s, PRO) == []
 
 
@@ -1142,7 +1145,8 @@ def test_a_second_request_while_one_is_being_written_is_busy(s):
 
 @pytest.mark.parametrize('setup,code,detail', [
     (lambda s, mp: mp.setenv('MARKETING_DESK', 'off'), 409, plan.NOT_SWITCHED_ON),
-    (lambda s, mp: s.svc.businesses[BIZ].update(comp_tier='professional'), 409, plan.WEEK_LEVEL),
+    # A Boss chair business with a live calendar now queues its open-chairs
+    # week (B11): __tests__/test_business_marketing_openings.py.
     (lambda s, mp: s.svc.businesses[BIZ].update(comp_tier=None), 403, plan.NO_PLAN),
     (lambda s, mp: setattr(s.svc, 'connections', []), 409, plan.NO_ACCOUNTS),
     (lambda s, mp: mp.setenv('POST_FOR_ME_PILOT_BUSINESSES', PRO), 409, plan.NO_POSTING),

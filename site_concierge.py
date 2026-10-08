@@ -93,7 +93,8 @@ logger = logging.getLogger("site_concierge")
 router = APIRouter(tags=["site_concierge"])
 
 # Cheap/fast tier on purpose: replies are ≤150 words of public facts.
-CONCIERGE_MODEL = os.environ.get("CONCIERGE_MODEL", "claude-haiku-4-5-20251001")
+# Haiku 5.5 since 2026-10-07; CONCIERGE_MODEL rolls it back.
+CONCIERGE_MODEL = os.environ.get("CONCIERGE_MODEL", "claude-haiku-5-5")
 MAX_REPLY_TOKENS = 300          # ≈150 words + headroom
 HISTORY_TURNS = 12              # prior messages carried into the model
 
@@ -562,7 +563,8 @@ def build_system_prompt(knowledge: Dict[str, Any]) -> str:
         "- Never give medical, legal, or financial advice — warmly "
         "suggest speaking with the practitioner.",
         "- Never discuss other customers or any private business data.",
-        "- Keep every reply under 150 words. Plain text, no markdown "
+        "- Keep replies short: answer what was asked in two to four "
+        "sentences, never more than 150 words. Plain text, no markdown "
         "headings.",
         # Bot-disclosure laws expect a plain answer; the chat header says
         # it too (ai_disclosure.CLIENT_V1). Never a claim to be human.
@@ -690,10 +692,15 @@ async def _call_model(system: str,
     the caller degrades to lead capture, never errors."""
     if not llm_call.api_key():
         return None
+    import chief_models
+    import model_ladder
     payload = {
         "model": CONCIERGE_MODEL,
         "max_tokens": MAX_REPLY_TOKENS,
-        "temperature": 0.3,
+        # 0.3 where the model takes a temperature; Haiku 5.5 does not.
+        **model_ladder.sampling_kwargs(CONCIERGE_MODEL, 0.3),
+        # Haiku 5.5 thinks by default, against the same 300-token budget.
+        **chief_models.quick_call_kwargs(CONCIERGE_MODEL),
         "system": system,
         "messages": messages,
     }
@@ -705,6 +712,11 @@ async def _call_model(system: str,
                            f"{resp.text[:200]}")
             return None
         data = resp.json()
+        if data.get("stop_reason") == "refusal":
+            # Haiku 5.5's safety classifiers declined; a partial reply
+            # never goes out. Degrade to lead capture like any failure.
+            logger.info("[concierge] model declined the message")
+            return None
         text = llm_call.text_of(data).strip()
         if not text:
             return None

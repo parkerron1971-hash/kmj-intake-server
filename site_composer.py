@@ -3156,7 +3156,11 @@ def render_and_persist(business_id: str, spec: List[Dict[str, Any]],
         # WHY — {stage: signals|authoring|validation|exception|skipped,
         # detail, at} — served by GET /composer/spec; an applied compose
         # clears it (stale blame must never outlive a successful rationale).
-        if dro_status in ("applied", "applied_thin"):
+        # A "blueprint" build (the approved blueprint drove the builder and
+        # the passes were skipped by design) is no failure either: without
+        # it here, every such build saved "authoring: unknown" and Chief's
+        # site check told the owner to pay for a recompose.
+        if dro_status in ("applied", "applied_thin", "blueprint"):
             cfg.pop("dro_failure", None)
         else:
             df = dro_failure if isinstance(dro_failure, dict) else {}
@@ -5013,9 +5017,11 @@ def interview_prefill(business_id: str,
 _PROBE_SYSTEM = (
     "You are Chief, mid-interview for a website design. Ask ONE short "
     "follow-up question that would make this answer more usable for "
-    "designing the site. If the answer is already usable, respond with "
-    "the single word CLEAR.")
-_PROBE_MODEL = "claude-haiku-4-5-20251001"   # cheap + fast; 150 tokens, 10s
+    "designing the site. Ask about one thing only, in a single sentence "
+    "under 20 words, with nothing before or after it. If the answer is "
+    "already usable, respond with the single word CLEAR.")
+# Cheap + fast; 150 tokens, 10s. COMPOSER_PROBE_MODEL rolls it back.
+_PROBE_MODEL = os.environ.get("COMPOSER_PROBE_MODEL") or "claude-haiku-5-5"
 _PROBE_ANSWER_CAP = 600
 _PROBE_FOLLOWUP_CAP = 300
 
@@ -5054,11 +5060,13 @@ def interview_probe(body: InterviewProbeBody,
         f"Interview beat: {body.beat_id}\n"
         f"The owner's answer: {answer[:_PROBE_ANSWER_CAP]}")
     try:
+        import chief_models
         import site_llm
         msg = site_llm.create_message(
             model=_PROBE_MODEL, max_tokens=150, system=_PROBE_SYSTEM,
             user_content=user_content, timeout=10.0,
-            task="composer/interview-probe")
+            task="composer/interview-probe",
+            thinking=chief_models.quick_call_kwargs(_PROBE_MODEL).get("thinking"))
         text = "".join(b.text for b in msg.content
                        if getattr(b, "type", None) == "text").strip()
     except Exception as e:

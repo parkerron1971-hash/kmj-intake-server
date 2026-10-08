@@ -33,6 +33,36 @@ router = APIRouter(prefix='/platform/chief/director', tags=['creative-director']
 business_router = APIRouter(prefix='/ai/images/director', tags=['creative-director'])
 VERSION = 1
 
+# A design that comes with the business's plan (Kevin, 2026-10-07: the
+# Professional weekly plan's flyers are included in the price). It is still
+# metered as cost (every call logs its dollars, units=0), still checked
+# against the spend guards before every paid call, and still counts against
+# the business's 20 designs a day (reserve_image_artwork); only the credit
+# charge and the credit check are skipped.
+#
+# SERVER-SET ONLY. The one place that sets it is include_in_plan, called by
+# the marketing planner (business_marketing_planner) on a spec it built
+# itself. No door that takes a request or a Chief action can carry it: the
+# chat and Chief doors build their spec from named fields (DesignRequest
+# forbids extra keys, flyer_request picks fields, prepare_for_business builds
+# the dict), start() drops it from an action's spec, and image_artworks is
+# read-only to signed-in callers (only the server writes `director`).
+INCLUDED = 'included'
+
+
+def included(spec):
+    """Whether this design's credits are included in the plan (see INCLUDED)."""
+    return isinstance(spec, dict) and spec.get('billing') == INCLUDED and spec.get('scope') == 'business'
+
+
+def include_in_plan(spec):
+    """The same business design, marked as included in the plan. For the
+    marketing planner only: never call this with anything a request or a
+    Chief action supplied."""
+    if not isinstance(spec, dict) or spec.get('scope') != 'business':
+        raise ValueError('Only a business design can come with the plan.')
+    return {**spec, 'billing': INCLUDED}
+
 
 async def profile(client, biz):
     rows = await sb_clients.sb_as_service(client, 'GET',
@@ -256,7 +286,8 @@ async def handle_design_flyer(client, biz, action):
 
 
 async def start(client, biz, action, request_id):
-    spec = action.get('director') or {}
+    # The spec rides on an action, so whether it is paid for is never its say.
+    spec = {k: v for k, v in (action.get('director') or {}).items() if k != 'billing'}
     if spec.get('version') != VERSION or spec.get('max_renders') != 2:
         raise HTTPException(422, 'This design request was not prepared for review.')
     iid = uuid5(UUID(str(biz['id'])), f'creative-director:{request_id}')
@@ -306,8 +337,9 @@ def vision(raw):
 
 async def structured(client, row, schema, instruction, content):
     from chief_models import model_for
-    # Planning precedes the first (charged) render; review follows it.
-    await guard(row['business_id'], scope_of(row), credits=schema is Plan)
+    # Planning precedes the first (charged) render; review follows it. A
+    # design included in the plan checks the spend guard, never the credits.
+    await guard(row['business_id'], scope_of(row), credits=schema is Plan and not included(row.get('director')))
     import model_ladder
     model = model_for('review')
     # Sonnet 5.5 / Opus 5.5 reject a forced tool_choice (400); there the
@@ -650,7 +682,9 @@ async def run(client, row):
         await update('repairing' if attempt else 'generating', attempts=attempt+1)
         try:
             # One price per design: the repair is the Director's own quality check.
-            raw, usage, cost = await render(client, row, render_prompt(plan, spec, repair), raw_refs, charge=attempt == 0)
+            # A design included in the plan is never charged (its cost is still logged).
+            raw, usage, cost = await render(client, row, render_prompt(plan, spec, repair), raw_refs,
+                                            charge=attempt == 0 and not included(spec))
         except Exception:
             if last_good is None: raise
             # A failed repair must not discard the already saved first draft.

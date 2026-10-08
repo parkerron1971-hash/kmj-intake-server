@@ -56,7 +56,9 @@ _LANE_DEFAULTS = {
     "deep":       "claude-opus-4-8",
     "draft":      "claude-sonnet-5-5",
     "insight":    "claude-opus-4-8",
-    "background": "claude-haiku-4-5-20251001",
+    # Haiku 5.5 since 2026-10-07 (see `fast` below). Every caller sends
+    # quick_call_kwargs: thinking off, as on Haiku 4.5.
+    "background": "claude-haiku-5-5",
     # The answer check is a mechanical JSON task that ran on the chat
     # model and took 12-15s of every turn (2026-09-14 timing lines:
     # review=15509ms of total=37576ms). Its own lane, so it can be
@@ -72,21 +74,35 @@ _LANE_DEFAULTS = {
     # (model_router). `route` is the tie-breaker the router asks only when
     # its heuristics are unsure. Both are small prompts on the fastest
     # model: measured first token 383ms median, 433ms p95.
-    # Same model id as `background`, so metering and pricing already know it.
-    "fast":       "claude-haiku-4-5-20251001",
-    # The opening line and the router's tie-breaker moved to Haiku 5.5 on
-    # 2026-10-07 (Kevin: "move those two"), measured on 12 real-shaped
-    # messages against Haiku 4.5: the same opener gate pass rate (11/12),
-    # first word 409ms vs 356ms median (p90 478 vs 464), the classifier
-    # 520ms vs 762ms with valid JSON 12/12, about 7x cheaper. Haiku 4.5's
-    # classifier missed its 0.9 s deadline on 5 of its last 14 calls.
-    # Thinking is off for both (chief_fast_track.stream_text). `fast` (the
-    # answers Haiku gives alone, the headline, the voice preview, the small
-    # helpers) stays on Haiku 4.5 until it is measured the same way.
-    # Roll back with CHIEF_MODEL_OPENER / CHIEF_MODEL_ROUTE.
+    #
+    # All four small lanes run on Haiku 5.5 (2026-10-07). The opening line
+    # and the router's tie-breaker went first (Kevin: "move those two"),
+    # measured on 12 real-shaped messages against Haiku 4.5: the same opener
+    # gate pass rate (11/12), first word 409ms vs 356ms median (p90 478 vs
+    # 464), the classifier 520ms vs 762ms with valid JSON 12/12, about 7x
+    # cheaper. `fast` and `background` followed the same day (Kevin: "Switch
+    # to 5.5 because its cheaper") after the same side-by-side on each of
+    # their jobs. Thinking is off on every one of them (quick_call_kwargs).
+    # Roll back with CHIEF_MODEL_<LANE>=claude-haiku-4-5-20251001.
+    "fast":       "claude-haiku-5-5",
     "opener":     "claude-haiku-5-5",
     "route":      "claude-haiku-5-5",
 }
+
+def quick_call_kwargs(model: str) -> dict:
+    """The request fields a small helper call adds for its model: thinking
+    off on Haiku 5.5, nothing on Haiku 4.5.
+
+    Haiku 5.5 thinks by default, and its thinking counts against max_tokens:
+    a 24-token classifier or an 80-token JSON pick would stop inside its
+    thinking with no answer, and a streamed line would wait on it. Haiku 4.5
+    never thought, so it gets an unchanged request. Any other model (a lane
+    overridden to Sonnet, say) is left as its caller sent it."""
+    if "haiku-5" not in (model or "").lower():
+        return {}
+    import model_ladder
+    return model_ladder.thinking_off_kwargs(model)
+
 
 # Per-lane reply budgets. Voice is deliberately tight: replies are read
 # aloud by TTS, so 700 tokens ≈ the ceiling of a listenable answer —

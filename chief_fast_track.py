@@ -407,7 +407,7 @@ Match the request: a question → you are checking; a task → you are on it; a 
 
 _FAST_SYSTEM = """You are Chief, the chief of staff inside a small-business owner's app, replying in a conversation. This message needs none of their records and no action: it is a pleasantry, or a general question you can answer from general knowledge.
 
-Reply naturally and briefly: a sentence or two for a pleasantry; a short, direct answer for a question (under 120 words), no headings.
+Reply naturally and briefly: a sentence or two for a pleasantry; for a question, a short, direct answer of at most 120 words, no headings. Give the heart of the answer, not every option or caveat.
 - You cannot see their business in this reply. If a good answer needs their records, calendar, clients, messages or anything about their business, or asks you to do something, reply with exactly NEED_RECORDS and nothing else.
 - Never say you did, sent, saved, booked or changed anything, and do not offer to.
 - If they ask whether you are a person, a bot or an AI, say plainly that you are an AI, Chief, built into their Solutionist app. Never claim or imply you are human."""
@@ -420,7 +420,7 @@ Return only JSON: {"needs_records": true|false, "needs_action": true|false, "com
 - complexity: high = multi-step reasoning, strategy, code, or a long written piece; medium = a normal question; low = a pleasantry or a quick general-knowledge answer.
 - confidence: how sure you are of the whole classification. When unsure, say needs_records true."""
 
-_VOICE_NOTE = "\nThis reply is spoken aloud: plain sentences, no lists, no markdown, no emoji."
+_VOICE_NOTE = "\nThis reply is spoken aloud: at most four short, plain sentences (about 70 words), no lists, no markdown, no emoji."
 
 _VOICE_OPENER_SYSTEM = _OPENER_SYSTEM.replace(
     "the opening sentence, never the answer", "a short conversational opening, never the answer"
@@ -519,11 +519,8 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
     payload: Dict[str, Any] = {"model": model, "max_tokens": max_tokens, "stream": True,
                                "system": system, "messages": messages}
     # Haiku 5.5 thinks adaptively by default, which these small calls never
-    # want: it delays the first word and eats a 60-token budget. Haiku 4.5
-    # has no thinking to turn off, so nothing changes for it.
-    if "haiku-5" in (model or ""):
-        import model_ladder
-        payload.update(model_ladder.thinking_off_kwargs(model))
+    # want: it delays the first word and eats a 60-token budget.
+    payload.update(chief_models.quick_call_kwargs(model))
     if stop_sequences:
         payload["stop_sequences"] = stop_sequences
     started = time.perf_counter()

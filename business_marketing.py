@@ -97,6 +97,9 @@ HEX64 = r'^[a-f0-9]{64}$'
 Shape = Literal['story', 'wide']
 
 CHANGED = 'A post changed or its time passed; refresh and review again'
+# marketing_approve's own words for it (the migration), so the desk says the
+# same thing whichever of the two refuses first.
+DESIGNING = 'A flyer is still being made; approve that post when it is ready'
 STALE = ('This post changed since the desk was loaded, or it is already going out. '
          'Nothing was changed. Refresh the desk and try again.')
 GONE_POST = 'A post here no longer exists. Refresh the desk.'
@@ -769,6 +772,9 @@ class Settings(BaseModel):
     post_hour: Optional[int] = Field(default=None, ge=6, le=21)
     audience: Optional[str] = Field(default=None, max_length=600)
     landing_url: Optional[str] = Field(default=None, max_length=1500)
+    # The owner's work photos (B11): ready photos of THIS business, uploaded
+    # through /ai/images/upload; the open-chairs week lays its words over them.
+    work_photo_ids: Optional[List[UUID]] = Field(default=None, max_length=12)
 
 
 # ── read ──────────────────────────────────────────────────────────────
@@ -911,9 +917,17 @@ async def approve_route(business_id: UUID, req: Review, user: AuthedUser = Depen
         row = await _call(store.get_post(bid, item.id), down=READ_DOWN)
         if not row:
             raise HTTPException(409, CHANGED)
+        if row.get('design_status') == 'designing':
+            # marketing_approve refuses it too, in these same words; said here first.
+            raise HTTPException(409, DESIGNING)
         if any(str(t.get('connection_id')) not in live for t in row.get('targets') or []):
             raise HTTPException(409, 'An account this post goes to is no longer connected. Change its accounts, '
                                      'then approve it again.')
+        _, dropped = fit(list(row.get('targets') or []), media_kind(row.get('media')))
+        if dropped:
+            # A weekly-plan post whose flyer never came, on Instagram alone.
+            raise HTTPException(409, f"{dropped_note(dropped) or 'An account here cannot take this post.'} "
+                                     'Add a picture or change its accounts, then approve it.')
     count = await _call(store.approve(bid, [i.model_dump(mode='json') for i in req.items],
                                       actor=str(user.id), via='owner'))
     return {'approved': count}
@@ -1122,6 +1136,12 @@ async def save_settings(business_id: UUID, req: Settings, user: AuthedUser = Dep
         patch['audience'] = (req.audience or '').strip() or None
     if 'landing_url' in sent:
         patch['landing_url'] = await asyncio.to_thread(landing_url, bid, req.landing_url)
+    if 'work_photo_ids' in sent:
+        # Each a ready photo of this business (another business's id answers
+        # like a missing one; a made picture is not a work photo), at most
+        # 12, saved newest first. [] or null clears them.
+        import business_marketing_openings as openings
+        patch['work_photo_ids'] = await asyncio.to_thread(openings.check_work_photos, bid, req.work_photo_ids or [])
     desk = await _call(store.get_desk(bid), down=READ_DOWN)
     if desk is None:
         try:

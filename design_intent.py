@@ -148,7 +148,7 @@ def interpret(descriptors: Any, business_type: Optional[str] = None) -> Optional
     model = chief_models.model_for("background")
     try:
         resp = llm_call.post({
-            "model": model, "max_tokens": 250,
+            "model": model, "max_tokens": 250, **chief_models.quick_call_kwargs(model),
             "system": _SYSTEM,
             "messages": [{"role": "user",
                           "content": _build_user_msg(words, business_type)}],

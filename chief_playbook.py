@@ -183,7 +183,7 @@ def _synthesize(biz: Dict[str, Any], sources: Dict[str, List[Dict]]) -> str:
 
     try:
         resp = llm_call.post({
-            "model": model, "max_tokens": 700,
+            "model": model, "max_tokens": 700, **chief_models.quick_call_kwargs(model),
             "system": _SYSTEM.replace("{max_words}", str(MAX_WORDS)),
             "messages": [{"role": "user", "content": user_msg}],
         }, timeout=httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0), key=key)

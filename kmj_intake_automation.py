@@ -817,6 +817,30 @@ def client_messages_create(**kwargs):
     return _anthropic_client.messages.create(**kwargs)
 
 
+# claude-sonnet-4-20250514 was retired on 2026-06-15; until 2026-10-07
+# every call below returned a 404, so lead qualification, the follow-up
+# emails and the Pulse briefing all failed. In a blind side-by-side graded
+# by Opus 5.5, Haiku 5.5 beat Sonnet 5.5 on 3 of 4 lead and follow-up
+# drafts with fewer invented details; the Pulse briefing (web research,
+# money arithmetic) is better on Sonnet 5.5. Both roll back by env var.
+KMJ_LEAD_MODEL = os.getenv("KMJ_LEAD_MODEL") or "claude-haiku-5-5"
+PULSE_MODEL = os.getenv("PULSE_MODEL") or "claude-sonnet-5-5"
+
+
+def _reply_text(response) -> str:
+    """The reply's text blocks, never a thinking block read by position.
+    A declined request raises, which every caller already catches."""
+    if getattr(response, "stop_reason", None) == "refusal":
+        raise ValueError("The model declined this request")
+    return "".join(getattr(b, "text", "") for b in (response.content or [])
+                   if getattr(b, "type", None) == "text")
+
+
+def _thinking_off(model: str) -> dict:
+    import model_ladder
+    return model_ladder.thinking_off_kwargs(model)
+
+
 OWNER_EMAIL = os.getenv("OWNER_EMAIL", "kevin@kmjcreative.com")
 OWNER_NAME = os.getenv("OWNER_NAME", "Kevin McCloud Jr.")
 BUSINESS_NAME = os.getenv("BUSINESS_NAME", "KMJ Creative Solutions")
@@ -866,13 +890,14 @@ RESPOND ONLY IN VALID JSON:
 }}"""
 
     response = client_messages_create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1500,
+        model=KMJ_LEAD_MODEL,
+        max_tokens=2000,
         system=system,
-        messages=[{"role": "user", "content": f"New form submission:\n{submission_text}"}]
+        messages=[{"role": "user", "content": f"New form submission:\n{submission_text}"}],
+        **_thinking_off(KMJ_LEAD_MODEL),
     )
     
-    raw = response.content[0].text.replace("```json", "").replace("```", "").strip()
+    raw = _reply_text(response).replace("```json", "").replace("```", "").strip()
     return json.loads(raw)
 
 
@@ -1083,12 +1108,13 @@ Days since delivery: {followup_type}
 Type: {followup_type}"""
 
     response = client_messages_create(
-        model="claude-sonnet-4-20250514",
+        model=KMJ_LEAD_MODEL,
         max_tokens=500,
         system=system,
-        messages=[{"role": "user", "content": msg}]
+        messages=[{"role": "user", "content": msg}],
+        **_thinking_off(KMJ_LEAD_MODEL),
     )
-    raw = response.content[0].text.replace("```json", "").replace("```", "").strip()
+    raw = _reply_text(response).replace("```json", "").replace("```", "").strip()
     return json.loads(raw)
 
 
@@ -1608,16 +1634,24 @@ async def startup():
                           "interval", minutes=5, id="business_marketing_delivery", max_instances=1)
     except Exception as e:
         print(f"   [warn] business marketing sending not scheduled: {e}")
-    # The weekly suggestion for every business (marketing suite B8): hourly,
-    # write one suggested post (a draft) for each business that is due, on
-    # its own clock; every minute, write the ones owners asked for. Both do
-    # nothing until MARKETING_DESK names the business or is "*" (default off).
+    # The weekly suggestion and the weekly plan for every business (marketing
+    # suite B8, B9): hourly, write one suggested post, or a five-post week
+    # (drafts), for each business that is due, on its own clock; every
+    # minute, write the ones owners asked for; every 2 minutes, put each
+    # finished flyer on its week's post and tell the owner once the week has
+    # settled; every 15 minutes, pull an open-chairs post (Boss, B11) whose
+    # chairs booked before it went out. All do nothing until MARKETING_DESK
+    # names the business or is "*" (default off).
     try:
         import business_marketing_planner as _marketing_planner
         scheduler.add_job(g("business_marketing_suggest", _marketing_planner.marketing_tick),
                           "interval", hours=1, id="business_marketing_suggest", max_instances=1)
         scheduler.add_job(g("business_marketing_requests", _marketing_planner.manual_tick),
                           "interval", minutes=1, id="business_marketing_requests", max_instances=1)
+        scheduler.add_job(g("business_marketing_designs", _marketing_planner.marketing_design_tick),
+                          "interval", minutes=2, id="business_marketing_designs", max_instances=1)
+        scheduler.add_job(g("business_marketing_openings_watch", _marketing_planner.openings_watch_tick),
+                          "interval", minutes=15, id="business_marketing_openings_watch", max_instances=1)
     except Exception as e:
         print(f"   [warn] business marketing suggestions not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:
@@ -2100,13 +2134,18 @@ OBSERVER FLAGS (what the system noticed since last briefing):
 Now search the 5 topics, factor in the observer flags, and generate the full briefing."""
 
     try:
+        # 4,000 was sized for Sonnet 4's tokenizer: Sonnet 5.5 and Haiku 5.5
+        # both ran out mid-JSON there; Sonnet 5.5 finished at 5,890 of 8,000.
         response = client_messages_create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4000,
+            model=PULSE_MODEL,
+            max_tokens=8000,
             system=system,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
-            messages=[{"role": "user", "content": user_msg}]
+            messages=[{"role": "user", "content": user_msg}],
+            **_thinking_off(PULSE_MODEL),
         )
+        if getattr(response, "stop_reason", None) == "refusal":
+            raise ValueError("The model declined this request")
 
         # Extract all text blocks (web search produces multiple content blocks)
         full_text = ""
