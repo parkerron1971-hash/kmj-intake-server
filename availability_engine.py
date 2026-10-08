@@ -144,6 +144,69 @@ def _hours_for_date(
     return list(getattr(av.weekly, weekday_key))
 
 
+# ─── Reading bookings out of module_entries ──────────────────────────
+#
+# module_entries has appointment_at and duration_min_at_booking COLUMNS
+# (APPLY-2026-07-23) and no duration_min. Three reads named duration_min
+# anyway, so PostgREST answered 400, sb_get_as_service gave None, `or []`
+# made that "no bookings", and every slot read as open: the widget showed
+# taken times and the double-book guard passed them (2026-10-07, found
+# building B11).
+#
+# And nothing writes those two columns. The widget, Chief and weekly
+# series put the time and the booked length in `data`, and reschedule
+# moves data.appointment_at (production, 2026-10-07: 0 rows with the
+# appointment_at column set; all 12 active bookings carry it in data).
+# So a bookings read matches the column OR data, takes the time from
+# data (what reschedule moves) else the column, and the length from the
+# column else data else DEFAULT_BOOKED_MIN. A booking with no length
+# still holds a chair: 0 minutes would block nothing at all.
+
+BOOKING_SELECT = ("appointment_at,duration_min_at_booking,"
+                  "booked_at:data->>appointment_at,"
+                  "booked_min:data->>duration_min_at_booking")
+DEFAULT_BOOKED_MIN = 60
+
+
+def booking_window_filter(lo: date, hi: date) -> str:
+    """PostgREST filter for bookings that start in [lo, hi), by the column
+    or by data. Whole days on purpose: data.appointment_at is text and is
+    compared as text, and every stored shape starts YYYY-MM-DD (Z, +00:00
+    and date-only all seen in production), so a bare date bound sorts
+    right whatever offset or precision follows it. Callers pad a day each
+    side and do the exact overlap math in Python."""
+    a, b = lo.isoformat(), hi.isoformat()
+    return (f"or=(and(appointment_at.gte.{a},appointment_at.lt.{b}),"
+            f"and(data->>appointment_at.gte.{a},data->>appointment_at.lt.{b}))")
+
+
+def _minutes(v: Any) -> Optional[int]:
+    if v in (None, ""):
+        return None
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def booked_rows(rows: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Rows read with BOOKING_SELECT → {appointment_at,
+    duration_min_at_booking} dicts that _booking_intervals understands."""
+    out: List[Dict[str, Any]] = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        start = r.get("booked_at") or r.get("appointment_at")
+        if not start:
+            continue
+        minutes = (_minutes(r.get("duration_min_at_booking"))
+                   or _minutes(r.get("booked_min"))
+                   or DEFAULT_BOOKED_MIN)
+        out.append({"appointment_at": start, "duration_min_at_booking": minutes})
+    return out
+
+
 def _booking_intervals(
     bookings: List[Dict[str, Any]],
 ) -> List[tuple]:

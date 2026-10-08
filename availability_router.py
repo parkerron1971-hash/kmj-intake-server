@@ -86,20 +86,24 @@ def _offering(offering_id: str, business_id: str) -> Optional[Dict[str, Any]]:
 def _bookings_in_window(
     business_id: str, start_date: date, end_date: date
 ) -> list:
-    """Load existing module_entries with appointment_at in [start, end+1]
-    to cover edge slots that span midnight. Only reads what the engine
-    needs (appointment_at + duration). PostgREST query."""
-    # Pad +1 day to cover bookings that started just before the window.
+    """Load the active bookings that start in [start-1, end+1] (a day of
+    padding each side covers edge slots that span midnight). Same read as
+    the widget and the double-book guard (booking_widget_router.
+    _read_bookings): the time and booked length from data or the columns,
+    cancelled bookings left out.
+
+    Raises 503 when the bookings can't be read. This read used to name a
+    column module_entries doesn't have (duration_min), so it 400'd every
+    time and `or []` served every slot as open; a failed read must never
+    look like an empty calendar. The endpoint answers 503; Chief's
+    slot suggestions catch it and suggest nothing."""
     from datetime import timedelta
-    lo = (start_date - timedelta(days=1)).isoformat()
-    hi = (end_date + timedelta(days=1)).isoformat()
-    rows = sb_clients.sb_get_as_service(
-        f"/module_entries?business_id=eq.{business_id}"
-        f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}"
-        f"&select=appointment_at,duration_min_at_booking,duration_min"
-        f"&limit=2000"
-    ) or []
-    return rows if isinstance(rows, list) else []
+    from booking_widget_router import SLOTS_UNAVAILABLE_MSG, _read_bookings
+    rows = _read_bookings(business_id, start_date - timedelta(days=1),
+                          end_date + timedelta(days=2))
+    if rows is None:
+        raise HTTPException(503, SLOTS_UNAVAILABLE_MSG)
+    return rows
 
 
 def _outside_busy(business_id: str, start_date: date, end_date: date) -> list:
