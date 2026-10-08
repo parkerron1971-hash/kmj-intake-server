@@ -16,6 +16,7 @@ prop (F7):
   POST /platform/marketing/suite/slot/cancel             skip a post
   POST /platform/marketing/suite/post-now                a reviewed post goes out in two minutes
   POST /platform/marketing/suite/posts/{id}/not-sent     an unconfirmed delivery did not go out
+  POST /platform/marketing/suite/posts/{id}/take-back    an approved post back to a draft (B13)
   PUT  /platform/marketing/suite/settings                the desk's settings
   GET  /platform/marketing/suite/results                 what came through the post links
   POST /platform/marketing/suite/engine/run              queue Chief's week (the worker writes it)
@@ -150,6 +151,12 @@ async def suite_post_now(req: bm.PostNow, owner=Depends(require_owner)):
 async def suite_not_sent(post_id: UUID, req: bm.Revision, owner=Depends(require_owner)):
     row = await platform_business(owner)
     return await bm.mark_not_sent(_id(row), post_id, req, owner)
+
+
+@router.post('/suite/posts/{post_id}/take-back')
+async def suite_take_back(post_id: UUID, req: bm.Revision, owner=Depends(require_owner)):
+    row = await platform_business(owner)
+    return await bm.take_back(_id(row), post_id, req, owner)
 
 
 @router.put('/suite/settings')

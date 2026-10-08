@@ -145,6 +145,13 @@ def test_autopilot_for_the_platform_business_only_whatever_its_billing(monkeypat
         'America/New_York'
     assert bm.business_tz(platform_row(id=str(uuid4()), settings={'availability': {'timezone': 'America/Denver'}})
                           ).key == 'America/Denver'
+    import policy_engine
+    import standing_permissions as sp
+    monkeypatch.setattr(policy_engine, 'client_facing_autonomy', lambda biz: 'enabled')
+    assert sp.marketing_eligible(platform_row(), 'marketing_post') == (True, '')          # B13's standing OK
+    assert sp.marketing_eligible(platform_row(id=str(uuid4())), 'marketing_post')[0] is False
+    switch(monkeypatch, on=False)
+    assert sp.marketing_eligible(platform_row(), 'marketing_post')[0] is False
 
 
 # ── Mission Control's routes on the suite ─────────────────────────────
@@ -211,6 +218,7 @@ ROUTES = [('GET', '/suite/engine', None), ('GET', '/suite/ideas/next-slot', None
           ('POST', '/suite/slot/cancel', {'items': [{'id': str(uuid4()), 'revision': 1}]}),
           ('POST', '/suite/post-now', {'items': [{'id': str(uuid4()), 'revision': 1, 'content_hash': 'a' * 64}]}),
           ('POST', f'/suite/posts/{uuid4()}/not-sent', {'revision': 1}),
+          ('POST', f'/suite/posts/{uuid4()}/take-back', {'revision': 1}),
           ('PUT', '/suite/settings', {'paused': True}), ('GET', '/suite/results', None),
           ('POST', '/suite/engine/run', None), ('GET', '/suite/preview', None), ('GET', '/drain', None)]
 
@@ -332,6 +340,10 @@ def test_approve_change_skip_post_now_and_not_sent_work_on_the_platform_store(mc
     u = api.seed(mc, biz=PID, targets=(PFB,), status='uncertain', run_at=api.NOW - timedelta(hours=1))
     r = hit(mc, 'POST', f"/suite/posts/{u['id']}/not-sent", {'revision': u['revision']})
     assert r.status_code == 200 and mc.db.posts[u['id']]['status'] == 'failed'
+    t = api.seed(mc, biz=PID, targets=(PFB,))
+    assert hit(mc, 'POST', '/suite/approve', {'items': [api.item(t)]}).status_code == 200
+    r = hit(mc, 'POST', f"/suite/posts/{t['id']}/take-back", {'revision': mc.db.posts[t['id']]['revision']})
+    assert r.status_code == 200 and mc.db.posts[t['id']]['status'] == 'draft'           # B13's take-back
     r = hit(mc, 'PUT', '/suite/settings', {'plan_enabled': True, 'post_hour': 11})
     assert r.status_code == 200 and mc.db.desks[PID]['plan_enabled'] is True
     r = hit(mc, 'GET', '/suite/results')

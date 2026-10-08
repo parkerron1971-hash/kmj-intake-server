@@ -1270,9 +1270,11 @@ Unset, everything on the suite path refuses in plain words; nothing guesses.
 
 - **The autopilot level** (the week, its clips, standing OKs) whatever its
   billing row says: `platform_suite.effective_row` reads it as `comp_tier`
-  practice, in memory only, in `business_marketing.level_for` and the
-  planner's business reads. Never from a request; never for another id (a
-  tenant setting `platform_books` on its own row gets nothing).
+  practice, in memory only, in `business_marketing.level_for`, the
+  planner's business reads and `standing_permissions.marketing_eligible`
+  (B13: a standing OK still needs Kevin's grant and client-facing autonomy
+  on that business). Never from a request; never for another id (a tenant
+  setting `platform_books` on its own row gets nothing).
 - **Its own profile** (`marketing_profile.platform_profile`):
   `marketing_engine`'s AUDIENCE (or the desk's own audience words), SYSTEM
   (no hashtags, no address in a caption), the clock America/New_York
@@ -1324,14 +1326,15 @@ desk's owner check runs too.
 | `GET /suite/engine` | `GET /marketing/{id}/engine` (level autopilot, America/New_York) |
 | `GET /suite/ideas/next-slot`, `POST /suite/ideas` | the same |
 | `POST /suite/approve`, `/suite/slot/edit`, `/suite/slot/cancel`, `/suite/post-now` | the same |
-| `POST /suite/posts/{id}/not-sent`, `PUT /suite/settings`, `GET /suite/results` | the same |
+| `POST /suite/posts/{id}/not-sent`, `POST /suite/posts/{id}/take-back`, `PUT /suite/settings`, `GET /suite/results` | the same |
 | `POST /suite/engine/run` | `POST /marketing/{id}/engine/run`, refused while the Buffer desk's plan for that week has a post approved or out |
 | `GET /suite/preview` | `GET /marketing/{id}/preview` |
 | `GET /platform/marketing/drain` | (new) the Buffer posts still to go out |
 
 All are the platform owner's alone (`require_owner`); a tenant owner gets 403
-before anything is read. B13's `take-back` is not mirrored yet (one more
-route when B13 lands).
+before anything is read. Granting a standing OK is
+`POST /agents/chief/standing` as for any business (Kevin, signed in to the
+platform business).
 
 ### Buffer drains
 
