@@ -11,7 +11,7 @@ output for an LLM/judge plumbing bug.
 
 Project conventions matched:
   - Direct anthropic.Anthropic SDK
-  - Model claude-sonnet-4-5-20250929
+  - Model Sonnet 5.5 since 2026-10-08 (was Sonnet 4.5); DIRECTOR_JUDGE_MODEL overrides
   - Multi-block content extraction (defensive)
   - System+user prompt split with strict JSON instruction
 """
@@ -27,8 +27,10 @@ from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
-JUDGE_MODEL = "claude-sonnet-4-5-20250929"
-JUDGE_MAX_TOKENS = 600
+# Sonnet 4.5 retires 2026-11-30: Sonnet 5.5, thinking off (Sonnet 4.5
+# never thought), ~30% more room. DIRECTOR_JUDGE_MODEL rolls it back without a deploy.
+JUDGE_MODEL = os.environ.get("DIRECTOR_JUDGE_MODEL") or "claude-sonnet-5-5"
+JUDGE_MAX_TOKENS = 780   # ~30% more tokens for the same text on Sonnet 5.5
 JUDGE_TEMPERATURE = 0.2  # low — consistent judgments, not creative variance
 HTML_INPUT_CAP = 50_000  # truncate to avoid token blowups on huge sites
 
@@ -124,10 +126,12 @@ def judge_rule(
         # honest read. SITE_JUDGE_PROVIDER=moonshot flips it on purpose
         # so Kevin can compare Claude-judged vs Kimi-self-judged builds.
         import site_llm
+        import model_ladder
         msg = site_llm.create_message(
             model=JUDGE_MODEL,
             max_tokens=JUDGE_MAX_TOKENS,
             temperature=JUDGE_TEMPERATURE,
+            thinking=model_ladder.thinking_off_kwargs(JUDGE_MODEL).get("thinking"),
             system=JUDGE_SYSTEM_PROMPT,
             user_content="\n\n".join(user_parts),
             task="llm_judge",

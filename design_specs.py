@@ -75,6 +75,11 @@ Output ONLY a JSON object with exactly these keys and allowed values:
 Nothing bounces unless the brief says playful. JSON only."""
 
 
+def _spec_model() -> str:
+    """Sonnet 4.5 (the old default) retires 2026-11-30. DESIGN_SPEC_MODEL still pins it."""
+    return (os.environ.get("DESIGN_SPEC_MODEL") or "claude-sonnet-5-5").strip()
+
+
 def _enabled(name: str) -> bool:
     env = "SITE_HERO_SPEC" if name == "hero" else "SITE_MOTION_SPEC"
     return (os.environ.get(env) or "on").strip().lower() not in ("off", "0", "false")
@@ -134,10 +139,15 @@ def _author(name: str, axes: Dict[str, list], system_tail: str,
     spec: Optional[Dict[str, str]] = None
     try:
         import site_llm
+        import model_ladder
         from design_doctrine import DOCTRINE, DIVERSITY_LINE
         msg = site_llm.create_message(
-            model=(os.environ.get("DESIGN_SPEC_MODEL") or "claude-sonnet-4-5-20250929").strip(),
-            max_tokens=300,
+            model=_spec_model(),
+            # ~30% more tokens for the same JSON on Sonnet 5.5, and its
+            # thinking held off (Sonnet 4.5 never thought): a 300-token
+            # spec cannot afford any.
+            max_tokens=400,
+            thinking=model_ladder.thinking_off_kwargs(_spec_model()).get("thinking"),
             system=DOCTRINE + "\n\n" + DIVERSITY_LINE + "\n\n" + system_tail,
             user_content=_brief_lines(business or {}, dna or {}, site_prefs or {}),
             timeout=45.0,

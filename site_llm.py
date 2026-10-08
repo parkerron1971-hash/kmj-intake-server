@@ -225,5 +225,10 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
     }
     kwargs.update(model_ladder.sampling_kwargs(model, temperature))
     if thinking:
-        kwargs["thinking"] = thinking
+        # The pinned SDK (0.34.2) predates the `thinking` keyword: passed
+        # as one it is a TypeError before any request leaves, which is what
+        # the composer probe's thinking-off (#1327) would have hit on
+        # Railway. extra_body merges into the request JSON on every SDK
+        # version (see model_ladder.sdk_effort_kwargs).
+        kwargs["extra_body"] = {**(kwargs.get("extra_body") or {}), "thinking": thinking}
     return client.messages.create(**kwargs)

@@ -55,15 +55,19 @@ def test_the_grader_bounds_a_thinking_judge(monkeypatch):
     assert sent["max_tokens"] >= 2000
 
 
-def test_the_grader_on_the_old_default_sends_no_effort(monkeypatch):
+def test_the_grader_default_is_sonnet_5_5_and_bounds_its_thinking(monkeypatch):
+    # The default was Sonnet 4.5 (no effort field); it retires 2026-11-30
+    # and the default is Sonnet 5.5, which production already pinned.
     sent = {}
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.delenv("VISION_JUDGE_MODEL", raising=False)
+    monkeypatch.delenv("VISION_JUDGE_EFFORT", raising=False)
     monkeypatch.setattr(vg.llm_call, "sdk_client",
                         lambda key=None: _fake_client(sent, json.dumps({"balance": 9})))
     with mock.patch.object(vg, "_meter"):
         vg._grade_anthropic([b"a", b"b", b"c"], "biz-1", None, [])
-    assert "output_config" not in sent and "extra_body" not in sent
+    assert sent["model"] == "claude-sonnet-5-5"
+    assert sent["extra_body"]["output_config"] == {"effort": "medium"}
 
 
 def test_the_site_check_vision_pass_bounds_a_thinking_judge(monkeypatch):

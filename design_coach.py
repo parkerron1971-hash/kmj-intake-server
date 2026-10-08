@@ -791,7 +791,8 @@ def _model() -> str:
         import canvas
         return canvas._model()
     except Exception:
-        return "claude-sonnet-4-5-20250929"
+        # Only if canvas cannot be imported. Sonnet 4.5 retires 2026-11-30.
+        return "claude-sonnet-5-5"
 
 
 def run_turn(business_id: str,
