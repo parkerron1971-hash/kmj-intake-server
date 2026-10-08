@@ -1608,16 +1608,21 @@ async def startup():
                           "interval", minutes=5, id="business_marketing_delivery", max_instances=1)
     except Exception as e:
         print(f"   [warn] business marketing sending not scheduled: {e}")
-    # The weekly suggestion for every business (marketing suite B8): hourly,
-    # write one suggested post (a draft) for each business that is due, on
-    # its own clock; every minute, write the ones owners asked for. Both do
-    # nothing until MARKETING_DESK names the business or is "*" (default off).
+    # The weekly suggestion and the weekly plan for every business (marketing
+    # suite B8, B9): hourly, write one suggested post, or a five-post week
+    # (drafts), for each business that is due, on its own clock; every
+    # minute, write the ones owners asked for; every 2 minutes, put each
+    # finished flyer on its week's post and tell the owner once the week has
+    # settled. All do nothing until MARKETING_DESK names the business or is
+    # "*" (default off).
     try:
         import business_marketing_planner as _marketing_planner
         scheduler.add_job(g("business_marketing_suggest", _marketing_planner.marketing_tick),
                           "interval", hours=1, id="business_marketing_suggest", max_instances=1)
         scheduler.add_job(g("business_marketing_requests", _marketing_planner.manual_tick),
                           "interval", minutes=1, id="business_marketing_requests", max_instances=1)
+        scheduler.add_job(g("business_marketing_designs", _marketing_planner.marketing_design_tick),
+                          "interval", minutes=2, id="business_marketing_designs", max_instances=1)
     except Exception as e:
         print(f"   [warn] business marketing suggestions not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:

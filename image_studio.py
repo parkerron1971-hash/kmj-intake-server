@@ -51,8 +51,12 @@ def model_qualities(model):
 
 # Phone (9:16) and widescreen (16:9) were accepted by both 2.5 models in a
 # production call on 2026-10-05; GPT Image 2 was not tried, so it keeps three.
-SIZES = ('1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088')
-Size = Literal['1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088']
+# 4:5 (1088x1360, both sides multiples of 16) is Instagram's tallest feed
+# picture: the weekly plan's flyers (business_marketing_planner, 2026-10-07)
+# render at it, through the same custom-size path as the two above. The
+# first live plan flyer is its proof.
+SIZES = ('1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088', '1088x1360')
+Size = Literal['1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088', '1088x1360']
 
 
 def model_sizes(model):
@@ -89,7 +93,7 @@ async def config(session: UserSession = Depends(sb_clients.authed_request)):
     qualities = model_qualities(model)
     return {'model': model, 'model_label': MODEL_LABELS[model], 'qualities': qualities,
         'sizes': model_sizes(model), 'credits': {q: image_units(q) for q in qualities},
-        'default_quality': 'high', 'pricing_date': '2026-09-08', 'daily_limit': 20}
+        'default_quality': 'high', 'pricing_date': '2026-09-08', 'daily_limit': DAILY_LIMIT}
 
 
 class CreateImage(BaseModel):
@@ -121,9 +125,10 @@ def token() -> str:
 
 # Bound only by server code that has already checked the business owner, and
 # reset right after: the durable build runner (chief_build_runtime), the cover
-# worker (clip_covers), the marketing desk (marketing_design) and Chief's
-# picture posts (image_posting, for the one JPEG delivery). Nothing reads it
-# from a request.
+# worker (clip_covers), the marketing desk (marketing_design), every
+# business's weekly plan (business_marketing_planner: its flyers and the
+# suggestion's) and Chief's picture posts (image_posting, for the one JPEG
+# delivery). Nothing reads it from a request.
 build_actor = contextvars.ContextVar('image_build_actor', default=None)
 
 
@@ -329,6 +334,29 @@ async def generate_worker(row):
                     units=image_units(row['quality']) if completed else 0, ok=completed, error=message)
 
 
+DAILY_LIMIT = 20
+DAILY_LIMIT_REACHED = 'Daily image limit reached. Try again tomorrow.'
+
+
+async def daily_limit_reached(client, business_id, request_id):
+    """Whether the business has started its 20 images today (UTC, as
+    reserve_image_artwork counts them), not counting this request's own row.
+    Read before reserving, so the limit answers 429 in plain words; the RPC
+    still enforces it under its lock (its refusal reaches here only as a
+    failed write, which read as storage being down).
+
+    Only a NEW request is ever refused: create() answers a request id that
+    already has a row with that row before it gets here, and a row that
+    appears in between (a retry racing the first call) is left out of the
+    count, so the RPC hands it back instead of a 429. A replay never loses
+    a design that is already being made."""
+    since = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00Z')
+    rows = await db(client, 'GET', f'/image_artworks?business_id=eq.{UUID(str(business_id))}&model=not.is.null'
+                                   f'&created_at=gte.{since}&id=neq.{UUID(str(request_id))}'
+                                   f'&select=id&limit={DAILY_LIMIT}')
+    return isinstance(rows, list) and len(rows) >= DAILY_LIMIT
+
+
 async def create(req: CreateImage, client, *, director=None):
     biz = await business(client, req.business_id)
     if not os.environ.get('OPENAI_API_KEY'):
@@ -357,9 +385,16 @@ async def create(req: CreateImage, client, *, director=None):
         row = await artwork(client, req.business_id, ref)
         if row['status'] != 'ready':
             raise HTTPException(409, 'Wait for the reference image to finish before editing.')
-    import billing_limits
-    billing_limits.require_units(str(req.business_id))
-    rows = await db(client, 'POST', '/rpc/reserve_image_artwork', {'p_record': record, 'p_daily_limit': 20})
+    # Only a request with no row yet reaches here: a replay was answered above.
+    if await daily_limit_reached(client, req.business_id, req.request_id):
+        raise HTTPException(429, DAILY_LIMIT_REACHED)
+    from creative_director import included
+    if not included(director):
+        # A design that comes with the plan (the weekly plan's flyers) is
+        # metered as cost and held to the daily limit, never to credits.
+        import billing_limits
+        billing_limits.require_units(str(req.business_id))
+    rows = await db(client, 'POST', '/rpc/reserve_image_artwork', {'p_record': record, 'p_daily_limit': DAILY_LIMIT})
     row = rows[0]
     if any(row.get(k) != record.get(k) for k in ('business_id', 'prompt', 'model', 'quality', 'size', 'reference_ids')):
         raise HTTPException(409, 'That request ID already belongs to a different image request.')
