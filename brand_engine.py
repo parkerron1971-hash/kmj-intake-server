@@ -50,7 +50,10 @@ if not logger.handlers:
 
 
 HTTP_TIMEOUT = 15.0
-ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
+# Sonnet 5.5 since 2026-10-07 (Sonnet 4.5 retires 2026-11-30). Haiku 5.5
+# split the blind-graded kits and directions 2-2 with Sonnet 4.5, so the
+# design work stays on Sonnet. BRAND_MODEL rolls it back without a deploy.
+ANTHROPIC_MODEL = os.environ.get("BRAND_MODEL") or "claude-sonnet-5-5"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1542,16 +1545,20 @@ def _call_claude_for_kit(system_prompt: str, user_message: str) -> Dict[str, Any
         return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
     try:
         with httpx.Client(timeout=60.0) as client:
+            import model_ladder
             r = llm_call.post_with(client, {
                     "model": ANTHROPIC_MODEL,
                     "max_tokens": 2000,
                     "system": system_prompt,
                     "messages": [{"role": "user", "content": user_message}],
+                    **model_ladder.thinking_off_kwargs(ANTHROPIC_MODEL),
                 }, key=api_key)
         if r.status_code != 200:
             logger.warning(f"Anthropic error {r.status_code}: {r.text[:200]}")
             return {"ok": False, "error": f"Anthropic API error: {r.status_code}"}
         body = r.json()
+        if body.get("stop_reason") == "refusal":
+            return {"ok": False, "error": "The model declined this request"}
         text_chunks = [c.get("text", "") for c in body.get("content", []) if c.get("type") == "text"]
         text = _strip_code_fences("".join(text_chunks))
         try:
@@ -1709,13 +1716,15 @@ def generate_directions(business_id: str,
         return {"ok": False, "error": "ANTHROPIC_API_KEY not configured"}
     try:
         with httpx.Client(timeout=90.0) as client:
+            import model_ladder
             r = llm_call.post_with(client, {
                 "model": ANTHROPIC_MODEL,
                 "max_tokens": 3500,
                 "system": _DIRECTIONS_SYSTEM_PROMPT,
                 "messages": [{"role": "user", "content": user_message}],
+                **model_ladder.thinking_off_kwargs(ANTHROPIC_MODEL),
             }, key=api_key, task="brand_directions", business_id=business_id)
-        if r.status_code != 200:
+        if r.status_code != 200 or r.json().get("stop_reason") == "refusal":
             logger.warning(f"directions: Anthropic error {r.status_code}: {r.text[:200]}")
             return {"ok": False, "error": "Couldn't sketch directions just now. Try again."}
         text = _strip_code_fences("".join(

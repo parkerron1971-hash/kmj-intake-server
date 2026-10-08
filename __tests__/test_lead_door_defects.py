@@ -184,5 +184,9 @@ def test_notif_model_can_be_changed_without_a_deploy():
     with mock.patch.dict(os.environ, {"NOTIF_MODEL": "claude-haiku-4-5-20251001"}):
         ne = importlib.reload(importlib.import_module("notification_engine"))
         assert ne.NOTIF_MODEL == "claude-haiku-4-5-20251001"
-    ne = importlib.reload(importlib.import_module("notification_engine"))
-    assert ne.NOTIF_MODEL.startswith("claude-sonnet"), "default must stay Sonnet"
+    with mock.patch.dict(os.environ):
+        os.environ.pop("NOTIF_MODEL", None)
+        ne = importlib.reload(importlib.import_module("notification_engine"))
+    # Haiku 5.5 since 2026-10-07: blind-graded better than Sonnet 4.5 on the
+    # briefs (test_writers_off_old_sonnet.py), and Sonnet 4.5 retires.
+    assert ne.NOTIF_MODEL == "claude-haiku-5-5"
