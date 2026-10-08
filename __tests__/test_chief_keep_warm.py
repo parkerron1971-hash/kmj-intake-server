@@ -193,3 +193,67 @@ def test_the_owners_main_call_schedules_the_pings(monkeypatch):
 
 def test_auxiliary_calls_do_not(monkeypatch):
     assert _chief_call(monkeypatch, "chief_auxiliary") == []
+
+
+# ── Daily users stay warm for a day (2026-10-07) ─────────────────────
+# Simulated on 30 days of real call times: cold starts plus pings cost
+# $37.27 with no keep-warm, $25.52 at 4 h and $18.56 at 24 h. A business
+# that uses Chief most days keeps its brief warm through the night.
+
+def _rows(*days):
+    return [{"created_at": f"{d}T10:00:00Z"} for d in days]
+
+
+def test_a_daily_user_gets_the_long_window(monkeypatch):
+    import sb_clients
+    kw._daily.clear()
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path: _rows("2026-10-05", "2026-10-06", "2026-10-07", "2026-10-07"))
+    assert kw.window_for("daily-biz") == kw.daily_window_s() == 24 * 3600
+
+
+def test_two_days_of_use_keeps_the_short_window(monkeypatch):
+    import sb_clients
+    kw._daily.clear()
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: _rows("2026-10-06", "2026-10-07"))
+    assert kw.window_for("new-biz") == kw.window_s() == 4 * 3600
+
+
+def test_a_failed_read_keeps_the_short_window(monkeypatch):
+    import sb_clients
+    kw._daily.clear()
+
+    def boom(path):
+        raise RuntimeError("no database")
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", boom)
+    assert kw.window_for("biz-x") == kw.window_s()
+
+
+def test_daily_use_is_read_once_a_day(monkeypatch):
+    import sb_clients
+    kw._daily.clear()
+    calls = []
+
+    def get(path):
+        calls.append(path)
+        return _rows("2026-10-05", "2026-10-06", "2026-10-07")
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    kw.window_for("biz-y")
+    kw.window_for("biz-y")
+    assert len(calls) == 1
+    assert "endpoint=eq./chief/backend" in calls[0] and "business_id=eq.biz-y" in calls[0]
+
+
+def test_a_daily_users_pings_outlast_the_short_window(monkeypatch):
+    sent = _wire(monkeypatch, [], every=0.01, window=0.001)
+    monkeypatch.setattr(kw, "window_for", lambda b: 30.0)
+
+    async def run():
+        kw.remember("biz-daily", _payload())
+        for _ in range(200):
+            if len(sent) >= 2:
+                break
+            await asyncio.sleep(0.02)
+        kw._tasks["biz-daily"].cancel()
+    asyncio.run(run())
+    assert len(sent) >= 2
