@@ -487,13 +487,33 @@ worker only, leader-gated, `max_instances=1`):
 owner only (`require_user` + the owner check), the suggest level, the switch,
 a connected account, the pilot, `rate_limit` (`business_marketing_engine`, 6
 an hour) and **one request a day** on the business's clock. The web process
-never calls the model: it claims the week as a manual start-over (a
-suggestion still waiting as a draft is cancelled and replaced; a week with an
-approved or sent post is refused), marks the run `design.queued_at`, and
-answers 202. `manual_tick` (job `business_marketing_requests`, every minute,
-worker) takes each queued run once (a write conditional on
-`design.started_at`) and writes it the same way. A request not started within
-the claim's 15 minutes is left to the claim's own reclaim.
+never calls the model, and **a request never loses the suggestion already
+waiting**:
+
+- The route claims the week and marks it queued (`design.queued_at`) in ONE
+  write (`queue_request`): an insert for a week with no run, else a write
+  conditional on the run's status and attempt count (a failed or skipped
+  week, one stuck 15 minutes, or a succeeded one whose posts are all still
+  drafts). It does not use `marketing_claim_run`, whose manual start-over
+  cancels the waiting drafts at claim time. A week that is being written, or
+  has an approved or sent post, is busy (409). If the write fails (503),
+  nothing has changed: no run, no post and no desk row is touched.
+- `manual_tick` (job `business_marketing_requests`, every minute, worker)
+  takes each queued run once (a write conditional on `design.started_at`),
+  saves the new draft, and **only then** cancels the week's earlier
+  suggestion draft, each cancel conditional on the draft still being at the
+  revision read. A draft that moved on (approved meanwhile) or a cancel that
+  fails is left standing: the owner sees two and can skip one, never none.
+- A request that writes nothing (over a spend ceiling, the pilot off, no
+  time left that week, a caption that broke a rule, the model down, a save
+  that failed, or the earlier one approved meanwhile) leaves the earlier
+  suggestion exactly as it was: the run goes back to `succeeded` over it,
+  with the reason in its `error` and `design.outcome = kept`. With no earlier
+  suggestion it is `skipped` or `failed` as usual.
+- Only a request that saved a new post (`design.made`) counts as the day's;
+  one that wrote nothing leaves the owner free to ask again.
+- A request not started within the claim's 15 minutes is left to the claim's
+  own reclaim.
 
 **The preview** (`GET /marketing/{business_id}/preview`, owner only): the
 numbers, profile, facts, diagnosis and the plays Chief would pick (one slot

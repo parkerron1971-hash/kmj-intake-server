@@ -67,6 +67,7 @@ CHICAGO = ZoneInfo('America/Chicago')
 THU = datetime(2026, 10, 8, 15, 0, tzinfo=timezone.utc)          # Thursday 10:00 in Chicago
 NEXT_MONDAY = date(2026, 10, 12)
 THIS_MONDAY = date(2026, 10, 5)
+REAL_NEXT_OPEN_SLOT = bm.next_open_slot
 
 FACTS = {'name': "Kev's Coaching", 'type': 'coach', 'city': 'Cleveland',
          'offerings': [{'name': 'Strategy session', 'price': '$150', 'minutes': 60}]}
@@ -155,12 +156,14 @@ class FakeStore:
     def __init__(self, clock):
         self.clock = clock
         self.desks, self.runs, self.posts = {}, {}, {}
-        self.writes, self.fail = [], ()
+        self.writes, self.fail, self.fail_writes = [], (), ()
 
     async def request(self, method, path, body=None):
         query = path.split('?', 1)[1] if '?' in path else ''
         assert '+' not in query, f'unencoded + in a PostgREST query: {path}'
         if any(f in path for f in self.fail):
+            raise store.StoreUnavailable('Marketing storage is unavailable. Please retry.')
+        if method != 'GET' and any(f in path for f in self.fail_writes):
             raise store.StoreUnavailable('Marketing storage is unavailable. Please retry.')
         table = path.split('?', 1)[0]
         if method != 'GET':
@@ -979,20 +982,162 @@ def test_once_a_day(s):
     assert ask(s).status_code == 202
 
 
-def test_a_new_request_replaces_a_waiting_draft_never_an_approved_one(s):
+def _owner_waiting_draft(s):
+    """Thursday's scheduled suggestion is waiting; on Friday the owner asks for another."""
     run(plan.run_suggestion(BIZ, trigger='scheduled'))
     (old,) = posts_of(s)
     s.now = THU + timedelta(days=1)
+    return copy.deepcopy(old)
+
+
+def test_asking_cancels_nothing_and_success_replaces_the_old_draft(s):
+    old = _owner_waiting_draft(s)
     assert ask(s).status_code == 202
-    assert s.db.posts[old['id']]['status'] == 'cancelled'
+    assert s.db.posts[old['id']] == old                              # untouched while the new one is written
+    (r,) = runs_of(s)
+    assert r['status'] == 'running' and r['trigger'] == 'manual' and r['attempts'] == 2
+    s.now += timedelta(minutes=1)
+    assert run(plan.manual_tick(s.now)) == {'succeeded': 1}
+    (new,) = posts_of(s, status='draft')
+    assert new['id'] != old['id'] and new['id'] == plan.suggestion_post_id(r['id'], 2)
+    gone = s.db.posts[old['id']]
+    assert gone['status'] == 'cancelled' and gone['revision'] == old['revision'] + 1
+    # The new draft was saved before the old one was cancelled.
+    order = [(m, path.split('?')[0], (b or {}).get('status')) for m, path, b in s.db.writes
+             if path.startswith('/marketing_posts')]
+    assert order[-2:] == [('POST', '/marketing_posts', 'draft'), ('PATCH', '/marketing_posts', 'cancelled')]
+    assert r['status'] == 'succeeded' and r['post_ids'] == [new['id']]
+    assert r['design']['made'] == new['id'] and r['design']['replaced'] == [old['id']]
+
+
+def test_an_approved_week_is_never_touched(s):
+    old = _owner_waiting_draft(s)
+    s.db.posts[old['id']].update(status='approved', approved_hash=old['content_hash'])
+    r = ask(s)
+    assert r.status_code == 409 and r.json()['detail'] == plan.BUSY
+    assert s.db.posts[old['id']]['status'] == 'approved' and runs_of(s)[0]['status'] == 'succeeded'
+
+
+def test_approved_while_queued_is_kept_and_nothing_new_is_written(s):
+    old = _owner_waiting_draft(s)
+    assert ask(s).status_code == 202
+    s.db.posts[old['id']].update(status='approved', approved_hash=old['content_hash'])
+    s.now += timedelta(minutes=1)
+    assert run(plan.manual_tick(s.now)) == {'kept': 1}
+    assert [p['status'] for p in posts_of(s)] == ['approved'] and len(s.calls) == 1
+    (r,) = runs_of(s)
+    assert r['status'] == 'succeeded' and r['post_ids'] == [old['id']]
+    assert r['error'].startswith(plan.APPROVED_MEANWHILE)
+
+
+HOWS = ['over the spend ceiling', 'caption broke a rule', 'model down', 'pilot switched off',
+        'no time left that week', 'the save failed']
+
+
+def _break(s, monkeypatch, how):
+    """Make the worker's run write nothing; returns how to put things right again."""
+    if how == 'over the spend ceiling':
+        s.over = {BIZ}
+    elif how == 'caption broke a rule':
+        s.reply = {'captions': [{**GOOD['captions'][0], 'text': 'Over 500 owners planned with us. Book a session.'}]}
+    elif how == 'model down':
+        s.llm_error_for = {BIZ}
+    elif how == 'pilot switched off':
+        monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', PRO)
+    elif how == 'no time left that week':
+        async def none_left(*a, **k):
+            raise HTTPException(422, 'There is no open weekday time in the next 60 days.')
+        monkeypatch.setattr(bm, 'next_open_slot', none_left)
+    elif how == 'the save failed':
+        s.db.fail_writes = ('/marketing_posts',)
+
+    def mend():
+        s.over, s.llm_error_for, s.reply, s.db.fail_writes = set(), set(), GOOD, ()
+        monkeypatch.setenv('POST_FOR_ME_PILOT_BUSINESSES', '*')
+        monkeypatch.setattr(bm, 'next_open_slot', REAL_NEXT_OPEN_SLOT)
+    return mend
+
+
+@pytest.mark.parametrize('how', HOWS)
+def test_a_request_that_writes_nothing_keeps_the_old_draft_exactly(s, monkeypatch, how):
+    old = _owner_waiting_draft(s)
+    calls_before = len(s.calls)
+    assert ask(s).status_code == 202
+    _break(s, monkeypatch, how)
+    s.now += timedelta(minutes=1)
+    assert run(plan.manual_tick(s.now)) == ({'over_budget': 1} if how == 'over the spend ceiling' else {'kept': 1})
+    assert posts_of(s) == [s.db.posts[old['id']]] and s.db.posts[old['id']] == old
+    (r,) = runs_of(s)
+    assert r['status'] == 'succeeded' and r['post_ids'] == [old['id']] and r['error'].endswith(plan.KEPT)
+    assert r['design']['outcome'] == 'kept' and 'made' not in r['design']
+    assert len(s.calls) - calls_before <= 1 and len(s.pushes) == 1              # only Thursday's push
+
+
+@pytest.mark.parametrize('how', HOWS)
+def test_a_request_that_wrote_nothing_does_not_use_up_the_day(s, monkeypatch, how):
+    _owner_waiting_draft(s)
+    assert ask(s).status_code == 202
+    mend = _break(s, monkeypatch, how)
+    s.now += timedelta(minutes=1)
+    run(plan.manual_tick(s.now))
+    mend()
+    s.now += timedelta(minutes=5)
+    assert ask(s).status_code == 202                                            # free to try again
+    s.now += timedelta(minutes=1)
+    assert run(plan.manual_tick(s.now)) == {'succeeded': 1}
+    s.now += timedelta(minutes=5)
+    r = ask(s)
+    assert r.status_code == 429 and r.json()['detail'] == plan.ONCE_A_DAY       # now the day is used
+
+
+def test_a_request_with_no_earlier_suggestion_fails_plainly(s):
+    s.llm_error_for = {BIZ}
+    assert ask(s).status_code == 202
+    s.now += timedelta(minutes=1)
+    assert run(plan.manual_tick(s.now)) == {'failed': 1}
+    (r,) = runs_of(s)
+    assert r['status'] == 'failed' and r['error'] == plan.FAILED and posts_of(s) == []
+    s.llm_error_for = set()
+    s.now += timedelta(minutes=5)
+    assert ask(s).status_code == 202                                            # a failed run is not the day's
+
+
+def test_if_the_old_draft_cannot_be_cancelled_the_owner_sees_two_never_none(s):
+    old = _owner_waiting_draft(s)
+    assert ask(s).status_code == 202
+    s.db.fail_writes = (f"/marketing_posts?id=eq.{old['id']}",)
     s.now += timedelta(minutes=1)
     assert run(plan.manual_tick(s.now)) == {'succeeded': 1}
     drafts = posts_of(s, status='draft')
-    assert len(drafts) == 1 and drafts[0]['id'] != old['id']
-    drafts[0].update(status='approved', approved_hash=drafts[0]['content_hash'])
-    s.now = THU + timedelta(days=2)
+    assert len(drafts) == 2 and s.db.posts[old['id']]['status'] == 'draft'
+    (r,) = runs_of(s)
+    new_id = plan.suggestion_post_id(r['id'], 2)
+    assert r['post_ids'] == [new_id, old['id']] and r['design']['replaced'] == []
+
+
+@pytest.mark.parametrize('existing', ['none', 'waiting draft', 'failed run'])
+def test_a_queue_write_that_fails_changes_nothing(s, existing):
+    if existing == 'waiting draft':
+        _owner_waiting_draft(s)
+    elif existing == 'failed run':
+        run(plan.run_suggestion(BIZ, trigger='scheduled'))
+        s.db.posts.clear()
+        runs_of(s)[0].update(status='failed', post_ids=[], error='Something went wrong.')
+        s.now = THU + timedelta(days=1)
+    before = copy.deepcopy((s.db.runs, s.db.posts, s.db.desks))
+    s.db.fail_writes = ('/marketing_runs',)
     r = ask(s)
-    assert r.status_code == 409 and r.json()['detail'] == plan.BUSY and drafts[0]['status'] == 'approved'
+    assert r.status_code == 503 and r.json()['detail'] == bm.STORE_DOWN
+    assert (s.db.runs, s.db.posts, s.db.desks) == before
+    s.db.fail_writes = ()
+    assert ask(s).status_code == 202                                            # and the owner can ask again
+
+
+def test_a_second_request_while_one_is_being_written_is_busy(s):
+    assert ask(s).status_code == 202
+    s.now += timedelta(minutes=2)
+    r = ask(s)
+    assert r.status_code == 409 and r.json()['detail'] == plan.BUSY and len(s.db.runs) == 1
 
 
 @pytest.mark.parametrize('setup,code,detail', [

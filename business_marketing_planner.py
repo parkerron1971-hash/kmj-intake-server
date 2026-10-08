@@ -47,11 +47,16 @@ THE FAN-OUT (marketing_tick, hourly, worker only, leader-gated)
 
 THE OWNER'S OWN REQUEST (POST /engine/run)
   The web process never calls the model. It checks the owner, the plan, the
-  switch, the accounts, the rate limit and one request a day, claims the week
-  (as a manual start-over: a suggestion still waiting as a draft is replaced;
-  an approved one is never touched), marks the run queued, and answers 202.
-  manual_tick on the worker starts each queued run once (a conditional write
-  on design.started_at) and writes the suggestion.
+  switch, the accounts, the rate limit and one request a day, then claims the
+  week and marks it queued in ONE write (queue_request), so a failed write
+  changes nothing, and answers 202. Nothing is cancelled then: manual_tick on
+  the worker starts each queued run once (a conditional write on
+  design.started_at), saves the new suggestion, and only then cancels the
+  week's earlier suggestion draft (if that cancel fails the owner sees two,
+  never none). A request that writes nothing (skipped, failed, over a spend
+  ceiling, no time left) leaves the earlier suggestion exactly as it was and
+  does not count against the day. A week with an approved or sent post is
+  never touched.
 """
 from __future__ import annotations
 
@@ -135,6 +140,12 @@ BUSY = ('A suggestion for that week is being written, or the one Chief wrote is 
         'Nothing new was queued.')
 QUEUED = 'Chief is writing a suggested post. It shows up here in a minute or two.'
 TOO_SOON = 'Please wait a moment before asking again.'
+KEPT = 'The earlier suggestion is still on the desk.'
+APPROVED_MEANWHILE = "The week's suggestion was approved in the meantime, so Chief left it as it is."
+# What an owner's request adds to marketing_runs.design. The first three
+# travel with the run; made and outcome say how the request ended (made: the
+# new post's id, the one thing the once-a-day rule counts).
+QUEUE_KEYS = ('queued_at', 'queued_by', 'started_at', 'made', 'outcome')
 
 
 class Skip(Exception):
@@ -638,6 +649,68 @@ async def _finish(business_id: str, run_id: Any, at: datetime, **fields) -> None
         log.warning('marketing planner: the run %s could not be recorded (%s)', str(run_id)[:8], fields.get('status'))
 
 
+async def _standing(business_id: str, run_id: Any) -> Optional[List[Dict[str, Any]]]:
+    """The week's posts that are not cancelled, or None when they cannot be read."""
+    try:
+        return await store.rows(f'/marketing_posts?run_id=eq.{UUID(str(run_id))}&business_id=eq.{business_id}'
+                                '&status=neq.cancelled&select=id,status,revision,run_at,play_id&limit=10')
+    except store.StoreError:
+        return None
+
+
+async def _close(business_id: str, run_id: Any, at: datetime, *, status: str, error: str, manual: bool,
+                 prior: Optional[Dict[str, Any]] = None, design: Optional[Dict[str, Any]] = None,
+                 record: Optional[Dict[str, Any]] = None,
+                 standing: Optional[List[Dict[str, Any]]] = None) -> str:
+    """End a run that wrote nothing new; returns how it ended.
+
+    An owner's start-over that wrote nothing leaves the week's earlier
+    suggestion exactly as it was: the run goes back to succeeded over it
+    ('kept'), the reason in its error, and nothing counts against the
+    once-a-day request (no design.made). Otherwise the run is skipped or
+    failed with the reason. If the earlier posts cannot be read, the run is
+    marked skipped or failed: a warning on the desk, never a lost post."""
+    if manual:
+        if standing is None:
+            standing = await _standing(business_id, run_id)
+        if standing:
+            keep = {**(prior if isinstance(prior, dict) else {}), 'outcome': 'kept'}
+            keep.pop('made', None)
+            await _finish(business_id, run_id, at, status='succeeded', post_ids=[str(p['id']) for p in standing],
+                          error=f'{error} {KEPT}', design=keep)
+            return 'kept'
+    fields = dict(record or {})
+    if design is not None:
+        fields['design'] = design
+    await _finish(business_id, run_id, at, status=status, error=error, **fields)
+    return status
+
+
+async def _retire(business_id: str, run_id: Any, previous: List[Dict[str, Any]], keep_id: str) -> List[str]:
+    """Cancel the week's earlier suggestion drafts, only once the new one is
+    saved. Each write lands only on a draft still at the revision read; one
+    that moved on (approved meanwhile) or a write that fails is left
+    standing, so the owner sees two and can skip one, never none. Returns the
+    ids still standing."""
+    left = []
+    for p in previous:
+        pid = str(p['id'])
+        if pid == keep_id:
+            continue
+        revision = int(p.get('revision') or 1)
+        try:
+            out = await store.request(
+                'PATCH', f'/marketing_posts?id=eq.{UUID(pid)}&business_id=eq.{business_id}'
+                         f'&run_id=eq.{UUID(str(run_id))}&status=eq.draft&revision=eq.{revision}',
+                {'status': 'cancelled', 'revision': revision + 1})
+        except store.StoreError:
+            out = None
+        if not out:
+            log.warning('marketing planner: an earlier suggestion %s was left standing', pid[:8])
+            left.append(pid)
+    return left
+
+
 def _record_slot(slot: Dict[str, Any], run_at: Optional[datetime]) -> Dict[str, Any]:
     out = {k: slot.get(k) for k in ('slot', 'play_id', 'subject_key', 'subject', 'offering', 'landing_url')}
     out['run_at'] = run_at.isoformat() if run_at else None
@@ -652,45 +725,48 @@ async def run_suggestion(business_id: Any, *, trigger: str, now: Optional[dateti
     trigger: 'scheduled' (the fan-out) or 'manual' (the owner's queued
     request, whose claimed run is passed as `run`). A scheduled call claims
     the week itself; a week already planned answers {'status': 'exists'}.
-    Never approves or sends anything."""
+    A manual start-over replaces the week's waiting suggestion only once the
+    new one is saved; when it writes nothing, the earlier one stays exactly
+    as it was. Never approves or sends anything."""
     if trigger not in store.RUN_TRIGGERS:
         raise ValueError('Unknown trigger.')
     bid = str(UUID(str(business_id)))
     at = now or _now()
+    manual = trigger == 'manual'
     row = business if business and all(k in business for k in FULL_COLUMNS.split(',')) else None
     run_id = UUID(str(run['id'])) if run else None
+    prior = run.get('design') if run and isinstance(run.get('design'), dict) else {}
+
+    async def stop(status: str, error: str, out: Dict[str, Any]) -> Dict[str, Any]:
+        if run_id:
+            ended = await _close(bid, run_id, at, status=status, error=error, manual=manual, prior=prior)
+            return {**out, 'status': ended if ended == 'kept' else out['status']}
+        return out
+
     try:
         row = row or await asyncio.to_thread(read_business, bid)
         tz = await asyncio.to_thread(marketing_profile.time_zone, row)
         desk = await store.get_desk(bid)
     except LookupError:
-        if run_id:
-            await _finish(bid, run_id, at, status='skipped', error='This business no longer exists.')
-        return {'status': 'not_eligible', 'reason': 'Business not found.'}
+        return await stop('skipped', 'This business no longer exists.',
+                          {'status': 'not_eligible', 'reason': 'Business not found.'})
     except (Unavailable, marketing_profile.ProfileUnavailable, store.StoreError):
-        if run_id:
-            await _finish(bid, run_id, at, status='failed', error=READ_FAILED)
-        return {'status': 'unavailable', 'reason': READ_FAILED}
+        return await stop('failed', READ_FAILED, {'status': 'unavailable', 'reason': READ_FAILED})
 
-    reason = eligibility(row, scheduled=trigger == 'scheduled')
-    if reason is None and trigger == 'scheduled' and not (desk or {}).get('plan_enabled'):
+    reason = eligibility(row, scheduled=not manual)
+    if reason is None and not manual and not (desk or {}).get('plan_enabled'):
         reason = NOT_SWITCHED_ON
     if reason:
-        if run_id:
-            await _finish(bid, run_id, at, status='skipped', error=reason)
-        return {'status': 'not_eligible', 'reason': reason}
+        return await stop('skipped', reason, {'status': 'not_eligible', 'reason': reason})
 
     week_of = date.fromisoformat(str(run['week_of'])[:10]) if run else target_week(at, tz)
     try:
         when = await slot_time(bid, tz, (desk or {}).get('post_hour', 11), week_of, at)
     except Unavailable:
-        if run_id:
-            await _finish(bid, run_id, at, status='failed', error=READ_FAILED)
-        return {'status': 'unavailable', 'reason': READ_FAILED}
+        return await stop('failed', READ_FAILED, {'status': 'unavailable', 'reason': READ_FAILED})
     if when is None:
-        if run_id:
-            await _finish(bid, run_id, at, status='skipped', error=NO_TIME)
-        return {'status': 'no_time', 'reason': NO_TIME, 'week_of': week_of.isoformat()}
+        return await stop('skipped', NO_TIME, {'status': 'no_time', 'reason': NO_TIME,
+                                               'week_of': week_of.isoformat()})
 
     if run is None:
         try:
@@ -708,13 +784,13 @@ async def run_suggestion(business_id: Any, *, trigger: str, now: Optional[dateti
             await _finish(bid, run_id, at, status='failed', error=READ_FAILED)
             return {'status': 'failed', 'reason': READ_FAILED, 'run_id': str(run_id)}
     attempt = int(run.get('attempts') or 1)
-    queued = run.get('design') if trigger == 'manual' and isinstance(run.get('design'), dict) else {}
-    request = {k: queued[k] for k in ('queued_at', 'queued_by', 'started_at') if k in queued}
-    return await _plan(row, desk, tz, run_id, week_of, when, attempt, at, request)
+    request = {k: prior[k] for k in QUEUE_KEYS[:3] if k in prior} if manual else {}
+    return await _plan(row, desk, tz, run_id, week_of, when, attempt, at, request, manual=manual, prior=prior)
 
 
 async def _plan(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: ZoneInfo, run_id: UUID, week_of: date,
-                when: datetime, attempt: int, at: datetime, request: Dict[str, Any]) -> Dict[str, Any]:
+                when: datetime, attempt: int, at: datetime, request: Dict[str, Any], *, manual: bool,
+                prior: Dict[str, Any]) -> Dict[str, Any]:
     """The claimed run, written and recorded. Every way out marks the run."""
     import creative_director
     import llm_call
@@ -722,20 +798,37 @@ async def _plan(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: ZoneInf
     bid = str(row['id'])
     record: Dict[str, Any] = {}
     design: Dict[str, Any] = dict(request)
+    standing: Optional[List[Dict[str, Any]]] = None
+
+    async def close(status: str, error: str) -> Dict[str, Any]:
+        ended = await _close(bid, run_id, at, status=status, error=error, manual=manual, prior=prior,
+                             design=design, record=record, standing=standing)
+        return {'status': ended, 'reason': error, 'run_id': str(run_id)}
+
     try:
         if not llm_call.api_key():
             raise Skip(NO_WRITER)
         if await asyncio.to_thread(spend_guard.over_budget, bid):
             raise Skip(spend_guard.block_message())
-        existing = await store.rows(f'/marketing_posts?run_id=eq.{run_id}&business_id=eq.{bid}'
-                                    '&status=neq.cancelled&select=id,run_at,play_id&limit=5')
-        if existing:
-            # An earlier attempt saved its draft and stopped before recording
-            # that (or before telling the owner, which tell_owner does once).
-            await _finish(bid, run_id, at, status='succeeded', post_ids=[str(p['id']) for p in existing], error=None)
-            await tell_owner(row, existing[0], {'play_id': existing[0].get('play_id')}, tz, week_of, at)
-            return {'status': 'succeeded', 'run_id': str(run_id), 'post_id': str(existing[0]['id']),
+        standing = await store.rows(f'/marketing_posts?run_id=eq.{run_id}&business_id=eq.{bid}'
+                                    '&status=neq.cancelled&select=id,status,revision,run_at,play_id&limit=10')
+        own = suggestion_post_id(run_id, attempt)
+        mine = [p for p in standing if str(p['id']) == own]
+        if mine or (standing and not manual):
+            # This attempt (or, for the scheduler, an earlier one) saved its
+            # draft and stopped before recording it or telling the owner.
+            keep = mine or standing
+            ids, fields = [str(p['id']) for p in standing], {}
+            if mine and manual:
+                left = await _retire(bid, run_id, [p for p in standing if p.get('status') == 'draft'], own)
+                ids, fields = [own] + left, {'design': {**prior, 'made': own}}
+            await _finish(bid, run_id, at, status='succeeded', post_ids=ids, error=None, **fields)
+            await tell_owner(row, keep[0], {'play_id': keep[0].get('play_id')}, tz, week_of, at)
+            return {'status': 'succeeded', 'run_id': str(run_id), 'post_id': str(keep[0]['id']),
                     'week_of': week_of.isoformat(), 'resumed': True}
+        if manual and any(p.get('status') != 'draft' for p in standing):
+            raise Skip(APPROVED_MEANWHILE)
+        previous = [p for p in standing if p.get('status') == 'draft']
         try:
             accounts = await bm.connected(bid)
         except HTTPException:
@@ -758,8 +851,7 @@ async def _plan(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: ZoneInf
         caption, copy, dropped = await write_caption(bid, slot, facts, profile)
         record['dropped'] = dropped
         if caption is None:
-            await _finish(bid, run_id, at, status='failed', error=CAPTION_BROKE, design=design, **record)
-            return {'status': 'failed', 'reason': CAPTION_BROKE, 'run_id': str(run_id)}
+            return await close('failed', CAPTION_BROKE)
 
         art, made = await make_flyer(row, run_id, attempt, slot, copy, profile)
         design.update(made)
@@ -784,7 +876,7 @@ async def _plan(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: ZoneInf
                 landing = await asyncio.to_thread(bm.default_landing, bid, row, site, desk)
         except HTTPException:
             raise Unavailable('site') from None
-        post_id = suggestion_post_id(run_id, attempt)
+        post_id = own
         try:
             link = bm.link_fields(post_id, caption, landing, site)
             targets = bm.ready_to_post(chosen, kind, caption, link['publish_text'])
@@ -802,22 +894,24 @@ async def _plan(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: ZoneInf
         except store.StoreConflict:
             post = await store.get_post(bid, post_id) or post      # this attempt saved it a moment ago
         except (store.StoreUnavailable, HTTPException):
-            await _finish(bid, run_id, at, status='failed', error=SAVE_FAILED, design=design, **record)
-            return {'status': 'failed', 'reason': SAVE_FAILED, 'run_id': str(run_id)}
-        await _finish(bid, run_id, at, status='succeeded', post_ids=[post_id], error=None, design=design, **record)
+            return await close('failed', SAVE_FAILED)
+        # The new suggestion exists; only now does the earlier one go.
+        left = await _retire(bid, run_id, previous, post_id)
+        design['made'] = post_id
+        if previous:
+            design['replaced'] = [str(p['id']) for p in previous if str(p['id']) not in left]
+        await _finish(bid, run_id, at, status='succeeded', post_ids=[post_id] + left, error=None, design=design,
+                      **record)
         await tell_owner(row, post, slot, tz, week_of, at)
         return {'status': 'succeeded', 'run_id': str(run_id), 'post_id': post_id, 'week_of': week_of.isoformat()}
     except Skip as reason:
-        await _finish(bid, run_id, at, status='skipped', error=str(reason), design=design, **record)
-        return {'status': 'skipped', 'reason': str(reason), 'run_id': str(run_id)}
+        return await close('skipped', str(reason))
     except (Unavailable, marketing_profile.ProfileUnavailable, store.StoreError):
         log.warning('marketing planner: a read for %s failed', bid[:8], exc_info=True)
-        await _finish(bid, run_id, at, status='failed', error=READ_FAILED, design=design, **record)
-        return {'status': 'failed', 'reason': READ_FAILED, 'run_id': str(run_id)}
+        return await close('failed', READ_FAILED)
     except Exception:
         log.warning('marketing planner: the suggestion for %s could not be finished', bid[:8], exc_info=True)
-        await _finish(bid, run_id, at, status='failed', error=FAILED, design=design, **record)
-        return {'status': 'failed', 'reason': FAILED, 'run_id': str(run_id)}
+        return await close('failed', FAILED)
 
 
 # ── the hourly fan-out ────────────────────────────────────────────────
@@ -935,7 +1029,8 @@ async def manual_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
                 continue
             if await asyncio.to_thread(_business_over, bid):
                 import spend_guard
-                await _finish(bid, run['id'], at, status='skipped', error=spend_guard.block_message())
+                await _close(bid, run['id'], at, status='skipped', error=spend_guard.block_message(), manual=True,
+                             prior=started.get('design'))
                 tally['over_budget'] += 1
                 continue
             out = await run_suggestion(bid, trigger='manual', now=at, run=started)
@@ -951,17 +1046,74 @@ def _local_midnight(at: datetime, tz: ZoneInfo) -> datetime:
 
 
 async def asked_today(business_id: str, tz: ZoneInfo, at: datetime) -> bool:
-    """Whether the owner already asked for a suggestion today, on the
-    business's clock. A failed read raises (the route answers 503)."""
+    """Whether the owner already got a suggestion from a request today, on
+    the business's clock. Only a request that saved a new post counts
+    (design.made): one that was skipped, failed or kept the earlier
+    suggestion leaves the owner free to ask again. A failed read raises (the
+    route answers 503)."""
     rows = await store.rows(f'/marketing_runs?business_id=eq.{business_id}&trigger=eq.manual'
                             f'&created_at=gte.{reading.query_time(at - timedelta(days=2))}'
-                            '&select=id,design,created_at&limit=20')
+                            '&select=id,status,design,created_at&limit=20')
     since = _local_midnight(at, tz)
     for r in rows:
-        stamp = words._stamp((r.get('design') or {}).get('queued_at') if isinstance(r.get('design'), dict) else None)
-        if stamp and stamp >= since:
+        design = r.get('design') if isinstance(r.get('design'), dict) else {}
+        stamp = words._stamp(design.get('queued_at'))
+        if stamp and stamp >= since and design.get('made'):
             return True
     return False
+
+
+async def queue_request(business_id: str, week: date, user_id: str, at: datetime) -> UUID:
+    """Claim the week for the owner's request and mark it queued, in ONE
+    write, so a write that fails changes nothing.
+
+    Not marketing_claim_run: its manual start-over cancels the waiting
+    drafts at claim time, before anything has replaced them. Here nothing is
+    cancelled; the worker retires the earlier suggestion only after the new
+    one is saved (_retire), and keeps it when it writes nothing (_close).
+    The claim's own rules otherwise: a week with no run is inserted; a failed
+    or skipped one, a run stuck 15 minutes, or a succeeded one whose posts are
+    all still drafts is taken over by a write conditional on its status and
+    attempt count. A running week, or one with an approved or sent post, is
+    busy (409)."""
+    run_id = store.run_id_for(business_id, week)
+    marker = {'queued_at': words._z(at), 'queued_by': str(user_id)}
+    current = await bm._call(store.get_run(business_id, run_id), down=bm.READ_DOWN)
+    try:
+        if current is None:
+            await store.request('POST', '/marketing_runs', {
+                'id': str(run_id), 'business_id': business_id, 'week_of': week.isoformat(), 'kind': KIND,
+                'trigger': 'manual', 'status': 'running', 'attempts': 1, 'design': marker})
+            return run_id
+        status, attempts = current.get('status'), int(current.get('attempts') or 1)
+        where = (f'/marketing_runs?id=eq.{run_id}&business_id=eq.{business_id}&status=eq.{status}'
+                 f'&attempts=eq.{attempts}')
+        if current.get('kind') not in (None, KIND):
+            raise HTTPException(409, BUSY)
+        if status == 'running':
+            started = words._stamp(current.get('created_at'))
+            if not started or started >= at - RECLAIM:
+                raise HTTPException(409, BUSY)
+            where += f'&created_at=lt.{reading.query_time(at - RECLAIM)}'
+        elif status == 'succeeded':
+            sent = await store.rows(f'/marketing_posts?run_id=eq.{run_id}&business_id=eq.{business_id}'
+                                    '&status=not.in.(draft,cancelled)&select=id&limit=1')
+            if sent:
+                raise HTTPException(409, BUSY)
+        elif status not in ('failed', 'skipped'):
+            raise HTTPException(409, BUSY)
+        design = current.get('design') if isinstance(current.get('design'), dict) else {}
+        kept = {k: v for k, v in design.items() if k not in QUEUE_KEYS}
+        saved = await store.request('PATCH', where, {
+            'status': 'running', 'trigger': 'manual', 'kind': KIND, 'attempts': attempts + 1, 'error': None,
+            'created_at': at.isoformat(), 'finished_at': None, 'design': {**kept, **marker}})
+    except store.StoreConflict:
+        raise HTTPException(409, BUSY) from None
+    except store.StoreUnavailable:
+        raise HTTPException(503, bm.STORE_DOWN) from None
+    if not saved:
+        raise HTTPException(409, BUSY)
+    return run_id
 
 
 @router.post('/engine/run', status_code=202)
@@ -1001,22 +1153,9 @@ async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user))
     except store.StoreError:
         raise HTTPException(503, bm.READ_DOWN) from None
     week = target_week(at, tz)
-    await bm.ensure_desk(bid)             # the sender claims nothing for a business with no desk row
-    # A manual start-over: a suggestion still waiting as a draft is replaced
-    # (the claim cancels it); a week with an approved or sent post is refused.
-    claimed = await bm._call(store.claim_run(bid, week, kind=KIND, source='manual', replan=True))
-    if not claimed:
-        raise HTTPException(409, BUSY)
-    run_id = store.run_id_for(bid, week)
-    # Marked queued for the worker. If this write is lost, the run waits out
-    # the claim's 15 minutes and can be asked for again (it is not counted
-    # as today's request without its queued_at).
-    marked = await bm._call(store.request(
-        'PATCH', f'/marketing_runs?id=eq.{run_id}&business_id=eq.{bid}&status=eq.running',
-        {'design': {'queued_at': words._z(at), 'queued_by': str(user.id)}, 'signals': None, 'diagnosis': None,
-         'plays': None, 'slots': None, 'dropped': None, 'post_ids': [], 'error': None}))
-    if not marked:
-        raise HTTPException(503, bm.STORE_DOWN)
+    # One write claims the week and marks it queued; nothing is cancelled
+    # here, and no desk row is made (the worker makes one before it saves).
+    run_id = await queue_request(bid, week, str(user.id), at)
     return {'queued': True, 'run_id': str(run_id), 'week_of': week.isoformat(), 'message': QUEUED}
 
 
