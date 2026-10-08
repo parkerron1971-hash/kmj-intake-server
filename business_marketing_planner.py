@@ -7,15 +7,18 @@ suggested post a week, as a draft on its marketing desk, to approve or skip.
 A business at the `week` level (marketing_week: Professional; Practice, the
 autopilot level, gets the same week until B12/B13) gets the WEEKLY PLAN:
 five drafts, each with a Creative Director flyer included in its plan.
-A chair business with a live calendar (the `openings` level, Boss) is B11:
-nothing here plans for it, and its own request answers 409.
+A chair business with a live calendar (the `openings` level, Boss) gets the
+OPEN-CHAIRS WEEK (B11): three posts made from its booking calendar
+(business_marketing_openings has the calendar's half).
 
   run_suggestion(business_id, trigger=)   one business's suggestion for one week
   run_week(business_id, trigger=)         one business's five-post week (B9)
+  run_openings(business_id, trigger=)     one Boss business's open-chairs week (B11)
   marketing_tick()                        hourly, on the worker: every business that is due
   manual_tick()                           every minute, on the worker: the owner's queued requests
   marketing_design_tick()                 every 2 minutes, on the worker: the week's flyers land (B9)
-  POST /marketing/{business_id}/engine/run   owner: queue a suggestion or a week now (the worker writes it)
+  openings_watch_tick()                   every 15 minutes, on the worker: pull a post whose chairs booked (B11)
+  POST /marketing/{business_id}/engine/run   owner: queue a suggestion, a week or open chairs now
   GET  /marketing/{business_id}/preview      owner: what Chief would write about, read-only
 
 ONE SUGGESTION
@@ -95,6 +98,20 @@ THE WEEKLY PLAN (B9, run_week)
   suggestion; a week can be re-planned at most twice, only while none of its
   posts is approved, sent or still designing, and the new drafts are saved
   before the old ones are retired.
+
+THE OPEN-CHAIRS WEEK (B11, run_openings; Boss, D5)
+  The week's machinery (kind 'openings': the same claim, fan-out, jitter,
+  per-tick cap, spend headroom, owner's request and save-new-before-retire-
+  old), planned from the chair calendar instead of the numbers: the
+  most-booked offering's open slots next week, grouped into windows; the
+  three biggest (slow days first), one per day; each post the day before
+  (or that morning) at least two hours before its window; Instagram first,
+  Facebook too; linking to the booking page. ONE small caption call for the
+  three (a caption that breaks a rule, says a seat count or names the wrong
+  day gets the plain caption instead); the owner's newest work photo with
+  the words laid over by the free composer (cost 0), else the branded flyer.
+  Every post stores its `opening`; openings_watch_tick and the sender pull
+  it when its window books first (business_marketing_openings).
 """
 from __future__ import annotations
 
@@ -116,6 +133,7 @@ import business_marketing as bm
 import business_marketing_desk as reading
 import business_marketing_engine as engine
 import business_marketing_links as links
+import business_marketing_openings as openings
 import business_marketing_store as store
 import feature_gates
 import marketing_desk as words
@@ -174,6 +192,13 @@ DESIGN_ESTIMATE_USD = 0.50
 CAPTIONS_ESTIMATE_USD = 0.05
 WEEK_ESTIMATE_USD = CAPTIONS_ESTIMATE_USD + FLYERS_PER_WEEK * DESIGN_ESTIMATE_USD
 
+# The open-chairs week (B11).
+OPENINGS_KIND = 'openings'
+OPENINGS_TASK = 'business_marketing_openings'
+OPENINGS_MAX_TOKENS = 2000            # three short captions
+OPENINGS_SLOTS = openings.POSTS_PER_WEEK
+CHAIR_PLATFORMS = ('instagram', 'facebook')   # Instagram first, Facebook too when connected
+
 PLAN_COLUMNS = 'comp_tier,subscription_status,subscription_plan,trial_ends_at,stripe_subscription_id'
 FULL_COLUMNS = f'{marketing_profile.BUSINESS_COLUMNS},{PLAN_COLUMNS}'
 CANDIDATE_COLUMNS = (f'id,owner_id,type,{PLAN_COLUMNS},availability:settings->availability,'
@@ -187,9 +212,11 @@ NO_ACCOUNTS = 'Connect an account first, in Build, Social Media.'
 NO_POSTING = "Posting to your social accounts isn't switched on for this business yet."
 NO_PLAN = "Chief's weekly suggestion comes with every plan. Choose a plan to get one."
 WEEK_LEVEL = "Your plan comes with Chief's weekly plan of five posts, so Chief writes that instead of one suggestion."
-OPENINGS_LATER = ("Chief's weekly plan for open chairs, made from your booking calendar, isn't open yet. "
-                  'Nothing was queued.')
+OPENINGS_LEVEL = ("Your plan comes with Chief's open-chairs week, made from your booking calendar, so Chief writes "
+                  'that instead.')
 NOT_WEEK = "Chief's weekly plan of five posts comes with the Professional plan. Nothing was queued."
+NOT_OPENINGS = ("Chief's open-chairs week comes with the Boss plan and a live booking calendar. Nothing was "
+                'queued.')
 NO_ACCESS = "Chief can't write a suggestion while the account needs attention. Check Settings, Billing."
 PAUSED = 'Automations are paused for this business, so Chief wrote nothing this week.'
 NO_WRITER = "Chief's writing isn't available right now, so nothing was written. It tries again later."
@@ -221,6 +248,18 @@ WEEK_CAPTIONS_BROKE = ('Every caption Chief wrote said something your site does 
                        'address), so nothing was saved.')
 WEEK_SAVE_FAILED = "This week's posts couldn't be saved just now. Nothing was posted."
 WEEK_FAILED = 'The weekly plan could not be finished. Nothing was posted.'
+# The open-chairs week's words (B11).
+OPENINGS_QUEUED = ('Chief is planning your open chairs: up to three posts from your booking calendar. They show up '
+                   'here in a minute or two.')
+OPENINGS_KEPT = "The week's earlier open-chairs posts are still on the desk."
+NO_HOURS = ("Your booking calendar has no weekly hours set, so Chief can't tell which chairs are open. Set your "
+            'hours in Settings, Availability.')
+NOTHING_BOOKABLE = 'Nothing on your booking calendar is booked by the slot, so there are no open chairs to post.'
+CALENDAR_FULL = "Every time on that week's calendar is already booked, so there are no open chairs to post."
+NO_OPENING_TIME = "No open time that week leaves room to post about it beforehand, so nothing was written."
+NO_CHAIR_ACCOUNTS = 'Open chairs go to Instagram and Facebook. Connect one of them in Build, Social Media.'
+OPENINGS_SAVE_FAILED = "This week's open-chairs posts couldn't be saved just now. Nothing was posted."
+OPENINGS_FAILED = 'The open-chairs week could not be finished. Nothing was posted.'
 # Why a plan post goes without its flyer: "<why>, so this post goes as words only[, and Instagram is left out]."
 NO_FLYER = {
     'timeout': "The flyer wasn't ready in time",
@@ -375,27 +414,43 @@ def _with_settings(row: Dict[str, Any]) -> Dict[str, Any]:
     return {**row, 'settings': {'booking_page': row.get('booking_page'), 'availability': row.get('availability')}}
 
 
-def week_problem(row: Dict[str, Any]) -> Optional[str]:
-    """None at a week level by the real plan (week, or autopilot, which gets
-    the plain week until B12/B13); else why not. The desk's own level
-    (business_marketing.level_for): a chair business with a live calendar is
-    the openings level, B11, and gets no plan here. Raises Unavailable when
-    the calendar cannot be read: never a guess at the level."""
-    if not feature_gates.plan_includes(row, 'marketing_week'):
-        return NOT_WEEK
+def _level(row: Dict[str, Any]) -> str:
+    """The desk's own level (business_marketing.level_for). Raises
+    Unavailable when the calendar cannot be read: never a guess at the level."""
     try:
-        level = bm.level_for(_with_settings(row))['level']
+        return bm.level_for(_with_settings(row))['level']
     except HTTPException:
         raise Unavailable('the booking calendar') from None
-    return None if level in WEEK_LEVELS else OPENINGS_LATER
+
+
+def week_problem(row: Dict[str, Any]) -> Optional[str]:
+    """None at a week level by the real plan (week, or autopilot, which gets
+    the plain week until B12/B13); else why not. A chair business with a
+    live calendar is the openings level: it gets the open-chairs week (B11)
+    instead of this one. Raises Unavailable when the calendar cannot be read."""
+    if not feature_gates.plan_includes(row, 'marketing_week'):
+        return NOT_WEEK
+    return None if _level(row) in WEEK_LEVELS else OPENINGS_LEVEL
+
+
+def openings_problem(row: Dict[str, Any]) -> Optional[str]:
+    """None at the openings level (marketing_week on a chair business with
+    a live calendar: Boss); else why not. Raises Unavailable when the
+    calendar cannot be read."""
+    if not feature_gates.plan_includes(row, 'marketing_week'):
+        return NOT_OPENINGS
+    return None if _level(row) == OPENINGS_KIND else NOT_OPENINGS
 
 
 def run_kind(row: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
     """What Chief writes for this business each week: (KIND, None) at the
-    suggest level, (WEEK_KIND, None) at a week level, else (None, why not)."""
+    suggest level, (WEEK_KIND, None) at a week level, (OPENINGS_KIND, None)
+    at the openings level, else (None, why not)."""
     if feature_gates.plan_includes(row, 'marketing_week'):
-        problem = week_problem(row)
-        return (None, problem) if problem else (WEEK_KIND, None)
+        level = _level(row)
+        if level == OPENINGS_KIND:
+            return OPENINGS_KIND, None
+        return (WEEK_KIND, None) if level in WEEK_LEVELS else (None, NOT_WEEK)
     problem = level_problem(row)
     return (None, problem) if problem else (KIND, None)
 
@@ -426,15 +481,17 @@ def _paused(row: Dict[str, Any]) -> bool:
 
 
 def eligibility(row: Dict[str, Any], *, scheduled: bool, kind: str = KIND) -> Optional[str]:
-    """Why this business gets no suggestion (kind KIND) or weekly plan
-    (WEEK_KIND) now, in plain words, or None. The owner's own request is not
-    an automation, so a pause does not stop it."""
+    """Why this business gets no suggestion (kind KIND), weekly plan
+    (WEEK_KIND) or open-chairs week (OPENINGS_KIND) now, in plain words, or
+    None. The owner's own request is not an automation, so a pause does not
+    stop it."""
     bid = str(row.get('id') or '')
     if not desk_on_for(bid):
         return NOT_SWITCHED_ON
     if not post_for_me.allowed_for(bid):
         return NO_POSTING
-    problem = week_problem(row) if kind == WEEK_KIND else level_problem(row)
+    problem = (week_problem(row) if kind == WEEK_KIND else openings_problem(row) if kind == OPENINGS_KIND
+               else level_problem(row))
     if problem:
         return problem
     if not access_ok(row):
@@ -552,8 +609,8 @@ def _eligible_kind(row: Dict[str, Any]) -> Optional[str]:
 
 async def candidates(scope: Any) -> List[Dict[str, Any]]:
     """Every business the fan-out may write for, each with the kind of run
-    it gets (`_kind`: a suggestion, or the weekly plan). Raises on a failed
-    read: a blip never reads as "nobody to do"."""
+    it gets (`_kind`: a suggestion, the weekly plan or the open-chairs
+    week). Raises on a failed read: a blip never reads as "nobody to do"."""
     ids = await _desk_ids(scope)
     if not ids:
         return []
@@ -1756,6 +1813,502 @@ async def marketing_design_tick(now: Optional[datetime] = None) -> Dict[str, Any
     return dict(tally)
 
 
+# ── the open-chairs week (B11) ────────────────────────────────────────
+
+def openings_post_id(run_id: Any, attempt: int, slot: int) -> str:
+    """One post per window per attempt of the week's run: a retry inside an
+    attempt is the same post, and a replan (a new attempt) gets new ones."""
+    return str(uuid5(UUID(str(run_id)), f'{int(attempt)}:openings:{int(slot)}'))
+
+
+def openings_dedup_key(run_id: Any, attempt: int) -> str:
+    return f'marketing_openings:{UUID(str(run_id))}:{int(attempt)}'
+
+
+def chair_targets(chosen: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The desk's accounts an open-chairs post goes to: Instagram first,
+    Facebook too (D5); every other network is left out."""
+    keep = [t for t in chosen if t.get('platform') in CHAIR_PLATFORMS]
+    return sorted(keep, key=lambda t: CHAIR_PLATFORMS.index(t['platform']))
+
+
+def openings_caption_request(slots: List[Dict[str, Any]], facts: Dict[str, Any],
+                             profile: Dict[str, Any]) -> Dict[str, Any]:
+    return {'audience': profile.get('audience'), 'voice': profile.get('voice'), 'facts': facts,
+            'slots': [{'slot': s['slot'], 'play': openings.PLAY_LABEL, 'play_brief': openings.PLAY_BRIEF,
+                       'subject': f"{s['words']['day']} {s['words']['time']}", 'offering': None,
+                       'opening': s['words']} for s in slots]}
+
+
+async def write_openings_captions(business_id: str, slots: List[Dict[str, Any]], facts: Dict[str, Any],
+                                  profile: Dict[str, Any]) -> Tuple[Dict[int, str], List[Dict[str, Any]]]:
+    """ONE small model call for the week's captions, metered to the business
+    (units=0). Each is held to the business caption checks plus the open
+    chairs' own (business_marketing_openings.check_caption: no seat count,
+    its own day and no other). A caption that is missing or breaks a rule,
+    or a call that does not answer, gets the plain caption, which always
+    holds: an open chair is never lost to a wording slip."""
+    import llm_call
+    import model_ladder
+    from chief_models import model_for
+    items: List[Any] = []
+    dropped: List[Dict[str, Any]] = []
+    answered = False
+    try:
+        model = model_for('draft')
+        payload = {'model': model, 'max_tokens': OPENINGS_MAX_TOKENS, 'system': profile['system_prompt'],
+                   'messages': [{'role': 'user', 'content': json.dumps(
+                       openings_caption_request(slots, facts, profile), default=str)}],
+                   **model_ladder.effort_kwargs(model, EFFORT)}
+        async with httpx.AsyncClient() as client:
+            response = await llm_call.apost(client, payload, timeout=CALL_TIMEOUT, task=OPENINGS_TASK,
+                                            business_id=business_id, units=0)
+        response.raise_for_status()
+        parsed = _parse(llm_call.text_of(response.json()))
+        items = parsed.get('captions') if isinstance(parsed.get('captions'), list) else []
+        answered = True
+    except Exception:
+        log.warning('marketing planner: the open-chairs captions for %s were not written', business_id[:8],
+                    exc_info=True)
+        dropped.append({'slot': None, 'reason': 'the writer did not answer', 'plain': True})
+    out: Dict[int, str] = {}
+    for s in slots:
+        item = next((i for i in items if isinstance(i, dict) and i.get('slot') == s['slot']), None)
+        text = item.get('text') if item else None
+        problem = openings.check_caption(text, facts, profile, s['words']) if answered else 'not written'
+        if problem:
+            if answered:
+                dropped.append({'slot': s['slot'], 'reason': problem, 'plain': True})
+            out[s['slot']] = openings.plain_caption(s['words'])
+        else:
+            out[s['slot']] = text.strip()
+    return out, dropped
+
+
+async def make_opening_flyer(business: Dict[str, Any], run_id: UUID, attempt: int, slot: int,
+                             copy: Dict[str, str], photo_id: Optional[str],
+                             profile: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
+    """The free composer picture for one open-chairs post (cost_usd 0): the
+    owner's work photo with the words laid over it, or, with no photo (or
+    one that cannot be placed), the business's branded flyer. Made under
+    image_studio.build_actor bound to this business and its owner (read as
+    the service role), reset in a finally. Never an image-model render:
+    nothing here can redraw a real haircut."""
+    import chief_flyer_composer as composer
+    import image_studio as images
+    import marketing_design
+    made: Dict[str, Any] = {'flyer': None, 'cost_usd': 0, 'made_by': 'composer', 'picture': None,
+                            'photo': photo_id, 'failed': []}
+    bid, owner = str(business['id']), str(business.get('owner_id') or '')
+    if not owner:
+        made['failed'].append({'what': 'picture', 'reason': 'no owner on record'})
+        return None, made
+    palette = marketing_design.brand_palette(marketing_design.brand_colors(business))
+    footer = profile.get('flyer_footer') or marketing_profile.flyer_footer(business.get('name'), None)
+    token = images.build_actor.set({'business_id': bid, 'user_id': owner})
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            for picture in (('photo', 'flyer') if photo_id else ('flyer',)):
+                last = None
+                for step, scale in enumerate(FLYER_SCALES):
+                    try:
+                        if picture == 'photo':
+                            layout = openings.photo_layout(photo_id, copy, scale=scale, footer=footer, palette=palette)
+                        else:
+                            layout = marketing_design.flyer_layout(openings.PLAY_ID, copy, scale=scale,
+                                                                   eyebrow=openings.EYEBROW, footer=footer,
+                                                                   palette=palette)
+                        request_id = uuid5(run_id, f'openings-{picture}:{attempt}:{slot}:{photo_id or "-"}:{step}')
+                        result = await composer.compose(client, {'id': bid}, {'layout': layout}, request_id)
+                        art = str(result['image']['id'])
+                        made.update(flyer=art, picture=picture, palette=palette, footer=footer)
+                        return art, made
+                    except HTTPException as exc:
+                        last = exc
+                        if exc.status_code != 422:
+                            break
+                made['failed'].append({'what': picture, 'reason': str(getattr(last, 'detail', 'render failed'))[:200]})
+    except Exception as exc:
+        log.warning('marketing planner: an open-chairs picture for %s failed', bid[:8], exc_info=True)
+        made['failed'].append({'what': 'picture', 'reason': str(getattr(exc, 'detail', 'render failed'))[:200]})
+    finally:
+        images.build_actor.reset(token)
+    return None, made
+
+
+def openings_words(drafts: int, photos: Optional[int], flyers: Optional[int], which: Optional[str]) -> Dict[str, str]:
+    """'Chief planned next week's open chairs: 3 posts wait for your OK', and what they show."""
+    many = drafts != 1
+    title = (f"Chief planned {which or 'next week'}'s open chairs: {drafts} post{'s' if many else ''} "
+             f"wait{'' if many else 's'} for your OK")
+    words_only = drafts - (photos or 0) - (flyers or 0)
+    if photos is None:
+        lead = ''
+    elif photos == drafts:
+        lead = 'Each shows one of your work photos. ' if many else 'It shows one of your work photos. '
+    elif not photos and flyers == drafts:
+        lead = ('They use your brand flyer; add work photos on the desk to show your own work. ' if many else
+                'It uses your brand flyer; add work photos on the desk to show your own work. ')
+    else:
+        parts = []
+        if photos:
+            parts.append(f"{photos} show{'s' if photos == 1 else ''} your work photos")
+        if flyers:
+            parts.append(f"{flyers} use{'s' if flyers == 1 else ''} your brand flyer")
+        if words_only:
+            parts.append(f"{words_only} go{'es' if words_only == 1 else ''} as words only")
+        lead = '; '.join(parts).capitalize() + '. '
+    return {'title': title,
+            'body': (f"{lead}Nothing posts until you approve {'them' if many else 'it'}, and a post comes down "
+                     'by itself if its time books first.')}
+
+
+async def tell_openings(business: Dict[str, Any], run_id: Any, attempt: int, tz: ZoneInfo, week_of: Any,
+                        at: datetime, *, photos: Optional[int] = None, flyers: Optional[int] = None) -> str:
+    """Tell the owner about the open-chairs week ONCE: one Today item and one
+    push, keyed by the run and its attempt in chief_notifications.
+    action_payload.dedup_key. If what was said cannot be read, nothing is said."""
+    bid, rid = str(UUID(str(business['id']))), str(UUID(str(run_id)))
+    try:
+        posts = await store.rows(f'/marketing_posts?run_id=eq.{rid}&business_id=eq.{bid}&status=eq.draft'
+                                 '&select=id&limit=10')
+        if not posts:
+            return 'nothing_to_tell'
+        key = openings_dedup_key(rid, attempt)
+        told = await asyncio.to_thread(_already_told, bid, key)
+        if told is None:
+            return 'unreadable'
+        if told:
+            return 'told_before'
+        said = openings_words(len(posts), photos, flyers, reading.relation(week_of, at, tz))
+        if not await asyncio.to_thread(_week_today_item, bid, rid, said, key):
+            return 'not_told'
+        if business.get('owner_id'):
+            await asyncio.to_thread(_week_push, str(business['owner_id']), rid, said)
+        return 'told'
+    except Exception:
+        log.warning('marketing planner: could not tell the owner of %s about open chairs', bid[:8], exc_info=True)
+        return 'not_told'
+
+
+async def _taken_times(business_id: str, week_of: date, tz: ZoneInfo) -> set:
+    """The times already taken by this business's posts around that week
+    (from the Sunday before: a Monday window posts the day before)."""
+    start = datetime.combine(week_of - timedelta(days=1), time(0), tz)
+    end = datetime.combine(week_of + timedelta(days=7), time(0), tz)
+    try:
+        rows = await store.rows(
+            f'/marketing_posts?business_id=eq.{business_id}&select=run_at&status=not.in.(cancelled,pulled)'
+            f'&run_at=gte.{reading.query_time(start)}&run_at=lt.{reading.query_time(end)}&limit={bm.TAKEN_LIMIT}')
+    except store.StoreError:
+        raise Unavailable('the calendar') from None
+    return {bm._aware(r['run_at']).timestamp() for r in rows}
+
+
+def _openings_record(calendar: Dict[str, Any], picked: List[Dict[str, Any]], slots: List[Dict[str, Any]],
+                     tz: ZoneInfo, which: Optional[str]) -> Dict[str, Any]:
+    """What the run records: the calendar it read, the reading Chief gives
+    the desk, the play and the windows. Counts here are for the owner's desk,
+    never for a caption."""
+    days = sorted({w['day'] for w in calendar['windows']})
+    names = [openings.WEEKDAYS[date.fromisoformat(d).weekday()] for d in days]
+    offering = calendar['offering']
+    evidence = (f"{(which or 'That week').capitalize()} still has open times on {words._join(names)}. Chief picked "
+                f"the {_plural_word(len(picked), 'longest open stretch', 'longest open stretches')}, slow days "
+                'first; each post comes down by itself if its time books first.')
+    return {
+        'signals': {'calendar': {'offering': offering.get('name'), 'offering_id': str(offering.get('id')),
+                                 'offering_from': calendar['offering_from'], 'history': calendar['history'],
+                                 'open_slots': calendar['open_slots'], 'windows': len(calendar['windows']),
+                                 'open_days': len(days), 'weekday_bookings': {
+                                     openings.WEEKDAYS[k]: v for k, v in sorted(calendar['counts'].items())}}},
+        'diagnosis': {'primary_problem': 'fill_the_calendar', 'rule': 'open_chairs', 'urgency': 'medium',
+                      'headline': 'Open chairs to fill', 'evidence': evidence,
+                      'numbers': {'open_days': len(days), 'windows': len(calendar['windows'])}},
+        'plays': [{'play_id': openings.PLAY_ID, 'label': openings.PLAY_LABEL, 'posts': len(slots),
+                   'reason': 'Each post names one open stretch of the calendar and links to the booking page.'}],
+        'slots': [{'slot': s['slot'], 'play_id': openings.PLAY_ID, 'subject_key': None,
+                   'subject': f"{s['words']['day']} {s['words']['time']}", 'offering': offering.get('name'),
+                   'landing_url': None, 'run_at': s['window']['run_at'].isoformat(),
+                   'score': s['window'].get('score'), 'opening': s['opening']} for s in slots],
+    }
+
+
+def _plural_word(n: int, one: str, many: str) -> str:
+    return f'{words._word(n)} {one if n == 1 else many}' if n else f'no {many}'
+
+
+async def run_openings(business_id: Any, *, trigger: str, now: Optional[datetime] = None,
+                       business: Optional[Dict[str, Any]] = None,
+                       run: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Plan one Boss business's open-chairs week: up to three drafts.
+
+    trigger: 'scheduled' (the fan-out) or 'manual' (the owner's queued
+    request, whose claimed run is passed as `run`). A scheduled call claims
+    the week itself (kind 'openings'); a week already planned answers
+    {'status': 'exists'}. A replan saves its new drafts before it retires
+    the old ones, and writes nothing over a week with an approved or sent
+    post. Never approves or sends anything."""
+    if trigger not in store.RUN_TRIGGERS:
+        raise ValueError('Unknown trigger.')
+    bid = str(UUID(str(business_id)))
+    at = now or _now()
+    manual = trigger == 'manual'
+    row = business if business and all(k in business for k in FULL_COLUMNS.split(',')) else None
+    run_id = UUID(str(run['id'])) if run else None
+    prior = run.get('design') if run and isinstance(run.get('design'), dict) else {}
+
+    async def stop(status: str, error: str, out: Dict[str, Any]) -> Dict[str, Any]:
+        if run_id:
+            ended = await _close(bid, run_id, at, status=status, error=error, manual=manual, prior=prior,
+                                 kept_note=OPENINGS_KEPT)
+            return {**out, 'status': ended if ended == 'kept' else out['status']}
+        return out
+
+    try:
+        row = row or await asyncio.to_thread(read_business, bid)
+        tz = await asyncio.to_thread(marketing_profile.time_zone, row)
+        desk = await store.get_desk(bid)
+        reason = await asyncio.to_thread(eligibility, row, scheduled=not manual, kind=OPENINGS_KIND)
+    except LookupError:
+        return await stop('skipped', 'This business no longer exists.',
+                          {'status': 'not_eligible', 'reason': 'Business not found.'})
+    except (Unavailable, marketing_profile.ProfileUnavailable, store.StoreError):
+        return await stop('failed', READ_FAILED, {'status': 'unavailable', 'reason': READ_FAILED})
+
+    if reason is None and not manual and not (desk or {}).get('plan_enabled'):
+        reason = NOT_SWITCHED_ON
+    if reason:
+        return await stop('skipped', reason, {'status': 'not_eligible', 'reason': reason})
+
+    week_of = date.fromisoformat(str(run['week_of'])[:10]) if run else target_week(at, tz)
+    if run is None:
+        try:
+            if not await store.claim_run(bid, week_of, kind=OPENINGS_KIND, source=trigger):
+                return {'status': 'exists', 'week_of': week_of.isoformat()}
+        except store.StoreError:
+            return {'status': 'unavailable', 'reason': READ_FAILED}
+        run_id = store.run_id_for(bid, week_of)
+        try:
+            run = await store.get_run(bid, run_id)
+        except store.StoreError:
+            run = None
+        if not run:
+            await _finish(bid, run_id, at, status='failed', error=READ_FAILED)
+            return {'status': 'failed', 'reason': READ_FAILED, 'run_id': str(run_id)}
+    attempt = int(run.get('attempts') or 1)
+    replans = int(((run.get('design') if isinstance(run.get('design'), dict) else None) or {}).get('replans') or 0)
+    request = {k: prior[k] for k in QUEUE_KEYS[:3] if k in prior} if manual else {}
+    return await _plan_openings(row, desk, tz, run_id, week_of, attempt, at, request, manual=manual, prior=prior,
+                                replans=replans)
+
+
+async def _plan_openings(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: ZoneInfo, run_id: UUID,
+                         week_of: date, attempt: int, at: datetime, request: Dict[str, Any], *, manual: bool,
+                         prior: Dict[str, Any], replans: int) -> Dict[str, Any]:
+    """The claimed open-chairs week, written and recorded. Every way out marks the run."""
+    import creative_director
+    import llm_call
+    import spend_guard
+    bid = str(row['id'])
+    record: Dict[str, Any] = {}
+    design: Dict[str, Any] = {**request, 'replans': replans}
+    standing: Optional[List[Dict[str, Any]]] = None
+    own = {openings_post_id(run_id, attempt, n): n for n in range(1, OPENINGS_SLOTS + 1)}
+    which = reading.relation(week_of, at, tz)
+
+    async def close(status: str, error: str) -> Dict[str, Any]:
+        ended = await _close(bid, run_id, at, status=status, error=error, manual=manual, prior=prior,
+                             design=design, record=record, standing=standing, kept_note=OPENINGS_KEPT)
+        return {'status': ended, 'reason': error, 'run_id': str(run_id)}
+
+    try:
+        if not llm_call.api_key():
+            raise Skip(NO_WRITER)
+        if await asyncio.to_thread(spend_guard.over_budget, bid):
+            raise Skip(spend_guard.block_message())
+        every = await store.rows(f'/marketing_posts?run_id=eq.{run_id}&business_id=eq.{bid}'
+                                 '&select=id,status,revision,run_at,play_id,design_status,source&limit=60')
+        # A pulled post is not on the desk any more: never "the earlier plan is still there".
+        standing = [p for p in every if p.get('status') not in ('cancelled', 'pulled')]
+        mine = [p for p in standing if str(p['id']) in own]
+        if mine or (standing and not manual):
+            # This attempt (or, for the scheduler, an earlier one) saved its
+            # posts and stopped before recording them or telling the owner.
+            ids = [str(p['id']) for p in standing]
+            kept_design = {**(prior if manual else {}), 'replans': replans}
+            if mine and manual:
+                left = await _retire(bid, run_id, [p for p in standing if p.get('status') == 'draft'], set(own))
+                ids = [str(p['id']) for p in mine] + left
+                kept_design['made'] = [str(p['id']) for p in mine]
+            await _finish(bid, run_id, at, status='succeeded', post_ids=ids, error=None, design=kept_design)
+            await tell_openings(row, run_id, attempt, tz, week_of, at)
+            return {'status': 'succeeded', 'run_id': str(run_id), 'post_ids': ids, 'week_of': week_of.isoformat(),
+                    'resumed': True}
+        if manual and any(p.get('status') != 'draft' for p in standing):
+            raise Skip(WEEK_APPROVED_MEANWHILE)
+        previous = [p for p in standing if p.get('status') == 'draft']
+        try:
+            accounts = await bm.connected(bid)
+        except HTTPException:
+            raise Unavailable('accounts') from None
+        if not accounts:
+            raise Skip(NO_ACCOUNTS)
+        try:
+            chosen = chair_targets(bm.pick_targets(accounts, desk, None))
+        except HTTPException as exc:
+            raise Skip(str(exc.detail)) from None
+        if not chosen:
+            raise Skip(NO_CHAIR_ACCOUNTS)
+
+        calendar = await asyncio.to_thread(openings.read_calendar, row, tz, week_of, at)
+        if calendar['state'] == 'no_hours':
+            raise Skip(NO_HOURS)
+        if calendar['state'] == 'nothing_bookable':
+            raise Skip(NOTHING_BOOKABLE)
+        if not calendar['windows']:
+            raise Skip(CALENDAR_FULL)
+        # A replan's earlier drafts are retired once the new ones are saved: their times are free.
+        taken = await _taken_times(bid, week_of, tz) - {bm._aware(p['run_at']).timestamp() for p in previous
+                                                        if p.get('run_at')}
+        picked = openings.pick(calendar['windows'], calendar['counts'], tz=tz,
+                               post_hour=(desk or {}).get('post_hour', 11), at=at, gap=calendar['gap'], taken=taken)
+        if not picked:
+            raise Skip(NO_OPENING_TIME)
+        offering, duration = calendar['offering'], calendar['duration_min']
+        slots = [{'slot': n, 'window': w, 'words': openings.opening_facts(w, tz),
+                  'opening': openings.opening_record(w, offering, duration, tz, calendar['gap'])}
+                 for n, w in enumerate(picked, 1)]
+        record = _openings_record(calendar, picked, slots, tz, which)
+
+        profile = await marketing_profile.read_profile(bid, business=row)
+        raw_facts = await asyncio.to_thread(creative_director.business_facts, bid)
+        facts = engine.verified_facts(raw_facts)
+        captions, dropped = await write_openings_captions(bid, slots, facts, profile)
+        record['dropped'] = dropped
+        photos = await asyncio.to_thread(openings.work_photos, bid, (desk or {}).get('work_photo_ids') or [])
+        try:
+            site = await asyncio.to_thread(bm._site, bid)
+            booking = profile.get('booking_url')
+            landing = (booking if links.on_site(booking, site)
+                       else await asyncio.to_thread(bm.default_landing, bid, row, site, desk))
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                raise Unavailable('site') from None
+            raise Skip(str(exc.detail)) from None
+
+        posts: List[Dict[str, Any]] = []
+        pictures: Dict[str, Any] = {}
+        left_out: List[Dict[str, Any]] = []
+        for s in slots:
+            n, w = s['slot'], s['window']
+            caption = captions[n]
+            copy = openings.flyer_copy(s['words'])
+            photo = photos[(n - 1) % len(photos)] if photos else None
+            problem = openings.check_flyer(copy, facts, profile, s['words'])
+            if problem:
+                art, made = None, {'flyer': None, 'cost_usd': 0, 'failed': [{'what': 'picture', 'reason': problem}]}
+            else:
+                art, made = await make_opening_flyer(row, run_id, attempt, n, copy, photo, profile)
+            pictures[str(n)] = {k: made.get(k) for k in ('flyer', 'picture', 'photo', 'cost_usd', 'failed')}
+            media = {'artwork_ids': [art]} if art else {}
+            kind = bm.media_kind(media)
+            kept, gone = bm.fit(chosen, kind)
+            if not kept:
+                record['dropped'].append({'slot': n, 'reason': bm.dropped_note(gone) or 'no account fits'})
+                left_out += gone
+                continue
+            pid = openings_post_id(run_id, attempt, n)
+            try:
+                link = bm.link_fields(pid, caption, landing, site)
+                targets = bm.ready_to_post(chosen, kind, caption, link['publish_text'])
+                run_at, expires_at = bm.schedule(w['run_at'], w['expires_at'])
+                post = bm.new_post(bid, pid, caption=caption, media=media, targets=targets, run_at=run_at,
+                                   expires_at=expires_at, landing=landing, source='opening', site=site)
+            except HTTPException as exc:
+                record['dropped'].append({'slot': n, 'reason': str(exc.detail)[:200]})
+                continue
+            # Every row of the one insert carries the same columns.
+            post.update(run_id=str(run_id), play_id=openings.PLAY_ID, opening=s['opening'],
+                        design_status='ready' if art else 'none',
+                        error=None if art else no_flyer_note('failed', [d for d in gone if d['why'] == 'needs_picture']))
+            left_out += gone
+            posts.append(post)
+        if not posts:
+            raise Skip(f"{bm.dropped_note(left_out) or 'None of your accounts can take these posts.'} "
+                       'Nothing was saved.')
+        if left_out:
+            once = {(d['platform'], d.get('username'), d['why']): d for d in left_out}
+            design['left_out'] = bm._public_dropped(list(once.values()))
+        design['pictures'] = pictures
+        # All of the week at once, in one write.
+        try:
+            if desk is None:
+                await bm.ensure_desk(bid)      # the sender claims nothing for a business with no desk row
+            await store.request('POST', '/marketing_posts', posts)
+        except store.StoreConflict:
+            saved = {str(p['id']) for p in await store.rows(
+                f'/marketing_posts?run_id=eq.{run_id}&business_id=eq.{bid}&select=id&limit=60')}
+            if not {str(p['id']) for p in posts} <= saved:
+                return await close('failed', OPENINGS_SAVE_FAILED)
+        except (store.StoreUnavailable, HTTPException):
+            return await close('failed', OPENINGS_SAVE_FAILED)
+        new_ids = [str(p['id']) for p in posts]
+        # The new week exists; only now does the earlier one go.
+        left = await _retire(bid, run_id, previous, new_ids)
+        design['made'] = new_ids
+        if previous:
+            design['replaced'] = [str(p['id']) for p in previous if str(p['id']) not in left]
+            if manual and any(p.get('source') == 'opening' for p in previous):
+                design['replans'] = replans + 1          # a week planned again (not a plan taken over)
+        await _finish(bid, run_id, at, status='succeeded', post_ids=new_ids + left, error=None, design=design,
+                      **record)
+        saved_ids = set(new_ids)
+        photo_posts = sum(1 for n, p in pictures.items() if p.get('picture') == 'photo'
+                          and openings_post_id(run_id, attempt, int(n)) in saved_ids)
+        flyer_posts = sum(1 for n, p in pictures.items() if p.get('picture') == 'flyer'
+                          and openings_post_id(run_id, attempt, int(n)) in saved_ids)
+        await tell_openings(row, run_id, attempt, tz, week_of, at, photos=photo_posts, flyers=flyer_posts)
+        return {'status': 'succeeded', 'run_id': str(run_id), 'post_ids': new_ids, 'week_of': week_of.isoformat(),
+                'photos': photo_posts}
+    except Skip as reason:
+        return await close('skipped', str(reason))
+    except (Unavailable, openings.Unavailable, marketing_profile.ProfileUnavailable, store.StoreError):
+        log.warning('marketing planner: a read for the open chairs of %s failed', bid[:8], exc_info=True)
+        return await close('failed', READ_FAILED)
+    except Exception:
+        log.warning('marketing planner: the open chairs for %s could not be finished', bid[:8], exc_info=True)
+        return await close('failed', OPENINGS_FAILED)
+
+
+async def openings_watch_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Every 15 minutes, on the worker, on the scheduler leader: recount the
+    window of every approved or draft open-chairs post going out in the next
+    48 hours and pull the ones whose chairs booked first (never needs the
+    owner's yes: the safe direction); then tell each owner once per pulled
+    post, the sender's pulls included. A calendar that cannot be read
+    changes nothing. Does nothing unless MARKETING_DESK covers the business."""
+    scope = desk_scope()
+    if scope is None:
+        return {'skipped': 'off'}
+    at = now or _now()
+    only = '' if scope == '*' else f"&business_id=in.({','.join(sorted(scope))})"
+    try:
+        posts = await store.rows(
+            f'/marketing_posts?source=eq.opening&status=in.(draft,approved)'
+            f'&run_at=lt.{reading.query_time(at + openings.WATCH_AHEAD)}&expires_at=gt.{reading.query_time(at)}'
+            f'{only}&select={openings.WATCH_COLUMNS}&order=run_at.asc&limit={openings.WATCH_LIMIT}')
+    except store.StoreError:
+        return {'skipped': 'storage'}
+    tally = await openings.watch([p for p in posts if desk_on_for(p.get('business_id'))], at)
+    try:
+        tally['told'] += await openings.tell_pulled(at, only)
+    except Exception:
+        log.warning('marketing planner: the pulled posts could not be told this time.', exc_info=True)
+        tally['tell_skipped'] += 1
+    return dict(tally)
+
+
 # ── the hourly fan-out ────────────────────────────────────────────────
 
 def _headroom_low() -> bool:
@@ -1789,8 +2342,9 @@ def _week_fits(reserved_usd: float) -> bool:
 
 async def marketing_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     """Hourly, on the worker, on the scheduler leader. Writes the weekly
-    suggestion, or the weekly plan, for every business that is due, at most
-    max_per_tick() of them, each in its own try with its own claim. A week
+    suggestion, the weekly plan or the open-chairs week for every business
+    that is due, at most max_per_tick() of them, each in its own try with its
+    own claim. A week
     also needs room for its five flyers (MARKETING_DESIGNS_AT_ONCE across
     every business) and its estimated cost under the spend headroom; one
     that does not fit waits for a later hour while the suggestions go on."""
@@ -1843,6 +2397,11 @@ async def marketing_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
             if await asyncio.to_thread(_business_over, bid):
                 tally['over_budget'] += 1
                 continue
+            if row.get('_kind') == OPENINGS_KIND:
+                # One small caption call and free pictures: counted like a suggestion.
+                out = await run_openings(bid, trigger='scheduled', now=at)
+                tally[f"openings_{out.get('status')}"] += 1
+                continue
             if row.get('_kind') == WEEK_KIND:
                 if room is None:
                     busy = await designs_in_progress()
@@ -1891,7 +2450,7 @@ async def manual_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     at = now or _now()
     try:
         queued = await store.rows(
-            f'/marketing_runs?status=eq.running&trigger=eq.manual&kind=in.({KIND},{WEEK_KIND})'
+            f'/marketing_runs?status=eq.running&trigger=eq.manual&kind=in.({KIND},{WEEK_KIND},{OPENINGS_KIND})'
             f'&created_at=gte.{reading.query_time(at - RECLAIM)}'
             '&design->>queued_at=not.is.null&design->>started_at=is.null'
             f'&select={RUN_COLUMNS}&order=created_at.asc&limit={MANUAL_BATCH}')
@@ -1902,7 +2461,8 @@ async def manual_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     for run in queued:
         bid = str(run.get('business_id'))
         week = run.get('kind') == WEEK_KIND
-        kept_note = WEEK_KEPT if week else KEPT
+        chairs = run.get('kind') == OPENINGS_KIND
+        kept_note = WEEK_KEPT if week else OPENINGS_KEPT if chairs else KEPT
         try:
             if week:
                 if room is None:
@@ -1934,6 +2494,10 @@ async def manual_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
                 out = await run_week(bid, trigger='manual', now=at, run=started)
                 room -= int(out.get('designing') or 0)
                 tally[f"week_{out.get('status')}"] += 1
+                continue
+            if chairs:
+                out = await run_openings(bid, trigger='manual', now=at, run=started)
+                tally[f"openings_{out.get('status')}"] += 1
                 continue
             out = await run_suggestion(bid, trigger='manual', now=at, run=started)
             tally[str(out.get('status'))] += 1
@@ -1982,8 +2546,12 @@ async def queue_request(business_id: str, week: date, user_id: str, at: datetime
     kind WEEK_KIND (a weekly plan): a planned week is planned again at most
     twice (design.replans, 429), never while a flyer of it is still being
     made (409), and may take over the week's suggestion (a business that
-    moved up a level)."""
-    busy = WEEK_BUSY if kind == WEEK_KIND else BUSY
+    moved up a level).
+
+    kind OPENINGS_KIND (the open-chairs week, B11): the week's rules (twice
+    at most, 429), may take over the week's suggestion or plain week, and a
+    pulled post (its chairs booked) does not hold the week."""
+    busy = WEEK_BUSY if kind in (WEEK_KIND, OPENINGS_KIND) else BUSY
     run_id = store.run_id_for(business_id, week)
     marker = {'queued_at': words._z(at), 'queued_by': str(user_id)}
     current = await bm._call(store.get_run(business_id, run_id), down=bm.READ_DOWN)
@@ -1997,7 +2565,9 @@ async def queue_request(business_id: str, week: date, user_id: str, at: datetime
         design = current.get('design') if isinstance(current.get('design'), dict) else {}
         where = (f'/marketing_runs?id=eq.{run_id}&business_id=eq.{business_id}&status=eq.{status}'
                  f'&attempts=eq.{attempts}')
-        if current.get('kind') not in (None, kind) and not (kind == WEEK_KIND and current.get('kind') == KIND):
+        takes_over = ((kind == WEEK_KIND and current.get('kind') == KIND)
+                      or (kind == OPENINGS_KIND and current.get('kind') in (KIND, WEEK_KIND)))
+        if current.get('kind') not in (None, kind) and not takes_over:
             raise HTTPException(409, busy)
         if status == 'running':
             started = words._stamp(current.get('created_at'))
@@ -2005,8 +2575,9 @@ async def queue_request(business_id: str, week: date, user_id: str, at: datetime
                 raise HTTPException(409, busy)
             where += f'&created_at=lt.{reading.query_time(at - RECLAIM)}'
         elif status == 'succeeded':
+            settled = 'draft,cancelled,pulled' if kind == OPENINGS_KIND else 'draft,cancelled'
             sent = await store.rows(f'/marketing_posts?run_id=eq.{run_id}&business_id=eq.{business_id}'
-                                    '&status=not.in.(draft,cancelled)&select=id&limit=1')
+                                    f'&status=not.in.({settled})&select=id&limit=1')
             if sent:
                 raise HTTPException(409, busy)
             if kind == WEEK_KIND:
@@ -2014,8 +2585,9 @@ async def queue_request(business_id: str, week: date, user_id: str, at: datetime
                                              '&status=neq.cancelled&design_status=eq.designing&select=id&limit=1')
                 if designing:
                     raise HTTPException(409, STILL_DESIGNING)
-                if current.get('kind') == WEEK_KIND and int(design.get('replans') or 0) >= REPLANS_PER_WEEK:
-                    raise HTTPException(429, REPLANNED_TWICE)
+            if (kind in (WEEK_KIND, OPENINGS_KIND) and current.get('kind') == kind
+                    and int(design.get('replans') or 0) >= REPLANS_PER_WEEK):
+                raise HTTPException(429, REPLANNED_TWICE)
         elif status not in ('failed', 'skipped'):
             raise HTTPException(409, busy)
         kept = {k: v for k, v in design.items() if k not in QUEUE_KEYS and k not in ('tell', 'told_at')}
@@ -2033,9 +2605,9 @@ async def queue_request(business_id: str, week: date, user_id: str, at: datetime
 
 @router.post('/engine/run', status_code=202)
 async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user)):
-    """Queue this week's suggestion (suggest level) or weekly plan (week
-    levels) now. The owner only; the worker writes it (the model never runs
-    on the web process). A chair business's open-chairs week is B11: 409."""
+    """Queue this week's suggestion (suggest level), weekly plan (week
+    levels) or open-chairs week (openings level, B11) now. The owner only;
+    the worker writes it (the model never runs on the web process)."""
     import rate_limit
     bid = str(business_id)
     owner_row = await bm._require_owner(bid, user)
@@ -2049,7 +2621,7 @@ async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user))
     except LookupError:
         raise HTTPException(404, 'Business not found.') from None
     if problem:
-        raise HTTPException(409 if problem in (WEEK_LEVEL, OPENINGS_LATER) else 403, problem)
+        raise HTTPException(409 if problem in (WEEK_LEVEL, OPENINGS_LEVEL) else 403, problem)
     if not access_ok(row):
         raise HTTPException(402, NO_ACCESS)
     if not post_for_me.allowed_for(bid):
@@ -2075,7 +2647,7 @@ async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user))
     # here, and no desk row is made (the worker makes one before it saves).
     run_id = await queue_request(bid, week, str(user.id), at, kind=kind)
     return {'queued': True, 'run_id': str(run_id), 'week_of': week.isoformat(), 'kind': kind,
-            'message': WEEK_QUEUED if kind == WEEK_KIND else QUEUED}
+            'message': WEEK_QUEUED if kind == WEEK_KIND else OPENINGS_QUEUED if kind == OPENINGS_KIND else QUEUED}
 
 
 # ── the preview ───────────────────────────────────────────────────────
@@ -2108,11 +2680,33 @@ async def preview(business_id: str, *, at: Optional[datetime] = None) -> Dict[st
         except store.StoreError:
             signals['play_scores'] = {}
     plan = engine.pick_plays(diagnosis, n, signals, profile, facts)
-    return {'business_id': business_id, 'level': level['level'], 'upgrade': level['upgrade'],
-            'switched_on': desk_on_for(business_id), 'time_zone': tz.key,
-            'week_of': target_week(at, tz).isoformat(), 'diagnosis': diagnosis, 'plays': plan['plays'],
-            'slots': plan['slots'], 'facts': facts, 'signals': marketing_signals.summary(signals),
-            'profile': {k: profile.get(k) for k in PROFILE_PUBLIC}}
+    out = {'business_id': business_id, 'level': level['level'], 'upgrade': level['upgrade'],
+           'switched_on': desk_on_for(business_id), 'time_zone': tz.key,
+           'week_of': target_week(at, tz).isoformat(), 'diagnosis': diagnosis, 'plays': plan['plays'],
+           'slots': plan['slots'], 'facts': facts, 'signals': marketing_signals.summary(signals),
+           'profile': {k: profile.get(k) for k in PROFILE_PUBLIC}}
+    if level['level'] == OPENINGS_KIND:
+        out['openings'] = await openings_preview(row, tz, target_week(at, tz), at)
+    return out
+
+
+async def openings_preview(row: Dict[str, Any], tz: ZoneInfo, week_of: date, at: datetime) -> Optional[Dict[str, Any]]:
+    """The open chairs Chief would post about that week, and when each post
+    would go out (B11). Reads only; None when the calendar cannot be read."""
+    try:
+        desk = await store.get_desk(str(row['id']))
+        calendar = await asyncio.to_thread(openings.read_calendar, row, tz, week_of, at)
+    except (openings.Unavailable, store.StoreError):
+        return None
+    if calendar['state'] != 'ok':
+        return {'state': calendar['state'], 'windows': []}
+    picked = openings.pick(calendar['windows'], calendar['counts'], tz=tz, post_hour=(desk or {}).get('post_hour', 11),
+                           at=at, gap=calendar['gap'])
+    return {'state': 'ok', 'offering': calendar['offering'].get('name'), 'offering_from': calendar['offering_from'],
+            'open_windows': len(calendar['windows']),
+            'windows': [{'when': openings.when_words(w['starts_at'], w['ends_at'], tz),
+                         'starts_at': w['starts_at'].isoformat(), 'ends_at': w['ends_at'].isoformat(),
+                         'run_at': w['run_at'].isoformat(), 'score': w['score']} for w in picked]}
 
 
 @router.get('/preview')

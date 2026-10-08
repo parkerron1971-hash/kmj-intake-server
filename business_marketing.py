@@ -772,6 +772,9 @@ class Settings(BaseModel):
     post_hour: Optional[int] = Field(default=None, ge=6, le=21)
     audience: Optional[str] = Field(default=None, max_length=600)
     landing_url: Optional[str] = Field(default=None, max_length=1500)
+    # The owner's work photos (B11): ready photos of THIS business, uploaded
+    # through /ai/images/upload; the open-chairs week lays its words over them.
+    work_photo_ids: Optional[List[UUID]] = Field(default=None, max_length=12)
 
 
 # ── read ──────────────────────────────────────────────────────────────
@@ -1133,6 +1136,12 @@ async def save_settings(business_id: UUID, req: Settings, user: AuthedUser = Dep
         patch['audience'] = (req.audience or '').strip() or None
     if 'landing_url' in sent:
         patch['landing_url'] = await asyncio.to_thread(landing_url, bid, req.landing_url)
+    if 'work_photo_ids' in sent:
+        # Each a ready photo of this business (another business's id answers
+        # like a missing one; a made picture is not a work photo), at most
+        # 12, saved newest first. [] or null clears them.
+        import business_marketing_openings as openings
+        patch['work_photo_ids'] = await asyncio.to_thread(openings.check_work_photos, bid, req.work_photo_ids or [])
     desk = await _call(store.get_desk(bid), down=READ_DOWN)
     if desk is None:
         try:

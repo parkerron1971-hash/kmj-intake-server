@@ -688,11 +688,19 @@ def business_timezone(business_id: str) -> str:
 
 # ─── Busy reads (the booking paths) ──────────────────────────────────
 
+class BusyUnavailable(Exception):
+    """A strict read of the outside busy blocks that did not happen."""
+
+
 def busy_blocks_between(business_id: str, lo: datetime,
-                        hi: datetime) -> List[Dict[str, Any]]:
+                        hi: datetime, *, strict: bool = False) -> List[Dict[str, Any]]:
     """Every outside busy block overlapping [lo, hi). Fails soft to []
     (not set up, not configured, database blip), so the booking paths
-    behave exactly as they did before this feature existed."""
+    behave exactly as they did before this feature existed.
+
+    strict (the marketing desk's open chairs): [] only when the feature is
+    not set up (its table is missing); any other failed read raises
+    BusyUnavailable, so a blip is never "free"."""
     if not business_id or tables_known_absent():
         return []
     status, rows = _rest(
@@ -701,16 +709,22 @@ def busy_blocks_between(business_id: str, lo: datetime,
         f"&starts_at=lt.{_iso_z(hi)}&ends_at=gt.{_iso_z(lo)}"
         "&select=starts_at,ends_at,all_day&order=starts_at.asc&limit=5000",
         prefer=None)
-    return rows if isinstance(rows, list) else []
+    if isinstance(rows, list):
+        if strict and len(rows) >= 5000:
+            raise BusyUnavailable("more busy blocks than one read counts")
+        return rows
+    if strict and not (_missing(status) and tables_known_absent()):
+        raise BusyUnavailable("the outside calendar could not be read")
+    return []
 
 
 def busy_blocks_for_dates(business_id: str, from_date: date,
-                          to_date: date) -> List[Dict[str, Any]]:
+                          to_date: date, *, strict: bool = False) -> List[Dict[str, Any]]:
     """Blocks for a slot window of business-tz days, padded a day each
     side so no time zone can push an overlap out of the read."""
     lo = datetime.combine(from_date - timedelta(days=1), time(0), tzinfo=timezone.utc)
     hi = datetime.combine(to_date + timedelta(days=2), time(0), tzinfo=timezone.utc)
-    return busy_blocks_between(business_id, lo, hi)
+    return busy_blocks_between(business_id, lo, hi, strict=strict)
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
