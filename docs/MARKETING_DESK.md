@@ -1533,6 +1533,27 @@ hand the artwork to the suite desk instead: `POST
 normally the same row `PLATFORM_BUSINESS_ID` names; the desk's own
 `build_media` refuses a picture of any other business).
 
+**The verdict never blocks the event loop** (review of #1343). Its reads
+(a service-role read and the auth admin API, up to 10 seconds each) are
+blocking, and B15's sync predicates were asked from async routes, ticks and
+Chief paths. `platform_suite` now has async forms (`state_async`,
+`valid_id_async`, `active_id_async`, `is_platform_async`, `problem_async`,
+`buffer_state_async`, `close_buffer_async`, `chief_closed_async`,
+`effective_row_async`) that read in a worker thread (`asyncio.to_thread`),
+and `ready()` for async code about to call a sync helper that asks
+(`desk_on_for`, `desk_scope`). Every async caller uses them: this module,
+`platform_console`, `platform_today`, `platform_chief_marketing`,
+`platform_marketing_suite`, the Buffer desk's routes and minute job
+(`platform_marketing`), `marketing_engine`, the planner's ticks and routes,
+B10's handlers, `business_marketing_links.follow_platform`,
+`business_marketing_outcomes`, `marketing_profile` and `marketing_signals`.
+The sync forms stay for sync callers (already in threads). One check runs at
+a time: concurrent cold callers wait for it and use what it found. A sync
+form asked on the event loop anyway never reads there: it answers the last
+verdict while a worker thread reads it again, and with none yet it answers
+unknown (fail closed, logged "was asked on the event loop") for that call.
+`forget()` drops a check already running.
+
 Not built here: the frontend for all of it (the suite's post-now and replan
 cards, Prepare post on the suite, F7); `GET /platform/chief/permissions`
 still lists "Posting right away" as always reviewed, not planning again.

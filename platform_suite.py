@@ -44,6 +44,18 @@ that minute (a 503 in plain words), and neither loop plans.
 Verdicts are cached for 5 minutes (a failed read for 1), so the reads behind
 them are rare; forget() empties the cache.
 
+NEVER ON THE EVENT LOOP. A verdict's reads are blocking (a service-role read
+and the auth admin API, up to 10 seconds). Async code asks the async forms
+(state_async, valid_id_async, active_id_async, is_platform_async,
+problem_async, buffer_state_async, close_buffer_async, chief_closed_async,
+effective_row_async), or awaits ready() before a sync helper that asks: the
+read then runs in a worker thread (asyncio.to_thread). The sync forms are for
+sync callers, which already run in threads. One check runs at a time:
+concurrent cold callers wait for it and use what it found. A sync form that is
+called on the event loop anyway never reads there: it answers the last
+verdict while a refresh runs in a worker thread, and with no verdict yet it
+answers unknown (fail closed, logged) for that call.
+
 WHY AN ID AND NOT THE FLAG ALONE. settings is the owner's own JSON: any
 business admin can set settings.platform_books on their own row (the
 businesses_admin_update policy). books_business() is the flag lookup the news
@@ -60,8 +72,10 @@ does (suite_week_live). A read that fails plans nothing that hour.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 import time
 from datetime import date
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -224,25 +238,90 @@ def _find_books() -> Tuple[str, Optional[Dict[str, Any]]]:
 
 
 _cache: Dict[str, Tuple[float, Tuple[str, Optional[Dict[str, Any]]]]] = {}
+_check_lock = threading.Lock()          # one check at a time (single flight)
+_refreshing: set = set()                # keys a worker thread is refreshing for the event loop
+_generation = 0                         # forget() moves it on: a check already running stores nothing
 
 
 def forget() -> None:
+    global _generation
+    _generation += 1
     _cache.clear()
 
 
-def _remember(key: str, compute: Callable[[], Tuple[str, Optional[Dict[str, Any]]]], *, loud: bool = False):
-    at = time.monotonic()
+def _fresh(key: str):
     hit = _cache.get(key)
-    if hit and hit[0] > at:
-        return hit[1]
-    verdict = compute()
-    _cache[key] = (at + (TTL_FAILED if verdict[0] == UNKNOWN else TTL_OK), verdict)
-    if loud and verdict[0] != VALID and suite_on():
-        # Loud, once per verdict: the switch is on and the suite is not.
-        log.error('platform suite: MC_MARKETING_SUITE is on but %s is %s for Solutionist\'s own business; '
-                  'the Buffer desk %s.', ID_ENV, verdict[0],
-                  'stays in use' if verdict[0] == INVALID else 'and the suite take nothing new until it is read')
-    return verdict
+    return hit[1] if hit and hit[0] > time.monotonic() else None
+
+
+def _check(key: str, compute: Callable[[], Tuple[str, Optional[Dict[str, Any]]]], loud: bool):
+    """The blocking read, in the calling thread (never the event loop's). One
+    at a time: a caller that waited finds the verdict the first one stored."""
+    with _check_lock:
+        hit = _fresh(key)
+        if hit is not None:
+            return hit
+        generation = _generation
+        verdict = compute()
+        if generation == _generation:
+            _cache[key] = (time.monotonic() + (TTL_FAILED if verdict[0] == UNKNOWN else TTL_OK), verdict)
+            if loud and verdict[0] != VALID and suite_on():
+                # Loud, once per verdict: the switch is on and the suite is not.
+                log.error("platform suite: MC_MARKETING_SUITE is on but %s is %s for Solutionist's own business; "
+                          'the Buffer desk %s.', ID_ENV, verdict[0],
+                          'stays in use' if verdict[0] == INVALID else 'and the suite take nothing new until it is read')
+        return verdict
+
+
+def _on_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _refresh_soon(key: str, compute, loud: bool) -> None:
+    """A worker thread checks again for the event loop (once per key at a time)."""
+    if key in _refreshing:
+        return
+    _refreshing.add(key)
+
+    def job():
+        try:
+            _check(key, compute, loud)
+        except Exception:
+            log.warning('platform suite: the check behind %s failed', key, exc_info=True)
+        finally:
+            _refreshing.discard(key)
+    try:
+        asyncio.get_running_loop().run_in_executor(None, job)
+    except RuntimeError:
+        _refreshing.discard(key)
+
+
+def _remember(key: str, compute: Callable[[], Tuple[str, Optional[Dict[str, Any]]]], *, loud: bool = False):
+    hit = _fresh(key)
+    if hit is not None:
+        return hit
+    if not _on_loop():
+        return _check(key, compute, loud)
+    # A sync form asked on the event loop: never a blocking read here.
+    _refresh_soon(key, compute, loud)
+    stale = _cache.get(key)
+    if stale:
+        return stale[1]
+    log.warning('platform suite: %s was asked on the event loop before it was read; unknown for this call '
+                '(use the async form, or await platform_suite.ready() first).', key)
+    return UNKNOWN, None
+
+
+async def _remember_async(key: str, compute: Callable[[], Tuple[str, Optional[Dict[str, Any]]]], *,
+                          loud: bool = False):
+    hit = _fresh(key)
+    if hit is not None:
+        return hit
+    return await asyncio.to_thread(_check, key, compute, loud)
 
 
 # ── the one predicate ─────────────────────────────────────────────────
@@ -259,9 +338,28 @@ def state() -> Tuple[str, Optional[str]]:
     return _remember(f'id:{pid}', lambda: _check_id(pid), loud=True)[0], pid
 
 
+async def state_async() -> Tuple[str, Optional[str]]:
+    """state(), its reads in a worker thread: the form for async code."""
+    pid = platform_id()
+    if not pid:
+        return state()                       # no read
+    return (await _remember_async(f'id:{pid}', lambda: _check_id(pid), loud=True))[0], pid
+
+
+async def ready() -> None:
+    """Have the verdict read (off the event loop) before async code calls a
+    sync helper that asks it (desk_on_for, desk_scope, level_for...)."""
+    await state_async()
+
+
 def valid_id() -> Optional[str]:
     """The configured id once validated, whatever the switch says."""
     verdict, pid = state()
+    return pid if verdict == VALID else None
+
+
+async def valid_id_async() -> Optional[str]:
+    verdict, pid = await state_async()
     return pid if verdict == VALID else None
 
 
@@ -269,6 +367,10 @@ def active_id() -> Optional[str]:
     """The platform business's id while its desk is on the suite: the switch
     on AND the id valid. None otherwise."""
     return valid_id() if suite_on() else None
+
+
+async def active_id_async() -> Optional[str]:
+    return await valid_id_async() if suite_on() else None
 
 
 def is_platform(business_id: Any) -> bool:
@@ -280,13 +382,31 @@ def is_platform(business_id: Any) -> bool:
     return suite_on() and _same(business_id, pid) and state()[0] == VALID
 
 
+async def is_platform_async(business_id: Any) -> bool:
+    pid = platform_id()
+    return suite_on() and _same(business_id, pid) and (await state_async())[0] == VALID
+
+
+def _problem_of(verdict: str) -> Optional[str]:
+    return {UNSET: NO_ID, INVALID: WRONG_ID, UNKNOWN: UNCONFIRMED}.get(verdict)
+
+
 def problem() -> Optional[str]:
     """Why the switch is on and the suite is not active, in a plain
     sentence; None when the switch is off or the suite is active."""
     if not suite_on():
         return None
-    verdict, _ = state()
-    return {UNSET: NO_ID, INVALID: WRONG_ID, UNKNOWN: UNCONFIRMED}.get(verdict)
+    return _problem_of(state()[0])
+
+
+async def problem_async() -> Optional[str]:
+    if not suite_on():
+        return None
+    return _problem_of((await state_async())[0])
+
+
+def _buffer_state_of(verdict: str) -> str:
+    return {VALID: 'closed', UNKNOWN: 'unknown'}.get(verdict, 'open')
 
 
 def buffer_state() -> str:
@@ -294,15 +414,16 @@ def buffer_state() -> str:
     'unknown' (the switch is on and the business couldn't be confirmed)."""
     if not suite_on():
         return 'open'
-    verdict, _ = state()
-    return {VALID: 'closed', UNKNOWN: 'unknown'}.get(verdict, 'open')
+    return _buffer_state_of(state()[0])
 
 
-def close_buffer() -> None:
-    """Refuse a write that would put a new post on Buffer's way while the
-    suite is active (409), or while it cannot be confirmed (503). A no-op
-    while the switch is off, or on with the id unset or invalid (logged)."""
-    closed = buffer_state()
+async def buffer_state_async() -> str:
+    if not suite_on():
+        return 'open'                        # no read
+    return _buffer_state_of((await state_async())[0])
+
+
+def _refuse_new(closed: str) -> None:
     if closed == 'open':
         return
     from fastapi import HTTPException
@@ -311,10 +432,28 @@ def close_buffer() -> None:
     raise HTTPException(503, UNCONFIRMED)
 
 
+def close_buffer() -> None:
+    """Refuse a write that would put a new post on Buffer's way while the
+    suite is active (409), or while it cannot be confirmed (503). A no-op
+    while the switch is off, or on with the id unset or invalid (logged)."""
+    _refuse_new(buffer_state())
+
+
+async def close_buffer_async() -> None:
+    _refuse_new(await buffer_state_async())
+
+
+def _chief_words(closed: str) -> Optional[str]:
+    return None if closed == 'open' else BUFFER_CLOSED if closed == 'closed' else UNCONFIRMED
+
+
 def chief_closed() -> Optional[str]:
     """Platform Chief's words for the same refusal, or None (go ahead)."""
-    closed = buffer_state()
-    return None if closed == 'open' else BUFFER_CLOSED if closed == 'closed' else UNCONFIRMED
+    return _chief_words(buffer_state())
+
+
+async def chief_closed_async() -> Optional[str]:
+    return _chief_words(await buffer_state_async())
 
 
 def desk_switch(business_id: Any) -> Optional[bool]:
@@ -358,6 +497,12 @@ def effective_row(row: Any) -> Any:
     while the suite is active. Any other row comes back as it is. Never
     written anywhere; never from a request."""
     if isinstance(row, dict) and is_platform(row.get('id')):
+        return {**row, 'comp_tier': LEVEL_PLAN}
+    return row
+
+
+async def effective_row_async(row: Any) -> Any:
+    if isinstance(row, dict) and await is_platform_async(row.get('id')):
         return {**row, 'comp_tier': LEVEL_PLAN}
     return row
 
@@ -409,7 +554,7 @@ async def suite_week_live(week_of: date) -> Optional[bool]:
     post approved or out. False at once (no read) while the id is unset or
     invalid; None when the business or its posts cannot be read (the old job
     then waits an hour)."""
-    verdict, pid = state()
+    verdict, pid = await state_async()
     if verdict in (UNSET, INVALID):
         return False
     if verdict == UNKNOWN:

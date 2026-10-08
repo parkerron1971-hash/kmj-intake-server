@@ -330,7 +330,7 @@ async def _marketing() -> List[Dict[str, Any]]:
     approved on the standing OK, pulled posts, and the Buffer desk's
     leftovers that need a hand while it drains (platform_chief_suite)."""
     import platform_chief_suite
-    if platform_chief_suite.active():
+    if await platform_chief_suite.active():
         return await platform_chief_suite.today_items()
     import marketing_desk
     return marketing_desk.today_items(await marketing_desk.read_state())

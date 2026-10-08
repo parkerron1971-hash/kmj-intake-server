@@ -482,7 +482,7 @@ async def dispatch_actions(
     import platform_chief_authority as authority
     import platform_chief_suite
     # B15b: with MC_MARKETING_SUITE on, the suite desk's verbs (empty when off).
-    suite = platform_chief_suite.handlers(owner, request_id) if owner is not None else {}
+    suite = await platform_chief_suite.handlers(owner, request_id) if owner is not None else {}
     results = await authority.dispatch(actions, owner, request_id,
                                        {**HANDLERS, **suite, **(extra_handlers or {})})
     for action, res in zip(actions, results):

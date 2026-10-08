@@ -1492,7 +1492,7 @@ async def run_week(business_id: Any, *, trigger: str, now: Optional[datetime] = 
         return await stop('skipped', NO_TIME, {'status': 'no_time', 'reason': NO_TIME, 'week_of': week_of.isoformat()})
 
     import platform_suite
-    if platform_suite.is_platform(bid):
+    if await platform_suite.is_platform_async(bid):
         # B15: one loop a week. A week the Buffer desk planned, with a post
         # of it approved or out, is never planned again here.
         held = await platform_suite.buffer_week_live(week_of)
@@ -1948,6 +1948,8 @@ async def marketing_design_tick(now: Optional[datetime] = None) -> Dict[str, Any
     """Every 2 minutes, on the worker, on the scheduler leader: the weekly
     plans' flyers land on their posts, and each owner whose week has settled
     is told once. Does nothing unless MARKETING_DESK covers the business."""
+    import platform_suite
+    await platform_suite.ready()            # B15b: the platform verdict read off the event loop
     scope = desk_scope()
     if scope is None:
         return {'skipped': 'off'}
@@ -2459,6 +2461,8 @@ async def openings_watch_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     owner's yes: the safe direction); then tell each owner once per pulled
     post, the sender's pulls included. A calendar that cannot be read
     changes nothing. Does nothing unless MARKETING_DESK covers the business."""
+    import platform_suite
+    await platform_suite.ready()            # B15b: the platform verdict read off the event loop
     scope = desk_scope()
     if scope is None:
         return {'skipped': 'off'}
@@ -2519,6 +2523,8 @@ async def marketing_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     also needs room for its five flyers (MARKETING_DESIGNS_AT_ONCE across
     every business) and its estimated cost under the spend headroom; one
     that does not fit waits for a later hour while the suggestions go on."""
+    import platform_suite
+    await platform_suite.ready()            # B15b: the platform verdict read off the event loop
     scope = desk_scope()
     if scope is None:
         return {'skipped': 'off'}
@@ -2616,6 +2622,8 @@ async def manual_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     room for its five flyers, and gives up in plain words after 10 minutes,
     keeping the week's earlier plan. A request older than the claim's 15
     minutes is left to the claim's own reclaim; it is never written twice."""
+    import platform_suite
+    await platform_suite.ready()            # B15b: the platform verdict read off the event loop
     if desk_scope() is None:
         return {'skipped': 'off'}
     at = now or _now()
@@ -2782,6 +2790,8 @@ async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user))
     import rate_limit
     bid = str(business_id)
     owner_row = await bm._require_owner(bid, user)
+    import platform_suite
+    await platform_suite.ready()            # B15b: the platform verdict read off the event loop
     if not desk_on_for(bid):
         raise HTTPException(409, NOT_SWITCHED_ON)
     try:
@@ -2833,6 +2843,8 @@ async def preview(business_id: str, *, at: Optional[datetime] = None) -> Dict[st
     numbers, profile and facts, the diagnosis and the plays. Reads only: no
     model call, no write, no spend."""
     import creative_director
+    import platform_suite
+    await platform_suite.ready()            # B15b: the platform verdict read off the event loop
     at = at or _now()
     row = await asyncio.to_thread(read_business, business_id)
     level = await asyncio.to_thread(bm.level_for, row)

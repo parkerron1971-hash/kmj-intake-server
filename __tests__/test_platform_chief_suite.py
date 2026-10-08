@@ -96,6 +96,7 @@ def pc(monkeypatch):
     verdict = SimpleNamespace(reads=[], fail=False)
 
     def read_business(bid):
+        assert not platform_suite._on_loop(), 'the platform verdict was read on the event loop'
         verdict.reads.append(bid)
         if verdict.fail:
             return None
@@ -103,6 +104,7 @@ def pc(monkeypatch):
             [{'id': bid, 'owner_id': api.OWNER, 'platform_books': None}]
 
     def owner_email(owner_id):
+        assert not platform_suite._on_loop(), 'the auth admin API was called on the event loop'
         verdict.reads.append(('auth', owner_id))
         return PLATFORM_OWNER_EMAIL if str(owner_id) == KEVIN else 'owner@fadestreet.com'
     monkeypatch.setattr(platform_suite, '_read_business', read_business)
@@ -176,6 +178,8 @@ def pc(monkeypatch):
             return [{'id': 'live'}] if state.buffer_live else []
         if path.startswith('/platform_marketing_posts?'):
             return copy.deepcopy(state.buffer_posts)
+        if path.startswith('/platform_marketing_campaigns?'):
+            return []
         raise AssertionError(path)
 
     async def buffer_config():
@@ -245,11 +249,11 @@ def test_with_the_switch_off_nothing_here_is_reached(monkeypatch):
         raise AssertionError('no verdict is read with the switch off')
     monkeypatch.setattr(platform_suite, '_read_business', no_read)
     monkeypatch.setattr(platform_suite, '_owner_email', no_read)
-    assert suite.active() is False
-    assert suite.handlers(OWNER, uuid4()) == {}
+    assert run(suite.active()) is False
+    assert run(suite.handlers(OWNER, uuid4())) == {}
     for action in ({'type': 'marketing_post_now', 'caption': 'x', 'channels': ['X'], 'channel_ids': ['x']},
                    {'type': 'marketing_new_post', 'text': 'x'}, {'type': 'send_practitioner_email'}):
-        assert suite.card_handlers(OWNER, uuid4(), action) == {}
+        assert run(suite.card_handlers(OWNER, uuid4(), action)) == {}
 
     async def buffer_review(payload):
         return {'type': 'marketing_post_now', 'buffer': True, 'caption': payload['text']}
@@ -326,7 +330,9 @@ def test_the_console_uses_the_buffer_prompt_off_and_the_suite_prompt_on(monkeypa
     assert client.post('/platform/chief/message', json={'message': 'Posts?', 'context': 'marketing'}).status_code == 200
     assert pcm.MARKETING_PROMPT in captured['system'] and marketing_desk.DIGEST_PROMPT in captured['system']
     assert 'buffer-account' in captured['system'] and suite.PROMPT not in captured['system']
-    monkeypatch.setattr(suite, 'active', lambda: True)
+    async def on():
+        return True
+    monkeypatch.setattr(suite, 'active', on)
     assert client.post('/platform/chief/message', json={'message': 'Posts?', 'context': 'marketing'}).status_code == 200
     assert suite.PROMPT in captured['system'] and suite.DIGEST_PROMPT in captured['system']
     assert 'suite-post' in captured['system'] and 'buffer-account' not in captured['system']
@@ -458,7 +464,7 @@ def test_class_c_is_refused_unattended(pc, spy, verb, body):
     action = {'type': verb, **body}
     if verb == 'marketing_post_now':
         action = run(suite.post_now_review(action))
-    handler = suite.card_handlers(OWNER, uuid4(), action)[verb]
+    handler = run(suite.card_handlers(OWNER, uuid4(), action))[verb]
     assert run(handler(action))['label'] == suite.NOT_CARD[verb][0]
     token = authority.current_authorization.set((OWNER, {'id': str(uuid4()), 'automatic': True}))
     try:
@@ -496,8 +502,8 @@ def test_replan_respects_one_loop_a_week(pc):
 
 def test_there_is_no_approve_verb(pc):
     assert 'marketing_approve' not in authority.GROUPS and 'marketing_approve' not in actions.HANDLERS
-    assert 'marketing_approve' not in suite.handlers(OWNER, uuid4())
-    assert suite.card_handlers(OWNER, uuid4(), {'type': 'marketing_approve'}) == {}
+    assert 'marketing_approve' not in run(suite.handlers(OWNER, uuid4()))
+    assert run(suite.card_handlers(OWNER, uuid4(), {'type': 'marketing_approve'})) == {}
     a = seed(pc)
     [out] = dispatch({'type': 'marketing_approve', 'items': [api.item(a)]})
     assert out == {'ok': False, 'type': 'marketing_approve', 'label': NOT_PERMITTED}
@@ -507,7 +513,7 @@ def test_there_is_no_approve_verb(pc):
 
 def test_switch_on_without_a_valid_business_keeps_the_buffer_verbs_and_says_so(pc, monkeypatch):
     switch(monkeypatch, on=True, pid=None)
-    handlers = suite.handlers(OWNER, uuid4())
+    handlers = run(suite.handlers(OWNER, uuid4()))
     assert 'marketing_new_post' not in handlers                         # the Buffer desk's own, as before
     [out] = dispatch({'type': 'marketing_desk'})
     assert out['ok'] is False and out['label'].startswith(platform_suite.NO_ID)
@@ -522,6 +528,173 @@ def test_the_owner_check_runs_too(pc):
     pc.svc.businesses[PID]['owner_id'] = str(uuid4())                   # the row no longer the signed-in owner's
     [out] = dispatch({'type': 'marketing_new_post', 'caption': 'x'})
     assert out['ok'] is False and out['label'].startswith(platform_suite.WRONG_ID) and pc.db.writes == []
+
+
+# ── the platform verdict never runs on the event loop ─────────────────
+
+@pytest.fixture
+def checks(monkeypatch):
+    """The verdict's blocking reads, recorded with where they ran."""
+    platform_suite.forget()
+    switch(monkeypatch, on=True)
+    seen = []
+
+    def check_id(pid):
+        import threading
+        import time
+        seen.append({'on_loop': platform_suite._on_loop(), 'thread': threading.get_ident()})
+        time.sleep(0.05)                     # a slow read: concurrent callers would pile up
+        return platform_suite.VALID, {'id': pid, 'owner_id': KEVIN}
+    monkeypatch.setattr(platform_suite, '_check_id', check_id)
+    yield seen
+    platform_suite.forget()
+
+
+def test_async_callers_read_the_verdict_in_a_worker_thread(checks):
+    import threading
+
+    async def go():
+        loop_thread = threading.get_ident()
+        assert await platform_suite.state_async() == (platform_suite.VALID, PID)
+        return loop_thread
+    loop_thread = run(go())
+    assert checks and all(c['on_loop'] is False and c['thread'] != loop_thread for c in checks)
+
+
+def test_concurrent_cold_callers_share_one_check(checks):
+    async def go():
+        return await asyncio.gather(*[platform_suite.state_async() for _ in range(12)],
+                                    *[platform_suite.buffer_state_async() for _ in range(4)],
+                                    *[suite.active() for _ in range(4)])
+    out = run(go())
+    assert len(checks) == 1                                           # one read for twenty callers
+    assert out[:12] == [(platform_suite.VALID, PID)] * 12 and out[12:16] == ['closed'] * 4
+    assert out[16:] == [True] * 4
+
+
+def test_a_sync_form_on_the_event_loop_never_reads_there(checks):
+    async def go():
+        cold = platform_suite.state()                     # no verdict yet: unknown, fail closed
+        for _ in range(100):                              # a worker thread reads it meanwhile
+            if platform_suite._fresh(f'id:{PID}'):
+                break
+            await asyncio.sleep(0.01)
+        warm = platform_suite.state()
+        return cold, warm
+    cold, warm = run(go())
+    assert cold == (platform_suite.UNKNOWN, PID) and warm == (platform_suite.VALID, PID)
+    assert [c['on_loop'] for c in checks] == [False]
+    # An expired verdict is answered as it was while a worker thread reads it again.
+    key = f'id:{PID}'
+    platform_suite._cache[key] = (0.0, (platform_suite.INVALID, None))
+
+    async def stale():
+        return platform_suite.state()
+    assert run(stale()) == (platform_suite.INVALID, PID)
+    assert [c['on_loop'] for c in checks] == [False, False]   # refreshed off the loop
+    assert platform_suite._fresh(key) == (platform_suite.VALID, {'id': PID, 'owner_id': KEVIN})
+
+
+def test_a_sync_caller_off_the_loop_still_reads_and_remembers(checks):
+    assert platform_suite.state() == (platform_suite.VALID, PID)
+    assert platform_suite.state() == (platform_suite.VALID, PID)
+    assert len(checks) == 1 and checks[0]['on_loop'] is False
+
+
+def test_forget_drops_a_check_that_was_already_running(checks, monkeypatch):
+    def check_id(pid):
+        platform_suite.forget()                  # a test (or a reset) clears the cache mid-read
+        return platform_suite.VALID, {'id': pid, 'owner_id': KEVIN}
+    monkeypatch.setattr(platform_suite, '_check_id', check_id)
+    assert platform_suite.state() == (platform_suite.VALID, PID)
+    assert platform_suite._fresh(f'id:{PID}') is None
+
+
+def test_every_async_entry_reads_the_verdict_off_the_loop(pc, monkeypatch, caplog):
+    """The async paths that ask the verdict, cold each time: Platform Chief
+    (this PR), MC Today and the digest, and B15's own (the Buffer desk's
+    routes and ticks, Mission Control's suite routes, the planner, links,
+    signals and profile). The pc fixture's reads assert they are not on the
+    event loop; each path must also answer from a real verdict (a sync form
+    asked cold on the loop would answer unknown)."""
+    import business_marketing_links as links
+    import marketing_engine
+    import marketing_profile
+    import marketing_signals
+
+    def cold():
+        platform_suite.forget()
+        pc.verdict.reads.clear()
+
+    async def snapshot_fail(*a, **k):
+        raise HTTPException(503, 'down')
+    for name in ('founder_offer', '_link_results', '_this_week', '_desk'):
+        monkeypatch.setattr(pcm, name, snapshot_fail)
+    monkeypatch.setattr(m, 'assets', snapshot_fail)
+
+    def asked():
+        assert pc.verdict.reads, 'this path asked the verdict'
+        assert 'was asked on the event loop' not in caplog.text, 'a sync form was asked cold on the event loop'
+
+    caplog.set_level('WARNING', logger='platform_suite')
+    cold()
+    assert run(suite.active()) is True
+    asked()
+    cold()
+    assert run(pcm.new_post({'text': 'x'})) == {'ok': False, 'label': platform_suite.BUFFER_CLOSED}
+    asked()
+    cold()
+    assert run(pcm.marketing_snapshot())['suite']['on'] is True
+    asked()
+    cold()
+    with pytest.raises(HTTPException) as err:
+        run(pcm.post_now_review({'type': 'marketing_post_now', 'text': 'Now.'}))
+    assert err.value.status_code == 409
+    asked()
+    cold()
+    with pytest.raises(HTTPException) as err:
+        run(m.create_idea(m.Idea(text='Bring your business work together.')))
+    assert err.value.status_code == 409
+    asked()
+    cold()
+    with pytest.raises(HTTPException) as err:
+        run(marketing_engine.run_now(None, owner=OWNER))
+    assert err.value.status_code == 409
+    asked()
+    cold()
+    monkeypatch.setenv('MARKETING_ENGINE', 'on')
+    run(marketing_engine.engine_tick())                       # the suite plans the week: nothing here
+    asked()
+    cold()
+    assert run(pt._marketing())[0]['id'].startswith('marketing:')
+    asked()
+    cold()
+    assert run(suite.digest())['desk'] == 'suite'
+    asked()
+    cold()
+    [out] = dispatch({'type': 'marketing_desk'})
+    assert out['ok'] is True
+    asked()
+    cold()
+    assert run(marketing_profile.read_profile(PID, business=platform_row()))['platform'] is True
+    asked()
+    cold()
+
+    async def platform_signals(bid, now=None):
+        return {'platform': True}
+    monkeypatch.setattr(marketing_signals, 'platform_signals', platform_signals)
+    assert run(marketing_signals.read_signals(PID, business=platform_row())) == {'platform': True}
+    asked()
+    cold()
+    assert run(links.follow_platform('not a code', person=True)) is None
+    asked()
+    cold()
+    run(planner.manual_tick(api.NOW))
+    asked()
+    cold()
+    out = run(cma.handle_marketing_desk(None, platform_row(), {}))
+    assert out['ok'] is True and out['switched_on'] is True
+    asked()
 
 
 # ── 3. MC Today and the digest ────────────────────────────────────────

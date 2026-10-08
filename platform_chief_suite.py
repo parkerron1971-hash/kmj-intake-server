@@ -7,7 +7,8 @@ three things on the Buffer desk: Platform Chief's marketing verbs (they
 refused anything new), MC Today and the Mission Control Chief digest. This
 module moves them, and keys every decision on platform_suite's one
 predicate: the suite is ACTIVE when the switch is on AND PLATFORM_BUSINESS_ID
-names a validated platform business (`active()`).
+names a validated platform business (`await active()`). Every check here
+is platform_suite's async form: its reads never run on the event loop.
 
 SWITCH OFF: nothing here is reached. `handlers()` and `card_handlers()` are
 empty, and every call site (platform_console, platform_today,
@@ -107,15 +108,16 @@ BUFFER_KINDS = ('failed', 'uncertain', 'paused', 'missed')
 
 # ── the predicate ─────────────────────────────────────────────────────
 
-def active() -> bool:
+async def active() -> bool:
     """The suite is active: MC_MARKETING_SUITE on AND a validated platform
-    business (platform_suite.buffer_state 'closed'). Off: no read at all."""
-    return platform_suite.buffer_state() == 'closed'
+    business (platform_suite.buffer_state 'closed'). Off: no read at all. Its
+    reads run in a worker thread, never on the event loop."""
+    return await platform_suite.buffer_state_async() == 'closed'
 
 
-def _not_active() -> str:
+async def _not_active() -> str:
     """Why the suite desk isn't Platform Chief's right now, in a plain sentence."""
-    return platform_suite.problem() or platform_suite.NOT_ON
+    return await platform_suite.problem_async() or platform_suite.NOT_ON
 
 
 # ── small words ───────────────────────────────────────────────────────
@@ -202,9 +204,9 @@ async def work(verb: str, owner, turn: str, action: Dict[str, Any], *, attended:
     platform business only. Never raises: a refusal is {ok: False, label}."""
     nothing = NOTHING[verb]
     try:
-        if not active():
-            return _no(f'{_not_active()} {_cap(nothing)}.', "Solutionist's desk isn't on the suite")
-        pid = platform_suite.active_id()
+        if not await active():
+            return _no(f'{await _not_active()} {_cap(nothing)}.', "Solutionist's desk isn't on the suite")
+        pid = await platform_suite.active_id_async()
         if _other_business(action, pid):
             return _no(OTHER_BUSINESS.format(nothing=nothing), "Only Solutionist's own desk")
         if verb in CLASS_C and not attended:
@@ -258,7 +260,7 @@ def _turn(request_id: Any) -> str:
     return f'platform-chief:{request_id}'
 
 
-def handlers(owner, request_id) -> Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]]:
+async def handlers(owner, request_id) -> Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]]:
     """For platform_chief_actions.dispatch_actions. Empty with the switch
     off (every tag is answered exactly as before). With the switch on: the
     suite-only verbs (each refuses in platform_suite's words while the suite
@@ -272,12 +274,12 @@ def handlers(owner, request_id) -> Dict[str, Callable[[Dict[str, Any]], Awaitabl
             return await work(verb, owner, _turn(request_id), action, attended=_attended())
         return run
     out = {verb: bound(verb) for verb in SUITE_ONLY}
-    if active():
+    if await active():
         out['marketing_new_post'] = bound('marketing_new_post')
     return out
 
 
-def card_handlers(owner, request_id, action: Dict[str, Any]):
+async def card_handlers(owner, request_id, action: Dict[str, Any]):
     """For platform_chief_authority.decide: the suite's handler for a card
     the suite made (a suite-only verb, a suite post-now card, or a new post
     while the suite is active). Empty for any other card, so a Buffer card
@@ -285,7 +287,7 @@ def card_handlers(owner, request_id, action: Dict[str, Any]):
     kind = (action or {}).get('type')
     if kind in SUITE_ONLY or (kind == 'marketing_post_now' and (action or {}).get('desk') == 'suite'):
         pass
-    elif kind == 'marketing_new_post' and platform_suite.suite_on() and active():
+    elif kind == 'marketing_new_post' and platform_suite.suite_on() and await active():
         pass
     else:
         return {}
@@ -307,12 +309,12 @@ async def post_now_review(payload: Dict[str, Any]) -> Dict[str, Any]:
     networks, picture and link. A refusal is an HTTPException in plain words
     (dispatch makes it that action's answer)."""
     import platform_chief_marketing as pcm
-    if not active():
+    if not await active():
         return await pcm.post_now_review(payload)
     import business_marketing_desk as bmd
     import chief_marketing_actions as cma
     from chief_clip_actions import Refusal
-    pid = platform_suite.active_id()
+    pid = await platform_suite.active_id_async()
     nothing = NOTHING['marketing_post_now']
     if _other_business(payload, pid):
         raise HTTPException(422, OTHER_BUSINESS.format(nothing=nothing))
@@ -365,9 +367,9 @@ async def post_now(owner, request_id, action: Dict[str, Any]) -> Dict[str, Any]:
     verb, nothing = 'marketing_post_now', NOTHING['marketing_post_now']
     if not _attended():
         return _no(*NOT_CARD[verb])
-    if not active():
-        return _no(f'{_not_active()} {_cap(nothing)}.', "Solutionist's desk isn't on the suite")
-    pid = platform_suite.active_id()
+    if not await active():
+        return _no(f'{await _not_active()} {_cap(nothing)}.', "Solutionist's desk isn't on the suite")
+    pid = await platform_suite.active_id_async()
     if not platform_suite._same(action.get('business_id'), pid):
         return _no(OTHER_BUSINESS.format(nothing=nothing), "Only Solutionist's own desk")
     if action.get('post_id'):
@@ -451,7 +453,7 @@ async def snapshot(owner) -> Dict[str, Any]:
     import chief_marketing_actions as cma
     import platform_chief_marketing as pcm
     from zoneinfo import ZoneInfo
-    pid = platform_suite.active_id()
+    pid = await platform_suite.active_id_async()
     result: Dict[str, Any] = {
         'fetched_at': datetime.now(timezone.utc).isoformat(),
         'suite': {'on': True, 'business_id': pid, 'note': SUITE_NOTE},
@@ -630,7 +632,8 @@ def buffer_items(state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
 async def today_items() -> List[Dict[str, Any]]:
     """MC Today's marketing items while the suite is active (platform_today._marketing)."""
     now = _now()
-    suite, buffer = await asyncio.gather(_suite_read(platform_suite.active_id(), now), _buffer_read(now))
+    suite, buffer = await asyncio.gather(_suite_read(await platform_suite.active_id_async(), now),
+                                         _buffer_read(now))
     return suite_items(suite) + buffer_items(buffer)
 
 
@@ -641,7 +644,8 @@ async def digest() -> Dict[str, Any]:
     Buffer desk's leftovers. A desk that couldn't be read says so."""
     import business_marketing_desk as bmd
     now = _now()
-    suite, buffer = await asyncio.gather(_suite_read(platform_suite.active_id(), now), _buffer_read(now))
+    suite, buffer = await asyncio.gather(_suite_read(await platform_suite.active_id_async(), now),
+                                         _buffer_read(now))
     if suite is None:
         out: Dict[str, Any] = {'posts_readable': False, 'read': [UNREAD_DETAIL],
                                'needs_owner': [f'{UNREAD_TITLE}: {UNREAD_DETAIL}']}

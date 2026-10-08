@@ -278,7 +278,7 @@ async def read_profile(business_id: Any, *, business: Optional[Dict[str, Any]] =
         desk = await store.get_desk(bid)
     except store.StoreError:
         raise ProfileUnavailable("The marketing desk couldn't be read just now.") from None
-    if platform_suite.is_platform(bid):
+    if await platform_suite.is_platform_async(bid):
         return platform_profile(row, desk=desk)
     hosts, chair, tz, live = await asyncio.gather(
         asyncio.to_thread(_strict, business_marketing._own_hosts, bid),

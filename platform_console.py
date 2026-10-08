@@ -1770,7 +1770,7 @@ async def _build_snapshot(headers: Dict[str, str]) -> Dict[str, Any]:
         import platform_chief_suite
         # B15b: with the suite active, the suite desk for Solutionist's own
         # business (and the Buffer desk's leftovers); otherwise as before.
-        if platform_chief_suite.active():
+        if await platform_chief_suite.active():
             snap["marketing"] = await asyncio.wait_for(platform_chief_suite.digest(), 8)
         else:
             snap["marketing"] = await asyncio.wait_for(marketing_desk.digest(), 8)
@@ -1814,7 +1814,7 @@ async def platform_chief_message(body: ChiefMessageBody, _owner=Depends(require_
     import json as _json
     import marketing_desk
     import platform_chief_suite
-    on_suite = platform_chief_suite.active()      # B15b: Solutionist's desk on the marketing suite
+    on_suite = await platform_chief_suite.active()      # B15b: Solutionist's desk on the marketing suite
     system = (
         PLATFORM_CHIEF_SYSTEM + authority.POLICY_PROMPT
         + (platform_chief_suite.DIGEST_PROMPT if on_suite else marketing_desk.DIGEST_PROMPT)

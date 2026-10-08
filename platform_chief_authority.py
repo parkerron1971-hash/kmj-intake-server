@@ -334,6 +334,6 @@ async def decide(approval_id: UUID, body: Decision, owner=Depends(require_owner)
     import platform_chief_suite
     request = UUID(row['request_id'])
     # A card the suite desk made runs on the suite desk (B15b); any other card exactly as before.
-    handlers = {**HANDLERS, **platform_chief_suite.card_handlers(owner, request, row['action']),
+    handlers = {**HANDLERS, **await platform_chief_suite.card_handlers(owner, request, row['action']),
                 **platform_chief_creative.handlers(owner, request)}
     return await execute(claimed, owner, handlers)

@@ -304,7 +304,7 @@ async def follow_platform(code: str, *, person: bool) -> Optional[str]:
     (platform_suite.valid_id), not the switch, so a link already out keeps
     working; unset, nothing is read."""
     import platform_suite
-    pid = platform_suite.valid_id() if platform_suite.platform_id() else None
+    pid = await platform_suite.valid_id_async() if platform_suite.platform_id() else None
     code = (code or "").strip().lower()
     if not pid or not store.GO_CODE.match(code):
         return None

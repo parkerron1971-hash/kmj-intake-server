@@ -113,7 +113,7 @@ async def suite_status(owner=Depends(require_owner)):
 @router.get('/suite/engine')
 async def suite_engine(owner=Depends(require_owner)):
     row = await platform_business(owner)
-    biz = {**platform_suite.effective_row(row), '_caller_role': 'owner'}
+    biz = {**await platform_suite.effective_row_async(row), '_caller_role': 'owner'}
     return await bm.engine(_id(row), biz)
 
 
@@ -250,12 +250,13 @@ async def drain(owner=Depends(require_owner)):
         'drafts': sum(1 for r in rows if r.get('status') == 'draft'),
     }
     publishing = os.environ.get('BUFFER_PUBLISHING', 'off').lower() == 'on'
-    active = platform_suite.buffer_state() == 'closed'
+    active = await platform_suite.buffer_state_async() == 'closed'
+    problem = await platform_suite.problem_async()
     # Only once the suite is in use is it safe to stop the Buffer desk's sender.
     safe = active and not truncated and count['queued'] == 0 and count['sending'] == 0
     last = max((when(r['run_at']) for r in queued), default=None)
     if not active:
-        message = ((platform_suite.problem() or platform_suite.NOT_ON)
+        message = ((problem or platform_suite.NOT_ON)
                    + ' Keep BUFFER_PUBLISHING on: the Buffer desk is still sending.')
     elif truncated:
         message = 'More posts are waiting than one read counts. Check again before switching anything off.'
@@ -272,6 +273,6 @@ async def drain(owner=Depends(require_owner)):
         message = (f"{count['queued'] + count['sending']} posts are still on their way to Buffer; the last goes out "
                    f"{last.isoformat() if last else 'soon'}. Keep BUFFER_PUBLISHING on until this reaches 0.")
     return {'suite_on': platform_suite.suite_on(), 'suite_active': active,
-            'suite_problem': platform_suite.problem(), 'buffer_publishing': publishing, 'paused': paused,
+            'suite_problem': problem, 'buffer_publishing': publishing, 'paused': paused,
             **count, 'last_goes_out': last.isoformat() if last else None, 'truncated': truncated,
             'safe_to_switch_off': safe, 'message': message, 'checked_at': now.isoformat()}
