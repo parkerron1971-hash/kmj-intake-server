@@ -29,6 +29,12 @@ RE-CHECKED AT SEND TIME, whatever happened since the approval:
     the post is held, not failed: back to approved, saying why, no push; it
     goes out if the business is switched back on while its window is open.
     A server with no posting key or an empty pilot list claims nothing;
+  * a post Chief approved on the owner's standing OK (approved_via
+    'standing', B13) is still covered by it (business_marketing_standing.
+    send_check: the grant by the current owner, the real plan, client-facing
+    autonomy, automations not paused). Not covered: back to a DRAFT for the
+    owner's own OK, never sent on a stale permission; the rest of its kind
+    goes back too and the owner is told once. The business unreadable: held;
   * every account is still connected to THIS business, and is the same
     account the owner approved (social._targets);
   * the picture is a ready artwork of THIS business; the clip is approved as
@@ -96,6 +102,7 @@ from fastapi import HTTPException
 
 import business_marketing_desk as reading
 import business_marketing_openings as openings
+import business_marketing_standing as standing
 import business_marketing_store as store
 import clip_posting
 import image_posting
@@ -186,6 +193,28 @@ class Pull(Exception):
     def __init__(self, why: str):
         super().__init__(why)
         self.why = why
+
+
+class Withdraw(Exception):
+    """A post Chief approved on the owner's standing OK (B13) that the OK no
+    longer covers: it goes back to a draft, unsent, for the owner's own OK."""
+
+    def __init__(self, why: str):
+        super().__init__(why)
+        self.why = why
+
+
+async def _standing_still_covers(business_id: str, row: Dict[str, Any]) -> None:
+    """B13: a post approved_via 'standing' goes out only while the standing
+    OK still covers its kind (the grant, by the current owner; the real plan;
+    client-facing autonomy; automations not paused). Raises Withdraw when it
+    does not, Hold when the business cannot be read (never sent on a guess)."""
+    try:
+        why = await asyncio.to_thread(standing.send_check, business_id, row)
+    except standing.Unavailable:
+        raise Hold('the standing permission could not be checked') from None
+    if why:
+        raise Withdraw(why)
 
 
 async def _chairs_still_open(business_id: str, row: Dict[str, Any]) -> None:
@@ -390,6 +419,7 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
     attempted = False
     token = None
     pub_id = None
+    withdrawn: Optional[str] = None
     try:
         try:
             pub_id = publication_id_for(row)
@@ -407,6 +437,8 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
         if not post_for_me.allowed_for(biz):
             # The pilot can be switched back on: the post waits, it does not fail.
             raise Hold('posting is not switched on for this business', note=PILOT_HELD)
+        if row.get('approved_via') == 'standing':
+            await _standing_still_covers(biz, row)
         if row.get('source') == 'opening':
             await _chairs_still_open(biz, row)
         owner = await asyncio.to_thread(_owner_of, biz)
@@ -453,6 +485,10 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
     except Pull as pull:
         log.info('marketing send %s pulled: %s', post_id[:8], pull.why)
         patch = {**openings.pull_patch(row, pull.why, now()), 'claimed_at': None}
+    except Withdraw as stop:
+        log.info('marketing send %s back to waiting: %s', post_id[:8], stop.why)
+        withdrawn = stop.why
+        patch = standing.withdrawn_patch(row, stop.why)
     except Refuse as refusal:
         patch = {'status': 'failed', 'error': str(refusal)}
     except store.StoreError:
@@ -472,7 +508,12 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
     finally:
         if token is not None:
             images.build_actor.reset(token)
-    return await _record(row, patch)
+    done = await _record(row, patch)
+    if withdrawn and done.get('status') == 'draft':
+        # B13: the rest of its kind goes back to waiting too, and the owner
+        # is told once. Best-effort; the next send's own check stands.
+        await standing.after_send_withdrawal(biz, row, withdrawn)
+    return done
 
 
 async def _record(row: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
