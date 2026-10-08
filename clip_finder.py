@@ -130,6 +130,17 @@ def plan_allows(business_id):
         return True
     except HTTPException as error:
         return error.status_code != 402
+    except Exception:
+        return True   # fail open, like require_feature itself
+
+
+def required_plan_name():
+    """The plan the gate actually requires, in customer words (Solutionist),
+    read from the same map require_feature uses so the two never drift."""
+    import billing_limits
+    import feature_gates
+    key = feature_gates.FEATURE_MIN_PLAN.get(FEATURE, 'practice')
+    return billing_limits.PLAN_DISPLAY.get(key, key.title())
 
 
 def ready_for(business_id):
@@ -144,7 +155,7 @@ def configuration(business_id):
     used = seconds_this_month(business_id) if available else 0.0
     # locked: switched on, but the business's plan does not include it, so the
     # app shows what it comes with instead of a button that would refuse.
-    return {'available': available, 'locked': switched and not available, 'required_plan': 'Solutionist',
+    return {'available': available, 'locked': switched and not available, 'required_plan': required_plan_name(),
             'included_hours': INCLUDED_SECONDS // 3600,
             'used_hours': round(used / 3600, 1), 'actions_per_extra_hour': UNITS_PER_EXTRA_HOUR,
             'max_upload_bytes': MAX_UPLOAD_BYTES, 'caption_styles': list(CAPTION_STYLES), 'lengths': ['short', 'medium', 'long'],
@@ -311,8 +322,18 @@ def start_upload(business_id, body, user):
     media_library.access(business_id, user)
     # A recording is only worth storing if something can turn it into clips:
     # the hand cutter (media processing) or Find my best clips for this business.
+    # (Production web has ffmpeg + MEDIA_PROCESSING=on, so this only bites if
+    # processing is switched off; checked 2026-10-08.)
     if not (media_library.configuration()['processing_available'] or ready_for(business_id)):
-        raise HTTPException(403, "Uploading recordings isn't available for this business yet.")
+        if enabled(business_id):
+            # The plan is what is missing: the same 402 shape require_feature
+            # sends, so the app's upgrade prompt handles it.
+            import feature_gates
+            plan = required_plan_name()
+            raise HTTPException(402, {'error': 'feature_locked', 'feature': FEATURE,
+                                      'required_plan': feature_gates.FEATURE_MIN_PLAN.get(FEATURE, 'practice'),
+                                      'message': f'Find my best clips comes with the {plan} plan. Upgrade in Settings → Billing to upload recordings.'})
+        raise HTTPException(403, 'Uploading recordings is switched off for this business. Contact support to turn on Video Clips.')
     if library_bytes(business_id) + body.byte_size > LIBRARY_BYTES:
         raise HTTPException(409, 'This media library has reached its 20 GB allowance. Remove recordings you no longer need first.')
     row = media_library.one(sb_clients.sb_post_as_service('/media_assets', {
