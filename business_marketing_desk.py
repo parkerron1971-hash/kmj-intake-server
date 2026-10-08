@@ -166,7 +166,9 @@ def facts(state: Dict[str, Any]) -> Dict[str, Any]:
         return _stamp(p['run_at']) or now
     drafts = [p for p in posts if p['status'] == 'draft']
     waiting = [p for p in drafts if at(p) > now]
-    plan_posts = [p for p in posts if current and str(p.get('run_id')) == str(current['id'])]
+    # A pulled open-chairs post (B11: its chairs booked first) is no longer part of the week's count.
+    plan_posts = [p for p in posts if current and str(p.get('run_id')) == str(current['id'])
+                  and p.get('status') != 'pulled']
     plan_waiting = [p for p in plan_posts if p in waiting]
     recent = now - FAILED_WINDOW
     failed_rows = [p for p in posts if p['status'] == 'failed' and at(p) >= recent]

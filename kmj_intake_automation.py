@@ -1639,8 +1639,9 @@ async def startup():
     # (drafts), for each business that is due, on its own clock; every
     # minute, write the ones owners asked for; every 2 minutes, put each
     # finished flyer on its week's post and tell the owner once the week has
-    # settled. All do nothing until MARKETING_DESK names the business or is
-    # "*" (default off).
+    # settled; every 15 minutes, pull an open-chairs post (Boss, B11) whose
+    # chairs booked before it went out. All do nothing until MARKETING_DESK
+    # names the business or is "*" (default off).
     try:
         import business_marketing_planner as _marketing_planner
         scheduler.add_job(g("business_marketing_suggest", _marketing_planner.marketing_tick),
@@ -1649,6 +1650,8 @@ async def startup():
                           "interval", minutes=1, id="business_marketing_requests", max_instances=1)
         scheduler.add_job(g("business_marketing_designs", _marketing_planner.marketing_design_tick),
                           "interval", minutes=2, id="business_marketing_designs", max_instances=1)
+        scheduler.add_job(g("business_marketing_openings_watch", _marketing_planner.openings_watch_tick),
+                          "interval", minutes=15, id="business_marketing_openings_watch", max_instances=1)
     except Exception as e:
         print(f"   [warn] business marketing suggestions not scheduled: {e}")
     # "Schedule anything" (2026-07-10) — Chief's deferred actions:

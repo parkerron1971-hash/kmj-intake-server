@@ -171,8 +171,9 @@ def bookings_from(rows: Optional[List[Dict[str, Any]]], now: datetime, limit: in
 
 def chair_offering(offerings: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The offering open chairs are counted for: the shortest bookable one
-    (ties by name). D5's "most booked in 60 days" waits for B11, which
-    verifies the offering fields on module_entries."""
+    (ties by name). B11's open-chairs week counts the most-booked offering
+    over 60 days instead (business_marketing_openings.choose_offering, from
+    module_entries.data->>offering_id) and falls back to this."""
     import agent_site
     bookable = [o for o in offerings or [] if agent_site.public_offering(o)['bookable']]
     if not bookable:
