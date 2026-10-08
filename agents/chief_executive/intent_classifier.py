@@ -28,8 +28,12 @@ from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
-CLASSIFIER_MODEL = "claude-sonnet-4-5-20250929"
-CLASSIFIER_MAX_TOKENS = 600
+# Sonnet 4.5 retires 2026-11-30. Sorting a message into nine internal
+# intents as JSON reaches no client and is the shape of Chief's own router
+# tie-breaker, which runs on Haiku 5.5 (#1324): Haiku 5.5, thinking off.
+# INTENT_CLASSIFIER_MODEL=claude-sonnet-5-5 moves it up without a deploy.
+CLASSIFIER_MODEL = os.environ.get("INTENT_CLASSIFIER_MODEL") or "claude-haiku-5-5"
+CLASSIFIER_MAX_TOKENS = 800   # ~30% more tokens for the same JSON
 CLASSIFIER_TEMPERATURE = 0.2
 
 # Below this, route to 'ambiguous' so Chief asks the user to clarify
@@ -273,13 +277,17 @@ def classify_intent(
     )
 
     try:
+        import model_ladder
         client = llm_call.sdk_client(key=api_key)
+        # The pinned SDK (0.34.2) predates `thinking`: it rides in extra_body.
+        off = model_ladder.thinking_off_kwargs(CLASSIFIER_MODEL)
         msg = client.messages.create(
             model=CLASSIFIER_MODEL,
             max_tokens=CLASSIFIER_MAX_TOKENS,
-            temperature=CLASSIFIER_TEMPERATURE,
             system=CLASSIFIER_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
+            **model_ladder.sampling_kwargs(CLASSIFIER_MODEL, CLASSIFIER_TEMPERATURE),
+            **({"extra_body": off} if off else {}),
         )
     except Exception as e:
         logger.warning(

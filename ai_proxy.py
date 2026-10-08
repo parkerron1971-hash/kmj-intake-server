@@ -61,7 +61,7 @@ Request body (JSON):
 Response (JSON):
     {
       "content":     "...joined text from all text blocks...",
-      "model":       "claude-sonnet-4-5-20250929",
+      "model":       "claude-sonnet-5-5",
       "stop_reason": "end_turn",
       "usage":       {"input_tokens": 123, "output_tokens": 456},
       "raw":         { ...full Anthropic response... }
@@ -94,18 +94,32 @@ from api_usage_logger import log_api_usage
 ANTHROPIC_VERSION = "2023-06-01"
 
 # Server-owned model selection. Change here, no client redeploy needed.
+# Sonnet 4.5 retires 2026-11-30: its tiers are on Sonnet 5.5 (Anthropic's
+# named replacement; a third cheaper per token). Each rolls back without a
+# deploy: AI_PROXY_<TASK>_MODEL, and AI_PROXY_DEFAULT_MODEL for the rest.
 TASK_MODEL_MAP: Dict[str, str] = {
-    "plan":     "claude-sonnet-4-5-20250929",
+    "plan":     os.environ.get("AI_PROXY_PLAN_MODEL") or "claude-sonnet-5-5",
     # Kevin's ruling (2026-07-03): builds (custom modules, page builder)
     # run on Opus 4.8 — the highest-stakes generation gets the best model.
     "build":    "claude-opus-4-8",
-    "score":    "claude-sonnet-4-5-20250929",
-    "draft":    "claude-sonnet-4-5-20250929",
+    "score":    os.environ.get("AI_PROXY_SCORE_MODEL") or "claude-sonnet-5-5",
+    "draft":    os.environ.get("AI_PROXY_DRAFT_MODEL") or "claude-sonnet-5-5",
     # AI_PROXY_VOLUME_MODEL rolls the volume tier back without a deploy.
     "volume":   os.environ.get("AI_PROXY_VOLUME_MODEL") or "claude-haiku-5-5",
-    "briefing": "claude-sonnet-4-5-20250929",
+    "briefing": os.environ.get("AI_PROXY_BRIEFING_MODEL") or "claude-sonnet-5-5",
 }
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_MODEL = os.environ.get("AI_PROXY_DEFAULT_MODEL") or "claude-sonnet-5-5"
+
+# A client that still names a retiring model gets its current equivalent
+# instead of having the override dropped (Sonnet 4.5 retires 2026-11-30;
+# Haiku 4.5 is only promised to 2026-10-15; Sonnet 4 is already gone).
+_RETIRING_MODELS: Dict[str, str] = {
+    "claude-sonnet-4-5-20250929": "claude-sonnet-5-5",
+    "claude-sonnet-4-5": "claude-sonnet-5-5",
+    "claude-sonnet-4-20250514": "claude-sonnet-5-5",
+    "claude-haiku-4-5-20251001": "claude-haiku-5-5",
+    "claude-haiku-4-5": "claude-haiku-5-5",
+}
 
 DEFAULT_MAX_TOKENS = 4096
 # Beta-readiness audit (adversarial + AI-spend): /ai/proxy honored a
@@ -114,8 +128,8 @@ DEFAULT_MAX_TOKENS = 4096
 # are only honored if they name a model the server already uses.
 MAX_PROXY_TOKENS = 8192
 _ALLOWED_OVERRIDE_MODELS = set(TASK_MODEL_MAP.values()) | {
-    DEFAULT_MODEL, "claude-opus-4-8", "claude-sonnet-5",
-    "claude-haiku-4-5-20251001", "claude-haiku-5-5",
+    DEFAULT_MODEL, "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-5-5",
+    "claude-haiku-5-5",
 }
 DEFAULT_TEMPERATURE = 1.0
 
@@ -162,6 +176,7 @@ def _select_model(task_type: Optional[str], override: Optional[str]) -> str:
     """Pick the model: override > task_type lookup > default. An override
     is only honored when it names a model the server already uses —
     otherwise a caller could force an arbitrary/expensive model."""
+    override = _RETIRING_MODELS.get(override or "", override)
     if override and override in _ALLOWED_OVERRIDE_MODELS:
         return override
     if override:
@@ -279,20 +294,23 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
     model = _select_model(req.task_type, req.model_override)
 
     # Build the Anthropic payload. Only include fields Anthropic expects.
-    import chief_models
     import model_ladder
+    # The current models count the same text as ~30% more tokens than the
+    # ones the app's budgets were written for; the budget grows with it,
+    # inside the same ceiling.
     anthropic_payload: Dict[str, Any] = {
         "model": model,
-        "max_tokens": min(int(req.max_tokens or DEFAULT_MAX_TOKENS), MAX_PROXY_TOKENS),
+        "max_tokens": min(int((req.max_tokens or DEFAULT_MAX_TOKENS) * 1.3), MAX_PROXY_TOKENS),
         "messages": [m.model_dump() for m in req.messages],
     }
     # Only where the model takes one: Haiku 5.5, Sonnet 5, Opus 4.7+ and
     # Fable 400 on a temperature (model_ladder.supports_sampling).
     anthropic_payload.update(model_ladder.sampling_kwargs(
         model, req.temperature if req.temperature is not None else DEFAULT_TEMPERATURE))
-    # Haiku 5.5 thinks by default and its thinking counts against the
-    # caller's max_tokens; the volume tier never thought on Haiku 4.5.
-    anthropic_payload.update(chief_models.quick_call_kwargs(model))
+    # Haiku 5.5 and the Sonnet 5 family think by default and their thinking
+    # counts against the caller's max_tokens; these tiers never thought on
+    # Haiku 4.5 / Sonnet 4.5. Opus keeps its own (it cannot turn it off).
+    anthropic_payload.update(model_ladder.thinking_off_kwargs(model))
     if req.system:
         anthropic_payload["system"] = req.system
     if req.metadata:
