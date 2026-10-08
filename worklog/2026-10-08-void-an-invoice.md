@@ -2,7 +2,7 @@
 title: Void an invoice from the invoice drawer, and Chief's void no longer stalls on a shared pay link
 date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
-asked: "Can you develope an ability to void out invoices. Chief and I. I don't see a void ability" (Dev Desk)
+asked: 'Dev Desk: "Can you develope an ability to void out invoices. Chief and I. I don''t see a void ability"'
 status: shipped
 prs: [kmj-intake-server#1352, solutionist-studio#1176]
 migrations: []
