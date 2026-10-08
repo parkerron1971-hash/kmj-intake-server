@@ -109,5 +109,50 @@ class TestBlueprintFirst(unittest.TestCase):
         self.assertEqual(r.persist["dro_status"], "applied")
 
 
+class TestBlueprintStatusIsSaved(unittest.TestCase):
+    """The tests above mock render_and_persist, so they see what it is
+    handed, not what it saves. These run the real save: a blueprint build
+    must not store a design-brief failure, or Chief's site check reads it
+    as "last compose ran WITHOUT its design brief" and asks for a paid
+    recompose (2026-10-07)."""
+
+    def _saved(self, dro_status, dro_failure=None, stored=None):
+        import site_composer
+        from test_canvas_pass import _CANVAS_DOC
+        saved = {}
+        ctx = _ctx()
+        ctx["color_source"] = "brand_kit"   # gather_context always sets one
+        with mock.patch.object(site_composer, "_ensure_site_row",
+                               return_value={"id": "s1", "site_config": dict(stored or {})}), \
+                mock.patch.object(site_composer.sb_clients, "sb_get_as_service", return_value=[]), \
+                mock.patch.object(site_composer.sb_clients, "sb_patch_as_service",
+                                  side_effect=lambda path, payload: saved.update(
+                                      payload.get("site_config") or {})), \
+                mock.patch("vision_grader.grade", return_value=None), \
+                mock.patch("design_register.get_invention_count", return_value=None), \
+                mock.patch.object(site_composer, "_verify_inventions", return_value={}):
+            site_composer.render_and_persist(
+                "biz-canvas", _spec(), ctx, dro=None, full_recompose=True,
+                dro_status=dro_status, dro_failure=dro_failure,
+                _canvas_html=_CANVAS_DOC,
+                _canvas_report={"engine": "builder_v2", "fallbacks": []})
+        return saved
+
+    def test_a_blueprint_build_saves_no_failure(self):
+        saved = self._saved("blueprint")
+        self.assertEqual(saved["dro_status"], "blueprint")
+        self.assertNotIn("dro_failure", saved)
+
+    def test_a_blueprint_build_clears_an_old_failure(self):
+        saved = self._saved("blueprint", stored={"dro_failure": {"stage": "authoring",
+                                                                 "detail": "old"}})
+        self.assertNotIn("dro_failure", saved)
+
+    def test_a_real_fallback_still_records_why(self):
+        saved = self._saved("fallback", {"stage": "exception", "detail": "boom"})
+        self.assertEqual(saved["dro_failure"]["stage"], "exception")
+        self.assertEqual(saved["dro_failure"]["detail"], "boom")
+
+
 if __name__ == "__main__":
     unittest.main()
