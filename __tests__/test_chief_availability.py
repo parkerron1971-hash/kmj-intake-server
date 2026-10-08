@@ -140,10 +140,21 @@ def test_invalid_saved_rules_never_mean_free(monkeypatch,change):
     assert run()['availability_check']['status']=='unavailable'
 
 
-@pytest.mark.parametrize('row', [booking(duration_min_at_booking=None), booking(appointment_at='bad'),booking(business_id=OTHER)])
+@pytest.mark.parametrize('row', [booking(duration_min_at_booking=0), booking(duration_min_at_booking=1441),
+    booking(appointment_at='bad'),booking(business_id=OTHER)])
 def test_bad_occupancy_never_reports_fit(monkeypatch,row):
     fixture(monkeypatch,bookings=[row])
     assert run()['availability_check']['status']=='unavailable'
+
+
+def test_a_booking_saved_without_a_length_holds_an_hour(monkeypatch):
+    """No length is DEFAULT_BOOKED_MIN (60), the rule every bookings read
+    shares, not "unavailable": once the booking columns fill themselves
+    (APPLY-2026-10-08-booking-columns) a booking without one would otherwise
+    make every check for that business refuse. 10:00-11:00 is held, so 10:00
+    and 10:30 both conflict (0 minutes would have let 10:00 fit)."""
+    fixture(monkeypatch,bookings=[booking(duration_min_at_booking=None)])
+    assert [a['status'] for a in run()['availability_check']['appointments']]==['conflict','conflict']
 
 
 @pytest.mark.parametrize('extra', [' Send reminders too.', ' Only with Ada.', ' Exclude my existing bookings.',

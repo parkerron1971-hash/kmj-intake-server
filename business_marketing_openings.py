@@ -329,13 +329,32 @@ def _query_time(d: datetime) -> str:
 
 
 def read_history(business_id: str, at: datetime) -> Optional[List[Dict[str, Any]]]:
-    """The last 60 days' active bookings: when, and which offering (the
-    booking's data->>offering_id). None when the read fails."""
+    """The last 60 days' active bookings: when (UTC, Z), and which offering
+    (the booking's data->>offering_id), newest first. None when the read
+    fails.
+
+    The shared bookings read (availability_engine.BOOKING_SELECT,
+    booking_window_filter, booked_start): a booking is found by the
+    appointment_at column OR data->>appointment_at and starts at the time in
+    data, else the column. The column alone was empty on every production
+    row until supabase/APPLY-2026-10-08-booking-columns.sql, so this history
+    read 'no bookings' (7 by data on 2026-10-07). Whole days are read, the
+    exact 60 days kept here."""
+    from availability_engine import BOOKING_SELECT, booked_start, booking_window_filter
+    lo, hi = at - timedelta(days=HISTORY_DAYS), at
     rows = sb_clients.sb_get_as_service(
         f'/module_entries?business_id=eq.{business_id}&status=eq.active'
-        f'&appointment_at=gte.{_query_time(at - timedelta(days=HISTORY_DAYS))}&appointment_at=lt.{_query_time(at)}'
-        f'&select=appointment_at,offering_id:data->>offering_id&order=appointment_at.desc&limit={HISTORY_ROWS}')
-    return rows if isinstance(rows, list) else None
+        f'&{booking_window_filter(lo.astimezone(timezone.utc).date(), hi.astimezone(timezone.utc).date() + timedelta(days=1))}'
+        f'&select={BOOKING_SELECT},offering_id:data->>offering_id&order=appointment_at.desc&limit={HISTORY_ROWS}')
+    if not isinstance(rows, list):
+        return None
+    kept = []
+    for r in rows:
+        start = booked_start(r)
+        if start is not None and lo <= start < hi:
+            kept.append((start, r.get('offering_id')))
+    kept.sort(key=lambda pair: pair[0], reverse=True)
+    return [{'appointment_at': _z(start), 'offering_id': offering_id} for start, offering_id in kept]
 
 
 def read_offerings(business_id: str) -> List[Dict[str, Any]]:

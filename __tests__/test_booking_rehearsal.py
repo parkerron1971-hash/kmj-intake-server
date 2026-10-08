@@ -103,7 +103,7 @@ def test_fingerprints_ignore_database_row_order():
     {"offerings": [{**SERVICE, "business_id": OTHER}]},
     {"offerings": [{**SERVICE, "is_active": False}]},
     {"offerings": [{**SERVICE, "duration_min": None}]},
-    {"bookings": [booking(duration=None)]},
+    {"bookings": [booking(duration=1441)]},
     {"bookings": [booking(start="not a date")]},
     {"bookings": [booking(business_id=OTHER)]},
     {"bookings": [booking(duration=0, duration_min=60)]},
@@ -111,6 +111,16 @@ def test_fingerprints_ignore_database_row_order():
 def test_missing_or_malformed_evidence_never_means_free(changes):
     with pytest.raises((br.RehearsalUnavailable, ValidationError)):
         check(**changes)
+
+
+def test_a_booking_saved_without_a_length_holds_an_hour():
+    """No length is DEFAULT_BOOKED_MIN (60), the rule every bookings read
+    shares, not "unavailable": once the booking columns fill themselves
+    (APPLY-2026-10-08-booking-columns) a booking without one would otherwise
+    make every rehearsal for that business refuse. 9:00-10:00 is held."""
+    held = check(plan("2030-01-07T09:30:00-05:00", "2030-01-07T10:00:00-05:00"),
+                 bookings=[booking("2030-01-07T14:00:00Z", duration=None)])
+    assert [a["status"] for a in held["appointments"]] == ["conflict", "fits"]
 
 
 @pytest.mark.parametrize("payload", [
