@@ -55,6 +55,8 @@ import spend_guard
 from auth_supabase import require_user
 from creative_director_models import DesignRequest
 
+REAL_CREATE = images.create
+
 from test_business_marketing_planner import (  # noqa: E402  (the B8 suite's fakes)
     BIZ, CHICAGO, FACTS, NEXT_MONDAY, OWNER, PRO, PRO_OWNER, THU, FakeService, FakeStore, Reply, _when,
     business, connection, quiet_signals, select)
@@ -324,12 +326,13 @@ def test_every_flyer_is_a_director_design_under_the_owner_included_in_the_plan(w
     assert len(w.creates) == 5
     for c, p in zip(w.creates, posts):
         assert c['request_id'] == flyer_of(p) == str(uuid5(UUID(p['run_id']), f"flyer:{p['id']}"))
-        assert c['size'] == '1024x1536' and c['quality'] == 'high'
+        assert c['size'] == '1088x1360' and c['quality'] == 'high'                 # 4:5, Instagram-safe
         assert c['actor'] == {'business_id': PRO, 'user_id': PRO_OWNER}       # bound for the design only
         assert c['director']['billing'] == cd.INCLUDED and cd.included(c['director'])
     assert images.build_actor.get() is None
     goal = w.prepared[0]['goal']
-    assert '4:5' in goal and '128 pixels' in goal and 'brand colours' in goal
+    assert 'Portrait 4:5' in goal and 'a twentieth of the width' in goal and 'brand colours' in goal
+    assert w.prepared[0]['size'] == '1088x1360'
     assert w.prepared[0]['copy'][-1] == 'Pro Shop'                           # the business's own name, small
     assert out['designing'] == 5
 
@@ -508,6 +511,7 @@ def test_image_studio_answers_the_daily_limit_with_429(monkeypatch):
             return []
         if method == 'GET':
             assert 'model=not.is.null' in path and 'created_at=gte.' in path and '+' not in path
+            assert f'id=neq.{req.request_id}' in path            # this request's own row never counts
             return [{'id': str(uuid4())} for _ in range(20)]
         reserved.append(path)
         return [{}]
@@ -519,6 +523,189 @@ def test_image_studio_answers_the_daily_limit_with_429(monkeypatch):
             run(images.create(req, None, director=director))
         assert refused.value.status_code == 429 and refused.value.detail == images.DAILY_LIMIT_REACHED
     assert reserved == []
+
+
+# ── a replay is never refused at the daily limit ──────────────────────
+
+class ImageDb:
+    """image_artworks and reserve_image_artwork as the migration writes them (20 a day, a known id answered with its row)."""
+
+    def __init__(self):
+        self.rows, self.reserved, self.hide_once = {}, [], set()
+
+    def fill(self, business_id, n):
+        for _ in range(n):
+            iid = str(uuid4())
+            self.rows[iid] = {'id': iid, 'business_id': str(business_id), 'model': images.MODELS[0], 'status': 'ready',
+                              'prompt': 'another', 'quality': 'high', 'size': '1024x1024', 'reference_ids': [],
+                              'director': None, 'created_at': datetime.now(timezone.utc).isoformat()}
+
+    async def __call__(self, client, method, path, body=None, **kw):
+        table = path.split('?', 1)[0]
+        if method == 'GET' and table == '/image_artworks':
+            hidden = [i for i in self.hide_once if f'id=eq.{i}' in path]
+            for i in hidden:
+                self.hide_once.discard(i)
+                return []                       # the row appears just after this read (a racing retry)
+            return copy.deepcopy(select(self.rows.values(), path))
+        if method == 'POST' and path == '/rpc/reserve_image_artwork':
+            rec = body['p_record']
+            if rec['id'] in self.rows:
+                return [copy.deepcopy(self.rows[rec['id']])]
+            today = [r for r in self.rows.values() if r['business_id'] == rec['business_id'] and r.get('model')]
+            if len(today) >= body['p_daily_limit']:
+                raise HTTPException(503, 'Image storage is unavailable.')
+            row = {**copy.deepcopy(rec), 'status': 'queued', 'director': None,
+                   'created_at': datetime.now(timezone.utc).isoformat()}
+            self.rows[rec['id']] = row
+            self.reserved.append(rec['id'])
+            return [copy.deepcopy(row)]
+        if method == 'PATCH' and table == '/image_artworks':
+            hit = select(self.rows.values(), path)
+            for r in hit:
+                r.update(copy.deepcopy(body))
+            return copy.deepcopy(hit)
+        raise AssertionError(f'unexpected image call {method} {path}')
+
+
+@pytest.fixture
+def real_images(monkeypatch):
+    """The real image_studio.create over an in-memory image table."""
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    monkeypatch.delenv('OPENAI_IMAGE_MODEL', raising=False)
+    imgs = ImageDb()
+    monkeypatch.setattr(images, 'create', REAL_CREATE)
+    monkeypatch.setattr(images, 'db', imgs)
+    monkeypatch.setattr(images, 'launch_worker', lambda row: None)
+
+    async def present(client, row):
+        return row
+    monkeypatch.setattr(images, 'present', present)
+    import billing_limits
+    monkeypatch.setattr(billing_limits, 'require_units', lambda bid: None)
+    return imgs
+
+
+def test_a_replay_at_the_daily_limit_gets_its_row_back_on_the_owners_own_path(monkeypatch, real_images):
+    monkeypatch.setattr(images, 'business', AsyncMock(return_value={'id': PRO, 'owner_id': PRO_OWNER}))
+    api = FastAPI()
+    api.include_router(images.router)
+    api.dependency_overrides[sb_clients.authed_request] = lambda: SimpleNamespace(user=SimpleNamespace(id=PRO_OWNER))
+    client = TestClient(api)
+    body = {'business_id': PRO, 'request_id': str(uuid4()), 'prompt': 'A flyer for Saturday', 'size': '1024x1536'}
+    first = client.post('/ai/images/generate', json=body)
+    assert first.status_code == 202 and first.json()['status'] == 'queued'
+    real_images.fill(PRO, 19)                               # 20 today, this one included: the limit
+    again = client.post('/ai/images/generate', json=body)
+    assert again.status_code == 202 and again.json()['id'] == body['request_id']
+    assert real_images.reserved == [body['request_id']]      # answered with its row, never reserved twice
+    fresh = client.post('/ai/images/generate', json={**body, 'request_id': str(uuid4())})
+    assert fresh.status_code == 429 and fresh.json()['detail'] == images.DAILY_LIMIT_REACHED
+    assert len(real_images.reserved) == 1
+
+
+def test_a_row_that_appears_between_the_lookup_and_the_count_is_not_refused(monkeypatch, real_images):
+    monkeypatch.setattr(images, 'business', AsyncMock(return_value={'id': PRO, 'owner_id': PRO_OWNER}))
+    req = images.CreateImage(business_id=PRO, request_id=uuid4(), prompt='A flyer for Saturday', size='1024x1536')
+    run(images.create(req, None))
+    real_images.fill(PRO, 19)
+    real_images.hide_once.add(str(req.request_id))           # a retry racing the first call
+    row = run(images.create(req, None))
+    assert row['id'] == str(req.request_id) and real_images.reserved == [str(req.request_id)]
+
+
+def test_the_planners_replay_at_the_daily_limit_keeps_designing(w, real_images):
+    out = week(w)
+    assert out['designing'] == 5 and len(real_images.reserved) == 5
+    real_images.fill(PRO, 15)                                # 20 today: the business is at its limit
+    p = posts_of(w)[0]
+    row = run(asyncio.to_thread(plan.read_business, PRO))
+    profile = run(prof.read_profile(PRO, business=row))
+    slot = next(s for s in run_of(w)['slots'] if s['play_id'] == p['play_id'])
+    copy_ = week_reply()['captions'][0]['flyer']
+    # the same post's flyer again (a retried run): its design, never a 429, never words only
+    assert run(plan.start_flyer(row, p, slot, copy_, profile, p['run_id'])) == ('started', None)
+    assert len(real_images.reserved) == 5
+    first = real_images.rows[flyer_of(p)]
+    assert first['size'] == '1088x1360' and cd.included(first['director'])
+    # a NEW flyer at the limit is still refused
+    other = {**p, 'id': plan.week_post_id(p['run_id'], 9, 1)}
+    outcome, why = run(plan.start_flyer(row, other, slot, copy_, profile, p['run_id']))
+    assert outcome == 'limit' and why == images.DAILY_LIMIT_REACHED and len(real_images.reserved) == 5
+
+
+def test_the_planner_never_gives_up_on_a_flyer_that_already_exists(w):
+    run_id = store.run_id_for(PRO, NEXT_MONDAY)
+    first = plan.week_post_id(run_id, 1, 1)
+    flyer = str(plan.flyer_request_id(run_id, first))
+    w.svc.images.append({'id': flyer, 'business_id': PRO, 'status': 'working', 'storage_path': None,
+                         'created_at': w.now.isoformat(), 'phase': 'generating', 'review': None})
+    w.create_error = {1: HTTPException(429, images.DAILY_LIMIT_REACHED)}     # however this call ends
+    out = week(w)
+    p = w.db.posts[first]
+    assert p['design_status'] == 'designing' and p['error'] is None and p['revision'] == 1
+    assert {t['platform'] for t in p['targets']} == {'facebook', 'instagram'}
+    assert run_of(w)['design']['flyers'][first]['state'] == 'designing' and out['designing'] == 5
+    finish(w, {flyer})
+    run(plan.marketing_design_tick(w.now + timedelta(minutes=4)))
+    assert w.db.posts[first]['design_status'] == 'ready'                        # and it is attached
+
+
+def test_when_it_cannot_tell_whether_a_flyer_exists_the_post_waits_for_the_tick(w, monkeypatch):
+    real = plan.flyer_rows
+
+    def blind_to_one(business_id, ids):
+        if len(ids) == 1:
+            raise plan.Unavailable('image_artworks')
+        return real(business_id, ids)
+    monkeypatch.setattr(plan, 'flyer_rows', blind_to_one)
+    w.create_error = {1: HTTPException(503, 'Image storage is unavailable.')}
+    week(w)
+    first = posts_of(w)[0]
+    assert first['design_status'] == 'designing' and run_of(w)['design']['flyers'][first['id']]['why'] == 'unknown'
+    w.now += timedelta(minutes=21)
+    run(plan.marketing_design_tick(w.now))                    # no design came: words only, at the usual 20 minutes
+    assert posts_of(w)[0]['design_status'] == 'failed'
+
+
+# ── every desk picture is 4:5 ─────────────────────────────────────────
+
+def test_four_by_five_is_offered_only_on_the_models_that_take_custom_sizes(monkeypatch):
+    assert '1088x1360' in images.model_sizes('gpt-image-2.5-sunburst')
+    assert '1088x1360' in images.model_sizes('gpt-image-2.5-flare')
+    assert images.model_sizes('gpt-image-2') == ('1024x1024', '1536x1024', '1024x1536')        # unchanged
+    assert images.CreateImage(business_id=PRO, request_id=uuid4(), prompt='A flyer', size='1088x1360').size == '1088x1360'
+    assert DesignRequest(goal='A flyer for the week', size='1088x1360').size == '1088x1360'
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    monkeypatch.setattr(images, 'business', AsyncMock(return_value={'id': PRO, 'owner_id': PRO_OWNER}))
+    database = AsyncMock()
+    monkeypatch.setattr(images, 'db', database)
+    req = images.CreateImage(business_id=PRO, request_id=uuid4(), prompt='A flyer', model='gpt-image-2',
+                             size='1088x1360')
+    with pytest.raises(HTTPException) as refused:
+        run(images.create(req, None))
+    assert refused.value.status_code == 422 and not database.called
+
+
+def test_the_plan_asks_for_four_by_five_and_square_without_custom_sizes(w, monkeypatch):
+    monkeypatch.delenv('OPENAI_IMAGE_MODEL', raising=False)
+    assert plan.flyer_size() == '1088x1360'
+    w_, h = map(int, plan.FLYER_SIZE.split('x'))
+    assert w_ * 5 == h * 4 and w_ % 16 == 0 and h % 16 == 0
+    monkeypatch.setenv('OPENAI_IMAGE_MODEL', 'gpt-image-2')
+    assert plan.flyer_size() == '1024x1024'
+    week(w)
+    assert {c['size'] for c in w.creates} == {'1024x1024'} and 'Square' in w.prepared[0]['goal']
+
+
+def test_the_suggestions_free_flyer_is_four_by_five_too():
+    import marketing_design as design
+    layout = design.flyer_layout('useful_tip', {'headline': 'Plan the week ahead',
+                                                'line': 'One small change makes the whole week calmer.',
+                                                'cta': 'Book a time'},
+                                 eyebrow='TIP', footer={'label': 'PRO SHOP', 'host': 'pro-shop.mysolutionist.app'},
+                                 palette=design.brand_palette({'primary': '#1F4E79'}))
+    assert (layout['width'], layout['height']) == (1080, 1350) and layout['width'] * 5 == layout['height'] * 4
 
 
 # ── idempotent design requests ────────────────────────────────────────

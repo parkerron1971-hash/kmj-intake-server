@@ -586,16 +586,26 @@ owner approves it on the desk.
 **The flyers.** One Creative Director design per post
 (`creative_director.prepare_for_business` + `image_studio.create`), made
 under `image_studio.build_actor` bound to the business and its owner (read
-as the service role) and reset in a `finally`. 1024x1536 portrait, `high`
-quality; the brief keeps every word, the button and the main subject inside
-the middle 4:5 of the picture (the top and bottom 128 pixels carry only
-background), because Instagram crops a tall picture to 4:5 in its feed. The
-business's own colours (its facts carry `brand_colors`) and its saved style
+as the service role) and reset in a `finally`. **4:5, 1088x1360** (`high`
+quality): the tallest picture Instagram's feed takes (4:5 to 1.91:1) and
+shows whole, so every desk picture is Instagram-safe as delivered. Both
+sides are multiples of 16, through the same custom-size path the clip
+covers' 1088x1920 and 1920x1088 use live; `image_studio` offers 1088x1360
+only on the models that take custom sizes (GPT Image 2 keeps its three, and
+on it the plan falls back to a 1024x1024 square). The first live plan flyer
+is the proof of 1088x1360 on the image model. The brief keeps every word,
+the button and the main subject a twentieth of the width in from every edge
+(Instagram's profile grid trims a 3:4 crop, 34 pixels off each side). B8's
+free composer flyer was already 4:5 (1080x1350). The business's own colours (its facts carry `brand_colors`) and its saved style
 and logo apply as in any of its designs. The words are the checked flyer
 copy plus the business's name. The request id is
 `uuid5(run id, 'flyer:' + post id)`, and a post's id is
 `uuid5(run id, '<attempt>:week:<slot>')`: a retried run lands on the same
-designs and never pays twice; a replan's new posts get new ones.
+designs and never pays twice; a replan's new posts get new ones. A post
+is never given up on while its design exists: if a start meets the daily
+limit or an error but the design's row is there (a retried run, a race),
+it stays `designing` and the design tick settles it; if that cannot be
+read, it waits for the tick too.
 
 **Included in the plan** (Kevin, 2026-10-07). A plan flyer is never charged
 in credits, and is still:
@@ -633,6 +643,11 @@ spec, Image Studio's own route takes no director at all, and
   started today (UTC, as the RPC counts them) and answers **429** "Daily
   image limit reached. Try again tomorrow." before reserving (the RPC still
   enforces it; its refusal used to surface as "storage unavailable", 503).
+  Only a NEW request is refused: a request id that already has a row is
+  answered with that row first, and the count leaves out the request's own
+  id, so a retry racing the first call gets its row back from the RPC,
+  never a 429. This holds for every caller, the owner's own Image Studio
+  included.
   A plan post whose flyer gets the 429, or cannot start for any other
   reason, goes as words only **at once**, Instagram left out, instead of
   waiting.
@@ -697,7 +712,7 @@ level.
 
 **Cost** (estimates, not yet measured on a live business-week): the caption
 call is about 2 cents. A flyer is a planning call and a review on the
-`review` lane (about 4-6 cents together) and a 1024x1536 high-quality render
+`review` lane (about 4-6 cents together) and a 1088x1360 high-quality render
 (about $0.20 at the image model's rates), about $0.26; one that takes its
 repair render about $0.48. **About $1.35 a business-week, up to about $2.50**
 when every flyer takes its repair. The headroom check reserves $2.55.
@@ -709,7 +724,6 @@ migration: the run's `design` jsonb carries `flyers`, `tell`, `told_at`,
 
 **Not built here:** Chief's desk actions (B10), the open-chairs week (B11),
 clips in the week (B12), standing permissions (B13), and the frontend (F4).
-Not verified: whether Post for Me hands Instagram a 2:3 picture as it is (the
-Graph API takes feed pictures from 4:5 to 1.91:1); if it refuses, the fix is
-a 4:5 delivery copy at send time, and the flyer's words are already inside
-that crop.
+Not yet seen live: a 1088x1360 render from the image model (the custom-size
+path is the clip covers'); the first plan flyer on a test business verifies
+it.

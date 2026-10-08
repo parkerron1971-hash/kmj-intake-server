@@ -72,8 +72,8 @@ THE WEEKLY PLAN (B9, run_week)
   business's own links once a play has 3 results (business_marketing_outcomes
   .play_scores; otherwise the default order), ONE caption call for all five,
   then all five drafts saved in one write with design_status 'designing'.
-  Then one Creative Director flyer per post, 1024x1536 with its words inside
-  Instagram's 4:5 feed crop, in the business's own colours, under the build
+  Then one Creative Director flyer per post, 4:5 (1088x1360, Instagram's
+  tallest feed picture), in the business's own colours, under the build
   actor bound to the business and its owner, request id uuid5(run, 'flyer:'
   + post id) so a retried run lands on the same design. The flyers are
   INCLUDED in the plan (Kevin, 2026-10-07): creative_director.include_in_plan,
@@ -156,7 +156,8 @@ WEEK_TASK = 'business_marketing_week'
 WEEK_LEVELS = ('week', 'autopilot')   # autopilot (Practice) gets the plain week until B12/B13
 WEEK_MAX_TOKENS = 4000                # five captions and five flyers' three lines
 FLYERS_PER_WEEK = 5                   # plan flyers per business per week, replans included
-FLYER_SIZE = '1024x1536'
+FLYER_SIZE = '1088x1360'              # 4:5: Instagram's tallest feed picture, shown whole
+FLYER_SQUARE = '1024x1024'            # for an image model without custom sizes (gpt-image-2): still Instagram-safe
 FLYER_QUALITY = 'high'
 DESIGN_TIMEOUT = timedelta(minutes=20)
 DEFAULT_DESIGNS_AT_ONCE = 10          # plan flyers in progress across every business
@@ -166,7 +167,7 @@ MANUAL_WAIT = timedelta(minutes=10)   # an owner's week that cannot start for wa
 DESIGN_BATCH = 100
 TELL_BATCH = 50
 # Conservative estimates for the fan-out's spend headroom (USD). One Creative
-# Director design at high quality, 1024x1536: a planning call, the render
+# Director design at high quality, 1088x1360: a planning call, the render
 # (about $0.20 at the image model's rates), the review, and the one repair
 # render it may take. The captions are one small Sonnet-class call.
 DESIGN_ESTIMATE_USD = 0.50
@@ -1152,19 +1153,36 @@ async def write_week_captions(business_id: str, slots: List[Dict[str, Any]], fac
     return {s['slot']: judge(parsed, s, facts, profile, number=s['slot'], first_if_missing=False) for s in slots}
 
 
-# Instagram crops a tall picture to 4:5 in the feed: of 1024x1536, the middle
-# 1024x1280 shows, so the top and bottom 128 pixels may be cut.
-SAFE_AREA = ('Portrait 2:3, made for Instagram and Facebook feeds. Instagram shows a tall picture cropped to 4:5 '
-             'in the feed, so keep every word, the button and the main subject inside the middle of the picture: '
-             'the top and bottom twelfth (128 pixels each) carry only background.')
+# Every desk picture is Instagram-safe as delivered: the feed takes 4:5 to
+# 1.91:1 and shows a 4:5 picture whole. The profile grid shows a 3:4 crop of
+# it (of 1088x1360, 34 pixels off each side), so the words keep a margin.
+SAFE_AREA = {
+    FLYER_SIZE: ("Portrait 4:5, the tallest picture Instagram's feed shows whole, made for Instagram and Facebook "
+                 'feeds. Keep every word, the button and the main subject at least a twentieth of the width in '
+                 'from every edge: the profile grid trims a little off each side.'),
+    FLYER_SQUARE: ('Square, made for Instagram and Facebook feeds, which show it whole. Keep every word, the button '
+                   'and the main subject at least a twentieth of the width in from every edge.'),
+}
 
 
-def flyer_goal(slot: Dict[str, Any], profile: Dict[str, Any], business: Dict[str, Any]) -> str:
+def flyer_size() -> str:
+    """4:5 (1088x1360) on the image models that take custom sizes; square
+    on one that does not (gpt-image-2 makes only its three sizes, and its
+    2:3 portrait is taller than Instagram's feed takes)."""
+    import image_studio as images
+    try:
+        return FLYER_SIZE if FLYER_SIZE in images.model_sizes(images.configured_model()) else FLYER_SQUARE
+    except HTTPException:
+        return FLYER_SIZE          # an unsupported model: create() refuses it in plain words
+
+
+def flyer_goal(slot: Dict[str, Any], profile: Dict[str, Any], business: Dict[str, Any],
+               size: str = FLYER_SIZE) -> str:
     play = engine.PLAYS[slot['play_id']]
     name = profile.get('brand_name') or business.get('name') or 'the business'
     subject = slot.get('subject') if slot.get('play_id') in ('offer_spotlight', 'whats_new') else None
     return (f'A social media flyer for {name}, posted with this week\'s "{play["label"]}" post'
-            + (f' about "{str(subject)[:120]}"' if subject else '') + '. ' + SAFE_AREA
+            + (f' about "{str(subject)[:120]}"' if subject else '') + '. ' + SAFE_AREA[size]
             + " Use the business's own brand colours from the facts when it has them, and nobody else's. "
             'The words are exactly the copy, in this order: the headline set large, the supporting line, the call '
             "to action as a button, and the business's name small at the foot. No other words, numbers, prices "
@@ -1178,23 +1196,29 @@ def flyer_copy(copy: Dict[str, str], profile: Dict[str, Any], business: Dict[str
 
 async def start_flyer(business: Dict[str, Any], post: Dict[str, Any], slot: Dict[str, Any],
                       copy: Dict[str, str], profile: Dict[str, Any], run_id: Any) -> Tuple[str, Optional[str]]:
-    """Start one plan post's Creative Director flyer: 1024x1536, the
+    """Start one plan post's Creative Director flyer: 4:5 (flyer_size), the
     business's own colours, its words checked, INCLUDED in the plan
     (creative_director.include_in_plan, set here and nowhere else: no credit
     charge, still metered and spend-guarded, still one of the business's 20
     designs a day). Made under image_studio.build_actor bound to this
     business and its owner (`business` is a service-role read), reset in a
     finally; the design itself runs on as Image Studio's worker task.
-    Returns ('started', None), ('limit', why) when the daily design limit
-    answered 429, or ('start', why) when it could not start."""
+    Returns ('started', None); ('limit', why) when the daily design limit
+    answered 429; ('start', why) when it could not start; ('unknown', why)
+    when it did not start here and whether its design already exists cannot
+    be read. A design that already exists (a retried run, a race with one)
+    is 'started' whatever this call met: its post is never given up on here,
+    and the design tick settles it."""
     import creative_director
     import image_studio as images
     bid, owner = str(business['id']), str(business.get('owner_id') or '')
     if not owner:
         return 'start', 'no owner on record'
     request_id = flyer_request_id(run_id, post['id'])
-    action = {'goal': flyer_goal(slot, profile, business), 'exact_copy': flyer_copy(copy, profile, business),
-              'size': FLYER_SIZE}
+    size = flyer_size()
+    action = {'goal': flyer_goal(slot, profile, business, size), 'exact_copy': flyer_copy(copy, profile, business),
+              'size': size}
+    outcome, why = 'started', None
     token = images.build_actor.set({'business_id': bid, 'user_id': owner})
     try:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -1205,17 +1229,24 @@ async def start_flyer(business: Dict[str, Any], post: Dict[str, Any], slot: Dict
                 owner_context=f"The post's caption: {post.get('caption') or ''}")
             spec = creative_director.include_in_plan(spec)
             await images.create(images.CreateImage(
-                business_id=bid, request_id=request_id, prompt=req.goal, quality=FLYER_QUALITY, size=FLYER_SIZE,
+                business_id=bid, request_id=request_id, prompt=req.goal, quality=FLYER_QUALITY, size=size,
                 reference_ids=[r['id'] for r in spec['references']]), client, director=spec)
-        return 'started', None
     except HTTPException as exc:
         detail = exc.detail.get('message') if isinstance(exc.detail, dict) else exc.detail
-        return ('limit' if exc.status_code == 429 else 'start'), str(detail or '')[:200]
+        outcome, why = ('limit' if exc.status_code == 429 else 'start'), str(detail or '')[:200]
     except Exception:
         log.warning('marketing planner: a flyer for %s could not start', bid[:8], exc_info=True)
-        return 'start', 'the design could not start'
+        outcome, why = 'start', 'the design could not start'
     finally:
         images.build_actor.reset(token)
+    if outcome == 'started':
+        return outcome, why
+    try:
+        if await asyncio.to_thread(flyer_rows, bid, [str(request_id)]):
+            return 'started', None          # it is being made (or made): never words only over it
+    except Unavailable:
+        return 'unknown', why
+    return outcome, why
 
 
 def no_flyer_note(reason: str, gone: List[Dict[str, Any]], *, picture_needed: bool = False) -> str:
@@ -1532,8 +1563,11 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
                 continue
             s, copy = wanted[pid]
             outcome, why = await start_flyer(row, post, s, copy, profile, run_id)
-            if outcome == 'started':
-                flyers[pid] = {'state': 'designing', 'image_id': str(flyer_request_id(run_id, pid))}
+            if outcome in ('started', 'unknown'):
+                # 'unknown': it may exist; the design tick attaches it, or
+                # gives up on it at 20 minutes, never a guess now.
+                flyers[pid] = {'state': 'designing', 'image_id': str(flyer_request_id(run_id, pid)),
+                               **({'why': outcome, 'detail': why} if outcome == 'unknown' else {})}
                 continue
             # The daily design limit (429) or a design that could not start:
             # this post goes as words only now, rather than wait.

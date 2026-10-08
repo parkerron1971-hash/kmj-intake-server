@@ -51,8 +51,12 @@ def model_qualities(model):
 
 # Phone (9:16) and widescreen (16:9) were accepted by both 2.5 models in a
 # production call on 2026-10-05; GPT Image 2 was not tried, so it keeps three.
-SIZES = ('1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088')
-Size = Literal['1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088']
+# 4:5 (1088x1360, both sides multiples of 16) is Instagram's tallest feed
+# picture: the weekly plan's flyers (business_marketing_planner, 2026-10-07)
+# render at it, through the same custom-size path as the two above. The
+# first live plan flyer is its proof.
+SIZES = ('1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088', '1088x1360')
+Size = Literal['1024x1024', '1536x1024', '1024x1536', '1088x1920', '1920x1088', '1088x1360']
 
 
 def model_sizes(model):
@@ -334,15 +338,22 @@ DAILY_LIMIT = 20
 DAILY_LIMIT_REACHED = 'Daily image limit reached. Try again tomorrow.'
 
 
-async def daily_limit_reached(client, business_id):
+async def daily_limit_reached(client, business_id, request_id):
     """Whether the business has started its 20 images today (UTC, as
-    reserve_image_artwork counts them). Read before reserving, so the limit
-    answers 429 in plain words; the RPC still enforces it under its lock
-    (its refusal reaches here only as a failed write, which read as storage
-    being down)."""
+    reserve_image_artwork counts them), not counting this request's own row.
+    Read before reserving, so the limit answers 429 in plain words; the RPC
+    still enforces it under its lock (its refusal reaches here only as a
+    failed write, which read as storage being down).
+
+    Only a NEW request is ever refused: create() answers a request id that
+    already has a row with that row before it gets here, and a row that
+    appears in between (a retry racing the first call) is left out of the
+    count, so the RPC hands it back instead of a 429. A replay never loses
+    a design that is already being made."""
     since = datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00Z')
     rows = await db(client, 'GET', f'/image_artworks?business_id=eq.{UUID(str(business_id))}&model=not.is.null'
-                                   f'&created_at=gte.{since}&select=id&limit={DAILY_LIMIT}')
+                                   f'&created_at=gte.{since}&id=neq.{UUID(str(request_id))}'
+                                   f'&select=id&limit={DAILY_LIMIT}')
     return isinstance(rows, list) and len(rows) >= DAILY_LIMIT
 
 
@@ -374,7 +385,8 @@ async def create(req: CreateImage, client, *, director=None):
         row = await artwork(client, req.business_id, ref)
         if row['status'] != 'ready':
             raise HTTPException(409, 'Wait for the reference image to finish before editing.')
-    if await daily_limit_reached(client, req.business_id):
+    # Only a request with no row yet reaches here: a replay was answered above.
+    if await daily_limit_reached(client, req.business_id, req.request_id):
         raise HTTPException(429, DAILY_LIMIT_REACHED)
     from creative_director import included
     if not included(director):
