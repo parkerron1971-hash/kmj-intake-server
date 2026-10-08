@@ -89,6 +89,48 @@ def switch(monkeypatch, *, on=True, pid=PID):
         monkeypatch.delenv('PLATFORM_BUSINESS_ID', raising=False)
 
 
+class Verdicts:
+    """The reads behind platform_suite's verdict: the business rows (the
+    narrow select) and the auth users' addresses."""
+
+    def __init__(self):
+        self.rows = {PID: {'id': PID, 'owner_id': KEVIN, 'platform_books': 'true'},
+                     api.BIZ: {'id': api.BIZ, 'owner_id': api.OWNER, 'platform_books': None}}
+        self.emails = {KEVIN: PLATFORM_OWNER_EMAIL, api.OWNER: 'owner@fadestreet.com'}
+        self.fail_rows = self.fail_auth = False
+        self.reads = []
+
+
+@pytest.fixture(autouse=True)
+def verdicts(monkeypatch):
+    platform_suite.forget()
+    v = Verdicts()
+
+    def read_business(bid):
+        v.reads.append(('business', bid))
+        if v.fail_rows:
+            return None
+        row = v.rows.get(bid)
+        return [dict(row)] if row else []
+
+    def flagged():
+        v.reads.append(('flagged', None))
+        if v.fail_rows:
+            return None
+        return [dict(r) for r in v.rows.values() if str(r.get('platform_books')).lower() == 'true']
+
+    def owner_email(owner_id):
+        v.reads.append(('auth', str(owner_id)))
+        if v.fail_auth:
+            raise platform_suite._Unread('auth')
+        return v.emails.get(str(owner_id))
+    monkeypatch.setattr(platform_suite, '_read_business', read_business)
+    monkeypatch.setattr(platform_suite, '_flagged_rows', flagged)
+    monkeypatch.setattr(platform_suite, '_owner_email', owner_email)
+    yield v
+    platform_suite.forget()
+
+
 # ── the switches and who the platform business is ─────────────────────
 
 def test_with_the_switch_off_no_business_is_the_platform_business(monkeypatch):
@@ -244,12 +286,14 @@ def test_the_suite_desk_refuses_plainly_until_it_is_switched_on_and_named(mc, mo
     assert mc.db.writes == [] and mc.db.paths == []
 
 
-@pytest.mark.parametrize('case', ['tenant_business', 'not_platform_books', 'missing'])
-def test_an_id_that_is_not_solutionists_own_business_opens_nothing(mc, monkeypatch, case):
+@pytest.mark.parametrize('case', ['tenant_business', 'not_platform_books', 'not_the_platform_owner', 'missing'])
+def test_an_id_that_is_not_solutionists_own_business_opens_nothing(mc, monkeypatch, verdicts, case):
     if case == 'tenant_business':
         switch(monkeypatch, on=True, pid=api.BIZ)                     # someone else's business, someone else's row
     elif case == 'not_platform_books':
-        mc.svc.businesses[PID]['settings'] = {}
+        verdicts.rows[PID]['platform_books'] = None
+    elif case == 'not_the_platform_owner':
+        verdicts.emails[KEVIN] = 'someone@else.example'
     else:
         switch(monkeypatch, on=True, pid=str(uuid4()))
     for method, path, body in ROUTES[:-1]:
@@ -260,10 +304,14 @@ def test_an_id_that_is_not_solutionists_own_business_opens_nothing(mc, monkeypat
     assert status == {'on': True, 'ready': False, 'business_id': None, 'reason': platform_suite.WRONG_ID}
 
 
-def test_a_failed_read_of_the_business_is_a_503_not_a_desk(mc):
+def test_a_failed_read_of_the_business_is_a_503_not_a_desk(mc, verdicts):
     mc.svc.fail = ('/businesses',)
     r = hit(mc, 'GET', '/suite/engine')
     assert r.status_code == 503 and mc.db.paths == []
+    platform_suite.forget()
+    verdicts.fail_rows = True                                          # the verdict itself unreadable
+    r = hit(mc, 'GET', '/suite/engine')
+    assert r.status_code == 503 and r.json()['detail'] == platform_suite.UNCONFIRMED and mc.db.paths == []
 
 
 def test_status_says_which_desk_mission_control_shows(mc, monkeypatch):
@@ -430,10 +478,50 @@ NEW_FOR_BUFFER = [('POST', '/ideas', lambda: {'text': 'Bring your business work 
 
 @pytest.mark.parametrize('method,path,body', NEW_FOR_BUFFER, ids=[f'{r[1]}-{i}' for i, r in enumerate(NEW_FOR_BUFFER)])
 def test_the_buffer_desk_takes_nothing_new_with_the_suite_on(old, monkeypatch, method, path, body):
-    switch(monkeypatch, on=True, pid=None)                              # even before the id is set
+    switch(monkeypatch, on=True)
     r = old['client'].request(method, f'/platform/marketing{path}', json=body())
     assert r.status_code == 409 and r.json()['detail'] == platform_suite.BUFFER_CLOSED
     assert old['writes'] == []
+
+
+@pytest.mark.parametrize('case', ['unset', 'tenant_id', 'not_platform_books'])
+def test_switch_on_without_a_valid_platform_business_keeps_the_buffer_desk_and_says_so(old, monkeypatch, verdicts,
+                                                                                      caplog, case):
+    switch(monkeypatch, on=True, pid=None if case == 'unset' else api.BIZ if case == 'tenant_id' else PID)
+    if case == 'not_platform_books':
+        verdicts.rows[PID]['platform_books'] = None
+    with caplog.at_level('ERROR'):
+        r = old['client'].post('/platform/marketing/ideas', json={'text': 'Bring your business work together.'})
+    assert r.status_code == 200 and r.json()['already_saved'] is False              # as before
+    assert 'MC_MARKETING_SUITE is on' in caplog.text                                  # loudly
+    assert platform_suite.buffer_state() == 'open' and platform_suite.chief_closed() is None
+    assert platform_suite.problem() == (platform_suite.NO_ID if case == 'unset' else platform_suite.WRONG_ID)
+    calls = _old_job(monkeypatch)
+
+    async def nothing(path):
+        return []
+    monkeypatch.setattr(store, 'rows', nothing)
+    run(platform.engine_tick())
+    assert calls == ['scheduled']                                      # the Thursday job still plans
+
+
+def test_when_the_platform_business_cannot_be_confirmed_neither_desk_takes_anything_new(old, monkeypatch,
+                                                                                         verdicts):
+    switch(monkeypatch, on=True)
+    verdicts.fail_rows = True
+    r = old['client'].post('/platform/marketing/ideas', json={'text': 'Bring your business work together.'})
+    assert r.status_code == 503 and r.json()['detail'] == platform_suite.UNCONFIRMED and old['writes'] == []
+    assert run(pcm.new_post({'text': 'Make a post.'})) == {'ok': False, 'label': platform_suite.UNCONFIRMED}
+    assert platform_suite.is_platform(PID) is False
+    assert platform_suite.effective_row(platform_row())['comp_tier'] is None             # no autopilot
+    monkeypatch.setenv('MARKETING_DESK', '*')
+    assert plan.desk_on_for(PID) is False                              # planned by neither loop this hour
+    calls = _old_job(monkeypatch)
+    run(platform.engine_tick())
+    assert calls == []
+    platform_suite.forget()
+    verdicts.fail_rows, verdicts.fail_auth = False, True               # the owner's address unreadable
+    assert platform_suite.state() == (platform_suite.UNKNOWN, PID) and platform_suite.is_platform(PID) is False
 
 
 def test_with_the_suite_off_the_buffer_desk_is_as_before(old, monkeypatch):
@@ -494,6 +582,34 @@ def test_platform_chief_makes_nothing_new_for_buffer(monkeypatch):
     assert run(pcm.pause_marketing({}))['ok'] is True                   # managing the drain still works
 
 
+def test_a_refused_post_now_card_is_an_ordinary_answer_in_platform_chiefs_reply(monkeypatch):
+    """Through the real dispatch (platform_chief_actions.dispatch_actions ->
+    platform_chief_authority.dispatch -> propose -> post_now_review): the
+    closed Buffer desk's 409 is that action's own answer, never the whole
+    reply's failure."""
+    import platform_chief_actions as actions
+    import platform_chief_authority as authority
+    switch(monkeypatch, on=True)
+
+    async def policy(owner_id):
+        return {'settings': {'drafts': 'ask', 'creative': 'ask', 'notes': 'ask', 'marketing_stop': 'ask'}}
+
+    async def no_write(*a, **k):
+        raise AssertionError('no card is written for a refused action')
+    logged = []
+
+    async def log_action(**kw):
+        logged.append(kw['result'])
+    monkeypatch.setattr(authority, 'policy', policy)
+    monkeypatch.setattr(authority, 'db', no_write)
+    monkeypatch.setattr(actions, '_log_action', log_action)
+    owner = SimpleNamespace(id=KEVIN, email=PLATFORM_OWNER_EMAIL)
+    out = run(actions.dispatch_actions([{'type': 'marketing_post_now', 'text': 'Out now.'}],
+                                       owner=owner, request_id=uuid4()))
+    assert out == [{'ok': False, 'type': 'marketing_post_now', 'label': platform_suite.BUFFER_CLOSED}]
+    assert logged == out
+
+
 def test_platform_chiefs_snapshot_says_where_marketing_runs_now(monkeypatch):
     async def fail(*a, **k):
         raise HTTPException(503, 'down')
@@ -506,6 +622,8 @@ def test_platform_chiefs_snapshot_says_where_marketing_runs_now(monkeypatch):
     assert 'suite' not in run(pcm.marketing_snapshot())
     switch(monkeypatch, on=True)
     assert run(pcm.marketing_snapshot())['suite']['on'] is True
+    switch(monkeypatch, on=True, pid=None)
+    assert run(pcm.marketing_snapshot())['suite'] == {'on': False, 'note': platform_suite.NO_ID}
 
 
 # ── the drain report ──────────────────────────────────────────────────
@@ -541,6 +659,14 @@ def test_the_drain_counts_what_is_left_for_buffer_and_never_calls_it(mc, monkeyp
     monkeypatch.setenv('BUFFER_PUBLISHING', 'off')
     out = hit(mc, 'GET', '/drain').json()
     assert out['safe_to_switch_off'] is False and 'will not go out' in out['message']
+    monkeypatch.setenv('BUFFER_PUBLISHING', 'on')
+    mc.buffer = [post('submitted', -1)]
+    switch(monkeypatch, on=True, pid=None)                             # the switch is on, the suite is not
+    out = hit(mc, 'GET', '/drain').json()
+    assert out['suite_on'] is True and out['suite_active'] is False and out['suite_problem'] == platform_suite.NO_ID
+    assert out['safe_to_switch_off'] is False and out['message'].startswith(platform_suite.NO_ID)
+    assert hit(mc, 'GET', '/suite/status').json()['reason'] == platform_suite.NO_ID
+    switch(monkeypatch, on=True)
     mc.buffer_fail = True
     assert hit(mc, 'GET', '/drain').status_code == 503                 # never "0 left" on a failed read
     assert mc.db.writes == []
@@ -649,6 +775,84 @@ def test_exactly_one_loop_plans_the_platform_week(w, monkeypatch):
     old_job = _old_job(monkeypatch)
     run(platform.engine_tick())
     assert old_job == []
+
+
+# ── who is the platform business ──────────────────────────────────────
+
+def test_a_tenant_id_in_the_env_by_mistake_gets_nothing_special(monkeypatch):
+    switch(monkeypatch, on=True, pid=api.BIZ)
+    tenant = platform_row(id=api.BIZ, owner_id=api.OWNER, settings={})
+    assert platform_suite.state() == (platform_suite.INVALID, api.BIZ)
+    assert platform_suite.is_platform(api.BIZ) is False and platform_suite.effective_row(tenant) is tenant
+    assert bm.level_for(tenant)['level'] == 'suggest' and platform_suite.zone_for(api.BIZ) is None
+    assert platform_suite.desk_switch(api.BIZ) is None and platform_suite.platform_site(api.BIZ) is None
+    monkeypatch.setenv('MARKETING_DESK', api.BIZ)
+    assert plan.desk_scope() == frozenset({api.BIZ}) and plan.desk_on_for(api.BIZ) is True     # as any business
+    switch(monkeypatch, on=False, pid=api.BIZ)
+    assert plan.desk_on_for(api.BIZ) is True                           # never excluded from its own desk either
+
+
+def test_the_verdict_needs_the_flag_and_the_platform_owner_and_is_remembered(monkeypatch, verdicts):
+    switch(monkeypatch, on=True)
+    assert platform_suite.state() == (platform_suite.VALID, PID)
+    assert verdicts.reads == [('business', PID), ('auth', KEVIN)]
+    for _ in range(5):
+        platform_suite.is_platform(PID)
+        platform_suite.effective_row(platform_row())
+    assert len(verdicts.reads) == 2                                    # remembered, not read per call
+    platform_suite.is_platform(str(uuid4()))
+    assert len(verdicts.reads) == 2                                    # another business: no read at all
+    platform_suite.forget()
+    verdicts.rows[PID]['platform_books'] = 'false'
+    assert platform_suite.state()[0] == platform_suite.INVALID
+    platform_suite.forget()
+    verdicts.rows[PID]['platform_books'] = 'true'
+    verdicts.emails[KEVIN] = 'kevin@elsewhere.example'
+    assert platform_suite.state()[0] == platform_suite.INVALID
+    platform_suite.forget()
+    verdicts.emails[KEVIN] = PLATFORM_OWNER_EMAIL
+    verdicts.fail_rows = True
+    assert platform_suite.state()[0] == platform_suite.UNKNOWN
+    assert platform_suite._cache[f'id:{PID}'][0] - platform_suite.time.monotonic() <= platform_suite.TTL_FAILED
+
+
+def test_a_tenant_flagging_its_own_row_is_never_the_platforms_books(monkeypatch, verdicts):
+    import marketing_design
+    import public_site
+    switch(monkeypatch, on=False, pid=None)
+    flagger = str(uuid4())
+    verdicts.rows = {flagger: {'id': flagger, 'owner_id': api.OWNER, 'platform_books': 'true'}}
+    assert platform_suite.books_business() == (platform_suite.INVALID, None)
+    read = []
+
+    async def service(client, path):
+        read.append(path)
+        return [{'news': [{'title': 'Their post', 'body': 'Words.', 'published_at': '2026-08-30T00:00:00Z'}]}]
+
+    async def buffer_db(method, path, body=None):
+        read.append(path)
+        return [{'news': []}]
+    monkeypatch.setattr(public_site, '_sb_service', service)
+    monkeypatch.setattr(m, 'db', buffer_db)
+    assert run(public_site._platform_news_posts()) == [] and read == []          # the news page
+    with pytest.raises(HTTPException) as err:
+        run(marketing_design.platform_owner())                                   # the Buffer desk's flyers
+    assert err.value.status_code == 409
+    assert run(platform._news()) == [] and read == []                            # the Buffer desk's numbers
+    platform_suite.forget()
+    verdicts.rows[PID] = {'id': PID, 'owner_id': KEVIN, 'platform_books': 'true'}
+    assert platform_suite.books_business() == (platform_suite.VALID, {'id': PID, 'owner_id': KEVIN})
+    assert [p['title'] for p in run(public_site._platform_news_posts())] == ['Their post']
+    assert read[-1].startswith(f'/businesses?id=eq.{PID}&settings->>platform_books=eq.true')
+    assert run(marketing_design.platform_owner()) == {'business_id': PID, 'user_id': KEVIN}
+    platform_suite.forget()
+    verdicts.fail_rows = True
+    assert run(public_site._platform_news_posts()) == []
+    with pytest.raises(HTTPException) as err:
+        run(marketing_design.platform_owner())
+    assert err.value.status_code == 503
+    with pytest.raises(HTTPException):
+        run(platform._news())                                                    # unread, never "no news"
 
 
 # ── Solutionist's own profile, numbers, plays and rules ───────────────
@@ -904,10 +1108,11 @@ def test_the_apex_never_follows_another_business_post_or_an_off_site_link(apex, 
         r = apex.go('abcdefgh')
         assert r.status_code == 302 and r.headers['location'] == 'https://mysolutionist.app/'
         assert apex.follows in ([('abcdefgh', False)], [])               # never counted
-    switch(monkeypatch, on=False, pid=None)
-    apex.follows.clear()
-    assert apex.go('abcdefgh').headers['location'] == 'https://mysolutionist.app/'
-    assert apex.follows == []                                            # no id: nothing is read
+    for pid in (None, api.BIZ):                                          # no id, or a tenant's: nothing is read
+        switch(monkeypatch, on=True, pid=pid)
+        apex.follows.clear()
+        assert apex.go('abcdefgh').headers['location'] == 'https://mysolutionist.app/'
+        assert apex.follows == []
 
 
 # ── the docs, the switches and the work log ───────────────────────────

@@ -31,10 +31,12 @@ The business desk's own owner check then runs as well (each route below calls
 the business route itself). A tenant owner, or anyone else, is refused by
 require_owner before anything is read.
 
-THE SWITCH. MC_MARKETING_SUITE=on opens these routes; off (the default)
-they refuse in plain words (409) and Mission Control's Buffer desk is
-exactly as it was. PLATFORM_BUSINESS_ID unset: refused in plain words.
-/drain answers either way (it only reads).
+THE SWITCH. MC_MARKETING_SUITE=on with a validated platform business
+(platform_suite.state: the id's row is platform_books and owned by the
+platform owner) opens these routes; otherwise they refuse in plain words
+(409; 503 when the business couldn't be confirmed) and Mission Control's
+Buffer desk is exactly as it was. /suite/status and /drain answer either way
+and say in a plain sentence when the switch is on but the suite is not.
 """
 from __future__ import annotations
 
@@ -64,9 +66,13 @@ def _platform_row(owner_id: str) -> Dict[str, Any]:
     the signed-in platform owner. Refuses in plain words otherwise."""
     if not platform_suite.suite_on():
         raise HTTPException(409, platform_suite.NOT_ON)
-    pid = platform_suite.platform_id()
-    if not pid:
+    verdict, pid = platform_suite.state()
+    if verdict == platform_suite.UNSET:
         raise HTTPException(409, platform_suite.NO_ID)
+    if verdict == platform_suite.INVALID:
+        raise HTTPException(409, platform_suite.WRONG_ID)
+    if verdict == platform_suite.UNKNOWN:
+        raise HTTPException(503, platform_suite.UNCONFIRMED)
     rows = sb_clients.sb_get_as_service(f'/businesses?id=eq.{pid}&select=*&limit=1')
     if rows is None:
         raise HTTPException(503, READ_DOWN)
@@ -217,7 +223,10 @@ async def drain(owner=Depends(require_owner)):
       missed       approved, but its window closed: it will not go out
       drafts       never approved; nothing approves them while the suite is on
 
-    Safe to switch BUFFER_PUBLISHING off once queued and sending are both 0."""
+    Safe to switch BUFFER_PUBLISHING off once the suite is in use (the
+    switch on and the platform business validated) and queued and sending
+    are both 0. suite_problem says, in a plain sentence, why the switch is on
+    and the suite is not."""
     import platform_marketing as marketing
     now = marketing.now()
     rows = await marketing.db('GET', '/platform_marketing_posts?status=in.(approved,dispatching,submitted,uncertain,draft)'
@@ -241,9 +250,14 @@ async def drain(owner=Depends(require_owner)):
         'drafts': sum(1 for r in rows if r.get('status') == 'draft'),
     }
     publishing = os.environ.get('BUFFER_PUBLISHING', 'off').lower() == 'on'
-    safe = not truncated and count['queued'] == 0 and count['sending'] == 0
+    active = platform_suite.buffer_state() == 'closed'
+    # Only once the suite is in use is it safe to stop the Buffer desk's sender.
+    safe = active and not truncated and count['queued'] == 0 and count['sending'] == 0
     last = max((when(r['run_at']) for r in queued), default=None)
-    if truncated:
+    if not active:
+        message = ((platform_suite.problem() or platform_suite.NOT_ON)
+                   + ' Keep BUFFER_PUBLISHING on: the Buffer desk is still sending.')
+    elif truncated:
         message = 'More posts are waiting than one read counts. Check again before switching anything off.'
     elif safe:
         message = ('Nothing is left to hand to Buffer. It is safe to set BUFFER_PUBLISHING=off.'
@@ -257,6 +271,7 @@ async def drain(owner=Depends(require_owner)):
     else:
         message = (f"{count['queued'] + count['sending']} posts are still on their way to Buffer; the last goes out "
                    f"{last.isoformat() if last else 'soon'}. Keep BUFFER_PUBLISHING on until this reaches 0.")
-    return {'suite_on': platform_suite.suite_on(), 'buffer_publishing': publishing, 'paused': paused,
+    return {'suite_on': platform_suite.suite_on(), 'suite_active': active,
+            'suite_problem': platform_suite.problem(), 'buffer_publishing': publishing, 'paused': paused,
             **count, 'last_goes_out': last.isoformat() if last else None, 'truncated': truncated,
             'safe_to_switch_off': safe, 'message': message, 'checked_at': now.isoformat()}

@@ -1257,16 +1257,36 @@ migration.
 
 Today Mission Control finds it as the row with `settings.platform_books`
 true under the signed-in owner's account
-(`platform_console._find_platform_business`; `marketing_design.platform_owner`
-and the news page read the flag without the owner). The worker has no
-signed-in owner, and `settings` is the owner's own JSON, so the flag alone is
-not an identity a server-side grant can rest on. New env
-`PLATFORM_BUSINESS_ID` names it. Mission Control's routes check both: the id
-must name a row with `platform_books` true whose `owner_id` is the signed-in
-platform owner (`require_owner`), else they refuse in plain words (409).
-Unset, everything on the suite path refuses in plain words; nothing guesses.
+(`platform_console._find_platform_business`). The worker has no signed-in
+owner, and `settings` is the owner's own JSON: any business admin can set
+`platform_books` on their own row (the `businesses_admin_update` policy), so
+the flag alone is not an identity a server-side grant can rest on. New env
+`PLATFORM_BUSINESS_ID` names it, and **one predicate validates it
+everywhere** (`platform_suite.state`, service-role reads, remembered 5
+minutes, a failed read 1 minute): its row is readable, `platform_books` is
+true, and its owner is the platform owner's user (the auth user whose email
+is `PLATFORM_OWNER_EMAIL`, read by id as `platform_chief_authority` reads a
+business owner's address).
 
-### What that business gets (switch on, that id only)
+| State | What happens |
+| --- | --- |
+| valid, switch on | the suite is **active**: everything below applies; the Buffer desk drains |
+| valid, switch off | the Buffer desk as before; the suite's fan-out leaves the platform business out |
+| unset or invalid (a tenant's id put in by mistake, a row not flagged, an owner who is not the platform owner), switch on | the Buffer desk and its Thursday job keep working exactly as before, a loud error is logged, and `GET /suite/status` and `/drain` say so in a plain sentence. The id gets nothing special (no level, no profile, no exclusion from its own desk) |
+| unknown (a read failed), switch on | fail closed: neither desk takes anything new that minute (503 in plain words), neither loop plans the week that hour, nothing is the platform business |
+
+Mission Control's routes also check that the row's owner is the signed-in
+platform owner (`require_owner`) and refuse in plain words otherwise.
+
+The same owner check now guards the two places that took the first
+`platform_books` row on its own (B15 review): the public news page
+(`public_site._platform_news_posts`, mysolutionist.app/news) and the Buffer
+desk's flyers and numbers (`marketing_design.platform_owner`,
+`marketing_engine._news`) read `platform_suite.books_business`: the validated
+id, else the oldest flagged row whose owner is the platform owner. A tenant
+that flags its own row is never it.
+
+### What that business gets (the suite active, that id only)
 
 - **The autopilot level** (the week, its clips, standing OKs) whatever its
   billing row says: `platform_suite.effective_row` reads it as `comp_tier`
@@ -1338,13 +1358,16 @@ platform business).
 
 ### Buffer drains
 
-While `MC_MARKETING_SUITE=on` nothing new goes to Buffer: the Buffer desk
+While the suite is active nothing new goes to Buffer: the Buffer desk
 refuses a new post (`POST /ideas`, a new `POST /posts`), an approval
 (`/approve`), `/post-now` and a planned week (`/engine/run`) with 409 and
 "Solutionist's marketing runs on the marketing suite now..."; Platform Chief's
 `marketing_new_post`, a new `marketing_save_draft`, `marketing_post_now`,
 `marketing_run_week` and `marketing_replan_week` say the same, and its
-snapshot carries `suite`. Editing, skipping, cancelling and pausing posts
+snapshot carries `suite`. A post-now card refused while it is being prepared
+is that action's own answer in the reply (`platform_chief_authority.dispatch`
+turns a refusal from `propose` into `{ok: false, label}`), never the whole
+reply's failure; that holds for any action whose card cannot be prepared. Editing, skipping, cancelling and pausing posts
 already there still work. Posts approved before the switch are left to go
 out: the minute job keeps sending them (logged "Buffer drain"), and nothing
 in Buffer is ever cancelled automatically.
@@ -1353,8 +1376,10 @@ in Buffer is ever cancelled automatically.
 platform tables only, no Buffer call): `queued` (approved, window open),
 `sending`, `in_buffer` (handed over, still being checked every 10 minutes
 while `BUFFER_API_KEY` is set), `unconfirmed`, `missed`, `drafts`,
-`last_goes_out`, `paused`, `buffer_publishing`, and `safe_to_switch_off`
-(queued and sending both 0), with one plain sentence. A failed read is a 503,
+`last_goes_out`, `paused`, `buffer_publishing`, `suite_active`,
+`suite_problem` (why the switch is on and the suite is not), and
+`safe_to_switch_off` (the suite active, queued and sending both 0), with one
+plain sentence. A failed read is a 503,
 never "0 left". Do not pause the Buffer desk to drain it: a paused desk holds
 its approved posts.
 
@@ -1362,8 +1387,9 @@ its approved posts.
 
 | Switch | Who plans Solutionist's week |
 | --- | --- |
-| off | `marketing_engine.engine_tick` (the Buffer desk), as before. The suite's fan-out leaves the platform business out once `PLATFORM_BUSINESS_ID` is set (`desk_on_for` False even with `MARKETING_DESK=*`), and the old job skips a week whose suite plan has a post approved or out |
-| on | the suite's fan-out (`marketing_tick`, kind week). `engine_tick` does nothing; the suite does not plan a week whose Buffer plan has a post approved or out (`buffer_week_live`; the owner's request is refused the same way) |
+| off, or on without a valid id | `marketing_engine.engine_tick` (the Buffer desk), as before. The suite's fan-out leaves the platform business out once its id validates (`desk_on_for` False even with `MARKETING_DESK=*`), and the old job skips a week whose suite plan has a post approved or out |
+| on, valid id (active) | the suite's fan-out (`marketing_tick`, kind week). `engine_tick` does nothing; the suite does not plan a week whose Buffer plan has a post approved or out (`buffer_week_live`; the owner's request is refused the same way) |
+| on, unconfirmed | neither, that hour |
 
 A read across the two that fails plans nothing that hour on either side.
 With the switch on and its desk's `plan_enabled` off, no loop plans the week:

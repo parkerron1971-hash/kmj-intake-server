@@ -172,8 +172,17 @@ def _stamp(value):
 
 
 async def _news():
+    """The news page's posts, from Solutionist's own business: the
+    platform_books row owned by the platform owner (platform_suite.
+    books_business), never a tenant that flagged its own row."""
+    import platform_suite
     import site_news
-    rows = await marketing.db('GET', '/businesses?settings->>platform_books=eq.true'
+    verdict, books = await asyncio.to_thread(platform_suite.books_business)
+    if verdict == platform_suite.UNKNOWN:
+        raise HTTPException(503, "Solutionist's own business couldn't be confirmed just now.")
+    if not books:
+        return []
+    rows = await marketing.db('GET', f"/businesses?id=eq.{books['id']}&settings->>platform_books=eq.true"
                                      '&select=news:settings->website_content->news&limit=1')
     return site_news.normalize_posts(rows[0].get('news')) if rows else []
 
@@ -860,15 +869,22 @@ async def engine_tick():
     attempts (the claim counts them) and says so on Today.
 
     B15: one loop a week. While Solutionist's desk is on the marketing suite
-    (MC_MARKETING_SUITE=on) this job does nothing: the suite's planner plans
-    the platform business's week. Off the suite, a week whose suite plan
-    already has a post approved or out is not planned here (only with
-    PLATFORM_BUSINESS_ID set; unset, nothing is read)."""
+    (MC_MARKETING_SUITE=on and PLATFORM_BUSINESS_ID validated) this job does
+    nothing: the suite's planner plans the platform business's week. Switch
+    on but the id unset or invalid: this job plans as before (the suite is
+    not in use; platform_suite logs it loudly). Unconfirmed: nothing this
+    hour. Off the suite, a week whose suite plan already has a post approved
+    or out is not planned here (only with PLATFORM_BUSINESS_ID set; unset,
+    nothing is read)."""
     import platform_suite
     if not enabled():
         return
-    if platform_suite.suite_on():
+    closed = platform_suite.buffer_state()
+    if closed == 'closed':
         log.info('marketing engine: Solutionist\'s desk is on the marketing suite; the suite plans the week.')
+        return
+    if closed == 'unknown':
+        log.warning('marketing engine: Solutionist\'s own business could not be confirmed; nothing planned this hour.')
         return
     now = marketing.now()
     if now.astimezone(TZ).hour < RUN_HOUR:

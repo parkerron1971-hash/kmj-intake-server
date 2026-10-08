@@ -888,7 +888,7 @@ async def due_tick():
                 rows = await db('POST', '/rpc/platform_marketing_claim', {})
                 if not rows:
                     break
-                if platform_suite.suite_on():
+                if platform_suite.buffer_state() == 'closed':
                     # B15: nothing new reaches this queue; what was approved before the switch drains.
                     logger.info('Buffer drain: sending post %s, approved before the marketing suite took over.',
                                 rows[0].get('id'))

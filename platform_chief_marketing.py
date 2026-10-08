@@ -277,9 +277,8 @@ def _closed():
     so in the desk's words. Editing, skipping, cancelling and pausing posts
     already on the Buffer desk still work while it drains."""
     import platform_suite
-    if platform_suite.suite_on():
-        return {'ok': False, 'label': platform_suite.BUFFER_CLOSED}
-    return None
+    why = platform_suite.chief_closed()
+    return {'ok': False, 'label': why} if why else None
 
 
 async def marketing_snapshot():
@@ -308,7 +307,9 @@ async def marketing_snapshot():
         result['source_status'][key] = status
         return data
 
-    if platform_suite.suite_on():
+    if platform_suite.problem():
+        result['suite'] = {'on': False, 'note': platform_suite.problem()}
+    elif platform_suite.buffer_state() == 'closed':
         result['suite'] = {'on': True, 'note': 'Solutionist\'s marketing now runs on the marketing suite desk: new '
                            'posts, the weekly plan and posting right away happen there, not here. This snapshot is the '
                            'Buffer desk, which is draining: posts approved before the switch still go out.'}

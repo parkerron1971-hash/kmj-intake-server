@@ -300,10 +300,11 @@ async def follow_platform(code: str, *, person: bool) -> Optional[str]:
     the Buffer desk's own code missed (public_site's apex /go/). The same
     rule as a business host: the post must be the platform business's and
     its tracked_url https on mysolutionist.app; the click is counted only
-    then, and only for a person. Keyed on PLATFORM_BUSINESS_ID, not the
-    switch, so a link already out keeps working; unset, nothing is read."""
+    then, and only for a person. Keyed on the validated PLATFORM_BUSINESS_ID
+    (platform_suite.valid_id), not the switch, so a link already out keeps
+    working; unset, nothing is read."""
     import platform_suite
-    pid = platform_suite.platform_id()
+    pid = platform_suite.valid_id() if platform_suite.platform_id() else None
     code = (code or "").strip().lower()
     if not pid or not store.GO_CODE.match(code):
         return None

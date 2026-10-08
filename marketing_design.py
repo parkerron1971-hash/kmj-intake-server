@@ -317,10 +317,16 @@ def brand_palette(colors):
 # ── the platform business, as the build actor ─────────────────────────
 
 async def platform_owner():
-    rows = await marketing.db('GET', '/businesses?settings->>platform_books=eq.true&select=id,owner_id&limit=1')
-    if not rows:
+    """Solutionist's own business and its owner: the platform_books row owned
+    by the platform owner (platform_suite.books_business), never a tenant
+    that flagged its own row."""
+    import platform_suite
+    verdict, books = await asyncio.to_thread(platform_suite.books_business)
+    if verdict == platform_suite.UNKNOWN:
+        raise HTTPException(503, "Solutionist's own business couldn't be confirmed just now. Try again shortly.")
+    if not books:
         raise HTTPException(409, 'Set up The Solutionist System in Mission Control → Money & Website first.')
-    return {'business_id': str(rows[0]['id']), 'user_id': str(rows[0]['owner_id'])}
+    return {'business_id': str(books['id']), 'user_id': str(books['owner_id'])}
 
 
 class acting_for:
