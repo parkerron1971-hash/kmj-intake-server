@@ -1583,6 +1583,17 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                 ttl="1h" if _extended else "5m", role=timing_role)
         except Exception as e:  # never let a diagnostic touch the turn
             logger.warning("cache watch (request) failed: %s", e)
+    # Anthropic's own cache diagnostics name what changed since this
+    # business's previous main call (model, system, tools or messages).
+    # Free, hashes only; the first round of the main call only.
+    _diag_biz = business_id or (tool_biz or {}).get("id")
+    try:
+        import cache_watch
+        _diag = cache_watch.diagnostics_field(_diag_biz, timing_role)
+    except Exception:
+        _diag = None
+    if _diag is not None:
+        payload["diagnostics"] = _diag
     started_ms = int(time.time() * 1000)
 
     # Voice streaming arc — SSE from Anthropic, text deltas forwarded to
@@ -1632,6 +1643,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               stop_details: Dict[str, Any] = {}
               in_tok = out_tok = 0
               cache_read_tok = cache_write_tok = cache_write_1h_tok = 0
+              _reply_id, _reply_diag = None, None
               try:
                   async with llm_call.astream(client, payload, timeout=HTTP_TIMEOUT, key=key,
                                               extra_headers=_beta_headers(_extended),
@@ -1717,6 +1729,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           elif et == "content_block_stop":
                               searches.block_stop(int(evt.get("index") or 0))
                           elif et == "message_start":
+                              _reply_id = (evt.get("message") or {}).get("id")
+                              _reply_diag = (evt.get("message") or {}).get("diagnostics")
                               u = ((evt.get("message") or {}).get("usage")) or {}
                               in_tok = int(u.get("input_tokens") or 0)
                               cache_read_tok = int(u.get("cache_read_input_tokens") or 0)
@@ -1770,8 +1784,11 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                           import cache_watch
                           cache_watch.report_write(business_id or (tool_biz or {}).get("id"),
                                                    _cache_seen, cache_read_tok, cache_write_tok)
+                          cache_watch.diagnostics_seen(_diag_biz, timing_role, _reply_id, _reply_diag,
+                                                       cache_read_tok, cache_write_tok)
                       except Exception:
                           pass
+                      payload.pop("diagnostics", None)
                       _keep_brief_warm(business_id or (tool_biz or {}).get("id"), payload,
                                        timing_role, prompt_shape, _extended)
                   if stop_reason == "refusal":
@@ -1993,8 +2010,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
               cache_watch.report_write(business_id or (tool_biz or {}).get("id"), _cache_seen,
                                        usage.get("cache_read_input_tokens"),
                                        usage.get("cache_creation_input_tokens"))
+              cache_watch.diagnostics_seen(
+                  _diag_biz, timing_role, data.get("id") if isinstance(data, dict) else None,
+                  data.get("diagnostics") if isinstance(data, dict) else None,
+                  usage.get("cache_read_input_tokens"), usage.get("cache_creation_input_tokens"))
           except Exception:
               pass
+          payload.pop("diagnostics", None)
           _keep_brief_warm(business_id or (tool_biz or {}).get("id"), payload,
                            timing_role, prompt_shape, _extended)
       content = data.get("content", []) if isinstance(data, dict) else []
