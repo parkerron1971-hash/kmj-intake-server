@@ -44,6 +44,23 @@ STORAGE
   with the same shallow merge chief_agent's switch uses. The release
   time is agent_queue.scheduled_for on the proposal row; the spec in
   the body carries "standing": true so nothing else mistakes it.
+
+THE MARKETING KINDS (B13 of the 2026-10-07 marketing-suite plan, D6)
+  MARKETING_KINDS are not proposals: marketing_post (Chief's weekly flyer
+  posts) and post_clip (the business's own clips Chief folded into the
+  week). A grant lets Chief APPROVE those posts on the marketing desk
+  (marketing_approve, approved_via 'standing') once their week is drafted;
+  the desk's sender still sends them, and each can be taken back until it
+  goes out. They never ride the release tick or the Approval Queue's
+  question (both stay on ELIGIBLE). eligible() gates them on the real plan
+  (feature_gates.plan_includes marketing_autopilot; post_clip also
+  ai_clips) and on client-facing autonomy being enabled; the grant is the
+  owner's alone (the door's owner check; chat never grants one). The rest
+  lives in business_marketing_standing: when Chief approves, the checks
+  at approval and send time, the ask after three and the retire after
+  three, read off the posts' own history (marketing_post_events).
+  settings.autonomy.standing_offered = {verb: at} remembers that Chief
+  asked once.
 """
 from __future__ import annotations
 
@@ -69,6 +86,17 @@ router = APIRouter(prefix="/agents/chief/standing", tags=["chief-standing"])
 ELIGIBLE = ("send_sms", "send_invoice", "generate_payment_link", "mark_invoice_paid")
 CLIENT_FACING = ("send_sms",)
 MONEY_VERBS = ("send_invoice",)
+# B13: posts Chief may approve on the marketing desk under the owner's
+# standing OK (business_marketing_standing). Not proposals: never filed
+# with a release time, never released by the tick, never asked about by
+# the Approval Queue. Nothing else on the desk is covered: the suggestion,
+# open chairs, the owner's and Chief's one-offs, and Post now.
+MARKETING_KINDS = ("marketing_post", "post_clip")
+KINDS = ELIGIBLE + MARKETING_KINDS
+MARKETING_FEATURES = {"marketing_post": ("marketing_autopilot",),
+                      "post_clip": ("marketing_autopilot", "ai_clips")}
+NOT_ON_PLAN = "standing approvals for posts come with the Solutionist plan"
+AUTONOMY_OFF = "client-facing autonomy is off for this business"
 
 RECALL_MINUTES = int(os.environ.get("STANDING_RECALL_MINUTES", "2") or 2)
 ASK_AFTER = int(os.environ.get("STANDING_ASK_AFTER", "3") or 3)
@@ -77,9 +105,11 @@ MONEY_CAP_USD = float(os.environ.get("STANDING_MONEY_CAP_USD", "500") or 500)
 MAX_PER_TICK = 50
 
 _WORDS = {"send_sms": "texts", "send_invoice": "invoice sends",
-          "generate_payment_link": "payment links", "mark_invoice_paid": "payments recorded"}
+          "generate_payment_link": "payment links", "mark_invoice_paid": "payments recorded",
+          "marketing_post": "weekly posts", "post_clip": "clip posts"}
 _ONE = {"send_sms": "a text", "send_invoice": "an invoice", "generate_payment_link": "a payment link",
-        "mark_invoice_paid": "a payment as recorded"}
+        "mark_invoice_paid": "a payment as recorded",
+        "marketing_post": "a weekly post", "post_clip": "a clip post"}
 
 
 def enabled() -> bool:
@@ -128,6 +158,8 @@ def is_granted(biz: Dict[str, Any], verb: str) -> bool:
 def eligible(biz: Dict[str, Any], verb: str) -> Tuple[bool, str]:
     """May this business hand this kind over at all? The guardrails
     that do not move."""
+    if verb in MARKETING_KINDS:
+        return marketing_eligible(biz, verb)
     if verb not in ELIGIBLE:
         return False, "this kind always needs a tap"
     if verb in CLIENT_FACING:
@@ -140,6 +172,28 @@ def eligible(biz: Dict[str, Any], verb: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def marketing_eligible(biz: Dict[str, Any], verb: str) -> Tuple[bool, str]:
+    """A marketing kind (B13): the business's REAL plan includes it
+    (feature_gates.plan_includes, whatever BILLING_ENFORCE says: Practice,
+    the Solutionist plan) and client-facing autonomy is enabled. A post
+    goes out under the business's name, so a practice that keeps
+    client-facing sends to itself keeps these too. Fails closed: anything
+    that cannot be read says no."""
+    try:
+        import feature_gates
+        if not all(feature_gates.plan_includes(biz, f) for f in MARKETING_FEATURES[verb]):
+            return False, NOT_ON_PLAN
+    except Exception:
+        return False, NOT_ON_PLAN
+    try:
+        import policy_engine
+        if policy_engine.client_facing_autonomy(biz) != "enabled":
+            return False, AUTONOMY_OFF
+    except Exception:
+        return False, AUTONOMY_OFF
+    return True, ""
+
+
 def money_cap(biz: Dict[str, Any]) -> float:
     raw = _autonomy(biz).get("standing_money_cap")
     try:
@@ -148,9 +202,14 @@ def money_cap(biz: Dict[str, Any]) -> float:
         return MONEY_CAP_USD
 
 
+# The plan's columns ride along so a marketing kind's eligibility reads
+# the real plan (feature_gates.plan_of).
+BUSINESS_COLUMNS = "id,name,type,owner_id,settings,comp_tier,subscription_status,subscription_plan"
+
+
 def _load(business_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=id,name,type,owner_id,settings&limit=1") or []
+        f"/businesses?id=eq.{business_id}&select={BUSINESS_COLUMNS}&limit=1") or []
     return rows[0] if rows else None
 
 
@@ -196,9 +255,12 @@ def grant(business_id: str, verb: str, *, by: str, via: str) -> Tuple[bool, str]
     _write_autonomy(business_id, _m)
     try:
         import audit_log
+        marketing = verb in MARKETING_KINDS
         audit_log.record(business_id, actor_type="user", actor_id=by, verb="standing_grant",
-                         ok=True, source=via, summary=f"Chief may send {words(verb)} on its own",
-                         payload={"verb": verb, "recall_minutes": RECALL_MINUTES})
+                         ok=True, source=via,
+                         summary=(f"Chief may approve {words(verb)} on its own" if marketing
+                                  else f"Chief may send {words(verb)} on its own"),
+                         payload={"verb": verb, **({} if marketing else {"recall_minutes": RECALL_MINUTES})})
     except Exception:
         pass
     return True, when
@@ -235,9 +297,34 @@ def decline(business_id: str, verb: str) -> None:
     _write_autonomy(business_id, _m)
 
 
+def offered(biz: Dict[str, Any], verb: str) -> Optional[str]:
+    """When Chief asked about this marketing kind (it asks once), or None."""
+    o = _autonomy(biz).get("standing_offered")
+    return o.get(verb) if isinstance(o, dict) and isinstance(o.get(verb), str) else None
+
+
+def mark_offered(business_id: str, verb: str) -> bool:
+    """Remember that Chief asked about this kind, before it asks. False
+    when it already asked, or the write did not land: then it does not ask
+    (a question said twice is worse than one said late)."""
+    biz = _load(business_id)
+    if not biz or offered(biz, verb):
+        return False
+    settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else {}
+    autonomy = dict(_autonomy(biz))
+    autonomy["standing_offered"] = {**(autonomy.get("standing_offered") or {}), verb: _z(_now())}
+    rows = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
+                                          {"settings": {**settings, "autonomy": autonomy}})
+    return bool(rows)
+
+
 # ─── The question, at the third approval ─────────────────────────────
 
 def question(verb: str) -> str:
+    if verb in MARKETING_KINDS:
+        return (f"You've approved the last {ASK_AFTER} {words(verb)} I drafted without changing them. "
+                f"Want me to approve {words(verb)} like these on my own from now on? I'll tell you each "
+                f"week, and you can take any one back before it goes out.")
     return (f"You've approved the last {ASK_AFTER} {words(verb)} I drafted. Want me to send "
             f"{words(verb)} like this on my own from now on? You'll still see every one, and "
             f"you get {RECALL_MINUTES} minutes to pull one back.")
@@ -251,7 +338,10 @@ def offer_after_approval(biz: Dict[str, Any], verb: str,
     approvals (pending rows do not count). The approval that just
     happened is usually still pending in the ledger, so it counts as
     one of them here."""
-    if not enabled() or not verb:
+    if not enabled() or not verb or verb not in ELIGIBLE:
+        # A marketing kind is asked about on the desk, off the posts' own
+        # history (business_marketing_standing), never here: Chief's own
+        # post_clip proposal is not the week's clip post.
         return None
     now = now or _now()
     ok, _ = eligible(biz, verb)
@@ -287,8 +377,9 @@ def offer_after_approval(biz: Dict[str, Any], verb: str,
 
 def filing_extras(biz: Optional[Dict[str, Any]], verb: str, now: Optional[datetime] = None) -> Dict[str, Any]:
     """What a proposal row carries when the kind is granted: its release
-    time. Empty otherwise."""
-    if not biz or not is_granted(biz, verb):
+    time. Empty otherwise. Only the proposal kinds: a marketing grant
+    (post_clip) never gives Chief's own post_clip proposal a release time."""
+    if not biz or verb not in ELIGIBLE or not is_granted(biz, verb):
         return {}
     now = now or _now()
     return {"scheduled_for": _z(now + timedelta(minutes=RECALL_MINUTES))}
@@ -370,7 +461,7 @@ async def release_one(row: Dict[str, Any], now: Optional[datetime] = None) -> Di
     biz = await asyncio.to_thread(_load, bid)
     if not biz:
         return {"id": qid, "did": "skipped", "why": "no business"}
-    if not is_granted(biz, verb):
+    if verb not in ELIGIBLE or not is_granted(biz, verb):
         await asyncio.to_thread(_hold, qid, "the standing permission was turned off")
         return {"id": qid, "did": "held", "why": "revoked"}
     if policy_engine.is_paused(biz):
@@ -460,7 +551,9 @@ def sweep_revocations(now: Optional[datetime] = None) -> List[str]:
         except Exception:
             continue
         for verb in grants:
-            if verb in retired:
+            # A marketing kind retires off its posts' own history
+            # (business_marketing_standing), not the proposal ledger.
+            if verb in retired and verb in ELIGIBLE:
                 revoke(str(biz["id"]), verb, by="chief", via="retire", reason="you stopped the last three")
                 _tell(biz, f"I'm back to asking before {words(verb)}",
                       f"You stopped the last {outcome_ledger.RETIRE_AFTER} {words(verb)} I sent on my own, so I "
@@ -476,9 +569,19 @@ def context_lines(biz: Dict[str, Any]) -> List[str]:
     g = granted(biz)
     if not g:
         return []
-    parts = [f"{words(v)} (since {str(i.get('granted_at') or '')[:10]})" for v, i in sorted(g.items())]
-    return [f"  Chief sends these on its own after a {RECALL_MINUTES}-minute window the practitioner can stop: "
-            + "; ".join(parts) + ". revoke_standing_permission turns one off."]
+    out: List[str] = []
+    sends = {v: i for v, i in g.items() if v not in MARKETING_KINDS}
+    posts = {v: i for v, i in g.items() if v in MARKETING_KINDS}
+    if sends:
+        parts = [f"{words(v)} (since {str(i.get('granted_at') or '')[:10]})" for v, i in sorted(sends.items())]
+        out.append(f"  Chief sends these on its own after a {RECALL_MINUTES}-minute window the practitioner can stop: "
+                   + "; ".join(parts) + ". revoke_standing_permission turns one off.")
+    if posts:
+        parts = [f"{words(v)} (since {str(i.get('granted_at') or '')[:10]})" for v, i in sorted(posts.items())]
+        out.append("  On the marketing desk, Chief approves these posts on its own once their week is drafted "
+                   "(the owner is told each week and can take any one back before it goes out): "
+                   + "; ".join(parts) + ". revoke_standing_permission turns one off.")
+    return out
 
 
 def _fail(atype: str, msg: str) -> Dict[str, Any]:
@@ -491,8 +594,17 @@ def _verb_from(action: Dict[str, Any]) -> str:
     aliases = {"texts": "send_sms", "text": "send_sms", "sms": "send_sms", "messages": "send_sms",
                "invoices": "send_invoice", "invoice": "send_invoice", "invoice sends": "send_invoice",
                "payment links": "generate_payment_link", "payment link": "generate_payment_link",
-               "payments": "mark_invoice_paid", "payments recorded": "mark_invoice_paid"}
+               "payments": "mark_invoice_paid", "payments recorded": "mark_invoice_paid",
+               "weekly posts": "marketing_post", "posts": "marketing_post", "marketing posts": "marketing_post",
+               "clip posts": "post_clip", "clips": "post_clip"}
     return aliases.get(raw, raw)
+
+
+def _turn_is_owner(biz: Dict[str, Any]) -> bool:
+    """The signed-in person on this chat turn is the business's owner."""
+    import chief_of_staff as cos
+    who = cos._TURN_USER_ID.get() or ""
+    return bool(who) and str(who) == str(biz.get("owner_id") or "")
 
 
 async def handle_grant_standing_permission(client, biz, action) -> Dict[str, Any]:
@@ -501,6 +613,11 @@ async def handle_grant_standing_permission(client, biz, action) -> Dict[str, Any
     verb = _verb_from(action)
     if not verb:
         return _fail("grant_standing_permission", "say which kind: texts, invoice sends, payment links, or payments recorded")
+    if verb in MARKETING_KINDS:
+        # B13: the owner turns this on themselves, on the marketing desk.
+        return _fail("grant_standing_permission",
+                     f"the owner turns that on themselves on the marketing desk (Grow, Marketing); "
+                     f"I can't approve {words(verb)} on my own from chat")
     ok, why = eligible(biz, verb)
     if not ok:
         return _fail("grant_standing_permission", why)
@@ -522,6 +639,8 @@ async def handle_revoke_standing_permission(client, biz, action) -> Dict[str, An
         verb = next(iter(g))
     if not verb:
         return _fail("revoke_standing_permission", "say which kind" if g else "nothing is on standing permission")
+    if verb in MARKETING_KINDS and not _turn_is_owner(biz):
+        return _fail("revoke_standing_permission", "only the business owner can change that")
     import chief_of_staff as cos
     had = await asyncio.to_thread(revoke, str(biz.get("id")), verb,
                                   by=(cos._TURN_USER_ID.get() or "owner"), via="chat")
@@ -553,6 +672,10 @@ def standing(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict
     return {"ok": True, "granted": granted(biz),
             "eligible": [{"verb": v, "kind": words(v), "ok": eligible(biz, v)[0], "why": eligible(biz, v)[1]}
                          for v in ELIGIBLE],
+            # B13: the marketing desk's kinds, apart, so a list of send
+            # switches never grows a post switch it does not know.
+            "marketing": [{"verb": v, "kind": words(v), "ok": eligible(biz, v)[0], "why": eligible(biz, v)[1]}
+                          for v in MARKETING_KINDS],
             "recall_minutes": RECALL_MINUTES, "ask_after": ASK_AFTER, "money_cap": money_cap(biz)}
 
 

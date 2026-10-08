@@ -93,6 +93,12 @@ THE WEEKLY PLAN (B9, run_week)
   post stays a draft for the owner's OK) and gives up on late or failed
   ones. Once no post of the run is designing, the owner is told ONCE: a
   push and a Today item, "Chief planned next week: 5 posts wait for your OK".
+  At the autopilot level (Solutionist, B13) the kinds the owner's standing
+  OK covers are approved first (business_marketing_standing.approve_run,
+  through marketing_approve with approved_via 'standing') and the one tell
+  says so: "Chief approved 5 posts for next week under your standing OK".
+  The same tick puts back to waiting any post approved on a standing OK
+  that no longer covers it (business_marketing_standing.lapse_sweep).
 
   The owner's request for a week (POST /engine/run) queues it like a
   suggestion; a week can be re-planned at most twice, only while none of its
@@ -186,7 +192,7 @@ LEVEL = 'suggest'
 # The weekly plan (B9).
 WEEK_KIND = 'week'
 WEEK_TASK = 'business_marketing_week'
-WEEK_LEVELS = ('week', 'autopilot')   # autopilot (Practice): the week plus its own clips (B12); B13 to come
+WEEK_LEVELS = ('week', 'autopilot')   # autopilot (Practice): the week plus its own clips (B12) and standing OKs (B13)
 WEEK_MAX_TOKENS = 4000                # five captions and five flyers' three lines
 FLYERS_PER_WEEK = 5                   # plan flyers per business per week, replans included
 FLYER_SIZE = '1088x1360'              # 4:5: Instagram's tallest feed picture, shown whole
@@ -1818,7 +1824,7 @@ async def tell_week(run: Dict[str, Any], at: datetime) -> str:
     dedup_key. If what was said cannot be read, nothing is said."""
     bid, rid = str(UUID(str(run['business_id']))), str(UUID(str(run['id'])))
     posts = await store.rows(f'/marketing_posts?run_id=eq.{rid}&business_id=eq.{bid}&status=neq.cancelled'
-                             '&select=id,status,design_status,source&limit=60')
+                             '&select=id,status,design_status,source,approved_via&limit=60')
     if any(p.get('design_status') == 'designing' for p in posts):
         return 'waiting'
     drafts = [p for p in posts if p.get('status') == 'draft']
@@ -1826,19 +1832,39 @@ async def tell_week(run: Dict[str, Any], at: datetime) -> str:
     told = await asyncio.to_thread(_already_told, bid, key)
     if told is None:
         return 'unreadable'
-    if not told and drafts:
+    by_standing = [p for p in posts if p.get('approved_via') == 'standing' and p.get('status') != 'draft']
+    if not told and (drafts or by_standing):
         business = await asyncio.to_thread(read_business, bid)
         tz = await asyncio.to_thread(marketing_profile.time_zone, business)
-        # A clip (B12) carries its own covers: never counted as words only.
-        clip_posts = sum(1 for p in drafts if p.get('source') == 'clip')
-        without = sum(1 for p in drafts if p.get('source') != 'clip' and p.get('design_status') != 'ready')
-        said = week_words(len(drafts), without, reading.relation(run.get('week_of'), at, tz), clip_posts)
+        which = reading.relation(run.get('week_of'), at, tz)
+        if drafts:
+            # B13: the kinds the owner's standing OK covers are approved now
+            # that the week has settled, through marketing_approve (approved_via
+            # 'standing'); approve_run checks the grant, the plan and autonomy
+            # itself, so nothing is approved for any other level.
+            import business_marketing_standing as standing
+            approved = set(await standing.approve_run(business, rid, at, tz=tz))
+            for p in drafts:
+                if str(p['id']) in approved:
+                    p.update(status='approved', approved_via='standing')
+                    by_standing.append(p)
+            drafts = [p for p in drafts if str(p['id']) not in approved]
+        if by_standing:
+            import business_marketing_standing as standing
+            said = standing.week_words(len(by_standing), len(drafts), which)
+        else:
+            # A clip (B12) carries its own covers: never counted as words only.
+            clip_posts = sum(1 for p in drafts if p.get('source') == 'clip')
+            without = sum(1 for p in drafts if p.get('source') != 'clip' and p.get('design_status') != 'ready')
+            said = week_words(len(drafts), without, which, clip_posts)
         if not await asyncio.to_thread(_week_today_item, bid, rid, said, key):
             return 'not_told'
         if business.get('owner_id'):
             await asyncio.to_thread(_week_push, str(business['owner_id']), rid, said)
+        await _mark_told(run, at)
+        return 'told'
     await _mark_told(run, at)
-    return 'told' if drafts and not told else 'nothing_to_tell'
+    return 'nothing_to_tell'
 
 
 async def settle_designs(posts: List[Dict[str, Any]], at: datetime) -> Counter:
@@ -1914,6 +1940,14 @@ async def marketing_design_tick(now: Optional[datetime] = None) -> Dict[str, Any
             log.warning('marketing planner: the owner of week %s could not be told', str(run.get('id'))[:8],
                         exc_info=True)
             tally['week_error'] += 1
+    # B13: posts approved on a standing OK that no longer covers them (the
+    # plan lapsed, client-facing autonomy or the permission turned off,
+    # automations paused) go back to waiting for the owner at once.
+    try:
+        import business_marketing_standing as standing
+        tally.update(await standing.lapse_sweep(only=only, on_for=desk_on_for))
+    except Exception:
+        log.warning('marketing planner: the standing sweep failed', exc_info=True)
     return dict(tally)
 
 
