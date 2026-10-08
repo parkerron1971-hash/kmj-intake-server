@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "This will work. let's build this."
 status: waiting on Kevin
-prs: []
+prs: [kmj-intake-server#1330]
 migrations: []
 left_undone:
   - "Kevin: nothing runs until MARKETING_DESK covers a Boss business (worker AND web) and nothing sends unless MARKETING_DESK_PUBLISHING=on and the owner approves; the first open-chairs week should go to a test barbershop with weekly hours, a bookable offering and a connected Instagram"
