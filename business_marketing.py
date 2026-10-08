@@ -97,6 +97,9 @@ HEX64 = r'^[a-f0-9]{64}$'
 Shape = Literal['story', 'wide']
 
 CHANGED = 'A post changed or its time passed; refresh and review again'
+# marketing_approve's own words for it (the migration), so the desk says the
+# same thing whichever of the two refuses first.
+DESIGNING = 'A flyer is still being made; approve that post when it is ready'
 STALE = ('This post changed since the desk was loaded, or it is already going out. '
          'Nothing was changed. Refresh the desk and try again.')
 GONE_POST = 'A post here no longer exists. Refresh the desk.'
@@ -911,9 +914,17 @@ async def approve_route(business_id: UUID, req: Review, user: AuthedUser = Depen
         row = await _call(store.get_post(bid, item.id), down=READ_DOWN)
         if not row:
             raise HTTPException(409, CHANGED)
+        if row.get('design_status') == 'designing':
+            # marketing_approve refuses it too, in these same words; said here first.
+            raise HTTPException(409, DESIGNING)
         if any(str(t.get('connection_id')) not in live for t in row.get('targets') or []):
             raise HTTPException(409, 'An account this post goes to is no longer connected. Change its accounts, '
                                      'then approve it again.')
+        _, dropped = fit(list(row.get('targets') or []), media_kind(row.get('media')))
+        if dropped:
+            # A weekly-plan post whose flyer never came, on Instagram alone.
+            raise HTTPException(409, f"{dropped_note(dropped) or 'An account here cannot take this post.'} "
+                                     'Add a picture or change its accounts, then approve it.')
     count = await _call(store.approve(bid, [i.model_dump(mode='json') for i in req.items],
                                       actor=str(user.id), via='owner'))
     return {'approved': count}

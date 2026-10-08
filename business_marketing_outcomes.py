@@ -18,6 +18,10 @@ post id is the one join key:
 The window is the last 30 days: the posts that went out in it, and what came
 through their links since.
 
+play_scores (B9) reads the same three measures over 120 days and averages
+them by play, so the weekly plan can lean on what did well through the
+business's own links (marketing_engine._rank, from 3 samples a play).
+
 A RECORDED relationship, never a causal claim (the rule marketing_outcomes
 and growth_intelligence follow): "4 visits came through this post's link",
 not "this post brought 4 visits". Someone who saw the post and typed the
@@ -130,6 +134,93 @@ def headline(totals: Dict[str, Optional[int]], sources: Dict[str, str], *, sent:
     return floor + sentence if floor else sentence[0].upper() + sentence[1:]
 
 
+async def _measure_posts(bid: str, ids: List[str],
+                         since: datetime) -> Tuple[Dict[str, Dict[str, Optional[int]]], Dict[str, str]]:
+    """Clicks, visits and leads per post (ids: validated post ids) since
+    `since`, and each source's state. A source that cannot be read is None
+    for every post, never 0."""
+    per: Dict[str, Dict[str, Optional[int]]] = {pid: {m: 0 for m in MEASURES} for pid in ids}
+    sources = {m: "loaded" for m in MEASURES}
+    if not ids:
+        return per, sources
+    day = since.date().isoformat()
+    stamp = query_time(since)
+    (clicks, sources["clicks"]), (events, sources["visits"]), (leads, sources["leads"]) = await asyncio.gather(
+        _measure(lambda: _batched(_store, lambda s: (
+            f"/marketing_link_clicks?business_id=eq.{bid}&post_id=in.({s})&day=gte.{day}"
+            "&select=post_id,clicks"), ids, LIMITS["clicks"])),
+        _measure(lambda: _batched(_service, lambda s: (
+            f"/site_events?business_id=eq.{bid}&data->>utm_content=in.({s})&ts=gte.{stamp}"
+            "&select=session_id,data"), ids, LIMITS["visits"])),
+        _measure(lambda: _batched(_service, lambda s: (
+            f"/contacts?business_id=eq.{bid}&attribution->>utm_content=in.({s})&created_at=gte.{stamp}"
+            "&select=id,attribution"), ids, LIMITS["leads"])),
+    )
+    for row in clicks:
+        pid = str(row.get("post_id") or "")
+        if pid in per:
+            per[pid]["clicks"] += int(row.get("clicks") or 0)
+    sessions: Dict[str, set] = {}
+    for row in events:
+        pid = str((row.get("data") or {}).get("utm_content") or "")
+        if pid in per and row.get("session_id"):
+            sessions.setdefault(pid, set()).add(row["session_id"])
+    for pid, seen in sessions.items():
+        per[pid]["visits"] = len(seen)
+    for row in leads:
+        pid = str((row.get("attribution") or {}).get("utm_content") or "")
+        if pid in per:
+            per[pid]["leads"] += 1
+    for pid in per:
+        for m in MEASURES:
+            if sources[m] == "unavailable":
+                per[pid][m] = None
+    return per, sources
+
+
+# ── what did well, by play (the weekly plan, B9) ──────────────────────
+
+PLAY_WINDOW_DAYS = 120          # the platform desk's window for a play's own results
+PLAY_POSTS_LIMIT = 200
+SCORED = ("published", "partly_published")
+
+
+def score(measured: Optional[Dict[str, Optional[int]]]) -> Optional[float]:
+    """One post's result through its own link: a lead counts far more than a
+    look (the platform's weighting, marketing_engine._score, without the
+    signups a business site does not have). None when a measure is unread."""
+    if not measured or any(measured.get(m) is None for m in MEASURES):
+        return None
+    return measured["leads"] * 4 + max(measured["clicks"], measured["visits"])
+
+
+async def play_scores(business_id: Any, *, now: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
+    """{play_id: {samples, average}} over this business's posts that went out
+    in the last 120 days with their own link. marketing_engine._rank lets a
+    play's own results reorder the week only once it has PROVEN (3) samples;
+    with fewer, the default ranking stands. A source that cannot be read
+    gives {} (the default ranking), never a guess; the posts unreadable
+    raises StoreError."""
+    bid = str(UUID(str(business_id)))
+    now = now or datetime.now(timezone.utc)
+    since = now - timedelta(days=PLAY_WINDOW_DAYS)
+    posts = await store.rows(
+        f"/marketing_posts?business_id=eq.{bid}&status=in.({','.join(SCORED)})&play_id=not.is.null"
+        f"&tracked_url=not.is.null&run_at=gte.{query_time(since)}&select=id,play_id,run_at"
+        f"&order=run_at.desc&limit={PLAY_POSTS_LIMIT}")
+    if not posts:
+        return {}
+    per, sources = await _measure_posts(bid, _ids(posts), since)
+    if any(state == "unavailable" for state in sources.values()):
+        return {}
+    by_play: Dict[str, List[float]] = {}
+    for p in posts:
+        value = score(per.get(str(p["id"])))
+        if value is not None:
+            by_play.setdefault(str(p["play_id"]), []).append(value)
+    return {play: {"samples": len(v), "average": round(sum(v) / len(v), 2)} for play, v in by_play.items()}
+
+
 async def for_business(business_id: Any, *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Per-post and total results for this business's posts that went out in
     the last 30 days, with each source's state. Raises StoreError when the
@@ -148,41 +239,7 @@ async def for_business(business_id: Any, *, now: Optional[datetime] = None) -> D
 
     linked_posts = [p for p in posts if p.get("tracked_url")]
     ids = _ids(linked_posts)
-    per = {pid: {m: 0 for m in MEASURES} for pid in ids}
-    sources = {m: "loaded" for m in MEASURES}
-    if ids:
-        day = since.date().isoformat()
-        stamp = query_time(since)
-        (clicks, sources["clicks"]), (events, sources["visits"]), (leads, sources["leads"]) = await asyncio.gather(
-            _measure(lambda: _batched(_store, lambda s: (
-                f"/marketing_link_clicks?business_id=eq.{bid}&post_id=in.({s})&day=gte.{day}"
-                "&select=post_id,clicks"), ids, LIMITS["clicks"])),
-            _measure(lambda: _batched(_service, lambda s: (
-                f"/site_events?business_id=eq.{bid}&data->>utm_content=in.({s})&ts=gte.{stamp}"
-                "&select=session_id,data"), ids, LIMITS["visits"])),
-            _measure(lambda: _batched(_service, lambda s: (
-                f"/contacts?business_id=eq.{bid}&attribution->>utm_content=in.({s})&created_at=gte.{stamp}"
-                "&select=id,attribution"), ids, LIMITS["leads"])),
-        )
-        for row in clicks:
-            pid = str(row.get("post_id") or "")
-            if pid in per:
-                per[pid]["clicks"] += int(row.get("clicks") or 0)
-        sessions: Dict[str, set] = {}
-        for row in events:
-            pid = str((row.get("data") or {}).get("utm_content") or "")
-            if pid in per and row.get("session_id"):
-                sessions.setdefault(pid, set()).add(row["session_id"])
-        for pid, seen in sessions.items():
-            per[pid]["visits"] = len(seen)
-        for row in leads:
-            pid = str((row.get("attribution") or {}).get("utm_content") or "")
-            if pid in per:
-                per[pid]["leads"] += 1
-        for pid in per:
-            for m in MEASURES:
-                if sources[m] == "unavailable":
-                    per[pid][m] = None
+    per, sources = await _measure_posts(bid, ids, since)
 
     totals = {m: (sum(p[m] for p in per.values()) if sources[m] != "unavailable" else None) for m in MEASURES}
     out_posts = []
