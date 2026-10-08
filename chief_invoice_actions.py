@@ -48,7 +48,13 @@ def owner_confirms_link_off(action, *, prompted, user_id, biz, owner_text):
 
 
 def _literal(value):
-    return quote('"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"', safe='')
+    """One value for a plain `col=eq.<value>` filter: percent-encoded, NOT
+    wrapped in double quotes. PostgREST unquotes only inside in.() lists and
+    or=() trees; on a plain eq the quotes are part of the value, so
+    status=eq."sent" looks for the text "sent" with its quotes and matches
+    nothing. Every void, delete, archive and restore failed that way, as
+    'the invoice changed while I was updating it' (2026-10-08)."""
+    return quote(str(value), safe='')
 
 
 async def _invoice(client, biz, action):

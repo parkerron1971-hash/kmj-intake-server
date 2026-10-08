@@ -8,7 +8,7 @@ Provider protection: when an invoice carries a Stripe link, verify its connected
 
 The practitioner's Void button in the invoice drawer calls `POST /invoices/{id}/void` (`chief_invoice_actions.router`): signed-in, member+ on the invoice's business, then the same `_change('void_invoice')` Chief runs. A refusal comes back as a 409 carrying Chief's reason.
 
-Actions use request-scoped Supabase credentials and business filters on reads and writes. Status, timestamp, and paid/sent checks guard concurrent edits. The existing Chief execution pipeline supplies audit results and data-refresh notifications. Delete and void are class C; archive/restore are reversible class A.
+Actions use request-scoped Supabase credentials and business filters on reads and writes. Status, timestamp, and paid/sent checks guard concurrent edits. Their values are percent-encoded and never wrapped in double quotes: PostgREST keeps the quotes of a plain `eq` value, and until 2026-10-08 that made every conditional write match nothing. The existing Chief execution pipeline supplies audit results and data-refresh notifications. Delete and void are class C; archive/restore are reversible class A.
 
 `supabase/APPLY-2026-09-09-invoice-archive.sql` was applied to the connected production project on 2026-09-09. Verified nullable `timestamptz`; no existing invoice values were changed. Apply this additive migration before releasing the frontend/backend elsewhere.
 
