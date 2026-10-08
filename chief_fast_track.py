@@ -518,6 +518,12 @@ async def stream_text(system: str, messages: List[Dict[str, Any]], *, model: str
     stream with out["error"] set."""
     payload: Dict[str, Any] = {"model": model, "max_tokens": max_tokens, "stream": True,
                                "system": system, "messages": messages}
+    # Haiku 5.5 thinks adaptively by default, which these small calls never
+    # want: it delays the first word and eats a 60-token budget. Haiku 4.5
+    # has no thinking to turn off, so nothing changes for it.
+    if "haiku-5" in (model or ""):
+        import model_ladder
+        payload.update(model_ladder.thinking_off_kwargs(model))
     if stop_sequences:
         payload["stop_sequences"] = stop_sequences
     started = time.perf_counter()
@@ -931,7 +937,7 @@ class TwoTrack:
         content = opener_request(self.message, voice=fuller_voice)
         pump = asyncio.ensure_future(self._pump(stream_text(
             system, _history_tail(self.req) + [{"role": "user", "content": content}],
-            model=chief_models.model_for("fast"),
+            model=chief_models.model_for("opener"),
             max_tokens=VOICE_OPENER_MAX_TOKENS if self.voice else OPENER_MAX_TOKENS, rec=self.rec,
             endpoint="/chief/opener", units=0,
             business_id=self.business_id if self.verified else None, out=out), q, out=out, stage="opener"))
