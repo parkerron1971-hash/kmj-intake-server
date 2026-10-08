@@ -472,6 +472,13 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
     # yet) treats every day as bookable 24/7 — practitioner can tighten
     # via the BUILD-side editor (PR 2).
     available_slots = _slots_per_offering(business, offerings)
+    # Bookings unreadable → no times, and say why. Every offering gets an
+    # explicit [] (the shipped widget renders that as "no availability"
+    # without crashing) and the form itself still loads; the submit guard
+    # refuses on the same failure, so a guess is never booked.
+    slots_unavailable = available_slots is None
+    if slots_unavailable:
+        available_slots = {o["id"]: [] for o in offerings or [] if o.get("id")}
     # Phase D.1.3 — business timezone for the widget's "Business hours: X"
     # label. Reads availability.timezone if set, else falls back to the
     # practitioner profile timezone, else UTC. Same resolution as the
@@ -520,6 +527,11 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
     }
     if arrival_window:
         payload["arrival_window_min"] = arrival_window
+    # Keys present only on a failed bookings read, so normal payloads stay
+    # byte-identical.
+    if slots_unavailable:
+        payload["slots_unavailable"] = True
+        payload["slots_message"] = SLOTS_UNAVAILABLE_MSG
     return payload
 
 
@@ -600,16 +612,62 @@ def _business_timezone(business: Dict[str, Any]) -> Optional[str]:
     return tz or None
 
 
+BOOKING_READ_LIMIT = 2000
+
+# Said to a customer (and to Chief) when the bookings could not be read,
+# so nobody is told a time is free on a guess.
+SLOT_CHECK_FAILED_MSG = ("We couldn't confirm that time is still free. "
+                         "Please try again in a moment.")
+SLOTS_UNAVAILABLE_MSG = ("We couldn't load the open times just now. "
+                         "Please refresh in a moment.")
+
+
+class SlotCheckFailed(HTTPException):
+    """The double-book guard could not read the bookings, so it cannot say
+    the time is free. A 503 so that a caller which does not catch it still
+    fails closed (an endpoint answers 503; nothing is booked); Chief and
+    weekly series catch it and say so in their own words."""
+
+    def __init__(self) -> None:
+        super().__init__(status_code=503, detail=SLOT_CHECK_FAILED_MSG)
+
+
+def _read_bookings(business_id: str, lo, hi,
+                   limit: int = BOOKING_READ_LIMIT,
+                   exclude_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    """Active bookings starting in [lo, hi) (dates), as
+    {appointment_at, duration_min_at_booking} rows. None when the read
+    failed or hit its row limit (some bookings unseen) — never [] for a
+    failure. sb_get_as_service already tells the two apart: None on a
+    4xx/5xx or transport error, [] on zero rows. exclude_id leaves one
+    booking out (a reschedule must not collide with itself)."""
+    from availability_engine import BOOKING_SELECT, booked_rows, booking_window_filter
+    not_this = f"&id=neq.{exclude_id}" if exclude_id else ""
+    rows = sb_clients.sb_get_as_service(
+        f"/module_entries?business_id=eq.{business_id}&status=eq.active{not_this}"
+        f"&{booking_window_filter(lo, hi)}"
+        f"&select={BOOKING_SELECT}&limit={limit}"
+    )
+    if not isinstance(rows, list) or len(rows) >= limit:
+        logger.warning(
+            f"bookings read failed biz={business_id} "
+            f"({'no answer' if not isinstance(rows, list) else 'row limit'}) "
+            f"— not treating it as an empty calendar")
+        return None
+    return booked_rows(rows)
+
+
 def _slots_per_offering(
     business: Dict[str, Any],
     offerings: List[Dict[str, Any]],
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> Optional[Dict[str, List[Dict[str, Any]]]]:
     """Phase D.1.1 — compute available slots per offering for the
     config-anon payload. Real-time compute per D2-α.
 
     Reads business.settings.availability + practitioner_profiles.timezone
     + existing module_entries; runs the engine for each offering's
-    duration. Returns dict keyed by offering id."""
+    duration. Returns dict keyed by offering id, or None when the
+    bookings could not be read (the caller then offers no times)."""
     try:
         from datetime import date as _date, timedelta as _td
         from availability import BusinessAvailability
@@ -640,18 +698,14 @@ def _slots_per_offering(
     horizon = today + _td(days=DEFAULT_LOOKAHEAD_DAYS)
 
     # Load existing bookings once for the window — engine subtracts overlaps
-    # per offering. Pad ±1 day for edge bookings.
-    lo = (today - _td(days=1)).isoformat()
-    hi = (horizon + _td(days=1)).isoformat()
-    bookings = sb_clients.sb_get_as_service(
-        f"/module_entries?business_id=eq.{business['id']}"
-        f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}"
-        f"&status=eq.active"
-        f"&select=appointment_at,duration_min_at_booking,duration_min"
-        f"&limit=2000"
-    ) or []
-    if not isinstance(bookings, list):
-        bookings = []
+    # per offering. Pad a day each side for edge bookings. A read that
+    # fails (or comes back at its row limit) is NOT "nothing booked": it
+    # returns None and the payload offers no times, with a flag saying so
+    # (see _read_bookings and _config_payload).
+    bookings = _read_bookings(business["id"], today - _td(days=1),
+                              horizon + _td(days=2))
+    if bookings is None:
+        return None
 
     # Busy times from the practitioner's other calendar (outside_calendar).
     # Read once for the window; fails soft to [] (nothing connected / not
@@ -867,6 +921,9 @@ async def book_anon(
     # Phase D.4 — submit-side double-book guard. The customer's UI
     # showed slots that were free at config-anon time, but two
     # customers can race the same slot. Re-verify before insert.
+    # When the bookings can't be read the guard raises SlotCheckFailed,
+    # which answers 503 "We couldn't confirm that time is still free"
+    # (the widget shows the detail) and books nothing.
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
@@ -962,7 +1019,8 @@ async def book(
     # anon path.
     entry_data = _stamp_arrival_window(biz, entry_data)
 
-    # Phase D.4 — same submit-side double-book guard as the anon path.
+    # Phase D.4 — same submit-side double-book guard as the anon path
+    # (a failed bookings read is a 503 here too, never a booking).
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     appt_iso = entry_data.get(pdf) or entry_data.get("appointment_at")
     dur_min = entry_data.get("duration_min_at_booking") or entry_data.get("duration_min") or 0
@@ -1258,6 +1316,7 @@ def _check_slot_available(
     appointment_at_iso: str,
     duration_min: int,
     business: Optional[Dict[str, Any]] = None,
+    exclude_id: Optional[str] = None,
 ) -> bool:
     """Phase D.4 — submit-side double-book guard.
 
@@ -1282,48 +1341,60 @@ def _check_slot_available(
     `business` is the already-loaded businesses row (with settings) when
     the caller has it; when omitted (e.g. booking_series) the settings
     are fetched here so every caller inherits capacity automatically.
+    `exclude_id` is the booking being moved (Chief's reschedule), which
+    must not count as its own conflict.
 
     Returns True while seats remain. Tolerant of malformed timestamps —
     lets the create proceed only when the input itself is malformed.
+    Raises SlotCheckFailed (a 503) when the bookings can't be read: a
+    failed read used to come back as "no bookings", so this guard said
+    "free" to every slot. Zero bookings is still free.
 
     The engine's _booking_intervals + _overlaps helpers are the canonical
     overlap math; we reuse them here so the submit path and the
     config-anon snapshot can never disagree on the overlap rule."""
-    if not appointment_at_iso or duration_min <= 0:
-        # Without a usable interval we can't reason about overlap; let
-        # the create proceed (no false 409s on malformed inputs — they'll
-        # surface elsewhere).
+    if not appointment_at_iso:
+        # Without a time we can't reason about overlap; let the create
+        # proceed (no false 409s on malformed inputs — they'll surface
+        # elsewhere).
         return True
 
-    # Pad ±duration so any booking whose start is within the requested
-    # interval is caught regardless of how the timestamp comparison
-    # rounds at the boundary.
     try:
-        from datetime import datetime, timedelta
-        from availability_engine import _overlaps, _booking_intervals
+        from datetime import datetime, timedelta, timezone as _tz
+        from availability_engine import (
+            DEFAULT_BOOKED_MIN, _overlaps, _booking_intervals,
+        )
+        # A time with no length is checked as the length every bookings
+        # read gives it (DEFAULT_BOOKED_MIN), not waved through: a module
+        # with no duration field used to skip this guard entirely.
+        if duration_min <= 0:
+            duration_min = DEFAULT_BOOKED_MIN
         s = appointment_at_iso
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         slot_start = datetime.fromisoformat(s)
+        if slot_start.tzinfo is None:
+            # Same convention as _booking_intervals: a bare time is UTC.
+            # (Naive vs aware would raise in the overlap loop below.)
+            slot_start = slot_start.replace(tzinfo=_tz.utc)
         slot_end = slot_start + timedelta(minutes=int(duration_min))
-        # Pad the query window by 4h either side so we don't miss a
-        # long booking whose appointment_at lands outside the immediate
-        # window but whose end-time spills in.
-        lo = _pg_ts(slot_start - timedelta(hours=4))
-        hi = _pg_ts(slot_start + timedelta(hours=4))
+        # Whole days either side: wide enough for a long booking that
+        # starts the day before and spills in, and the bounds the text
+        # match on data.appointment_at needs (see booking_window_filter).
+        day = slot_start.astimezone(_tz.utc)
+        lo = (day - timedelta(days=1)).date()
+        hi = (day + timedelta(days=2)).date()
     except Exception:
         # If we can't parse the slot, don't block the booking; the
         # check is opportunistic.
         return True
 
-    rows = sb_clients.sb_get_as_service(
-        f"/module_entries?business_id=eq.{business_id}"
-        f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}"
-        f"&status=eq.active"
-        f"&select=appointment_at,duration_min_at_booking,duration_min"
-        f"&limit=200"
-    ) or []
-    if not isinstance(rows, list) or not rows:
+    # A failed read is not "free": it raises SlotCheckFailed (a 503) so no
+    # caller books on a guess. Zero rows is free.
+    rows = _read_bookings(business_id, lo, hi, exclude_id=exclude_id)
+    if rows is None:
+        raise SlotCheckFailed()
+    if not rows:
         return True
 
     # Resolve capacity — from the caller's business row when provided,

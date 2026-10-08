@@ -64,6 +64,14 @@ def _fail(action_type: str, msg: str) -> Dict[str, Any]:
             "failed": True}
 
 
+# The double-book guard could not read the calendar, so it cannot say the
+# time is free and nothing was booked or moved. Practitioner-presentable.
+_CALENDAR_UNREAD = ("I couldn't check your calendar just now, so I didn't "
+                    "book that time — try again in a moment.")
+_CALENDAR_UNREAD_MOVE = ("I couldn't check your calendar just now, so I left "
+                         "that booking where it was — try again in a moment.")
+
+
 def _nav_calendar() -> Dict[str, Any]:
     return {"tab": "operate", "sub": "calendar"}
 
@@ -280,8 +288,8 @@ def _outside_busy_at(business_id: str, when_iso: str, duration_min: int) -> bool
 
 def _create_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
     from booking_widget_router import (
-        _bookings_module, _check_slot_available, _create_appointment,
-        _maybe_denormalize_offering,
+        SlotCheckFailed, _bookings_module, _check_slot_available,
+        _create_appointment, _maybe_denormalize_offering,
     )
 
     business_id = biz["id"]
@@ -319,8 +327,9 @@ def _create_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
     customer_email = (action.get("customer_email") or action.get("email")
                       or (contact or {}).get("email") or "").strip().lower()
 
-    # Build the entry payload in the same shape the widget writes, so the
-    # generated appointment_at column and every downstream reader agree.
+    # Build the entry payload in the same shape the widget writes, so every
+    # downstream reader agrees (they read data.appointment_at; the column
+    # of that name is not maintained).
     pdf = (module.get("archetype_params") or {}).get("primary_date_field") or "appointment_at"
     entry_data: Dict[str, Any] = {
         pdf: when,
@@ -351,8 +360,13 @@ def _create_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
 
     # D.4 double-book guard — the widget's bookings check. Not the public
     # one: an outside-busy time does not refuse a practitioner's own
-    # booking (see _outside_busy_at below).
-    if not _check_slot_available(business_id, when, duration):
+    # booking (see _outside_busy_at below). When the calendar can't be
+    # read the guard can't say the time is free, so nothing is booked.
+    try:
+        free = _check_slot_available(business_id, when, duration)
+    except SlotCheckFailed:
+        return _fail("create_booking", _CALENDAR_UNREAD)
+    if not free:
         alts = _suggest_slots(business_id, offering, when)
         if alts:
             return _fail("create_booking",
@@ -417,7 +431,9 @@ async def handle_create_booking(client, biz, action) -> Dict[str, Any]:
 # ─── reschedule_booking ───────────────────────────────────────────────
 
 def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
-    from booking_widget_router import _check_slot_available, _mirror_booking_session
+    from booking_widget_router import (
+        SlotCheckFailed, _check_slot_available, _mirror_booking_session,
+    )
 
     business_id = biz["id"]
 
@@ -437,13 +453,22 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
     old_when = data.get("appointment_at") or booking.get("appointment_at") or ""
     duration = int(data.get("duration_min_at_booking") or data.get("duration_min") or 60)
 
-    if not _check_slot_available(business_id, new_when, duration):
+    # The booking being moved is left out of the check: moving 2:00 to
+    # 2:30 overlaps its own old time, which is not a conflict.
+    try:
+        free = _check_slot_available(business_id, new_when, duration,
+                                     exclude_id=booking.get("id"))
+    except SlotCheckFailed:
+        return _fail("reschedule_booking", _CALENDAR_UNREAD_MOVE)
+    if not free:
         return _fail("reschedule_booking",
                      f"{_pretty(new_when)} is already booked — pick another time.")
 
-    # appointment_at is DB-maintained from `data`, so the write goes to the
-    # jsonb. Patch every date key the entry actually carries, or the module's
-    # primary_date_field and the canonical key can drift apart.
+    # The booking's time lives in `data` (the appointment_at column is not
+    # maintained — no row had it set in production on 2026-10-07), so the
+    # write goes to the jsonb. Patch every date key the entry actually
+    # carries, or the module's primary_date_field and the canonical key can
+    # drift apart.
     for key in ("appointment_at", "starts_at", "scheduled_for"):
         if key in data:
             data[key] = new_when
