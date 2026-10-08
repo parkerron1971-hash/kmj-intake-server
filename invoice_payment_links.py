@@ -8,10 +8,23 @@ from stripe_checkout_helpers import STRIPE_API_BASE, _secret_key
 from financial_policy import require_stripe_write
 
 
+def is_business_pay_link(biz, url):
+    """The pay link the practitioner pasted in Integrations. Every invoice
+    without its own link carries it, so it is shared by design."""
+    payments = ((biz.get('settings') or {}).get('payments') or {})
+    shared = str(payments.get('stripe_link') or '').strip()
+    return bool(shared) and str(url or '').strip() == shared
+
+
 async def disable_invoice_payment_link(client, biz, invoice):
+    """Returns 'shared' when the invoice carries the business's own pay link
+    (it stays on for the other invoices; the caller only detaches it),
+    'disabled' once the invoice's own links are off, None with no link."""
     url = invoice.get('stripe_payment_url')
     if not url:
-        return
+        return None
+    if is_business_pay_link(biz, url):
+        return 'shared'
     account = biz.get('stripe_account_id')
     if not account:
         raise ValueError('This invoice has an external payment link. Disable that link with the payment provider before deleting or voiding the invoice.')
@@ -58,3 +71,4 @@ async def disable_invoice_payment_link(client, biz, invoice):
                 if session.get('status') == 'open':
                     response = await client.post(f"{STRIPE_API_BASE}/checkout/sessions/{session['id']}/expire", headers=headers, auth=auth)
                     response.raise_for_status()
+    return 'disabled'

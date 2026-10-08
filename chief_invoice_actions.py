@@ -1,9 +1,18 @@
-"""Explicit, tenant-scoped invoice lifecycle actions. No payment or GL deletion."""
+"""Explicit, tenant-scoped invoice lifecycle actions. No payment or GL deletion.
+
+Chief's void_invoice and the invoice drawer's Void button (POST
+/invoices/{id}/void) run the same _change, so neither can skip the
+pay-link cleanup."""
+import asyncio
 from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import UUID
-from fastapi import HTTPException
 
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+
+import sb_clients
+from auth_supabase import UserSession
 from sb_clients import sb_as_current_context
 
 
@@ -46,9 +55,10 @@ async def _change(client, biz, action, verb):
                 return _fail(verb, 'This is a Stripe-hosted invoice. Void it in Stripe first; I cannot cancel it by changing the local record alone.')
         if verb == 'void_invoice' and status not in ('draft', 'sent', 'viewed', 'overdue', 'cancelled'):
             return _fail(verb, 'This invoice is not in a state that can be voided.')
+        link = None
         if verb in ('delete_invoice', 'void_invoice'):
             from invoice_payment_links import disable_invoice_payment_link
-            await disable_invoice_payment_link(client, biz, inv)
+            link = await disable_invoice_payment_link(client, biz, inv)
         patch = {}
         if verb == 'void_invoice':
             patch = {'status': 'cancelled', 'stripe_payment_url': None}
@@ -67,9 +77,16 @@ async def _change(client, biz, action, verb):
             path += '&sent_at=is.null'
         changed = await sb_as_current_context(client, 'DELETE' if verb == 'delete_invoice' else 'PATCH', path, patch or None)
         if not changed:
-            return _fail(verb, 'The invoice changed while I was updating it. Review its current state and try again. Any invoice-specific payment link may already be disabled.')
+            # The link is switched off before this write, so a lost race leaves
+            # an open invoice with a dead pay link. Say that plainly.
+            if link == 'disabled':
+                return _fail(verb, f'Invoice {number} changed while I was updating it, so it is still open, but its pay link is now switched off. Review it and try again.')
+            return _fail(verb, 'The invoice changed while I was updating it. Review its current state and try again.')
         word = {'delete_invoice': 'deleted', 'void_invoice': 'voided', 'archive_invoice': 'archived', 'restore_invoice': 'restored'}[verb]
-        return {'type': verb, 'result': f'Invoice {number} {word}.', 'label': f'Invoice {number} {word}',
+        result = f'Invoice {number} {word}.'
+        if verb == 'void_invoice' and link == 'shared':
+            result += ' Your business pay link stays on for your other invoices; it is no longer on this one.'
+        return {'type': verb, 'result': result, 'label': f'Invoice {number} {word}',
                 'invoice_id': inv['id'], 'invoice_number': number, 'nav': {'tab': 'operate', 'sub': 'invoices'}}
     except ValueError as exc:
         return _fail(verb, str(exc))
@@ -94,3 +111,35 @@ async def handle_archive_invoice(client, biz, action):
 
 async def handle_restore_invoice(client, biz, action):
     return await _change(client, biz, action, 'restore_invoice')
+
+
+router = APIRouter(prefix='/invoices', tags=['invoices'])
+
+
+@router.post('/{invoice_id}/void')
+async def void_invoice(invoice_id: str, session: UserSession = Depends(sb_clients.authed_request)):
+    """The invoice drawer's Void button. Same checks, pay-link cleanup and
+    conditional write as Chief's void_invoice, run as the signed-in person
+    so RLS still applies. Member+ — the rank that can write invoices."""
+    try:
+        invoice_id = str(UUID(invoice_id))
+    except ValueError:
+        raise HTTPException(404, 'Invoice not found.')
+    rows = await asyncio.to_thread(
+        sb_clients.sb_get_as_service, f'/invoices?id=eq.{invoice_id}&select=business_id&limit=1') or []
+    if not rows:
+        raise HTTPException(404, 'Invoice not found.')
+    business_id = str(rows[0]['business_id'])
+    from business_users_router import require_role
+    await asyncio.to_thread(require_role, business_id, str(session.user.id), 'member')
+    biz = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
+        f'/businesses?id=eq.{business_id}&select=id,stripe_account_id,settings&limit=1') or []
+    if not biz:
+        raise HTTPException(404, 'Invoice not found.')
+    async with httpx.AsyncClient(timeout=30) as client:
+        out = await _change(client, biz[0], {'invoice_id': invoice_id}, 'void_invoice')
+    if out.get('failed'):
+        raise HTTPException(409, out['result'])
+    return {'ok': True, 'result': out['result'], 'invoice_id': out['invoice_id'],
+            'invoice_number': out['invoice_number']}
