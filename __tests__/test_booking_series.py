@@ -284,7 +284,7 @@ def test_cancel_series_with_nothing_upcoming_is_calm(monkeypatch):
 def test_reschedule_detaches_a_series_occurrence_but_keeps_the_stamp(monkeypatch):
     import booking_widget_router as bwr
     import sb_clients
-    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d: True)
+    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d, **k: True)
     monkeypatch.setattr(bwr, "_mirror_booking_session", lambda b, e: None)
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk2", "status": "active", "module_id": "mod1",

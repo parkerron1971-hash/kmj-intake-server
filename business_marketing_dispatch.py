@@ -32,7 +32,15 @@ RE-CHECKED AT SEND TIME, whatever happened since the approval:
   * every account is still connected to THIS business, and is the same
     account the owner approved (social._targets);
   * the picture is a ready artwork of THIS business; the clip is approved as
-    it is now, at the fingerprint the post was approved with.
+    it is now, at the fingerprint the post was approved with (the
+    fingerprint is in the post's content hash); a clip Chief folded into the
+    week (source 'clip', B12) is still among the owner's kept clips;
+  * an open-chairs post (source 'opening', B11) still has its chairs: its
+    window is recounted on the calendar (business_marketing_openings.
+    recheck). Booked into, filled up or too close: the post is `pulled`
+    (never sent, never needs a yes; the planner's watch tells the owner
+    once). A calendar that cannot be read holds it: back to approved, tried
+    again next minute, never sent on a guess.
 
 THE BUILD ACTOR. On the worker there is no JWT, so making a picture's public
 JPEG (images.delivery_jpeg, also used for a clip's covers) needs
@@ -87,6 +95,7 @@ import httpx
 from fastapi import HTTPException
 
 import business_marketing_desk as reading
+import business_marketing_openings as openings
 import business_marketing_store as store
 import clip_posting
 import image_posting
@@ -137,6 +146,12 @@ STILL_GOING = ('Two hours on, the posting service still has not said whether it 
 UNCONFIRMED = ("Sending could not be confirmed: the posting service's receipt for this post was not recorded. "
                'Check your accounts; if it is not there, mark it not sent and give it a new time.')
 CANCELLED = 'It was cancelled before it went out.'
+CHAIRS_UNCHECKED = ("The booking calendar couldn't be checked just before sending, so this post waits and tries "
+                    'again in a minute.')
+OPENING_UNREADABLE = ("This post's open chairs couldn't be read, so it was not sent. Skip it, or write a new post "
+                      'for that time.')
+UNKEPT = ("This clip is no longer among your kept clips in Video Clips, so nothing went out. Keep it again, "
+          'then approve the post again.')
 
 # Refusals from inside the shared door that a failed READ can also produce
 # (social._targets and clip_posting._require_owner read with `or []`). The
@@ -163,6 +178,31 @@ class Refuse(Exception):
 
 class Unreadable(Exception):
     """A read that failed: not the same as "nothing there"."""
+
+
+class Pull(Exception):
+    """An open-chairs post whose chairs booked first: it comes down, unsent."""
+
+    def __init__(self, why: str):
+        super().__init__(why)
+        self.why = why
+
+
+async def _chairs_still_open(business_id: str, row: Dict[str, Any]) -> None:
+    """An open-chairs post's window, recounted just before sending (B11).
+    Raises Pull when it booked into, filled up or is too close; Hold when the
+    calendar cannot be read (never sent on a guess); Refuse when the post
+    carries no readable opening."""
+    opening = row.get('opening')
+    if not openings.valid(opening):
+        raise Refuse(OPENING_UNREADABLE)
+    try:
+        availability = await asyncio.to_thread(openings.read_availability, business_id)
+        why = await asyncio.to_thread(openings.recheck, business_id, opening, availability, now())
+    except openings.Unavailable:
+        raise Hold('the booking calendar could not be read', note=CHAIRS_UNCHECKED) from None
+    if why:
+        raise Pull(why)
 
 
 def now() -> datetime:
@@ -271,10 +311,13 @@ def _live_targets(business_id: str, post: Dict[str, Any]) -> List[Dict[str, Any]
     return out
 
 
-async def _clip_ready(business_id: str, media: Dict[str, Any]) -> None:
+async def _clip_ready(business_id: str, media: Dict[str, Any], *, chief_pick: bool = False) -> None:
     """The clip is this business's, ready, and approved as it is now, at the
     fingerprint this post was approved with. post_clip_for checks the same
-    again; checking here first keeps a refusal apart from a hand-off."""
+    again; checking here first keeps a refusal apart from a hand-off.
+    chief_pick: a clip Chief folded into the week (source 'clip', B12) was
+    picked because the owner kept it; one taken off the kept clips since is
+    not sent."""
     try:
         row = await asyncio.to_thread(clip_posting._clip, business_id, str(UUID(str(media['clip_id']))))
     except HTTPException as exc:
@@ -288,6 +331,8 @@ async def _clip_ready(business_id: str, media: Dict[str, Any]) -> None:
     if problem == 'changed' or clip_posting.media_library.fingerprint(row) != media.get('clip_fingerprint'):
         raise Refuse('This clip changed after the post was approved, so nothing went out. Check the clip, '
                      'then approve the post again.')
+    if chief_pick and row.get('decision') != 'kept':
+        raise Refuse(UNKEPT)
 
 
 async def _pictures(business_id: str, media: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -362,6 +407,8 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
         if not post_for_me.allowed_for(biz):
             # The pilot can be switched back on: the post waits, it does not fail.
             raise Hold('posting is not switched on for this business', note=PILOT_HELD)
+        if row.get('source') == 'opening':
+            await _chairs_still_open(biz, row)
         owner = await asyncio.to_thread(_owner_of, biz)
         targets = await asyncio.to_thread(_live_targets, biz, row)
         media = row.get('media') or {}
@@ -369,7 +416,7 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
         # Bound only now that the owner is known; reset in the finally below.
         token = images.build_actor.set({'business_id': biz, 'user_id': owner})
         if media.get('clip_id'):
-            await _clip_ready(biz, media)
+            await _clip_ready(biz, media, chief_pick=row.get('source') == 'clip')
             attempted = True
             done = await clip_posting.post_clip_for(
                 biz, owner, str(media['clip_id']), request_id=request_id(row),
@@ -403,6 +450,9 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
     except Hold as hold:
         log.info('marketing send %s held: %s', post_id[:8], hold)
         patch = {'status': 'approved', 'claimed_at': None, 'error': hold.note}
+    except Pull as pull:
+        log.info('marketing send %s pulled: %s', post_id[:8], pull.why)
+        patch = {**openings.pull_patch(row, pull.why, now()), 'claimed_at': None}
     except Refuse as refusal:
         patch = {'status': 'failed', 'error': str(refusal)}
     except store.StoreError:

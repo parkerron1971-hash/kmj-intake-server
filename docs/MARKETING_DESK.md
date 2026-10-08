@@ -135,9 +135,9 @@ approved posts (`marketing_claim_due`) and re-checks everything at send time.
 | `POST /slot/cancel` | owner | skip a post or let missed drafts go |
 | `POST /post-now` | owner | a reviewed post goes out in two minutes |
 | `POST /posts/{id}/not-sent` | owner | an unconfirmed delivery becomes a failure |
-| `PUT /settings` | owner | paused, plan_enabled, accounts, hour (6-21), audience, link; makes the desk row |
+| `PUT /settings` | owner | paused, plan_enabled, accounts, hour (6-21), audience, link, work photos (B11); makes the desk row |
 | `GET /results` | owner + members | what came through the post links in the last 30 days, per post and in total (B6) |
-| `POST /engine/run` | owner | queue this week's suggested post; the worker writes it (B8, below) |
+| `POST /engine/run` | owner | queue this week's suggested post, weekly plan or open-chairs week; the worker writes it (B8, B9, B11, below) |
 | `GET /preview` | owner | what Chief would write about now: numbers, profile, facts, diagnosis, plays; reads only (B8) |
 
 - **Who.** Reads use `business_access('viewer')`. Writes use `require_user`
@@ -543,8 +543,8 @@ desk's own (`business_marketing.level_for`, from the real plan through
 | Level | Who | What B9 does |
 | --- | --- | --- |
 | week | Professional; a Boss business without a live chair calendar | the weekly plan |
-| autopilot | Practice (Solutionist) | the same plain week, until clips (B12) and standing permissions (B13) |
-| openings | Boss: a chair business with a live booking calendar | nothing: its open-chairs week is B11. It is never a candidate, and its own request answers 409 |
+| autopilot | Practice (Solutionist) | the same week plus up to two of its own clips (B12, below); standing permissions are B13 |
+| openings | Boss: a chair business with a live booking calendar | nothing: it gets the open-chairs week instead (B11, below) |
 | suggest | Starter, Solo, Booked | B8's one suggestion, unchanged |
 
 **Nothing runs until `MARKETING_DESK` names the business or is `*`**, and
@@ -722,8 +722,278 @@ when every flyer takes its repair. The headroom check reserves $2.55.
 migration: the run's `design` jsonb carries `flyers`, `tell`, `told_at`,
 `replans` and `left_out`.
 
-**Not built here:** Chief's desk actions (B10), the open-chairs week (B11),
-clips in the week (B12), standing permissions (B13), and the frontend (F4).
+**Not built here:** Chief's desk actions (B10), clips in the week (B12),
+standing permissions (B13), and the frontend (F4). The open-chairs week is
+B11, below.
 Not yet seen live: a 1088x1360 render from the image model (the custom-size
 path is the clip covers'); the first plan flyer on a test business verifies
 it.
+
+### The barber-sized week (B11)
+
+Boss (barbershops and salons, $99) gets the weekly plan barber-sized: made
+from the chair calendar, not from the numbers (Kevin approved the design on
+2026-10-07, D5 of the plan). The level is the desk's own `openings`
+(`business_marketing.level_for`: marketing_week on a personal_services
+business whose booking page is published and whose booking calendar is
+active). The run is `business_marketing_planner.run_openings`, kind
+`openings`, on the week's machinery: the same claim, fan-out, jitter,
+per-tick cap, spend headroom (counted like a suggestion: one small call, free
+pictures), owner's request and save-new-before-retire-old.
+`business_marketing_openings.py` is the calendar's half.
+
+**Which offering.** The most-booked active, bookable offering over the last
+60 days, counted from `module_entries.data->>offering_id`: the field the
+booking widget and Chief's `create_booking` write
+(`booking_widget_router._maybe_denormalize_offering`). module_entries has no
+`offering_id` column (checked read-only against production on 2026-10-07: 400;
+`appointment_at` and `duration_min_at_booking` are columns). With no booking
+that names one, the shortest bookable offering, as B7's capacity signal
+does; with the bookings unreadable, the shortest too. The run records which
+(`signals.calendar.offering_from`: most_booked, shortest, shortest_unread).
+Production had no bookings with an appointment in the last 60 days on
+2026-10-07, so the most-booked path has not yet met a real calendar.
+
+**The windows.** `agent_site.slots_for` for that offering over the week
+(strict: below). Starts on the same local day no further apart than the
+calendar's slot step are one window, from its first start to its last start
+plus the offering's length; `open_count` is how many starts it holds. These
+are start times, not chairs: `compute_slots` keeps a start open while any
+chair is free, so no count of chairs is ever known or said.
+
+**Rank and pick.** A window's minutes, doubled on the week's slowest
+weekday: minutes x (2 - that weekday's share of the busiest weekday's
+bookings over the last 60 days); with no history, minutes alone. Highest
+first, ties by the earlier start. Three are picked, at most one a day, each
+only if its post can be scheduled.
+
+**When each post goes out**, on the business's clock: the day before at the
+desk's hour, else the day before at 3:00 PM, else that morning at 8:00. The
+first that is at least an hour from now, not already taken by another post,
+and leaves at least 30 minutes to send before the cut-off. The cut-off is
+two hours before the window, or the calendar's lead time if longer:
+`expires_at = min(run_at + 6 h, start - the gap)`, so a post never goes out
+saying a chair is open once it can no longer be booked online. Instants are
+compared in UTC, so a daylight-saving change never moves one (tested across
+both 2026 changes in Chicago). A replan's earlier drafts do not count as
+taken: they are retired once the new ones are saved.
+
+**Where they go.** Instagram first, Facebook too when connected: only those
+two, from the desk's accounts (or every connected one). Neither connected:
+the week is skipped, saying so. The link is the booking page (`/book` on the
+business's own host), with the post's own short link (B6).
+
+**The words.** ONE caption call for the three (`task=business_marketing_openings`,
+the `draft` lane, low effort, `units=0`). Each caption is held to the
+business checks (numbers and prices only from the facts plus this window's
+own day, date and time; links only to its own site; at most three hashtags)
+and to these: no count of chairs, seats, spots or times, and no "last one",
+"going fast" or "before they're gone" (concurrent_capacity is not verified);
+it names its own day and no other; never "today", "tonight" or "tomorrow"
+(the post may move). A caption that fails, or a call that does not answer,
+gets the plain caption, which always holds ("Open chairs Thursday 2 to 5 pm.
+Book your time online and we'll see you then."); `dropped` records why. The
+flyer's words are built in code, never by the model: the day and time, "Book
+your chair online.", "Book now".
+
+**The picture.** The owner's newest work photos (`marketing_desks.work_photo_ids`,
+newest first, cycled over the three posts) full-bleed at 4:5 (1080x1350,
+B8's composer path), the words on a panel in the business's own colour over
+the lower part, its name and site in the footer; the top of the photo
+(at least 42%) stays clear. `cost_usd` 0, made under the build actor bound to
+the business and its owner. The photo's own pixels are placed, cropped to
+fit: nothing redraws a real haircut, and nothing here ever calls the image
+model. No usable work photo (none set, or deleted since): the business's
+branded flyer, and the Today item says so ("add work photos on the desk to
+show your own work"). A photo that cannot be placed falls back to the flyer;
+no picture at all leaves the post words only, Instagram left out.
+
+**Work photos** (`PUT /marketing/{business_id}/settings`, `work_photo_ids`,
+owner only): each a ready image of THIS business (another business's id
+answers like a missing one, 404; still being made or failed, 409), a photo
+uploaded through `/ai/images/upload`, never a picture the image model or the
+composer made (`model` or `size` set: 422), at most 12 (422), saved newest
+first, duplicates once; `[]` clears them. A failed read is a 503 and changes
+nothing.
+
+**Each post stores its `opening`**: `offering_id`, `starts_at`, `ends_at`,
+`open_count`, `duration_min`, `day`, `time_zone`, `gap_min`, `when` ("Thursday
+2 to 5 pm") and the offering's name. It is not content: it is outside the
+content hash, so it never voids an approval.
+
+**The pull.** A post is pulled when its window no longer holds as many open
+starts as it was made for (`fewer`), none at all (`full`: "Thursday 2 to 5
+pm filled up, so its post was pulled"), or it is within the gap of its
+window (`late`, after an owner moved it). Pulling is the safe direction, so
+it never needs the owner's yes: status `pulled`, a new revision (an open
+desk refreshes), the reason in plain words in `error` and `opening.pulled`.
+Two places check:
+
+| Who | When | A failed calendar read |
+| --- | --- | --- |
+| `openings_watch_tick` (job `business_marketing_openings_watch`, every 15 minutes, worker only, leader-gated, `max_instances=1`, nothing unless `MARKETING_DESK` covers the business) | approved and draft opening posts going out in the next 48 hours (and not expired) | changes nothing |
+| the sender (B5's `dispatch`), after the pause and pilot checks | just before the hand-off | holds the post: back to `approved`, "the booking calendar couldn't be checked just before sending...", tried again next minute until its window closes. Never sent on a guess |
+
+A post whose `opening` cannot be read is refused by the sender (failed, in
+plain words). Each write lands only on the post as read (same revision and
+status; the sender's only on its own claim). The watch then tells the owner
+once per pulled post, the sender's pulls included: one Today item
+(`chief_notifications`, type `reminder`, navigate to Grow → Marketing) and
+one push, keyed `marketing_opening:<post id>`. If what was said cannot be
+read, nothing is said until it can.
+
+**The calendar is read strictly.** `agent_site.slots_for(..., strict=True)`
+and `outside_calendar.busy_blocks_*(..., strict=True)`: a bookings read that
+fails or comes back at its row limit, and an outside-calendar read that
+fails (other than the feature not being set up), raise instead of counting as
+"nothing booked". The offerings are read fail-closed here too (the agent
+bundle reads them `or []`).
+
+**A fix to the shared slot computation (all surfaces).** `slots_for` asked
+module_entries for a `duration_min` column that does not exist, so in
+production that read answered 400, the `or []` made it "no bookings", and
+every slot read as open on the agent surface, the Site Concierge's picker and
+B7's capacity signal. It now reads `appointment_at,duration_min_at_booking`
+and the booked length from `data->>duration_min_at_booking`. Not changed
+here: `booking_widget_router.py` selects the same missing column (around its
+lines 650 and 1323: the widget's slot read and the double-book guard's read).
+How each handles the failed read was not checked in this PR; it is worth its
+own.
+
+**Telling the owner the week is planned:** one Today item and one push,
+"Chief planned next week's open chairs: 3 posts wait for your OK", with what
+the pictures are and "a post comes down by itself if its time books first";
+keyed by the run and attempt.
+
+**The owner's request** (`POST /engine/run`) queues the open-chairs week
+(`kind: openings`, "Chief is planning your open chairs ..."), replacing the
+old 409. The week's rules: planned again at most twice (429), never over an
+approved or sent post (409); a pulled post does not hold the week; the new
+drafts are saved before the old ones are retired; a request that writes
+nothing keeps the week's earlier posts. It may take over the week's
+suggestion or plain week.
+
+**The preview** (`GET /preview`) at the openings level adds `openings`: the
+offering, how it was chosen, and the windows Chief would post about with
+when each post would go out. Reads only.
+
+**Cost** (an estimate, not yet measured live). One caption call a
+business-week on the `draft` lane (Sonnet 5.5), about 2,000 tokens in and 400
+out, about 1-2 cents, as B8's suggestion; nothing when the plain captions
+stand in. The pictures are local renders (`cost_usd` 0); no credits
+(`units=0`). The watch and the sender's re-check make no model call.
+
+No migration (`marketing_posts.opening`, status `pulled`, source `opening`,
+run kind `openings` and `marketing_desks.work_photo_ids` came with B3), no
+Chief action, no frontend (F5 is the Boss view).
+
+### Clips in the week (B12)
+
+Solutionist (the desk's `autopilot` level: the real plan includes
+`marketing_autopilot` and `ai_clips`, which is Practice alone) gets Chief's
+weekly plan (B9's five flyer posts) with **up to two of its own video clips
+folded in** (D6, Kevin's design of 2026-10-07). `business_marketing_clips.py`
+is the clips' half; `business_marketing_planner._plan_week` folds them into
+the same run, the same caption call and the same insert. Professional and
+Boss never get clips (`clips.takes_clips` is False for every plan but
+Practice; Boss is "No Video Clips"), and neither does the suggest level.
+**No eligible clip: the week is exactly B9's** (the same posts, the same
+caption call; the run only records `design.clips`).
+
+**Which clips.** Every one of these:
+
+| Check | Where it is read |
+| --- | --- |
+| a ready clip of this business, still stored | `media_assets`: `kind clip`, `status ready`, `source_removed_at` empty |
+| kept by the owner (not skipped, not undecided) | `media_assets.decision = 'kept'` (Video Clips' Keep) |
+| approved at the fingerprint it has now | `media_assets.approval.fingerprint == media_library.fingerprint(row)` (`clip_posting.approval_problem`) |
+| not posted anywhere | no `social_publications` row naming it (`media->0->>clip_id`), status other than failed or cancelled: Chief's `post_clip`, the clip screen and the desk all post through that door |
+| not already in a waiting post | no `marketing_posts` row naming it (`media->>clip_id`), status other than cancelled, failed or pulled, except this week's own drafts a replan is about to retire |
+| covers ready | a ready story (9:16) cover (`image_artworks`, `director->>clip_id`, `status ready`): the cover every vertical network shows |
+
+A read that fails picks no clip (`design.clips.state = 'unreadable'`): never
+a guess that could post a clip twice. The week itself goes out as B9's.
+A post the owner skipped (cancelled) or that failed lets its clip be picked
+again; one that is waiting, sending or went out holds it.
+
+**The pick.** Best first: the clip finder's score (`configuration.score`,
+highest first; a clip without one after every scored clip), then the newest,
+then the id. At most two a week, each clip once.
+
+**When.** Each clip on its own weekday, Tuesday first, then Thursday,
+Wednesday, Monday, Friday (two clips land two days apart when they can),
+never two the same day. At the desk's hour or the next free hour up to
+21:00, then 3:00 PM and after, on the business's clock; at least an hour
+from now; and **at least three hours from every other post of the business
+that day** (the week's flyer posts, the owner's own, anything planned).
+With the default 11:00, the flyer goes at 11:00 and the clip at 2:00 PM.
+
+**Add, not replace.** The clips come on top of the five flyer posts: seven
+posts at most a week, two on a clip day. No limit is near: the posting
+door's daily cap is 25 posts a business per rolling day; the week's five
+included flyers and `MARKETING_DESIGNS_AT_ONCE` count designs, and a clip
+needs none; `marketing_approve` takes 50 at once. A clip post's
+`design_status` is `none`, so it never waits on the design tick.
+
+**The post** (`source 'clip'`, `play_id 'video_clip'`, so the clips' own
+results show in `play_scores` without ever reordering B9's plays):
+
+- `media` is `business_marketing.build_media`'s for a clip, re-read
+  fail-closed just before it is saved: `{clip_id, clip_fingerprint, covers:
+  {story, wide}}` (the newest ready cover of each shape). The fingerprint and
+  the covers are inside `content_hash`.
+- `targets`: the desk's accounts (or every connected one when the desk
+  names none) on a network `clip_posting` can place a vertical clip on
+  (`COVER_SHAPES`: Instagram, Facebook, TikTok, YouTube, X, Threads,
+  Pinterest, LinkedIn). TikTok and YouTube are included (Kevin's decision
+  3: no plan gates a network). An account on any other network is left out
+  (`design.clips.left_out`).
+- The cover each network shows is `clip_posting.cover_for`'s at send time:
+  the story cover everywhere a vertical clip plays (Reels, TikTok, Shorts,
+  X, Threads, Pinterest), the wide cover on LinkedIn (else the story one).
+  The run records it per network (`design.clips.picked[].covers`).
+- `publish_text` carries the post's tracked short link (B6), as every desk
+  post does. `post_clip_for` sends one caption to every account, so on
+  Instagram and TikTok the link shows as plain text.
+
+**The caption.** One more slot in the week's ONE caption call
+(`write_week_captions`, `max_tokens` 300 more per clip, no new call): the
+clip's title, the words the owner checked and its tags as data, a brief
+that says nobody has watched it (nothing beyond its title and words) and
+that it takes no flyer. The same business checks as every caption: numbers
+and prices only from the facts, links only to its own site, **at most three
+hashtags** (Kevin's decision 2). A caption that breaks one costs only that
+clip, which stays eligible next week.
+
+**The approval and the send.** Nothing posts without the owner's OK
+(standing permissions are B13). The sender (B5) already re-checks a clip
+post: the content still hashes to the approval, and the clip is approved as
+it is now at the fingerprint the post was approved with
+(`_clip_ready`); `clip_posting.post_clip_for` checks again. New here: a
+clip Chief folded in (`source 'clip'`) that the owner has since taken off
+the kept clips is refused in plain words. A clip post goes out through
+`post_clip_for` (the request id `uuid5(post, 'rev:<revision>')`, so a retry
+never posts twice).
+
+**Telling the owner.** The week's one Today item and push now name the
+clips: "Chief planned next week: 7 posts wait for your OK" / "5 have a flyer
+and 2 are your own video clips, with their covers. Nothing posts until you
+approve them." A clip is never counted as words only. The owner's request
+(`POST /engine/run`) says the week comes with up to two clips.
+
+**Replans.** A replan picks again; the week's own drafts do not hold their
+clips, so the same clips can come back in new posts, saved before the old
+drafts are retired. A worker that stops after saving keeps the attempt's
+clip posts as it keeps its flyer posts.
+
+**Cost.** No new paid call: each clip is one more caption in the week's
+call, about 250 tokens in and 75 out on the `draft` lane, under half a cent
+a week for two. Posting a clip calls no model (a signed link, the cover as a
+JPEG). A business-week stays about $1.35 (up to about $2.50 when every flyer
+takes its repair); the fan-out's $2.55 reservation is unchanged.
+
+No migration (`source 'clip'`, `media` jsonb and `play_id` came with B3), no
+Chief action, no frontend (F6 is the Solutionist view). Not yet seen live:
+the `media->0->>clip_id` filter on `social_publications` (a PostgREST JSON
+path with an array index; a 400 there reads as a failed read, so the week
+goes without clips, never with a clip posted twice).

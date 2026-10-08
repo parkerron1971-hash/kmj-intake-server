@@ -1143,18 +1143,10 @@ def test_a_second_request_while_one_is_being_written_is_busy(s):
     assert r.status_code == 409 and r.json()['detail'] == plan.BUSY and len(s.db.runs) == 1
 
 
-def _make_chair_business(s):
-    b = s.svc.businesses[BIZ]
-    b.update(comp_tier='boss', type='barbershop')
-    b['settings']['booking_page'] = {'published': True}
-    s.svc.modules.append({'id': str(uuid4()), 'business_id': BIZ, 'archetype': 'booking_calendar',
-                          'is_active': True})
-
-
 @pytest.mark.parametrize('setup,code,detail', [
     (lambda s, mp: mp.setenv('MARKETING_DESK', 'off'), 409, plan.NOT_SWITCHED_ON),
-    # A Boss chair business with a live calendar is the openings level (B11): no plan yet.
-    (lambda s, mp: _make_chair_business(s), 409, plan.OPENINGS_LATER),
+    # A Boss chair business with a live calendar now queues its open-chairs
+    # week (B11): __tests__/test_business_marketing_openings.py.
     (lambda s, mp: s.svc.businesses[BIZ].update(comp_tier=None), 403, plan.NO_PLAN),
     (lambda s, mp: setattr(s.svc, 'connections', []), 409, plan.NO_ACCOUNTS),
     (lambda s, mp: mp.setenv('POST_FOR_ME_PILOT_BUSINESSES', PRO), 409, plan.NO_POSTING),
