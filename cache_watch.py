@@ -173,3 +173,50 @@ def report_write(business_id, summary, read_tokens, write_tokens) -> None:
     logger.info("cache rewrite biz=%s role=%s%s: wrote %d, read %d. %s",
                 str(business_id)[:8], summary.get("role") or "?", since, written,
                 int(read_tokens or 0), why)
+
+
+# ── Anthropic's cache diagnostics (2026-10-08) ───────────────────────
+# The API itself can say why a request missed the cache: send the previous
+# response's id as diagnostics.previous_message_id and the response's
+# diagnostics.cache_miss_reason names the first divergence (model_changed,
+# system_changed, tools_changed, messages_changed) and roughly how many
+# tokens fell after it. Fingerprints are hashes only, kept briefly, and the
+# feature costs nothing. Only Chief's main call carries it, on its first
+# round; CACHE_DIAGNOSTICS=off turns it off.
+import os as _os
+
+_last_message: "OrderedDict[str, str]" = OrderedDict()
+
+
+def diagnostics_on() -> bool:
+    return (_os.environ.get("CACHE_DIAGNOSTICS") or "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def diagnostics_field(business_id, role: str):
+    """The request's `diagnostics` object for this business's main call, or
+    None when it should not carry one."""
+    if not diagnostics_on() or role != "chief_main" or not business_id:
+        return None
+    return {"previous_message_id": _last_message.get(str(business_id))}
+
+
+def diagnostics_seen(business_id, role: str, message_id, diagnostics, read_tokens=0, write_tokens=0) -> None:
+    """Remember this reply's id for the next comparison and log a named miss."""
+    if not diagnostics_on() or role != "chief_main" or not business_id:
+        return
+    b = str(business_id)
+    if isinstance(message_id, str) and message_id:
+        _last_message[b] = message_id
+        _last_message.move_to_end(b)
+        while len(_last_message) > _MAX_BUSINESSES:
+            _last_message.popitem(last=False)
+    if not isinstance(diagnostics, dict):
+        return
+    reason = diagnostics.get("cache_miss_reason")
+    if not isinstance(reason, dict):
+        return
+    kind = str(reason.get("type") or "unknown")
+    missed = reason.get("cache_missed_input_tokens")
+    logger.info("cache diagnostics biz=%s: %s%s (read %s, wrote %s)", b[:8], kind,
+                f", ~{missed} tokens after the change" if isinstance(missed, int) else "",
+                int(read_tokens or 0), int(write_tokens or 0))
