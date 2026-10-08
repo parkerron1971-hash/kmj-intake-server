@@ -44,8 +44,13 @@ from pydantic import BaseModel
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-BRIEFING_MODEL = "claude-sonnet-4-5-20250929"
-INSIGHTS_MODEL = "claude-sonnet-4-5-20250929"
+# Sonnet 5.5 since 2026-10-07 (Sonnet 4.5 retires 2026-11-30). Haiku 5.5
+# was tried and won only half the blind-graded cases (it lost three of
+# four client drafts and got two insight figures wrong), so these stay on
+# Sonnet. GROWTH_BRIEFING_MODEL / GROWTH_INSIGHTS_MODEL roll back without
+# a deploy.
+BRIEFING_MODEL = os.environ.get("GROWTH_BRIEFING_MODEL") or "claude-sonnet-5-5"
+INSIGHTS_MODEL = os.environ.get("GROWTH_INSIGHTS_MODEL") or "claude-sonnet-5-5"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
 
 BRIEFING_WINDOW_DAYS = 7
@@ -103,15 +108,20 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,
     key = _anthropic_key()
     if not key:
         return ""
+    import model_ladder
     resp = await llm_call.apost(client, {
         "model": model, "max_tokens": max_tokens, "system": system,
         "messages": [{"role": "user", "content": user_msg}],
+        **model_ladder.thinking_off_kwargs(model),
     }, timeout=HTTP_TIMEOUT, key=key)
     if resp.status_code >= 400:
         logger.warning(f"Claude error: {resp.status_code} {resp.text[:400]}")
         return ""
     data = resp.json()
-    return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
+    if data.get("stop_reason") == "refusal":
+        return ""   # every caller already handles an empty reply
+    return "".join(b.get("text", "") for b in data.get("content", [])
+                   if isinstance(b, dict) and b.get("type") == "text").strip()
 
 
 def _sum_amount(events: List[Dict]) -> float:
@@ -1221,7 +1231,7 @@ Be specific and actionable. Do NOT invent numbers. Only reference data present i
         cd_block = _format_cross_domain_for_ai(cross_domain)
         if cd_block:
             user_msg = f"{user_msg}\n\n{cd_block}"
-        raw = await _call_claude(client, system_prompt, user_msg, model=INSIGHTS_MODEL, max_tokens=2000)
+        raw = await _call_claude(client, system_prompt, user_msg, model=INSIGHTS_MODEL, max_tokens=3000)
         parsed = _extract_json_block(raw)
 
         if not isinstance(parsed, list):

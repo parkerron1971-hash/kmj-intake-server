@@ -70,6 +70,9 @@ router = APIRouter(prefix="/bookings", tags=["booking-series"])
 SERIES_MAX_OCCURRENCES = 26
 # Default when the caller gives neither count nor until_date (a quarter).
 SERIES_DEFAULT_COUNT = 12
+# A week skipped because the double-book guard could not read the
+# calendar (it raises SlotCheckFailed rather than guessing "free").
+UNCHECKED_REASON = "couldn't check the calendar"
 
 _WEEKDAY_LOOKUP: Dict[str, int] = {}
 for _i, _names in enumerate([
@@ -266,8 +269,8 @@ def create_series(
     or {"ok": False, "error": msg}. Never raises for a planning problem —
     callers (Chief verb, router) decide how to surface errors."""
     from booking_widget_router import (
-        _bookings_module, _check_slot_available, _create_appointment,
-        _maybe_denormalize_offering,
+        SlotCheckFailed, _bookings_module, _check_slot_available,
+        _create_appointment, _maybe_denormalize_offering,
     )
 
     module = _bookings_module(business_id)
@@ -338,7 +341,15 @@ def create_series(
         if reason:
             skipped.append({"date": _pretty_date(occ["date"]), "reason": reason})
             continue
-        if not _check_slot_available(business_id, occ["utc_iso"], duration):
+        # A calendar that can't be read is not a free one: that week is
+        # not booked, and the summary says why ("couldn't check").
+        try:
+            free = _check_slot_available(business_id, occ["utc_iso"], duration)
+        except SlotCheckFailed:
+            skipped.append({"date": _pretty_date(occ["date"]),
+                            "reason": UNCHECKED_REASON})
+            continue
+        if not free:
             skipped.append({"date": _pretty_date(occ["date"]), "reason": "conflict"})
             continue
         entry_data = dict(base)
@@ -362,6 +373,9 @@ def create_series(
     if n_s:
         summary += (f", {n_s} skipped: "
                     + ", ".join(f"{s['date']} ({s['reason']})" for s in skipped))
+    if any(s["reason"] == UNCHECKED_REASON for s in skipped):
+        summary += (". Nothing was booked on a date the calendar couldn't be "
+                    "checked for — try those again in a moment")
     # Busy on the practitioner's other calendar. This is always a
     # practitioner-made booking (the calendar's New booking, or Chief), so
     # those times are booked, not skipped: someone moving in from Calendly

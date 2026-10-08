@@ -194,7 +194,7 @@ def test_reschedule_writes_time_into_data_not_the_column(monkeypatch):
     import booking_widget_router as bwr
     import sb_clients
 
-    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d: True)
+    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d, **k: True)
     monkeypatch.setattr(bwr, "_mirror_booking_session", lambda b, e: None)
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active", "module_id": "mod1",
@@ -222,7 +222,7 @@ def test_reschedule_reports_failure_when_nothing_matched(monkeypatch):
     booking owned by another business. That is NOT a successful move."""
     import booking_widget_router as bwr
     import sb_clients
-    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d: True)
+    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d, **k: True)
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active", "data": {"customer_name": "Maria"}}})
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: [])
@@ -245,7 +245,7 @@ def test_cancel_reports_failure_when_nothing_matched(monkeypatch):
 def test_reschedule_refuses_a_taken_slot(monkeypatch):
     import booking_widget_router as bwr
     import sb_clients
-    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d: False)
+    monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d, **k: False)
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active", "data": {"customer_name": "Maria"}}})
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",

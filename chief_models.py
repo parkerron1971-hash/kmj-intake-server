@@ -64,6 +64,10 @@ _LANE_DEFAULTS = {
     # review=15509ms of total=37576ms). Its own lane, so it can be
     # moved and measured on its own.
     "review":     "claude-sonnet-5-5",
+    # A second review when the first comes back malformed (it checked
+    # nothing, and an unchecked answer is delivered). On the strongest
+    # reviewer, so a misquote is never what decides.
+    "review_fallback": "claude-sonnet-5-5",
     # The two-track reply (chief_fast_track, 2026-09-25). `fast` writes the
     # opening that goes out in the first half-second of every streamed
     # turn, and answers alone the turns that need no records and no action

@@ -7,8 +7,8 @@ only with Instagram left out, never holding up the week; the owner is told
 once, after every post has settled; the flyers are included in the plan
 (no credits, still metered and spend-guarded) and nothing a request or Chief
 sends can say so; replans; plays lean on the business's own results only
-with 3 samples; the openings level (Boss) is untouched; the fan-out counts a
-week's cost against the spend headroom.
+with 3 samples; the openings level (Boss) gets its open-chairs week instead
+(B11); the fan-out counts a week's cost against the spend headroom.
 
 No network: the marketing tables, the claim and approve RPCs, the
 service-role reads, the model, Image Studio and the push sender are fakes at
@@ -1127,16 +1127,19 @@ def test_a_play_reorders_the_week_only_with_three_results(w):
 
 # ── who gets a week ───────────────────────────────────────────────────
 
-def test_boss_with_open_chairs_is_left_for_b11(w):
+def test_boss_with_open_chairs_gets_the_open_chairs_week_not_the_plain_one(w):
+    # B11: the openings level is never planned as a plain week; its own week
+    # is the open-chairs one (__tests__/test_business_marketing_openings.py).
     out = run(plan.run_week(BOSS, trigger='scheduled'))
-    assert out == {'status': 'not_eligible', 'reason': plan.OPENINGS_LATER}
+    assert out == {'status': 'not_eligible', 'reason': plan.OPENINGS_LEVEL}
     assert not [r for r in w.db.runs.values() if r['business_id'] == BOSS] and w.calls == []
-    w.user = BOSS_OWNER
-    r = ask(w, BOSS)
-    assert r.status_code == 409 and r.json()['detail'] == plan.OPENINGS_LATER
+    assert plan.run_kind(w.svc.businesses[BOSS]) == ('openings', None)
     tick = run(plan.marketing_tick(THU + timedelta(hours=3)))
+    assert tick['candidates'] == 3 and tick['openings_skipped'] == 1         # no weekly hours set here
     assert not [p for p in w.db.posts.values() if p['business_id'] == BOSS]
-    assert tick['candidates'] == 2                                           # the suggestion and the week; not Boss
+    boss_run = next(r for r in w.db.runs.values() if r['business_id'] == BOSS)
+    assert boss_run['kind'] == 'openings' and boss_run['error'] == plan.NO_HOURS
+    assert len(posts_of(w)) == 5                                             # the Professional week is unchanged
     suggestion = run(plan.run_suggestion(BOSS, trigger='scheduled'))
     assert suggestion['reason'] == plan.WEEK_LEVEL                           # nor a suggestion
 
