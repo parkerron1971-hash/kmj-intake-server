@@ -42,7 +42,7 @@ async def main():
     async for piece in fast.stream_text(
         conversation_style({}) + '\n' + fast._VOICE_OPENER_SYSTEM,
         [{'role': 'user', 'content': fast.opener_request(MESSAGE, voice=True)}],
-        model=chief_models.model_for('fast'), max_tokens=fast.VOICE_OPENER_MAX_TOKENS,
+        model=chief_models.model_for('opener'), max_tokens=fast.VOICE_OPENER_MAX_TOKENS,
         rec=route_ledger.RouteRecord(arrived=time.perf_counter()),
         endpoint='/chief/natural-flow-eval', units=0, business_id=None, out=out,
     ):
