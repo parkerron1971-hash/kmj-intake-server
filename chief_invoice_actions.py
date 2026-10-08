@@ -5,6 +5,7 @@ Chief's void_invoice and the invoice drawer's Void button (POST
 pay-link cleanup."""
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import UUID
@@ -29,8 +30,25 @@ def _fail(verb, message, code=None):
     return out
 
 
-def _yes(value):
-    return value is True or str(value).strip().lower() in ('true', 'yes', '1')
+# The owner's "void anyway" for a pay link that couldn't be verified counts
+# only as an answer to that refusal: recorded per invoice here, honoured from
+# 1 second (a person read it; not the same Chief turn, which runs its
+# actions milliseconds apart) to 30 minutes later.
+_UNVERIFIED_REFUSALS = {}
+_ANSWER_WINDOW = (1.0, 1800.0)
+
+
+def _answers_a_refusal(biz, inv):
+    at = _UNVERIFIED_REFUSALS.get((str(biz['id']), str(inv['id'])))
+    return at is not None and _ANSWER_WINDOW[0] <= time.monotonic() - at <= _ANSWER_WINDOW[1]
+
+
+def owner_confirms_link_off(action, *, prompted, user_id, biz, owner_text):
+    """Chief's side of the owner's word: the model's link_off_confirmed counts
+    only on a turn the owner actually typed. Set by the dispatcher, never read
+    from the payload (the same rule as _owner_text)."""
+    said = str(action.get('link_off_confirmed')).strip().lower() in ('true', 'yes', '1')
+    return bool(said and prompted and owner_text and str(user_id) == str(biz.get('owner_id')))
 
 
 def _literal(value):
@@ -71,8 +89,12 @@ async def _change(client, biz, action, verb):
         link = None
         if verb in ('delete_invoice', 'void_invoice'):
             from invoice_payment_links import disable_invoice_payment_link
-            link = await disable_invoice_payment_link(
-                client, biz, inv, link_off_confirmed=_yes(action.get('link_off_confirmed')))
+            confirmed = action.get('_owner_confirms_link_off') is True and _answers_a_refusal(biz, inv)
+            try:
+                link = await disable_invoice_payment_link(client, biz, inv, link_off_confirmed=confirmed)
+            except UnverifiedLink:
+                _UNVERIFIED_REFUSALS[(str(biz['id']), str(inv['id']))] = time.monotonic()
+                raise
         patch = {}
         if verb == 'void_invoice':
             patch = {'status': 'cancelled', 'stripe_payment_url': None}
@@ -138,6 +160,7 @@ router = APIRouter(prefix='/invoices', tags=['invoices'])
 
 class VoidBody(BaseModel):
     # The owner says the pay link we couldn't verify is already off in Stripe.
+    # Owner only, and only as an answer to that refusal (_answers_a_refusal).
     link_off_confirmed: bool = False
 
 
@@ -157,7 +180,12 @@ async def void_invoice(invoice_id: str, body: VoidBody | None = None,
         raise HTTPException(404, 'Invoice not found.')
     business_id = str(rows[0]['business_id'])
     from business_users_router import require_role
-    await asyncio.to_thread(require_role, business_id, str(session.user.id), 'member')
+    role = await asyncio.to_thread(require_role, business_id, str(session.user.id), 'member')
+    override = bool(body and body.link_off_confirmed)
+    if override and role != 'owner':
+        return JSONResponse(status_code=409, content={
+            'detail': "Only the business owner can void an invoice whose pay link I couldn't confirm.",
+            'code': 'owner_only'})
     biz = await asyncio.to_thread(
         sb_clients.sb_get_as_service,
         f'/businesses?id=eq.{business_id}&select=id,stripe_account_id,settings&limit=1') or []
@@ -165,7 +193,7 @@ async def void_invoice(invoice_id: str, body: VoidBody | None = None,
         raise HTTPException(404, 'Invoice not found.')
     async with httpx.AsyncClient(timeout=30) as client:
         out = await _change(client, biz[0], {'invoice_id': invoice_id,
-                                             'link_off_confirmed': bool(body and body.link_off_confirmed)}, 'void_invoice')
+                                             '_owner_confirms_link_off': override}, 'void_invoice')
     if out.get('failed'):
         # Logged, because a refusal nobody saw is otherwise invisible.
         logger.info('void refused: invoice=%s code=%s reason=%s', invoice_id, out.get('code'), out['result'])

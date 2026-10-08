@@ -9,7 +9,7 @@ import logging
 import httpx
 
 from stripe_checkout_helpers import STRIPE_API_BASE, _secret_key
-from financial_policy import require_stripe_write
+from financial_policy import require_operational_write, require_stripe_write
 
 logger = logging.getLogger('invoice_payment_links')
 
@@ -18,6 +18,10 @@ class UnverifiedLink(ValueError):
     """The link can't be shown to belong only to this invoice, so it can't be
     switched off from here. The owner may still void once they have turned it
     off with Stripe themselves (link_off_confirmed)."""
+
+
+class _TooMany(Exception):
+    """Stripe kept paging past what we read; the list may be incomplete."""
 
 
 UNVERIFIED = ("I couldn't confirm this invoice's Stripe pay link as its own, so I can't switch it off "
@@ -53,7 +57,7 @@ async def _pages(client, resource, params, headers, auth):
         if not rows:
             break
         params['starting_after'] = rows[-1]['id']
-    raise UnverifiedLink(UNVERIFIED)
+    raise _TooMany(resource)
 
 
 async def _switch_off(client, owned, headers, auth):
@@ -62,13 +66,17 @@ async def _switch_off(client, owned, headers, auth):
         response = await client.post(f"{STRIPE_API_BASE}/payment_links/{link['id']}", data={'active': 'false'}, headers=headers, auth=auth)
         response.raise_for_status()
     for link in owned:
-        async for sessions in _pages(client, 'checkout/sessions', {'payment_link': link['id']}, headers, auth):
-            for session in sessions:
-                if session.get('status') == 'complete' or session.get('payment_status') == 'paid':
-                    raise ValueError("Stripe shows a payment for this invoice, so I didn't void it. Its pay link is now off. If the money arrived, mark the invoice paid.")
-                if session.get('status') == 'open':
-                    response = await client.post(f"{STRIPE_API_BASE}/checkout/sessions/{session['id']}/expire", headers=headers, auth=auth)
-                    response.raise_for_status()
+        try:
+            async for sessions in _pages(client, 'checkout/sessions', {'payment_link': link['id']}, headers, auth):
+                for session in sessions:
+                    if session.get('status') == 'complete' or session.get('payment_status') == 'paid':
+                        raise ValueError("Stripe shows a payment for this invoice, so I didn't void it. Its pay link is now off. If the money arrived, mark the invoice paid.")
+                    if session.get('status') == 'open':
+                        response = await client.post(f"{STRIPE_API_BASE}/checkout/sessions/{session['id']}/expire", headers=headers, auth=auth)
+                        response.raise_for_status()
+        except _TooMany:
+            # The links are already off here, so this is not "couldn't switch it off".
+            raise ValueError("Its pay link is now off, but I couldn't read all of its Stripe checkouts, so I didn't void it. Check its payments in Stripe, then try again.")
 
 
 async def disable_invoice_payment_link(client, biz, invoice, *, link_off_confirmed=False):
@@ -82,6 +90,8 @@ async def disable_invoice_payment_link(client, biz, invoice, *, link_off_confirm
         return None
     if is_business_pay_link(biz, url):
         return 'shared'
+    # Every path below can write to Stripe, the platform account included.
+    require_operational_write(biz['id'])
     auth = (_secret_key(), '')
     # Where an invoice's own link can live: the business's connected account
     # (every link since D.4 PR 3c), then the platform account (KMJ's earlier ones).
@@ -100,9 +110,10 @@ async def disable_invoice_payment_link(client, biz, invoice, *, link_off_confirm
                         found = link
                     if _owns(link, invoice, biz):
                         owned.append(link)
-        except httpx.HTTPStatusError as exc:
-            logger.warning('pay link lookup failed: invoice=%s on=%s status=%s', invoice['id'],
-                           'connected' if headers else 'platform', exc.response.status_code)
+        except (httpx.HTTPStatusError, _TooMany) as exc:
+            logger.warning('pay link lookup failed: invoice=%s on=%s why=%s', invoice['id'],
+                           'connected' if headers else 'platform',
+                           getattr(getattr(exc, 'response', None), 'status_code', 'too many links'))
             continue
         if found and _owns(found, invoice, biz):
             await _switch_off(client, owned, headers, auth)
