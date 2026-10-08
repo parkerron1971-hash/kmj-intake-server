@@ -270,13 +270,16 @@ async def extract_answers(questions: List[str], transcript: List[Dict[str, Any]]
         return {}
     try:
         import httpx
+        import chief_models
         import llm_call
+        import model_ladder
         if not llm_call.api_key():
             return None
         payload = {
             "model": model,
             "max_tokens": 400,
-            "temperature": 0,
+            **model_ladder.sampling_kwargs(model, 0),
+            **chief_models.quick_call_kwargs(model),
             "system": EXTRACT_SYSTEM,
             "messages": [{"role": "user",
                           "content": _extract_payload(questions, transcript, extra_text)}],
