@@ -17,8 +17,9 @@ def is_business_pay_link(biz, url):
 
 
 async def disable_invoice_payment_link(client, biz, invoice):
-    """Returns 'shared' when the invoice carries the business's own pay link.
-    That link stays on for the other invoices; the caller only detaches it."""
+    """Returns 'shared' when the invoice carries the business's own pay link
+    (it stays on for the other invoices; the caller only detaches it),
+    'disabled' once the invoice's own links are off, None with no link."""
     url = invoice.get('stripe_payment_url')
     if not url:
         return None
@@ -70,3 +71,4 @@ async def disable_invoice_payment_link(client, biz, invoice):
                 if session.get('status') == 'open':
                     response = await client.post(f"{STRIPE_API_BASE}/checkout/sessions/{session['id']}/expire", headers=headers, auth=auth)
                     response.raise_for_status()
+    return 'disabled'

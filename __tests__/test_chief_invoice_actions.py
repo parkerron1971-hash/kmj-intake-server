@@ -185,6 +185,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 
+_REAL_CHANGE = actions._change
+
+
 @pytest.fixture
 def api(monkeypatch):
     import business_users_router
@@ -253,3 +256,39 @@ def test_void_endpoint_reports_the_refusal_reason(api, monkeypatch):
     api.as_user('owner-user')
     res = api.client.post(f"/invoices/{INVOICE['id']}/void")
     assert res.status_code == 409 and 'has a payment' in res.json()['detail']
+
+
+def test_void_endpoint_runs_the_real_void_and_a_blocked_read_is_a_clean_refusal(api, monkeypatch):
+    """No fake _change: the route binds the caller, _change reads through
+    sb_as_current_context, and a row the caller's RLS hides reads as []."""
+    monkeypatch.setattr(actions, '_change', _REAL_CHANGE)
+    calls = []
+
+    async def rls_hides_the_row(client, method, path, body=None):
+        calls.append((method, path))
+        return []
+    monkeypatch.setattr(actions, 'sb_as_current_context', rls_hides_the_row)
+    monkeypatch.setattr(financial_policy, 'require_operational_write', lambda bid: None)
+    api.as_user('member-user')
+    res = api.client.post(f"/invoices/{INVOICE['id']}/void")
+    assert res.status_code == 409 and res.json()['detail'] == 'Invoice not found in this business.'
+    assert [m for m, _ in calls] == ['GET'] and f"business_id=eq.{BIZ['id']}" in calls[0][1]
+
+
+def test_a_lost_race_after_the_link_is_off_says_the_invoice_is_still_open(monkeypatch, db):
+    db[0][0].update(status='sent', stripe_payment_url='https://buy.stripe.com/test')
+
+    async def switched_off(client, biz, inv):
+        return 'disabled'
+    monkeypatch.setattr(links, 'disable_invoice_payment_link', switched_off)
+
+    async def request(client, method, path, body=None):
+        return deepcopy(db[0]) if method == 'GET' else []
+    monkeypatch.setattr(actions, 'sb_as_current_context', request)
+    out = run(actions.handle_void_invoice)
+    assert out['failed'] and 'still open' in out['result'] and 'pay link is now switched off' in out['result']
+
+
+def test_disable_reports_that_it_switched_the_link_off(stripe_policy):
+    stripe = Stripe()
+    assert asyncio.run(links.disable_invoice_payment_link(stripe, BIZ, {**INVOICE, 'stripe_payment_url': 'https://buy.stripe.com/test'})) == 'disabled'

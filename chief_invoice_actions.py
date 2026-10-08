@@ -77,7 +77,11 @@ async def _change(client, biz, action, verb):
             path += '&sent_at=is.null'
         changed = await sb_as_current_context(client, 'DELETE' if verb == 'delete_invoice' else 'PATCH', path, patch or None)
         if not changed:
-            return _fail(verb, 'The invoice changed while I was updating it. Review its current state and try again. Any invoice-specific payment link may already be disabled.')
+            # The link is switched off before this write, so a lost race leaves
+            # an open invoice with a dead pay link. Say that plainly.
+            if link == 'disabled':
+                return _fail(verb, f'Invoice {number} changed while I was updating it, so it is still open, but its pay link is now switched off. Review it and try again.')
+            return _fail(verb, 'The invoice changed while I was updating it. Review its current state and try again.')
         word = {'delete_invoice': 'deleted', 'void_invoice': 'voided', 'archive_invoice': 'archived', 'restore_invoice': 'restored'}[verb]
         result = f'Invoice {number} {word}.'
         if verb == 'void_invoice' and link == 'shared':
