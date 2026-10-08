@@ -60,11 +60,15 @@ from chief_of_staff import ACTION_HANDLERS
 # means only a business that had a day pays for one.
 #
 # An ENV VAR rather than a constant so the decision can be revisited
-# without a deploy: at roughly $1 per active business per month, this
-# stops being noise somewhere north of a couple of hundred tenants, and
-# claude-haiku-4-5-20251001 is about a tenth the cost for what is
-# mostly summarization.
-NOTIF_MODEL = os.environ.get("NOTIF_MODEL", "claude-sonnet-4-5-20250929")
+# without a deploy.
+#
+# Haiku 5.5 since 2026-10-07. Sonnet 4.5 retires 2026-11-30, and in a
+# blind side-by-side on five real-shaped briefs (morning, midday,
+# evening; coaching and church) graded by Opus 5.5, Haiku 5.5 was
+# preferred over Sonnet 4.5 on 4 of 5 with fewer invented details and
+# fewer broken instructions, at about a thirtieth of the cost and a
+# third of the time. Roll back with NOTIF_MODEL=claude-sonnet-5-5.
+NOTIF_MODEL = os.environ.get("NOTIF_MODEL", "claude-haiku-5-5")
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 MIDDAY_LOOKBACK_HOURS = 4
@@ -165,9 +169,11 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,
         # practitioner never asked for (briefs, pings, urgent alerts)
         # bills nothing — same rule as /chief/insights and
         # /chief/playbook in pricing_config.
+        import model_ladder
         resp = await llm_call.apost(client, {
             "model": NOTIF_MODEL, "max_tokens": max_tokens, "system": system,
             "messages": [{"role": "user", "content": user_msg}],
+            **model_ladder.thinking_off_kwargs(NOTIF_MODEL),
         }, timeout=HTTP_TIMEOUT, key=key, business_id=business_id, units=0)
     except httpx.HTTPError as e:
         logger.warning(f"Claude request failed: {e}")
@@ -175,7 +181,12 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str,
     if resp.status_code >= 400:
         return ""
     data = resp.json()
-    return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
+    if data.get("stop_reason") == "refusal":
+        # A declined request falls back to the plain brief.
+        logger.info("notification brief declined by the model")
+        return ""
+    return "".join(b.get("text", "") for b in data.get("content", [])
+                   if isinstance(b, dict) and b.get("type") == "text").strip()
 
 
 def _extract_json(text: str) -> Optional[Dict]:

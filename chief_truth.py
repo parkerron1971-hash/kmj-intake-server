@@ -452,6 +452,101 @@ def _free_figures(text):
     import datetime as _dt
     this = _dt.date.today().year
     return {Decimal(y) for y in _YEAR_CONTEXT.findall(text or '') if abs(int(y) - this) <= 1}
+
+# A number Chief proposes as part of its advice is not a fact about the
+# business: a threshold in a condition ("If you have fewer than 3 by the end
+# of week 1, outreach is the problem"), a rule of thumb ("Below 25 percent
+# usually means an offer problem"), a habit or policy it suggests ("Count
+# who you've talked to in the last 14 days", "for example one free
+# reschedule with 24 hours' notice"), or an assumption it states and the
+# rough figure that follows from it ("At a 40 percent conversion rate, five
+# packages needs about 12 discovery calls"). Read as facts, they withheld
+# 4 of the 10 advice answers the check held back on 2026-10-07. Only those
+# shapes, only figures in them that carry a comparator, a rate or a span of
+# time, and never a sentence that names a person, states a record ("you
+# have", "overdue", "paid"...) or a figure of theirs ("your $150 rate").
+_COMPARATOR_FIGURE = re.compile(
+    r"\b(?:fewer than|less than|more than|under|over|below|above|at least|at most|up to|"
+    r"no more than|no fewer than|beyond)\s+(?:about\s+|around\s+|roughly\s+|~\s*)?"
+    r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent\b)?", re.I)
+_SPAN_OR_RATE = re.compile(
+    r"(\d[\d,]*(?:\.\d+)?)\s*(?:%|percent\b|(?:hours?|days?|weeks?|months?|minutes?|calls?|"
+    r"times?|posts?|messages?|reschedules?)\b)", re.I)
+_PERIOD_ORDINAL = re.compile(r"\b(?:week|day|month)\s+(\d{1,2})\b", re.I)
+_APPROX_FIGURE = re.compile(r"\b(?:about|roughly|around|approximately|~)\s*(\d[\d,]*(?:\.\d+)?)", re.I)
+_CONDITION_LEAD = re.compile(r"^(?:if|when|unless|once|until|whenever)\b", re.I)
+_RULE_OF_THUMB_LEAD = re.compile(
+    r"^(?:below|under|above|over|fewer than|less than|more than|at least)\s+(?:about\s+)?\d", re.I)
+_RULE_OF_THUMB_VERB = re.compile(
+    r"\b(?:usually|typically|often|generally|tends? to|means|signals?|suggests?|points? to)\b", re.I)
+_IMPERATIVE_LEAD = re.compile(
+    r"^(?:aim|count|track|set|keep|give|offer|ask|require|book|block|reserve|check|review|"
+    r"follow up|wait|plan|schedule|limit|cap|post|add|use|try|don['’]?t|do|make|run|reach out|"
+    r"protect|hold|start|stop|focus|judge|expect|allow|look|measure|watch|then)\b", re.I)
+_EXAMPLE_MARK = re.compile(r"\b(?:for example|for instance|e\.g\.|such as)\b", re.I)
+_ASSUMPTION_LEAD = re.compile(r"^(?:at an?|assuming|suppose|say)\b[^,]*\d", re.I)
+_RECORD_STATE = re.compile(
+    r"\b(?:you have|you've got|you['’]ve booked|there (?:is|are|were|was)|overdue|late|owe[sd]?|"
+    r"owing|paid|unpaid|due|booked|scheduled|on file|your\s+(?:\w+\s+)?\$?\d)\b", re.I)
+
+
+def _figure_set(matches):
+    out = set()
+    for m in matches:
+        try:
+            out.add(Decimal(m.group(1).replace(',', '')).normalize())
+        except Exception:
+            continue
+    return out
+
+
+def _advice_parameters(sentence):
+    """The figures in one sentence of advice that are Chief's own thresholds,
+    rules of thumb, suggested spans and stated assumptions (see above)."""
+    s = re.sub(r'^\s*(?:[-*•]|\d+[.)])\s+', '', sentence or '').strip()
+    s = re.sub(r'^\*\*[^*]+\*\*\s*', '', s).strip()
+    names = _fast_lane_names(s)[1:]
+    if names or '$' in s or _POSSESSIVE_FIGURE.search(s):
+        return set()
+    if _CONDITION_LEAD.match(s):
+        clause = s.split(',', 1)[0]
+        return (_figure_set(_COMPARATOR_FIGURE.finditer(clause))
+                | _figure_set(_PERIOD_ORDINAL.finditer(clause))
+                | _figure_set(_SPAN_OR_RATE.finditer(clause)))
+    if _RECORD_STATE.search(s):
+        return set()
+    if _RULE_OF_THUMB_LEAD.match(s) and _RULE_OF_THUMB_VERB.search(s):
+        return _figure_set(_COMPARATOR_FIGURE.finditer(s))
+    if _ASSUMPTION_LEAD.match(s):
+        head = s.split(',', 1)[0]
+        return _figure_set(_SPAN_OR_RATE.finditer(head)) | _figure_set(_APPROX_FIGURE.finditer(s))
+    found = set()
+    if _IMPERATIVE_LEAD.match(s):
+        found |= _figure_set(_COMPARATOR_FIGURE.finditer(s)) | _figure_set(_SPAN_OR_RATE.finditer(s))
+    example = _EXAMPLE_MARK.search(s)
+    if example:
+        found |= _figure_set(_SPAN_OR_RATE.finditer(s[example.end():]))
+    return found
+
+
+_LISTED_NAMES = re.compile(
+    r"[(:]\s*((?:[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?)(?:\s*,\s*(?:and\s+)?|\s+and\s+)"
+    r"(?:[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?(?:\s*,\s*(?:and\s+)?|\s+and\s+)?)+)\)?")
+
+
+def _enumerated_count(n, text, source_text):
+    """"You have 3 sessions this week (Marcus, Priya, Chris)": a count that
+    is the number of names the claim itself lists, every one of them in the
+    cited record. Held as "claim number 3 is not in the quote", the answer
+    that found why a coach's income was flat was withheld (2026-10-07)."""
+    m = _LISTED_NAMES.search(text or '')
+    if not m:
+        return False
+    names = [p.strip() for p in re.split(r'\s*,\s*(?:and\s+)?|\s+and\s+', m.group(1)) if p.strip()]
+    src = (source_text or '').lower()
+    return (Decimal(len(names)) == n and len(set(names)) == len(names)
+            and all(name.lower() in src for name in names))
+
 # A sentence about records is a business fact whatever its wording: "revenue
 # was roughly $900,000" must still be proved.
 _RECORD_NOUN = re.compile(
@@ -703,7 +798,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 if arithmetic_only_gap(gap) and calculated and _numbers(text_) <= calculated:
                     continue
                 if _numbers(text_) - _practitioner_figures(sources) - _free_figures(text_) \
-                        - _advice_math(text_, reply, sources):
+                        - _advice_math(text_, reply, sources) - _advice_parameters(sentence):
                     return 'unsupported', [], _claim_fail('claim number has no evidence', text_)
                 gaps.append('claim without support: %s (%s)' % (text_.strip()[:80], why))
                 # A prose gap must not hide a bad citation/figure later in the
@@ -771,6 +866,9 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 # that holds it together with the claim's names (or, with
                 # no names, its record words) — the fast lane's bar.
                 if missing:
+                    missing -= _advice_parameters(_sentence_containing(reply, text_))
+                    missing = {n for n in missing if not _enumerated_count(n, text_, source['text'])}
+                if missing:
                     if prover is None:
                         prover = _SentenceProver(sources)
                     missing = {n for n in missing if not prover.corroborates(n, text_)}
@@ -788,6 +886,7 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
         for s in re.split(r'(?<=[.!?])\s+|\n+', prose):
             if _is_recommendation_text(s):
                 exempt |= _numbers(s)
+            exempt |= _advice_parameters(s)
         # The owner's own numbers ("fill 12 seats") and plain arithmetic on
         # them and on Chief's recommended figures are not new facts.
         exempt |= _practitioner_figures(sources) | _advice_math(prose, reply, sources)
@@ -1537,6 +1636,29 @@ _DELIVERY_COMPLETION = re.compile(
     r"\s+(?:went|has gone|have gone) through\b", re.I)
 
 
+# "I've also texted your clients a reminder", "I emailed Ada the invoice",
+# "I've booked her for Friday": Chief reporting a write in the first person.
+# The phrase list in chief_of_staff knows "sent the" and "i've added"; these
+# slipped past it, and when a review came back malformed the answer went
+# out unchecked with the false "I texted" in it (2026-10-07 replay). Only
+# verbs that change something outside the chat: "I've added a few ideas
+# below" is prose, not a write.
+_FIRST_PERSON_WRITE = re.compile(
+    r"\b(?:i|we)(?:['\u2019]ve|\s+have)?\s+(?:also\s+|just\s+|already\s+|now\s+)?"
+    r"(?:sent|texted|emailed|messaged|booked|rebooked|scheduled|rescheduled|charged|refunded|"
+    r"invoiced|posted|published|deleted|cancell?ed|paid|uploaded|archived)\b", re.I)
+_WRITE_CONDITION = re.compile(r"\b(?:if|once|when|after|before|unless|until|whether)\b", re.I)
+
+
+def _first_person_write(text):
+    for sentence in re.split(r'(?<=[.!?])\s+|\n+', text or ''):
+        s = sentence.strip()
+        m = _FIRST_PERSON_WRITE.search(s)
+        if m and not s.endswith('?') and not _WRITE_CONDITION.search(s[:m.start()]):
+            return True
+    return False
+
+
 def has_completion_claim(reply):
     """Does the reply say work is done, or under way, that a receipt has
     to back? An offer or a promise of work to come does not."""
@@ -1544,7 +1666,7 @@ def has_completion_claim(reply):
     asserted = _asserted_text(_without_promises(reply))
     return bool(_DELIVERY_COMPLETION.search(asserted)) or chief._looks_like_completed_action(asserted) or bool(re.search(
         r'\b(?:appointment is booked|changes have been saved|payment recorded successfully)\b',
-        asserted, re.IGNORECASE))
+        asserted, re.IGNORECASE)) or _first_person_write(asserted)
 
 
 # A context list whose read failed: what its evidence says instead of a
@@ -2565,18 +2687,41 @@ async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, bu
             logger.info('reply review fast lane; citations=%d', len(fast))
             return reply, {'status': 'fast', 'sources': fast}
     raw = ''
+    review_messages = None
     if reply and len(reply) <= MAX_REPLY_CHARS:
         turn = _turn.get()
         payload = {'owner_message': message, 'draft': reply, 'sources': sources,
                    'unavailable': sorted(turn.unavailable) if turn else []}
+        review_messages = [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]
         try:
-            raw = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM,
-                [{'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
+            raw = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM, review_messages,
                 max_tokens=REVIEW_MAX_TOKENS, enable_web_search=False, business_id=business_id),
                 timeout=min(30.0, max(5.0, _left())))
         except Exception as exc:
             logger.warning('reply review unavailable: %s', type(exc).__name__)
     verdict, cited, reason = assess_review(raw, reply, sources)
+    # A malformed review checked nothing, and an unchecked answer goes out:
+    # a planted "I've also texted your clients a reminder" and an invented
+    # "7 new leads from Instagram" did, when the reviewer misquoted the draft
+    # (2026-10-07 replay). One second review on the fallback lane while time
+    # allows. A timeout or an empty reply is not retried: the turn has no
+    # time to spend on it.
+    if (verdict == 'invalid' and raw and review_messages and _left() >= 10.0
+            and reason not in ('no review text',)):
+        raw2 = ''
+        try:
+            raw2 = await asyncio.wait_for(reviewer(client, REVIEW_SYSTEM, review_messages,
+                max_tokens=REVIEW_MAX_TOKENS, enable_web_search=False, business_id=business_id,
+                model_lane='review_fallback'), timeout=min(30.0, max(5.0, _left())))
+        except TypeError:
+            raw2 = ''   # a reviewer that takes no lane (a test double)
+        except Exception as exc:
+            logger.warning('reply review fallback unavailable: %s', type(exc).__name__)
+        if raw2:
+            second = assess_review(raw2, reply, sources)
+            logger.info('reply review was malformed (%s); fallback review: %s', reason, second[0])
+            if second[0] != 'invalid':
+                raw, (verdict, cited, reason) = raw2, second
     # A vacuous reviewer verdict cannot clear a recognizable completion claim.
     if verdict == 'supported' and has_completion_claim(reply) and (
             not cited or all(sources[sid]['kind'] == 'conversation' for sid in cited)):

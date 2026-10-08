@@ -124,8 +124,11 @@ ANTHROPIC_VERSION = "2023-06-01"
 HONEYPOT_FIELDS = ("sol-hp", "_hp")
 
 # Scoring moved to lead_scoring (one rubric, every door) and runs on a
-# cheap model there. What is left here is the draft.
-DRAFT_MODEL = "claude-sonnet-4-5-20250929"
+# cheap model there. What is left here is the draft: Sonnet 5.5 since
+# 2026-10-07 (Sonnet 4.5 retires 2026-11-30). Haiku 5.5 split the
+# blind-graded replies 2-2 with Sonnet 4.5; a first reply to a new client
+# stays on Sonnet. INTAKE_DRAFT_MODEL rolls it back without a deploy.
+DRAFT_MODEL = os.environ.get("INTAKE_DRAFT_MODEL") or "claude-sonnet-5-5"
 
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
@@ -214,6 +217,7 @@ async def call_claude(
     if not api_key:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
 
+    import model_ladder
     resp = await llm_call.apost(
         client,
         {
@@ -221,6 +225,7 @@ async def call_claude(
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user_msg}],
+            **model_ladder.thinking_off_kwargs(model),
         },
         timeout=HTTP_TIMEOUT,
         key=api_key,
@@ -232,9 +237,12 @@ async def call_claude(
         return ""
 
     data = resp.json()
+    if data.get("stop_reason") == "refusal":
+        return ""   # the submission keeps its plain thank-you draft
     content = data.get("content", [])
     return "".join(
-        block.get("text", "") for block in content if isinstance(block, dict)
+        block.get("text", "") for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
     ).strip()
 
 

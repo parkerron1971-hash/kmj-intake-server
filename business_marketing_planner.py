@@ -5,8 +5,8 @@ fan-out rules). A business at the `suggest` level (its real plan includes
 marketing_suggestion and not marketing_week: Starter, Solo, Booked) gets ONE
 suggested post a week, as a draft on its marketing desk, to approve or skip.
 A business at the `week` level (marketing_week: Professional; Practice, the
-autopilot level, gets the same week until B12/B13) gets the WEEKLY PLAN:
-five drafts, each with a Creative Director flyer included in its plan.
+autopilot level, gets the same week plus its own clips, B12) gets the WEEKLY
+PLAN: five drafts, each with a Creative Director flyer included in its plan.
 A chair business with a live calendar (the `openings` level, Boss) gets the
 OPEN-CHAIRS WEEK (B11): three posts made from its booking calendar
 (business_marketing_openings has the calendar's half).
@@ -99,6 +99,20 @@ THE WEEKLY PLAN (B9, run_week)
   posts is approved, sent or still designing, and the new drafts are saved
   before the old ones are retired.
 
+CLIPS IN THE WEEK (B12, Solutionist: the autopilot level, D6)
+  The week above, plus up to TWO of the business's own video clips
+  (business_marketing_clips has the clips' half): ready, kept, approved at
+  the fingerprint they have now, not posted anywhere, not in a waiting post,
+  with a ready story cover; best score first, then newest. Each on its own
+  weekday at the desk's hour or the next free hour, 3 hours from any other
+  post that day. They ADD to the five (seven at most). Each is one more slot
+  in the week's ONE caption call (no flyer, the same business checks), then a
+  source 'clip' draft in the week's one insert: media is the clip with its
+  fingerprint and covers (inside the content hash), to every desk account
+  that takes a video, TikTok and YouTube included, with its tracked link.
+  The sender posts it through clip_posting.post_clip_for. Professional and
+  Boss never get clips. No eligible clip: the week is exactly B9's.
+
 THE OPEN-CHAIRS WEEK (B11, run_openings; Boss, D5)
   The week's machinery (kind 'openings': the same claim, fan-out, jitter,
   per-tick cap, spend headroom, owner's request and save-new-before-retire-
@@ -130,6 +144,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 import business_marketing as bm
+import business_marketing_clips as clips
 import business_marketing_desk as reading
 import business_marketing_engine as engine
 import business_marketing_links as links
@@ -171,7 +186,7 @@ LEVEL = 'suggest'
 # The weekly plan (B9).
 WEEK_KIND = 'week'
 WEEK_TASK = 'business_marketing_week'
-WEEK_LEVELS = ('week', 'autopilot')   # autopilot (Practice) gets the plain week until B12/B13
+WEEK_LEVELS = ('week', 'autopilot')   # autopilot (Practice): the week plus its own clips (B12); B13 to come
 WEEK_MAX_TOKENS = 4000                # five captions and five flyers' three lines
 FLYERS_PER_WEEK = 5                   # plan flyers per business per week, replans included
 FLYER_SIZE = '1088x1360'              # 4:5: Instagram's tallest feed picture, shown whole
@@ -237,6 +252,8 @@ WEEK_KEPT = "The week's earlier plan is still on the desk."
 APPROVED_MEANWHILE = "The week's suggestion was approved in the meantime, so Chief left it as it is."
 # The weekly plan's words (B9).
 WEEK_QUEUED = 'Chief is planning your week: five posts, each with a flyer. They show up here in a few minutes.'
+WEEK_CLIPS_QUEUED = ('Chief is planning your week: five posts, each with a flyer, and up to two of your own video '
+                     'clips. They show up here in a few minutes.')
 WEEK_BUSY = ("That week is being planned, or one of its posts is already approved or sent, so Chief can't "
              'plan it again. Nothing new was queued.')
 STILL_DESIGNING = "Chief is still making this week's flyers. Ask again once they are ready. Nothing new was queued."
@@ -1181,6 +1198,9 @@ def week_caption_request(slots: List[Dict[str, Any]], facts: Dict[str, Any],
                          profile: Dict[str, Any]) -> Dict[str, Any]:
     out = []
     for slot in slots:
+        if slot.get('clip'):
+            out.append(clips.request_item(slot))          # B12: one of the business's own clips
+            continue
         play = engine.PLAYS[slot['play_id']]
         out.append({'slot': slot['slot'], 'play': play['label'], 'play_brief': play['brief'],
                     'subject': slot.get('subject'), 'offering': slot.get('offering')})
@@ -1193,12 +1213,14 @@ async def write_week_captions(business_id: str, slots: List[Dict[str, Any]], fac
     """ONE model call for every caption of the week, metered to the business
     (units=0: the plan bills the owner nothing), each held to the same
     business caption checks as the suggestion. {slot: (caption, flyer copy,
-    dropped)}; a slot the model skipped or numbered wrong has no caption."""
+    dropped)}; a slot the model skipped or numbered wrong has no caption. A
+    clip's slot (B12) is one more caption in the same call, with no flyer."""
     import llm_call
     import model_ladder
     from chief_models import model_for
     model = model_for('draft')
-    payload = {'model': model, 'max_tokens': WEEK_MAX_TOKENS, 'system': profile['system_prompt'],
+    room = WEEK_MAX_TOKENS + clips.MAX_TOKENS_EACH * sum(1 for s in slots if s.get('clip'))
+    payload = {'model': model, 'max_tokens': room, 'system': profile['system_prompt'],
                'messages': [{'role': 'user', 'content': json.dumps(week_caption_request(slots, facts, profile),
                                                                    default=str)}],
                **model_ladder.effort_kwargs(model, EFFORT)}
@@ -1207,7 +1229,9 @@ async def write_week_captions(business_id: str, slots: List[Dict[str, Any]], fac
                                         business_id=business_id, units=0)
     response.raise_for_status()
     parsed = _parse(llm_call.text_of(response.json()))
-    return {s['slot']: judge(parsed, s, facts, profile, number=s['slot'], first_if_missing=False) for s in slots}
+    return {s['slot']: (clips.judge(parsed, s, facts, profile) if s.get('clip')
+                        else judge(parsed, s, facts, profile, number=s['slot'], first_if_missing=False))
+            for s in slots}
 
 
 # Every desk picture is Instagram-safe as delivered: the feed takes 4:5 to
@@ -1477,6 +1501,7 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
     design: Dict[str, Any] = {**request, 'replans': replans}
     standing: Optional[List[Dict[str, Any]]] = None
     own = {week_post_id(run_id, attempt, n): n for n in range(1, WEEK_SLOTS + 1)}
+    own_clips = {clips.post_id(run_id, attempt, n) for n in range(1, clips.PER_WEEK + 1)}     # B12
 
     async def close(status: str, error: str) -> Dict[str, Any]:
         ended = await _close(bid, run_id, at, status=status, error=error, manual=manual, prior=prior,
@@ -1491,7 +1516,7 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
         every = await store.rows(f'/marketing_posts?run_id=eq.{run_id}&business_id=eq.{bid}'
                                  '&select=id,status,revision,run_at,play_id,design_status,source&limit=60')
         standing = [p for p in every if p.get('status') != 'cancelled']
-        mine = [p for p in standing if str(p['id']) in own]
+        mine = [p for p in standing if str(p['id']) in own or str(p['id']) in own_clips]
         if mine or (standing and not manual):
             # This attempt (or, for the scheduler, an earlier one) saved its
             # drafts and stopped before recording them. Their flyers are
@@ -1500,7 +1525,8 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
             ids = [str(p['id']) for p in standing]
             kept_design = {**(prior if manual else {}), 'replans': replans, 'tell': 'pending'}
             if mine and manual:
-                left = await _retire(bid, run_id, [p for p in standing if p.get('status') == 'draft'], set(own))
+                left = await _retire(bid, run_id, [p for p in standing if p.get('status') == 'draft'],
+                                     set(own) | own_clips)
                 ids = [str(p['id']) for p in mine] + left
                 kept_design['made'] = [str(p['id']) for p in mine]
             await _finish(bid, run_id, at, status='succeeded', post_ids=ids, error=None, design=kept_design)
@@ -1537,10 +1563,23 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
         record = {'signals': {**marketing_signals.summary(signals), 'play_scores': scores}, 'diagnosis': diagnosis,
                   'plays': plan['plays'], 'slots': [_record_slot(s, when[s['slot']]) for s in slots]}
 
-        written = await write_week_captions(bid, slots, facts, profile)
-        record['dropped'] = [d for s in slots for d in written[s['slot']][2]]
+        # B12: Solutionist's own clips, folded into the same week (never
+        # Professional or Boss). A read that fails picks none: the week is B9's.
+        picks: List[Dict[str, Any]] = []
+        if clips.takes_clips(row):
+            try:
+                picks, design['clips'] = await clips.plan_clips(
+                    bid, run_id=run_id, week_of=week_of, tz=tz, desk=desk, at=at, plan_times=list(when.values()),
+                    previous=previous, first_slot=len(slots) + 1)
+            except Exception:
+                log.warning('marketing planner: the clips for %s could not be picked', bid[:8], exc_info=True)
+                picks, design['clips'] = [], {'state': 'error', 'picked': [], 'skipped': []}
+        clip_slots = [clips.caption_slot(p['slot'], p['clip']) for p in picks]
+
+        written = await write_week_captions(bid, slots + clip_slots, facts, profile)
+        record['dropped'] = [d for s in slots + clip_slots for d in written[s['slot']][2]]
         good = [s for s in slots if written[s['slot']][0]]
-        if not good:
+        if not good and not any(written[c['slot']][0] for c in clip_slots):
             return await close('failed', WEEK_CAPTIONS_BROKE)
 
         try:
@@ -1591,6 +1630,12 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
                     'words' if not copy else 'week', [d for d in gone if d['why'] == 'needs_picture']))
             left_out += gone
             posts.append(post)
+        # B12: each clip whose caption passed is a draft beside them (source
+        # 'clip', no flyer): every desk account that takes a video, TikTok and
+        # YouTube included; its tracked link; the clip's fingerprint and covers
+        # in its media, so in its content hash.
+        clip_posts = _clip_posts(bid, run_id, attempt, picks, written, chosen, fallback, site, record, design)
+        posts += clip_posts
         if not posts:
             raise Skip(f"{bm.dropped_note(left_out) or 'None of your accounts can take these posts.'} "
                        'Nothing was saved.')
@@ -1615,6 +1660,8 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
         flyers: Dict[str, Dict[str, Any]] = {}
         for post in posts:
             pid = str(post['id'])
+            if post.get('source') == 'clip':
+                continue                        # a clip is its own picture: no flyer
             if pid not in wanted:
                 flyers[pid] = {'state': 'failed', 'why': 'words' if not written[own[pid]][1] else 'week'}
                 continue
@@ -1652,6 +1699,46 @@ async def _plan_week(row: Dict[str, Any], desk: Optional[Dict[str, Any]], tz: Zo
         return await close('failed', WEEK_FAILED)
 
 
+def _clip_posts(business_id: str, run_id: UUID, attempt: int, picks: List[Dict[str, Any]],
+                written: Dict[int, Tuple[Optional[str], Any, List[Dict[str, Any]]]], chosen: List[Dict[str, Any]],
+                landing: Optional[str], site: Optional[Dict[str, Any]], record: Dict[str, Any],
+                design: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The week's clip drafts (B12), with the same columns as its flyer
+    posts (one insert). A clip whose caption broke a rule, or that no account
+    can take, is left out (it stays eligible next week); the run records
+    which clip went where, with which cover on each network."""
+    out: List[Dict[str, Any]] = []
+    noted = (design.get('clips') or {}).get('picked') or []
+    by_clip = {str(n.get('clip_id')): n for n in noted}
+    kept, gone = clips.video_targets(chosen)
+    if gone and picks and isinstance(design.get('clips'), dict):
+        design['clips']['left_out'] = bm._public_dropped(gone)
+    for p in picks:
+        caption = written.get(p['slot'], (None, None, []))[0]
+        entry = by_clip.get(str(p['clip']['id']), {})
+        if not caption:
+            entry['saved'] = False
+            continue
+        pid = clips.post_id(run_id, attempt, p['n'])
+        try:
+            if not kept:
+                raise HTTPException(422, 'None of your accounts takes a video.')
+            link = bm.link_fields(pid, caption, landing, site)
+            targets = bm.ready_to_post(kept, 'video', caption, link['publish_text'])
+            run_at, expires_at = bm.schedule(p['run_at'])
+            post = bm.new_post(business_id, pid, caption=caption, media=p['media'], targets=targets, run_at=run_at,
+                               expires_at=expires_at, landing=landing, source='clip', site=site)
+        except HTTPException as exc:
+            record['dropped'].append({'slot': p['slot'], 'clip_id': str(p['clip']['id']),
+                                      'reason': str(exc.detail)[:200]})
+            entry['saved'] = False
+            continue
+        post.update(run_id=str(run_id), play_id=clips.PLAY_ID, error=None)
+        entry.update(saved=True, post_id=pid, covers=clips.covers_by_network(targets, p['media'].get('covers') or {}))
+        out.append(post)
+    return out
+
+
 # ── the week's flyers land (B9) ───────────────────────────────────────
 
 POST_DESIGN_COLUMNS = ('id,business_id,run_id,source,status,revision,caption,publish_text,landing_url,media,'
@@ -1663,12 +1750,27 @@ def week_dedup_key(run_id: Any, attempt: int) -> str:
     return f'marketing_week:{UUID(str(run_id))}:{int(attempt)}'
 
 
-def week_words(drafts: int, without: int, which: Optional[str]) -> Dict[str, str]:
-    """'Chief planned next week: 5 posts wait for your OK', and what comes with them."""
+def week_words(drafts: int, without: int, which: Optional[str], clip_posts: int = 0) -> Dict[str, str]:
+    """'Chief planned next week: 5 posts wait for your OK', and what comes
+    with them. clip_posts: how many of them are the business's own video
+    clips (B12), which carry their covers instead of a flyer."""
     many = drafts != 1
     title = (f"Chief planned {which or 'next week'}: {drafts} post{'s' if many else ''} "
              f"wait{'' if many else 's'} for your OK")
-    if not without:
+    if clip_posts and clip_posts >= drafts:
+        lead = ('They are your own video clips, with their covers.' if many
+                else 'It is your own video clip, with its cover.')
+    elif clip_posts:
+        flyered = max(0, drafts - clip_posts - without)
+        parts = []
+        if flyered:
+            parts.append(f"{flyered} {'has' if flyered == 1 else 'have'} a flyer")
+        if without:
+            parts.append(f"{without} {'goes' if without == 1 else 'go'} as words only")
+        parts.append(f'{clip_posts} is your own video clip, with its cover' if clip_posts == 1
+                     else f'{clip_posts} are your own video clips, with their covers')
+        lead = words._cap(words._join(parts)) + '.'
+    elif not without:
         lead = 'Each has its flyer.' if many else 'It has its flyer.'
     elif without >= drafts:
         lead = 'They go as words only this time.' if many else 'It goes as words only this time.'
@@ -1716,7 +1818,7 @@ async def tell_week(run: Dict[str, Any], at: datetime) -> str:
     dedup_key. If what was said cannot be read, nothing is said."""
     bid, rid = str(UUID(str(run['business_id']))), str(UUID(str(run['id'])))
     posts = await store.rows(f'/marketing_posts?run_id=eq.{rid}&business_id=eq.{bid}&status=neq.cancelled'
-                             '&select=id,status,design_status&limit=60')
+                             '&select=id,status,design_status,source&limit=60')
     if any(p.get('design_status') == 'designing' for p in posts):
         return 'waiting'
     drafts = [p for p in posts if p.get('status') == 'draft']
@@ -1727,8 +1829,10 @@ async def tell_week(run: Dict[str, Any], at: datetime) -> str:
     if not told and drafts:
         business = await asyncio.to_thread(read_business, bid)
         tz = await asyncio.to_thread(marketing_profile.time_zone, business)
-        without = sum(1 for p in drafts if p.get('design_status') != 'ready')
-        said = week_words(len(drafts), without, reading.relation(run.get('week_of'), at, tz))
+        # A clip (B12) carries its own covers: never counted as words only.
+        clip_posts = sum(1 for p in drafts if p.get('source') == 'clip')
+        without = sum(1 for p in drafts if p.get('source') != 'clip' and p.get('design_status') != 'ready')
+        said = week_words(len(drafts), without, reading.relation(run.get('week_of'), at, tz), clip_posts)
         if not await asyncio.to_thread(_week_today_item, bid, rid, said, key):
             return 'not_told'
         if business.get('owner_id'):
@@ -2646,8 +2750,9 @@ async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user))
     # One write claims the week and marks it queued; nothing is cancelled
     # here, and no desk row is made (the worker makes one before it saves).
     run_id = await queue_request(bid, week, str(user.id), at, kind=kind)
+    week_said = WEEK_CLIPS_QUEUED if clips.takes_clips(row) else WEEK_QUEUED
     return {'queued': True, 'run_id': str(run_id), 'week_of': week.isoformat(), 'kind': kind,
-            'message': WEEK_QUEUED if kind == WEEK_KIND else OPENINGS_QUEUED if kind == OPENINGS_KIND else QUEUED}
+            'message': week_said if kind == WEEK_KIND else OPENINGS_QUEUED if kind == OPENINGS_KIND else QUEUED}
 
 
 # ── the preview ───────────────────────────────────────────────────────
