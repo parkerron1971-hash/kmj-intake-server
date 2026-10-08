@@ -508,6 +508,28 @@ def test_a_read_that_fails_puts_no_clip_in_the_week(c, table):
     assert run_of(c)['design']['clips']['state'] == 'unreadable'
 
 
+@pytest.mark.parametrize('how', ['clip_lookup_fails', 'clip_lookup_at_its_limit', 'busy_times_fail'])
+def test_a_marketing_posts_read_that_fails_puts_no_clip_in_the_week(c, how):
+    """The two marketing_posts reads (in_posts, busy_times): a StoreError, or a
+    lookup that comes back at its row limit, is a read that did not happen,
+    never "the clip is free" or "the day is empty"."""
+    two_clips(c)
+    if how == 'clip_lookup_fails':
+        c.db.fail = ('media->>clip_id',)                                 # in_posts: StoreUnavailable
+    elif how == 'clip_lookup_at_its_limit':
+        for n in range(clips.POSTED_LIMIT):                               # all naming clip A, in an earlier week
+            c.db.posts[f'old{n}'] = {'id': f'old{n}', 'business_id': PRO, 'run_id': None, 'source': 'owner',
+                                     'status': 'published', 'media': {'clip_id': clip_id(1)},
+                                     'run_at': '2026-09-01T16:00:00Z'}
+    else:
+        c.db.fail = ('select=id,run_at',)                                 # busy_times: StoreUnavailable
+    out = week(c)
+    this_week = [p for p in posts_of(c) if p.get('run_id') == run_of(c)['id']]
+    assert out['status'] == 'succeeded' and len(this_week) == 5
+    assert {p['source'] for p in this_week} == {'plan'}
+    assert run_of(c)['design']['clips']['state'] == 'unreadable'          # not 'error': converted to Unavailable
+
+
 # ── the caption ───────────────────────────────────────────────────────
 
 def test_a_clip_caption_takes_at_most_three_hashtags_and_a_broken_one_costs_only_that_clip(c):
