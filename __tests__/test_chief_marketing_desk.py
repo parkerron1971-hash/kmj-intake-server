@@ -542,6 +542,23 @@ def test_a_member_cannot_replan(s, queued):
     assert queued == []
 
 
+def test_replan_unattended_is_refused_before_anything_is_read(s, queued):
+    """Review of #1339: a replan can start paid flyers and retire the
+    week's drafts, so a scheduled or automatic run never queues one."""
+    paths = len(s.db.paths)
+    out = refused(s, act('marketing_replan', _unattended=True))
+    assert 'only when you ask' in out['result'] and queued == []
+    assert len(s.db.paths) == paths and s.svc.reads == []
+
+
+def test_replan_through_the_door_unprompted_is_refused(s, queued, monkeypatch):
+    _quiet_policy(monkeypatch)
+    taken = run(cos._execute_actions(None, BIZ_ROW, [{'type': 'marketing_replan', '_unattended': False}],
+                                     user_id=OWNER, surface='agent', prompted=False))
+    out = refused(s, taken[0])
+    assert 'only when you ask' in out['result'] and queued == []
+
+
 # ─── 5. no approve verb ──────────────────────────────────────────────
 
 def test_there_is_no_approve_verb_anywhere():

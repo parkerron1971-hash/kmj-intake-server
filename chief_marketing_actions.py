@@ -102,6 +102,8 @@ QUEUED = "nothing was queued"
 UNATTENDED = ("A post goes out only when you ask me to post it, and this came from a scheduled or "
               "automatic run, so nothing was posted. Ask me to post it, or use Post now on the "
               "marketing desk.")
+REPLAN_UNATTENDED = ("Chief plans posts again only when you ask, and this came from a scheduled or automatic "
+                     "run, so nothing was queued. Ask me to plan again, or use Plan again on the marketing desk.")
 COULD_NOT_READ = ("I couldn't read the marketing desk just now. That is not the same as an empty desk: "
                   "try again in a minute.")
 
@@ -924,6 +926,11 @@ async def handle_marketing_replan(client, biz, action) -> Dict[str, Any]:
     bid = str((biz or {}).get("id") or "")
     action = action or {}
     try:
+        # The unattended gate, before anything is read: a week's replan can
+        # start paid flyers and retire the week's waiting drafts, so it runs
+        # only on the owner's own ask in this turn (review of #1339).
+        if action.get("_unattended"):
+            raise Refusal(REPLAN_UNATTENDED, "Not queued: I plan again only when you ask", DESK_NAV)
         g = await _gates(verb, bid, QUEUED)
         import business_marketing as bm
         import business_marketing_planner as planner
