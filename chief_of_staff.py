@@ -1629,7 +1629,12 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                                   client, system, messages, max_tokens=max_tokens,
                                   enable_web_search=enable_web_search,
                                   business_id=business_id, model=model,
-                                  stream_sink=stream_sink, timing_role=timing_role)
+                                  stream_sink=stream_sink, timing_role=timing_role,
+                                  # The same request: without its tools and
+                                  # effort the turn lost them, and the cache
+                                  # key changed under it.
+                                  read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                                  stable_tools=stable_tools)
                           logger.warning(
                               f"Claude stream error (attempt {attempt + 1}/3): "
                               f"{resp.status_code} {body[:300]}")
@@ -1891,7 +1896,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       client, system, messages, max_tokens=max_tokens,
                       enable_web_search=enable_web_search,
                       business_id=business_id, model=model, stream_sink=stream_sink, timing_role=timing_role,
-                      read_tools=read_tools, tool_biz=tool_biz)
+                      read_tools=read_tools, tool_biz=tool_biz, effort=effort,
+                      stable_tools=stable_tools)
               if resp.status_code in (408, 429, 500, 502, 503, 504, 529):
                   resp = None
                   continue
@@ -13835,13 +13841,19 @@ async def _analyze_relationships(client: httpx.AsyncClient, biz_id: str) -> List
 
 
 async def _get_time_context(client: httpx.AsyncClient, biz_id: str) -> str:
-    """Build a small block about the moment — time of day, day of week,
-    and any recurring activity pattern from chief_patterns."""
+    """Build a small block about the moment — today's date, time of day,
+    day of week, and any recurring activity pattern from chief_patterns.
+
+    Today's date lives HERE, in the per-message tail, and nowhere in the
+    cached operating manual. It used to sit in the manual ("today is
+    2026-10-08"), so the manual changed at midnight UTC and the first
+    message after it re-wrote ~90k cached tokens, even mid-conversation
+    (8 pm Eastern) and right after a keep-warm ping (2026-10-08)."""
     now = datetime.now(timezone.utc)
     hour = now.hour
     day = now.strftime("%A")
 
-    parts: List[str] = []
+    parts: List[str] = [f"Today is {day}, {now.date().isoformat()} (UTC)."]
     if hour < 9:
         parts.append("It's early morning — keep it focused, lead with priorities.")
     elif hour >= 17:
@@ -13866,8 +13878,6 @@ async def _get_time_context(client: httpx.AsyncClient, biz_id: str) -> str:
     except Exception:
         pass
 
-    if not parts:
-        return ""
     return "TIME CONTEXT:\n" + "\n".join(f"- {p}" for p in parts)
 
 
