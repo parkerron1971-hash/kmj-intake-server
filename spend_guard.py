@@ -148,6 +148,13 @@ def today_spend_cents(force: bool = False,
     return total
 
 
+def platform_cap_usd() -> float:
+    """DAILY_SPEND_CAP_USD, in dollars. Work that plans its own spend ahead
+    (the marketing suite's weekly plan: five flyers a business) measures its
+    estimate against it alongside platform_share."""
+    return _cap_cents() / 100.0
+
+
 def platform_share(force: bool = False) -> float:
     """Today's platform-wide spend as a share of DAILY_SPEND_CAP_USD (1.0 =
     at the ceiling). Read like over_budget: cached 60s, failing open to the

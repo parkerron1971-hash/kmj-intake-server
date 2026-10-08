@@ -13,7 +13,7 @@ class DesignRequest(Strict):
     goal: str = Field(min_length=3, max_length=4000)
     exact_copy: list[str] = Field(default_factory=list, max_length=16)
     reference_inputs: list[ReferenceInput] = Field(default_factory=list, max_length=4)
-    size: Literal['1024x1024', '1024x1536', '1536x1024', '1088x1920', '1920x1088'] = '1024x1536'
+    size: Literal['1024x1024', '1024x1536', '1536x1024', '1088x1920', '1920x1088', '1088x1360'] = '1024x1536'
     quality: Literal['low', 'medium', 'high'] = 'high'
 
 

@@ -18,8 +18,12 @@ missed because of a model mistake. If the check can't run (no key, an
 outage), the message is NOT sent — the member is asked to try again —
 because nothing goes out unchecked.
 
-Model: Claude Haiku 4.5 through llm_call (the one Anthropic seam), the
-policy as a cached system prompt, temperature 0, a few output tokens.
+Model: Claude Haiku 5.5 through llm_call (the one Anthropic seam), the
+policy as a cached system prompt, thinking off, a few output tokens
+(temperature 0 where the model takes one; Haiku 5.5 does not). A
+safety refusal from the model is never a delivery: the message is held
+for the safety officers, or routed as self_harm when the crisis floor
+matches.
 """
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ import os
 import re
 from typing import Optional
 
-MODEL = os.environ.get("MSG_SCREEN_MODEL", "claude-haiku-4-5-20251001")
+MODEL = os.environ.get("MSG_SCREEN_MODEL", "claude-haiku-5-5")
 VERDICTS = ("ok", "harm", "self_harm")
 
 CRISIS_RE = re.compile(
@@ -75,11 +79,15 @@ def parse(raw: str) -> str:
 async def screen(business_id: str, text: str) -> str:
     """'ok' | 'harm' | 'self_harm'. Raises ScreenUnavailable."""
     import httpx
+    import chief_models
     import llm_call
+    import model_ladder
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise ScreenUnavailable("no key")
     payload = {
-        "model": MODEL, "max_tokens": 20, "temperature": 0,
+        "model": MODEL, "max_tokens": 20,
+        **model_ladder.sampling_kwargs(MODEL, 0),
+        **chief_models.quick_call_kwargs(MODEL),
         "system": [{"type": "text", "text": POLICY, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": f"<message>{(text or '')[:2000]}</message>"}],
     }
@@ -88,7 +96,13 @@ async def screen(business_id: str, text: str) -> str:
             resp = await llm_call.apost(client, payload, timeout=8, task="msg_screen", business_id=str(business_id))
         if resp.status_code != 200:
             raise ScreenUnavailable(f"http {resp.status_code}")
-        verdict = parse(llm_call.text_of(resp.json()))
+        body = resp.json()
+        if body.get("stop_reason") == "refusal":
+            # Haiku 5.5's own safety classifiers declined to read it. That
+            # is never a reason to deliver it, and "try again" would hide
+            # it from the safety officers: hold it (or route a crisis).
+            return floor(text) or "harm"
+        verdict = parse(llm_call.text_of(body))
     except ScreenUnavailable:
         raise
     except Exception as exc:
