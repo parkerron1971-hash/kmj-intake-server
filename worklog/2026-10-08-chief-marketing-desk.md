@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "This will work. let's build this."
 status: waiting on Kevin
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1339]
 migrations: []
 left_undone:
   - "Kevin: merge. Nothing changes for a business until MARKETING_DESK covers it (the verbs say 'not switched on yet' and no context block is read); post now also needs MARKETING_DESK_PUBLISHING=on and the posting pilot, exactly as the desk's own Post now"
