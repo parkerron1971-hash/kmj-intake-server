@@ -35,7 +35,20 @@ def test_delete_unsent_draft_is_scoped_and_conditional(db):
     method, path, body = db[1][-1]
     assert method == 'DELETE' and f"business_id=eq.{BIZ['id']}" in path
     assert 'sent_at=is.null' in path and 'paid_at=is.null' in path and 'updated_at=eq.' in path
-    assert 'status=eq."draft"' in unquote(path)
+    assert 'status=eq.draft&' in unquote(path)
+
+
+def test_plain_eq_filters_are_never_wrapped_in_quotes(db):
+    """PostgREST keeps the quotes of a plain eq value (checked against prod
+    2026-10-08: id=eq."<uuid>" is a 22P02), so status=eq."sent" matched
+    nothing and every void failed as 'the invoice changed'."""
+    db[0][0].update(status='sent', updated_at='2026-06-06T23:07:09.538107+00:00')
+    assert not run(actions.handle_void_invoice, {'invoice_number': 'INV-2026-010'}).get('failed')
+    lookup, write = db[1][0][1], db[1][-1][1]
+    assert '%22' not in lookup and '"' not in lookup and 'invoice_number=eq.INV-2026-010' in lookup
+    assert '%22' not in write and '"' not in write
+    assert 'status=eq.sent&' in write
+    assert 'updated_at=eq.2026-06-06T23%3A07%3A09.538107%2B00%3A00' in write   # + stays a plus
 
 
 @pytest.mark.parametrize('status', ['sent', 'viewed', 'overdue', 'paid', 'cancelled'])
