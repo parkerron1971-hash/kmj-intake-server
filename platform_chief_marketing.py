@@ -271,13 +271,14 @@ async def _desk():
                              for i in items]}
 
 
-def _closed():
+async def _closed():
     """B15: while Solutionist's desk is on the marketing suite, Chief's verbs
     here make nothing new for Buffer (a post, a plan, an approval); they say
     so in the desk's words. Editing, skipping, cancelling and pausing posts
-    already on the Buffer desk still work while it drains."""
+    already on the Buffer desk still work while it drains. The check's reads
+    run in a worker thread, never on the event loop (B15b)."""
     import platform_suite
-    why = platform_suite.chief_closed()
+    why = await platform_suite.chief_closed_async()
     return {'ok': False, 'label': why} if why else None
 
 
@@ -307,9 +308,10 @@ async def marketing_snapshot():
         result['source_status'][key] = status
         return data
 
-    if platform_suite.problem():
-        result['suite'] = {'on': False, 'note': platform_suite.problem()}
-    elif platform_suite.buffer_state() == 'closed':
+    problem = await platform_suite.problem_async()
+    if problem:
+        result['suite'] = {'on': False, 'note': problem}
+    elif await platform_suite.buffer_state_async() == 'closed':
         result['suite'] = {'on': True, 'note': 'Solutionist\'s marketing now runs on the marketing suite desk: new '
                            'posts, the weekly plan and posting right away happen there, not here. This snapshot is the '
                            'Buffer desk, which is draining: posts approved before the switch still go out.'}
@@ -335,8 +337,9 @@ async def marketing_snapshot():
 async def save_draft(action):
     import platform_marketing as marketing
     draft = marketing.Draft.model_validate({**action.get('draft', {}), 'ai_assisted': True})
-    if draft.revision is None and _closed():
-        return _closed()
+    closed = await _closed() if draft.revision is None else None
+    if closed:
+        return closed
     if draft.revision is None:
         existing = await marketing.db('GET', f'/platform_marketing_posts?id=eq.{draft.id}&limit=1')
         if existing:
@@ -354,8 +357,9 @@ async def new_post(action):
     """Chief makes a post: every connected channel and the next open slot unless the owner chose."""
     import platform_marketing as marketing
     from marketing_desk import _join, clock, day_name
-    if _closed():
-        return _closed()
+    closed = await _closed()
+    if closed:
+        return closed
     text = str(action.get('text') or '').strip()
     if not text:
         return {'ok': False, 'label': 'There was no caption to save.'}
@@ -396,7 +400,7 @@ async def post_now_review(payload):
     import platform_marketing as marketing
     import platform_suite
     from marketing_desk import SERVICE
-    platform_suite.close_buffer()           # B15: no card for a Buffer post while the suite is on
+    await platform_suite.close_buffer_async()     # B15: no card for a Buffer post while the suite is on
     cfg = await marketing.config()
     connected = cfg.get('channels') or []
     review = {'type': 'marketing_post_now', 'goes_out': 'Within a few minutes of your approval'}
@@ -449,8 +453,9 @@ async def post_now(action):
     import platform_chief_authority as authority
     import platform_marketing as marketing
     from marketing_desk import _join
-    if _closed():
-        return _closed()
+    closed = await _closed()
+    if closed:
+        return closed
     ctx = authority.current_authorization.get()
     if not ctx or ctx[1].get('automatic', True) is not False:
         return {'ok': False, 'label': 'Posting right away needs your approval on its card.'}
@@ -489,8 +494,9 @@ async def run_week(action):
     import marketing_engine
     import platform_marketing as marketing
     from marketing_desk import week_label
-    if _closed():
-        return _closed()
+    closed = await _closed()
+    if closed:
+        return closed
     now = marketing.now()
     week_of, _ = marketing_engine.week_window(now)
     which = marketing_engine.relation(week_of, now)
@@ -513,8 +519,9 @@ async def replan_week(action):
     first instead of answering "started" for a run that will not start."""
     import marketing_engine
     import platform_marketing as marketing
-    if _closed():
-        return _closed()
+    closed = await _closed()
+    if closed:
+        return closed
     now = marketing.now()
     week_of, _ = marketing_engine.week_window(now)
     which = marketing_engine.relation(week_of, now)

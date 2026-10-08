@@ -146,7 +146,7 @@ async def _measure_posts(bid: str, ids: List[str],
     day = since.date().isoformat()
     stamp = query_time(since)
     import platform_suite
-    if platform_suite.is_platform(bid):
+    if await platform_suite.is_platform_async(bid):
         # Solutionist's own desk on the suite (B15): its pages are the
         # platform's (site_events with no business) and its leads the
         # platform's own (marketing_leads), as marketing_outcomes reads them.

@@ -400,7 +400,7 @@ async def read_signals(business_id: Any, *, now: Optional[datetime] = None,
     now = now or datetime.now(timezone.utc)
     bid = str(UUID(str(business_id)))
     import platform_suite
-    if platform_suite.is_platform(bid):
+    if await platform_suite.is_platform_async(bid):
         return await platform_signals(bid, now=now)
     unread: List[str] = []
 

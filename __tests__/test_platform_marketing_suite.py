@@ -582,14 +582,18 @@ def test_platform_chief_makes_nothing_new_for_buffer(monkeypatch):
     assert run(pcm.pause_marketing({}))['ok'] is True                   # managing the drain still works
 
 
-def test_a_refused_post_now_card_is_an_ordinary_answer_in_platform_chiefs_reply(monkeypatch):
+def test_a_refused_post_now_card_is_an_ordinary_answer_in_platform_chiefs_reply(monkeypatch, verdicts):
     """Through the real dispatch (platform_chief_actions.dispatch_actions ->
-    platform_chief_authority.dispatch -> propose -> post_now_review): the
-    closed Buffer desk's 409 is that action's own answer, never the whole
-    reply's failure."""
+    platform_chief_authority.dispatch -> propose -> post_now_review): a
+    refusal while the card is prepared is that action's own answer, never the
+    whole reply's failure. (B15b: with the suite active a post-now card is
+    made on the suite desk, test_platform_chief_suite; the refusal here is
+    the business that couldn't be confirmed, where neither desk takes
+    anything new.)"""
     import platform_chief_actions as actions
     import platform_chief_authority as authority
     switch(monkeypatch, on=True)
+    verdicts.fail_rows = True
 
     async def policy(owner_id):
         return {'settings': {'drafts': 'ask', 'creative': 'ask', 'notes': 'ask', 'marketing_stop': 'ask'}}
@@ -606,7 +610,7 @@ def test_a_refused_post_now_card_is_an_ordinary_answer_in_platform_chiefs_reply(
     owner = SimpleNamespace(id=KEVIN, email=PLATFORM_OWNER_EMAIL)
     out = run(actions.dispatch_actions([{'type': 'marketing_post_now', 'text': 'Out now.'}],
                                        owner=owner, request_id=uuid4()))
-    assert out == [{'ok': False, 'type': 'marketing_post_now', 'label': platform_suite.BUFFER_CLOSED}]
+    assert out == [{'ok': False, 'type': 'marketing_post_now', 'label': platform_suite.UNCONFIRMED}]
     assert logged == out
 
 

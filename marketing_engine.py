@@ -732,7 +732,7 @@ async def run_week(trigger, now=None, replan=False):
     week the owner started from the desk says nothing extra; they are watching.
     Never while Solutionist's desk is on the marketing suite (B15)."""
     import platform_suite
-    platform_suite.close_buffer()
+    await platform_suite.close_buffer_async()
     now = now or marketing.now()
     week_of, times = week_window(now)
     run_id = run_id_for(week_of)
@@ -879,7 +879,7 @@ async def engine_tick():
     import platform_suite
     if not enabled():
         return
-    closed = platform_suite.buffer_state()
+    closed = await platform_suite.buffer_state_async()
     if closed == 'closed':
         log.info('marketing engine: Solutionist\'s desk is on the marketing suite; the suite plans the week.')
         return
@@ -990,7 +990,7 @@ class RunRequest(BaseModel):
 async def run_now(req: RunRequest | None = None, owner=Depends(require_owner)):
     import platform_suite
     import rate_limit
-    platform_suite.close_buffer()           # B15: plan the week on the suite desk
+    await platform_suite.close_buffer_async()     # B15: plan the week on the suite desk
     if not rate_limit.allow('platform_marketing_engine', str(owner.id)):
         raise HTTPException(429, 'Please wait a moment before planning again.')
     started = start_week(replan=bool(req and req.replan))

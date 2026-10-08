@@ -480,8 +480,11 @@ async def dispatch_actions(
     """Run every action sequentially. Each result is logged. Returns
     the list of result dicts (same length as input)."""
     import platform_chief_authority as authority
+    import platform_chief_suite
+    # B15b: with MC_MARKETING_SUITE on, the suite desk's verbs (empty when off).
+    suite = await platform_chief_suite.handlers(owner, request_id) if owner is not None else {}
     results = await authority.dispatch(actions, owner, request_id,
-                                       {**HANDLERS, **(extra_handlers or {})})
+                                       {**HANDLERS, **suite, **(extra_handlers or {})})
     for action, res in zip(actions, results):
         await _log_action(action_type=action.get('type', 'unknown'), payload=action,
                          result=res, ok=bool(res.get('ok')),

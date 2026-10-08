@@ -253,6 +253,8 @@ async def _owner(business_id: str, user_id: str, nothing: str) -> Dict[str, Any]
 async def _gates(verb: str, business_id: str, nothing: str) -> Dict[str, Any]:
     """Switched on, a signed-in turn, the owner. In that order: a business
     the desk is off for learns that first, whoever asks."""
+    import platform_suite
+    await platform_suite.ready()       # B15b: the platform verdict read off the event loop
     _switched_on(business_id, nothing)
     uid = _acting_user(nothing)
     row = await _owner(business_id, uid, nothing)
@@ -706,6 +708,8 @@ async def handle_marketing_desk(client, biz, action) -> Dict[str, Any]:
     action = action or {}
     try:
         import business_marketing_planner as planner
+        import platform_suite
+        await platform_suite.ready()   # B15b: the platform verdict read off the event loop
         if not planner.desk_on_for(bid):
             return {"type": verb, "ok": True, "switched_on": False, "nav": None,
                     "result": "The marketing desk isn't switched on for this business yet, so there is nothing on "
@@ -1129,6 +1133,8 @@ async def context_block(biz: Dict[str, Any], message: str, *, mode: Optional[str
         if not bid or not wants_desk(message, mode=mode, tab=tab, sub_tab=sub_tab):
             return ""
         import business_marketing_planner as planner
+        import platform_suite
+        await platform_suite.ready()   # B15b: the platform verdict read off the event loop
         if not planner.desk_on_for(bid):
             return ""
         try:
