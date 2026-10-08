@@ -1428,11 +1428,17 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         enable_web_search = True
     # Arc 20B Part 1 (+ char-core split) — the prompt splits into up to three
     # cache segments, ordered most-stable → most-volatile:
-    #   1. UNIVERSAL core (identity + shared character + machinery) — before
-    #      [[CHIEF_GLOBAL_SPLIT]]. Byte-identical across every tenant, so this
-    #      breakpoint is cached ONCE globally and shared by all businesses.
-    #   2. PER-BUSINESS stable (archetype + full operating manual) — between
-    #      the two markers. Stable across a business's calls, cached per tenant.
+    #   1. UNIVERSAL core (identity + shared character + machinery + the
+    #      operating manual) — before [[CHIEF_GLOBAL_SPLIT]]. Byte-identical
+    #      across every tenant, so this breakpoint is cached ONCE globally
+    #      and shared by all businesses. (2026-10-08: the ~43k-token manual
+    #      moved up here from segment 2; only its first lines named the
+    #      business. One business's keep-warm pings now keep it warm for
+    #      everyone, and any other business's first message writes only its
+    #      own part.)
+    #   2. PER-BUSINESS stable (archetype, name, vertical, delegation, web
+    #      search, personality, suggestions) — between the two markers.
+    #      Stable across a business's calls, cached per tenant.
     #   3. DYNAMIC state — after [[CHIEF_CACHE_SPLIT]]. Rewritten every turn,
     #      never cached.
     # Two cache_control breakpoints (cap is 4). A segment below the model's
@@ -1528,7 +1534,14 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # that is an order of magnitude short.
     if isinstance(sys_payload, list):
         segs = [len(b["text"]) // 4 for b in sys_payload]
-        cacheable = [n for b, n in zip(sys_payload, segs) if "cache_control" in b]
+        # The minimum is on the whole prefix up to a breakpoint, not on the
+        # block itself: the per-business block is small since the manual
+        # moved into the universal one (2026-10-08), and still caches.
+        running, cacheable = 0, []
+        for b, n in zip(sys_payload, segs):
+            running += n
+            if "cache_control" in b:
+                cacheable.append(running)
         if any(n < 1024 for n in cacheable):
             logger.warning(
                 "[chief] a cache_control segment is below the ~1024-token "

@@ -82,7 +82,9 @@ def test_todays_date_rides_the_per_message_time_context(monkeypatch):
     monkeypatch.setattr(chief, "datetime", _frozen(dt.date(2026, 10, 8)))
     block = asyncio.run(chief._get_time_context(None, BIZ["id"]))
     assert "2026-10-08" in block and block.startswith("TIME CONTEXT:")
-    assert "today's date in TIME CONTEXT" in _segments(_system())[1]
+    # The manual's pointer to the date sits in the shared block since the
+    # manual moved there (2026-10-08, test_chief_shared_manual.py).
+    assert "today's date in TIME CONTEXT" in _segments(_system())[0]
 
 
 _PROBE = r"""
