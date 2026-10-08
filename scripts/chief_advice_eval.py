@@ -383,6 +383,15 @@ def run_live(cases: List[Dict[str, str]], with_grade: bool = False) -> Dict[str,
     for case in cases:
         biz, make_ctx = BUSINESSES[case["biz"]]
         ctx = {**te._fixture_context(biz), **make_ctx(biz)}
+        # The turn eval's base context counts its own three contacts. A
+        # business with more kept that total of 3 beside a list of 8, and the
+        # answer check rightly withheld "you have 8 contacts" as a conflict:
+        # the eval measured its own fixture, not the check (2026-10-07).
+        contacts = ctx.get("contacts") or []
+        ctx["contacts_total"] = ctx["contacts_loaded"] = len(contacts)
+        ctx["contacts_by_status"] = {}
+        for c in contacts:
+            ctx["contacts_by_status"][c.get("status")] = ctx["contacts_by_status"].get(c.get("status"), 0) + 1
         mp = pytest.MonkeyPatch()
         try:
             real_prompt = cos._build_system_prompt
