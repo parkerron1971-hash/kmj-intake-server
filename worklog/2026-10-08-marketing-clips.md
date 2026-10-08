@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "This will work. let's build this."
 status: waiting on Kevin
-prs: []
+prs: [kmj-intake-server#1336]
 migrations: []
 left_undone:
   - "Kevin: nothing runs until MARKETING_DESK covers a Solutionist (practice) business (worker AND web), and nothing sends unless MARKETING_DESK_PUBLISHING=on and the owner approves; the first clip week should go to a test business with a kept, approved clip that has a ready story cover, and TikTok or YouTube connected"
