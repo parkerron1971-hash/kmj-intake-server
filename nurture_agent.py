@@ -48,7 +48,10 @@ from pydantic import BaseModel
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════
 
-DRAFT_MODEL = "claude-sonnet-4-5-20250929"
+# Haiku 5.5 since 2026-10-07 (Sonnet 4.5 retires 2026-11-30): preferred
+# over Sonnet 4.5 on 3 of 4 blind-graded re-engagement drafts, with fewer
+# invented details. NURTURE_DRAFT_MODEL rolls it back without a deploy.
+DRAFT_MODEL = os.environ.get("NURTURE_DRAFT_MODEL") or "claude-haiku-5-5"
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
 
 DEFAULT_THRESHOLDS = {
@@ -105,15 +108,20 @@ async def _call_claude(client: httpx.AsyncClient, system: str, user_msg: str, ma
     key = _anthropic_key()
     if not key:
         return ""
+    import model_ladder
     resp = await llm_call.apost(client, {
         "model": DRAFT_MODEL, "max_tokens": max_tokens, "system": system,
         "messages": [{"role": "user", "content": user_msg}],
+        **model_ladder.thinking_off_kwargs(DRAFT_MODEL),
     }, timeout=HTTP_TIMEOUT, key=key)
     if resp.status_code >= 400:
         logger.warning(f"Claude error: {resp.status_code}")
         return ""
     data = resp.json()
-    return "".join(b.get("text", "") for b in data.get("content", []) if isinstance(b, dict)).strip()
+    if data.get("stop_reason") == "refusal":
+        return ""   # the caller's plain check-in takes over
+    return "".join(b.get("text", "") for b in data.get("content", [])
+                   if isinstance(b, dict) and b.get("type") == "text").strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════
