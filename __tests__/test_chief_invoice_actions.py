@@ -383,7 +383,11 @@ OWNER_BIZ = {**BIZ, 'owner_id': 'owner-user'}
 
 @pytest.mark.parametrize('said,prompted,user,text,expected', [
     (True, True, 'owner-user', 'It is off, void it.', True),
-    ('true', True, 'owner-user', 'yes', True),
+    ('true', True, 'owner-user', "yes, it's off", True),
+    (True, True, 'owner-user', 'yes', False),               # a bare yes is not "the link is off"
+    (True, True, 'owner-user', 'ok', False),
+    (True, True, 'owner-user', 'void it', False),
+    (True, True, 'owner-user', 'Go ahead, do it', False),
     ('false', True, 'owner-user', 'no', False),
     (None, True, 'owner-user', 'void it', False),
     (True, False, 'owner-user', 'void it', False),        # unattended: no owner present

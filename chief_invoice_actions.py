@@ -28,12 +28,14 @@ def _fail(verb, message, code=None):
     return out
 
 
-# What an owner says when they mean "void it anyway" / "the link is off".
-# No per-process memory of the refusal: the web tier runs several replicas,
-# and the owner's yes lands on whichever one (2026-10-08, refused twice).
+# The owner's own words that the link is off, or to void it anyway. Only
+# about the link: a bare "yes", "ok" or "void it" is a request to void, not
+# a statement that the link is off. No per-process memory of the refusal:
+# the web tier runs several replicas, and the owner's answer lands on
+# whichever one (2026-10-08, refused twice).
 _OWNER_YES = re.compile(
-    r"\b(yes|yeah|yep|yup|ok|okay|sure|go ahead|do it|anyway|confirm(ed)?|"
-    r"(turned|switched|shut) (it )?off|it'?s off|is off|disabled|deactivated|void it)\b", re.I)
+    r"\b(anyway|(turned|switched|shut) (it |the link )?off|(it'?s|it is|link is|is|already) off|"
+    r"disabled|deactivated)\b", re.I)
 
 
 def owner_confirms_link_off(action, *, prompted, user_id, biz, owner_text):
@@ -151,7 +153,9 @@ router = APIRouter(prefix='/invoices', tags=['invoices'])
 
 class VoidBody(BaseModel):
     # The owner says the pay link we couldn't verify is already off in Stripe.
-    # Owner only; the drawer sends it only after that refusal and a second yes.
+    # Owner only (checked here). That it follows a link_unverified refusal and
+    # a second yes is the drawer's promise, not checked here: no replica
+    # remembers the refusal, and the owner may say it up front.
     link_off_confirmed: bool = False
 
 
