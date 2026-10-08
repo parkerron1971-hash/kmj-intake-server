@@ -122,9 +122,16 @@ class TestBlueprintStatusIsSaved(unittest.TestCase):
         saved = {}
         ctx = _ctx()
         ctx["color_source"] = "brand_kit"   # gather_context always sets one
+
+        def _get(path):
+            # the save starts from the row's site_config as stored
+            if path.startswith("/business_sites?id=eq."):
+                return [{"site_config": dict(stored or {}), "html_content": ""}]
+            return []
+
         with mock.patch.object(site_composer, "_ensure_site_row",
                                return_value={"id": "s1", "site_config": dict(stored or {})}), \
-                mock.patch.object(site_composer.sb_clients, "sb_get_as_service", return_value=[]), \
+                mock.patch.object(site_composer.sb_clients, "sb_get_as_service", side_effect=_get), \
                 mock.patch.object(site_composer.sb_clients, "sb_patch_as_service",
                                   side_effect=lambda path, payload: saved.update(
                                       payload.get("site_config") or {})), \
