@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "This will work. let's build this."
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1341]
 migrations: []
 left_undone:
   - "Kevin: nothing is approved on a standing OK until MARKETING_DESK covers a Solutionist (practice) business (the design tick is where Chief approves), and nothing sends unless MARKETING_DESK_PUBLISHING=on. First live check: a comped practice test business, grant marketing_post from the desk's door (POST /agents/chief/standing), let a week draft and settle, confirm the week's Today item says 'Chief approved N posts', then take one back"
