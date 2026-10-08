@@ -148,6 +148,22 @@ def today_spend_cents(force: bool = False,
     return total
 
 
+def platform_share(force: bool = False) -> float:
+    """Today's platform-wide spend as a share of DAILY_SPEND_CAP_USD (1.0 =
+    at the ceiling). Read like over_budget: cached 60s, failing open to the
+    last known numbers. Work that spends unasked across many businesses
+    (the marketing suite's weekly suggestion) defers itself well below the
+    ceiling, so a Thursday fan-out never takes AI offline for everyone."""
+    try:
+        cap = _cap_cents()
+        if cap <= 0:
+            return 1.0
+        return today_spend_cents(force) / cap
+    except Exception as e:
+        logger.warning(f"[spend_guard] platform_share failed open: {e}")
+        return 0.0
+
+
 def over_budget(business_id: Optional[str] = None) -> bool:
     """True when this call should be soft-blocked. Never raises.
 
