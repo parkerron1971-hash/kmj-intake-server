@@ -4,20 +4,33 @@ Chief's void_invoice and the invoice drawer's Void button (POST
 /invoices/{id}/void) run the same _change, so neither can skip the
 pay-link cleanup."""
 import asyncio
+import logging
 from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 import sb_clients
 from auth_supabase import UserSession
+from invoice_payment_links import UnverifiedLink
 from sb_clients import sb_as_current_context
 
+logger = logging.getLogger('chief_invoice_actions')
 
-def _fail(verb, message):
-    return {"type": verb, "result": message, "label": message, "failed": True, "nav": None}
+
+def _fail(verb, message, code=None):
+    out = {"type": verb, "result": message, "label": message, "failed": True, "nav": None}
+    if code:
+        out["code"] = code
+    return out
+
+
+def _yes(value):
+    return value is True or str(value).strip().lower() in ('true', 'yes', '1')
 
 
 def _literal(value):
@@ -58,7 +71,8 @@ async def _change(client, biz, action, verb):
         link = None
         if verb in ('delete_invoice', 'void_invoice'):
             from invoice_payment_links import disable_invoice_payment_link
-            link = await disable_invoice_payment_link(client, biz, inv)
+            link = await disable_invoice_payment_link(
+                client, biz, inv, link_off_confirmed=_yes(action.get('link_off_confirmed')))
         patch = {}
         if verb == 'void_invoice':
             patch = {'status': 'cancelled', 'stripe_payment_url': None}
@@ -86,13 +100,19 @@ async def _change(client, biz, action, verb):
         result = f'Invoice {number} {word}.'
         if verb == 'void_invoice' and link == 'shared':
             result += ' Your business pay link stays on for your other invoices; it is no longer on this one.'
+        elif verb == 'void_invoice' and link == 'confirmed_off':
+            result += ' You said its old pay link is off in Stripe; it is no longer on the invoice either.'
         return {'type': verb, 'result': result, 'label': f'Invoice {number} {word}',
                 'invoice_id': inv['id'], 'invoice_number': number, 'nav': {'tab': 'operate', 'sub': 'invoices'}}
+    except UnverifiedLink as exc:
+        return _fail(verb, str(exc), code='link_unverified')
     except ValueError as exc:
         return _fail(verb, str(exc))
     except HTTPException as exc:
         return _fail(verb, str(exc.detail))
-    except Exception:
+    except Exception as exc:
+        logger.warning('invoice %s failed: %s %s', verb, type(exc).__name__,
+                       getattr(getattr(exc, 'response', None), 'status_code', ''))
         note = ' Its payment link may already be disabled; check its current state before retrying.' if verb in ('delete_invoice', 'void_invoice') else ' Please try again after invoice storage is available.'
         return _fail(verb, 'The invoice change could not be completed.' + note)
 
@@ -116,8 +136,14 @@ async def handle_restore_invoice(client, biz, action):
 router = APIRouter(prefix='/invoices', tags=['invoices'])
 
 
+class VoidBody(BaseModel):
+    # The owner says the pay link we couldn't verify is already off in Stripe.
+    link_off_confirmed: bool = False
+
+
 @router.post('/{invoice_id}/void')
-async def void_invoice(invoice_id: str, session: UserSession = Depends(sb_clients.authed_request)):
+async def void_invoice(invoice_id: str, body: VoidBody | None = None,
+                       session: UserSession = Depends(sb_clients.authed_request)):
     """The invoice drawer's Void button. Same checks, pay-link cleanup and
     conditional write as Chief's void_invoice, run as the signed-in person
     so RLS still applies. Member+ — the rank that can write invoices."""
@@ -138,8 +164,11 @@ async def void_invoice(invoice_id: str, session: UserSession = Depends(sb_client
     if not biz:
         raise HTTPException(404, 'Invoice not found.')
     async with httpx.AsyncClient(timeout=30) as client:
-        out = await _change(client, biz[0], {'invoice_id': invoice_id}, 'void_invoice')
+        out = await _change(client, biz[0], {'invoice_id': invoice_id,
+                                             'link_off_confirmed': bool(body and body.link_off_confirmed)}, 'void_invoice')
     if out.get('failed'):
-        raise HTTPException(409, out['result'])
+        # Logged, because a refusal nobody saw is otherwise invisible.
+        logger.info('void refused: invoice=%s code=%s reason=%s', invoice_id, out.get('code'), out['result'])
+        return JSONResponse(status_code=409, content={'detail': out['result'], 'code': out.get('code')})
     return {'ok': True, 'result': out['result'], 'invoice_id': out['invoice_id'],
             'invoice_number': out['invoice_number']}
