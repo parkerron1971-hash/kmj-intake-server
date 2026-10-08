@@ -120,11 +120,6 @@ def _use(monkeypatch, fake):
 
 # ─── 1. No read asks module_entries for a column it does not have ─────
 
-# agent_site.py had the same select and is fixed in its own PR (#1330);
-# once that lands this skip can go.
-_SKIP = {"agent_site.py"}
-
-
 def _literal(node):
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
@@ -165,8 +160,6 @@ def test_no_module_entries_select_names_duration_min():
     for path in ROOT.rglob("*.py"):
         rel = path.relative_to(ROOT)
         if rel.parts[0] in {"__tests__", "node_modules"} or rel.parts[0].startswith("."):
-            continue
-        if str(rel) in _SKIP:
             continue
         try:
             source = path.read_text(encoding="utf-8-sig")
