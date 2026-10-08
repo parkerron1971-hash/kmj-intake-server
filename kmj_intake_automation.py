@@ -400,6 +400,10 @@ app.include_router(stripe_data_proxy_router)
 # All under /payments/* prefix; FastAPI merges with the other
 # /payments routers cleanly.
 app.include_router(stripe_payments_router)
+# The invoice drawer's Void button — POST /invoices/{id}/void, the same
+# path as Chief's void_invoice (pay-link cleanup included).
+from chief_invoice_actions import router as invoice_lifecycle_router
+app.include_router(invoice_lifecycle_router)
 # Phase F.2 v1 — Plaid Link, sync, webhook, summary, categorize rules
 app.include_router(plaid_router)
 # Phase G — Chief Bookkeeping Intelligence (proposals + learning signals)
