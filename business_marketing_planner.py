@@ -223,7 +223,8 @@ CHAIR_PLATFORMS = ('instagram', 'facebook')   # Instagram first, Facebook too wh
 PLAN_COLUMNS = 'comp_tier,subscription_status,subscription_plan,trial_ends_at,stripe_subscription_id'
 FULL_COLUMNS = f'{marketing_profile.BUSINESS_COLUMNS},{PLAN_COLUMNS}'
 CANDIDATE_COLUMNS = (f'id,owner_id,type,{PLAN_COLUMNS},availability:settings->availability,'
-                     'automations_paused:settings->automations_paused,booking_page:settings->booking_page')
+                     'automations_paused:settings->automations_paused,booking_page:settings->booking_page,'
+                     'platform_books:settings->>platform_books')
 RUN_COLUMNS = 'id,business_id,week_of,kind,trigger,status,attempts,design,created_at'
 
 # What the owner reads (on the desk's "could not be written", in Today, in a
@@ -338,12 +339,9 @@ def _named_scope() -> Any:
     return frozenset(ids) or None
 
 
-def desk_on_for(business_id: Any) -> bool:
-    import platform_suite
-    platform = platform_suite.desk_switch(business_id)     # B15: on the suite, or not at all
-    if platform is not None:
-        return platform
-    scope = desk_scope()
+def _named(business_id: Any) -> bool:
+    """MARKETING_DESK, as written, names this business (or every business)."""
+    scope = _named_scope()
     if scope is None:
         return False
     if scope == '*':
@@ -352,6 +350,28 @@ def desk_on_for(business_id: Any) -> bool:
         return str(UUID(str(business_id))) in scope
     except ValueError:
         return False
+
+
+def desk_on_for(business_id: Any, row: Any = None) -> bool:
+    """Whether the tenant suite's desk is switched on for this business.
+    Solutionist's own business only while its desk is on the suite (B15),
+    whatever MARKETING_DESK says: it runs on Buffer otherwise, found by its
+    id or, with none, by platform_suite.kept_out. `row` (its business row,
+    when the caller has it) lets a failed lookup of which business that is
+    keep out only a row whose own settings say platform_books, that hour."""
+    import platform_suite
+    platform = platform_suite.desk_switch(business_id)     # B15: on the suite, or not at all
+    if platform is not None:
+        return platform
+    return _named(business_id) and not platform_suite.kept_out(business_id, row)
+
+
+def own_desk(business_id: Any) -> bool:
+    """Solutionist's own business, on a desk MARKETING_DESK would switch on,
+    while its desk is not on the suite: a manual run here is refused in plain
+    words (platform_suite.OWN_DESK), never queued."""
+    import platform_suite
+    return _named(business_id) and platform_suite.own_desk(business_id)
 
 
 def max_per_tick() -> int:
@@ -520,7 +540,7 @@ def eligibility(row: Dict[str, Any], *, scheduled: bool, kind: str = KIND) -> Op
     None. The owner's own request is not an automation, so a pause does not
     stop it."""
     bid = str(row.get('id') or '')
-    if not desk_on_for(bid):
+    if not desk_on_for(bid, row):
         return NOT_SWITCHED_ON
     if not post_for_me.allowed_for(bid):
         return NO_POSTING
@@ -2792,6 +2812,8 @@ async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user))
     owner_row = await bm._require_owner(bid, user)
     import platform_suite
     await platform_suite.ready()            # B15b: the platform verdict read off the event loop
+    if own_desk(bid):
+        raise HTTPException(409, platform_suite.OWN_DESK)     # Solutionist's own: the Buffer desk plans it
     if not desk_on_for(bid):
         raise HTTPException(409, NOT_SWITCHED_ON)
     try:
@@ -2801,6 +2823,8 @@ async def run_route(business_id: UUID, user: AuthedUser = Depends(require_user))
         raise HTTPException(503, bm.READ_DOWN) from None
     except LookupError:
         raise HTTPException(404, 'Business not found.') from None
+    if not desk_on_for(bid, row):
+        raise HTTPException(409, NOT_SWITCHED_ON)     # its own platform_books, while that lookup failed
     if problem:
         raise HTTPException(409 if problem in (WEEK_LEVEL, OPENINGS_LEVEL) else 403, problem)
     if not access_ok(row):

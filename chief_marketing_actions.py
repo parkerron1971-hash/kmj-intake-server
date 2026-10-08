@@ -252,12 +252,21 @@ async def _owner(business_id: str, user_id: str, nothing: str) -> Dict[str, Any]
 
 async def _gates(verb: str, business_id: str, nothing: str) -> Dict[str, Any]:
     """Switched on, a signed-in turn, the owner. In that order: a business
-    the desk is off for learns that first, whoever asks."""
+    the desk is off for learns that first, whoever asks. Solutionist's own
+    business while its desk is not on the suite (planner.own_desk):
+    its owner, the platform owner, learns that it runs on the Mission Control
+    desk (Buffer), never "not switched on"; anyone else, only the owner rule."""
+    import business_marketing_planner as planner
     import platform_suite
     await platform_suite.ready()       # B15b: the platform verdict read off the event loop
-    _switched_on(business_id, nothing)
+    own = planner.own_desk(business_id)
+    if not own:
+        _switched_on(business_id, nothing)
     uid = _acting_user(nothing)
     row = await _owner(business_id, uid, nothing)
+    if own:
+        raise Refusal(f"Solutionist's own marketing runs on the Mission Control desk, so {nothing}. "
+                      "Plan and post it there.", "Runs on the Mission Control desk")
     return {"user_id": uid, "business": row}
 
 
