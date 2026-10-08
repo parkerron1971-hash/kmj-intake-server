@@ -266,6 +266,9 @@ async def approve_run(business: Dict[str, Any], run_id: Any, at: datetime, *, tz
     try:
         bid = str(UUID(str(business['id'])))
         kinds = [k for k in KINDS if covers(business, k)[0]]
+        # A retire that is due (a revoke that did not take last time) is
+        # done before Chief uses the permission again; the kind is not used.
+        kinds = [k for k in kinds if await retire_if_due(business, k, at) is None]
         if not kinds:
             return []
         owner = str(business['owner_id'])
@@ -648,6 +651,25 @@ def _tell_retired(biz: Dict[str, Any], kind: str, grant: Dict[str, Any]) -> bool
     return _tell(biz, title, body, f"marketing_standing_retired:{kind}:{grant.get('granted_at') or ''}")
 
 
+async def _revoked(business_id: str, kind: str) -> bool:
+    """Retire the grant; True only when it is gone. A write that failed
+    (WriteFailed: the patch answered nothing) or found nothing to revoke is
+    False. A write that landed is then confirmed by a fresh read: still
+    granted there is False; a read that fails trusts the landed write."""
+    try:
+        if not await asyncio.to_thread(sp.revoke, str(business_id), kind, by='chief', via='retire',
+                                       reason=RETIRED):
+            return False
+    except sp.WriteFailed as e:
+        log.warning('marketing standing: the retire of %s was not saved: %s', kind, e)
+        return False
+    try:
+        fresh = await asyncio.to_thread(read_business, business_id)
+    except (Unavailable, LookupError):
+        return True
+    return kind not in sp.granted(fresh)
+
+
 async def after_override(business_id: str, rows: List[Dict[str, Any]], at: Optional[datetime] = None) -> List[str]:
     """The owner edited, took back, skipped or marked not sent posts Chief
     approved on the standing OK: three in a row retire it. Returns the kinds
@@ -662,25 +684,40 @@ async def after_override(business_id: str, rows: List[Dict[str, Any]], at: Optio
         return []
     retired: List[str] = []
     for kind in kinds:
-        grant = sp.granted(biz).get(kind)
-        if not grant:
-            continue
-        try:
-            if not retires(await history(business_id, kind, at), _ts(grant.get('granted_at'))):
-                continue
-        except store.StoreError:
-            continue
-        await asyncio.to_thread(sp.revoke, str(biz['id']), kind, by='chief', via='retire', reason=RETIRED)
-        try:
-            await withdraw(biz, [kind], RETIRED, tell=False)
-        except store.StoreError:
-            pass                            # the sweep and the sender's own check catch the rest
-        try:
-            await asyncio.to_thread(_tell_retired, biz, kind, grant)
-        except Exception:
-            log.warning('marketing standing: the owner could not be told of a retire', exc_info=True)
-        retired.append(kind)
+        if await retire_if_due(biz, kind, at) == 'retired':
+            retired.append(kind)
     return retired
+
+
+async def retire_if_due(biz: Dict[str, Any], kind: str, at: datetime) -> Optional[str]:
+    """Retire this kind's grant when its history says so (retires): 'retired'
+    once the grant is confirmed gone, its waiting posts are put back and the
+    owner is told; 'not_saved' when it is due but the revoke did not take
+    (nothing withdrawn, nothing said; tried again at the next override and
+    before Chief next approves anything on it); None when it is not due, or
+    the history cannot be read."""
+    business_id = str(biz['id'])
+    grant = sp.granted(biz).get(kind)
+    if not grant:
+        return None
+    try:
+        if not retires(await history(business_id, kind, at), _ts(grant.get('granted_at'))):
+            return None
+    except store.StoreError:
+        log.warning('marketing standing: the history of %s for %s could not be read', kind, business_id[:8])
+        return None
+    if not await _revoked(business_id, kind):
+        log.warning('marketing standing: retiring %s for %s did not take; left as it was', kind, business_id[:8])
+        return 'not_saved'
+    try:
+        await withdraw(biz, [kind], RETIRED, tell=False)
+    except store.StoreError:
+        pass                            # the sweep and the sender's own check catch the rest
+    try:
+        await asyncio.to_thread(_tell_retired, biz, kind, grant)
+    except Exception:
+        log.warning('marketing standing: the owner could not be told of a retire', exc_info=True)
+    return 'retired'
 
 
 # ── what the desk shows ───────────────────────────────────────────────

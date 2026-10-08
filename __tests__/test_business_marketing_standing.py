@@ -120,10 +120,16 @@ def m(c, monkeypatch):
     posts' history, settings writes, Chief's log and the standing door."""
     c.ev = Events(c.db, lambda: c.now)
     c.audit, c.activity, c.patches = [], [], []
+    c.patch_fail = None             # None | 'none' (4xx/5xx) | 'empty' (no row matched) | 'noop' (answered, not taken)
+    c.events_fail = None            # None | 'raise' (a 400 or a blip) | 'none' (an unreadable answer)
     inner = c.db.request
 
     async def request(method, path, body=None):
         if path.split('?', 1)[0] == '/marketing_post_events':
+            if c.events_fail == 'raise':
+                raise store.StoreUnavailable('Marketing storage could not do that (HTTP 400).')
+            if c.events_fail == 'none':
+                return None
             return c.ev.get(path)
         out = await inner(method, path, body)
         if method != 'GET':
@@ -144,8 +150,14 @@ def m(c, monkeypatch):
         hit = re.match(r'/businesses\?id=eq\.([0-9a-f-]+)', path)
         if not hit:
             raise AssertionError(f'unexpected service patch {path}')
-        c.patches.append((path, copy.deepcopy(body)))
         row = c.svc.businesses[hit.group(1)]
+        if c.patch_fail == 'none':
+            return None
+        if c.patch_fail == 'empty':
+            return []
+        if c.patch_fail == 'noop':
+            return [copy.deepcopy(row)]
+        c.patches.append((path, copy.deepcopy(body)))
         row.update(copy.deepcopy(body))
         return [copy.deepcopy(row)]
     monkeypatch.setattr(sb_clients, 'sb_patch_as_service', patch)
@@ -765,3 +777,174 @@ def test_the_kill_switch_stops_every_standing_approval(m, monkeypatch):
     planned(m, clips=False)
     assert not approvals(m) and {p['status'] for p in plan_posts(m)} == {'draft'}
     assert notes(m, 'marketing_week:')[0]['title'].startswith('Chief planned next week')
+
+
+# ── a write that did not land is never reported as done ───────────────
+
+def overrides(m, flyers, how=('edit', 'take_back', 'skip')):
+    m.user = PRO_OWNER
+    for post, kind in zip(flyers, how):
+        row = m.db.posts[post['id']]
+        if kind == 'edit':
+            edit(m, row)
+        elif kind == 'take_back':
+            assert take_back(m, row).status_code == 200
+        else:
+            skip(m, row)
+
+
+@pytest.mark.parametrize('failure', ['none', 'empty', 'noop'])
+def test_a_retire_whose_revoke_did_not_take_changes_nothing_and_says_nothing(m, failure):
+    grant(m, 'marketing_post')
+    planned(m, clips=False)
+    flyers = sorted(plan_posts(m), key=lambda p: p['run_at'])
+    m.patch_fail = failure
+    overrides(m, flyers[:3])
+    assert 'marketing_post' in sp.granted(m.svc.businesses[PRO]), 'the grant still stands'
+    assert [m.db.posts[p['id']]['status'] for p in flyers[3:]] == ['approved', 'approved'], 'nothing withdrawn'
+    assert all(m.db.posts[p['id']]['approved_via'] == 'standing' for p in flyers[3:])
+    assert not notes(m, 'marketing_standing_retired:') and not notes(m, 'marketing_standing_held:')
+    assert not any(p['title'].startswith("I'm back to asking") for p in m.pushes), 'nobody was told it was off'
+    if failure != 'noop':
+        assert not [a for a in m.audit if a['verb'] == 'standing_revoke'], 'no revoke on the record'
+    # The next time it is tried (another override), it lands.
+    m.patch_fail = None
+    edit(m, m.db.posts[flyers[3]['id']])
+    assert 'marketing_post' not in sp.granted(m.svc.businesses[PRO])
+    assert m.db.posts[flyers[4]['id']]['status'] == 'draft'
+    assert len(notes(m, 'marketing_standing_retired:marketing_post')) == 1
+
+
+def test_a_retire_that_did_not_take_is_done_before_chief_approves_again(m):
+    grant(m, 'marketing_post')
+    planned(m, clips=False)
+    flyers = sorted(plan_posts(m), key=lambda p: p['run_at'])
+    m.patch_fail = 'none'
+    overrides(m, flyers[:3])
+    assert 'marketing_post' in sp.granted(m.svc.businesses[PRO])
+    # Chief is about to use the permission again: it retires it first instead.
+    m.patch_fail = None
+    for p in flyers[3:]:
+        m.db.posts[p['id']].update(status='draft', approved_hash=None, approved_by=None, approved_via=None,
+                                   approved_at=None)
+    m.ev.snap()
+    biz = copy.deepcopy(m.svc.businesses[PRO])
+    assert run(standing.approve_run(biz, run_of(m, PRO)['id'], m.now)) == []
+    assert 'marketing_post' not in sp.granted(m.svc.businesses[PRO])
+    assert {m.db.posts[p['id']]['status'] for p in flyers[3:]} == {'draft'}
+    assert len(notes(m, 'marketing_standing_retired:marketing_post')) == 1
+
+
+def test_a_question_whose_memory_did_not_land_is_not_asked_and_comes_later(m):
+    planned(m, clips=False)
+    flyers = sorted(plan_posts(m), key=lambda p: p['run_at'])
+    m.patch_fail = 'none'
+    for p in flyers[:3]:
+        assert 'standing_offer' not in approve_as_owner(m, p)
+    assert not sp.offered(m.svc.businesses[PRO], 'marketing_post')
+    assert not notes(m, 'marketing_standing_offer:') and not any('Want Chief' in p['title'] for p in m.pushes)
+    m.patch_fail = None
+    body = approve_as_owner(m, flyers[3])
+    assert body['standing_offer']['verb'] == 'marketing_post', 'the last three are still clean: asked now'
+    assert len(notes(m, 'marketing_standing_offer:marketing_post')) == 1
+
+
+@pytest.mark.parametrize('failure', ['none', 'empty'])
+def test_a_grant_a_revoke_or_a_no_that_did_not_land_is_never_reported_done(m, failure):
+    import chief_of_staff as cos
+    door = '/agents/chief/standing'
+    m.user = PRO_OWNER
+    m.patch_fail = failure
+    r = m.client.post(door, json={'business_id': PRO, 'verb': 'marketing_post', 'grant': True})
+    assert r.status_code == 503 and r.json()['detail'] == sp.SAVE_FAILED
+    assert not sp.granted(m.svc.businesses[PRO]) and not [a for a in m.audit if a['verb'] == 'standing_grant']
+    m.patch_fail = None
+    grant(m, 'marketing_post')
+    m.patch_fail = failure
+    r = m.client.post(door, json={'business_id': PRO, 'verb': 'marketing_post', 'grant': False})
+    assert r.status_code == 503 and 'marketing_post' in sp.granted(m.svc.businesses[PRO])
+    assert not [a for a in m.audit if a['verb'] == 'standing_revoke']
+    r = m.client.post(door, json={'business_id': PRO, 'verb': 'post_clip', 'grant': False})
+    assert r.status_code == 503 and not (settings(m)['autonomy'].get('standing_declined') or {})
+    token = cos._TURN_USER_ID.set(PRO_OWNER)
+    try:
+        out = run(sp.handle_revoke_standing_permission(None, copy.deepcopy(m.svc.businesses[PRO]),
+                                                        {'verb': 'weekly posts'}))
+    finally:
+        cos._TURN_USER_ID.reset(token)
+    assert cos._action_failed(out) and 'marketing_post' in sp.granted(m.svc.businesses[PRO])
+
+
+def test_a_settings_write_never_happens_on_a_business_it_could_not_read(m, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, 'sb_get_as_service',
+                        lambda path: None if path.startswith('/businesses') else real(path))
+    before = copy.deepcopy(settings(m))
+    with pytest.raises(sp.WriteFailed):
+        sp.decline(PRO, 'marketing_post')
+    assert sp.grant(PRO, 'marketing_post', by=PRO_OWNER, via='app') == (False, 'business not found')
+    assert sp.mark_offered(PRO, 'marketing_post') is False
+    assert m.patches == [] and settings(m) == before, 'never replaced every setting with just this block'
+
+
+# ── the history cannot be read ────────────────────────────────────────
+
+@pytest.mark.parametrize('failure', ['raise', 'none'])
+def test_an_unreadable_history_asks_nothing_and_retires_nothing(m, failure):
+    planned(m, clips=False)
+    flyers = sorted(plan_posts(m), key=lambda p: p['run_at'])
+    m.events_fail = failure
+    for p in flyers[:3]:
+        body = approve_as_owner(m, p)
+        assert body['approved'] == 1 and 'standing_offer' not in body
+    assert not sp.offered(m.svc.businesses[PRO], 'marketing_post') and not notes(m, 'marketing_standing_offer:')
+    # With a grant, three overrides of posts Chief approved: nothing is
+    # revoked, nothing is said, nothing crashes.
+    m.events_fail = None
+    grant(m, 'marketing_post')
+    for p in flyers[2:]:
+        row = m.db.posts[p['id']]
+        if row['status'] == 'approved':
+            assert take_back(m, row).status_code == 200
+        m.now += timedelta(minutes=1)
+        approved = run(store.approve(PRO, [{'id': row['id'], 'revision': m.db.posts[row['id']]['revision'],
+                                            'content_hash': row['content_hash']}], actor=PRO_OWNER, via='standing'))
+        assert approved == 1
+    m.events_fail = failure
+    overrides(m, flyers[2:])
+    assert 'marketing_post' in sp.granted(m.svc.businesses[PRO])
+    assert not notes(m, 'marketing_standing_retired:') and not notes(m, 'marketing_standing_held:')
+    assert run(standing.after_override(PRO, [{'source': 'plan', 'approved_via': 'standing'}], m.now)) == []
+    # Readable again: the same three overrides now retire it.
+    m.events_fail = None
+    assert run(standing.after_override(PRO, [{'source': 'plan', 'approved_via': 'standing'}], m.now)) == [
+        'marketing_post']
+
+
+# ── B10: Chief's own desk verbs, at the owner's ask ───────────────────
+
+def test_chiefs_edit_and_skip_at_the_owners_ask_count_toward_retiring_it(m):
+    import chief_marketing_actions as cma
+    import chief_of_staff as cos
+    grant(m, 'marketing_post')
+    planned(m, clips=False)
+    flyers = sorted(plan_posts(m), key=lambda p: p['run_at'])
+    biz = {'id': PRO}
+    token = cos._TURN_USER_ID.set(PRO_OWNER)
+    try:
+        for n, p in enumerate(flyers[:3]):
+            m.now += timedelta(minutes=1)
+            row = m.db.posts[p['id']]
+            ref = {'post_id': row['id'], 'revision': row['revision']}
+            if n == 1:
+                out = run(cma.handle_marketing_skip_post(None, biz, ref))
+            else:
+                out = run(cma.handle_marketing_edit_post(None, biz, {**ref, 'caption': f'Chief rewrote this {n}.'}))
+            assert out.get('ok') is True and out.get('result'), out
+            if n < 2:
+                assert 'marketing_post' in sp.granted(m.svc.businesses[PRO])
+    finally:
+        cos._TURN_USER_ID.reset(token)
+    assert 'marketing_post' not in sp.granted(m.svc.businesses[PRO]), "Chief's edit and skip count like the owner's"
+    assert {m.db.posts[p['id']]['status'] for p in flyers[3:]} == {'draft'}
+    assert len(notes(m, 'marketing_standing_retired:marketing_post')) == 1

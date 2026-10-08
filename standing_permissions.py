@@ -224,15 +224,39 @@ def load_for_filing(business_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+class WriteFailed(RuntimeError):
+    """settings.autonomy could not be read or written: nothing changed, and
+    nothing may be reported as done."""
+
+
+SAVE_FAILED = "that couldn't be saved just now, so nothing changed; try again in a minute"
+
+
 def _write_autonomy(business_id: str, mutate) -> Dict[str, Any]:
     """Reload, mutate settings.autonomy, write back with a shallow merge
-    on settings so a neighbouring key is never clobbered."""
-    biz = _load(business_id) or {"settings": {}}
+    on settings so a neighbouring key is never clobbered.
+
+    Raises WriteFailed when the business cannot be read (writing then would
+    replace every other setting with just this block) or the write does not
+    land (sb_clients answers None on any 4xx, 5xx or transport error, and []
+    when no row matched). A caller never reports a failed write as done."""
+    try:
+        biz = _load(business_id)
+    except Exception as e:
+        raise WriteFailed(f"the business could not be read: {e}") from None
+    if not biz:
+        raise WriteFailed("the business could not be read")
     settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else {}
     autonomy = dict(_autonomy(biz))
     mutate(autonomy)
-    sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
-                                   {"settings": {**settings, "autonomy": autonomy}})
+    try:
+        rows = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
+                                              {"settings": {**settings, "autonomy": autonomy}})
+    except Exception as e:
+        raise WriteFailed(f"the write failed: {e}") from None
+    if not rows:
+        logger.warning(f"[standing] settings.autonomy write for {str(business_id)[:8]} did not land")
+        raise WriteFailed("the write did not land")
     return autonomy
 
 
@@ -252,7 +276,11 @@ def grant(business_id: str, verb: str, *, by: str, via: str) -> Tuple[bool, str]
         declined = dict(a.get("standing_declined") or {})
         declined.pop(verb, None)
         a["standing_declined"] = declined
-    _write_autonomy(business_id, _m)
+    try:
+        _write_autonomy(business_id, _m)
+    except WriteFailed as e:
+        logger.warning(f"[standing] grant of {verb} not saved: {e}")
+        return False, SAVE_FAILED
     try:
         import audit_log
         marketing = verb in MARKETING_KINDS
@@ -267,6 +295,9 @@ def grant(business_id: str, verb: str, *, by: str, via: str) -> Tuple[bool, str]
 
 
 def revoke(business_id: str, verb: str, *, by: str, via: str, reason: str = "") -> bool:
+    """True when the grant was there and is now gone, False when there was
+    nothing to revoke. Raises WriteFailed when it could not be written: the
+    grant still stands, and nothing may say otherwise."""
     had = {"v": False}
 
     def _m(a):
@@ -294,7 +325,7 @@ def decline(business_id: str, verb: str) -> None:
         d = dict(a.get("standing_declined") or {})
         d[verb] = when
         a["standing_declined"] = d
-    _write_autonomy(business_id, _m)
+    _write_autonomy(business_id, _m)          # raises WriteFailed: the answer was not saved
 
 
 def offered(biz: Dict[str, Any], verb: str) -> Optional[str]:
@@ -306,16 +337,24 @@ def offered(biz: Dict[str, Any], verb: str) -> Optional[str]:
 def mark_offered(business_id: str, verb: str) -> bool:
     """Remember that Chief asked about this kind, before it asks. False
     when it already asked, or the write did not land: then it does not ask
-    (a question said twice is worse than one said late)."""
-    biz = _load(business_id)
+    (a question said twice is worse than one said late). It asks again
+    on a later approval once the write lands."""
+    try:
+        biz = _load(business_id)
+    except Exception:
+        return False
     if not biz or offered(biz, verb):
         return False
-    settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else {}
-    autonomy = dict(_autonomy(biz))
-    autonomy["standing_offered"] = {**(autonomy.get("standing_offered") or {}), verb: _z(_now())}
-    rows = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{business_id}",
-                                          {"settings": {**settings, "autonomy": autonomy}})
-    return bool(rows)
+    when = _z(_now())
+
+    def _m(a):
+        a["standing_offered"] = {**(a.get("standing_offered") or {}), verb: when}
+    try:
+        _write_autonomy(business_id, _m)
+    except WriteFailed as e:
+        logger.warning(f"[standing] the question about {verb} was not remembered, so not asked: {e}")
+        return False
+    return True
 
 
 # ─── The question, at the third approval ─────────────────────────────
@@ -554,7 +593,12 @@ def sweep_revocations(now: Optional[datetime] = None) -> List[str]:
             # A marketing kind retires off its posts' own history
             # (business_marketing_standing), not the proposal ledger.
             if verb in retired and verb in ELIGIBLE:
-                revoke(str(biz["id"]), verb, by="chief", via="retire", reason="you stopped the last three")
+                try:
+                    if not revoke(str(biz["id"]), verb, by="chief", via="retire", reason="you stopped the last three"):
+                        continue
+                except WriteFailed as e:
+                    logger.warning(f"[standing] retire of {verb} not saved; tried again next sweep: {e}")
+                    continue
                 _tell(biz, f"I'm back to asking before {words(verb)}",
                       f"You stopped the last {outcome_ledger.RETIRE_AFTER} {words(verb)} I sent on my own, so I "
                       f"turned that permission off. Say the word in chat if you want it back.",
@@ -642,8 +686,11 @@ async def handle_revoke_standing_permission(client, biz, action) -> Dict[str, An
     if verb in MARKETING_KINDS and not _turn_is_owner(biz):
         return _fail("revoke_standing_permission", "only the business owner can change that")
     import chief_of_staff as cos
-    had = await asyncio.to_thread(revoke, str(biz.get("id")), verb,
-                                  by=(cos._TURN_USER_ID.get() or "owner"), via="chat")
+    try:
+        had = await asyncio.to_thread(revoke, str(biz.get("id")), verb,
+                                      by=(cos._TURN_USER_ID.get() or "owner"), via="chat")
+    except WriteFailed:
+        return _fail("revoke_standing_permission", SAVE_FAILED)
     return {"type": "revoke_standing_permission",
             "result": (f"back to asking before {words(verb)}" if had else f"{words(verb)} already needed your tap"),
             "label": f"🔒 Asks first again: {words(verb)}", "verb": verb}
@@ -686,10 +733,15 @@ def set_standing(body: _Body, user: AuthedUser = Depends(require_user)) -> Dict[
     if body.grant:
         ok, info = grant(body.business_id, verb, by=str(user.id), via="app")
         if not ok:
-            raise HTTPException(status_code=400, detail=info)
+            raise HTTPException(status_code=503 if info == SAVE_FAILED else 400, detail=info)
         return {"ok": True, "granted": True, "verb": verb, "since": info}
-    if verb in granted(biz):
-        revoke(body.business_id, verb, by=str(user.id), via="app")
-    else:
-        decline(body.business_id, verb)
+    try:
+        if verb in granted(biz):
+            revoke(body.business_id, verb, by=str(user.id), via="app")
+        else:
+            decline(body.business_id, verb)
+    except WriteFailed:
+        # Never "turned off" when it was not: the grant (or the open
+        # question) stands exactly as it was.
+        raise HTTPException(status_code=503, detail=SAVE_FAILED) from None
     return {"ok": True, "granted": False, "verb": verb}

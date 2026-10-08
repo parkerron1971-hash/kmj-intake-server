@@ -1191,8 +1191,24 @@ now, ends the run, as `outcome_ledger.retired_verbs` does), the permission
 retires itself: `standing_permissions.revoke(..., via='retire')`, its other
 waiting posts go back to drafts, and one Today item and push say "I'm back to
 asking before your weekly posts". Checked after each of those four owner
-actions (on the desk, or by Chief at the owner's ask through the same
-functions).
+actions, on the desk or by Chief at the owner's ask: B10's
+`marketing_edit_post` and `marketing_skip_post` call the same `edit_slot`
+and `cancel_slot_route`, so they count exactly like the owner's own. Chief's
+Post now on an approved post is read as posted now (kept), not as an edit.
+
+**A write that did not land is never reported as done.**
+`standing_permissions._write_autonomy` now raises `WriteFailed` when the
+business cannot be read (it used to write `settings` as just the autonomy
+block over every other setting) or the write answers nothing (None on any
+error, [] when no row matched). A grant then answers 503 with nothing on the
+record; a revoke or a "no" answers 503 and the grant or question stands; chat
+says it could not be saved. A retire is confirmed before anything follows:
+the revoke must land and a fresh read must show the grant gone (a read that
+fails then trusts the landed write). If not, no post is withdrawn and nothing
+is said; it is tried again at the next override, and before Chief next
+approves anything on that grant (`approve_run` retires first and does not use
+it). The question is asked only once remembering it has landed; otherwise
+it comes on a later approval.
 
 **Read off the posts' own history.** Ask and retire never use a counter: they
 read `marketing_post_events` (the database's snapshot of every insert and
