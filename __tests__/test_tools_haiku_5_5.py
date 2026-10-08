@@ -263,10 +263,12 @@ def test_ai_proxy_volume_tier(monkeypatch):
     out = asyncio.run(ai_proxy.ai_proxy(req, _FakeRequest(), _user()))
     assert out["content"] == "hi"
     _quick(sent[-1])
-    # A model that takes a temperature still gets the caller's.
+    # The draft tier left Sonnet 4.5 (retires 2026-11-30) for Sonnet 5.5,
+    # which takes no temperature and holds its thinking to between_tools.
     req = ai_proxy.ProxyRequest(task_type="draft", messages=[{"role": "user", "content": "x"}], temperature=0.7)
     asyncio.run(ai_proxy.ai_proxy(req, _FakeRequest(), _user()))
-    assert sent[-1]["temperature"] == 0.7 and "thinking" not in sent[-1]
+    assert sent[-1]["model"] == "claude-sonnet-5-5" and "temperature" not in sent[-1]
+    assert sent[-1]["thinking"] == {"type": "between_tools"}
 
 
 def test_message_screen_on_haiku_5_5(monkeypatch):

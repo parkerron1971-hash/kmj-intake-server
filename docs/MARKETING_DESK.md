@@ -1286,6 +1286,28 @@ desk's flyers and numbers (`marketing_design.platform_owner`,
 id, else the oldest flagged row whose owner is the platform owner. A tenant
 that flags its own row is never it.
 
+**Out of the tenant suite while it runs on Buffer** (2026-10-08). Buffer is
+for Solutionist's own marketing (this desk); Post for Me is for the businesses
+on the platform (the tenant suite). Before this, the tenant fan-out left
+Solutionist's own business out only once `PLATFORM_BUSINESS_ID` validated:
+with the id unset or invalid, `MARKETING_DESK=*` plus `plan_enabled` and
+connected accounts on that business's tenant desk would have planned and
+posted a second week through Post for Me beside the Buffer week. Now, while
+the suite is not active, `platform_suite.kept_out` finds it by the validated
+id, or by `books_business` (the same owner check) when the id is unset,
+invalid or unread, and `desk_on_for` / `desk_scope` leave it out of the
+fan-out, the scheduled and queued runs (`eligibility`), the flyer and
+open-chairs ticks and Chief's desk verbs. A lookup that fails keeps out, that
+hour, only rows whose own settings say `platform_books` (the candidate and
+run rows carry it; logged); every other business is planned. Its manual runs
+(`POST /marketing/{id}/engine/run`, Chief's `marketing_replan` and the other
+desk verbs) are refused after the owner check in plain words
+(`platform_suite.OWN_DESK`: "Solutionist's own marketing runs on the Mission
+Control desk"). The flag lookup is asked only while `MARKETING_DESK` names
+anyone (`ready()` reads it off the event loop), so a desk that is off still
+costs no read. Suite active: unchanged. Tests:
+`__tests__/test_platform_out_of_tenant_fanout.py`.
+
 ### What that business gets (the suite active, that id only)
 
 - **The autopilot level** (the week, its clips, standing OKs) whatever its

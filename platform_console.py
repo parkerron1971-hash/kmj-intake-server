@@ -977,7 +977,12 @@ PLATFORM_CHIEF_MODEL = os.environ.get("PLATFORM_CHIEF_MODEL", "claude-sonnet-5-5
 # per token than Sonnet 4.5) rejects a forced tool_choice, so a turn that
 # must call the creation tool goes to the previous Sonnet, as does a turn
 # 5.5 declines (stop_reason "refusal", no text). See test_sonnet_5_5_compat.
-PLATFORM_CHIEF_FALLBACK_MODEL = os.environ.get("PLATFORM_CHIEF_FALLBACK_MODEL", "claude-sonnet-4-5-20250929")
+# That previous Sonnet is Sonnet 5 since 2026-10-08: Sonnet 4.5 retires on
+# 2026-11-30 (it served every forced creation turn, 31 in 30 days), and
+# Sonnet 5 takes a forced tool_choice and is active until at least
+# 2027-06-30. It takes no temperature (sampling_kwargs drops it) and its
+# thinking is turned off, as on every newer model here.
+PLATFORM_CHIEF_FALLBACK_MODEL = os.environ.get("PLATFORM_CHIEF_FALLBACK_MODEL", "claude-sonnet-5")
 
 
 def _platform_chief_payload(model: str, system: str, messages: list, tools: list, forced: bool) -> Dict[str, Any]:
@@ -992,7 +997,7 @@ def _platform_chief_payload(model: str, system: str, messages: list, tools: list
     }
     payload.update(model_ladder.sampling_kwargs(model, 0.6))
     # Adaptive thinking counts against max_tokens on the newer models; the
-    # reply needs the whole budget. Sonnet 4.5 never thought, so it is left as it was.
+    # reply needs the whole budget. A model that never thought is left as it was.
     if model_ladder.supports_effort(model):
         payload.update(model_ladder.thinking_off_kwargs(model))
     return payload
