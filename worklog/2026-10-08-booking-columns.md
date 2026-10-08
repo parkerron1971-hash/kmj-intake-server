@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "follow-up of #1335: the root fix for the module_entries booking columns"
 status: waiting on Kevin
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1338]
 migrations: [supabase/APPLY-2026-10-08-booking-columns.sql (pending, apply after merge)]
 left_undone:
   - "Apply supabase/APPLY-2026-10-08-booking-columns.sql after the merge, then run the VERIFY queries at its bottom (expect 3 functions, 1 trigger, 0/0 unfilled, 12 active bookings with a time, 9 with a length, 17 rows with a time in all)"
