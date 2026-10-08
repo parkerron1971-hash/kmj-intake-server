@@ -79,15 +79,18 @@ DOCS_BUCKET = "business-documents"
 # gets a friendly 413 instead of an opaque Anthropic error.)
 MAX_FILE_BYTES = 20 * 1024 * 1024
 
-DEFAULT_MODEL = "claude-sonnet-4-5"
-MAX_TOKENS = 2000
+# Sonnet 4.5 retires 2026-11-30: Sonnet 5.5 reads the documents now.
+# DOCINTEL_MODEL still pins it. Budgets are ~30% larger: the same text
+# is more tokens on Sonnet 5.5.
+DEFAULT_MODEL = "claude-sonnet-5-5"
+MAX_TOKENS = 2600
 # A grant checklist is a much bigger answer than a summary: eleven
 # arrays, one of them a section-by-section breakdown of a NOFO. At 2000
 # the JSON truncates mid-array and _parse_json raises, which the caller
 # sees as "came back malformed" and retries — paying twice for the same
 # truncation. Sized per mode rather than raising the ceiling for every
 # call, since a summary genuinely does not need it.
-MODE_MAX_TOKENS = {"grant_requirements": 8000}
+MODE_MAX_TOKENS = {"grant_requirements": 10400}
 
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
 
@@ -328,11 +331,14 @@ async def _call_claude(system: str, content: List[Dict[str, Any]],
                        task_type: str, max_tokens: Optional[int] = None) -> Dict[str, Any]:
     if not llm_call.api_key():
         raise HTTPException(503, "Document analysis isn't configured (no API key).")
+    import model_ladder
     payload = {
         "model": _model(),
         "max_tokens": max_tokens or MAX_TOKENS,
         "system": system,
         "messages": [{"role": "user", "content": content}],
+        # A JSON reading task: thinking would spend the budget first.
+        **model_ladder.thinking_off_kwargs(_model()),
     }
     started = time.monotonic()
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -341,6 +347,8 @@ async def _call_claude(system: str, content: List[Dict[str, Any]],
         logger.error(f"docintel LLM {resp.status_code}: {resp.text[:300]}")
         raise HTTPException(502, "The document couldn't be analyzed right now.")
     data = resp.json()
+    if data.get("stop_reason") == "refusal":
+        raise HTTPException(422, "This document couldn't be analyzed.")
     text = "".join(b.get("text", "") for b in data.get("content", [])
                    if b.get("type") == "text")
     usage = data.get("usage") or {}
