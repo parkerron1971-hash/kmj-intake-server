@@ -120,9 +120,32 @@ def extra_units(used_seconds, seconds):
     return math.ceil((after - before) / 3600 * UNITS_PER_EXTRA_HOUR) if after > before else 0
 
 
+def plan_allows(business_id):
+    """Whether this business's plan includes Find my best clips. Same rule as
+    the gate on starting a run (billing_limits.require_feature): enforcement
+    off, a grandfathered owner or a lookup error all allow."""
+    import billing_limits
+    try:
+        billing_limits.require_feature(str(business_id), FEATURE)
+        return True
+    except HTTPException as error:
+        return error.status_code != 402
+
+
+def ready_for(business_id):
+    """Switched on for the business AND on its plan: the only state in which the
+    app may offer the Find my best clips button."""
+    return enabled(business_id) and plan_allows(business_id)
+
+
 def configuration(business_id):
-    used = seconds_this_month(business_id) if enabled(business_id) else 0.0
-    return {'available': enabled(business_id), 'included_hours': INCLUDED_SECONDS // 3600,
+    switched = enabled(business_id)
+    available = switched and plan_allows(business_id)
+    used = seconds_this_month(business_id) if available else 0.0
+    # locked: switched on, but the business's plan does not include it, so the
+    # app shows what it comes with instead of a button that would refuse.
+    return {'available': available, 'locked': switched and not available, 'required_plan': 'Solutionist',
+            'included_hours': INCLUDED_SECONDS // 3600,
             'used_hours': round(used / 3600, 1), 'actions_per_extra_hour': UNITS_PER_EXTRA_HOUR,
             'max_upload_bytes': MAX_UPLOAD_BYTES, 'caption_styles': list(CAPTION_STYLES), 'lengths': ['short', 'medium', 'long'],
             'covers': cover_offer()}
@@ -286,6 +309,10 @@ def audit(business_id, user_id, action, payload):
 
 def start_upload(business_id, body, user):
     media_library.access(business_id, user)
+    # A recording is only worth storing if something can turn it into clips:
+    # the hand cutter (media processing) or Find my best clips for this business.
+    if not (media_library.configuration()['processing_available'] or ready_for(business_id)):
+        raise HTTPException(403, "Uploading recordings isn't available for this business yet.")
     if library_bytes(business_id) + body.byte_size > LIBRARY_BYTES:
         raise HTTPException(409, 'This media library has reached its 20 GB allowance. Remove recordings you no longer need first.')
     row = media_library.one(sb_clients.sb_post_as_service('/media_assets', {
