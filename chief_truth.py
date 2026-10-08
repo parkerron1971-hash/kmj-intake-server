@@ -41,6 +41,7 @@ MAX_EVIDENCE_CHARS = 50000
 # long ordinary answer (output_tokens == cap in api_usage), which discarded the
 # whole review and replaced the answer with UNVERIFIED_REPLY.
 REVIEW_MAX_TOKENS = 4000
+REVIEW_THINKING_MAX_TOKENS = 12000
 MAX_SOURCE_CHARS = 10000
 MAX_REPLY_CHARS = 16000
 MAX_REVIEW_HISTORY_MESSAGES = 30
@@ -490,6 +491,11 @@ _RECORD_STATE = re.compile(
     r"owing|paid|unpaid|due|booked|scheduled|on file|your\s+(?:\w+\s+)?\$?\d)\b", re.I)
 
 
+_ESTIMATE_HEDGE = re.compile(
+    r"\b(?:about|around|roughly|approximately|estimat\w*|assum\w*|if|projected|likely|"
+    r"probably|ballpark)\b|~", re.I)
+
+
 def _figure_set(matches):
     out = set()
     for m in matches:
@@ -779,6 +785,8 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             # turn read something; any write verb in it keeps the old rule.
             if claim['kind'] == 'action' and is_read_narration(text_) and read_anything(sources):
                 continue
+            if claim['kind'] == 'action' and is_owner_instruction(text_):
+                continue
             if (isinstance(gap, str) and gap.strip()) or not (isinstance(sid, str) and sid.strip()) \
                     or not (isinstance(quote, str) and quote.strip()):
                 why = gap.strip()[:120] if isinstance(gap, str) and gap.strip() else 'no source'
@@ -829,7 +837,14 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
                 # The reviewer labels totals "estimate" more often than the
                 # rules ask; a total that adds up from the source is a fact
                 # and needs no hedge. A genuine estimate still does.
-                if missing and not re.search(
+                # "about 10 discovery calls, if half of them convert": the
+                # hedge is in the estimate's own sentence (2026-10-07 replay).
+                # Not for a sentence that states a record ("you have about 40
+                # clients" is still a count to prove).
+                own = _sentence_containing(reply, text_)
+                hedged = bool(_ESTIMATE_HEDGE.search(own)) and not (
+                    _RECORD_NOUN.search(own) and _STATE_CLAIM.search(own))
+                if missing and not hedged and not re.search(
                         r'\b(?:estimat\w*|assuming|assumption|hypothetic\w*|project\w*|approximately|roughly)\b',
                         reply, re.I):
                     return 'unsupported', [], _claim_fail('estimate without an explicit label', text_)
@@ -1514,8 +1529,27 @@ _NON_EXECUTION = re.compile(
     r"payment|charge|booking|post|change)s?\b|not (?:yet |been |actually |already )?"
     r"(?:created|sent|booked|saved|paid|published|scheduled|run|done|completed|gone|"
     r"started|texted|emailed|charged|recorded|deleted|updated|made|placed|posted)|"
-    r"(?:has|have|had|was|were|did|is|are)n['’]t|(?:has|have|had|was|were|did|is|are) not)\b",
+    r"(?:has|have|had|was|were|did|is|are)n['’]t|(?:has|have|had|was|were|did|is|are) not|"
+    # "I couldn't pull the full Retention report just now": a read that
+    # failed, not work claimed. Filed as an action, it withheld whole
+    # answers for want of a write receipt (2026-10-07 replay).
+    r"could(?:n['’]t| not)|can(?:['’]t|not)|(?:was|were)(?:n['’]t| not) able to|(?:was|were) unable to)\b",
     re.I)
+
+# "Ask Pat Johnson, Omar King and Lee Wright whether they know a couple...",
+# "reach out personally to Ada and Sam": Chief telling the owner what to do.
+# An instruction has no subject and claims nothing was done; filed as an
+# action it withheld the answer for want of a write receipt (2026-10-07
+# replay). A first-person subject anywhere keeps the action rule.
+_OWNER_INSTRUCTION = re.compile(
+    r"^\s*(?:then\s+|and\s+|so\s+|just\s+|first,?\s+|next,?\s+)?"
+    r"(?:ask|reach out|send|text|email|call|invite|offer|post|follow up|book|schedule|set up|try|"
+    r"share|tell|remind|thank|check in|message|reply to|contact|pick|choose|block|plan)\b", re.I)
+_FIRST_PERSON = re.compile(r"\b(?:I|I['’](?:ve|ll|d|m)|we|we['’](?:ve|ll|d|re)|me|us)\b")
+
+
+def is_owner_instruction(text):
+    return bool(_OWNER_INSTRUCTION.match(text or '')) and not _FIRST_PERSON.search(text or '')
 
 
 def is_non_execution_claim(text):
@@ -1973,11 +2007,19 @@ async def review_reply(client, system, messages, *, max_tokens, enable_web_searc
     # previous setting without a deploy.
     # Only where the API accepts it: Opus 5.5 cannot turn thinking off, and
     # Sonnet 5.5 spells "off" as between_tools (disabled is a 400 there).
-    off = model_ladder.thinking_off_kwargs(model) if _review_thinking() == 'off' else {}
+    # CHIEF_REVIEW_THINKING (off | low | medium | high) sets the review
+    # lane's thinking; the fallback review, the repair and the sentence
+    # check keep it off. A model that thinks spends its thinking from
+    # max_tokens, so a thinking review gets room for it on top of the
+    # verdict (a Haiku 5.5 verdict on a long answer is ~1,500 tokens).
+    level = _review_thinking() if model_lane == 'review' else 'off'
+    off = model_ladder.thinking_off_kwargs(model) if level == 'off' else {}
     if off:
         payload.update(off)
     else:
-        payload.update(model_ladder.effort_kwargs(model, 'low'))
+        payload.update(model_ladder.effort_kwargs(model, level if level in ('low', 'medium', 'high') else 'low'))
+        if level != 'off':
+            payload['max_tokens'] = max(int(payload.get('max_tokens') or 0), REVIEW_THINKING_MAX_TOKENS)
     if schema and _review_schema_on():
         payload['output_config'] = {**(payload.get('output_config') or {}),
                                     'format': {'type': 'json_schema', 'schema': schema}}
@@ -2305,7 +2347,21 @@ class _SentenceProver:
     def corroborates(self, figure, claim_text):
         """Does one trusted record item hold this figure together with
         every name in the claim (or, when it names no one, its record
-        words)? A claim naming nothing and no record proves nothing."""
+        words)? A claim naming nothing and no record proves nothing.
+
+        "Your 1:1 Session is $150 and the 3-Month Package is $1,200" joins
+        two records in one claim, and no single record holds both names
+        (2026-10-07 replay: withheld as "claim number 1200 is not in the
+        quote"). Each figure is first held to the part of the claim it sits
+        in — the clause up to a comma, "and" or semicolon — the way a
+        reviewer that splits the claim would cite it. A wrong figure finds
+        no record in its own clause either."""
+        for part in re.split(r',\s+|;\s*|\s+and\s+', claim_text or ''):
+            if part != claim_text and figure in _numbers(part) and self._corroborates(figure, part):
+                return True
+        return self._corroborates(figure, claim_text)
+
+    def _corroborates(self, figure, claim_text):
         names = [n.lower() for n in _fast_lane_names(claim_text)]
         keywords = _state_keywords(claim_text)
         if not names and not keywords:
@@ -2939,5 +2995,8 @@ async def _finalize_reply(client, reply, *, ctx, view_detail, taken, message, bu
 
 
 async def repair_reply(client, system, messages, **kwargs):
-    """Use the metered, tool-free reviewer transport for a single prose repair."""
+    """Use the metered, tool-free reviewer transport for a single prose repair.
+    On its own lane: the repair writes words the owner reads, so it stays on
+    the strongest writer whatever model checks the answer."""
+    kwargs.setdefault('model_lane', 'repair')
     return await review_reply(client, system, messages, schema=None, **kwargs)

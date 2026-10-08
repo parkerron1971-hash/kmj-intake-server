@@ -29,7 +29,8 @@ Edge cases handled:
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time, timedelta
+import re
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 try:
@@ -185,7 +186,7 @@ def _minutes(v: Any) -> Optional[int]:
         return None
     try:
         n = int(float(v))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):     # OverflowError: "Infinity"
         return None
     return n if n > 0 else None
 
@@ -205,6 +206,50 @@ def booked_rows(rows: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
                    or DEFAULT_BOOKED_MIN)
         out.append({"appointment_at": start, "duration_min_at_booking": minutes})
     return out
+
+
+# The shapes a stored booking time may take: a date, or a date and time
+# (T or a space between, seconds and a fraction optional) with Z, an
+# offset (+00, +0000, +00:00) or nothing. The same pattern as
+# public.booking_ts (supabase/APPLY-2026-10-08-booking-columns.sql);
+# __tests__/booking_time_cases.json holds the cases both must agree on.
+_BOOKING_TIME = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    r"(?:[T ](?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.[0-9]+)?)?"
+    r"(?:[Zz]|[+-][0-9]{2}(?::?[0-9]{2})?)?)?")
+
+
+def booking_instant(value: Any) -> Optional[datetime]:
+    """A stored booking time as an aware UTC instant, read the way the
+    database's public.booking_ts reads data->>appointment_at into the
+    column: Z or an offset is that instant, a time without one is UTC (as
+    _booking_intervals reads it), a bare date is its midnight UTC. None
+    when there is no time or it is not one of those shapes."""
+    if isinstance(value, datetime):
+        d = value
+    elif isinstance(value, str) and _BOOKING_TIME.fullmatch(value.strip()):
+        s = value.strip()
+        if s[-1] in "Zz":
+            s = s[:-1] + "+00:00"
+        try:
+            d = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+    else:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.astimezone(timezone.utc)
+
+
+def booked_start(row: Any) -> Optional[datetime]:
+    """When a row read with BOOKING_SELECT starts, as an aware UTC instant:
+    the time in data (what reschedule moves), else the column, the same
+    pick booked_rows makes. For reads that need the instant itself (a
+    history or a count), not the overlap math."""
+    if not isinstance(row, dict):
+        return None
+    return booking_instant(row.get("booked_at") or row.get("appointment_at"))
 
 
 def _booking_intervals(

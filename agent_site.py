@@ -699,26 +699,17 @@ def parse_window(from_: Optional[str], to: Optional[str]) -> Tuple[date, date]:
 
 BOOKING_ROWS = 2000
 
-# module_entries has no `duration_min` column (only appointment_at and
-# duration_min_at_booking are columns; the widget and Chief write the rest
-# into `data`). Naming it made this read a 400 in production, which the
-# `or []` below turned into "no bookings", so every slot read as open. The
-# booked length is read from the column, else from data (2026-10-07, B11).
-BOOKING_SELECT = "appointment_at,duration_min_at_booking,booked_min:data->>duration_min_at_booking"
-
-
-def _booked(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Each booking with its length: the column, else the length in data."""
-    out = []
-    for r in rows:
-        minutes = r.get("duration_min_at_booking")
-        if minutes in (None, "") and r.get("booked_min") not in (None, ""):
-            try:
-                minutes = int(float(r["booked_min"]))
-            except (TypeError, ValueError):
-                minutes = None
-        out.append({"appointment_at": r.get("appointment_at"), "duration_min_at_booking": minutes})
-    return out
+# The bookings read is the shared one (availability_engine.BOOKING_SELECT,
+# booking_window_filter, booked_rows), the same the widget and the
+# double-book guard use: a booking is found by the appointment_at column OR
+# data->>appointment_at, starts at the time in data (what reschedule moves)
+# else the column, and lasts the column's length, else data's, else
+# DEFAULT_BOOKED_MIN. Until 2026-10-08 this read filtered on the column
+# alone, which no writer filled (the widget and Chief write `data`), so it
+# saw no bookings and offered taken times; and a booking with no length
+# counted as 0 minutes, which blocks nothing. The column fills itself once
+# supabase/APPLY-2026-10-08-booking-columns.sql is applied; this read does
+# not need it.
 
 
 def slots_for(b: Dict[str, Any], off: Dict[str, Any],
@@ -736,17 +727,20 @@ def slots_for(b: Dict[str, Any], off: Dict[str, Any],
     now: the clock compute_slots measures "still ahead" against (tests)."""
     try:
         from availability import BusinessAvailability
-        from availability_engine import compute_slots
+        from availability_engine import (
+            BOOKING_SELECT, booked_rows, booking_window_filter, compute_slots,
+        )
         av = BusinessAvailability.from_settings_dict(b["facts"].get("availability"))
-        lo = (start - timedelta(days=1)).isoformat()
-        hi = (end + timedelta(days=1)).isoformat()
+        # Bookings that start from the day before (a long one can spill in)
+        # through the last day: [start - 1, end + 2) as whole days, the
+        # bounds booking_window_filter's text match on data needs.
         rows = sb_clients.sb_get_as_service(
-            f"/module_entries?business_id=eq.{b['facts']['id']}"
-            f"&appointment_at=gte.{lo}&appointment_at=lte.{hi}&status=eq.active"
+            f"/module_entries?business_id=eq.{b['facts']['id']}&status=eq.active"
+            f"&{booking_window_filter(start - timedelta(days=1), end + timedelta(days=2))}"
             f"&select={BOOKING_SELECT}&limit={BOOKING_ROWS}")
         if strict and (not isinstance(rows, list) or len(rows) >= BOOKING_ROWS):
             raise HTTPException(status_code=503, detail="the bookings could not be read")
-        bookings = _booked(rows) if isinstance(rows, list) else []
+        bookings = booked_rows(rows) if isinstance(rows, list) else []
         # The practitioner's other calendar (outside_calendar) — busy there
         # is busy here. Fails soft to [] when nothing is connected (strict:
         # only when it is not set up, never when a read fails).

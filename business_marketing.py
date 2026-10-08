@@ -8,6 +8,7 @@
   POST /marketing/{business_id}/slot/cancel               owner             skip a post
   POST /marketing/{business_id}/post-now                  owner             a reviewed post goes out in two minutes
   POST /marketing/{business_id}/posts/{post_id}/not-sent  owner             an unconfirmed delivery did not go out
+  POST /marketing/{business_id}/posts/{post_id}/take-back owner             an approved post back to a draft (B13)
   PUT  /marketing/{business_id}/settings                  owner             the desk's settings
   GET  /marketing/{business_id}/results                   owner + members   what came through the post links (B6)
 
@@ -54,6 +55,13 @@ THE LEVEL. GET /engine says how much of the work Chief does for this business
 (`level`) from its real plan (feature_gates.plan_includes, which ignores
 BILLING_ENFORCE), and the next step up (`upgrade`). The frontend reads these,
 not useEntitlements().has(), which lets everything through.
+
+STANDING OK (B13, business_marketing_standing). At the autopilot level the
+owner may let Chief approve its weekly posts and clip posts; GET /engine's
+`standing` says what is granted and whether it covers posts now. The owner's
+own changes feed it: /approve may answer with Chief's one-time question
+(`standing_offer`), and an edit, take-back, skip or "not sent" of a post Chief
+approved counts toward retiring it (three in a row).
 """
 from __future__ import annotations
 
@@ -809,6 +817,7 @@ async def engine(business_id: UUID, biz: dict = Depends(business_access('viewer'
         **reading.weeks(state),
         'latest': latest, 'planning': marketing_engine.is_planning(latest, at),
         'truncated': len(state['posts'] or []) >= reading.POSTS_LIMIT,
+        'standing': _standing_block(biz),
         **reading.desk(state),
     }
 
@@ -827,10 +836,14 @@ async def next_slot_route(business_id: UUID, user: AuthedUser = Depends(require_
 
 # ── new posts ─────────────────────────────────────────────────────────
 
-async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, actor: str) -> Dict[str, Any]:
+async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, actor: str,
+                      *, source: str = 'owner') -> Dict[str, Any]:
     """Save one post (a draft) for every chosen account; with post_now, also
     approve it as the owner's, due in two minutes. Every check runs before
-    anything is written."""
+    anything is written. `source`: 'owner' from the desk, 'chief' when Chief
+    saves it in chat at the owner's ask (chief_marketing_actions, B10)."""
+    if source not in ('owner', 'chief'):
+        raise ValueError('A new post comes from the owner or from Chief.')
     bid = business_id
     desk = await _call(store.get_desk(bid), down=READ_DOWN)
     if req.post_now:
@@ -866,7 +879,7 @@ async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, act
         if desk is None:
             await ensure_desk(bid)
         row = new_post(bid, post_id, caption=caption, media=media, targets=targets, run_at=run_at,
-                       expires_at=expires_at, landing=landing, site=site)
+                       expires_at=expires_at, landing=landing, source=source, site=site)
         try:
             saved = await store.request('POST', '/marketing_posts', row)
             existing, already = (saved[0] if isinstance(saved, list) and saved else row), False
@@ -913,10 +926,12 @@ async def approve_route(business_id: UUID, req: Review, user: AuthedUser = Depen
     bid = str(business_id)
     await _require_owner(bid, user)
     live = {str(a['id']) for a in await connected(bid)}
+    rows = []
     for item in req.items:
         row = await _call(store.get_post(bid, item.id), down=READ_DOWN)
         if not row:
             raise HTTPException(409, CHANGED)
+        rows.append(row)
         if row.get('design_status') == 'designing':
             # marketing_approve refuses it too, in these same words; said here first.
             raise HTTPException(409, DESIGNING)
@@ -930,7 +945,45 @@ async def approve_route(business_id: UUID, req: Review, user: AuthedUser = Depen
                                      'Add a picture or change its accounts, then approve it.')
     count = await _call(store.approve(bid, [i.model_dump(mode='json') for i in req.items],
                                       actor=str(user.id), via='owner'))
-    return {'approved': count}
+    offer = await _standing_offer(bid, rows)
+    return {'approved': count, **({'standing_offer': offer} if offer else {})}
+
+
+# ── the standing OK (B13) ─────────────────────────────────────────────
+
+def _standing_block(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """GET /engine's `standing` (business_marketing_standing.desk_block).
+    Never breaks the desk: None when it cannot be worked out."""
+    try:
+        import business_marketing_standing as standing
+        return standing.desk_block(biz)
+    except Exception:
+        log.warning('marketing desk: the standing block for %s failed', str(biz.get('id'))[:8], exc_info=True)
+        return None
+
+
+async def _standing_offer(business_id: str, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """After the owner's own approval: Chief's one-time question (ask after
+    three), or None. Never touches the approval."""
+    try:
+        import business_marketing_standing as standing
+        return await standing.after_owner_approval(business_id, rows, now())
+    except Exception:
+        log.warning('marketing desk: the standing question for %s failed', business_id[:8], exc_info=True)
+        return None
+
+
+async def _standing_override(business_id: str, rows: List[Dict[str, Any]]) -> None:
+    """The owner changed, took back, skipped or marked not sent posts Chief
+    approved on the standing OK: three in a row retire it. Never touches the
+    owner's own change."""
+    if not any(r.get('approved_via') == 'standing' for r in rows):
+        return
+    try:
+        import business_marketing_standing as standing
+        await standing.after_override(business_id, rows, now())
+    except Exception:
+        log.warning('marketing desk: the standing check for %s failed', business_id[:8], exc_info=True)
 
 
 # ── change, skip ──────────────────────────────────────────────────────
@@ -1009,6 +1062,7 @@ async def edit_slot(business_id: str, req: SlotEdit, business: Optional[Dict[str
             content['run_at'], content['expires_at'] = moved
         pairs.append((row, changed(row, **content)))
     saved = await _write_all(bid, pairs, EDITABLE, 'changed')
+    await _standing_override(bid, rows)
     note = dropped_note(dropped_all)
     return {'posts': [reading.public_post(r) for r in saved], 'dropped': _public_dropped(dropped_all),
             'note': note}
@@ -1029,6 +1083,7 @@ async def cancel_slot_route(business_id: UUID, req: SlotCancel, user: AuthedUser
     rows = await _slot_rows(bid, req.items, EDITABLE)
     pairs = [(row, {'status': 'cancelled', 'revision': int(row['revision']) + 1}) for row in rows]
     saved = await _write_all(bid, pairs, EDITABLE, 'skipped')
+    await _standing_override(bid, rows)
     return {'cancelled': len(saved), 'posts': [reading.public_post(r) for r in saved]}
 
 
@@ -1108,7 +1163,34 @@ async def mark_not_sent(business_id: UUID, post_id: UUID, req: Revision, user: A
          'error': NOT_SENT_NOTE}))
     if not rows:
         raise HTTPException(409, 'Only an unconfirmed delivery can be marked not sent. Refresh the desk.')
+    await _standing_override(bid, rows)
     return {'post': reading.public_post(rows[0])}
+
+
+TAKE_BACK_GONE = ('Only an approved post that has not started going out can be taken back. Refresh the desk. '
+                  'Nothing was changed.')
+
+
+@router.post('/posts/{post_id}/take-back')
+async def take_back(business_id: UUID, post_id: UUID, req: Revision, user: AuthedUser = Depends(require_user)):
+    """An approved post (the owner's own approval or Chief's standing one,
+    B13) goes back to a draft before it is sent: the approval is dropped and
+    the revision moves on; its words, picture, accounts and time stay as
+    they are. A post already claimed for sending cannot be taken back."""
+    bid = str(business_id)
+    await _require_owner(bid, user)
+    row = await _call(store.get_post(bid, post_id), down=READ_DOWN)
+    if not row or row.get('revision') != req.revision or row.get('status') != 'approved':
+        raise HTTPException(409, TAKE_BACK_GONE)
+    try:
+        patch = changed(row)
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(409, TAKE_BACK_GONE) from None
+    saved = await _write_post(bid, row, patch, ('approved',))
+    if saved is None:
+        raise HTTPException(409, TAKE_BACK_GONE)
+    await _standing_override(bid, [row])
+    return {'post': reading.public_post(saved)}
 
 
 # ── settings ──────────────────────────────────────────────────────────

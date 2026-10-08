@@ -199,6 +199,12 @@ async def handle_schedule_action(client, biz, action) -> Dict:
         # its time goes with the post, cancellable in Build, Social Media.
         return _fail("schedule_action", "a post is scheduled with its own time: "
                      "use post_image with \"when\" instead, so nothing was scheduled")
+    if itype.startswith("marketing_") and itype != "marketing_desk":
+        # The marketing desk (B10) keeps its own times: a post's time is on
+        # the post, and every change is the owner's on a chat turn, which a
+        # scheduled run is not (chief_marketing_actions).
+        return _fail("schedule_action", "the marketing desk keeps its own times: give the post its time "
+                     "with marketing_new_post or marketing_edit_post \"when\" instead, so nothing was scheduled")
     if itype not in _handlers():
         return _fail("schedule_action", f"unknown action '{itype}'")
 
@@ -408,7 +414,13 @@ async def handle_site_health(client, biz, action) -> Dict:
         if not any(i.startswith("gate") for i in issues):
             healthy.append("quality gate clean")
 
-    if cfg.get("dro_failure") and not hand_built:
+    # The saved status is the verdict on the last full compose: when it says
+    # the brief ran ("applied", "applied_thin") or the approved blueprint
+    # drove the page ("blueprint"), a dro_failure beside it is stale (re-
+    # renders used to stamp one), and telling the owner to pay for a
+    # recompose over it would be wrong.
+    if cfg.get("dro_failure") and not hand_built \
+            and cfg.get("dro_status") not in ("applied", "applied_thin", "blueprint"):
         issues.append("last compose ran WITHOUT its design brief "
                       f"({str((cfg.get('dro_failure') or {}).get('detail'))[:80]}) "
                       "— fix: run a recompose (refine keeps the current look)")

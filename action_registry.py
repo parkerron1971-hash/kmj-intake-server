@@ -621,6 +621,34 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "A scheduled one can be cancelled until it goes out; a sent one cannot "
                                     "be recalled, and a post that was seen cannot be unseen. Owner only; "
                                     "never unattended (chief_social_actions holds every run nobody asked for)"),
+    # ── the marketing desk (B10, chief_marketing_actions) ─────────────
+    # Chief works the business's own desk through the desk API's own
+    # functions. There is NO approve verb: the owner approves on the desk.
+    # Every write is owner-only, checked against the signed-in person on
+    # this chat turn, so none is a native write tool (WRITE_TOOL_SCHEMAS is
+    # also the outside agent's list, and it carries no turn).
+    "marketing_desk":       _r("reads the business's own marketing desk through the engine route's own "
+                               "function: this and next week's posts, what waits for the owner's OK, Chief's "
+                               "read, the plan level, and on request what came through the post links. Captions "
+                               "and account handles, no customer data; campaign_status's class"),
+    "marketing_new_post":   _w("A", "saves ONE draft on the desk (business_marketing.create_idea, source "
+                                    "chief). Nothing posts until the owner approves it there; skipping it "
+                                    "takes it back. Owner only"),
+    "marketing_edit_post":  _w("A", "changes a post's words, time, accounts, picture or link through the "
+                                    "desk's edit_slot: a new revision, back to draft, the approval dropped, so "
+                                    "a change can only make a post wait for the owner again. Owner only"),
+    "marketing_skip_post":  _w("A", "skips one post (status cancelled, the row stays) through the desk's own "
+                                    "cancel route; nothing leaves the system. Owner only"),
+    "marketing_replan":     _w("C", "queues the week's writing again through POST /engine/run's own function: "
+                                    "a model call and, at a week level, up to five Creative Director flyers "
+                                    "(platform spend), replacing the week's waiting drafts once the new ones "
+                                    "are saved. Money-touching, so never unprompted; the route's own limits "
+                                    "(once a day, a week twice) still apply. Owner only"),
+    "marketing_post_now":   _w("C", "the desk's own Post now: approves a post as the owner's and moves it to two "
+                                    "minutes from now, when the sender posts it publicly to the business's "
+                                    "connected accounts. A post that was seen cannot be unseen. Owner only, on "
+                                    "the owner's yes in the turn; never unattended (chief_marketing_actions "
+                                    "holds every run nobody asked for)"),
     "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
                                     "(send_confirmation defaults true). The send is what makes this "
                                     "C while cancel/reschedule are A"),

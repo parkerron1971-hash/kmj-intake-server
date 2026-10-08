@@ -68,6 +68,9 @@ _LANE_DEFAULTS = {
     # nothing, and an unchecked answer is delivered). On the strongest
     # reviewer, so a misquote is never what decides.
     "review_fallback": "claude-sonnet-5-5",
+    # The repair rewrites an answer the check rejected: words the owner
+    # reads, so it stays on the conversational writer whatever checks.
+    "repair":     "claude-sonnet-5-5",
     # The two-track reply (chief_fast_track, 2026-09-25). `fast` writes the
     # opening that goes out in the first half-second of every streamed
     # turn, and answers alone the turns that need no records and no action
