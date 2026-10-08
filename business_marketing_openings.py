@@ -21,7 +21,7 @@ days, counted from module_entries.data->>offering_id (the field the booking
 widget and Chief's create_booking write, through
 booking_widget_router._maybe_denormalize_offering; module_entries has no
 offering_id column). With no booking that names one, or a bookings read that
-fails, the shortest bookable offering, as B7's capacity signal does
+fails or comes back at its row limit, the shortest bookable offering, as B7's capacity signal does
 (marketing_signals.chair_offering), and the run records which.
 
 WINDOWS. agent_site.slots_for (strict: a failed bookings or outside-calendar
@@ -331,7 +331,9 @@ def _query_time(d: datetime) -> str:
 def read_history(business_id: str, at: datetime) -> Optional[List[Dict[str, Any]]]:
     """The last 60 days' active bookings: when (UTC, Z), and which offering
     (the booking's data->>offering_id), newest first. None when the read
-    fails.
+    fails or comes back at its row limit (some bookings unseen, so "most
+    booked" can't be told): the caller then takes the shortest bookable
+    offering ('shortest_unread') and the weekday counts are empty.
 
     The shared bookings read (availability_engine.BOOKING_SELECT,
     booking_window_filter, booked_start): a booking is found by the
@@ -339,14 +341,17 @@ def read_history(business_id: str, at: datetime) -> Optional[List[Dict[str, Any]
     data, else the column. The column alone was empty on every production
     row until supabase/APPLY-2026-10-08-booking-columns.sql, so this history
     read 'no bookings' (7 by data on 2026-10-07). Whole days are read, the
-    exact 60 days kept here."""
+    exact 60 days kept here, and the newest-first order is made here too:
+    the database is not asked to order, because a data-only booking has an
+    empty column (NULL sorts first descending), so a cut by the column's
+    order was never a cut by date."""
     from availability_engine import BOOKING_SELECT, booked_start, booking_window_filter
     lo, hi = at - timedelta(days=HISTORY_DAYS), at
     rows = sb_clients.sb_get_as_service(
         f'/module_entries?business_id=eq.{business_id}&status=eq.active'
         f'&{booking_window_filter(lo.astimezone(timezone.utc).date(), hi.astimezone(timezone.utc).date() + timedelta(days=1))}'
-        f'&select={BOOKING_SELECT},offering_id:data->>offering_id&order=appointment_at.desc&limit={HISTORY_ROWS}')
-    if not isinstance(rows, list):
+        f'&select={BOOKING_SELECT},offering_id:data->>offering_id&limit={HISTORY_ROWS}')
+    if not isinstance(rows, list) or len(rows) >= HISTORY_ROWS:
         return None
     kept = []
     for r in rows:

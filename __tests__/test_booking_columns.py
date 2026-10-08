@@ -214,6 +214,45 @@ def test_history_on_a_failed_read_is_unknown_not_empty(monkeypatch):
     assert op.read_history(BIZ, AT) is None
 
 
+OFFERINGS = [
+    {"id": CUT, "name": "Classic cut", "category": "service", "duration_min": 30, "is_active": True},
+    {"id": BEARD, "name": "Beard trim", "category": "service", "duration_min": 15, "is_active": True},
+]
+
+
+def test_history_at_its_row_limit_is_unknown_and_falls_back_to_the_shortest(monkeypatch):
+    """A read cut off at its limit has unseen bookings, so "most booked" can't
+    be told: None, and the caller takes the shortest bookable offering."""
+    monkeypatch.setattr(op, "HISTORY_ROWS", 3)
+    _use(monkeypatch, FakePostgrest([_booked(f"2026-09-0{d}T19:00:00Z", CUT, id=f"h{d}") for d in (1, 2, 3)]))
+    assert op.read_history(BIZ, AT) is None
+    assert op.choose_offering(OFFERINGS, None) == (OFFERINGS[1], "shortest_unread")
+    assert op.weekday_counts(None, ZoneInfo("UTC")) == {}
+    _use(monkeypatch, FakePostgrest([_booked(f"2026-09-0{d}T19:00:00Z", CUT, id=f"h{d}") for d in (1, 2)]))
+    assert len(op.read_history(BIZ, AT)) == 2                             # under the limit: read
+
+
+def test_history_mixes_data_only_and_column_rows_in_any_order(monkeypatch):
+    """Before the migration a data-only booking has an empty column, which
+    sorts first descending, so the database is not asked to order: the read
+    is by date in Python, whatever order the rows come in."""
+    column_only = _entry("2026-09-25T10:00:00+00:00", 30, id="col", column=True)
+    column_only["data"]["offering_id"] = BEARD
+    both = _booked("2026-09-20T10:00:00Z", CUT, id="both")
+    both["appointment_at"] = "2026-09-20T10:00:00+00:00"
+    rows = [_booked("2026-09-02T10:00:00Z", CUT, id="old"), column_only,
+            _booked("2026-10-01", CUT, id="newest"), both,
+            _booked("2026-07-01T10:00:00Z", BEARD, id="too-old")]
+    for ordering in (rows, list(reversed(rows))):
+        fake = _use(monkeypatch, FakePostgrest(ordering))
+        history = op.read_history(BIZ, AT)
+        assert [h["appointment_at"] for h in history] == [
+            "2026-10-01T00:00:00Z", "2026-09-25T10:00:00Z", "2026-09-20T10:00:00Z", "2026-09-02T10:00:00Z"]
+        assert op.booked_counts(history) == {CUT: 3, BEARD: 1}
+        read = [p for p in fake.paths if p.startswith("/module_entries")][0]
+        assert "order=" not in read
+
+
 # ─── 4. B7's bookings signal, like for like ────────────────────────────
 
 SIG_NOW = datetime(2026, 10, 8, 12, tzinfo=UTC)
