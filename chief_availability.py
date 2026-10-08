@@ -17,7 +17,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from availability import BusinessAvailability, is_open_default
-from availability_engine import compute_slots
+from availability_engine import DEFAULT_BOOKED_MIN, compute_slots
 from chief_host import _sb
 import sb_clients
 
@@ -396,8 +396,16 @@ def evaluate(*, day, clocks, service, business_id, availability, tz, bookings, b
     for row in bookings:
         if row.get('business_id') != business_id or row.get('status') != 'active':
             raise Unavailable('I could not verify the existing bookings for this business.')
+        # A booking saved without a length holds the chair for
+        # DEFAULT_BOOKED_MIN, the rule every bookings read shares
+        # (availability_engine.booked_rows, the double-book guard). Once the
+        # booking columns fill themselves (APPLY-2026-10-08-booking-columns)
+        # this read sees such bookings; refusing on them would make every
+        # check "unavailable" for a business with one. A length that is
+        # there but not 1-1440 minutes still refuses.
+        length = row.get('duration_min_at_booking')
         occupied.append({'appointment_at': _instant(row.get('appointment_at')).isoformat(),
-            'duration_min_at_booking': _duration(row.get('duration_min_at_booking'))})
+            'duration_min_at_booking': DEFAULT_BOOKED_MIN if length is None else _duration(length)})
     for row in busy:
         if row.get('business_id') != business_id or _instant(row.get('ends_at')) <= _instant(row.get('starts_at')):
             raise Unavailable('I could not verify the outside-calendar busy times.')
