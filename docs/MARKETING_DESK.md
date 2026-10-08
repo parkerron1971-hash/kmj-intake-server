@@ -997,3 +997,83 @@ Chief action, no frontend (F6 is the Solutionist view). Not yet seen live:
 the `media->0->>clip_id` filter on `social_publications` (a PostgREST JSON
 path with an array index; a 400 there reads as a failed read, so the week
 goes without clips, never with a clip posted twice).
+
+### Chief works the desk (B10)
+
+`chief_marketing_actions.py` (2026-10-08). Chief does in chat what the owner
+can do on the desk, through **the same server functions** the desk's API
+calls: `business_marketing.engine` (the read), `create_idea` (New post, now
+with `source='chief'`), `edit_slot` (Change), `cancel_slot_route` (Skip),
+`post_existing_now` / `create_idea(post_now=True)` (Post now) and
+`business_marketing_planner.run_route` (`POST /engine/run`). No second write
+path: every change keeps the API's owner check, revision rule and content
+hash.
+
+| Verb | Class | How Chief calls it | What |
+| --- | --- | --- | --- |
+| `marketing_desk` | read | native lookup tool (and tag) | this and next week's posts (post_id, revision, time on the business's clock, status, words, accounts, picture), what waits for the owner's OK, Chief's read (the desk's own `note`), the level and the server's `upgrade` label; `results: true` adds `GET /results` (B6) |
+| `marketing_new_post` | write A | tag | a draft (words; a Media Library picture by id or `"image":"latest"`, or a free composer `flyer` {headline, line, cta}; networks; a time with its zone, else the desk's next open time; a link on the business's own site) |
+| `marketing_edit_post` | write A | tag | words, time, accounts, picture (or `remove_picture`) or link; a new revision, back to draft: an approved post needs the owner's OK again |
+| `marketing_skip_post` | write A | tag | the post is cancelled and never goes out |
+| `marketing_replan` | write C | tag | the week's writing again, by the route's own level rules and limits; optional `kind` (suggestion, week, openings) |
+| `marketing_post_now` | write C | tag | a desk post (post_id + revision) or a new one goes out in about two minutes |
+
+- **No approve verb.** Chief never approves a post: the owner approves on the
+  desk (standing permissions come with B13). Post now is the desk's own
+  "Post now" (it approves as the owner's and moves the time in one step):
+  class C, on the owner's yes in that chat turn (the class-C gate holds a
+  voice turn for a spoken yes), refused before anything is read on a
+  scheduled, automatic or agent run (`_unattended`), and in
+  `policy_engine.CLIENT_FACING`. `schedule_action` will not wrap any desk
+  change.
+- **Why tags.** `mcp_server.WRITE_TOOL_SCHEMAS` is also the outside agent's
+  write list. Every desk write is the owner's alone, checked against the
+  signed-in person on THIS chat turn (`_TURN_USER_ID` against
+  `businesses.owner_id`, the API's `_owner_row`), which the agent surface does
+  not carry; the table keeps out writes that shape what the public sees and
+  writes that spend (a replan can start up to five paid flyers); class C is
+  never a tool. The read is a native tool (`mcp_server.TOOL_SCHEMAS`, so also
+  on the read-only agent surface, tripwire 37 to 38).
+- **Who.** Owner and members read; only the owner changes anything. No signed
+  in turn, no change.
+- **The gate.** Nothing works, and no context block is read, unless
+  `MARKETING_DESK` covers the business (`desk_on_for`): every verb says "isn't
+  switched on yet". A replan asks for what the plan gives (`level_for`: suggest
+  writes one suggested post, week and autopilot a week, openings the
+  open-chairs week); asking for more names the server's own `upgrade` label
+  ("A whole week of posts planned for you comes with Professional" for a
+  Starter), never a plan written in the code. The route's limits stand: once
+  a day for a suggestion, a week planned again at most twice, never over an
+  approved or sent post or while its flyers are being made, the rate limit
+  and the spend ceiling.
+- **Stale.** Every change names the post's id and the revision Chief read. A
+  revision that moved on (the owner changed it on the desk meanwhile) is
+  refused before anything is written, and the desk refuses it again at write
+  time; Chief says the post changed and reads the desk again.
+- **Words.** A failed read is "couldn't read", never "nothing there".
+  "Sent" and "posted" are said only when a post's status from the server says
+  so (submitted, published); post now answers "approved, goes out at 3:42 PM".
+  Refusals are the desk's own plain words. A flyer's words are held to the
+  weekly flyers' checks (numbers and prices only from the business's own
+  facts, its own site only, no hashtag) and made by the planner's own
+  `make_flyer` (the free composer, cost 0).
+- **In a turn.** On a marketing-shaped turn (the growth doctrine's triggers,
+  Grow → Marketing on screen, or words like post, flyer, Instagram, desk) a
+  compact read of the desk rides the prompt's per-message tail beside the
+  doctrine, never a cached segment: the level, sending, Chief's read, up to
+  six posts with post_id and revision, what needs a look, and the rules line.
+  About 240 tokens with one post, about 500 at its six-post cap; read with a
+  6-second limit, and a failed read says so. The verbs' catalog is static
+  text beside post_image's in the per-business cached segment (about 800
+  tokens, byte-stable), and the read tool's definition about 170.
+- **The desk's own words** now name a run for what it wrote (note, masthead,
+  Needs a look, Today): a suggestion is "a suggested post" ("Chief is writing a
+  suggested post.", "Next week's suggested post is drafted.", "Chief suggested
+  a post for next week. It waits for your OK", "The suggested post for the
+  week of October 12 could not be written"), the open-chairs week
+  "open-chair posts", and a week "next week's posts" while it is written. A
+  week and a run without a kind read exactly as before. `chief_digest`'s plan
+  carries its `kind`.
+
+No migration (`source='chief'` came with B3). Tests:
+`__tests__/test_chief_marketing_desk.py`.

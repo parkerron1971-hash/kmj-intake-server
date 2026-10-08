@@ -164,7 +164,12 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # list_projects, which already shows client names; no message bodies.
     # Creating, completing and deleting tasks are writes and stay off.
     # Booking rehearsal is a read-only preview with no new booking authority.
-    assert len(tools) == 37, (
+    # 38 (10/8, marketing suite B10): marketing_desk reads the business's own
+    # marketing desk: post words, times, statuses, account handles, what
+    # waits for the owner's OK, and on request link click/visit/lead counts.
+    # campaign_status's class; no customer data. Every desk write is the
+    # owner's on a chat turn and stays off; there is no approve verb.
+    assert len(tools) == 38, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -589,6 +594,10 @@ SILENT_TOOLS = {
     # working on Thursday"); giving and stopping are writes off this
     # surface, so the result carries the progress and no verb.
     "assignment_status",
+    # marketing_desk (10/8, B10): what waits on the desk is approved on the
+    # desk, which no verb on this surface can do (there is no approve verb
+    # anywhere), so the result names the place in words instead.
+    "marketing_desk",
     "responsibility_status",  # status only: never offer a generic retry of mixed work
 }
 
