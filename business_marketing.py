@@ -79,7 +79,7 @@ from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 import business_marketing_desk as reading
@@ -1291,6 +1291,23 @@ async def save_settings(business_id: UUID, req: Settings, user: AuthedUser = Dep
     if not saved:
         raise HTTPException(503, STORE_DOWN)
     return {'desk': public_desk(saved[0])}
+
+
+# ── the calendar ──────────────────────────────────────────────────────
+
+@router.get('/calendar')
+async def calendar_route(business_id: UUID, month: str = Query(..., max_length=7),
+                         biz: dict = Depends(business_access('viewer'))):
+    """One month of everything that goes out, on the business's clock: desk
+    posts and Outreach emails and texts (business_marketing_calendar). A
+    source that cannot be read is named, never an empty month."""
+    import business_marketing_calendar as calendar
+    bid = str(business_id)
+    tz = await asyncio.to_thread(business_tz, biz)
+    try:
+        return await calendar.month(bid, month, tz=tz, now=now())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 # ── results ───────────────────────────────────────────────────────────

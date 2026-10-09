@@ -500,6 +500,22 @@ link a post carries. First user: Grow → Outreach (`campaigns_router`).
   None and named, never 0.
 - **Migration.** `supabase/APPLY-2026-10-09-marketing-links.sql` (applied
   live before this deployed).
+### One calendar of everything that goes out (2026-10-09)
+
+`business_marketing_calendar.py`, the Reach plan's step 1 ("one calendar").
+`GET /marketing/{business_id}/calendar?month=YYYY-MM` (viewer; Mission
+Control's desk: `GET /platform/marketing/suite/calendar`) answers one month
+on the business's own clock (`business_tz`, as `/engine`): its desk posts
+(`marketing_posts`, not cancelled; each the desk's `public_post`) and its
+Outreach emails and texts (`campaigns` running, paused or completed with a
+start day; a touch goes out on the start day plus its offset, the sweep's
+own rule). A touch is `planned`, `sending` (due, still going out: quiet
+hours, a held link, the per-tick cap), `sent` (finished) or `paused`, with
+how many people it went to (`campaign_sends`). A draft campaign has no day
+and is not shown. `sources.posts` / `sources.campaigns` are `loaded`,
+`partial` (at a row limit) or `unavailable`: a failed read is named and its
+items left out, never an empty month. Nothing here writes. The app's
+Calendar → Month reads it.
 
 ### The weekly suggestion and the fan-out (B8)
 
