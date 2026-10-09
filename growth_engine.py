@@ -342,11 +342,19 @@ def _days_since(iso_str: Optional[str]) -> Optional[int]:
 
 async def _existing_draft(client: httpx.AsyncClient, biz_id: str, contact_id: str,
                           agent: str, action_type: str, cutoff_iso: str) -> Optional[Dict]:
-    """Return the most recent matching draft/approved row within the window, or None."""
+    """Return the most recent matching row still waiting in Approvals (any
+    age), or approved within the window, or None.
+
+    A waiting draft of any age counts: one a week old fell outside the
+    window and the client got a second identical draft (2026-10-08). The
+    cutoff goes in the Z form: '+00:00' reads as a space in a PostgREST
+    query string, and every one of these checks came back 400 and found
+    nothing."""
+    cutoff = cutoff_iso.replace("+00:00", "Z")
     rows = await _sb(client, "GET",
         f"/agent_queue?business_id=eq.{biz_id}&contact_id=eq.{contact_id}"
         f"&agent=eq.{agent}&action_type=eq.{action_type}"
-        f"&status=in.(draft,approved)&created_at=gte.{cutoff_iso}"
+        f"&or=(status.eq.draft,and(status.eq.approved,created_at.gte.{cutoff}))"
         f"&order=created_at.desc&limit=1&select=id,created_at"
     )
     return rows[0] if rows else None
