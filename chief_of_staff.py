@@ -2219,30 +2219,61 @@ _LIST_LIMITS = {"queue": 10, "sessions": 10, "projects": 50,
                 "open_invoices": _INVOICE_SAMPLE_LIMIT, "products": 50, "offerings": 60}
 
 
-def _queue_count_path(biz_id: str, welcome: bool = False) -> str:
-    """The exact-count path for the drafts waiting in Approvals, or (welcome)
-    for the onboarding welcome note among them. Values go in unquoted and
-    percent-encoded: PostgREST keeps the quotes of a plain eq."""
+# How many drafts the by-kind read takes; past it the kinds go unsaid.
+_QUEUE_KINDS_LIMIT = 500
+
+
+def _waiting_drafts_filter(biz_id: str) -> str:
+    """Every draft waiting in Approvals except the onboarding welcome note
+    (onboarding_welcome.is_welcome: agent system AND that exact reasoning).
+    Percent-encoded, unquoted: PostgREST keeps the quotes of a plain eq."""
     import onboarding_welcome
     from urllib.parse import quote
-    path = f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id"
-    if welcome:
-        path += (f"&agent=eq.{quote(onboarding_welcome.AGENT, safe='')}"
-                 f"&ai_reasoning=eq.{quote(onboarding_welcome.REASONING, safe='')}")
-    return path
+    return (f"business_id=eq.{biz_id}&status=eq.draft"
+            f"&or=(agent.is.null,agent.neq.{quote(onboarding_welcome.AGENT, safe='')},"
+            f"ai_reasoning.is.null,ai_reasoning.neq.{quote(onboarding_welcome.REASONING, safe='')})")
 
 
-def _queue_total(page, kept, drafts, welcome) -> Optional[int]:
+def _queue_count_path(biz_id: str) -> str:
+    """The exact count of the drafts waiting, welcome note aside."""
+    return f"/agent_queue?{_waiting_drafts_filter(biz_id)}&select=id"
+
+
+def _queue_kinds_path(biz_id: str) -> str:
+    """The same drafts, two short fields each, to say what kind they are."""
+    return (f"/agent_queue?{_waiting_drafts_filter(biz_id)}"
+            f"&select=agent,action_type&limit={_QUEUE_KINDS_LIMIT}")
+
+
+def _queue_total(page, kept, drafts) -> Optional[int]:
     """How many drafts wait for review, the welcome note aside. A page that
     came back under the read's limit is every draft; a full page needs the
-    exact counts, and without them the total is unknown (None). Never fewer
+    exact count, and without it the total is unknown (None). Never fewer
     than the rows shown: a draft approved between the reads must not leave
     a heading that says 8 over a list of 10."""
     if page is not None and len(page) < _LIST_LIMITS["queue"]:
         return len(kept or [])
-    if isinstance(drafts, int) and isinstance(welcome, int) and drafts >= welcome:
-        return max(drafts - welcome, len(kept or []))
+    if isinstance(drafts, int):
+        return max(drafts, len(kept or []))
     return None
+
+
+def _queue_kinds(rows, total) -> Optional[List[List[Any]]]:
+    """[["nurture/check_in", 40], ...], most first, when the by-kind read
+    holds exactly the drafts the total counts. Told "40 drafts" over ten
+    check-in rows, the answer check would not let "40 check-in drafts"
+    through: what the other 30 were was nowhere (2026-10-09). A read that
+    failed, hit its limit or disagrees with the total says nothing."""
+    if not isinstance(rows, list) or not isinstance(total, int) or len(rows) != total \
+            or len(rows) >= _QUEUE_KINDS_LIMIT:
+        return None
+    counts: Dict[str, int] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            return None
+        kind = f"{r.get('agent') or '?'}/{r.get('action_type') or '?'}"
+        counts[kind] = counts.get(kind, 0) + 1
+    return [[k, n] for k, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def _invoice_today():
@@ -2546,16 +2577,15 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # Every door the site can open, live or not, and what each needs
         # (site_doors, 2026-10-04): Chief connects them to the site.
         _soft(asyncio.to_thread(_lazy_sync, "site_doors", "site_doors", biz_id), []),
-        # Every draft waiting in Approvals, and how many of them are the
-        # welcome note (never counted as work). The queue read stops at 10
-        # rows: a salon with 40 check-ins waiting was told "the 10 check-in
-        # drafts", the answer check rightly found no 10 in any record, and
-        # three "what's next?" answers in a row ended in "No action ran ...
-        # try again?" (2026-10-08). None is a failed count.
+        # Every draft waiting in Approvals (welcome note aside), and what
+        # kind each is. The queue read stops at 10 rows: a salon with 40
+        # check-ins waiting was told "the 10 check-in drafts", the answer
+        # check rightly found no 10 in any record, and three "what's next?"
+        # answers in a row ended in "No action ran ... try again?"
+        # (2026-10-08). None is a failed read.
         sb_clients.sb_count_as_current_context(client, _queue_count_path(biz_id),
                                                allow_service_fallback=True),
-        sb_clients.sb_count_as_current_context(client, _queue_count_path(biz_id, welcome=True),
-                                               allow_service_fallback=True),
+        _sb(client, "GET", _queue_kinds_path(biz_id)),
     )]
 
     # Start each dependent read as soon as its own scoped prerequisite is
@@ -2620,8 +2650,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     (foundation_block, business_profile_block, _mat_block, _growth_block,
      business_profile_raw, brand_block, playbook_block, _semantic_hits,
      blueprint_block, exact_contact_total, site_door_rows,
-     drafts_waiting, welcome_waiting) = early_values
-    queue_total = _queue_total(queue_read, queue, drafts_waiting, welcome_waiting)
+     drafts_waiting, drafts_by_kind) = early_values
+    queue_total = _queue_total(queue_read, queue, drafts_waiting)
 
     contacts_available = contacts is not None
     # A server-side row cap can be lower than our requested limit. Even a
@@ -2695,6 +2725,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # Every draft waiting for review, welcome note aside; None when
         # neither the page nor the count can say (see queue_count_heading).
         "queue_total": queue_total,
+        # What those drafts are, most first ([["nurture/check_in", 40]]);
+        # None unless the by-kind read is every draft the total counts.
+        "queue_kinds": _queue_kinds(drafts_by_kind, queue_total),
         "events": events or [],
         "sessions": sessions or [],
         # <list>_complete: the read succeeded (None is a failed read) and
@@ -3681,15 +3714,19 @@ def _empty_list_line(ctx: Dict[str, Any], name: str) -> str:
 def queue_count_heading(ctx: Dict[str, Any]) -> Optional[str]:
     """The Approvals heading when it can state the whole count, in the
     prompt and over the answer check's record of the queue: the same words,
-    so "40 drafts are waiting" quotes its evidence. None when the count is
-    unknown. The sample's own size is never in it: "the 10 below" would
-    hand the check the very figure that was wrong."""
+    so "40 drafts are waiting" quotes its evidence, and what kind they are
+    when that is known ("40 nurture/check_in"), so "40 check-in drafts"
+    does too. None when the count is unknown. The sample's own size is
+    never in it: "the 10 below" would hand the check the very figure that
+    was wrong."""
     n = len(ctx.get('queue') or [])
     total = ctx.get('queue_total')
     if ctx.get('queue_complete') or total == n:
         return f"QUEUE ({n} draft{'' if n == 1 else 's'} waiting for review; this list is complete)"
     if isinstance(total, int) and total > n:
-        return (f"QUEUE ({total} drafts waiting for review in all; "
+        kinds = ctx.get('queue_kinds') or []
+        by_kind = ": " + ", ".join(f"{count} {kind}" for kind, count in kinds) if kinds else ""
+        return (f"QUEUE ({total} drafts waiting for review in all{by_kind}; "
                 f"the rows below are only the first few, not all of them)")
     return None
 
