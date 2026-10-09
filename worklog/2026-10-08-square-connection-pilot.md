@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Codex (GPT-6)
 asked: "ok great. let's keep going"
 status: in progress
-prs: []
+prs: [kmj-intake-server#1356]
 migrations: ["supabase/APPLY-2026-10-08-square-connections.sql (pending)"]
 left_undone: ["merge and manual migration", "backend Square secrets and pilot owner configuration", "live sandbox OAuth acceptance", "frontend connection and location selection", "booking preview/import, webhooks and calendar safeguards", "scheduled refresh and revocation retry"]
 decisions: ["existing Square sellers connect their own accounts through OAuth", "read-only scopes; no payment access or booking writes", "pilot disabled by default", "encrypted tokens and service-only state; one merchant per business/environment"]
