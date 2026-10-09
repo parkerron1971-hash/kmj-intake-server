@@ -153,11 +153,14 @@ def money(cents: int) -> str:
     return f"${dollars:,}" + (f".{rest:02d}" if rest else "")
 
 
-async def _measure_posts(bid: str, ids: List[str],
-                         since: datetime) -> Tuple[Dict[str, Dict[str, Optional[int]]], Dict[str, str]]:
+async def _measure_posts(bid: str, ids: List[str], since: datetime, *,
+                         clicks_from: str = "posts") -> Tuple[Dict[str, Dict[str, Optional[int]]], Dict[str, str]]:
     """Clicks, visits, leads, bookings and what was paid for them per post
     (ids: validated post ids) since `since`, and each source's state. A
-    source that cannot be read is None for every post, never 0."""
+    source that cannot be read is None for every post, never 0.
+    clicks_from "links": the ids are tracked links on texts and emails
+    (business_marketing_sent_links; their clicks are marketing_link_hits),
+    joined to visits, leads and bookings by the same utm_content."""
     per: Dict[str, Dict[str, Optional[int]]] = {pid: {m: 0 for m in MEASURES} for pid in ids}
     sources = {m: "loaded" for m in MEASURES}
     if not ids:
@@ -181,6 +184,8 @@ async def _measure_posts(bid: str, ids: List[str],
     ((clicks, sources["clicks"]), (events, sources["visits"]), (leads, sources["leads"]),
      (bookings, sources["bookings"])) = await asyncio.gather(
         _measure(lambda: _batched(_store, lambda s: (
+            f"/marketing_link_hits?business_id=eq.{bid}&link_id=in.({s})&day=gte.{day}"
+            "&select=post_id:link_id,clicks" if clicks_from == "links" else
             f"/marketing_link_clicks?business_id=eq.{bid}&post_id=in.({s})&day=gte.{day}"
             "&select=post_id,clicks"), ids, LIMITS["clicks"])),
         _measure(lambda: _batched(_service, lambda s: (
@@ -228,6 +233,17 @@ def _cents(value: Any) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+async def for_links(business_id: Any, link_ids: List[str], since: datetime) -> Dict[str, Any]:
+    """What came through these tracked links (a campaign's touches) since
+    `since`: {totals, sources, per_link}. Each measure as for posts; unread
+    is None and named, never 0."""
+    bid = str(UUID(str(business_id)))
+    ids = [str(UUID(str(i))) for i in link_ids]
+    per, sources = await _measure_posts(bid, ids, since, clicks_from="links")
+    totals = {m: (sum(p[m] for p in per.values()) if sources[m] != "unavailable" else None) for m in MEASURES}
+    return {"totals": totals, "sources": sources, "per_link": per}
 
 
 # ── what did well, by play (the weekly plan, B9) ──────────────────────

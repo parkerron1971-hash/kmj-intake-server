@@ -423,7 +423,9 @@ async def get_campaign(campaign_id: str, user: AuthedUser = Depends(require_user
     camp = _load_campaign(campaign_id)
     biz = _load_business(camp["business_id"])
     _require_owner(user, biz)
-    return {"ok": True, "campaign": camp, "results": _campaign_results(camp)}
+    results = _campaign_results(camp)
+    results["links"] = await _link_results(camp)
+    return {"ok": True, "campaign": camp, "results": results}
 
 
 @router.post("/{campaign_id}/audience-preview")
@@ -523,6 +525,24 @@ def _campaign_results(camp: Dict[str, Any]) -> Dict[str, Any]:
             "replies_since_launch": replies,
             "bookings_since_launch": bookings,
             "sends_by_touch": by_touch}
+
+
+async def _link_results(camp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What came through the touches' own links since launch: taps, visits,
+    leads, bookings and what was paid for them, in total and by touch. None
+    when no touch says {{link}} (or nothing has launched); a measure that
+    cannot be read is None and named, never 0."""
+    touches = _clean_touches(camp.get("touches"))
+    parts = [i for i, t in enumerate(touches) if sent_links.wants_link(t.get("body"))]
+    start = camp.get("start_at")
+    if not parts or not start:
+        return None
+    import business_marketing_outcomes as outcomes
+    ids = {i: sent_links.link_id("campaign", camp["id"], i) for i in parts}
+    since = datetime.fromisoformat(str(start).replace("Z", "+00:00"))
+    measured = await outcomes.for_links(camp["business_id"], list(ids.values()), since)
+    return {"totals": measured["totals"], "sources": measured["sources"],
+            "by_touch": {str(i): measured["per_link"].get(lid) for i, lid in ids.items()}}
 
 
 # ─── The sweep (scheduler leader, minute cadence) ────────────────────

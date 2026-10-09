@@ -208,3 +208,58 @@ def test_launch_refuses_link_with_nowhere_to_go(monkeypatch):
 def test_chief_is_told_how_to_place_the_link():
     src = (pathlib.Path(cr.__file__)).read_text(encoding="utf-8")
     assert re.search(r"write \{\{link\}\} once", src) and "Never write any other web address" in src
+
+
+# ── what came through the touches' links ─────────────────────────────
+
+def test_link_results_read_the_link_hits_and_the_same_joins_as_posts(monkeypatch):
+    import business_marketing_outcomes as outcomes
+    import platform_suite
+    lid = sl.link_id("campaign", CAMP, 1)
+    store_reads, service_reads = [], []
+
+    async def rows(path):
+        store_reads.append(path)
+        assert path.startswith("/marketing_link_hits") and f"link_id=in.({lid})" in path and "select=post_id:link_id,clicks" in path
+        return [{"post_id": lid, "clicks": 7}]
+
+    def get(path):
+        service_reads.append(path)
+        if path.startswith("/site_events"):
+            return [{"session_id": f"s{i}", "data": {"utm_content": lid}} for i in range(5)]
+        if path.startswith("/contacts"):
+            return []
+        if path.startswith("/module_entries"):
+            return [{"id": "b1", "paid_at": "2026-10-09T12:00:00Z", "post": lid, "charged": "4500"},
+                    {"id": "b2", "paid_at": None, "post": lid, "charged": None}]
+        raise AssertionError(path)
+
+    async def not_platform(bid):
+        return False
+
+    monkeypatch.setattr(store, "rows", rows)
+    monkeypatch.setattr(outcomes.sb_clients, "sb_get_as_service", get)
+    monkeypatch.setattr(platform_suite, "is_platform_async", not_platform)
+    out = run(outcomes.for_links(BIZ, [lid], datetime(2026, 10, 1, tzinfo=timezone.utc)))
+    assert out["totals"] == {"clicks": 7, "visits": 5, "leads": 0, "bookings": 2, "paid_cents": 4500}
+    assert out["sources"]["clicks"] == "loaded" and out["per_link"][lid]["bookings"] == 2
+    assert all(f"business_id=eq.{BIZ}" in p for p in store_reads + service_reads)
+
+
+def test_a_campaign_shows_its_link_results_by_touch_only_when_a_touch_has_one(monkeypatch):
+    import business_marketing_outcomes as outcomes
+    asked = []
+
+    async def for_links(bid, ids, since):
+        asked.append((bid, ids, since))
+        return {"totals": {"clicks": 3}, "sources": {"clicks": "loaded"}, "per_link": {ids[0]: {"clicks": 3}}}
+
+    monkeypatch.setattr(outcomes, "for_links", for_links)
+    camp = {"id": CAMP, "business_id": BIZ, "start_at": "2026-10-05T15:00:00+00:00",
+            "touches": [{"channel": "email", "offset_days": 0, "subject": "Hi", "body": "No link."},
+                        {"channel": "sms", "offset_days": 2, "body": "Book: {{link}} Reply STOP to opt out."}]}
+    out = run(cr._link_results(camp))
+    assert asked == [(BIZ, [sl.link_id("campaign", CAMP, 1)], datetime(2026, 10, 5, 15, tzinfo=timezone.utc))]
+    assert out == {"totals": {"clicks": 3}, "sources": {"clicks": "loaded"}, "by_touch": {"1": {"clicks": 3}}}
+    assert run(cr._link_results({**camp, "touches": camp["touches"][:1]})) is None
+    assert run(cr._link_results({**camp, "start_at": None})) is None
