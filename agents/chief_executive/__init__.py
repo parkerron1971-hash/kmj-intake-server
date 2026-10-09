@@ -24,7 +24,8 @@ Modules:
   router            — FastAPI router (mounts /chief/message)
 
 Decisions (from planning doc + unattended choices flagged in commit):
-  - Sonnet model claude-sonnet-4-5-20250929 (matches existing agents)
+  - Classifier model: Haiku 5.5 since 2026-10-08 (was Sonnet 4.5, which
+    retires 2026-11-30); INTENT_CLASSIFIER_MODEL overrides
   - temperature=0.2, JSON-only output
   - Confidence threshold 0.6: below → ambiguous + clarification
   - dry_run mode (default False) lets test cases verify dispatch

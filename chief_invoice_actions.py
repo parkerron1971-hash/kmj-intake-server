@@ -1,18 +1,60 @@
-"""Explicit, tenant-scoped invoice lifecycle actions. No payment or GL deletion."""
+"""Explicit, tenant-scoped invoice lifecycle actions. No payment or GL deletion.
+
+Chief's void_invoice and the invoice drawer's Void button (POST
+/invoices/{id}/void) run the same _change, so neither can skip the
+pay-link cleanup."""
+import asyncio
+import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import UUID
-from fastapi import HTTPException
 
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+import sb_clients
+from auth_supabase import UserSession
+from invoice_payment_links import UnverifiedLink
 from sb_clients import sb_as_current_context
 
 
-def _fail(verb, message):
-    return {"type": verb, "result": message, "label": message, "failed": True, "nav": None}
+
+def _fail(verb, message, code=None):
+    out = {"type": verb, "result": message, "label": message, "failed": True, "nav": None}
+    if code:
+        out["code"] = code
+    return out
+
+
+# The owner's own words that the link is off, or to void it anyway. Only
+# about the link: a bare "yes", "ok" or "void it" is a request to void, not
+# a statement that the link is off. No per-process memory of the refusal:
+# the web tier runs several replicas, and the owner's answer lands on
+# whichever one (2026-10-08, refused twice).
+_OWNER_YES = re.compile(
+    r"\b(anyway|(turned|switched|shut) (it |the link )?off|(it'?s|it is|link is|is|already) off|"
+    r"disabled|deactivated)\b", re.I)
+
+
+def owner_confirms_link_off(action, *, prompted, user_id, biz, owner_text):
+    """Chief's side of the owner's word: the model's link_off_confirmed counts
+    only on a turn the owner typed, and only when their own words say so.
+    Set by the dispatcher, never read from the payload (the _owner_text rule)."""
+    said = str(action.get('link_off_confirmed')).strip().lower() in ('true', 'yes', '1')
+    return bool(said and prompted and owner_text and str(user_id) == str(biz.get('owner_id'))
+                and _OWNER_YES.search(str(owner_text)))
 
 
 def _literal(value):
-    return quote('"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"', safe='')
+    """One value for a plain `col=eq.<value>` filter: percent-encoded, NOT
+    wrapped in double quotes. PostgREST unquotes only inside in.() lists and
+    or=() trees; on a plain eq the quotes are part of the value, so
+    status=eq."sent" looks for the text "sent" with its quotes and matches
+    nothing. Every void, delete, archive and restore failed that way, as
+    'the invoice changed while I was updating it' (2026-10-08)."""
+    return quote(str(value), safe='')
 
 
 async def _invoice(client, biz, action):
@@ -46,9 +88,11 @@ async def _change(client, biz, action, verb):
                 return _fail(verb, 'This is a Stripe-hosted invoice. Void it in Stripe first; I cannot cancel it by changing the local record alone.')
         if verb == 'void_invoice' and status not in ('draft', 'sent', 'viewed', 'overdue', 'cancelled'):
             return _fail(verb, 'This invoice is not in a state that can be voided.')
+        link = None
         if verb in ('delete_invoice', 'void_invoice'):
             from invoice_payment_links import disable_invoice_payment_link
-            await disable_invoice_payment_link(client, biz, inv)
+            link = await disable_invoice_payment_link(
+                client, biz, inv, link_off_confirmed=action.get('_owner_confirms_link_off') is True)
         patch = {}
         if verb == 'void_invoice':
             patch = {'status': 'cancelled', 'stripe_payment_url': None}
@@ -67,15 +111,29 @@ async def _change(client, biz, action, verb):
             path += '&sent_at=is.null'
         changed = await sb_as_current_context(client, 'DELETE' if verb == 'delete_invoice' else 'PATCH', path, patch or None)
         if not changed:
-            return _fail(verb, 'The invoice changed while I was updating it. Review its current state and try again. Any invoice-specific payment link may already be disabled.')
+            # The link is switched off before this write, so a lost race leaves
+            # an open invoice with a dead pay link. Say that plainly.
+            if link == 'disabled':
+                return _fail(verb, f'Invoice {number} changed while I was updating it, so it is still open, but its pay link is now switched off. Review it and try again.')
+            return _fail(verb, 'The invoice changed while I was updating it. Review its current state and try again.')
         word = {'delete_invoice': 'deleted', 'void_invoice': 'voided', 'archive_invoice': 'archived', 'restore_invoice': 'restored'}[verb]
-        return {'type': verb, 'result': f'Invoice {number} {word}.', 'label': f'Invoice {number} {word}',
+        result = f'Invoice {number} {word}.'
+        if verb == 'void_invoice' and link == 'shared':
+            result += ' Your business pay link stays on for your other invoices; it is no longer on this one.'
+        elif verb == 'void_invoice' and link == 'confirmed_off':
+            result += ' You said its old pay link is off in Stripe; it is no longer on the invoice either.'
+        return {'type': verb, 'result': result, 'label': f'Invoice {number} {word}',
                 'invoice_id': inv['id'], 'invoice_number': number, 'nav': {'tab': 'operate', 'sub': 'invoices'}}
+    except UnverifiedLink as exc:
+        return _fail(verb, str(exc), code='link_unverified')
     except ValueError as exc:
         return _fail(verb, str(exc))
     except HTTPException as exc:
         return _fail(verb, str(exc.detail))
-    except Exception:
+    except Exception as exc:
+        # print, not logger: only stdout reaches the Railway logs here.
+        print(f"[invoice] {verb} failed: {type(exc).__name__} "
+              f"{getattr(getattr(exc, 'response', None), 'status_code', '')}", flush=True)
         note = ' Its payment link may already be disabled; check its current state before retrying.' if verb in ('delete_invoice', 'void_invoice') else ' Please try again after invoice storage is available.'
         return _fail(verb, 'The invoice change could not be completed.' + note)
 
@@ -94,3 +152,54 @@ async def handle_archive_invoice(client, biz, action):
 
 async def handle_restore_invoice(client, biz, action):
     return await _change(client, biz, action, 'restore_invoice')
+
+
+router = APIRouter(prefix='/invoices', tags=['invoices'])
+
+
+class VoidBody(BaseModel):
+    # The owner says the pay link we couldn't verify is already off in Stripe.
+    # Owner only (checked here). That it follows a link_unverified refusal and
+    # a second yes is the drawer's promise, not checked here: no replica
+    # remembers the refusal, and the owner may say it up front.
+    link_off_confirmed: bool = False
+
+
+@router.post('/{invoice_id}/void')
+async def void_invoice(invoice_id: str, body: VoidBody | None = None,
+                       session: UserSession = Depends(sb_clients.authed_request)):
+    """The invoice drawer's Void button. Same checks, pay-link cleanup and
+    conditional write as Chief's void_invoice, run as the signed-in person
+    so RLS still applies. Member+ — the rank that can write invoices."""
+    try:
+        invoice_id = str(UUID(invoice_id))
+    except ValueError:
+        raise HTTPException(404, 'Invoice not found.')
+    rows = await asyncio.to_thread(
+        sb_clients.sb_get_as_service, f'/invoices?id=eq.{invoice_id}&select=business_id&limit=1') or []
+    if not rows:
+        raise HTTPException(404, 'Invoice not found.')
+    business_id = str(rows[0]['business_id'])
+    from business_users_router import require_role
+    role = await asyncio.to_thread(require_role, business_id, str(session.user.id), 'member')
+    override = bool(body and body.link_off_confirmed)
+    if override and role != 'owner':
+        return JSONResponse(status_code=409, content={
+            'detail': "Only the business owner can void an invoice whose pay link I couldn't confirm.",
+            'code': 'owner_only'})
+    biz = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
+        f'/businesses?id=eq.{business_id}&select=id,stripe_account_id,settings&limit=1') or []
+    if not biz:
+        raise HTTPException(404, 'Invoice not found.')
+    async with httpx.AsyncClient(timeout=30) as client:
+        out = await _change(client, biz[0], {'invoice_id': invoice_id,
+                                             '_owner_confirms_link_off': override}, 'void_invoice')
+    if out.get('failed'):
+        # Printed, because a refusal nobody saw is otherwise invisible (and
+        # logger output never reaches the Railway logs).
+        print(f"[invoice] void refused: invoice={invoice_id} code={out.get('code')} "
+              f"override={override} reason={out['result']}", flush=True)
+        return JSONResponse(status_code=409, content={'detail': out['result'], 'code': out.get('code')})
+    return {'ok': True, 'result': out['result'], 'invoice_id': out['invoice_id'],
+            'invoice_number': out['invoice_number']}
