@@ -804,6 +804,11 @@ class BookAnonBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     data: Dict[str, Any]  # field values for the appointment (date, service, etc.)
+    # The optional "texts about offers" box (2026-10-09, Kevin: "Build now,
+    # texts after"): consent to marketing texts from this business, apart
+    # from the reminders consent above. Recorded in sms_consents with
+    # source 'booking_marketing' (outreach_journeys reads it).
+    marketing_sms_consent: bool = False
     # Where the visit came from (2026-10-09): the campaign tags the hosted
     # booking page kept for the tab (utm_*, gclid, fbclid, ref). Read
     # through lead_attribution's whitelist; see booking_attribution.
@@ -991,6 +996,9 @@ async def book_anon(
     # platform can text them (and prove consent to carriers).
     if body.sms_consent:
         _record_booking_sms_consent(business_id, entry_data, body.name)
+    # The optional "texts about offers" box: marketing consent of its own.
+    if body.marketing_sms_consent:
+        _record_booking_sms_consent(business_id, entry_data, body.name, source="booking_marketing")
 
     # A2P alert #1 — booking-confirmation text (2026-07-07, campaign
     # approved). Fire-and-forget: sms_alerts owns the consent rule +
@@ -1017,6 +1025,7 @@ class BookBody(BaseModel):
     quoted_price: Optional[float] = None
     # SMS consent — same contract as BookAnonBody.
     sms_consent: bool = False
+    marketing_sms_consent: bool = False
     # Where the visit came from — same contract as BookAnonBody.
     attribution: Optional[Dict[str, Any]] = None
 
@@ -1087,6 +1096,9 @@ async def book(
     if body.sms_consent:
         _record_booking_sms_consent(
             business_id, entry_data, ctx.customer_row.get("name") or "")
+    if body.marketing_sms_consent:
+        _record_booking_sms_consent(
+            business_id, entry_data, ctx.customer_row.get("name") or "", source="booking_marketing")
 
     # A2P alert #1 — booking-confirmation text, same contract as the
     # walk-in path. `biz` is the pre-insert load, no longer scoped to
@@ -1134,7 +1146,7 @@ async def request_fresh_link(body: FreshLinkBody, request: Request) -> Dict[str,
 
 
 def _record_booking_sms_consent(business_id: str, entry_data: Dict[str, Any],
-                                name: str) -> None:
+                                name: str, source: str = "booking") -> None:
     """SMS consent audit row for a booking-form opt-in (2026-07-04).
     Best-effort — never blocks or fails a booking. The phone comes from
     whatever phone-ish field the module schema collected."""
@@ -1149,7 +1161,7 @@ def _record_booking_sms_consent(business_id: str, entry_data: Dict[str, Any],
         sb_clients.sb_post_as_service("/sms_consents", {
             "phone": phone,
             "name": (name or "").strip()[:120] or None,
-            "source": "booking",
+            "source": source,
             "business_id": business_id,
         })
         logger.info(f"[consent] booking SMS consent recorded {phone} biz={business_id[:8]}")

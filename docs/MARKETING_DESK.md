@@ -517,6 +517,47 @@ and is not shown. `sources.posts` / `sources.campaigns` are `loaded`,
 items left out, never an empty month. Nothing here writes. The app's
 Calendar → Month reads it.
 
+### Outreach that runs by itself (2026-10-09, step 2)
+
+`outreach_journeys.py` + `journeys_router.py` (`GET /journeys/{business_id}`
+viewer, `PUT /journeys/{business_id}/{kind}` owner); the app's Grow →
+Outreach → Automatic. Kevin, 2026-10-08: the review ask on every plan,
+win-back / rebook / birthday from the Week level up; 2026-10-09: "Build
+now, texts after".
+
+- **The journeys.** `review_ask` (hours after a visit, the review link
+  `settings.get_found.review_url`; once per visit, at most once per person
+  in 120 days), `win_back` (last visit `days` ago, default 60, nothing
+  booked; a 14-day window), `rebook` (default 35 days, a 7-day window),
+  `birthday` (`contacts.birthdate` on the business's clock; Feb 29 on Mar 1
+  in a common year). Visits are `sessions` (scheduled or completed; online
+  bookings mirror there).
+- **The owner's OK.** Nothing runs until switched on in
+  `settings.journeys.<kind>`, next to its exact words (email subject, email,
+  text), which the owner can change or reset. Week-only journeys can't be
+  switched on below the Week level (409); the review ask needs its link
+  (409).
+- **How a note goes.** By email (`send_via_resend`: suppression, one-click
+  unsubscribe, never to a contact who opted out). By text only when
+  `JOURNEY_TEXTS=on` (off until the 10DLC registration covers marketing)
+  AND the person ticked the booking widget's optional "texts about offers"
+  box (`sms_consents` source `booking_marketing`, recorded by both booking
+  doors; it is NOT reminder consent: `sms_alerts._positive_consent` skips
+  it) AND has not opted out. Only 9 AM to 8 PM on the business's clock; at
+  most 40 notes per business per day; never while
+  `settings.automations_paused`. Kill switch `JOURNEYS=off`.
+- **Exactly once.** `journey_sends` (UNIQUE business, journey, key) is
+  claimed before a note is sent. A journey whose `{{link}}` can't be made
+  waits for a later sweep (nothing claimed).
+- **Links and results.** `{{link}}` is the journey's tracked link
+  (`business_marketing_sent_links.journey_link`, `marketing_links` kind
+  `journey`, part 0 email / 1 text; tags `utm_medium=journey`,
+  `utm_campaign=<journey>`). The overview reports notes sent in 30 days by
+  channel and what came through each journey's link
+  (`outcomes.for_links`).
+- **Sweep.** `journeys_tick` every 30 minutes (`kmj_intake_automation`).
+- **Migration.** `supabase/APPLY-2026-10-09-journeys.sql`.
+
 ### The weekly suggestion and the fan-out (B8)
 
 `business_marketing_planner.py` (2026-10-07). A business at the `suggest`

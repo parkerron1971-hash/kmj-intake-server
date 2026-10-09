@@ -302,6 +302,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # their clicks before the links they count.
     "marketing_link_hits",
     "marketing_links",
+    # The notes Outreach journeys sent (APPLY-2026-10-09-journeys.sql).
+    "journey_sends",
     "marketing_posts",
     "marketing_runs",
     "marketing_desks",
@@ -687,6 +689,8 @@ _IMPORT_SKIP = {
     "marketing_runs", "marketing_posts", "marketing_link_clicks", "marketing_post_events",
     # The tracked links on texts and emails, and their clicks: history too.
     "marketing_links", "marketing_link_hits",
+    # The journeys' sent notes: history, never re-sent from a file.
+    "journey_sends",
     # The desk's settings are not restored either (review of #1307): an
     # uploaded file could switch the weekly plan on or name another
     # business's accounts and photos. The owner sets the desk up again; the

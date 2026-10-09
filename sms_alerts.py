@@ -131,11 +131,14 @@ def _paused(biz: Optional[Dict[str, Any]]) -> bool:
 async def _positive_consent(client: httpx.AsyncClient, business_id: str,
                             phone: str) -> bool:
     """The affirmative half of the rule: business-scoped consent OR
-    platform web-form consent OR a keyword binding to this business."""
+    platform web-form consent OR a keyword binding to this business. A
+    'booking_marketing' row (the optional "texts about offers" box,
+    2026-10-09) is consent to marketing texts only, so it is not counted
+    here: reminders keep their own consent."""
     rows = await _sb_get(
         client,
         f"/sms_consents?phone=eq.{_pq(phone)}"
-        f"&or=(business_id.eq.{business_id},source.eq.web_form)"
+        f"&or=(and(business_id.eq.{business_id},source.neq.booking_marketing),source.eq.web_form)"
         f"&select=id&limit=1",
     ) or []
     if rows:
