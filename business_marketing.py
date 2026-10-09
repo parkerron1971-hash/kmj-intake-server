@@ -26,8 +26,13 @@ business's name on public feeds; a member never approves, edits or posts.
 NOTHING SENDS HERE. This module saves drafts, records approvals and moves
 times. The sender (B5, `marketing_claim_due` every minute) is what hands an
 approved post to Post for Me, and it re-checks everything at send time. "Post
-now" therefore refuses until sending is switched on (MARKETING_DESK_PUBLISHING,
-B5's switch, default off): an approval that nothing would act on is not a post.
+now" therefore refuses while sending is switched off (MARKETING_DESK_PUBLISHING=
+off, B5's switch, on by default since 2026-10-08): an approval that nothing
+would act on is not a post.
+
+ON BY DEFAULT (2026-10-08). A business with no saved desk row has Chief's
+weekly plan on (DESK_DEFAULTS, plan_on); a row this module makes saves it on;
+an owner who turns it off (PUT /settings) stays off.
 
 THE LINK (B6, business_marketing_links). Every post of a business with a
 site carries its own short link, {origin}/go/{code}, in publish_text; the
@@ -126,8 +131,11 @@ def now() -> datetime:
 
 
 def publishing_on() -> bool:
-    """B5's switch: the desk's sender hands approved posts to Post for Me."""
-    return (os.environ.get('MARKETING_DESK_PUBLISHING') or 'off').strip().lower() == 'on'
+    """B5's switch: the desk's sender hands approved posts to Post for Me.
+    On unless MARKETING_DESK_PUBLISHING says off (marketing_switches, the one
+    reader; on by default since 2026-10-08)."""
+    import marketing_switches
+    return marketing_switches.publishing_on()
 
 
 # ── who ───────────────────────────────────────────────────────────────
@@ -557,10 +565,29 @@ async def next_open_slot(business_id: str, tz: ZoneInfo, post_hour: Any = 11,
 
 # ── the desk row ──────────────────────────────────────────────────────
 
-DESK_DEFAULTS = {'plan_enabled': False, 'paused': False, 'connection_ids': [], 'post_hour': 11,
+# plan_enabled: Chief's Thursday work (the weekly suggestion, the week or the
+# open chairs). On for a business with no saved desk row since 2026-10-08
+# (Kevin opened the suite to every business). The column's own default is
+# still false (no migration), so every row made here writes it explicitly.
+DESK_DEFAULTS = {'plan_enabled': True, 'paused': False, 'connection_ids': [], 'post_hour': 11,
                  'audience': None, 'landing_url': None, 'work_photo_ids': []}
 DESK_PUBLIC = ('plan_enabled', 'paused', 'connection_ids', 'post_hour', 'audience', 'landing_url',
                'work_photo_ids', 'updated_at')
+
+
+def plan_on(desk: Optional[Dict[str, Any]]) -> bool:
+    """Whether Chief's Thursday work is on for this desk: a saved row's own
+    plan_enabled (an owner who turned it off stays off); no saved row, the
+    default (on)."""
+    if not desk:
+        return bool(DESK_DEFAULTS['plan_enabled'])
+    return bool(desk.get('plan_enabled', DESK_DEFAULTS['plan_enabled']))
+
+
+def new_desk_row(business_id: str, **fields) -> Dict[str, Any]:
+    """The insert for a business's first desk row: the default weekly plan
+    written out (the column defaults to false), then whatever the caller set."""
+    return {'business_id': business_id, 'plan_enabled': DESK_DEFAULTS['plan_enabled'], **fields}
 
 
 def public_desk(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -579,7 +606,7 @@ async def ensure_desk(business_id: str) -> Dict[str, Any]:
     if desk is not None:
         return desk
     try:
-        made = await store.request('POST', '/marketing_desks', {'business_id': business_id})
+        made = await store.request('POST', '/marketing_desks', new_desk_row(business_id))
     except store.StoreConflict:
         made = None                     # another request made it first
     except store.StoreUnavailable:
@@ -1235,7 +1262,7 @@ async def save_settings(business_id: UUID, req: Settings, user: AuthedUser = Dep
     desk = await _call(store.get_desk(bid), down=READ_DOWN)
     if desk is None:
         try:
-            made = await store.request('POST', '/marketing_desks', {'business_id': bid, **patch})
+            made = await store.request('POST', '/marketing_desks', new_desk_row(bid, **patch))
             return {'desk': public_desk(made[0] if isinstance(made, list) and made else None)}
         except store.StoreConflict:
             pass                        # made a moment ago by another request: change it below
