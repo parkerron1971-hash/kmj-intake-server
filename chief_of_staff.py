@@ -2219,6 +2219,32 @@ _LIST_LIMITS = {"queue": 10, "sessions": 10, "projects": 50,
                 "open_invoices": _INVOICE_SAMPLE_LIMIT, "products": 50, "offerings": 60}
 
 
+def _queue_count_path(biz_id: str, welcome: bool = False) -> str:
+    """The exact-count path for the drafts waiting in Approvals, or (welcome)
+    for the onboarding welcome note among them. Values go in unquoted and
+    percent-encoded: PostgREST keeps the quotes of a plain eq."""
+    import onboarding_welcome
+    from urllib.parse import quote
+    path = f"/agent_queue?business_id=eq.{biz_id}&status=eq.draft&select=id"
+    if welcome:
+        path += (f"&agent=eq.{quote(onboarding_welcome.AGENT, safe='')}"
+                 f"&ai_reasoning=eq.{quote(onboarding_welcome.REASONING, safe='')}")
+    return path
+
+
+def _queue_total(page, kept, drafts, welcome) -> Optional[int]:
+    """How many drafts wait for review, the welcome note aside. A page that
+    came back under the read's limit is every draft; a full page needs the
+    exact counts, and without them the total is unknown (None). Never fewer
+    than the rows shown: a draft approved between the reads must not leave
+    a heading that says 8 over a list of 10."""
+    if page is not None and len(page) < _LIST_LIMITS["queue"]:
+        return len(kept or [])
+    if isinstance(drafts, int) and isinstance(welcome, int) and drafts >= welcome:
+        return max(drafts - welcome, len(kept or []))
+    return None
+
+
 def _invoice_today():
     return datetime.now(timezone.utc).date()
 
@@ -2520,6 +2546,16 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         # Every door the site can open, live or not, and what each needs
         # (site_doors, 2026-10-04): Chief connects them to the site.
         _soft(asyncio.to_thread(_lazy_sync, "site_doors", "site_doors", biz_id), []),
+        # Every draft waiting in Approvals, and how many of them are the
+        # welcome note (never counted as work). The queue read stops at 10
+        # rows: a salon with 40 check-ins waiting was told "the 10 check-in
+        # drafts", the answer check rightly found no 10 in any record, and
+        # three "what's next?" answers in a row ended in "No action ran ...
+        # try again?" (2026-10-08). None is a failed count.
+        sb_clients.sb_count_as_current_context(client, _queue_count_path(biz_id),
+                                               allow_service_fallback=True),
+        sb_clients.sb_count_as_current_context(client, _queue_count_path(biz_id, welcome=True),
+                                               allow_service_fallback=True),
     )]
 
     # Start each dependent read as soon as its own scoped prerequisite is
@@ -2583,7 +2619,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     practitioner_block, practitioner_profile_raw, voice_block = owner_values
     (foundation_block, business_profile_block, _mat_block, _growth_block,
      business_profile_raw, brand_block, playbook_block, _semantic_hits,
-     blueprint_block, exact_contact_total, site_door_rows) = early_values
+     blueprint_block, exact_contact_total, site_door_rows,
+     drafts_waiting, welcome_waiting) = early_values
+    queue_total = _queue_total(queue_read, queue, drafts_waiting, welcome_waiting)
 
     contacts_available = contacts is not None
     # A server-side row cap can be lower than our requested limit. Even a
@@ -2654,6 +2692,9 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "avg_health": avg_health,
         "at_risk": at_risk[:8],
         "queue": queue or [],
+        # Every draft waiting for review, welcome note aside; None when
+        # neither the page nor the count can say (see queue_count_heading).
+        "queue_total": queue_total,
         "events": events or [],
         "sessions": sessions or [],
         # <list>_complete: the read succeeded (None is a failed read) and
@@ -3637,6 +3678,29 @@ def _empty_list_line(ctx: Dict[str, Any], name: str) -> str:
     return f"  ({EMPTY_COMPLETE[name] if ctx.get(f'{name}_complete') else UNREAD_LIST})"
 
 
+def queue_count_heading(ctx: Dict[str, Any]) -> Optional[str]:
+    """The Approvals heading when it can state the whole count, in the
+    prompt and over the answer check's record of the queue: the same words,
+    so "40 drafts are waiting" quotes its evidence. None when the count is
+    unknown. The sample's own size is never in it: "the 10 below" would
+    hand the check the very figure that was wrong."""
+    n = len(ctx.get('queue') or [])
+    total = ctx.get('queue_total')
+    if ctx.get('queue_complete') or total == n:
+        return f"QUEUE ({n} draft{'' if n == 1 else 's'} waiting for review; this list is complete)"
+    if isinstance(total, int) and total > n:
+        return (f"QUEUE ({total} drafts waiting for review in all; "
+                f"the rows below are only the first few, not all of them)")
+    return None
+
+
+def queue_heading_line(ctx: Dict[str, Any]) -> str:
+    """The queue's heading in the prompt: the whole count when known
+    (queue_count_heading), else a sample that is never a total."""
+    return (queue_count_heading(ctx)
+            or f"QUEUE ({len(ctx.get('queue') or [])} loaded draft rows; sample, not a total)")
+
+
 def _quality_for_prompt(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """context_quality for the CACHED state segment: the retrieval DATE,
     not the microsecond timestamp, which changed the segment on every turn
@@ -4102,10 +4166,9 @@ def _format_context_parts(ctx: Dict[str, Any]):
     # A list read in full says so (complete_lists); a sample says it is one.
     # Projects and invoices show their first 25, so they are called
     # complete only when every row is on the page.
-    n_queue = len(ctx['queue'])
-    queue_heading = (
-        f"QUEUE ({n_queue} draft{'' if n_queue == 1 else 's'} waiting for review; this list is complete)"
-        if ctx.get('queue_complete') else f"QUEUE ({n_queue} loaded draft rows; sample, not a total)")
+    # The queue's heading carries the whole count even when the list is a
+    # sample (queue_heading_line).
+    queue_heading = queue_heading_line(ctx)
     projects_heading = (
         "PROJECTS (every project on file; this list is complete)"
         if ctx.get('projects_complete') and len(ctx.get('projects') or []) <= 25

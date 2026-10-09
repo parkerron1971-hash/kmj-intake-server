@@ -194,6 +194,17 @@ approved posts (`marketing_claim_due`) and re-checks everything at send time.
 - **This business's rows only.** Every post, picture, clip and account is
   read with the business id in the filter, so another business's id answers
   exactly like a missing one.
+- **Pictures or a clip.** A post carries one picture (`artwork_id`), up to
+  ten in order (`artwork_ids`, 2026-10-09: a carousel where the network
+  takes one; the first is the one people see; the same id twice counts
+  once), or one approved clip (`clip_id` + `clip_fingerprint`), never a
+  clip and pictures together. A network that shows fewer pictures in one
+  post gets the first ones at send time (`business_marketing_dispatch.
+  PICTURE_CAPS`: X 4, LinkedIn 9, Pinterest 1); the post and its record keep
+  every picture approved. `POST /slot/edit` takes the same fields. The
+  app's composer (Grow → Create → Post, and New post on the desk) sends
+  `clip_id` with the fingerprint it showed, so a clip changed since is
+  refused, never posted.
 - **Links.** `landing_url` must be https on the business's own host: its
   `mysolutionist.app` subdomain, or its custom domain once verified.
   `publish_text` is the caption with the post's short link (B6, below).
