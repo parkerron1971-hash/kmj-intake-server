@@ -1634,7 +1634,7 @@ async def startup():
     # The marketing desk for every business (marketing suite B5): send due
     # approved posts through Post for Me every minute; watch how each went
     # every 5 minutes and tell the owner once per problem. Both do nothing
-    # until MARKETING_DESK_PUBLISHING=on (default off).
+    # while MARKETING_DESK_PUBLISHING=off (on when unset since 2026-10-08).
     try:
         import business_marketing_dispatch as _business_marketing
         scheduler.add_job(g("business_marketing_due", _business_marketing.due_tick),
@@ -1649,8 +1649,8 @@ async def startup():
     # minute, write the ones owners asked for; every 2 minutes, put each
     # finished flyer on its week's post and tell the owner once the week has
     # settled; every 15 minutes, pull an open-chairs post (Boss, B11) whose
-    # chairs booked before it went out. All do nothing until MARKETING_DESK
-    # names the business or is "*" (default off).
+    # chairs booked before it went out. All cover every business unless
+    # MARKETING_DESK is "off" or a list of ids (open to all since 2026-10-08).
     try:
         import business_marketing_planner as _marketing_planner
         scheduler.add_job(g("business_marketing_suggest", _marketing_planner.marketing_tick),

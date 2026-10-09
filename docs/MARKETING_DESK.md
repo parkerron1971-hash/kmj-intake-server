@@ -116,6 +116,36 @@ What is still platform-only:
 Tenant social publishing today is separate: Meta only, through
 `content_calendar` and `post_approval`.
 
+## Open to every business (2026-10-08, plan B14)
+
+Kevin: "open to everyone because right now no one is using it so you can set
+how it will work for everyone." Since then the suite is on by default, and each
+switch is a kill switch. Both are read in one place, `marketing_switches.py`.
+
+| Switch | Unset or empty | `off` (also false, no, 0) | Other values |
+| --- | --- | --- | --- |
+| `MARKETING_DESK` | every business | nobody | `*` or `on`: every business; a comma-separated list: those ids (a value naming no valid id switches nobody on) |
+| `MARKETING_DESK_PUBLISHING` | on: approved posts are handed to the posting service and watched | approved posts wait, Post now refuses, nothing is checked or announced | on |
+
+- **Chief's Thursday work is on by default.** A business with no saved desk
+  row reads `plan_enabled` as true (`business_marketing.plan_on`), and every
+  row the server makes writes it explicitly, because the column still
+  defaults to false (no migration). An owner who turns it off stays off.
+- **The fan-out's candidates** are every business in scope with a connected
+  account, less desks saved with `plan_enabled` false. The per-tick cap,
+  jitter and the 60% spend deferral are unchanged; Solutionist's own business
+  stays out while its marketing runs on Buffer (#1345).
+- **Announced.** The three keys left `UNANNOUNCED_FEATURES` and `_NOT_A_ROW`.
+  `feature_gates.MARKETING_LADDER` holds one sentence per plan, used by the
+  compare table, the features page, four FAQ entries and `/billing/plans`
+  (`marketing_by_plan`). Barber plans show on public pages only once offered.
+- **Nothing posts by itself.** A post still needs the owner's OK (or a
+  standing OK on the Solutionist plan), the posting pilot
+  (`POST_FOR_ME_PILOT_BUSINESSES`, `*` since 2026-10-05) and a connected account.
+- **Spend.** A business week costs about $1.35 (up to $2.55 reserved).
+  `DAILY_SPEND_CAP_USD` was raised to 150 on Railway on 2026-10-08, staged
+  with this change.
+
 ## The desk for every business — API
 
 B4 of `docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md` (2026-10-07). The same
@@ -157,7 +187,8 @@ approved posts (`marketing_claim_due`) and re-checks everything at send time.
 - **The approval.** `content_hash` is `business_marketing_store.digest`. Any
   change bumps `revision`, recomputes the hash and drops the approval.
 - **Post now** refuses, before anything is written, unless all of these hold:
-  `MARKETING_DESK_PUBLISHING=on` (B5's switch, off by default), the posting
+  `MARKETING_DESK_PUBLISHING` is not `off` (B5's switch, on by default since
+  2026-10-08), the posting
   pilot is on for the business, the desk is not paused, every account is
   still connected, Instagram has a picture, and the caption fits each network.
 - **This business's rows only.** Every post, picture, clip and account is
@@ -190,8 +221,9 @@ It promises no weekly plan until a planner exists (B8/B9). Nothing calls
 
 `business_marketing_dispatch.py`, two scheduled jobs registered beside the
 platform desk's. They run only where scheduled jobs run (`PROCESS_ROLE`
-worker or all), on the scheduler leader, and **do nothing until
-`MARKETING_DESK_PUBLISHING=on`** (default off; set it on the worker). The
+worker or all), on the scheduler leader, and **do nothing while
+`MARKETING_DESK_PUBLISHING=off`** (on when unset since 2026-10-08; `off` on the
+worker is the kill switch). The
 sender also claims nothing while `POST_FOR_ME_API_KEY` is missing or
 `POST_FOR_ME_PILOT_BUSINESSES` is empty, so a configuration slip on the
 worker never fails anyone's posts.
@@ -413,10 +445,11 @@ and `marketing_follow` came with B3.
 level (its real plan includes `marketing_suggestion` and not
 `marketing_week`: Starter, Solo, Booked) gets **one suggested post a week**, a
 draft on its desk to approve, change or skip. Professional and Boss (the week
-levels) get nothing from B8; their five-post week is B9 (below). **Nothing runs until
-`MARKETING_DESK` names the business or is `*`** (default off), and nothing a
-suggestion writes is ever sent unless `MARKETING_DESK_PUBLISHING=on` and the
-owner approves it on the desk.
+levels) get nothing from B8; their five-post week is B9 (below). **Nothing runs for a
+business `MARKETING_DESK` leaves out** (unset covers every business since
+2026-10-08; `off` or a list of ids narrows it), and nothing a suggestion writes
+is ever sent while `MARKETING_DESK_PUBLISHING=off`, or before the owner approves
+it on the desk.
 
 **One suggestion** (`run_suggestion(business_id, trigger=)`):
 
@@ -527,8 +560,9 @@ suggestion uses the free composer flyer, `cost_usd` 0, never a Creative
 Director render; owners are told by push plus a Today item, never by text. No
 credits are charged for any of it (`units=0`).
 
-**Switches** (`.env.example`): `MARKETING_DESK` (off | comma-separated ids |
-`*`; set on the worker and the web), `MARKETING_MAX_PER_TICK` (default 10).
+**Switches** (`.env.example`): `MARKETING_DESK` (unset or `*` = every business,
+the default since 2026-10-08 | comma-separated ids | `off`; read on the worker
+and the web), `MARKETING_MAX_PER_TICK` (default 10).
 Cost: one Sonnet-class call of about 2,000 tokens in and 200 out, about 1-2
 cents a suggestion; the flyer is a local render.
 
@@ -547,9 +581,9 @@ desk's own (`business_marketing.level_for`, from the real plan through
 | openings | Boss: a chair business with a live booking calendar | nothing: it gets the open-chairs week instead (B11, below) |
 | suggest | Starter, Solo, Booked | B8's one suggestion, unchanged |
 
-**Nothing runs until `MARKETING_DESK` names the business or is `*`**, and
-nothing the plan writes is sent unless `MARKETING_DESK_PUBLISHING=on` and the
-owner approves it on the desk.
+**Nothing runs for a business `MARKETING_DESK` leaves out** (unset covers every
+business since 2026-10-08), and nothing the plan writes is sent while
+`MARKETING_DESK_PUBLISHING=off`, or before the owner approves it on the desk.
 
 **One week** (`run_week(business_id, trigger=)`):
 
@@ -1304,8 +1338,8 @@ run rows carry it; logged); every other business is planned. Its manual runs
 desk verbs) are refused after the owner check in plain words
 (`platform_suite.OWN_DESK`: "Solutionist's own marketing runs on the Mission
 Control desk"). The flag lookup is asked only while `MARKETING_DESK` names
-anyone (`ready()` reads it off the event loop), so a desk that is off still
-costs no read. Suite active: unchanged. Tests:
+anyone (`ready()` reads it off the event loop; unset names every business since
+2026-10-08), so a desk switched `off` still costs no read. Suite active: unchanged. Tests:
 `__tests__/test_platform_out_of_tenant_fanout.py`.
 
 ### What that business gets (the suite active, that id only)
