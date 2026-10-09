@@ -678,6 +678,11 @@ app.include_router(stripe_discounts_router)
 # ownership verified); the send sweep registers in startup() below.
 from campaigns_router import router as campaigns_api_router
 app.include_router(campaigns_api_router)
+# Outreach that runs by itself (2026-10-09, the Reach plan's step 2):
+# the owner's switches for the review ask, win-back, rebook and birthday
+# notes. /journeys/* (business_access); the sweep registers in startup().
+from journeys_router import router as journeys_api_router
+app.include_router(journeys_api_router)
 # S6 per-business email identity — /email-domain/* (owner-only). Domain
 # lifecycle against Resend; sends resolve the custom from in email_sender.
 from email_domains_router import router as email_domains_api_router
@@ -1803,6 +1808,15 @@ async def startup():
                           "interval", minutes=1, id="campaigns_tick")
     except Exception as e:
         print(f"   [warn] campaigns sweep not scheduled: {e}")
+    # Outreach journeys (2026-10-09): the review ask, win-back, rebook and
+    # birthday notes a business switched on, by email (texts only with
+    # marketing consent and JOURNEY_TEXTS=on). Kill switch: JOURNEYS=off.
+    try:
+        import outreach_journeys as _journeys
+        scheduler.add_job(g("journeys_tick", _journeys.journeys_tick),
+                          "interval", minutes=30, id="journeys_tick")
+    except Exception as e:
+        print(f"   [warn] journeys sweep not scheduled: {e}")
     # Chief Layers arc — trusted-autonomy sweep: executes pending
     # proposals ONLY in categories the practitioner explicitly granted
     # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.
