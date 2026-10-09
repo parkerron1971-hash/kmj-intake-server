@@ -81,6 +81,68 @@ def test_month_usage_counts_active_and_finished_runs_only(monkeypatch, on):
     assert '+00:00' not in seen[0] and 'Z&' in seen[0]
 
 
+def plan_says(monkeypatch, allowed):
+    import billing_limits
+    def gate(biz, feature):
+        assert feature == 'ai_clips'
+        if not allowed:
+            raise HTTPException(402, {'error': 'feature_locked', 'feature': feature, 'required_plan': 'practice'})
+    monkeypatch.setattr(billing_limits, 'require_feature', gate)
+
+
+def test_available_means_switched_on_and_on_the_plan(monkeypatch, on):
+    """Opening the switch to everyone ('*') must not hand a Starter business a
+    button that refuses: the plan decides between available and locked."""
+    monkeypatch.setenv('CLIP_FINDER_BUSINESSES', '*')
+    monkeypatch.setattr(cf, 'cover_offer', lambda: None)
+    Store(monkeypatch, reads=lambda path: [{'source_seconds': 1800}])
+    plan_says(monkeypatch, True)
+    on_plan = cf.configuration(BIZ)
+    assert on_plan['available'] is True and on_plan['locked'] is False and on_plan['used_hours'] == 0.5
+    plan_says(monkeypatch, False)
+    off_plan = cf.configuration(BIZ)
+    assert off_plan['available'] is False and off_plan['locked'] is True and off_plan['required_plan'] == 'Solutionist'
+    assert off_plan['used_hours'] == 0.0
+    monkeypatch.setenv('CLIP_FINDER', 'off')
+    switched_off = cf.configuration(BIZ)
+    assert switched_off['available'] is False and switched_off['locked'] is False
+
+
+def test_a_billing_lookup_hiccup_never_hides_the_feature(monkeypatch, on):
+    import billing_limits
+    for error in (RuntimeError('billing unavailable'), HTTPException(503, 'billing unavailable')):
+        def broken(biz, feature, error=error):
+            raise error
+        monkeypatch.setattr(billing_limits, 'require_feature', broken)
+        assert cf.plan_allows(BIZ) is True
+
+
+def test_the_plan_named_on_the_screen_is_the_plan_the_gate_requires():
+    import billing_limits
+    import feature_gates
+    assert cf.required_plan_name() == billing_limits.PLAN_DISPLAY[feature_gates.FEATURE_MIN_PLAN['ai_clips']] == 'Solutionist'
+
+
+def test_upload_refused_when_nothing_could_use_the_recording(monkeypatch, on):
+    monkeypatch.setattr(media, 'configuration', lambda: {'processing_available': False})
+    plan_says(monkeypatch, False)
+    store = Store(monkeypatch, reads=lambda path: [])
+    # Switched on, plan missing: the upgrade answer the app already knows how to show.
+    with pytest.raises(HTTPException) as caught:
+        cf.start_upload(BIZ, upload(), USER)
+    assert caught.value.status_code == 402 and caught.value.detail['error'] == 'feature_locked'
+    assert 'Solutionist' in caught.value.detail['message'] and not store.posts
+    # Not switched on at all, and no hand cutter: say who can turn it on.
+    monkeypatch.setenv('CLIP_FINDER_BUSINESSES', '')
+    with pytest.raises(HTTPException) as caught:
+        cf.start_upload(BIZ, upload(), USER)
+    assert caught.value.status_code == 403 and 'support' in caught.value.detail and not store.posts
+    # Hand cutting alone is enough reason to keep a recording.
+    monkeypatch.setattr(media, 'configuration', lambda: {'processing_available': True})
+    monkeypatch.setattr(cf, 'upload_token', lambda path: 'signed')
+    assert cf.start_upload(BIZ, upload(), USER)['upload']['token'] == 'signed'
+
+
 # ── uploads from a computer ──────────────────────────────────────────
 
 def upload(**changes):
