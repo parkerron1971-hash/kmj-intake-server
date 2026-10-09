@@ -395,6 +395,29 @@ def test_an_approved_picture_post_goes_out_once_through_the_shared_door(s):
     assert len(s.sent) == 1
 
 
+def test_several_pictures_go_in_order_and_x_gets_its_first_four(s):
+    arts = [f'a0000000-0000-4000-8000-0000000001{i:02d}' for i in range(6)]
+    s.svc.artworks += [artwork(a) for a in arts]
+    x = 'c0000000-0000-4000-8000-000000000009'
+    s.svc.connections.append(connection(x, 'x'))
+    pid = seed(s, targets=(IG, FB, x), media={'artwork_ids': arts}, caption='Six looks.')
+    assert run(d.due_tick()) == {'claimed': 1, 'submitted': 1}
+    [sent] = s.sent
+    urls = [f'https://sb.test/storage/v1/object/public/business-assets/{BIZ}/published-artwork/{a}.jpg' for a in arts]
+    assert sent['media_urls'] == urls                         # every picture, in the owner's order
+    assert sent['platform_configurations'] == {'x': {'media': [{'url': u} for u in urls[:4]]}}
+    assert [m['image_id'] for m in s.svc.pubs[0]['media']] == arts   # the record keeps what was approved
+    assert post(s, pid)['status'] == 'submitted'
+
+
+def test_picture_configurations_only_where_a_network_shows_fewer():
+    pics = [{'url': f'https://x.test/{i}.jpg'} for i in range(3)]
+    targets = [{'platform': 'instagram'}, {'platform': 'pinterest'}, {'platform': 'pinterest'}, {'platform': 'x'}]
+    assert d.picture_configurations(pics, targets) == {'pinterest': {'media': [{'url': 'https://x.test/0.jpg'}]}}
+    assert d.picture_configurations(pics[:1], targets) is None
+    assert d.picture_configurations(pics, [{'platform': 'facebook'}]) is None
+
+
 def test_words_only_go_out_without_a_picture(s):
     pid = seed(s, targets=(FB,), media={})
     run(d.due_tick())

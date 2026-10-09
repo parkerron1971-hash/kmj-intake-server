@@ -128,6 +128,10 @@ TELL_PAGE = 200
 TELL_PAGES = 5
 ANNOUNCED_LOOKBACK = timedelta(days=1)  # announcements read back beyond TELL_WINDOW
 MAX_PICTURES = 10                      # the posting door takes at most ten
+# The most pictures a network shows in one post. A post with more sends that
+# network its first ones, in the owner's order; the post itself keeps them all
+# (they are what was approved), and every other network gets every picture.
+PICTURE_CAPS = {'x': 4, 'linkedin': 9, 'pinterest': 1}
 PROBLEMS = ('failed', 'partly_published', 'uncertain')
 NAV = reading.NAV                      # 'grow:marketing'
 
@@ -366,6 +370,17 @@ async def _clip_ready(business_id: str, media: Dict[str, Any], *, chief_pick: bo
         raise Refuse(UNKEPT)
 
 
+def picture_configurations(pictures: List[Dict[str, Any]], targets: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Per network, the first pictures where a post has more than it shows
+    (PICTURE_CAPS); None when every network takes them all."""
+    out = {}
+    for platform in dict.fromkeys(t['platform'] for t in targets):
+        cap = PICTURE_CAPS.get(platform)
+        if cap and len(pictures) > cap:
+            out[platform] = {'media': [{'url': p['url']} for p in pictures[:cap]]}
+    return out or None
+
+
 async def _pictures(business_id: str, media: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Each picture as a public JPEG, in the approved order. Only a ready
     artwork of THIS business is ever read; the build actor (bound by the
@@ -473,7 +488,8 @@ async def dispatch(row: Dict[str, Any]) -> Dict[str, Any]:
             attempted = True
             sent, _ = await social.send_post(
                 biz, str(row.get('approved_by') or owner), caption=caption, media=pictures, targets=targets,
-                scheduled_at=None, approved_hash=row['approved_hash'], publication_id=pub_id)
+                scheduled_at=None, approved_hash=row['approved_hash'], publication_id=pub_id,
+                platform_configurations=picture_configurations(pictures, targets))
         sent_id = str(sent.get('id') or pub_id)
         if sent.get('provider_post_id'):
             patch = {'status': 'submitted', 'publication_id': sent_id, 'error': None}
