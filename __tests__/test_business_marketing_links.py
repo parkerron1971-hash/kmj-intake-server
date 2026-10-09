@@ -48,8 +48,10 @@ TIMEY = {'ts', 'created_at', 'day', 'run_at'}
 
 def value_of(row, column):
     if '->>' in column:
-        head, key = column.split('->>', 1)
-        inner = row.get(head) or {}
+        head, key = column.rsplit('->>', 1)
+        inner = row
+        for part in head.split('->'):                 # data->attribution->>utm_content
+            inner = inner.get(part) if isinstance(inner, dict) else None
         got = inner.get(key) if isinstance(inner, dict) else None
         return None if got is None else str(got)
     return row.get(column)
@@ -143,11 +145,11 @@ class Service(api.FakeService):
     def __init__(self):
         super().__init__()
         self.sites[0]['status'] = 'published'
-        self.offerings, self.events, self.contacts = [], [], []
+        self.offerings, self.events, self.contacts, self.bookings = [], [], [], []
 
     def get(self, path):
         mine = {'/business_sites': self.sites, '/offerings': self.offerings,
-                '/site_events': self.events, '/contacts': self.contacts}
+                '/site_events': self.events, '/contacts': self.contacts, '/module_entries': self.bookings}
         table = path.split('?', 1)[0]
         if table not in mine:
             return super().get(path)
@@ -607,6 +609,17 @@ def lead(t, post, *, biz=BIZ, days_ago=1):
                            'created_at': (NOW - timedelta(days=days_ago)).isoformat()})
 
 
+def booking(t, post, *, biz=BIZ, days_ago=1, paid_cents=None, paid=True):
+    """A booking made on a page reached through the post's link; paid online
+    when paid_cents is given (Stripe's amount, once paid_at is set)."""
+    data = {'attribution': {'utm_content': post['id'], 'source_detail': 'booking'}, 'service': 'Fade'}
+    if paid_cents is not None:
+        data['amount_charged_cents'] = paid_cents
+    t.svc.bookings.append({'id': str(uuid4()), 'business_id': biz, 'data': data,
+                           'paid_at': (NOW - timedelta(hours=1)).isoformat() if paid_cents is not None and paid else None,
+                           'created_at': (NOW - timedelta(days=days_ago)).isoformat()})
+
+
 def click(t, post, n, *, days_ago=1):
     t.db.clicks.append({'post_id': post['id'], 'business_id': post['business_id'],
                         'day': (NOW - timedelta(days=days_ago)).date().isoformat(), 'clicks': n})
@@ -625,8 +638,9 @@ def test_results_per_post_and_in_total(t):
     r = call(t, 'GET', '/results')
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body['totals'] == {'clicks': 6, 'visits': 3, 'leads': 1}
-    assert body['sources'] == {'clicks': 'loaded', 'visits': 'loaded', 'leads': 'loaded'}
+    assert body['totals'] == {'clicks': 6, 'visits': 3, 'leads': 1, 'bookings': 0, 'paid_cents': 0}
+    assert body['sources'] == {'clicks': 'loaded', 'visits': 'loaded', 'leads': 'loaded', 'bookings': 'loaded',
+                               'paid_cents': 'loaded'}
     assert body['sent'] == 3 and body['linked'] == 2 and body['window_days'] == 30
     assert body['site'] == {'state': 'ready', 'origin': SITE}
     by = {p['id']: p for p in body['posts']}
@@ -638,7 +652,7 @@ def test_results_per_post_and_in_total(t):
     assert body['headline'] == '6 visits and 1 lead came through the links in your 2 posts from the last 30 days.'
     assert 'brought' not in body['headline']
     assert t.db.writes == []
-    reads = [p for p in t.svc.reads if p.startswith(('/site_events', '/contacts'))]
+    reads = [p for p in t.svc.reads if p.startswith(('/site_events', '/contacts', '/module_entries'))]
     assert reads and all(f'business_id=eq.{BIZ}' in p for p in reads)
 
 
@@ -647,8 +661,9 @@ def test_an_unreadable_source_is_unavailable_never_zero(t):
     click(t, a, 2)
     t.svc.fail = ('/site_events',)
     body = call(t, 'GET', '/results').json()
-    assert body['totals'] == {'clicks': 2, 'visits': None, 'leads': 0}
-    assert body['sources'] == {'clicks': 'loaded', 'visits': 'unavailable', 'leads': 'loaded'}
+    assert body['totals'] == {'clicks': 2, 'visits': None, 'leads': 0, 'bookings': 0, 'paid_cents': 0}
+    assert body['sources'] == {'clicks': 'loaded', 'visits': 'unavailable', 'leads': 'loaded', 'bookings': 'loaded',
+                               'paid_cents': 'loaded'}
     assert body['posts'][0]['visits'] is None and body['posts'][0]['leads'] == 0
     assert body['headline'].startswith('Some results could not be read just now')
     t.svc.fail = ()
@@ -657,10 +672,49 @@ def test_an_unreadable_source_is_unavailable_never_zero(t):
     assert body['totals']['clicks'] is None and body['sources']['clicks'] == 'unavailable'
 
 
+def test_a_booking_and_its_payment_follow_the_link(t):
+    a, b = put(t, caption='Post A'), put(t, caption='Post B')
+    theirs = put(t, biz=OTHER, landing='https://elsewhere.mysolutionist.app/')
+    click(t, a, 4), visit(t, a, 's1'), visit(t, a, 's2'), lead(t, a)
+    booking(t, a, paid_cents=4500)                          # booked and paid online
+    booking(t, a)                                           # booked, pays in person
+    booking(t, a, paid_cents=2000, paid=False)              # sent to pay, not paid yet
+    booking(t, b, paid_cents=1250)
+    booking(t, a, days_ago=40, paid_cents=9900)             # before the 30 days
+    booking(t, theirs, biz=OTHER, paid_cents=7000)          # another business
+    body = call(t, 'GET', '/results').json()
+    assert body['totals']['bookings'] == 4 and body['totals']['paid_cents'] == 5750
+    by = {p['id']: p for p in body['posts']}
+    assert (by[a['id']]['bookings'], by[a['id']]['paid_cents']) == (3, 4500)
+    assert (by[b['id']]['bookings'], by[b['id']]['paid_cents']) == (1, 1250)
+    assert body['headline'] == ('4 visits, 1 lead and 4 bookings came through the links in your 2 posts from the '
+                                'last 30 days. $57.50 of it was paid online.')
+    reads = [p for p in t.svc.reads if p.startswith('/module_entries')]
+    assert reads and all(f'business_id=eq.{BIZ}' in p for p in reads)
+    assert t.db.writes == []
+
+
+def test_unread_bookings_are_unavailable_never_zero(t):
+    a = put(t)
+    booking(t, a, paid_cents=4500)
+    t.svc.fail = ('/module_entries',)
+    body = call(t, 'GET', '/results').json()
+    assert body['totals']['bookings'] is None and body['totals']['paid_cents'] is None
+    assert body['sources']['bookings'] == body['sources']['paid_cents'] == 'unavailable'
+    assert body['posts'][0]['bookings'] is None
+    assert body['headline'].startswith('Some results could not be read just now')
+
+
+def test_a_booking_counts_more_than_a_lead_in_a_plays_score():
+    assert outcomes.score({'clicks': 3, 'visits': 2, 'leads': 1, 'bookings': 1, 'paid_cents': 0}) == 15
+    assert outcomes.score({'clicks': 3, 'visits': 2, 'leads': 1, 'bookings': None, 'paid_cents': None}) is None
+    assert outcomes.money(5750) == '$57.50' and outcomes.money(4500) == '$45' and outcomes.money(123456) == '$1,234.56'
+
+
 def test_nothing_came_through_is_a_real_zero(t):
     put(t)
     body = call(t, 'GET', '/results').json()
-    assert body['totals'] == {'clicks': 0, 'visits': 0, 'leads': 0}
+    assert body['totals'] == {'clicks': 0, 'visits': 0, 'leads': 0, 'bookings': 0, 'paid_cents': 0}
     assert body['headline'] == 'No one has followed the links in your 1 post from the last 30 days yet.'
 
 
@@ -678,7 +732,7 @@ def test_results_say_when_there_is_no_site(t):
     t.svc.sites = [x for x in t.svc.sites if x['business_id'] != BIZ]
     body = call(t, 'GET', '/results').json()
     assert body['site'] == {'state': 'none', 'origin': None} and body['linked'] == 0
-    assert body['totals'] == {'clicks': 0, 'visits': 0, 'leads': 0}
+    assert body['totals'] == {'clicks': 0, 'visits': 0, 'leads': 0, 'bookings': 0, 'paid_cents': 0}
     assert 'no site or booking page' in body['headline']
     t.db.posts.clear()
     assert 'no link until this business has a site' in call(t, 'GET', '/results').json()['headline']

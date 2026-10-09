@@ -436,7 +436,12 @@ and `marketing_follow` came with B3.
   - visits as distinct sessions in this business's `site_events` whose
     `data.utm_content` is the post;
   - leads from this business's `contacts` whose `attribution.utm_content` is
-    the post.
+    the post;
+  - bookings (2026-10-09) from this business's `module_entries` whose own
+    `data.attribution.utm_content` is the post, and `paid_cents`: what was
+    paid online for them (`data.amount_charged_cents` once `paid_at` is
+    set; a deposit counts as what was paid). Solutionist's own desk reads
+    none.
 
   It returns `totals`, `posts` (each with `has_link`), `sources` (`loaded`,
   `partial` at a row limit, or `unavailable`), `site.state` (`ready`, `none`
@@ -444,11 +449,21 @@ and `marketing_follow` came with B3.
   "brought". A source that cannot be read is `null` and named, never 0. A
   post with no link has `null` measures. The posts unreadable is a 503.
 - **Leads are a floor.** `lead_attribution.capture` reads campaign tags off
-  the form's `Referer`. Business-site forms and the booking widget post
-  cross-origin to the API, and browsers send only the origin then, so most
-  leads arrive without `utm_content` today. Counting them needs the forms
-  and the booking widget to send the session's tags (frontend and
-  site-module work, not built).
+  the form's `Referer`. Business-site forms post cross-origin to the API,
+  and browsers send only the origin then, so most form leads arrive without
+  `utm_content` (sending the session's tags from site forms is not built).
+- **Bookings follow the link (2026-10-09).** The hosted `/book` page carries
+  the page-view beacon (`public_site._serve_booking_page`), so its visits
+  count and it keeps the first-touch tags for the tab (`sol_c`). The booking
+  widget sends them as `attribution` on `book-anon` and `book`;
+  `booking_widget_router.booking_attribution` reads them through
+  `lead_attribution`'s whitelist (the page address wins when the browser
+  sends it) and the booking keeps the server's reading in
+  `data.attribution` (what the form sent under that key is dropped). The
+  contact keeps it too when the booking makes one. `static/embed.js` is the
+  rebuilt widget (`test_embed_bundle_current` checks it sends `sol_c`).
+  Bookings made on a business's own custom site count only when that page's
+  address carries the tags.
 
 ### The weekly suggestion and the fan-out (B8)
 
