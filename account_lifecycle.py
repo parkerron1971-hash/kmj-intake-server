@@ -298,6 +298,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # business too; listing them is what makes them EXPORTABLE.
     "marketing_post_events",
     "marketing_link_clicks",
+    # Tracked links on texts and emails (APPLY-2026-10-09-marketing-links.sql):
+    # their clicks before the links they count.
+    "marketing_link_hits",
+    "marketing_links",
     "marketing_posts",
     "marketing_runs",
     "marketing_desks",
@@ -526,6 +530,7 @@ async def _erase_ledger(client: httpx.AsyncClient, business_id: str,
 _DELETE_SELECT = {
     "marketing_desks": "business_id",       # keyed by the business
     "marketing_link_clicks": "post_id",     # keyed by (post_id, day)
+    "marketing_link_hits": "link_id",       # keyed by (link_id, day)
 }
 
 
@@ -680,6 +685,8 @@ _IMPORT_SKIP = {
     # ids), their clicks and audit trail. History in the export; a restored
     # business must never resend or re-approve from a file.
     "marketing_runs", "marketing_posts", "marketing_link_clicks", "marketing_post_events",
+    # The tracked links on texts and emails, and their clicks: history too.
+    "marketing_links", "marketing_link_hits",
     # The desk's settings are not restored either (review of #1307): an
     # uploaded file could switch the weekly plan on or name another
     # business's accounts and photos. The owner sets the desk up again; the
