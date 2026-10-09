@@ -12,6 +12,8 @@ await db.exec('CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_
 await db.query('INSERT INTO businesses VALUES ($1,$2),($3,$4)',[b1,u1,b2,u2]);
 await db.exec(await readFile(new URL('../supabase/APPLY-2026-10-08-square-connections.sql',import.meta.url),'utf8'));
 await db.exec(await readFile(new URL('../supabase/APPLY-2026-10-08-square-connections.sql',import.meta.url),'utf8'));
+await db.exec(await readFile(new URL('../supabase/APPLY-2026-10-09-square-locations.sql',import.meta.url),'utf8'));
+await db.exec(await readFile(new URL('../supabase/APPLY-2026-10-09-square-locations.sql',import.meta.url),'utf8'));
 let checks=0;
 const rpc = async (name,args) => (await db.query('SELECT * FROM square_'+name+'('+args.map((_,i)=>'$'+(i+1)).join(',')+')',args)).rows;
 const truth = async (name,args,expected=true) => { assert.equal((await rpc(name,args))[0]['square_'+name],expected); checks++; };
@@ -30,6 +32,15 @@ const expiry=new Date(Date.now()+86400000).toISOString();
 await truth('finish',[b1,'sandbox',u1,claim.attempt_id,'merchant1','ciphertext',expiry]);
 assert.equal((await row(b1)).state_hash,null); checks++;
 await truth('start',[b1,'sandbox',u1,'again'],false);
+let connected=await row(b1);
+const save=async (b,u,c,r,ids)=> (await rpc('save_locations',[b,'sandbox',u,c,r,ids]))[0].square_save_locations;
+assert.equal(await save(b1,u2,connected.connection_id,connected.selection_revision,['L1']),null); checks++;
+assert.equal(await save(b1,u1,b2,connected.selection_revision,['L1']),null); checks++;
+assert.equal(await save(b1,u1,connected.connection_id,connected.selection_revision,['L1','L1']),null); checks++;
+const savedRevision=await save(b1,u1,connected.connection_id,connected.selection_revision,['L1']);
+assert.ok(savedRevision); checks++;
+assert.deepEqual((await row(b1)).selected_location_ids,['L1']); checks++;
+assert.equal(await save(b1,u1,connected.connection_id,connected.selection_revision,['L2']),null); checks++;
 let revision=(await row(b1)).revision;
 await truth('refresh',[b1,'sandbox',revision,'fresh-ciphertext',expiry]);
 await truth('refresh',[b1,'sandbox',revision,'stale-ciphertext',expiry],false);
@@ -50,6 +61,9 @@ revision=(await row(b1)).revision;
 assert.equal((await rpc('disconnect',[b1,'sandbox',u2])).length,0); checks++;
 const dc=(await rpc('disconnect',[b1,'sandbox',u1]))[0];
 assert.equal((await row(b1)).credentials,null); checks++;
+assert.deepEqual((await row(b1)).selected_location_ids,[]); checks++;
+assert.notEqual((await row(b1)).connection_id,connected.connection_id); checks++;
+assert.equal(await save(b1,u1,connected.connection_id,savedRevision,['L2']),null); checks++;
 assert.equal((await row(b1)).status,'revocation_pending'); checks++;
 await truth('refresh',[b1,'sandbox',revision,'resurrected',expiry],false);
 await truth('start',[b1,'sandbox',u1,'pending'],false);
@@ -69,6 +83,7 @@ for (const role of ['anon','authenticated']) {
   await db.exec('SET ROLE '+role);
   await assert.rejects(db.query('SELECT * FROM square_connections'),/permission denied/); checks++;
   await assert.rejects(rpc('start',[b1,'sandbox',u1,'attack']),/permission denied/); checks++;
+  await assert.rejects(save(b1,u1,connected.connection_id,savedRevision,['L1']),/permission denied/); checks++;
   await db.exec('RESET ROLE');
 }
 // Service role may execute only through explicit grants; FK business cleanup cascades.

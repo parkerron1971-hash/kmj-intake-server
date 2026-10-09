@@ -1,6 +1,7 @@
 """Owner-only endpoints for the Square connection pilot."""
 from __future__ import annotations
 
+import asyncio
 import html
 import secrets
 from urllib.parse import urlencode
@@ -12,6 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from auth_supabase import AuthedUser, require_user
 from business_access import assert_access
 import square_connector as sq
+import square_booking_preview as bookings
 
 router = APIRouter(tags=["square"])
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
@@ -34,7 +36,7 @@ def cookie_name(state):
 def complete(cfg, message, state="", status=200):
     response = HTMLResponse("<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>Square connection</title><h1>Square connection</h1><p>" + html.escape(message) +
-        "</p><p><a href='" + html.escape(cfg.app_url, quote=True) + "'>Return to Solutionist</a></p></html>",
+        "</p><p><a href='" + html.escape(cfg.app_url.rstrip("/") + "/#/integrations", quote=True) + "'>Return to Solutionist</a></p></html>",
         status_code=status, headers=HEADERS)
     if state:
         response.delete_cookie(cookie_name(state), path="/", secure=True, httponly=True, samesite="lax")
@@ -59,7 +61,10 @@ async def status(business_id: UUID, response: Response, user: AuthedUser = Depen
             "status": row["status"] if row else "disconnected",
             "merchant_id": row.get("merchant_id") if row else None,
             "connected_at": row.get("connected_at") if row else None,
-            "booking_sync_enabled": False}
+            "booking_sync_enabled": False,
+            "connection_id": row.get("connection_id") if row else None,
+            "selection_revision": row.get("selection_revision") if row else None,
+            "selected_location_ids": row.get("selected_location_ids", []) if row else []}
 
 
 @router.post("/connect/square/start")
@@ -119,7 +124,7 @@ async def callback(request: Request, state: str = "", code: str = "", error: str
             # Never revoke here: the same merchant might already belong to another
             # Solutionist business, and Square revocation invalidates that whole grant.
             return complete(cfg, "This Square account could not be attached. It may already be connected, or the request was replaced. Return to Solutionist to check.", state, 409)
-        return complete(cfg, "Square is connected. Appointment importing is not enabled yet.", state)
+        return complete(cfg, "Square is connected. Return to Solutionist to choose locations and preview appointments. Nothing has been imported.", state)
     except HTTPException:
         return complete(cfg, "The connection could not be completed. Return to Solutionist to check its status before trying again.", state, 503)
 
@@ -129,12 +134,36 @@ async def locations(business_id: UUID, response: Response, user: AuthedUser = De
     owner(business_id, user)
     cfg = sq.config()
     pilot(cfg, user)
-    token = await sq.access_token(business_id, cfg)
-    payload = await sq.square(cfg, "GET", "/v2/locations", token=token)
+    row, locations = await bookings.location_data(business_id, cfg)
     response.headers["Cache-Control"] = "no-store"
     # Only discovery fields; no addresses, tax identifiers or payment configuration.
     return {"locations": [{k: row.get(k) for k in ("id", "name", "status", "timezone")}
-                          for row in payload.get("locations", [])]}
+                          for row in locations],
+            "connection_id": row["connection_id"], "selection_revision": row["selection_revision"],
+            "selected_location_ids": row.get("selected_location_ids", [])}
+
+
+@router.put("/square/locations")
+async def save_locations(business_id: UUID, body: bookings.Selection, response: Response,
+                         user: AuthedUser = Depends(require_user)):
+    owner(business_id, user)
+    cfg = sq.config()
+    pilot(cfg, user)
+    response.headers["Cache-Control"] = "no-store"
+    return await bookings.save_selection(business_id, user.id, cfg, body)
+
+
+@router.post("/square/bookings/preview")
+async def preview_bookings(business_id: UUID, body: bookings.PreviewRequest, response: Response,
+                           user: AuthedUser = Depends(require_user)):
+    owner(business_id, user)
+    cfg = sq.config()
+    pilot(cfg, user)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return await asyncio.wait_for(bookings.preview(business_id, cfg, body), timeout=45)
+    except asyncio.TimeoutError:
+        raise HTTPException(503, "Square took too long. Try a shorter date range.") from None
 
 
 @router.delete("/square/connection")

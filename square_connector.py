@@ -104,7 +104,7 @@ async def connection(business_id: UUID | str, cfg: Config):
     return rows[0] if rows else None
 
 
-async def square(cfg: Config, method: str, path: str, *, token=None, body=None, revoke=False):
+async def square(cfg: Config, method: str, path: str, *, token=None, body=None, params=None, revoke=False):
     headers = {"Square-Version": API_VERSION, "Content-Type": "application/json"}
     if revoke:
         headers["Authorization"] = "Client " + cfg.secret
@@ -112,7 +112,7 @@ async def square(cfg: Config, method: str, path: str, *, token=None, body=None, 
         headers["Authorization"] = "Bearer " + token
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.request(method, cfg.base + path, headers=headers, json=body)
+            response = await client.request(method, cfg.base + path, headers=headers, json=body, params=params)
         payload = response.json()
     except (httpx.HTTPError, ValueError):
         raise HTTPException(502, "Square is temporarily unavailable. Try again.") from None

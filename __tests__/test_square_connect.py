@@ -93,7 +93,7 @@ def test_oauth_roundtrip_cookie_and_ciphertext(client, monkeypatch, cfg):
     response = client.get("/connect/square/callback", params={"state": state, "code": "private-code"})
     assert response.status_code == 200
     assert "Square is connected" in response.text
-    assert "Appointment importing is not enabled" in response.text
+    assert "Nothing has been imported" in response.text
     assert sq.unseal(cfg, saved["finish"]["p_credentials"]) == TOKENS
     assert saved["exchange"]["body"]["redirect_uri"] == cfg.callback
     for secret in ["private-code", "private-access", "private-refresh", "private-secret", state]:
@@ -180,6 +180,9 @@ def test_disconnect_failure_disables_access_and_retains_retry(client, monkeypatc
 
 
 def test_locations_whitelist(client, monkeypatch):
+    async def current(*args):
+        return {"connection_id": BIZ, "selection_revision": BIZ, "selected_location_ids": []}
+    monkeypatch.setattr(routes.bookings, "current", current)
     async def token(*args):
         return "private-access"
     async def square(*args, **kwargs):
