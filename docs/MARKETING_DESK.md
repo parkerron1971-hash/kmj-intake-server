@@ -465,6 +465,42 @@ and `marketing_follow` came with B3.
   Bookings made on a business's own custom site count only when that page's
   address carries the tags.
 
+### Tracked links on texts and emails (2026-10-09)
+
+The Reach plan's step 1, "links on texts, emails and offers too".
+`business_marketing_sent_links.py` gives what goes out another way the same
+link a post carries. First user: Grow → Outreach (`campaigns_router`).
+
+- **`{{link}}`.** A touch (an email or a text) that says `{{link}}` sends
+  that touch's own short link, `{origin}/go/{code}`, to the business's booking
+  page when anything is bookable, else its published site. One link per
+  touch (id `uuid5(kind:campaign:part)`, code from its own sha256 prefix), so
+  everyone the touch goes to gets the same link and a retried send lands on
+  the same row. It is made on the touch's first send (`marketing_links`);
+  nothing is made for a draft. Chief's drafting prompt places it once where
+  tapping through helps, and never any other address. The app's Outreach
+  editor has "Add your link".
+- **Tags.** `utm_source=email|sms`, `utm_medium=outreach`,
+  `utm_campaign=<campaign id>`, `utm_content=<link id>`, so the visit, lead,
+  booking and payment after a tap are credited to the touch by the same join
+  a post uses.
+- **The redirect.** `marketing_follow` looks at `marketing_posts` first and
+  then `marketing_links` (a post's code wins); a person's click on a link
+  counts in `marketing_link_hits` (every link out there went out). Same host
+  rule: only to https on the business's own hosts.
+- **Fail closed.** A launch whose touch says `{{link}}` with nowhere to send
+  people is a 409 in plain words (503 when that cannot be read). At send
+  time a link that cannot be made holds the touch for a later tick; nothing
+  goes out with a missing link. With no landing at all, `{{link}}` is left
+  out of the words, never sent as written.
+- **Results.** `GET /campaigns/{id}` answers `results.links` (None when no
+  touch has a link): `totals`, `sources` and `by_touch`, from
+  `business_marketing_outcomes.for_links` (clicks from `marketing_link_hits`,
+  then visits, leads, bookings and `paid_cents` as for posts). Unread is
+  None and named, never 0.
+- **Migration.** `supabase/APPLY-2026-10-09-marketing-links.sql` (applied
+  live before this deployed).
+
 ### The weekly suggestion and the fan-out (B8)
 
 `business_marketing_planner.py` (2026-10-07). A business at the `suggest`
