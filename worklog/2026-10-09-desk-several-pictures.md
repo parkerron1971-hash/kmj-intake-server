@@ -2,7 +2,7 @@
 title: Desk posts take up to ten pictures, and the composer posts approved clips
 date: 2026-10-09
 agent: Claude Code (Claude Opus 5.5)
-asked: "work on this in order" (Kevin, 2026-10-09: video posts through the desk; Build → Social Media still has its older composer; Chief's flyer card has no Post in Create)
+asked: "work on this in order (Kevin, 2026-10-09; first three: video posts through the desk, Build → Social Media's older composer, Post in Create on Chief's flyer card)"
 status: done
 prs: [kmj-intake-server#1360, solutionist-studio#1182, solutionist-studio#1184]
 migrations: []
