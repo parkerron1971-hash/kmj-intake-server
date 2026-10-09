@@ -4,7 +4,7 @@ date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "open to everyone because right now no one is using it so you can set how it will work for everyone."
 status: done
-prs: [kmj-intake-server #1350, solutionist-studio #1173]
+prs: [kmj-intake-server#1350, solutionist-studio#1173]
 migrations: []
 left_undone: ["Chief's Content Plan verbs (chief_grow_actions plan_content, capture_idea, publish_post, publish_to_site) still write to Content Plan; the frontend now sends grow:content to the desk (F8/B16 retire the Meta path)", "count of saved marketing_desks rows in production: unknown (the read-only count was refused earlier); rows saved with plan_enabled false stay off by design"]
 decisions: ["MARKETING_DESK and MARKETING_DESK_PUBLISHING are read only in marketing_switches.py; unset or empty = on for every business; off (also false, no, 0) = the kill switch; a MARKETING_DESK value with no business id in it switches nobody on", "plan_enabled defaults to on for a business with no saved desk row (business_marketing.plan_on); rows the server makes write it explicitly because the column still defaults to false (no migration); an owner who turned it off stays off", "the fan-out's candidates are now every business in scope with a connected account, less desks saved with plan_enabled false", "the ladder's words live once in feature_gates.MARKETING_LADDER and feed /compare, /features, the FAQ and /billing/plans (marketing_by_plan); the barber plans show on the public pages only once offered"]
