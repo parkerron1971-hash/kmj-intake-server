@@ -804,6 +804,10 @@ class BookAnonBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     data: Dict[str, Any]  # field values for the appointment (date, service, etc.)
+    # Where the visit came from (2026-10-09): the campaign tags the hosted
+    # booking page kept for the tab (utm_*, gclid, fbclid, ref). Read
+    # through lead_attribution's whitelist; see booking_attribution.
+    attribution: Optional[Dict[str, Any]] = None
     # SMS consent (2026-07-04, A2P architecture): the booking form shows
     # an UNCHECKED optional checkbox; true = customer agreed to receive
     # texts (confirmations/reminders). Recorded in sms_consents — the
@@ -872,6 +876,32 @@ def _maybe_denormalize_offering(
     return out
 
 
+def booking_attribution(request: Request, sent: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Where a booking came from (2026-10-09, the Reach plan's step 1: a
+    tap on a post's link followed to the booking and its payment).
+
+    The campaign tags of the page the booking was made on: from the
+    Referer when the browser sends the whole address, else from the
+    widget's own copy (`attribution`: the hosted /book page's first-touch
+    tags, kept for the tab's session by the site beacon; a desk post's
+    /go/ link adds utm_content=<post id>). lead_attribution's whitelist
+    and size limits; {} when there is nothing. A marketing record, never
+    trusted for anything else: the worst a forged tag can do is credit
+    one booking to the wrong post."""
+    import lead_attribution
+    body = {"attribution": sent} if isinstance(sent, dict) else None
+    return lead_attribution.capture(request, body, source_detail="booking")
+
+
+def _with_attribution(entry_data: Dict[str, Any], attribution: Dict[str, Any]) -> Dict[str, Any]:
+    """The booking's own record of where it came from, as the server read
+    it; whatever the form sent under that key is dropped."""
+    entry_data.pop("attribution", None)
+    if attribution:
+        entry_data["attribution"] = attribution
+    return entry_data
+
+
 @router.post("/widgets/booking/{business_id}/book-anon")
 async def book_anon(
     business_id: str,
@@ -892,17 +922,16 @@ async def book_anon(
     # 1. Dedupe-on-email: find or create a contact for the business first.
     #    Per the ruling: walk-in flow MUST check for existing contact and
     #    link instead of creating a duplicate.
-    import lead_attribution
+    attribution = booking_attribution(request, body.attribution)
     contact_id = _find_or_create_contact(
-        business_id, body.name, email_norm, submission=body.data,
-        attribution=lead_attribution.capture(request, source_detail="booking"))
+        business_id, body.name, email_norm, submission=body.data, attribution=attribution)
 
     # 2. Find or create a business_customers row (unique on biz + lower(email)).
     customer_id = _find_or_create_customer(business_id, contact_id, email_norm, body.name)
 
     # 3. Create the appointment as a module_entry. data.contact_id wires it
     #    to the practitioner-side contact, which surfaces it in ContactDetail.
-    entry_data = dict(body.data)
+    entry_data = _with_attribution(dict(body.data), attribution)
     entry_data["contact_id"] = contact_id
     entry_data.setdefault("customer_name", body.name)
     entry_data.setdefault("customer_email", email_norm)
@@ -988,12 +1017,15 @@ class BookBody(BaseModel):
     quoted_price: Optional[float] = None
     # SMS consent — same contract as BookAnonBody.
     sms_consent: bool = False
+    # Where the visit came from — same contract as BookAnonBody.
+    attribution: Optional[Dict[str, Any]] = None
 
 
 @router.post("/widgets/booking/{business_id}/book")
 async def book(
     business_id: str,
     body: BookBody,
+    request: Request,
     ctx: CustomerContext = Depends(require_customer_token_dep),
 ) -> Dict[str, Any]:
     module = _bookings_module(business_id)
@@ -1005,7 +1037,7 @@ async def book(
     biz = _business_basics(business_id)
 
     contact_id = ctx.customer_row.get("contact_id")
-    entry_data = dict(body.data)
+    entry_data = _with_attribution(dict(body.data), booking_attribution(request, body.attribution))
     if contact_id:
         entry_data["contact_id"] = contact_id
     entry_data.setdefault("customer_name", ctx.customer_row.get("name"))

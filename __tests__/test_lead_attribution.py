@@ -224,7 +224,8 @@ DOORS = {
     "intake_endpoint.py": "attribution = lead_attribution.capture(",
     "public_site.py": "attribution = lead_attribution.capture(",
     "site_concierge.py": "attribution=lead_attribution.capture(",
-    "booking_widget_router.py": "attribution=lead_attribution.capture(",
+    # booking_attribution (2026-10-09): the contact and the booking itself.
+    "booking_widget_router.py": "return lead_attribution.capture(request, body, source_detail=\"booking\")",
 }
 
 
