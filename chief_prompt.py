@@ -426,12 +426,15 @@ def _build_daily_priorities(biz: Dict[str, Any], ctx: Dict[str, Any]) -> List[st
         and _is_recent_event(e, days=1)
     ]
     held = ctx.get("queue") or []
+    # The queue rows stop at 10; the count is every draft (40 read as 10).
+    total = ctx.get("queue_total")
+    n_held = total if isinstance(total, int) and total >= len(held) else len(held)
     if auto_actions or held:
         text = ""
         if auto_actions:
             text = f"Your team handled {len(auto_actions)} thing(s) automatically."
         if held:
-            text += (" " if text else "") + f"{len(held)} waiting for your review."
+            text += (" " if text else "") + f"{n_held} waiting for your review."
         if text:
             out.append(text)
 
