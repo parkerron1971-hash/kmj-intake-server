@@ -569,7 +569,8 @@ def _picture_words(post: Dict[str, Any]) -> str:
     if design == "designing":
         return "a flyer on the way"
     if media.get("artwork_ids"):
-        return "a picture"
+        n = len(media["artwork_ids"])
+        return "a picture" if n == 1 else f"{n} pictures"
     if design == "failed":
         return "words only (its flyer could not be made)"
     return "words only"
