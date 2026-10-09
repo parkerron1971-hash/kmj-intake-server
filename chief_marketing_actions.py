@@ -49,8 +49,10 @@ businesses.owner_id, read as the service role (business_marketing._owner_row,
 the API's own check). No turn, no change.
 
 THE GATE. The desk is behind MARKETING_DESK (business_marketing_planner.
-desk_on_for): a business it does not name gets a plain "not switched on yet"
-from every verb, and no context block. The plan level is the API's own
+desk_on_for, read in marketing_switches): unset, it covers every business
+(2026-10-08); a business it does not cover ('off', or a list that leaves it
+out) gets a plain "not switched on yet" from every verb, and no context
+block. The plan level is the API's own
 (business_marketing.level_for, from feature_gates.plan_includes): a replan
 asks for what the plan gives, and a level that cannot do something says so
 by the server's own upgrade label, never a plan named here.

@@ -149,7 +149,7 @@ def test_with_the_switch_off_no_business_is_the_platform_business(monkeypatch):
 def test_marketing_desk_is_unchanged_without_the_id_but_for_solutionists_own_business(monkeypatch):
     switch(monkeypatch, on=True, pid=None)
     other = str(uuid4())
-    for raw, scope in (('', None), ('off', None), ('*', '*'), (other, frozenset({other}))):
+    for raw, scope in (('', '*'), ('off', None), ('*', '*'), (other, frozenset({other}))):
         monkeypatch.setenv('MARKETING_DESK', raw)
         assert plan.desk_scope() == scope
         assert plan.desk_on_for(other) is (scope is not None)

@@ -468,11 +468,17 @@ async def billing_plans(for_type: Optional[str] = None):
     # the override is currently denying.
     limits = fg.plan_limits()
     plan_details = {p: _plan_detail(fg, limits, p) for p in list(fg.PLANS) + audience_keys}
+    # What Chief does for the business's marketing on each plan (plan B14):
+    # one sentence per plan, so a Boss card says open chairs where the
+    # marketing_week key alone would read as Professional's five posts.
+    marketing_by_plan = {p: fg.MARKETING_LADDER[p] for p in list(fg.PLANS) + audience_keys
+                         if p in fg.MARKETING_LADDER}
 
     any_configured = any(e["configured"] for e in out)
     return {"ok": True, "plans": out, "founder": founder,
             "audience_plans": audience,
             "features_by_plan": features_by_plan,
+            "marketing_by_plan": marketing_by_plan,
             "plan_details": plan_details,
             "enforce": fg.enforcement_on(),
             "note": (None if any_configured else

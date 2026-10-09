@@ -353,12 +353,11 @@ def expected_id(pid, revision=1):
 
 # ── the switch ────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize('value', [None, 'off', '', 'yes'])
+# On when unset since 2026-10-08 (marketing_switches); 'off' and its
+# spellings are the kill switch.
+@pytest.mark.parametrize('value', ['off', 'OFF', 'false', 'no', '0'])
 def test_while_the_switch_is_off_nothing_is_claimed_or_checked(s, monkeypatch, value):
-    if value is None:
-        monkeypatch.delenv('MARKETING_DESK_PUBLISHING')
-    else:
-        monkeypatch.setenv('MARKETING_DESK_PUBLISHING', value)
+    monkeypatch.setenv('MARKETING_DESK_PUBLISHING', value)
     pid = seed(s)
     assert run(d.due_tick()) == {'skipped': 'off'}
     assert run(d.delivery_tick()) == {'skipped': 'off'}
