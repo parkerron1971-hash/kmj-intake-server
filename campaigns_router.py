@@ -17,6 +17,13 @@ Honesty contract:
 - campaign_sends UNIQUE(campaign,touch,contact) = the sweep can crash
   mid-run and re-run without double-sending anyone.
 
+Tracked links (2026-10-09, the Reach plan's step 1): a touch that says
+{{link}} sends that touch's own short link to the business's booking page
+(or site), made on the touch's first send (business_marketing_sent_links).
+A tap on it, and the visit, booking and payment after it, count for that
+touch, as a desk post's do. A link that cannot be made just now holds the
+touch for a later tick; nothing goes out with a missing link.
+
 Kill switch: CAMPAIGNS=off (endpoints keep working; the sweep no-ops).
 """
 from __future__ import annotations
@@ -35,6 +42,9 @@ import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import business_marketing_links as links
+import business_marketing_sent_links as sent_links
+import business_marketing_store as marketing_store
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -232,6 +242,8 @@ async def _draft_campaign_with_chief(business: Dict[str, Any], goal: str,
         f"{practitioner} (not a newsletter), under 150 words, may use {{{{first_name}}}}. "
         "Include at most ONE sms touch, under 300 chars, only if it genuinely helps; "
         "sms must end with 'Reply STOP to opt out.' "
+        "Where tapping through to book or visit helps, write {{link}} once in that touch: it becomes "
+        "the business's own tracked link to its booking page. Never write any other web address. "
         "Every email ends with a genuine sign-off from the practitioner. No emojis in subjects."
     )
     user_msg = (
@@ -316,6 +328,8 @@ def launch_campaign_core(biz: Dict[str, Any], camp: Dict[str, Any],
     touches = _clean_touches(camp.get("touches"))
     if not touches:
         raise HTTPException(400, "Add at least one touch before launching.")
+    if any(sent_links.wants_link(t.get("body")) for t in touches):
+        _require_link_destination(biz)
     summary = _audience_summary(_resolve_audience(biz["id"], camp.get("audience") or {}))
     if summary["count"] == 0:
         raise HTTPException(409, "This audience is empty right now — nothing to send.")
@@ -327,6 +341,19 @@ def launch_campaign_core(biz: Dict[str, Any], camp: Dict[str, Any],
         "updated_at": _now().isoformat(),
     })
     return {"campaign": _load_campaign(camp["id"]), "audience_preview": summary}
+
+
+def _require_link_destination(biz: Dict[str, Any]) -> None:
+    """A touch that says {{link}} needs somewhere to send people: the booking
+    page when anything is bookable, else the published site."""
+    try:
+        landing = links.default_landing(biz["id"], biz, links.site_for(biz["id"]))
+    except links.LinksUnavailable:
+        raise HTTPException(503, "Couldn't check your booking page just now, so nothing was launched. "
+                                 "Try again in a minute.")
+    if not landing:
+        raise HTTPException(409, "A touch says {{link}}, but your booking page and site aren't published yet, "
+                                 "so the link would have nowhere to go. Publish one, or take {{link}} out.")
 
 
 def pause_campaign_core(camp: Dict[str, Any]) -> Dict[str, Any]:
@@ -573,6 +600,16 @@ async def campaigns_tick() -> Dict[str, int]:
                 all_done = False
                 continue
             pending = [c for c in contacts if (idx, c["id"]) not in sent_keys]
+            # The touch's own tracked link, once for everyone it goes to. Not
+            # made just now: the touch waits for a later tick, nothing is sent.
+            link = None
+            if pending and sent_links.wants_link(touch.get("body")):
+                try:
+                    link = await sent_links.campaign_link(biz, camp["id"], idx, touch.get("channel") or "")
+                except (links.LinksUnavailable, marketing_store.StoreError, ValueError) as e:
+                    logger.warning(f"campaign link not made c={camp['id']} touch={idx}: {e}")
+                    all_done = False
+                    continue
             remaining = 0
             for contact in pending:
                 if budget <= 0:
@@ -582,7 +619,7 @@ async def campaigns_tick() -> Dict[str, int]:
                     sent = await _send_touch(
                         biz, camp, idx, touch, contact,
                         email_sender, sms_alerts, _send_platform_sms,
-                        _store_sms, normalize_phone)
+                        _store_sms, normalize_phone, link=link)
                 except _Defer:
                     # Quiet hours — leave unclaimed; a daytime tick sends.
                     remaining += 1
@@ -625,12 +662,13 @@ async def campaigns_tick() -> Dict[str, int]:
 
 async def _send_touch(biz, camp, idx, touch, contact,
                       email_sender, sms_alerts, send_platform_sms,
-                      store_sms, normalize_phone) -> str:
+                      store_sms, normalize_phone, link: Optional[str] = None) -> str:
     """One send. Returns 'email' | 'sms' | 'skipped'. Records the
     campaign_sends row FIRST (unique key) so a crash after insert can
-    never double-send — a lost send costs less than a duplicate."""
+    never double-send — a lost send costs less than a duplicate. `link`
+    is the touch's tracked link, in place of {{link}} (left out when None)."""
     channel = touch.get("channel")
-    body = _personalize(touch.get("body") or "", contact)
+    body = sent_links.fill(_personalize(touch.get("body") or "", contact), link)
 
     if channel == "email":
         to_email = (contact.get("email") or "").strip()
