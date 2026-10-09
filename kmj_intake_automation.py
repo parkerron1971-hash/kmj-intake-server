@@ -305,6 +305,8 @@ app.include_router(sms_numbers_router)
 # practitioner posting; pilot until the Booked / Boss plans are on sale).
 from social_connect_router import router as social_connect_router
 app.include_router(social_connect_router)
+from square_connect_router import router as square_connect_router
+app.include_router(square_connect_router)
 # Part 2: post to those accounts (the click is the approval).
 from social_publish_router import router as social_publish_router
 app.include_router(social_publish_router)

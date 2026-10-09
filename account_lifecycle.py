@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "square_connections": "encrypted Square OAuth credentials and one-time login state; never portable, cascade on business deletion",
     "chief_event_deliveries": "internal worker leases and replay fences; not portable, cascade on business deletion",
     "agentcard_wallets": "encrypted customer OAuth credentials and wallet-bound purchase journal; never portable, cascade on user/business deletion",
     "lane_purchases": "encrypted wallet-bound purchase journal; never portable, cascade on user/business deletion",

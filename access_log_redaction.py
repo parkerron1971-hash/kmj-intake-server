@@ -41,6 +41,8 @@ from urllib.parse import unquote
 
 _SECURE_ENTRY = re.compile(r"(?:/agents/chief/errands/[^/\s?]+/secret|/payments/card-connections)(?:[/?\s\"']|$)")
 
+_SQUARE_CONNECT = re.compile(r"/(?:connect/)?square(?:[/?\s\"']|$)")
+
 # Each pattern keeps the identifying prefix — the log is still useful for
 # "how many auditors read the ledger today" — and destroys the secret.
 # Written as a list so adding a route is one line, not a new mechanism.
@@ -66,6 +68,8 @@ _MASK = r"\1<redacted>"
 
 def redact(text: str) -> str:
     """The whole policy, in one testable function."""
+    if _SQUARE_CONNECT.search(unquote(text)):
+        return "Square OAuth request (details omitted)"
     if _SECURE_ENTRY.search(unquote(text)):
         return "Chief Secure Entry request (details omitted)"
     for rx in _REDACTIONS:
@@ -85,6 +89,13 @@ class RedactCredentialPaths(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
+            if _SQUARE_CONNECT.search(unquote(record.getMessage())):
+                record.msg = "Square OAuth request (details omitted)"
+                record.args = ()
+                record.exc_info = None
+                record.exc_text = None
+                record.stack_info = None
+                return True
             if _SECURE_ENTRY.search(unquote(record.getMessage())):
                 record.msg = "Chief Secure Entry request (details omitted)"
                 record.args = ()
@@ -141,6 +152,9 @@ def scrub_sentry_event(event: Dict[str, Any], _hint: Any = None) -> Optional[Dic
     """
     try:
         req = event.get("request")
+        if _SQUARE_CONNECT.search(unquote(str((req or {}).get("url", "")))) or _SQUARE_CONNECT.search(
+                unquote(str(event.get("transaction", "")))):
+            return None
         # Drop the whole Secure Entry event, including locals and breadcrumbs.
         if _SECURE_ENTRY.search(unquote(str((req or {}).get("url", "")))) or _SECURE_ENTRY.search(
                 unquote(str(event.get("transaction", "")))):
