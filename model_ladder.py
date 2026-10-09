@@ -64,10 +64,12 @@ import llm_call
 
 logger = logging.getLogger("model_ladder")
 
-# The ladder's one rung down. Sonnet 4.5 (dated full ID): accepts
-# `temperature`, streams fast, and has been the composer's reliable
-# workhorse across Arcs 1-11.
-FALLBACK_MODEL = "claude-sonnet-4-5-20250929"
+# The ladder's one rung down. It was Sonnet 4.5, the composer's workhorse
+# across Arcs 1-11, which retires 2026-11-30; it is Sonnet 5.5 now
+# (Anthropic's named replacement). Every do_call builds its request through
+# sampling_kwargs, so the temperature Sonnet 4.5 took is dropped for it.
+# MODEL_LADDER_FALLBACK_MODEL moves the rung without a deploy.
+FALLBACK_MODEL = os.environ.get("MODEL_LADDER_FALLBACK_MODEL") or "claude-sonnet-5-5"
 
 # Timeout-retry token reduction: 1 - 0.35.
 TOKEN_REDUCTION = 0.65

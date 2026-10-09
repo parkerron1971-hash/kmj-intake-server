@@ -25,8 +25,10 @@ from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
-ENRICHMENT_MODEL = "claude-sonnet-4-5-20250929"
-ENRICHMENT_MAX_TOKENS = 2000
+# Sonnet 4.5 retires 2026-11-30: Sonnet 5.5, thinking off (Sonnet 4.5
+# never thought), ~30% more room. FEEDBACK_ENRICHMENT_MODEL rolls it back without a deploy.
+ENRICHMENT_MODEL = os.environ.get("FEEDBACK_ENRICHMENT_MODEL") or "claude-sonnet-5-5"
+ENRICHMENT_MAX_TOKENS = 2600   # ~30% more tokens for the same text on Sonnet 5.5
 ENRICHMENT_TEMPERATURE = 0.3
 # Cap module text size so we don't blow the context window. Cinematic
 # Authority is ~25K chars; 30K leaves room for the brief + design pick
@@ -150,10 +152,12 @@ def enrich_feedback(
 
     try:
         import site_llm
+        import model_ladder
         msg = site_llm.create_message(
             model=ENRICHMENT_MODEL,
             max_tokens=ENRICHMENT_MAX_TOKENS,
             temperature=ENRICHMENT_TEMPERATURE,
+            thinking=model_ladder.thinking_off_kwargs(ENRICHMENT_MODEL).get("thinking"),
             system=ENRICHMENT_SYSTEM_PROMPT,
             user_content=user_message,
             task="feedback_enrichment",

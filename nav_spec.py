@@ -56,6 +56,11 @@ Output ONLY a JSON object with exactly these keys and allowed values:
 Reason from the personality: bold+dark businesses can take split or banner with sharp CTAs; soft/warm ones suit ghost with title-case links; a "statement" type voice pairs with caps; "editorial" with title case. Never contradict the avoid-list. No commentary — JSON only."""
 
 
+def _spec_model() -> str:
+    """Sonnet 4.5 (the old default) retires 2026-11-30. NAV_SPEC_MODEL still pins it."""
+    return (os.environ.get("NAV_SPEC_MODEL") or "claude-sonnet-5-5").strip()
+
+
 def _build_user(business: Dict[str, Any], dna: Dict[str, Any],
                 site_prefs: Dict[str, Any]) -> str:
     prefs = site_prefs or {}
@@ -121,9 +126,14 @@ def author_nav_spec(business_id: str, business: Dict[str, Any],
                    if w.strip()]
     try:
         import site_llm
+        import model_ladder
         msg = site_llm.create_message(
-            model=(os.environ.get("NAV_SPEC_MODEL") or "claude-sonnet-4-5-20250929").strip(),
-            max_tokens=300,
+            model=_spec_model(),
+            # ~30% more tokens for the same JSON on Sonnet 5.5, and its
+            # thinking held off (Sonnet 4.5 never thought): a 300-token
+            # spec cannot afford any.
+            max_tokens=400,
+            thinking=model_ladder.thinking_off_kwargs(_spec_model()).get("thinking"),
             system=_SYSTEM,
             user_content=_build_user(business or {}, dna or {}, site_prefs or {})
             + (("\nVOICE - words to avoid in the CTA: " + ", ".join(avoid_words[:12]))

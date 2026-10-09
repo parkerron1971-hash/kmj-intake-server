@@ -40,6 +40,21 @@ DOSSIER_VERSION = 1
 _PRACTITIONER_SOURCES = ("asked", "flipped", "inferred-confirmed")
 
 
+def _study_model() -> str:
+    """Sonnet 4.5 (the old default) retires 2026-11-30: Sonnet 5.5, with
+    budgets ~30% larger (the same text is more tokens). DISCOVERY_STUDY_MODEL
+    still pins it."""
+    return (os.environ.get("DISCOVERY_STUDY_MODEL") or "claude-sonnet-5-5").strip()
+
+
+def _sdk_thinking_off(model: str) -> Dict[str, Any]:
+    """Thinking off for one SDK call, on whatever model the ladder chose
+    (Sonnet 4.5 never thought). The pinned SDK (0.34.2) predates `thinking`,
+    so it rides in extra_body."""
+    import model_ladder
+    off = model_ladder.thinking_off_kwargs(model)
+    return {"extra_body": off} if off else {}
+
 def _empty_dossier() -> Dict[str, Any]:
     return {
         "version": DOSSIER_VERSION,
@@ -341,13 +356,13 @@ def study_reference(business_id: str, url: str, verdict: str,
                     system=_STUDY_SYSTEM,
                     messages=[{"role": "user", "content": content}],
                     timeout=timeout,
-                    **model_ladder.sampling_kwargs(model, None))
+                    **model_ladder.sampling_kwargs(model, None),
+                    **_sdk_thinking_off(model))
 
             msg, _used = model_ladder.call_with_ladder(
-                _do, model=(os.environ.get("DISCOVERY_STUDY_MODEL")
-                            or "claude-sonnet-4-5-20250929").strip(),
+                _do, model=_study_model(),
                 task="discovery_study", business_id=business_id,
-                max_tokens=900)
+                max_tokens=1200)
             raw = "".join(b.text for b in msg.content
                           if getattr(b, "type", None) == "text")
             import re as _re
@@ -526,13 +541,13 @@ def derive_taste(business_id: str) -> Optional[Dict[str, Any]]:
                 model=model, max_tokens=max_tokens, system=_DERIVE_SYSTEM,
                 messages=[{"role": "user", "content": content}],
                 timeout=timeout,
-                **model_ladder.sampling_kwargs(model, None))
+                **model_ladder.sampling_kwargs(model, None),
+                **_sdk_thinking_off(model))
 
         msg, _used = model_ladder.call_with_ladder(
-            _do, model=(os.environ.get("DISCOVERY_STUDY_MODEL")
-                        or "claude-sonnet-4-5-20250929").strip(),
+            _do, model=_study_model(),
             task="discovery_derive", business_id=business_id,
-            max_tokens=600)
+            max_tokens=800)
         raw = "".join(b.text for b in msg.content
                       if getattr(b, "type", None) == "text")
         import re as _re

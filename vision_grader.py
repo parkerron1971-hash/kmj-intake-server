@@ -89,8 +89,8 @@ def judge_effort() -> str:
 
 def judge_kwargs(model: str) -> Dict[str, Any]:
     """The effort field for one judge call (an SDK call, so it rides
-    extra_body), only where the model takes it (Sonnet 4.5 400s on it,
-    so it gets nothing)."""
+    extra_body), only where the model takes it (a model that 400s on it
+    gets nothing)."""
     import model_ladder
     return model_ladder.sdk_effort_kwargs(model, judge_effort())
 
@@ -292,7 +292,9 @@ def _grade_anthropic(shots: List[bytes], business_id: str = "",
         "type": "base64", "media_type": "image/jpeg",
         "data": base64.b64encode(shot).decode()}})
     client = llm_call.sdk_client(key=key)
-    model = (os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip()
+    # Sonnet 4.5 (the old default) retires 2026-11-30; production already
+    # pins Sonnet 5.5 through VISION_JUDGE_MODEL.
+    model = (os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-5-5").strip()
     msg = client.messages.create(
         model=model,
         # 800 → 2000 (2026-10-03): Sonnet 5.5 thinks adaptively and the

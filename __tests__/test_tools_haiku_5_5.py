@@ -222,7 +222,10 @@ def test_site_llm_sends_thinking_only_when_asked(monkeypatch):
     monkeypatch.setattr(llm_call, "sdk_client", lambda **k: S(messages=_Msgs()))
     site_llm.create_message(model=H55, max_tokens=10, system="s", user_content="u", thinking=OFF)
     site_llm.create_message(model="claude-opus-4-8", max_tokens=10, system="s", user_content="u")
-    assert calls[0]["thinking"] == OFF and "thinking" not in calls[1]
+    # Through extra_body: the pinned SDK (0.34.2) predates the `thinking`
+    # keyword and would raise a TypeError on it.
+    assert calls[0]["extra_body"] == {"thinking": OFF} and "thinking" not in calls[0]
+    assert "thinking" not in calls[1] and "extra_body" not in calls[1]
 
 
 def test_ai_proxy_volume_tier(monkeypatch):

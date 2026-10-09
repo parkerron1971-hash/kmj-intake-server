@@ -289,7 +289,7 @@ def vision_findings(page: Dict[str, Any], business_id: str) -> List[Dict[str, An
         content.append({"type": "text", "text": "Review per the rubric. JSON only."})
         from vision_grader import judge_kwargs
         client = llm_call.sdk_client(key=key)
-        model = (os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-4-5-20250929").strip()
+        model = (os.environ.get("VISION_JUDGE_MODEL") or "claude-sonnet-5-5").strip()
         msg = client.messages.create(
             model=model,
             # 900 → 2000 (2026-10-03): a judge that thinks spends from this

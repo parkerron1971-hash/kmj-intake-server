@@ -49,8 +49,10 @@ from agents.composer.cathedral_hero_composer import _strip_code_fence
 
 logger = logging.getLogger(__name__)
 
-ROUTER_MODEL = "claude-sonnet-4-5-20250929"
-ROUTER_MAX_TOKENS = 700
+# Sonnet 4.5 retires 2026-11-30: Sonnet 5.5, thinking off (Sonnet 4.5
+# never thought), ~30% more room. MODULE_ROUTER_MODEL rolls it back without a deploy.
+ROUTER_MODEL = os.environ.get("MODULE_ROUTER_MODEL") or "claude-sonnet-5-5"
+ROUTER_MAX_TOKENS = 910   # ~30% more tokens for the same text on Sonnet 5.5
 # 0.3 — lower than Composer's 0.4 because routing should be
 # CONSISTENT (same business -> same module across runs) rather than
 # creatively varied. Convergence verification expects >0.8 confidence
@@ -394,10 +396,12 @@ def _route_from_context(
     # moonshot) with fail-open fallback to Anthropic.
     def _call(extra_user: str = "") -> str:
         import site_llm
+        import model_ladder
         msg = site_llm.create_message(
             model=ROUTER_MODEL,
             max_tokens=ROUTER_MAX_TOKENS,
             temperature=ROUTER_TEMPERATURE,
+            thinking=model_ladder.thinking_off_kwargs(ROUTER_MODEL).get("thinking"),
             system=ROUTER_SYSTEM_PROMPT,
             user_content=user_prompt + extra_user,
             task="module_router",

@@ -22,7 +22,8 @@ BUSINESSES = [
 
 def main() -> int:
     print("=== Phase 3 spike: firing 3 Composer calls ===")
-    print(f"Model: claude-sonnet-4-5-20250929, ~$0.05/call forecast\n", flush=True)
+    from agents.composer.hero_composer import COMPOSER_MODEL
+    print(f"Model: {COMPOSER_MODEL}\n", flush=True)
 
     results = []
     for name, bid in BUSINESSES:
