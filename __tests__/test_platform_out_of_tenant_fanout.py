@@ -136,7 +136,7 @@ def test_a_failed_lookup_keeps_out_only_rows_flagged_platform_books_that_hour(w,
 
 def test_a_desk_that_is_off_asks_no_flag_lookup(w, monkeypatch, verdicts):
     switch(monkeypatch, on=False, pid=None)
-    for raw in ('', 'off'):
+    for raw in ('off', 'false'):              # unset or empty is every business since 2026-10-08
         monkeypatch.setenv('MARKETING_DESK', raw)
         run(platform_suite.ready())
         assert plan.desk_on_for(PID) is False and plan.own_desk(PID) is False

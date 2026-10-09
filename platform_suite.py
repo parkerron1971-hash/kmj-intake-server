@@ -370,11 +370,12 @@ async def ready() -> None:
 
 
 def _tenant_desk_on() -> bool:
-    """MARKETING_DESK (the tenant suite's switch, business_marketing_planner)
-    names anyone: only then is the flag lookup asked, so a desk that is off
-    costs no read."""
-    raw = (os.environ.get('MARKETING_DESK') or '').strip()
-    return bool(raw) and raw.lower() != 'off'
+    """MARKETING_DESK (the tenant suite's switch, read only by
+    marketing_switches) names anyone: only then is the flag lookup asked, so
+    a desk that is off costs no read. Unset names every business since
+    2026-10-08."""
+    import marketing_switches
+    return marketing_switches.desk_scope() is not None
 
 
 def valid_id() -> Optional[str]:

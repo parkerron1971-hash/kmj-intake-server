@@ -119,12 +119,28 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
 # the screen that sells it is live, so a card never lists a raw key or a
 # feature nobody can open. Remove a key here when its screen ships.
 # (ai_clips left 2026-10-05: Kevin opened Find my best clips to every
-# business on the plan, after the live Church proof.)
-UNANNOUNCED_FEATURES: frozenset = frozenset({
-    # The marketing suite's levels: on the map so the code can check them,
-    # off the plan cards until the desk ships (plan B14 takes them out).
-    "marketing_suggestion", "marketing_week", "marketing_autopilot",
-})
+# business on the plan, after the live Church proof. The marketing suite's
+# three levels left 2026-10-08, plan B14: Kevin opened the desk to every
+# business.)
+UNANNOUNCED_FEATURES: frozenset = frozenset()
+
+# What Chief does for a business's marketing on each plan, in the words the
+# pricing table, the plan cards and the FAQ use (plan B14, the ladder of
+# docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md). Boss's week is the open-
+# chairs shape of marketing_week; Solutionist's is marketing_autopilot.
+# __tests__/test_marketing_open_to_all.py holds these to plan_features().
+MARKETING_SUGGEST_WORDS = "Chief suggests one post a week for you to approve"
+MARKETING_WEEK_WORDS = "Chief plans your week: five posts with flyers, approve in one tap"
+MARKETING_OPENINGS_WORDS = "Chief turns open chairs into posts, with your own work photos"
+MARKETING_AUTOPILOT_WORDS = "Chief runs your week: flyers and your own video clips, and the kinds of posts you trust can go out without asking"
+MARKETING_LADDER: Dict[str, str] = {
+    "starter": MARKETING_SUGGEST_WORDS,
+    "solo": MARKETING_SUGGEST_WORDS,
+    "booked": MARKETING_SUGGEST_WORDS,
+    "professional": MARKETING_WEEK_WORDS,
+    "boss": MARKETING_OPENINGS_WORDS,
+    "practice": MARKETING_AUTOPILOT_WORDS,
+}
 
 # ─── Plans for one kind of business ──────────────────────────────────
 # Solo = everything Starter carries (derived, so a new Starter feature

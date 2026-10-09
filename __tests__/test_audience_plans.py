@@ -262,11 +262,13 @@ def test_the_marketing_levels_follow_the_ladder():
     assert fg.upgrade_plan_for("marketing_week", "starter") == "professional"
 
 
-def test_the_marketing_levels_are_not_on_sale_yet():
+def test_the_marketing_levels_are_on_sale():
+    # Announced 2026-10-08 (plan B14): off the unannounced list and the
+    # compare table's skip list. test_marketing_open_to_all holds the words.
     import feature_gates as fg
     import marketing_pages as mp
     for key in ("marketing_suggestion", "marketing_week", "marketing_autopilot"):
-        assert key in fg.UNANNOUNCED_FEATURES and key in mp._NOT_A_ROW
+        assert key not in fg.UNANNOUNCED_FEATURES and key not in mp._NOT_A_ROW
 
 
 def test_plan_includes_reads_the_real_plan_even_with_enforcement_off(monkeypatch):

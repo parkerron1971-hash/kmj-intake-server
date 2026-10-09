@@ -491,16 +491,19 @@ def test_what_the_claim_would_allow():
 # ── the switches ──────────────────────────────────────────────────────
 
 def test_marketing_desk_off_ids_and_star(monkeypatch):
-    for raw in (None, '', 'off', 'OFF', 'on', 'not-an-id'):
+    # Open to every business since 2026-10-08: unset or empty is '*'; 'off' is
+    # the kill switch; a value with no business id in it switches nobody on.
+    for raw in ('off', 'OFF', ' off ', 'false', 'not-an-id'):
+        monkeypatch.setenv('MARKETING_DESK', raw)
+        assert plan.desk_scope() is None and not plan.desk_on_for(BIZ)
+    for raw in (None, '', '  ', '*', 'on'):
         if raw is None:
             monkeypatch.delenv('MARKETING_DESK', raising=False)
         else:
             monkeypatch.setenv('MARKETING_DESK', raw)
-        assert plan.desk_scope() is None and not plan.desk_on_for(BIZ)
+        assert plan.desk_scope() == '*' and plan.desk_on_for(BIZ) and plan.desk_on_for(PRO)
     monkeypatch.setenv('MARKETING_DESK', f' {BIZ.upper()} , junk')
     assert plan.desk_on_for(BIZ) and not plan.desk_on_for(PRO)
-    monkeypatch.setenv('MARKETING_DESK', '*')
-    assert plan.desk_on_for(BIZ) and plan.desk_on_for(PRO)
 
 
 def test_the_per_tick_cap_reads_its_env(monkeypatch):
@@ -513,7 +516,8 @@ def test_the_per_tick_cap_reads_its_env(monkeypatch):
 
 def test_the_env_example_documents_both_switches():
     text = (ROOT / '.env.example').read_text(encoding='utf-8')
-    assert '\nMARKETING_DESK=off' in text and '\nMARKETING_MAX_PER_TICK=10' in text
+    # Unset is every business since 2026-10-08; the file says so and shows the kill switch.
+    assert '\nMARKETING_DESK=\n' in text and 'MARKETING_DESK=off' in text and '\nMARKETING_MAX_PER_TICK=10' in text
 
 
 # ── one suggestion ────────────────────────────────────────────────────
@@ -794,13 +798,17 @@ def test_named_ids_only(s, monkeypatch):
 
 def test_no_connected_account_or_switched_off_desk_is_not_a_candidate(s):
     add_business(s, connected=False)
-    add_business(s, plan_enabled=False)
+    add_business(s, plan_enabled=False)                                    # the owner turned it off: stays off
     nodesk = add_business(s)
     del s.db.desks[nodesk]
     out = run(plan.marketing_tick(THU))
-    assert out['candidates'] == 1 and out['succeeded'] == 1
-    assert {p['business_id'] for p in s.db.posts.values()} == {BIZ}
-    assert nodesk not in s.db.desks                                        # no desk row is made here
+    # Since 2026-10-08 a business with no saved desk row has the weekly plan on.
+    assert out['candidates'] == 2 and out['succeeded'] == 2
+    assert {p['business_id'] for p in s.db.posts.values()} == {BIZ, nodesk}
+    # The fan-out made no desk row; the saved draft's ensure_desk did, with the plan on.
+    made = [w for w in s.db.writes if w[0] == 'POST' and w[1] == '/marketing_desks']
+    assert [w[2] for w in made] == [{'business_id': nodesk, 'plan_enabled': True}]
+    assert s.db.desks[nodesk]['plan_enabled'] is True
 
 
 def test_paused_automations_and_the_pilot_are_respected(s, monkeypatch):

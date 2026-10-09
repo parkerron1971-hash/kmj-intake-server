@@ -10,8 +10,10 @@ how it went.
   delivery_tick   every 5 min    read how each sent post went; tell the owner
                                  once per problem
 
-Both do nothing until MARKETING_DESK_PUBLISHING=on (business_marketing.
-publishing_on, default off). Both run only where scheduled jobs run
+Both do nothing while MARKETING_DESK_PUBLISHING=off (business_marketing.
+publishing_on, read in marketing_switches; on when unset since 2026-10-08:
+approved posts wait, and nothing is checked or announced, while it is off).
+Both run only where scheduled jobs run
 (PROCESS_ROLE worker or all), on the scheduler leader.
 
 ONE DOOR. Every post goes through social_publish_router.send_post: the daily
