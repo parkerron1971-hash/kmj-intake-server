@@ -1770,7 +1770,11 @@ def evidence_for_review(ctx, view_detail, taken):
             # every review's records differ and nothing could be cached.
             value = {**value, 'retrieved_at': str(value['retrieved_at'])[:10]}
         if isinstance(value, list):
-            heading = chief.CONTEXT_HEADINGS.get(name)
+            # The queue's heading holds its whole count ("40 drafts waiting
+            # for review in all") when the rows are only the first 10, and
+            # is left off when the count is unknown.
+            heading = (chief.queue_count_heading(ctx or {}) if name == 'queue'
+                       else chief.CONTEXT_HEADINGS.get(name))
             # An empty list says which empty it is, in words the review can
             # quote: none (read in full, the prompt's own words) or unknown.
             note = ({'complete': chief.EMPTY_COMPLETE[name]}
