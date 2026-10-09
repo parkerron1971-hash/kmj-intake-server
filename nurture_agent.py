@@ -311,10 +311,16 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
         if contact_fields.email_opted_out(contact):
             continue
 
-        # Check if we already reached out recently
+        # Skip someone we reached out to lately, or who already has a
+        # nurture draft waiting in Approvals, however old it is. The
+        # cooldown alone let a fortnightly sweep draft a second "Checking
+        # in" for 20 clients whose first was still waiting: a salon had 40
+        # in Approvals, two per person (2026-09-16 and 09-30).
+        since = (datetime.now(timezone.utc) - timedelta(days=RECENT_OUTREACH_COOLDOWN_DAYS)
+                 ).isoformat().replace('+00:00', 'Z')
         recent_outreach = await _sb(client, "GET",
             f"/agent_queue?contact_id=eq.{cid}&agent=eq.nurture"
-            f"&created_at=gte.{(datetime.now(timezone.utc) - timedelta(days=RECENT_OUTREACH_COOLDOWN_DAYS)).isoformat().replace('+00:00', 'Z')}"
+            f"&or=(status.eq.draft,created_at.gte.{since})"
             f"&select=id&limit=1"
         )
         if recent_outreach and len(recent_outreach) > 0:
