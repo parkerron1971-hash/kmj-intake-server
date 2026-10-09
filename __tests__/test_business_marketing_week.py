@@ -1093,11 +1093,14 @@ def test_play_scores_come_from_the_businesss_own_links(monkeypatch):
             return [{'session_id': f's{i}', 'data': {'utm_content': posts[0]['id']}} for i in range(9)]
         if path.startswith('/contacts'):
             return [{'id': 'c1', 'attribution': {'utm_content': posts[3]['id']}}]
+        if path.startswith('/module_entries'):                  # a booking through the link (2026-10-09)
+            return [{'id': 'b1', 'paid_at': None, 'post': posts[4]['id'], 'charged': None}]
         raise AssertionError(path)
     monkeypatch.setattr(store, 'rows', rows)
     monkeypatch.setattr(sb_clients, 'sb_get_as_service', service)
     scores = run(outcomes.play_scores(PRO, now=now))
-    assert scores == {'meet_us': {'samples': 3, 'average': 7.0}, 'offer_spotlight': {'samples': 2, 'average': 8.0}}
+    # offer_spotlight: (6 + a lead's 4) and (6 + a booking's 8), averaged
+    assert scores == {'meet_us': {'samples': 3, 'average': 7.0}, 'offer_spotlight': {'samples': 2, 'average': 12.0}}
 
     def failing(path):
         return None if path.startswith('/contacts') else service(path)
