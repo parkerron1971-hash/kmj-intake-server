@@ -51,8 +51,11 @@ class _Use:
 
 
 class _Msg:
-    def __init__(self, content, stop):
+    def __init__(self, content, stop, events=()):
         self.content, self.stop_reason, self.usage = content, stop, _Usage()
+        # the raw stream events, played by the fake stream before the
+        # final message (the real SDK's stream iterates them too)
+        self.events = list(events)
 
 
 class _Client:
@@ -69,6 +72,7 @@ class _Client:
 
                 class _Ctx:
                     text_stream = iter([])
+                    def __iter__(self_): return iter(msg.events)
                     def __enter__(self_): return self_
                     def __exit__(self_, *a): return False
                     def get_final_message(self_): return msg
@@ -218,3 +222,69 @@ def test_the_opus_5_5_price_is_its_own():
     import api_usage_logger as ul
     assert ul._price_for_model("claude-opus-5-5") == (400.0, 2000.0)
     assert ul._price_for_model("claude-opus-5") == (500.0, 2500.0)
+
+
+# ─── THE SECOND TURN (2026-10-09) ────────────────────────────────────
+# On the pinned SDK (0.34.2) the final message's thinking block has an
+# EMPTY signature and a stray `text` field; the signature only ever
+# arrives in the stream's signature_delta events. Replaying the SDK's
+# block 400'd every second loop call. These fakes play the stream exactly
+# that way.
+
+class _Thinking:
+    """A thinking block as SDK 0.34.2 hands it back: no signature, plus a
+    `text` attribute the API refuses on the way back in."""
+    type = "thinking"
+    thinking, signature, text = "", "", ""
+
+
+def _ev(kind, index, **kw):
+    from types import SimpleNamespace
+    return SimpleNamespace(type=kind, index=index, **kw)
+
+
+def _thinking_events(signature="SIG-abc123"):
+    from types import SimpleNamespace
+    evs = [_ev("content_block_start", 0,
+               content_block={"type": "thinking", "thinking": "", "signature": ""}),
+           _ev("content_block_delta", 0,
+               delta=SimpleNamespace(type="thinking_delta", thinking="look first"))]
+    if signature:
+        evs.append(_ev("content_block_delta", 0,
+                       delta=SimpleNamespace(type="signature_delta", signature=signature)))
+    evs.append(_ev("content_block_start", 1,
+                   content_block={"type": "tool_use", "id": "t1", "name": "render", "input": {}}))
+    return evs
+
+
+def test_the_second_turn_carries_thinking_with_the_streamed_signature(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    box = _box(monkeypatch)
+    client = _Client([
+        _Msg([_Thinking(), _Use("render", {"html": _doc()}, "t1")], "tool_use",
+             events=_thinking_events()),
+        _Msg([_Use("finish", {"html": _doc()}, "t2")], "tool_use"),
+    ])
+    out = bl.run_loop("SPEC", {}, "biz-1", v2.new_spend(), toolbox=box, client=client,
+                      model="claude-opus-5-5")
+    assert out["html"] and out["report"]["forced_finish"] is None
+    assistant = client.seen[1]["messages"][1]
+    assert assistant["role"] == "assistant"
+    thinking, use = assistant["content"]
+    assert thinking == {"type": "thinking", "thinking": "look first", "signature": "SIG-abc123"}
+    assert use == {"type": "tool_use", "id": "t1", "name": "render", "input": {"html": _doc()}}
+
+
+def test_a_thinking_block_without_a_signature_is_left_out(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    box = _box(monkeypatch)
+    client = _Client([
+        _Msg([_Thinking(), _Use("render", {"html": _doc()}, "t1")], "tool_use",
+             events=_thinking_events(signature="")),
+        _Msg([_Use("finish", {"html": _doc()}, "t2")], "tool_use"),
+    ])
+    bl.run_loop("SPEC", {}, "biz-1", v2.new_spend(), toolbox=box, client=client,
+                model="claude-opus-5-5")
+    content = client.seen[1]["messages"][1]["content"]
+    assert [b["type"] for b in content] == ["tool_use"]
+    assert all("text" not in b for b in content if b["type"] != "text")

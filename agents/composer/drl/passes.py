@@ -44,7 +44,7 @@ logger = logging.getLogger("drl.passes")
 # compose (signal detection + rationale authoring), so this is the
 # surgical place to spend Opus. Env-driven (DRL_MODEL) with the full
 # model-ladder protecting it: an unavailable model 404/403/400s → ONE
-# loud, breadcrumbed retry on model_ladder.FALLBACK_MODEL (Sonnet 4.5);
+# loud, breadcrumbed retry on model_ladder.FALLBACK_MODEL (Sonnet 5.5);
 # a timeout → one same-model retry at -35% max_tokens → the sonnet rung
 # → minimal mode. COST NOTE: Opus 4.8 is ~$5/$25 per MTok vs Sonnet
 # $3/$15; a single compose is 1 signal pass + 1 DRO (~10k out) ≈ +$0.15,

@@ -12,8 +12,8 @@ stand the endpoint up; no existing agent calls it yet.
 
 Project conventions matched here:
   - Direct `anthropic.Anthropic` SDK (no internal helper indirection)
-  - Model `claude-sonnet-4-5-20250929` (matches ai_proxy / brand_engine /
-    chief_of_staff)
+  - Model Sonnet 5.5 since 2026-10-08 (was Sonnet 4.5, which retires
+    2026-11-30); SPARSE_ENRICHMENT_MODEL overrides
   - API key from `ANTHROPIC_API_KEY` env var
   - Soft-fail on missing key / LLM error → return safe fallback dict
     rather than raising, so the Designer Agent can still proceed
@@ -29,8 +29,10 @@ from anthropic import Anthropic
 
 logger = logging.getLogger(__name__)
 
-ENRICHMENT_MODEL = "claude-sonnet-4-5-20250929"
-ENRICHMENT_MAX_TOKENS = 1500
+# Sonnet 4.5 retires 2026-11-30: Sonnet 5.5, thinking off (Sonnet 4.5
+# never thought), ~30% more room. SPARSE_ENRICHMENT_MODEL rolls it back without a deploy.
+ENRICHMENT_MODEL = os.environ.get("SPARSE_ENRICHMENT_MODEL") or "claude-sonnet-5-5"
+ENRICHMENT_MAX_TOKENS = 1950   # ~30% more tokens for the same text on Sonnet 5.5
 ENRICHMENT_TEMPERATURE = 0.3  # low — consistent inference, not creative variation
 
 
@@ -134,10 +136,12 @@ def enrich_intake(
 
     try:
         import site_llm
+        import model_ladder
         msg = site_llm.create_message(
             model=ENRICHMENT_MODEL,
             max_tokens=ENRICHMENT_MAX_TOKENS,
             temperature=ENRICHMENT_TEMPERATURE,
+            thinking=model_ladder.thinking_off_kwargs(ENRICHMENT_MODEL).get("thinking"),
             system=ENRICHMENT_SYSTEM_PROMPT,
             user_content=user_message,
             task="sparse_enrichment",

@@ -1303,7 +1303,7 @@ def _self_review(html: str, brief: str,
         client = llm_call.sdk_client(key=key)
         model = (os.environ.get("CANVAS_REVIEW_MODEL")
                  or os.environ.get("VISION_JUDGE_MODEL")
-                 or "claude-sonnet-4-5-20250929").strip()
+                 or "claude-sonnet-5-5").strip()
         msg = client.messages.create(
             model=model,
             # 500 → 1500 (2026-10-03): a reviewer that thinks spends from

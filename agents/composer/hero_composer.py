@@ -50,8 +50,10 @@ from agents.design_modules.studio_brut.hero.types import (
 
 logger = logging.getLogger(__name__)
 
-COMPOSER_MODEL = "claude-sonnet-4-5-20250929"
-COMPOSER_MAX_TOKENS = 1500
+# Sonnet 4.5 retires 2026-11-30: Sonnet 5.5, thinking off (Sonnet 4.5
+# never thought), ~30% more room. HERO_COMPOSER_MODEL rolls it back without a deploy.
+COMPOSER_MODEL = os.environ.get("HERO_COMPOSER_MODEL") or "claude-sonnet-5-5"
+COMPOSER_MAX_TOKENS = 1950   # ~30% more tokens for the same text on Sonnet 5.5
 COMPOSER_TEMPERATURE = 0.4  # creative work — higher than router's 0.3
 
 
@@ -981,6 +983,7 @@ def compose_hero(
     # SITE_BUILDER_PROVIDER=moonshot, fail-open back to Anthropic.
     def _call(extra_user: str = "") -> str:
         import site_llm
+        import model_ladder
         # Phase 1 (Kimi design integration) — doctrine + instructed
         # diversity for BOTH providers (Symmetry Rule).
         from design_doctrine import with_doctrine, DIVERSITY_LINE
@@ -988,6 +991,7 @@ def compose_hero(
             model=COMPOSER_MODEL,
             max_tokens=COMPOSER_MAX_TOKENS,
             temperature=COMPOSER_TEMPERATURE,
+            thinking=model_ladder.thinking_off_kwargs(COMPOSER_MODEL).get("thinking"),
             system=with_doctrine(spec.system_prompt) + chr(10) + chr(10) + DIVERSITY_LINE,
             user_content=user_prompt + extra_user,
             task="hero_composer",

@@ -339,17 +339,94 @@ def _tool_uses(msg: Any) -> List[Any]:
     return [b for b in getattr(msg, "content", []) if getattr(b, "type", None) == "tool_use"]
 
 
+def _field(block: Any, name: str, default: Any = None) -> Any:
+    if isinstance(block, dict):
+        return block.get(name, default)
+    return getattr(block, name, default)
+
+
+def _as_dict(block: Any) -> Dict[str, Any]:
+    if isinstance(block, dict):
+        return dict(block)
+    for name in ("to_dict", "model_dump"):
+        fn = getattr(block, name, None)
+        if callable(fn):
+            try:
+                return dict(fn())
+            except Exception:
+                pass
+    return {}
+
+
+# ─── THE SECOND TURN (2026-10-09) ────────────────────────────────────
+# The loop's second call failed on every build since the loop shipped:
+# one builder_v2_loop row per build, in every build measured. The SDK is
+# pinned at 0.34.2, which predates thinking: its final message keeps a
+# thinking block with an EMPTY signature (the signature_delta events are
+# dropped) and a stray `text` field, and the API refuses that assistant
+# turn with a 400 ("messages.1.content.0.thinking.text: Extra inputs are
+# not permitted"). The loop then ended on its first call: the last render
+# was kept, or with no render the whole build fell back to the one-pass
+# author. Opus 5.5 always thinks, so every build hit it. Reproduced and
+# proven fixed on the production SDK 2026-10-09: the next turn carries
+# the blocks as the stream delivered them, each thinking block with its
+# signature, unchanged.
+
+def _replayable(final: List[Any], streamed: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The assistant turn as the next request must carry it: plain blocks,
+    text and tool calls from the final message, thinking exactly as the
+    stream delivered it. A thinking block that arrived without a signature
+    cannot be replayed and is left out."""
+    out: List[Dict[str, Any]] = []
+    for i, block in enumerate(final):
+        kind = _field(block, "type")
+        got = streamed.get(i) or {}
+        if kind == "text":
+            text = _field(block, "text", "") or ""
+            if text:
+                out.append({"type": "text", "text": text})
+        elif kind == "tool_use":
+            out.append({"type": "tool_use", "id": _field(block, "id"),
+                        "name": _field(block, "name"), "input": _field(block, "input", {}) or {}})
+        elif kind == "thinking":
+            if got.get("signature"):
+                out.append({"type": "thinking", "thinking": got.get("thinking") or "",
+                            "signature": got["signature"]})
+        elif kind == "redacted_thinking":
+            data = got.get("data") or _field(block, "data")
+            if data:
+                out.append({"type": "redacted_thinking", "data": data})
+        else:
+            other = got or _as_dict(block)
+            if other:
+                out.append(other)
+    return out
+
+
 def _stream(client, *, model: str, max_tokens: int, system: str,
             messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
             tool_choice: Optional[Dict[str, Any]], sampling: Dict[str, Any]):
+    """(the final message, its content as the next turn must replay it)."""
     kw: Dict[str, Any] = dict(model=model, max_tokens=max_tokens, system=system,
                               messages=messages, tools=tools, timeout=900.0, **sampling)
     if tool_choice:
         kw["tool_choice"] = tool_choice
+    streamed: Dict[int, Dict[str, Any]] = {}
     with client.messages.stream(**kw) as s:
-        for _ in s.text_stream:
-            pass
-        return s.get_final_message()
+        for event in s:
+            kind = getattr(event, "type", "")
+            if kind == "content_block_start":
+                streamed[event.index] = _as_dict(event.content_block)
+            elif kind == "content_block_delta":
+                block = streamed.setdefault(event.index, {})
+                delta = event.delta
+                step = getattr(delta, "type", "")
+                if step == "thinking_delta":
+                    block["thinking"] = (block.get("thinking") or "") + (getattr(delta, "thinking", "") or "")
+                elif step == "signature_delta":
+                    block["signature"] = (block.get("signature") or "") + (getattr(delta, "signature", "") or "")
+        msg = s.get_final_message()
+    return msg, _replayable(list(getattr(msg, "content", None) or []), streamed)
 
 
 FINISH_NOW = ("That was the last tool call this build allows. Call finish now "
@@ -439,9 +516,9 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
                 tools = [t for t in TOOLS if t["name"] == "finish"]
                 sent = _with_note(sent, FINISH_NOW)
         try:
-            msg = _stream(client, model=model, max_tokens=v2._max_tokens(), system=system,
-                          messages=sent, tools=tools, tool_choice=choice,
-                          sampling=sampling)
+            msg, replay = _stream(client, model=model, max_tokens=v2._max_tokens(),
+                                  system=system, messages=sent, tools=tools,
+                                  tool_choice=choice, sampling=sampling)
         except Exception as e:
             logger.error(f"[loop] call failed: {type(e).__name__}: {e}")
             break
@@ -456,7 +533,7 @@ def run_loop(spec_text: str, ctx: Dict[str, Any], business_id: str,
             if doc:
                 final_html = doc
             break
-        turns.append({"role": "assistant", "content": msg.content})
+        turns.append({"role": "assistant", "content": replay})
         results: List[Dict[str, Any]] = []
         done = False
         for use in uses:
