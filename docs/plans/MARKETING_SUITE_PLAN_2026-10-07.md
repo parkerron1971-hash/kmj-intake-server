@@ -158,7 +158,7 @@ Frontend (solutionist-studio, `module-system`):
 ## Kevin, by hand
 
 1. Confirm `social_connections` / `social_publications` are live (`SELECT to_regclass('public.social_publications')`); apply B3's migration after merge.
-2. Env: `POST_FOR_ME_API_KEY`, `POST_FOR_ME_PILOT_BUSINESSES` (`*` or the pilot ids); new `MARKETING_DESK_PUBLISHING`, `MARKETING_DESK`, `MARKETING_MAX_PER_TICK`; raise `DAILY_SPEND_CAP_USD` before widening; a `PROCESS_ROLE=worker` service runs (verified 2026-10-06).
+2. Env: `POST_FOR_ME_API_KEY`, `POST_FOR_ME_PILOT_BUSINESSES` (`*` or the pilot ids); new `MARKETING_DESK_PUBLISHING`, `MARKETING_DESK`, `MARKETING_MAX_PER_TICK`; raise `DAILY_SPEND_CAP_USD` before widening; a `PROCESS_ROLE=worker` service runs (verified 2026-10-06). **Done 2026-10-08 (B14):** `MARKETING_DESK` and `MARKETING_DESK_PUBLISHING` are on when unset (neither is set on Railway), `POST_FOR_ME_PILOT_BUSINESSES=*`, `DAILY_SPEND_CAP_USD=150`.
 3. Post for Me dashboard: enabled networks (LinkedIn is off there).
 4. Comp test businesses to each plan; first real posts to a test account.
 5. Step 5: connect Solutionist's own accounts in Post for Me, pause Buffer, drain, flip, `BUFFER_PUBLISHING=off`.

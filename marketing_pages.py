@@ -5561,7 +5561,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="how">
         <summary>Can the AI publish to my social accounts?</summary>
-        <div class="faq-body"><p>Yes, once you connect your Facebook Page (and linked Instagram Business account). Chief can draft, schedule, and publish directly. You approve each post; nothing goes out without your action. Connect from <strong>Build → Integrations → Social Publishing</strong>.</p></div>
+        <div class="faq-body"><p>Yes. Connect your own accounts once in <strong>Build → Social Media</strong>, and Chief can draft, schedule and post for you from <strong>Grow → Marketing</strong>. You approve each post; nothing goes out without your OK.</p></div>
       </details>
       <details class="faq-item" data-g="marketing">
         <summary>What does Chief do for my marketing?</summary>

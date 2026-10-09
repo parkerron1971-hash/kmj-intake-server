@@ -132,7 +132,7 @@ UNANNOUNCED_FEATURES: frozenset = frozenset()
 MARKETING_SUGGEST_WORDS = "Chief suggests one post a week for you to approve"
 MARKETING_WEEK_WORDS = "Chief plans your week: five posts with flyers, approve in one tap"
 MARKETING_OPENINGS_WORDS = "Chief turns open chairs into posts, with your own work photos"
-MARKETING_AUTOPILOT_WORDS = "Chief runs your week: flyers and your own video clips, with standing OKs"
+MARKETING_AUTOPILOT_WORDS = "Chief runs your week: flyers and your own video clips, and the kinds of posts you trust can go out without asking"
 MARKETING_LADDER: Dict[str, str] = {
     "starter": MARKETING_SUGGEST_WORDS,
     "solo": MARKETING_SUGGEST_WORDS,

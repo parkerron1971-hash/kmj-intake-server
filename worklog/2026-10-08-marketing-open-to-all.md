@@ -3,10 +3,10 @@ title: Open the marketing suite to every business (B14, on by default and announ
 date: 2026-10-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "open to everyone because right now no one is using it so you can set how it will work for everyone."
-status: in progress
-prs: [kmj-intake-server marketing-open-to-all (draft)]
+status: done
+prs: [kmj-intake-server #1350, solutionist-studio #1173]
 migrations: []
-left_undone: ["docs/MARKETING_DESK.md: the 'Open to every business (2026-10-08)' section (defaults and kill switches), and the B8/B9/B15 lines that still say MARKETING_DESK and MARKETING_DESK_PUBLISHING default off", "docs/plans/MARKETING_SUITE_PLAN_2026-10-07.md: annotate 'Kevin, by hand' item 2 as done where it is", "new __tests__/test_marketing_open_to_all.py: switch defaults, publishing default, plan_on and the desk rows made with the plan on, announced keys on /compare, /features and the FAQ, MARKETING_LADDER held to plan_features, no vendor names, /billing/plans marketing_by_plan", "existing suites that pin the old defaults, not yet updated: test_audience_plans (the levels are not on sale yet), test_business_marketing_dispatch (the switch parametrization), test_platform_marketing_suite and test_platform_out_of_tenant_fanout (unset MARKETING_DESK used to mean off), possibly others", "run every suite the task lists; only test_business_marketing_planner has run (97 passed)", "frontend: BillingPanel.FEATURE_LABELS has no labels for the three marketing keys, so the in-app plan cards show raw keys once this merges unless the frontend adds them (or reads /billing/plans marketing_by_plan)", "count of saved marketing_desks rows in production: unknown (the read-only count was refused by the permission system)"]
+left_undone: ["Chief's Content Plan verbs (chief_grow_actions plan_content, capture_idea, publish_post, publish_to_site) still write to Content Plan; the frontend now sends grow:content to the desk (F8/B16 retire the Meta path)", "count of saved marketing_desks rows in production: unknown (the read-only count was refused earlier); rows saved with plan_enabled false stay off by design"]
 decisions: ["MARKETING_DESK and MARKETING_DESK_PUBLISHING are read only in marketing_switches.py; unset or empty = on for every business; off (also false, no, 0) = the kill switch; a MARKETING_DESK value with no business id in it switches nobody on", "plan_enabled defaults to on for a business with no saved desk row (business_marketing.plan_on); rows the server makes write it explicitly because the column still defaults to false (no migration); an owner who turned it off stays off", "the fan-out's candidates are now every business in scope with a connected account, less desks saved with plan_enabled false", "the ladder's words live once in feature_gates.MARKETING_LADDER and feed /compare, /features, the FAQ and /billing/plans (marketing_by_plan); the barber plans show on the public pages only once offered"]
 related: [2026-10-07-marketing-plan-gates.md, 2026-10-08-platform-out-of-tenant-fanout.md]
 ---
@@ -22,3 +22,20 @@ and four FAQ entries (Marketing group) from `feature_gates.MARKETING_LADDER`;
 `.env.example` updated. Solutionist's own business stays out (#1345
 unchanged); the per-tick cap, jitter and 60% spend deferral are unchanged;
 `POST_FOR_ME_PILOT_BUSINESSES` untouched. See left_undone for the rest.
+
+Finished 2026-10-08 (session 1314a369, Kevin approving the Reach review:
+"ok all of the plans are great. let's do it."). Added
+__tests__/test_marketing_open_to_all.py (30: switch defaults and kill
+switches, plan_on / new_desk_row, announced keys, MARKETING_LADDER held to
+plan_features, the words on /compare, /features, the FAQ and
+/billing/plans, no posting-service name on the public pages, the FAQ no
+longer sends people to the old Facebook connection). Updated the four suites
+that pinned "unset means off". docs/MARKETING_DESK.md gained "Open to every
+business" and its B5/B8/B9/B15 lines; the plan doc's by-hand item 2 is
+marked done. The stale FAQ answer about publishing now points at Build,
+Social Media and Grow, Marketing. MARKETING_AUTOPILOT_WORDS is in plain words
+("the kinds of posts you trust can go out without asking"), matching the
+frontend's plan cards. Railway: neither MARKETING_DESK nor
+MARKETING_DESK_PUBLISHING is set, so the new defaults apply on deploy;
+DAILY_SPEND_CAP_USD=150 staged 2026-10-08. Marketing suites: 1473 tests, all
+passing after the updates.
