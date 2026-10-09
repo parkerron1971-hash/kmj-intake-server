@@ -19,6 +19,7 @@ prop (F7):
   POST /platform/marketing/suite/posts/{id}/take-back    an approved post back to a draft (B13)
   PUT  /platform/marketing/suite/settings                the desk's settings
   GET  /platform/marketing/suite/results                 what came through the post links
+  GET  /platform/marketing/suite/calendar?month=YYYY-MM  one month of everything that goes out
   POST /platform/marketing/suite/engine/run              queue Chief's week (the worker writes it)
   GET  /platform/marketing/suite/preview                 what Chief would write about, read-only
   GET  /platform/marketing/drain                         the Buffer posts still to go out
@@ -45,7 +46,7 @@ import os
 from typing import Any, Dict
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 import business_marketing as bm
 import business_marketing_planner as planner
@@ -179,6 +180,15 @@ async def suite_results(owner=Depends(require_owner)):
         return await outcomes.for_business(str(row['id']), now=bm.now())
     except store.StoreError:
         raise HTTPException(503, bm.READ_DOWN) from None
+
+
+@router.get('/suite/calendar')
+async def suite_calendar(month: str = Query(..., max_length=7), owner=Depends(require_owner)):
+    """Solutionist's own desk's month (business_marketing_calendar), as the
+    app's Calendar → Month reads it for a business."""
+    row = await platform_business(owner)
+    biz = await platform_suite.effective_row_async(row)
+    return await bm.calendar_route(_id(row), month, biz)
 
 
 @router.post('/suite/engine/run', status_code=202)
