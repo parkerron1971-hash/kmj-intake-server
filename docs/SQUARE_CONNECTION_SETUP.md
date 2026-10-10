@@ -1,6 +1,10 @@
 # Square connection pilot
 
-This is the connection and read-only appointment preview foundation for businesses that already use Square Appointments. It is **disabled by default** and restricted to explicit pilot owner IDs. No booking import, Square booking write, payment access, webhook subscription, or reminder automation is enabled by this change. The connection/location/preview interface is being prepared separately for the existing Integrations page.
+This is the connection and read-only appointment preview foundation for businesses that already use Square Appointments. It is **disabled by default** and restricted to explicit pilot owner IDs. No booking import, Square booking write, payment access, webhook subscription, or reminder automation is enabled by this change. The connection/location/preview interface is implemented in the existing Integrations page.
+
+## Rollout status — 2026-10-10
+
+Backend PR #1356 and frontend PR #1183 are merged and deployed. Frontend Vercel deployment 7y9ktja9AGdYwMwdMQoxbDpNNzG2 succeeded at 5e2f91e506277620912ff3a7a24f47216b5e51ab; the live IntegrationsHub-Bp0sUXql.js asset contains the Square appointment panel and preview route. Backend production deployment c5b1bf4c-57f4-416f-a91b-536b56097e15 succeeded at c95fed7311f4739568b741d7a1e59c3df1377667. Both SQL migrations were applied to brqjgbpzackdihgjsorf and their role restrictions verified. Sandbox ID, encryption key, callback/return URLs and the single platform-owner allowlist are stored in Railway. SQUARE_ENABLED remains false. The Sandbox OAuth application secret is still missing because the Square developer session expired; Kevin must sign in before private configuration and real sandbox OAuth/preview/disconnect acceptance can finish. Never enable production sellers based on fixture tests alone.
 
 ## Existing Square app
 
