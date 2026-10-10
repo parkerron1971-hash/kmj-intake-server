@@ -40,7 +40,7 @@ HTTP errors never echo upstream bodies. Database outages return 503 rather than 
 
 ## Permissions and boundaries
 
-Requested scopes: APPOINTMENTS_READ, APPOINTMENTS_ALL_READ, APPOINTMENTS_BUSINESS_SETTINGS_READ, CUSTOMERS_READ, ITEMS_READ, MERCHANT_PROFILE_READ. These prepare for reading a seller's existing appointments, services, customers and locations. No appointment-write, customer-write, payment or employee-directory scopes are requested.
+Requested scopes: APPOINTMENTS_READ, APPOINTMENTS_ALL_READ, MERCHANT_PROFILE_READ. These read existing appointments and locations only. Customer-directory, catalog and booking-settings scopes are deferred until a feature needs them. No appointment-write, customer-write, payment or employee-directory scopes are requested.
 
 Each merchant may connect to only one Solutionist business per environment. Sandbox and production cannot share state or tokens. State, ticket and browser secrets are stored only as hashes. Credentials use a dedicated Fernet key. All writes repeat ownership checks in the database where needed; callbacks and refreshes cannot restore a connection after disconnect. Table data is excluded from account export and cascades on business deletion.
 
@@ -79,7 +79,7 @@ Do not SELECT credentials, ticket_hash, state_hash or browser_hash into shared l
 
 ## Next implementation
 
-1. Add the owner connection card and location selection, using existing responsive integration patterns. Hide the card when status.available is false.
+1. Deploy paired frontend PR solutionist-studio#1183, which provides the owner connection card, location selection and preview. The card hides only for explicit status.available=false; transport/route failures remain visible.
 2. Validate read scopes and booking profiles against sandbox and a consenting pilot seller. Location selection is stored now; an ACTIVE location alone does not prove bookability.
 3. Build on the read-only preview to implement booking import (31-day API query windows with pagination), source identity/version fences, out-of-order-safe booking webhooks, replayable jobs, and revocation handling.
 4. Map Square appointments into one canonical calendar projection. Guard native reminders, completion, billing and availability paths before exposing imported records. Square cancellation and no-show states must not become completed/paid sessions.
@@ -96,3 +96,7 @@ Range: up to 93 elapsed days, explicit timezone required. Results use a half-ope
 A stable connection_id changes on connect/disconnect; selection_revision changes on every saved selection. Both are checked before preview/save and again after loading. A concurrent disconnect or location change invalidates the result. Token refresh only rotates its separate credential revision and cannot invalidate a saved location list. Disconnect clears selections. Reselect after reconnect.
 
 The second migration adds these three columns and the service-only square_save_locations RPC, and updates the existing connect/disconnect transactions. Both migrations are replay-tested; apply them in order. Verify connection_id, selected_location_ids and selection_revision exist using information_schema.columns; do not print connection credentials.
+
+## Rollout review (2026-10-10)
+
+Revocation uses `Authorization: Client APPLICATION_SECRET` with the merchant ID. The [official endpoint contract](https://developer.squareup.com/reference/square/oauth-api/revoke-token) documents `success: true` for success, not a safe blanket interpretation of 401/403 as already revoked. Keep those failures pending instead of claiming the grant is removed; verify external revocation and retry in live sandbox acceptance. A lost database revision now reads the current state rather than reporting unconditionally successful removal.

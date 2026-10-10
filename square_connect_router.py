@@ -188,5 +188,13 @@ async def disconnect(business_id: UUID, response: Response, user: AuthedUser = D
         except HTTPException:
             response.status_code = 202
             return {"disconnected": True, "revocation_pending": True, "retry_after_seconds": 120}
-    await sq.rpc("finish_disconnect", p_business=str(business_id), p_environment=cfg.environment, p_revision=claim["revision"])
+    finished = await sq.rpc("finish_disconnect", p_business=str(business_id), p_environment=cfg.environment, p_revision=claim["revision"])
+    if not finished:
+        # A newer disconnect/reconnect owns the row; report its current state.
+        row = await sq.connection(business_id, cfg)
+        if row and row["status"] == "connected":
+            raise HTTPException(409, "Your Square connection changed. Refresh before continuing.")
+        pending = bool(row and row["status"] == "revocation_pending")
+        response.status_code = 202 if pending else 200
+        return {"disconnected": True, "revocation_pending": pending, "retry_after_seconds": 120 if pending else None}
     return {"disconnected": True, "revocation_pending": False}

@@ -84,7 +84,7 @@ def test_oauth_roundtrip_cookie_and_ciphertext(client, monkeypatch, cfg):
     url = urlsplit(begin.headers["location"])
     assert url.netloc == "connect.squareupsandbox.com"
     query = parse_qs(url.query)
-    assert set(query["scope"][0].split()) == set(sq.SCOPES)
+    assert set(query["scope"][0].split()) == {"APPOINTMENTS_READ", "APPOINTMENTS_ALL_READ", "MERCHANT_PROFILE_READ"}
     assert not any("WRITE" in scope or "PAYMENT" in scope for scope in sq.SCOPES)
     assert query["session"] == ["false"]
     assert "HttpOnly" in begin.headers["set-cookie"] and "Secure" in begin.headers["set-cookie"]
@@ -244,3 +244,21 @@ def test_log_and_sentry_redaction():
     record=logging.LogRecord("uvicorn.access",20,"",0,"GET %s",(url,),None)
     assert RedactCredentialPaths().filter(record)
     assert "private" not in record.getMessage()
+
+
+@pytest.mark.parametrize("status,code,pending", [("revocation_pending",202,True),("disconnected",200,False),("connected",409,None)])
+def test_disconnect_lost_revision_reports_current_state(client, monkeypatch, status, code, pending):
+    async def rpc(name, **kwargs):
+        return [{"merchant_id":"merchant1", "revision": BIZ}] if name == "disconnect" else False
+    async def square(*args, **kwargs):
+        return {"success": True}
+    async def connection(*args):
+        return {"status": status}
+    monkeypatch.setattr(sq, "rpc", rpc)
+    monkeypatch.setattr(sq, "square", square)
+    monkeypatch.setattr(sq, "connection", connection)
+    response = client.delete("/square/connection", params={"business_id": BIZ})
+    assert response.status_code == code
+    if pending is not None:
+        assert response.json()["revocation_pending"] is pending
+        assert response.json()["disconnected"] is True
