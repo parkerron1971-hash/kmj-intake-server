@@ -15,3 +15,5 @@ Integrated current trunk and resolved additive release-note/environment-example 
 Release review: fixed stale disconnect completion reporting and reduced consent to the three scopes needed by bookings/locations. Missing status routes now show a retryable error; the global release note explicitly says general access is not open. Official Square documentation does not establish 401/403 as successful revocation, so that case remains fail-closed pending a live test. Sandbox variables and a new encryption key are staged in Railway with SQUARE_ENABLED=false; the allowlist contains only the verified platform owner.
 
 Review fixes validated: 137 backend tests and 23 browser checks passed, including the stale-disconnect and missing-route regressions.
+
+Live navigation preflight found the OAuth return link used an unsupported top-level hash. Corrected it to /#/build/integrations, verified against SolutionistLayout routing, and added coverage to the OAuth round-trip regression.

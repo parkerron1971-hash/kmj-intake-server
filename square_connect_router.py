@@ -36,7 +36,7 @@ def cookie_name(state):
 def complete(cfg, message, state="", status=200):
     response = HTMLResponse("<!doctype html><html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>"
         "<title>Square connection</title><h1>Square connection</h1><p>" + html.escape(message) +
-        "</p><p><a href='" + html.escape(cfg.app_url.rstrip("/") + "/#/integrations", quote=True) + "'>Return to Solutionist</a></p></html>",
+        "</p><p><a href='" + html.escape(cfg.app_url.rstrip("/") + "/#/build/integrations", quote=True) + "'>Return to Solutionist</a></p></html>",
         status_code=status, headers=HEADERS)
     if state:
         response.delete_cookie(cookie_name(state), path="/", secure=True, httponly=True, samesite="lax")

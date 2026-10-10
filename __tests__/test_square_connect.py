@@ -93,6 +93,7 @@ def test_oauth_roundtrip_cookie_and_ciphertext(client, monkeypatch, cfg):
     response = client.get("/connect/square/callback", params={"state": state, "code": "private-code"})
     assert response.status_code == 200
     assert "Square is connected" in response.text
+    assert "https://app.example.com/#/build/integrations" in response.text
     assert "Nothing has been imported" in response.text
     assert sq.unseal(cfg, saved["finish"]["p_credentials"]) == TOKENS
     assert saved["exchange"]["body"]["redirect_uri"] == cfg.callback
