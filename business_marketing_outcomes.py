@@ -14,6 +14,14 @@ post id is the one join key:
           the tab's session; a Do Not Track visitor sends nothing)
   leads   contacts of this business whose recorded attribution carries the
           post id (lead_attribution: only what the form or booking recorded)
+  bookings  bookings (module_entries) of this business whose own recorded
+          attribution carries the post id: made on a page reached through
+          the post's link (2026-10-09, booking_widget_router.
+          booking_attribution; the hosted /book page keeps the tags for the
+          tab's session)
+  paid_cents  what was paid online for those bookings (Stripe's own amount,
+          data.amount_charged_cents, once the booking's paid_at is set): a
+          deposit counts as what was paid, not the service's price
 
 The window is the last 30 days: the posts that went out in it, and what came
 through their links since.
@@ -47,13 +55,13 @@ from business_marketing_desk import channels_of, query_time
 
 logger = logging.getLogger("business_marketing_outcomes")
 
-MEASURES = ("clicks", "visits", "leads")
+MEASURES = ("clicks", "visits", "leads", "bookings", "paid_cents")
 WINDOW_DAYS = 30
 SENT = ("submitted", "published", "partly_published")
 POST_COLUMNS = "id,caption,status,run_at,landing_url,tracked_url,link_code,targets,external_urls"
 POSTS_LIMIT = 200
 BATCH = 100
-LIMITS = {"clicks": 5000, "visits": 20000, "leads": 5000}
+LIMITS = {"clicks": 5000, "visits": 20000, "leads": 5000, "bookings": 5000}
 
 
 class _Unread(Exception):
@@ -128,17 +136,31 @@ def headline(totals: Dict[str, Optional[int]], sources: Dict[str, str], *, sent:
     parts = [_count(max(totals["clicks"] or 0, totals["visits"] or 0), "visit", "visits")]
     if totals["leads"]:
         parts.append(_count(totals["leads"], "lead", "leads"))
-    listed = " and ".join(parts)
+    if totals["bookings"]:
+        parts.append(_count(totals["bookings"], "booking", "bookings"))
+    listed = parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
     floor = "At least " if any(sources[m] == "partial" for m in MEASURES) else ""
     sentence = f"{listed} came through the links in your {linked_posts} from the last 30 days."
-    return floor + sentence if floor else sentence[0].upper() + sentence[1:]
+    sentence = floor + sentence if floor else sentence[0].upper() + sentence[1:]
+    if totals["paid_cents"]:
+        sentence += f" {money(totals['paid_cents'])} of it was paid online."
+    return sentence
 
 
-async def _measure_posts(bid: str, ids: List[str],
-                         since: datetime) -> Tuple[Dict[str, Dict[str, Optional[int]]], Dict[str, str]]:
-    """Clicks, visits and leads per post (ids: validated post ids) since
-    `since`, and each source's state. A source that cannot be read is None
-    for every post, never 0."""
+def money(cents: int) -> str:
+    """$45, or $45.50."""
+    dollars, rest = divmod(int(cents), 100)
+    return f"${dollars:,}" + (f".{rest:02d}" if rest else "")
+
+
+async def _measure_posts(bid: str, ids: List[str], since: datetime, *,
+                         clicks_from: str = "posts") -> Tuple[Dict[str, Dict[str, Optional[int]]], Dict[str, str]]:
+    """Clicks, visits, leads, bookings and what was paid for them per post
+    (ids: validated post ids) since `since`, and each source's state. A
+    source that cannot be read is None for every post, never 0.
+    clicks_from "links": the ids are tracked links on texts and emails
+    (business_marketing_sent_links; their clicks are marketing_link_hits),
+    joined to visits, leads and bookings by the same utm_content."""
     per: Dict[str, Dict[str, Optional[int]]] = {pid: {m: 0 for m in MEASURES} for pid in ids}
     sources = {m: "loaded" for m in MEASURES}
     if not ids:
@@ -146,15 +168,24 @@ async def _measure_posts(bid: str, ids: List[str],
     day = since.date().isoformat()
     stamp = query_time(since)
     import platform_suite
-    if await platform_suite.is_platform_async(bid):
+    platform = await platform_suite.is_platform_async(bid)
+    if platform:
         # Solutionist's own desk on the suite (B15): its pages are the
         # platform's (site_events with no business) and its leads the
         # platform's own (marketing_leads), as marketing_outcomes reads them.
+        # It takes no bookings, so none are read.
         visits_at, leads_at = "business_id=is.null", "/marketing_leads?"
     else:
         visits_at, leads_at = f"business_id=eq.{bid}", f"/contacts?business_id=eq.{bid}&"
-    (clicks, sources["clicks"]), (events, sources["visits"]), (leads, sources["leads"]) = await asyncio.gather(
+
+    async def no_bookings():
+        return [], False
+
+    ((clicks, sources["clicks"]), (events, sources["visits"]), (leads, sources["leads"]),
+     (bookings, sources["bookings"])) = await asyncio.gather(
         _measure(lambda: _batched(_store, lambda s: (
+            f"/marketing_link_hits?business_id=eq.{bid}&link_id=in.({s})&day=gte.{day}"
+            "&select=post_id:link_id,clicks" if clicks_from == "links" else
             f"/marketing_link_clicks?business_id=eq.{bid}&post_id=in.({s})&day=gte.{day}"
             "&select=post_id,clicks"), ids, LIMITS["clicks"])),
         _measure(lambda: _batched(_service, lambda s: (
@@ -163,7 +194,12 @@ async def _measure_posts(bid: str, ids: List[str],
         _measure(lambda: _batched(_service, lambda s: (
             f"{leads_at}attribution->>utm_content=in.({s})&created_at=gte.{stamp}"
             "&select=id,attribution"), ids, LIMITS["leads"])),
+        _measure(no_bookings if platform else lambda: _batched(_service, lambda s: (
+            f"/module_entries?business_id=eq.{bid}&data->attribution->>utm_content=in.({s})"
+            f"&created_at=gte.{stamp}&select=id,paid_at,post:data->attribution->>utm_content,"
+            "charged:data->>amount_charged_cents"), ids, LIMITS["bookings"])),
     )
+    sources["paid_cents"] = sources["bookings"]
     for row in clicks:
         pid = str(row.get("post_id") or "")
         if pid in per:
@@ -179,11 +215,35 @@ async def _measure_posts(bid: str, ids: List[str],
         pid = str((row.get("attribution") or {}).get("utm_content") or "")
         if pid in per:
             per[pid]["leads"] += 1
+    for row in bookings:
+        pid = str(row.get("post") or "")
+        if pid in per:
+            per[pid]["bookings"] += 1
+            if row.get("paid_at"):
+                per[pid]["paid_cents"] += _cents(row.get("charged"))
     for pid in per:
         for m in MEASURES:
             if sources[m] == "unavailable":
                 per[pid][m] = None
     return per, sources
+
+
+def _cents(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def for_links(business_id: Any, link_ids: List[str], since: datetime) -> Dict[str, Any]:
+    """What came through these tracked links (a campaign's touches) since
+    `since`: {totals, sources, per_link}. Each measure as for posts; unread
+    is None and named, never 0."""
+    bid = str(UUID(str(business_id)))
+    ids = [str(UUID(str(i))) for i in link_ids]
+    per, sources = await _measure_posts(bid, ids, since, clicks_from="links")
+    totals = {m: (sum(p[m] for p in per.values()) if sources[m] != "unavailable" else None) for m in MEASURES}
+    return {"totals": totals, "sources": sources, "per_link": per}
 
 
 # ── what did well, by play (the weekly plan, B9) ──────────────────────
@@ -193,13 +253,17 @@ PLAY_POSTS_LIMIT = 200
 SCORED = ("published", "partly_published")
 
 
+SCORED_MEASURES = ("clicks", "visits", "leads", "bookings")
+
+
 def score(measured: Optional[Dict[str, Optional[int]]]) -> Optional[float]:
     """One post's result through its own link: a lead counts far more than a
-    look (the platform's weighting, marketing_engine._score, without the
-    signups a business site does not have). None when a measure is unread."""
-    if not measured or any(measured.get(m) is None for m in MEASURES):
+    look, and a booking more than a lead (the platform's weighting,
+    marketing_engine._score, with a business's bookings in place of the
+    platform's signups). None when a measure is unread."""
+    if not measured or any(measured.get(m) is None for m in SCORED_MEASURES):
         return None
-    return measured["leads"] * 4 + max(measured["clicks"], measured["visits"])
+    return measured["bookings"] * 8 + measured["leads"] * 4 + max(measured["clicks"], measured["visits"])
 
 
 async def play_scores(business_id: Any, *, now: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:

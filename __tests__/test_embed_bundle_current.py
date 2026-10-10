@@ -36,6 +36,8 @@ REQUIRED = {
     "arrival_window_min": "arrival windows (visitor sees exact times instead)",
     "book-anon": "anonymous booking submit — the widget's whole purpose",
     "config-anon": "widget config load — nothing renders without it",
+    "sol_c": "a booking keeps which post's link it came through (the tab's campaign tags)",
+    "marketing_sms_consent": "the optional texts-about-offers box (marketing consent of its own)",
 }
 
 

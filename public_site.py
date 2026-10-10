@@ -5797,6 +5797,10 @@ async def _serve_booking_page(client, biz_id: Optional[str], slug: str) -> HTMLR
         )
 
     html = render_booking_page(business, canonical, embed_origin=_EMBED_ORIGIN)
+    # The page-view beacon (2026-10-09): /book is where a desk post's link
+    # lands by default, so its visits are counted, and the campaign tags it
+    # keeps for the tab are what the booking widget sends with the booking.
+    html = _inject_traffic_beacon(html, biz_id)
     return HTMLResponse(
         content=html, media_type="text/html",
         headers={**_PUBLIC_SITE_NO_STORE_HEADERS},

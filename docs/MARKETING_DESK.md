@@ -194,6 +194,17 @@ approved posts (`marketing_claim_due`) and re-checks everything at send time.
 - **This business's rows only.** Every post, picture, clip and account is
   read with the business id in the filter, so another business's id answers
   exactly like a missing one.
+- **Pictures or a clip.** A post carries one picture (`artwork_id`), up to
+  ten in order (`artwork_ids`, 2026-10-09: a carousel where the network
+  takes one; the first is the one people see; the same id twice counts
+  once), or one approved clip (`clip_id` + `clip_fingerprint`), never a
+  clip and pictures together. A network that shows fewer pictures in one
+  post gets the first ones at send time (`business_marketing_dispatch.
+  PICTURE_CAPS`: X 4, LinkedIn 9, Pinterest 1); the post and its record keep
+  every picture approved. `POST /slot/edit` takes the same fields. The
+  app's composer (Grow → Create → Post, and New post on the desk) sends
+  `clip_id` with the fingerprint it showed, so a clip changed since is
+  refused, never posted.
 - **Links.** `landing_url` must be https on the business's own host: its
   `mysolutionist.app` subdomain, or its custom domain once verified.
   `publish_text` is the caption with the post's short link (B6, below).
@@ -425,7 +436,12 @@ and `marketing_follow` came with B3.
   - visits as distinct sessions in this business's `site_events` whose
     `data.utm_content` is the post;
   - leads from this business's `contacts` whose `attribution.utm_content` is
-    the post.
+    the post;
+  - bookings (2026-10-09) from this business's `module_entries` whose own
+    `data.attribution.utm_content` is the post, and `paid_cents`: what was
+    paid online for them (`data.amount_charged_cents` once `paid_at` is
+    set; a deposit counts as what was paid). Solutionist's own desk reads
+    none.
 
   It returns `totals`, `posts` (each with `has_link`), `sources` (`loaded`,
   `partial` at a row limit, or `unavailable`), `site.state` (`ready`, `none`
@@ -433,11 +449,114 @@ and `marketing_follow` came with B3.
   "brought". A source that cannot be read is `null` and named, never 0. A
   post with no link has `null` measures. The posts unreadable is a 503.
 - **Leads are a floor.** `lead_attribution.capture` reads campaign tags off
-  the form's `Referer`. Business-site forms and the booking widget post
-  cross-origin to the API, and browsers send only the origin then, so most
-  leads arrive without `utm_content` today. Counting them needs the forms
-  and the booking widget to send the session's tags (frontend and
-  site-module work, not built).
+  the form's `Referer`. Business-site forms post cross-origin to the API,
+  and browsers send only the origin then, so most form leads arrive without
+  `utm_content` (sending the session's tags from site forms is not built).
+- **Bookings follow the link (2026-10-09).** The hosted `/book` page carries
+  the page-view beacon (`public_site._serve_booking_page`), so its visits
+  count and it keeps the first-touch tags for the tab (`sol_c`). The booking
+  widget sends them as `attribution` on `book-anon` and `book`;
+  `booking_widget_router.booking_attribution` reads them through
+  `lead_attribution`'s whitelist (the page address wins when the browser
+  sends it) and the booking keeps the server's reading in
+  `data.attribution` (what the form sent under that key is dropped). The
+  contact keeps it too when the booking makes one. `static/embed.js` is the
+  rebuilt widget (`test_embed_bundle_current` checks it sends `sol_c`).
+  Bookings made on a business's own custom site count only when that page's
+  address carries the tags.
+
+### Tracked links on texts and emails (2026-10-09)
+
+The Reach plan's step 1, "links on texts, emails and offers too".
+`business_marketing_sent_links.py` gives what goes out another way the same
+link a post carries. First user: Grow → Outreach (`campaigns_router`).
+
+- **`{{link}}`.** A touch (an email or a text) that says `{{link}}` sends
+  that touch's own short link, `{origin}/go/{code}`, to the business's booking
+  page when anything is bookable, else its published site. One link per
+  touch (id `uuid5(kind:campaign:part)`, code from its own sha256 prefix), so
+  everyone the touch goes to gets the same link and a retried send lands on
+  the same row. It is made on the touch's first send (`marketing_links`);
+  nothing is made for a draft. Chief's drafting prompt places it once where
+  tapping through helps, and never any other address. The app's Outreach
+  editor has "Add your link".
+- **Tags.** `utm_source=email|sms`, `utm_medium=outreach`,
+  `utm_campaign=<campaign id>`, `utm_content=<link id>`, so the visit, lead,
+  booking and payment after a tap are credited to the touch by the same join
+  a post uses.
+- **The redirect.** `marketing_follow` looks at `marketing_posts` first and
+  then `marketing_links` (a post's code wins); a person's click on a link
+  counts in `marketing_link_hits` (every link out there went out). Same host
+  rule: only to https on the business's own hosts.
+- **Fail closed.** A launch whose touch says `{{link}}` with nowhere to send
+  people is a 409 in plain words (503 when that cannot be read). At send
+  time a link that cannot be made holds the touch for a later tick; nothing
+  goes out with a missing link. With no landing at all, `{{link}}` is left
+  out of the words, never sent as written.
+- **Results.** `GET /campaigns/{id}` answers `results.links` (None when no
+  touch has a link): `totals`, `sources` and `by_touch`, from
+  `business_marketing_outcomes.for_links` (clicks from `marketing_link_hits`,
+  then visits, leads, bookings and `paid_cents` as for posts). Unread is
+  None and named, never 0.
+- **Migration.** `supabase/APPLY-2026-10-09-marketing-links.sql` (applied
+  live before this deployed).
+### One calendar of everything that goes out (2026-10-09)
+
+`business_marketing_calendar.py`, the Reach plan's step 1 ("one calendar").
+`GET /marketing/{business_id}/calendar?month=YYYY-MM` (viewer; Mission
+Control's desk: `GET /platform/marketing/suite/calendar`) answers one month
+on the business's own clock (`business_tz`, as `/engine`): its desk posts
+(`marketing_posts`, not cancelled; each the desk's `public_post`) and its
+Outreach emails and texts (`campaigns` running, paused or completed with a
+start day; a touch goes out on the start day plus its offset, the sweep's
+own rule). A touch is `planned`, `sending` (due, still going out: quiet
+hours, a held link, the per-tick cap), `sent` (finished) or `paused`, with
+how many people it went to (`campaign_sends`). A draft campaign has no day
+and is not shown. `sources.posts` / `sources.campaigns` are `loaded`,
+`partial` (at a row limit) or `unavailable`: a failed read is named and its
+items left out, never an empty month. Nothing here writes. The app's
+Calendar → Month reads it.
+
+### Outreach that runs by itself (2026-10-09, step 2)
+
+`outreach_journeys.py` + `journeys_router.py` (`GET /journeys/{business_id}`
+viewer, `PUT /journeys/{business_id}/{kind}` owner); the app's Grow →
+Outreach → Automatic. Kevin, 2026-10-08: the review ask on every plan,
+win-back / rebook / birthday from the Week level up; 2026-10-09: "Build
+now, texts after".
+
+- **The journeys.** `review_ask` (hours after a visit, the review link
+  `settings.get_found.review_url`; once per visit, at most once per person
+  in 120 days), `win_back` (last visit `days` ago, default 60, nothing
+  booked; a 14-day window), `rebook` (default 35 days, a 7-day window),
+  `birthday` (`contacts.birthdate` on the business's clock; Feb 29 on Mar 1
+  in a common year). Visits are `sessions` (scheduled or completed; online
+  bookings mirror there).
+- **The owner's OK.** Nothing runs until switched on in
+  `settings.journeys.<kind>`, next to its exact words (email subject, email,
+  text), which the owner can change or reset. Week-only journeys can't be
+  switched on below the Week level (409); the review ask needs its link
+  (409).
+- **How a note goes.** By email (`send_via_resend`: suppression, one-click
+  unsubscribe, never to a contact who opted out). By text only when
+  `JOURNEY_TEXTS=on` (off until the 10DLC registration covers marketing)
+  AND the person ticked the booking widget's optional "texts about offers"
+  box (`sms_consents` source `booking_marketing`, recorded by both booking
+  doors; it is NOT reminder consent: `sms_alerts._positive_consent` skips
+  it) AND has not opted out. Only 9 AM to 8 PM on the business's clock; at
+  most 40 notes per business per day; never while
+  `settings.automations_paused`. Kill switch `JOURNEYS=off`.
+- **Exactly once.** `journey_sends` (UNIQUE business, journey, key) is
+  claimed before a note is sent. A journey whose `{{link}}` can't be made
+  waits for a later sweep (nothing claimed).
+- **Links and results.** `{{link}}` is the journey's tracked link
+  (`business_marketing_sent_links.journey_link`, `marketing_links` kind
+  `journey`, part 0 email / 1 text; tags `utm_medium=journey`,
+  `utm_campaign=<journey>`). The overview reports notes sent in 30 days by
+  channel and what came through each journey's link
+  (`outcomes.for_links`).
+- **Sweep.** `journeys_tick` every 30 minutes (`kmj_intake_automation`).
+- **Migration.** `supabase/APPLY-2026-10-09-journeys.sql`.
 
 ### The weekly suggestion and the fan-out (B8)
 

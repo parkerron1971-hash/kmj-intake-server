@@ -498,6 +498,51 @@ def test_an_unapproved_or_changed_clip_is_refused(s):
     assert s.db.writes == []
 
 
+ART2 = 'a0000000-0000-4000-8000-000000000009'
+
+
+def _second_picture(s):
+    s.svc.artworks.append({'id': ART2, 'business_id': BIZ, 'status': 'ready', 'storage_path': f'{BIZ}/{ART2}.png',
+                           'size': '1024x1024', 'created_at': '2026-10-08T12:00:00Z', 'clip_id': None})
+
+
+def test_several_pictures_are_one_post_in_the_owners_order(s):
+    _second_picture(s)
+    r = call(s, 'POST', '/ideas', {'caption': 'Three looks this week.', 'artwork_ids': [ART2, ART, ART2]})
+    assert r.status_code == 200, r.text
+    saved = s.db.posts[r.json()['post']['id']]
+    assert saved['media'] == {'artwork_ids': [ART2, ART]}              # in order, each once: the first is the one people see
+    assert [t['platform'] for t in saved['targets']] == ['instagram', 'facebook']
+    assert saved['content_hash'] == store.digest(saved)
+
+
+def test_pictures_are_refused_with_a_clip_with_artwork_id_past_ten_or_not_this_business(s):
+    _second_picture(s)
+    fp = media_library.fingerprint(s.svc.clips[0])
+    r = call(s, 'POST', '/ideas', {'caption': 'x', 'artwork_ids': [ART], 'clip_id': CLIP, 'clip_fingerprint': fp})
+    assert r.status_code == 422 and r.json()['detail'] == 'A post carries a clip or a picture, not both.'
+    r = call(s, 'POST', '/ideas', {'caption': 'x', 'artwork_id': ART, 'artwork_ids': [ART2]})
+    assert r.status_code == 422 and r.json()['detail'] == 'Send the pictures as one list.'
+    r = call(s, 'POST', '/ideas', {'caption': 'x', 'artwork_ids': [ART] * 11})
+    assert r.status_code == 422                                          # the door takes at most ten
+    r = call(s, 'POST', '/ideas', {'caption': 'x', 'artwork_ids': [ART, THEIR_ART]})
+    assert r.status_code == 404 and "isn't in this business" in r.json()['detail']
+    r = call(s, 'POST', '/ideas', {'caption': 'x', 'artwork_ids': [ART, ART_WORKING]})
+    assert r.status_code == 409 and 'still being made' in r.json()['detail']
+    assert s.db.writes == []
+
+
+def test_an_edit_can_set_several_pictures(s):
+    _second_picture(s)
+    p = seed(s, targets=(FB,), media={'artwork_ids': [ART]})
+    r = call(s, 'POST', '/slot/edit', {'items': [slot(p)], 'artwork_ids': [ART, ART2]})
+    assert r.status_code == 200, r.text
+    row = s.db.posts[p['id']]
+    assert row['media'] == {'artwork_ids': [ART, ART2]} and row['revision'] == 2 and row['status'] == 'draft'
+    r = call(s, 'POST', '/slot/edit', {'items': [slot(row)], 'artwork_ids': [ART], 'remove_media': True})
+    assert r.status_code == 422
+
+
 def test_only_instagram_without_a_picture_saves_nothing(s):
     r = call(s, 'POST', '/ideas', {'caption': 'Fresh fades.', 'connection_ids': [IG]})
     assert r.status_code == 422 and 'Instagram needs a picture' in r.json()['detail']

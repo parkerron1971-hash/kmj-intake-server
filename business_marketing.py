@@ -79,7 +79,7 @@ from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 import business_marketing_desk as reading
@@ -404,19 +404,30 @@ def _artwork(business_id: str, artwork_id: Any) -> Dict[str, Any]:
     return row
 
 
+# The posting door takes at most ten (business_marketing_dispatch.MAX_PICTURES).
+MAX_PICTURES = 10
+
+
 async def build_media(business_id: str, *, artwork_id=None, clip_id=None, clip_fingerprint=None,
-                      covers=None) -> Dict[str, Any]:
-    """The media a post binds: a ready picture of this business, or a ready
-    clip of this business approved as it is now (its review fingerprint) with
-    the covers chosen for it (none: the newest ready cover of each shape; {}:
-    no cover). Nothing is fetched or published here."""
-    if artwork_id and clip_id:
+                      covers=None, artwork_ids=None) -> Dict[str, Any]:
+    """The media a post binds: ready pictures of this business (one, or up
+    to MAX_PICTURES in the owner's order: a carousel where the network takes
+    one), or a ready clip of this business approved as it is now (its review
+    fingerprint) with the covers chosen for it (none: the newest ready cover
+    of each shape; {}: no cover). Nothing is fetched or published here."""
+    if artwork_id and artwork_ids:
+        raise HTTPException(422, 'Send the pictures as one list.')
+    pictures = [artwork_id] if artwork_id else list(artwork_ids or [])
+    if pictures and clip_id:
         raise HTTPException(422, 'A post carries a clip or a picture, not both.')
     if (covers is not None or clip_fingerprint) and not clip_id:
         raise HTTPException(422, 'Choose the clip along with its covers.')
-    if artwork_id:
-        row = await asyncio.to_thread(_artwork, business_id, artwork_id)
-        return {'artwork_ids': [str(row['id'])]}
+    if pictures:
+        ids = list(dict.fromkeys(str(UUID(str(a))) for a in pictures))
+        if len(ids) > MAX_PICTURES:
+            raise HTTPException(422, f'A post carries at most {MAX_PICTURES} pictures.')
+        rows = [await asyncio.to_thread(_artwork, business_id, a) for a in ids]
+        return {'artwork_ids': [str(row['id']) for row in rows]}
     if clip_id:
         import clip_posting
         import media_library
@@ -752,6 +763,8 @@ class Idea(BaseModel):
     id: UUID = Field(default_factory=uuid4)          # the caller's: a retry with the same id is not a second post
     caption: str = Field(default='', max_length=5000)
     artwork_id: Optional[UUID] = None
+    # Several pictures, in order (a carousel); artwork_id is the one-picture form.
+    artwork_ids: Optional[List[UUID]] = Field(default=None, min_length=1, max_length=10)
     clip_id: Optional[UUID] = None
     clip_fingerprint: Optional[str] = Field(default=None, pattern=HEX64)
     covers: Optional[Dict[Shape, UUID]] = None       # None: newest ready cover of each shape; {}: none
@@ -791,6 +804,7 @@ class SlotEdit(BaseModel):
     run_at: Optional[datetime] = None
     connection_ids: Optional[List[UUID]] = Field(default=None, min_length=1, max_length=10)
     artwork_id: Optional[UUID] = None
+    artwork_ids: Optional[List[UUID]] = Field(default=None, min_length=1, max_length=10)
     clip_id: Optional[UUID] = None
     clip_fingerprint: Optional[str] = Field(default=None, pattern=HEX64)
     covers: Optional[Dict[Shape, UUID]] = None
@@ -885,7 +899,8 @@ async def create_idea(business_id: str, business: Dict[str, Any], req: Idea, act
         _sendable_now(bid, desk)
     accounts = await connected(bid)
     media = await build_media(bid, artwork_id=req.artwork_id, clip_id=req.clip_id,
-                              clip_fingerprint=req.clip_fingerprint, covers=req.covers)
+                              clip_fingerprint=req.clip_fingerprint, covers=req.covers,
+                              artwork_ids=req.artwork_ids)
     kind = media_kind(media)
     caption = (req.caption or '').strip()
     chosen = pick_targets(accounts, desk, req.connection_ids)
@@ -1044,20 +1059,22 @@ async def edit_slot(business_id: str, req: SlotEdit, business: Optional[Dict[str
     rebuilt on the business's site as it is now: the link sent, else the
     post's own (refused if it has left the site), else the default."""
     bid = business_id
-    sent = {k for k in ('caption', 'run_at', 'connection_ids', 'artwork_id', 'clip_id') if getattr(req, k) is not None}
+    sent = {k for k in ('caption', 'run_at', 'connection_ids', 'artwork_id', 'artwork_ids', 'clip_id')
+            if getattr(req, k) is not None}
     if req.remove_media:
         sent.add('remove_media')
     if 'landing_url' in req.model_fields_set:
         sent.add('landing_url')
     if not sent:
         raise HTTPException(422, 'Change the words, the time, the accounts, the picture or the link.')
-    if req.remove_media and (req.artwork_id or req.clip_id):
+    if req.remove_media and (req.artwork_id or req.artwork_ids or req.clip_id):
         raise HTTPException(422, 'Remove the picture or choose a new one, not both.')
     rows = await _slot_rows(bid, req.items, EDITABLE)
     new_media = None
-    if req.artwork_id or req.clip_id or req.covers is not None or req.clip_fingerprint:
+    if req.artwork_id or req.artwork_ids or req.clip_id or req.covers is not None or req.clip_fingerprint:
         new_media = await build_media(bid, artwork_id=req.artwork_id, clip_id=req.clip_id,
-                                      clip_fingerprint=req.clip_fingerprint, covers=req.covers)
+                                      clip_fingerprint=req.clip_fingerprint, covers=req.covers,
+                                      artwork_ids=req.artwork_ids)
     elif req.remove_media:
         new_media = {}
     accounts = await connected(bid) if req.connection_ids is not None else None
@@ -1274,6 +1291,23 @@ async def save_settings(business_id: UUID, req: Settings, user: AuthedUser = Dep
     if not saved:
         raise HTTPException(503, STORE_DOWN)
     return {'desk': public_desk(saved[0])}
+
+
+# ── the calendar ──────────────────────────────────────────────────────
+
+@router.get('/calendar')
+async def calendar_route(business_id: UUID, month: str = Query(..., max_length=7),
+                         biz: dict = Depends(business_access('viewer'))):
+    """One month of everything that goes out, on the business's clock: desk
+    posts and Outreach emails and texts (business_marketing_calendar). A
+    source that cannot be read is named, never an empty month."""
+    import business_marketing_calendar as calendar
+    bid = str(business_id)
+    tz = await asyncio.to_thread(business_tz, biz)
+    try:
+        return await calendar.month(bid, month, tz=tz, now=now())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 # ── results ───────────────────────────────────────────────────────────
