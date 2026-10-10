@@ -241,6 +241,7 @@ def _booking_checkout_parts(
     deposit_cents: Optional[int] = None,
     tip_cents: int = 0,
     store_payment_method: bool = False,
+    offer: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Line items + metadata for a booking checkout. Pure (tested).
 
@@ -256,6 +257,11 @@ def _booking_checkout_parts(
         kept on file for the operator-triggered no-show fee; the
         CheckoutStep shows the disclosure line whenever a fee is
         configured).
+      * offer {code, title, discount_cents} (offers.py, 2026-10-10) → on a
+        FULL payment only, the service line is charged less and named with
+        the offer ("Fade (FIRST10: $10 off your first visit)"); the tip
+        stays whole; metadata carries offer_code + discount_cents. Ignored
+        on a deposit (the counter takes it).
     """
     amount_cents = int(amount_cents or 0)
     tip_cents = int(tip_cents or 0)
@@ -265,9 +271,13 @@ def _booking_checkout_parts(
     is_deposit = bool(deposit_cents) and charge_cents < amount_cents
 
     name = (service_name or "Booking").strip() or "Booking"
+    off = 0
+    if offer and not is_deposit:
+        off = max(0, min(int(offer.get("discount_cents") or 0), charge_cents - 50))
     line_items: List[Dict[str, Any]] = [{
-        "name": f"Deposit — {name}" if is_deposit else name,
-        "amount_cents": charge_cents,
+        "name": (f"Deposit — {name}" if is_deposit
+                 else f"{name} ({offer['code']}: {offer['title']})" if off else name),
+        "amount_cents": charge_cents - off,
         "quantity": 1,
     }]
     if tip_cents > 0:
@@ -284,6 +294,9 @@ def _booking_checkout_parts(
         metadata["tip_cents"] = tip_cents
     if store_payment_method:
         metadata["store_payment_method"] = "1"
+    if off:
+        metadata["offer_code"] = str(offer["code"])
+        metadata["discount_cents"] = off
 
     return {
         "line_items": line_items,
@@ -304,6 +317,7 @@ async def create_booking_checkout(
     deposit_cents: Optional[int] = None,
     tip_cents: int = 0,
     store_payment_method: bool = False,
+    offer: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Wrapper for the wizard CheckoutStep + the post-booking email.
 
@@ -316,6 +330,7 @@ async def create_booking_checkout(
         deposit_cents=deposit_cents,
         tip_cents=tip_cents,
         store_payment_method=store_payment_method,
+        offer=offer,
     )
     return await create_checkout_session(
         stripe_account_id=stripe_account_id,
@@ -329,7 +344,8 @@ async def create_booking_checkout(
         setup_future_usage=parts["setup_future_usage"],
         # Deposits and tips keep their disclosed amounts. Full service payments
         # can redeem a code on Stripe; donations and no-show fees never can.
-        allow_promotion_codes=not deposit_cents and not tip_cents,
+        # An offer already taken off: nothing typed stacks on it.
+        allow_promotion_codes=not deposit_cents and not tip_cents and "offer_code" not in parts["extra_metadata"],
     )
 
 

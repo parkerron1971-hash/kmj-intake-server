@@ -683,6 +683,11 @@ app.include_router(campaigns_api_router)
 # notes. /journeys/* (business_access); the sweep registers in startup().
 from journeys_router import router as journeys_api_router
 app.include_router(journeys_api_router)
+# Offers (2026-10-10, the Reach plan's step 3): a code, a link and a QR code
+# in one. /offers/* (business_access; /offers/public/* is the booking page's
+# read of an offer's words).
+from offers import router as offers_api_router
+app.include_router(offers_api_router)
 # S6 per-business email identity — /email-domain/* (owner-only). Domain
 # lifecycle against Resend; sends resolve the custom from in email_sender.
 from email_domains_router import router as email_domains_api_router
