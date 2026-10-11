@@ -320,14 +320,40 @@ async def connector_dispatch(client, run, biz, verb: str, params: Dict[str, Any]
 PAUSE = "__pause__"
 
 
+def _irreversible_chief_step(action: str) -> bool:
+    """A Chief verb that can't be undone (class C), not bulk. Since
+    2026-10-11 the policy engine runs such a step unattended only once
+    the owner has confirmed it, so the run pauses for that confirmation
+    instead of failing. Bulk stays refused outright (never unattended,
+    confirmed or not), and the record-only switch skips the pause."""
+    if not action or action.startswith("connector.") or action in STEP_HANDLERS:
+        return False
+    try:
+        import action_registry
+        import policy_engine
+        cls = action_registry.classification(action) or {}
+        return (cls.get("effect") == action_registry.WRITE
+                and cls.get("reversibility") == "C" and not cls.get("bulk")
+                and policy_engine.unattended_c_mode() == "refuse")
+    except Exception as e:
+        # Unknown here means the engine will refuse the step anyway; a
+        # pause would only hide that refusal behind a confirmation.
+        logger.warning(f"irreversibility lookup failed for {action!r}: {e}")
+        return False
+
+
 async def execute_step(client, run, biz, step, ctx) -> Dict[str, Any]:
     """Run one step. Returns the step result dict, or {'pause': True} when a
     confirmation gate stops the run (Fork 17)."""
     action = step.get("action", "")
 
     # Confirmation gate: a step requiring confirmation pauses until the cursor
-    # is listed in context._confirmed_steps (set by confirm_run).
-    if step.get("requires_confirmation"):
+    # is listed in context._confirmed_steps (set by confirm_run). An
+    # irreversible Chief step needs one whether or not its definition asked:
+    # templates and generated module workflows were written before the
+    # owner saw them, so the owner's confirmation is what authorises it.
+    needs_confirmation = bool(step.get("requires_confirmation")) or _irreversible_chief_step(action)
+    if needs_confirmation:
         confirmed = (ctx.get("_confirmed_steps") or [])
         if run.get("step_cursor", 0) not in confirmed:
             return {"pause": True, "reason": "awaiting_confirmation"}
@@ -360,7 +386,8 @@ async def execute_step(client, run, biz, step, ctx) -> Dict[str, Any]:
                 import policy_engine
                 verdict = policy_engine.evaluate(
                     str(biz.get("id") or ""), verb=action, surface="workflow",
-                    prompted=False, biz_row=biz)
+                    prompted=False, biz_row=biz,
+                    owner_authority=("confirmed_step" if needs_confirmation else None))
                 authorized_by = verdict.rule
                 if not verdict.allowed:
                     return {"ok": False, "error": verdict.reason,

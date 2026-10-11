@@ -7151,10 +7151,18 @@ async def _should_auto_approve(
     """
     try:
         import policy_engine
+        # approve_draft sends, so it is class C: the engine lets it run
+        # unattended only on the owner's own autopilot setting (smart or
+        # full), which only the owner writes, from Settings. Without that
+        # setting the engine's refusal IS manual mode.
         verdict = policy_engine.evaluate(
             str(biz.get("id") or ""), verb="approve_draft",
-            surface="autopilot", prompted=False, biz_row=biz)
+            surface="autopilot", prompted=False, biz_row=biz,
+            owner_authority=("autopilot_level"
+                             if _autopilot_level(biz, agent_name) in ("smart", "full") else None))
         if not verdict.allowed:
+            if verdict.rule == policy_engine.UNATTENDED_C_RULE:
+                return False, "manual_mode"
             return False, verdict.rule
     except Exception as e:
         # Fail CLOSED. This used to proceed on an engine hiccup to
