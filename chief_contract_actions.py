@@ -313,9 +313,16 @@ async def handle_contract_pdf(client, biz, action) -> Dict[str, Any]:
     if not pdf_url:
         return _fail("contract_pdf", "I built the PDF but couldn't store it.")
 
+    import document_ledger
+    doc_sha = await asyncio.to_thread(
+        document_ledger.record_document, business_id, pdf_bytes, kind="contract_pdf",
+        label=row.get("subject") or "Proposal", actor_type="chief",
+        target_type="agent_queue", target_id=row.get("id"))
+
     who = contact.get("name") or "your client"
     return {
         "type": "contract_pdf",
+        "doc_sha256": doc_sha,
         "result": f"PDF ready for {who}",
         "label": f"{row.get('subject') or 'Proposal'} — PDF",
         "pdf_url": pdf_url,

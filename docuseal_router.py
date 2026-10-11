@@ -100,6 +100,9 @@ router = APIRouter(prefix="/esign", tags=["esign"])
 DOCUSEAL_BASE = (os.environ.get("DOCUSEAL_API_BASE")
                  or "https://api.docuseal.com").rstrip("/")
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
+# How long a completion waits for the executed copy before recording that it
+# could not be fetched (document checks, 2026-10-11).
+SIGNED_COPY_TIMEOUT_S = 45.0
 
 # DocuSeal submission status → our vocabulary. Our words did not change
 # when the provider did, which is why nothing downstream (the panel's
@@ -418,7 +421,19 @@ def _completion_html(*, title: str, biz_name: str, signer_name: str,
             f"{tail}</div>")
 
 
-async def _send_completion_emails(biz: Dict[str, Any], doc: Dict[str, Any]) -> None:
+async def _signed_copy_bounded(document_id: str) -> Optional[str]:
+    """The executed copy as base64, or None if it is not back in time."""
+    import asyncio
+    try:
+        return await asyncio.wait_for(_signed_pdf_b64(document_id), SIGNED_COPY_TIMEOUT_S)
+    except Exception as e:
+        logger.warning(f"[esign] signed copy not fetched for {document_id}: {e}")
+        return None
+
+
+async def _send_completion_emails(biz: Dict[str, Any], doc: Dict[str, Any],
+                                  pdf_b64: Optional[str] = None,
+                                  prefetched: bool = False) -> None:
     """Tell both sides it is done, with the executed copy attached.
 
     Best-effort in the strongest sense: the signature is a real event
@@ -437,7 +452,8 @@ async def _send_completion_emails(biz: Dict[str, Any], doc: Dict[str, Any]) -> N
     signer_name = doc.get("signer_name") or ""
     from_email = os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app"
 
-    pdf_b64 = await _signed_pdf_b64(doc.get("document_id") or "")
+    if not prefetched:
+        pdf_b64 = await _signed_pdf_b64(doc.get("document_id") or "")
     attachments = ([{"filename": f"{title[:60]}.pdf", "content": pdf_b64,
                      "content_type": "application/pdf"}] if pdf_b64 else None)
 
@@ -497,12 +513,24 @@ async def _apply_status(doc: Dict[str, Any], biz: Dict[str, Any],
             "title": doc.get("title"),
             "signer_email": doc.get("signer_email"),
         }, source="esign")
+        # Document checks: the executed copy's SHA-256 goes into this row's
+        # payload, which the ledger hash covers and the anchors publish. The
+        # same bytes are the ones attached to both confirmation emails.
+        pdf_b64 = await _signed_copy_bounded(doc.get("document_id") or "")
+        try:
+            pdf_bytes = base64.b64decode(pdf_b64) if pdf_b64 else None
+        except Exception:
+            pdf_bytes = None
         import audit_log
+        import document_ledger
         audit_log.record(biz_id, actor_type="system", verb="esign_completed",
                          summary=f"Signed: {doc.get('title')}",
                          target_type="esign_document", target_id=doc["document_id"],
+                         payload=document_ledger.doc_fields(
+                             pdf_bytes, kind="signed_agreement",
+                             label=doc.get("title") or "Agreement"),
                          source="esign")
-        await _send_completion_emails(biz, doc)
+        await _send_completion_emails(biz, doc, pdf_b64=pdf_b64, prefetched=True)
 
     return {"status": new_status, "changed": True}
 

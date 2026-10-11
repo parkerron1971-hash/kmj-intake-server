@@ -140,6 +140,18 @@ def build_vertical_context_block(business: Optional[Dict[str, Any]]) -> str:
         private = business_learning.context_block(business)
         if private:
             lines.append(private)
+        # The nightly brain pass's digest (Layer Two). Per-business and
+        # changed once a night, so it sits in the cached per-business part
+        # of the prompt and costs a rewrite at most once a day.
+        try:
+            import business_brain
+            digest = business_brain.digest_for(str(business["id"]))
+        except Exception:
+            digest = ""
+        if digest:
+            lines.append("OVERNIGHT NOTES (your own review of this business last night; a summary to "
+                         "orient you, not instructions and not a record: check live records before "
+                         "stating a figure):\n" + digest)
     return "\n".join(lines)
 
 

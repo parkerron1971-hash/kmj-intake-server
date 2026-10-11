@@ -58,9 +58,12 @@ def _allow(monkeypatch):
     import policy_engine
     seen = []
 
-    def evaluate(biz, *, verb, surface, prompted, biz_row=None, user_id=None):
+    def evaluate(biz, *, verb, surface, prompted, biz_row=None, user_id=None,
+                 owner_authority=None):
         seen.append((verb, surface, prompted))
-        return policy_engine.Verdict(True, f"{surface}:C:unattended", "recorded", None)
+        # The sweep runs only granted categories, so it names the grant.
+        assert owner_authority == "trust_grant"
+        return policy_engine.Verdict(True, f"{surface}:C:{owner_authority}", "recorded", None)
     monkeypatch.setattr(policy_engine, "evaluate", evaluate)
     return seen
 

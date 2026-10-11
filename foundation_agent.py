@@ -814,6 +814,11 @@ async def render_document_pdf(document_id: str) -> Dict[str, Any]:
         # it means a second render can be recognised as a re-render.
         await _sb_patch(client, f"/foundation_documents?id=eq.{document_id}",
                         {"storage_path": path})
+        import document_ledger
+        await asyncio.to_thread(
+            document_ledger.record_document, business_id, pdf_bytes,
+            kind="foundation_document", label=title, target_type="foundation_document",
+            target_id=document_id)
 
         # business-documents is PRIVATE (the 2026-08-10 vault migration —
         # it holds client records). A `/object/public/` URL on it answers

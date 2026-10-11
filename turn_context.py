@@ -78,6 +78,17 @@ def note_main_call(*, model: Optional[str] = None, lane: Optional[str] = None,
             info[key] = _s(value)
 
 
+def note_brain(version: Any = None, fingerprint: Optional[str] = None) -> None:
+    """The business brain this turn acted with (business_brain.stamp)."""
+    info = _INFO.get()
+    if info is None:
+        return
+    if _s(version):
+        info["brain_version"] = _s(version)
+    if _s(fingerprint):
+        info["brain_fp"] = _s(fingerprint)
+
+
 def ai_context(model: Optional[str] = None, lane: Optional[str] = None,
                response_id: Optional[str] = None) -> Dict[str, str]:
     """The compact record of which AI acted, for a ledger row's payload.
@@ -92,5 +103,7 @@ def ai_context(model: Optional[str] = None, lane: Optional[str] = None,
         "model": _s(model) or info.get("model", ""),
         "lane": _s(lane) or info.get("lane", "") or _LANE.get(),
         "resp": _s(response_id) or info.get("resp", ""),
+        "brain_version": info.get("brain_version", ""),
+        "brain_fp": info.get("brain_fp", ""),
     }
     return {k: v for k, v in out.items() if v}
