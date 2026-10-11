@@ -292,6 +292,14 @@ def test_the_cost_cap_holds_for_a_pricier_provider_model(world, monkeypatch):
     assert 'an-unpriced-model' in world.runs[0]['error']
 
 
+def test_the_cap_names_the_claude_fallback_when_it_is_the_dearer_model(world, monkeypatch):
+    monkeypatch.setenv('CHIEF_MODEL_BACKGROUND', 'claude-opus-5-5')
+    _route_to_provider(monkeypatch, 'kimi-k3')
+    say(world, BIZ, 'hi')
+    assert bp.run_for_business(BIZ, NOW) == {'skipped': 'cost cap'}
+    assert 'claude-opus-5-5' in world.runs[0]['error']
+
+
 def test_unreadable_review_fails_cleanly(world):
     say(world, BIZ, 'hi')
     world.next_reply = {'content': [{'type': 'text', 'text': 'not json at all'}], 'usage': {}}

@@ -318,8 +318,9 @@ def run_for_business(bid: str, now: Optional[datetime] = None) -> Dict[str, Any]
     # whichever of the two answers.
     route = lane_registry.route_for("background")
 
-    def worst_cents(prompt_chars: int) -> float:
-        return max(estimate_cents(m, prompt_chars) for m in {model, route.model})
+    def worst(prompt_chars: int) -> tuple:
+        """(cents, model) for the dearer of the two at this prompt size."""
+        return max((estimate_cents(m, prompt_chars), m) for m in {model, route.model})
 
     run_id = _claim(bid, now.date().isoformat(), model)
     if not run_id:
@@ -353,12 +354,13 @@ def run_for_business(bid: str, now: Optional[datetime] = None) -> Dict[str, Any]
         budget = INPUT_CHAR_BUDGET
         prompt = build_prompt(biz, ev, rules=rules, pending=pending, declined=declined,
                               prior_digest=prior, since=since, budget=budget)
-        while worst_cents(len(prompt)) > MAX_COST_CENTS_PER_RUN and budget > MIN_INPUT_CHARS:
+        while worst(len(prompt))[0] > MAX_COST_CENTS_PER_RUN and budget > MIN_INPUT_CHARS:
             budget = int(budget * 0.6)
             prompt = build_prompt(biz, ev, rules=rules, pending=pending, declined=declined,
                                   prior_digest=prior, since=since, budget=budget)
-        if worst_cents(len(prompt)) > MAX_COST_CENTS_PER_RUN:
-            _finish(run_id, status="failed", error=f"over the per-run cap on {route.model}")
+        cents_at_worst, dearest = worst(len(prompt))
+        if cents_at_worst > MAX_COST_CENTS_PER_RUN:
+            _finish(run_id, status="failed", error=f"over the per-run cap on {dearest}")
             return {"skipped": "cost cap"}
 
         payload = {"model": model, "max_tokens": MAX_OUTPUT_TOKENS, "system": SYSTEM,
