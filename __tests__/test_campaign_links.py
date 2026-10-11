@@ -43,7 +43,7 @@ def test_one_link_per_touch_derived_never_a_posts():
     assert store.GO_CODE.match(sl.link_code(a))
     assert sl.link_code(a) != store.link_code(a)                            # never a post's code for the same id
     with pytest.raises(ValueError):
-        sl.link_id("offer", CAMP, 0)                                        # offers come later
+        sl.link_id("flyer", CAMP, 0)                                        # only the kinds that exist
 
 
 def test_the_tracked_url_carries_the_touch_and_stays_on_the_business_site(monkeypatch):

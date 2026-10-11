@@ -69,11 +69,15 @@ def routed(monkeypatch):
         calls["bindings"].append(phone)
         return []
 
+    async def _recent_threads(client, phone):
+        return {}
+
     for name, fn in {
         "business_for_number": business_for_number, "_bind": _bind,
         "_ensure_contact": _ensure_contact, "record_inbound_sms": record_inbound_sms,
         "_sb_post": _sb_post, "_biz_name": _biz_name,
         "_keyword_lookup": _keyword_lookup, "_bindings_for": _bindings_for,
+        "_recent_threads": _recent_threads,
     }.items():
         monkeypatch.setattr(sms_routing, name, fn)
     monkeypatch.setenv("TWILIO_PLATFORM_NUMBER", PLATFORM)

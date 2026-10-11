@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "square_booking_sync": "temporary Square appointment copies; reconnect and opt in to sync; cascade through square_connections",
     "square_connections": "encrypted Square OAuth credentials and one-time login state; never portable, cascade on business deletion",
     "chief_event_deliveries": "internal worker leases and replay fences; not portable, cascade on business deletion",
     "agentcard_wallets": "encrypted customer OAuth credentials and wallet-bound purchase journal; never portable, cascade on user/business deletion",
@@ -305,6 +306,14 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "marketing_links",
     # The notes Outreach journeys sent (APPLY-2026-10-09-journeys.sql).
     "journey_sends",
+    # The business's offers (APPLY-2026-10-10-offers.sql).
+    "offers",
+    # Refer a friend: each client's code and the thank-yous made
+    # (APPLY-2026-10-11-refer-a-friend.sql).
+    "referral_links",
+    "referral_rewards",
+    # The business's texting registration answers (APPLY-2026-10-11-texting-registrations.sql).
+    "texting_registrations",
     "marketing_posts",
     "marketing_runs",
     "marketing_desks",
@@ -692,6 +701,15 @@ _IMPORT_SKIP = {
     "marketing_links", "marketing_link_hits",
     # The journeys' sent notes: history, never re-sent from a file.
     "journey_sends",
+    # Offers: a restored business makes its offers again (the codes and their
+    # rules are its own decisions); the export keeps them for reference.
+    "offers",
+    # Refer a friend: codes and thank-yous name contacts by id, and a restore
+    # gives contacts new ids; the export keeps them for reference.
+    "referral_links", "referral_rewards",
+    # A texting registration belongs to the business Twilio approved; a
+    # restored business registers again. The export keeps the answers.
+    "texting_registrations",
     # The desk's settings are not restored either (review of #1307): an
     # uploaded file could switch the weekly plan on or name another
     # business's accounts and photos. The owner sets the desk up again; the

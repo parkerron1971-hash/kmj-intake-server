@@ -189,6 +189,13 @@ from chief_marketing_actions import (
     handle_marketing_replan,
     handle_marketing_skip_post,
 )
+# Offers and refer a friend (2026-10-11): the Offers page's own functions,
+# owner only, class C (chief_offer_actions).
+from chief_offer_actions import (
+    handle_change_offer,
+    handle_make_offer,
+    handle_set_refer_a_friend,
+)
 # Custom modules — propose / accept / inspect / extend / summarize / upgrade
 # (2026-09-04, third slice). _has_dup_override is shared with the turn.
 from chief_module_actions import (
@@ -3530,6 +3537,18 @@ def _confirmation_subject(action: Dict[str, Any]) -> str:
         nets = a.get('platforms')
         nets = [nets] if isinstance(nets, str) else [str(n) for n in (nets or []) if str(n).strip()]
         bits.append('to ' + (', '.join(nets) if nets else 'its accounts on the marketing desk'))
+    if a.get('type') == 'make_offer':
+        # What the offer gives and to whom (a dollar amount is named below).
+        if a.get('percent') is not None:
+            bits.append(f"{a['percent']}% off")
+        elif a.get('free_item'):
+            bits.append(f"a free {a['free_item']}")
+        bits.append('for ' + str(a.get('who') or 'anyone').replace('_', ' '))
+    if a.get('type') == 'change_offer':
+        bits.append(' '.join(x for x in (str(a.get('code') or '').upper(), str(a.get('status') or '')) if x))
+    if a.get('type') == 'set_refer_a_friend':
+        on = str(a.get('on')).strip().lower() in ('true', '1', 'yes', 'on')
+        bits.append('refer a friend ' + ('on' if on else 'off') + (' · each way' if a.get('amount') else ''))
     for key in ("amount", "total", "price"):
         val = a.get(key)
         if isinstance(val, (int, float)) and val:
@@ -11917,6 +11936,10 @@ ACTION_HANDLERS = {
     "marketing_skip_post":    handle_marketing_skip_post,
     "marketing_replan":       handle_marketing_replan,
     "marketing_post_now":     handle_marketing_post_now,
+    # Offers and refer a friend (Grow → Offers), owner only.
+    "make_offer":             handle_make_offer,
+    "change_offer":           handle_change_offer,
+    "set_refer_a_friend":     handle_set_refer_a_friend,
     "run_agent":             handle_run_agent,
     "create_module_entry":   handle_create_module_entry,
     "update_module_entry":   handle_update_module_entry,

@@ -230,6 +230,33 @@ def test_a_rebook_note_goes_by_email_with_its_tracked_link(monkeypatch):
     assert run(oj.run_business(w.business, now=NOW, budget=50))["email"] == 0   # once
 
 
+def test_refer_a_friend_rides_on_the_rebook_note_only(monkeypatch):
+    """Refer a friend's P.S. (Grow, Offers): each client's own link on their
+    "Time for your next visit?" note, in the words the owner saw on the
+    switch; never on another journey, and not when it's off."""
+    import refer_a_friend as rf
+    monkeypatch.delenv("JOURNEY_TEXTS", raising=False)
+    program = {"id": "p1", "status": "on", "in_notes": True, "amount_cents": 1000, "reward_cents": 1500}
+    made = []
+    monkeypatch.setattr(rf, "program", lambda bid: program)
+    monkeypatch.setattr(rf, "booking_page", lambda b: "https://northside.mysolutionist.app/book")
+    monkeypatch.setattr(rf, "code_for", lambda bid, contact: made.append(contact["id"]) or "PAT-7K")
+    w = World(monkeypatch, biz(**on("rebook")), sessions=[session("s1", C1, 24 * 36)])
+    run(oj.run_business(w.business, now=NOW, budget=50))
+    [mail] = w.emails
+    assert mail["body"].endswith(
+        "\n\nP.S. Bring a friend: they get $10 off their first visit, and you get $15 off your next one once "
+        "they've been in. Your own link: https://northside.mysolutionist.app/book?offer=PAT-7K")
+    assert made == [C1]
+    w = World(monkeypatch, biz(**on("win_back")), sessions=[session("s2", C1, 24 * 61)])
+    run(oj.run_business(w.business, now=NOW, budget=50))
+    assert len(w.emails) == 1 and "P.S." not in w.emails[0]["body"]
+    program["in_notes"] = False
+    w = World(monkeypatch, biz(**on("rebook")), sessions=[session("s3", C1, 24 * 36)])
+    run(oj.run_business(w.business, now=NOW, budget=50))
+    assert len(w.emails) == 1 and "P.S." not in w.emails[0]["body"]
+
+
 def test_a_text_only_with_marketing_consent_and_the_switch_on(monkeypatch):
     monkeypatch.setenv("JOURNEY_TEXTS", "on")
     w = World(monkeypatch, biz(**on("rebook")), sessions=[session("s1", C1, 24 * 36)])

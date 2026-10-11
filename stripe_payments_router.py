@@ -173,6 +173,16 @@ async def booking_checkout(
     store_pm = no_show_fee_cents > 0
     tip_cents = _validate_tip_cents(body.tip_cents, amount_cents)
 
+    # Offers (2026-10-10, Kevin's default 1): the offer frozen on the booking
+    # comes off THIS payment only when it is the full price (no deposit),
+    # leaving at least 50 cents; otherwise it is taken off at the counter.
+    import offers
+    offer_kwargs: Dict[str, Any] = {}
+    off = offers.online_discount(data.get("offer"), amount_cents=amount_cents, deposit_cents=deposit_cents)
+    if off and provider.id == "stripe":
+        offer_kwargs["offer"] = {"code": data["offer"]["code"], "title": data["offer"]["title"],
+                                 "discount_cents": off}
+
     # Freeze the DISCLOSED no-show fee on the booking entry (like
     # price_at_booking): the charge-no-show endpoint only ever charges
     # what the guest saw at checkout, even if the offering changes later.
@@ -202,6 +212,7 @@ async def booking_checkout(
             deposit_cents=deposit_cents,
             tip_cents=tip_cents,
             store_payment_method=store_pm,
+            **offer_kwargs,
         )
     except RuntimeError as e:
         logger.warning(f"booking checkout failed: biz={business_id} booking={booking_id} err={e}")

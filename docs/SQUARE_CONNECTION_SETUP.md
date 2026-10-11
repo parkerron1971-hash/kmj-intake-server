@@ -1,3 +1,5 @@
+Current follow-up: [one-way trial calendar sync and production gate](SQUARE_BOOKING_SYNC.md). The preview foundation below is historical; automatic sync now has a separate opt-in and rollout switch.
+
 # Square connection pilot
 
 This is the connection and read-only appointment preview foundation for businesses that already use Square Appointments. It is **disabled by default** and restricted to explicit pilot owner IDs. No booking import, Square booking write, payment access, webhook subscription, or reminder automation is enabled by this change. The connection/location/preview interface is implemented in the existing Integrations page.
@@ -40,7 +42,7 @@ The frontend will use authedFetch for owner endpoints and a top-level/popup navi
 | POST /connect/square/start?business_id=UUID | Owner + pilot gate; replaces previous pending attempt; returns a one-use authorize_url. Rejects an existing connected/revocation-pending account. |
 | GET /connect/square/begin?ticket=... | Consumes hashed handoff, binds state to backend browser cookie, redirects to the selected Square environment. |
 | GET /connect/square/callback | Claims state once, checks browser binding and current ownership, exchanges the code on the server, stores encrypted tokens. |
-| GET /square/status?business_id=UUID | Owner-only safe status; booking_sync_enabled is always false in this phase. |
+| GET /square/status?business_id=UUID | Owner-only safe status; booking_sync_available reports the automatic-sync rollout switch; opt-in status is read separately. |
 | GET /square/locations?business_id=UUID | Owner-only live location ID/name/status/timezone discovery and saved selection; on-demand token refresh. |
 | PUT /square/locations?business_id=UUID | Save up to 20 active locations owned by the connected merchant; requires connection_id and selection_revision from the latest GET. Empty selection clears it. |
 | POST /square/bookings/preview?business_id=UUID | JSON: connection_id, selection_revision, start_at and end_at (timezone-aware timestamps, end exclusive). Reads only saved locations, using <=31-day windows and cursor pagination. |

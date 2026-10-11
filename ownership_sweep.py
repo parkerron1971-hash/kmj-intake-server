@@ -165,6 +165,12 @@ PUBLIC_BY_DESIGN = frozenset({
     # tablets can't both pair on it. Every other station route resolves
     # the device token (station_from_token, a HINT above).
     ("kids_station", "pair"),
+    # The booking page's read of an offer's words for ?offer=CODE
+    # (2026-10-10): a customer on the public booking page has no session.
+    # It answers only an offer that is on (code, title, when) and nothing
+    # about who can use it; whether it applies is decided at booking, from
+    # the business's own records (offers.evaluate). It writes nothing.
+    ("offers", "public_offer"),
 })
 
 

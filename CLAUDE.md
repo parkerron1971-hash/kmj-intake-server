@@ -51,7 +51,7 @@ all the practitioner-facing data actions.
 
 ## Chief (chief_of_staff.py)
 
-- 263 `ACTION_HANDLERS`. Every handler returns `{result, label}`; a
+- 266 `ACTION_HANDLERS`. Every handler returns `{result, label}`; a
   missing `result` blanks the app (toLowerCase crash) — always return
   both. Actions are emitted by the model as `[ACTION:{"type":...}]` tags —
   except the reviewed class-A verbs in `mcp_server.WRITE_TOOL_SCHEMAS`,

@@ -685,6 +685,18 @@ app.include_router(campaigns_api_router)
 # notes. /journeys/* (business_access); the sweep registers in startup().
 from journeys_router import router as journeys_api_router
 app.include_router(journeys_api_router)
+# Offers (2026-10-10, the Reach plan's step 3): a code, a link and a QR code
+# in one. /offers/* (business_access; /offers/public/* is the booking page's
+# read of an offer's words). Refer a friend (2026-10-11) adds
+# /offers/{biz}/referral* (owner); its thank-you sweep registers in startup().
+# Texting under each business's own name (2026-10-11, ISV step 1):
+# /texting/registration/{biz} (owner); the pages are served by public_site.
+from texting_registration import router as texting_registration_api_router
+app.include_router(texting_registration_api_router)
+from refer_a_friend import router as referral_api_router
+app.include_router(referral_api_router)
+from offers import router as offers_api_router
+app.include_router(offers_api_router)
 # S6 per-business email identity — /email-domain/* (owner-only). Domain
 # lifecycle against Resend; sends resolve the custom from in email_sender.
 from email_domains_router import router as email_domains_api_router
@@ -1610,6 +1622,13 @@ async def startup():
                           "interval", minutes=10, id="booking_session_sync")
     except Exception as e:
         print(f"   [warn] booking-session sync not scheduled: {e}")
+    # Square trial copies stay separate from native bookings, sessions and reminders.
+    try:
+        import square_booking_sync as _square_sync
+        scheduler.add_job(g('square_booking_sync', _square_sync.sync_due_tick),
+                          'interval', minutes=1, id='square_booking_sync', max_instances=1)
+    except Exception:
+        print('   [warn] Square booking sync not scheduled')
     # Outside calendars (2026-09-26): re-read every connected private
     # calendar feed so its busy times keep blocking slots. The tick looks
     # every 5 minutes; each feed is due 15 minutes after its last sync
@@ -1819,6 +1838,14 @@ async def startup():
                           "interval", minutes=30, id="journeys_tick")
     except Exception as e:
         print(f"   [warn] journeys sweep not scheduled: {e}")
+    # Refer a friend (2026-10-11): a regular's thank-you code once the
+    # friend's visit is paid, sent in daytime. Kill switch: REFER_A_FRIEND=off.
+    try:
+        import refer_a_friend as _referral
+        scheduler.add_job(g("referral_tick", _referral.rewards_tick),
+                          "interval", minutes=15, id="referral_tick")
+    except Exception as e:
+        print(f"   [warn] referral sweep not scheduled: {e}")
     # Chief Layers arc — trusted-autonomy sweep: executes pending
     # proposals ONLY in categories the practitioner explicitly granted
     # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.

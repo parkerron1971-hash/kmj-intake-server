@@ -952,9 +952,12 @@ def _mark_booking_paid(
     amount_total / PI amount_received): the books post THAT, so a
     Stripe-side promotion code can't leave revenue at the list price.
     First writer wins; both channels report the same number."""
+    # module_entries has no contact_id column: a booking keeps its contact in
+    # data. Naming the column made this read fail (400 -> None -> []), so
+    # every paid booking returned here before anything was recorded.
     rows = sb_clients.sb_get_as_service(
         f"/module_entries?id=eq.{booking_id}"
-        f"&select=id,paid_at,business_id,contact_id,data&limit=1"
+        f"&select=id,paid_at,business_id,contact_id:data->>contact_id,data&limit=1"
     ) or []
     if not rows:
         return

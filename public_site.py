@@ -434,7 +434,7 @@ def _rewrite_nav_for_preview(html: str, slug: str,
     return out
 # Sub-paths served by their own handlers — never 404, never in the
 # "unknown path" branch.
-_ALWAYS_WINS_PATHS = ("/book", "/give", "/events", "/store")
+_ALWAYS_WINS_PATHS = ("/book", "/give", "/events", "/store", "/texting-terms", "/texting-privacy")
 
 
 def _site_robots_txt(slug: str, custom_domain: Optional[str] = None) -> str:
@@ -6753,6 +6753,16 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         # URL the visitor has never seen (2026-08-13 gap list).
         if normalized_path == "/store":
             return await _serve_store_page(slug)
+        # Texting terms and privacy in the business's own name (2026-10-11,
+        # docs/plans/ISV_TEXTING_PLAN_2026-10-11.md): the pages its texting
+        # registration points Twilio's reviewers at.
+        if normalized_path in ("/texting-terms", "/texting-privacy"):
+            import texting_registration
+            page = await texting_registration.page_for(
+                biz_id, "terms" if normalized_path == "/texting-terms" else "privacy")
+            if page is None:
+                raise HTTPException(404, "Page not found")
+            return HTMLResponse(page, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
         # ─── Academy Phase 4 — /academy catalog + course pages ─────
         if normalized_path == "/academy" or normalized_path.startswith("/academy/"):
             return await _serve_academy(client, biz_id, normalized_path, standalone=False)

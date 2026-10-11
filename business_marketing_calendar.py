@@ -12,13 +12,15 @@ Offers join when they exist (step 3).
           post   the desk's own public post (status, caption, accounts, media)
           email  {campaign_id, campaign, touch, subject, preview, state, sent}
           text   {campaign_id, campaign, touch, preview, state, sent}
+          offer  {offer_id, code, title, edge: starts|ends, status} on the day an
+                 offer (offers.py, 2026-10-10) starts or ends
           state  planned (its day is ahead), sending (due, still going out:
                  quiet hours, a held link, the per-tick cap), sent (the touch
                  finished), paused (the campaign is paused); sent = how many
                  people it went to (campaign_sends)
   month   the month asked, on the business's own clock (days start at its
           local midnight); a draft campaign has no day yet and is not shown
-  sources {posts, campaigns}: loaded | partial (at a row limit: a floor) |
+  sources {posts, campaigns, offers}: loaded | partial (at a row limit: a floor) |
           unavailable (a read failed: never shown as an empty month)
 
 A read that fails is named in sources and its items are left out; the month
@@ -127,15 +129,43 @@ def _campaigns(bid: str) -> Tuple[Optional[List[Dict[str, Any]]], Dict[str, Dict
     return rows, sent
 
 
+def _offers(bid: str, first: date, following: date) -> Optional[List[Dict[str, Any]]]:
+    lo, hi = first.isoformat(), following.isoformat()
+    rows = sb_clients.sb_get_as_service(
+        f"/offers?business_id=eq.{bid}&source=eq.owner"
+        f"&or=(and(starts_on.gte.{lo},starts_on.lt.{hi}),and(ends_on.gte.{lo},ends_on.lt.{hi}))"
+        f"&select=id,code,title,status,starts_on,ends_on&limit=200")
+    return rows if isinstance(rows, list) else None
+
+
+def offer_items(rows: List[Dict[str, Any]], first: date, following: date, tz) -> List[Dict[str, Any]]:
+    """An offer on the day it starts and the day it ends, at 9 AM on the
+    business's clock (so it sorts before the day's posts)."""
+    out = []
+    for r in rows:
+        for edge, day in (("starts", r.get("starts_on")), ("ends", r.get("ends_on"))):
+            try:
+                d = date.fromisoformat(str(day)[:10]) if day else None
+            except ValueError:
+                d = None
+            if d and first <= d < following:
+                at = datetime.combine(d, time(9, 0), tz).astimezone(timezone.utc)
+                out.append({"kind": "offer", "at": at.isoformat(), "offer_id": str(r["id"]), "code": r.get("code"),
+                            "title": r.get("title"), "edge": edge, "status": r.get("status")})
+    return out
+
+
 async def month(business_id: Any, month_key: str, *, tz, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Everything that goes out in this month, on the business's clock."""
     bid = str(UUID(str(business_id)))
     now = now or datetime.now(timezone.utc)
     first, start, end = month_bounds(month_key, tz)
-    sources = {"posts": "loaded", "campaigns": "loaded"}
+    sources = {"posts": "loaded", "campaigns": "loaded", "offers": "loaded"}
     items: List[Dict[str, Any]] = []
-    posts_read, campaigns_read = await asyncio.gather(
-        _posts(bid, start, end), asyncio.to_thread(_campaigns, bid), return_exceptions=True)
+    following = date(first.year + (first.month == 12), first.month % 12 + 1, 1)
+    posts_read, campaigns_read, offers_read = await asyncio.gather(
+        _posts(bid, start, end), asyncio.to_thread(_campaigns, bid),
+        asyncio.to_thread(_offers, bid, first, following), return_exceptions=True)
     if isinstance(posts_read, BaseException):
         if not isinstance(posts_read, store.StoreError):
             raise posts_read
@@ -152,6 +182,10 @@ async def month(business_id: Any, month_key: str, *, tz, now: Optional[datetime]
             sources["campaigns"] = "partial"
         for c in rows:
             items += touch_items(c, sent.get(str(c["id"]), {}), start, end, now)
+    if isinstance(offers_read, BaseException) or offers_read is None:
+        sources["offers"] = "unavailable"
+    else:
+        items += offer_items(offers_read, first, following, tz)
     never = datetime.min.replace(tzinfo=timezone.utc)
     items.sort(key=lambda i: (_when(i["at"]) or never, i["kind"]))
     return {"month": first.strftime("%Y-%m"), "time_zone": getattr(tz, "key", str(tz)),

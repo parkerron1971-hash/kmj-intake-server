@@ -804,6 +804,10 @@ class BookAnonBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     email: str = Field(..., min_length=3, max_length=320)
     data: Dict[str, Any]  # field values for the appointment (date, service, etc.)
+    # An offer the booking page arrived with (?offer=CODE, 2026-10-10):
+    # offers.evaluate decides, from this business's records, whether it
+    # applies; the decision is frozen on the booking as data.offer.
+    offer_code: Optional[str] = Field(default=None, max_length=24)
     # The optional "texts about offers" box (2026-10-09, Kevin: "Build now,
     # texts after"): consent to marketing texts from this business, apart
     # from the reminders consent above. Recorded in sms_consents with
@@ -898,6 +902,32 @@ def booking_attribution(request: Request, sent: Optional[Dict[str, Any]]) -> Dic
     return lead_attribution.capture(request, body, source_detail="booking")
 
 
+def _apply_offer(biz: Optional[Dict[str, Any]], entry_data: Dict[str, Any], code: Optional[str],
+                 contact_id: Optional[str], appt_iso: Any) -> Optional[Dict[str, Any]]:
+    """The booking's offer decision (offers.evaluate), frozen on the booking
+    as data.offer; whatever the form sent under that key is dropped. None
+    (and nothing stored) when there's no code or it isn't one of this
+    business's offers. Never fails a booking."""
+    entry_data.pop("offer", None)
+    if not code or not biz:
+        return None
+    import offers
+    price = entry_data.get("price_at_booking") or entry_data.get("price")
+    try:
+        cents = int(round(float(price) * 100)) if price is not None else None
+    except (TypeError, ValueError):
+        cents = None
+    try:
+        decision = offers.evaluate(biz, code, contact_id=contact_id, slot_iso=str(appt_iso or ""),
+                                   service_cents=cents)
+    except Exception as e:  # pragma: no cover - evaluate never raises; belt to the brace
+        logger.warning(f"offer evaluation failed soft: {e}")
+        return None
+    if decision:
+        entry_data["offer"] = decision
+    return decision
+
+
 def _with_attribution(entry_data: Dict[str, Any], attribution: Dict[str, Any]) -> Dict[str, Any]:
     """The booking's own record of where it came from, as the server read
     it; whatever the form sent under that key is dropped."""
@@ -968,6 +998,8 @@ async def book_anon(
             detail="Sorry — that time was just booked. Please pick another.",
         )
 
+    offer = _apply_offer(biz, entry_data, body.offer_code, contact_id, appt_iso)
+
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
         raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
@@ -1006,6 +1038,7 @@ async def book_anon(
     # failure must never fail the booking.
     _schedule_confirmation_sms(biz, entry_data, body.name, str(appt_iso or ""))
 
+    import offers as _offers
     return {
         "ok": True,
         "appointment_id": entry["id"],
@@ -1013,6 +1046,7 @@ async def book_anon(
         "contact_id": contact_id,
         "token": token,
         "token_expires_in_seconds": TOKEN_TTL_SECONDS,
+        "offer": _offers.public_answer(offer),
     }
 
 
@@ -1026,6 +1060,7 @@ class BookBody(BaseModel):
     # SMS consent — same contract as BookAnonBody.
     sms_consent: bool = False
     marketing_sms_consent: bool = False
+    offer_code: Optional[str] = Field(default=None, max_length=24)
     # Where the visit came from — same contract as BookAnonBody.
     attribution: Optional[Dict[str, Any]] = None
 
@@ -1072,6 +1107,7 @@ async def book(
             detail="Sorry — that time was just booked. Please pick another.",
         )
 
+    offer = _apply_offer(biz, entry_data, body.offer_code, contact_id, appt_iso)
     entry = _create_appointment(business_id, module["id"], entry_data)
     if not entry:
         raise HTTPException(status_code=500, detail="Something went wrong on our end — please try again.")
@@ -1107,7 +1143,8 @@ async def book(
         biz, entry_data,
         ctx.customer_row.get("name") or "", str(appt_iso or ""))
 
-    return {"ok": True, "appointment_id": entry["id"]}
+    import offers as _offers
+    return {"ok": True, "appointment_id": entry["id"], "offer": _offers.public_answer(offer)}
 
 
 # ─── ANON: request a fresh link (rate-limited) ────────────────────────
@@ -1468,6 +1505,15 @@ def _check_slot_available(
     return True
 
 
+def _offer_note(data: Dict[str, Any]) -> Optional[str]:
+    """The offer line the owner reads on the appointment (offers.counter_note)."""
+    try:
+        import offers
+        return offers.counter_note(data.get("offer"))
+    except Exception:  # pragma: no cover
+        return None
+
+
 def _mirror_booking_session(business_id: str, entry: Dict[str, Any]) -> None:
     """ONE CALENDAR (Kevin's ruling, 2026-07-10): every booking mirrors
     into sessions — the calendar spine that CalendarView, Chief's
@@ -1508,7 +1554,7 @@ def _mirror_booking_session(business_id: str, entry: Dict[str, Any]) -> None:
             "status": "scheduled",
             "scheduled_for": appt,
             "duration_minutes": dur,
-            "notes": f"Booked online. {marker}",
+            "notes": " ".join(filter(None, ["Booked online.", _offer_note(d), marker])),
         })
     except Exception as e:  # pragma: no cover
         logger.warning(f"booking->session mirror failed soft: {e}")

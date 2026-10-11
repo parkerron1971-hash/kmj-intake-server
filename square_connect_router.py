@@ -14,6 +14,7 @@ from auth_supabase import AuthedUser, require_user
 from business_access import assert_access
 import square_connector as sq
 import square_booking_preview as bookings
+import square_booking_sync as sync
 
 router = APIRouter(tags=["square"])
 HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
@@ -61,7 +62,7 @@ async def status(business_id: UUID, response: Response, user: AuthedUser = Depen
             "status": row["status"] if row else "disconnected",
             "merchant_id": row.get("merchant_id") if row else None,
             "connected_at": row.get("connected_at") if row else None,
-            "booking_sync_enabled": False,
+            "booking_sync_available": sync.enabled(),
             "connection_id": row.get("connection_id") if row else None,
             "selection_revision": row.get("selection_revision") if row else None,
             "selected_location_ids": row.get("selected_location_ids", []) if row else []}
@@ -198,3 +199,34 @@ async def disconnect(business_id: UUID, response: Response, user: AuthedUser = D
         response.status_code = 202 if pending else 200
         return {"disconnected": True, "revocation_pending": pending, "retry_after_seconds": 120 if pending else None}
     return {"disconnected": True, "revocation_pending": False}
+
+
+@router.get('/square/bookings/sync')
+async def sync_status(business_id: UUID, response: Response, user: AuthedUser = Depends(require_user)):
+    owner(business_id, user)
+    cfg = sq.config()
+    pilot(cfg, user)
+    response.headers['Cache-Control'] = 'no-store'
+    result = await sync.state(business_id, user.id, cfg)
+    owner(business_id, user)
+    return result
+
+
+@router.put('/square/bookings/sync')
+async def sync_setting(business_id: UUID, body: sync.SyncSetting, response: Response, user: AuthedUser = Depends(require_user)):
+    owner(business_id, user)
+    cfg = sq.config()
+    pilot(cfg, user)
+    response.headers['Cache-Control'] = 'no-store'
+    return await sync.set_enabled(business_id, user.id, cfg, body)
+
+
+@router.post('/square/bookings/sync')
+async def sync_now(business_id: UUID, response: Response, user: AuthedUser = Depends(require_user)):
+    owner(business_id, user)
+    cfg = sq.config()
+    pilot(cfg, user)
+    response.headers['Cache-Control'] = 'no-store'
+    await sync.sync_one(business_id, user.id, cfg)
+    owner(business_id, user)
+    return await sync.state(business_id, user.id, cfg)

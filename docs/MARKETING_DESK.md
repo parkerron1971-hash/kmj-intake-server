@@ -558,6 +558,98 @@ now, texts after".
 - **Sweep.** `journeys_tick` every 30 minutes (`kmj_intake_automation`).
 - **Migration.** `supabase/APPLY-2026-10-09-journeys.sql`.
 
+### Offers (2026-10-10, step 3)
+
+`offers.py` (`GET /offers/{business_id}` viewer; `POST` and `PATCH
+/offers/{business_id}[/{offer_id}]` owner; `GET
+/offers/public/{business_id}/{code}` the booking page's read of an offer's
+words, public by design). The approved Offers board, and Kevin's four
+defaults ("go", 2026-10-10).
+
+- **The offer.** An amount off, a percent off or a free item; for anyone, a
+  first visit or regulars; optionally only some days and hours on the
+  business's clock; a start and an end day; once per person; up to N uses;
+  on or paused. A code like FIRST10 / BACK5 / SAVE15 / FREE is suggested.
+  Making one needs card payments connected (Stripe), else a 409 that says
+  so (default 4).
+- **Its links.** `business_marketing_sent_links.offer_link`: part 0 to share,
+  part 1 for the printed QR (counted apart), both to `/book?offer=CODE`
+  (`marketing_links` kind `offer`). Nothing bookable online: no link; the
+  code still works at the counter.
+- **At booking.** Both booking doors take `offer_code`; `offers.evaluate`
+  decides from the business's own records (sessions for first visit /
+  regulars, earlier bookings for one per person, uses so far, the slot's
+  day and hour) whether it applies and why not (default 2), and the booking
+  keeps the decision in `data.offer` (what the form sent under that key is
+  dropped). The appointment's calendar note says "Offer FIRST10: ... take it
+  off at the counter" unless paid online. A code that isn't one of the
+  business's offers changes nothing.
+- **At checkout.** `stripe_payments_router.booking_checkout`: an offer that
+  applies comes off the online payment only when it is the full price (no
+  deposit) and leaves at least 50 cents; the service line is charged less
+  and named with the offer, the tip stays whole, and typed codes are off
+  for that payment (default 1). Otherwise the counter takes it.
+- **Results.** Bookings that used it, what they were booked for, what was
+  paid online for them, and taps on its link and its QR.
+- **Calendar.** An offer shows on the Month on the day it starts and ends.
+- **Migration.** `supabase/APPLY-2026-10-10-offers.sql`.
+
+### Refer a friend (2026-10-11, step 3)
+
+`refer_a_friend.py` (`PUT /offers/{business_id}/referral`, `POST
+.../referral/link`, `POST .../referral/paid`, all owner; its card rides on
+`GET /offers/{business_id}` as `referral`). The approved Offers board ("give
+$10, get $10") and Kevin's default 3 ("go", 2026-10-10).
+
+- **The program.** The business's one `offers` row with source `referral`:
+  what the friend gets (`amount_cents`, a first visit, once per person), what
+  the regular gets (`reward_cents`), on or paused, and `in_notes`. Turning it
+  on needs card payments connected, like any offer.
+- **Each client's link.** `referral_links`: their own code (ANDRE-7K), made
+  the first time it's needed, on `/book?offer=CODE`. The owner can copy any
+  client's link; with `in_notes` on, a P.S. with the link rides on that
+  client's rebook note (`outreach_journeys`), in words the owner sees on the
+  switch and on the rebook card.
+- **At booking.** `offers.evaluate` hands any code that isn't an owner's
+  offer to `refer_a_friend.evaluate`: a client's code is the friend's offer
+  (`data.offer.source` `referral`, `part` `friend`, the referrer, the
+  visit's time; never the client's own link); a THANKS-XXXX code is the
+  regular's reward, for that regular only, once. Both come off online on the
+  same terms as any offer. The program row's own code is never usable.
+- **The thank-you.** `rewards_tick` (every 15 minutes): a friend's booking
+  that is still booked counts as paid when it was paid in full online and
+  its time has passed, when an invoice for the friend was marked paid after
+  they booked, or when the owner says so (`/referral/paid`). Then exactly
+  one `referral_rewards` row (unique per friend booking and per friend), and
+  the regular is told by email (text only under the journeys' rules), in
+  daytime, claimed before it is sent. No way to reach them: the card says
+  "tell them at the counter". Kill switch `REFER_A_FRIEND=off`.
+- **The thank-you's words and end day** (2026-10-11, second PR). The owner
+  can rewrite the subject, email and text (`offers.thanks_words`, over
+  `THANKS_DEFAULTS`); `{{code}}` must stay in the email and the text, a
+  line whose link or end day this thank-you doesn't have is left out, and
+  a part that comes out without the code falls back to the suggested words.
+  `offers.thanks_days` (7 to 365, or no end) sets `referral_rewards.expires_on`
+  when a thank-you is made, on the business's clock; after that day the
+  booking page says it ended. Settings save while the program is off (it
+  is made paused).
+- **Migration.** `supabase/APPLY-2026-10-11-refer-a-friend.sql`, then
+  `supabase/APPLY-2026-10-11-thank-you-words.sql`.
+
+### Chief and offers (2026-10-11)
+
+`chief_offer_actions.py`: Chief does in chat what the owner does in Grow,
+Offers, through the page's own functions (no second write path). Owner
+only, on the owner's word in this chat turn; never unattended, never
+scheduled (`schedule_action` refuses them). Class C: a voice turn is held
+for a spoken yes that names what it gives.
+
+| verb | class | how | what |
+|---|---|---|---|
+| `make_offer` | write C | tag | an offer (`offers.create_offer`): amount, percent or free item; who; slow hours; start and end day; most uses; code. Nothing goes out; the reply gives the code and link |
+| `change_offer` | write C | tag | pause or turn back on an offer by its code, or its end day or most uses (`offers.change_offer`) |
+| `set_refer_a_friend` | write C | tag | refer a friend on or off, dollars each way, the P.S. on rebook notes, how long thank-you codes are good for (`refer_a_friend.set_referral`) |
+
 ### The weekly suggestion and the fan-out (B8)
 
 `business_marketing_planner.py` (2026-10-07). A business at the `suggest`

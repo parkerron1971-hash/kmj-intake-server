@@ -252,6 +252,44 @@ def test_paid_webhook_records_what_stripe_charged():
     assert data and data[0]["amount_charged_cents"] == 4800
 
 
+# module_entries' columns (live schema, 2026-10-11). A booking keeps its
+# contact in data; there is no contact_id column.
+MODULE_ENTRIES_COLUMNS = {
+    "id", "module_id", "business_id", "data", "status", "created_by", "created_at", "updated_at", "source",
+    "source_form_id", "paid_at", "stripe_charge_id", "stripe_payment_intent_id", "appointment_at",
+    "duration_min_at_booking",
+}
+
+
+def test_paid_webhook_reads_only_columns_that_exist():
+    """The read named a contact_id column that module_entries doesn't have,
+    so PostgREST answered 400, the read came back empty, and every paid
+    booking returned before paid_at, the deposit, the tip or the card on
+    file was recorded (found 2026-10-11: no booking had ever been marked paid)."""
+    import stripe_connect_router as scr
+    import event_spine
+    paths = []
+
+    def read(path):
+        paths.append(path)
+        return [{"id": "bk-1", "paid_at": None, "business_id": "biz-1", "contact_id": "c-1",
+                 "data": {"price_at_booking": 40.0, "contact_id": "c-1"}}]
+
+    emitted = []
+    with mock.patch.object(scr.sb_clients, "sb_get_as_service", read), \
+         mock.patch.object(scr.sb_clients, "sb_patch_as_service", lambda path, payload: [payload]), \
+         mock.patch.object(event_spine, "emit", lambda *a, **k: emitted.append(k)):
+        scr._mark_booking_paid("bk-1", payment_intent_id="pi_1", charge_id=None, metadata={},
+                               amount_charged_cents=4000)
+    select = paths[0].split("select=")[1].split("&")[0]
+    for field in select.split(","):
+        source = field.split(":", 1)[-1]
+        column = source.split("->", 1)[0]
+        assert column in MODULE_ENTRIES_COLUMNS, f"module_entries has no column {column!r} ({field})"
+    assert "contact_id:data->>contact_id" in select
+    assert emitted and emitted[0]["contact_id"] == "c-1"
+
+
 def test_first_recorded_charge_amount_is_kept():
     entry = {"id": "bk-1", "paid_at": "2026-06-10T00:00:00Z", "business_id": "biz-1",
              "contact_id": None, "data": {"price_at_booking": 40.0, "amount_charged_cents": 4800}}
