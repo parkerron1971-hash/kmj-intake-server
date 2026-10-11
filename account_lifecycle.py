@@ -311,6 +311,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # (APPLY-2026-10-11-refer-a-friend.sql).
     "referral_links",
     "referral_rewards",
+    # The business's texting registration answers (APPLY-2026-10-11-texting-registrations.sql).
+    "texting_registrations",
     "marketing_posts",
     "marketing_runs",
     "marketing_desks",
@@ -704,6 +706,9 @@ _IMPORT_SKIP = {
     # Refer a friend: codes and thank-yous name contacts by id, and a restore
     # gives contacts new ids; the export keeps them for reference.
     "referral_links", "referral_rewards",
+    # A texting registration belongs to the business Twilio approved; a
+    # restored business registers again. The export keeps the answers.
+    "texting_registrations",
     # The desk's settings are not restored either (review of #1307): an
     # uploaded file could switch the weekly plan on or name another
     # business's accounts and photos. The owner sets the desk up again; the

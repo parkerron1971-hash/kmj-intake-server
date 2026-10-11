@@ -689,6 +689,10 @@ app.include_router(journeys_api_router)
 # in one. /offers/* (business_access; /offers/public/* is the booking page's
 # read of an offer's words). Refer a friend (2026-10-11) adds
 # /offers/{biz}/referral* (owner); its thank-you sweep registers in startup().
+# Texting under each business's own name (2026-10-11, ISV step 1):
+# /texting/registration/{biz} (owner); the pages are served by public_site.
+from texting_registration import router as texting_registration_api_router
+app.include_router(texting_registration_api_router)
 from refer_a_friend import router as referral_api_router
 app.include_router(referral_api_router)
 from offers import router as offers_api_router
