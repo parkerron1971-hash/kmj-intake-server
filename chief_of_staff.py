@@ -1790,7 +1790,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                   if timing_role == "chief_main":
                       turn_context.note_main_call(model=model, lane=turn_context.lane(),
                                                   response_id=_reply_id)
-                  route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok)
+                  route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok,
+                                     cache_write_1h_tok)
                   if _round == 0:
                       try:
                           import cache_watch

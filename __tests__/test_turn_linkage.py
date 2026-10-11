@@ -315,3 +315,11 @@ def test_operating_on_an_existing_draft_does_not_claim_it():
              {"type": "approve_draft", "queue_id": "q-old2"},
              {"type": "draft_email", "queue_id": "q-new"}]
     assert turn_linkage.drafted_queue_ids(taken, lambda t: False) == ["q-new"]
+
+
+def test_sync_row_stores_one_hour_writes_once_the_column_exists(monkeypatch):
+    posted = _capture_sync_post(monkeypatch)
+    _columns(monkeypatch, True)
+    ul.log_api_usage_sync(endpoint="llm:x", model="claude-sonnet-5-5", input_tokens=1,
+                          output_tokens=1, cache_creation_tokens=100, cache_creation_1h_tokens=60)
+    assert posted.bodies[-1]["cache_creation_1h_tokens"] == 60

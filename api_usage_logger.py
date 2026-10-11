@@ -77,6 +77,12 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # Fable 5 — Mythos-class flagship: $10/MTok in, $50/MTok out.
     # (Elite-tier deep/insight lanes — the launch-gate entry.)
     "claude-fable-5":    (1000.0, 5000.0),
+    # Fable 5.1 and Mythos 5.1 — same $10/$50 as Fable 5 (cache reads are
+    # 0.025x, below). Explicit rows so neither rides a prefix by accident;
+    # Mythos 5.1 had a cache multiplier but no price row at all.
+    # Source: platform.claude.com/docs/en/about-claude/pricing, 2026-10-11.
+    "claude-fable-5-1":  (1000.0, 5000.0),
+    "claude-mythos-5-1": (1000.0, 5000.0),
     # Opus 5 — $5/MTok in, $25/MTok out. MISSING until 2026-08-22: the
     # sourcing engine's every call fell to the Sonnet fallback below and
     # under-booked by ~40% — the number a pricing ruling was made
@@ -121,6 +127,22 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "tts-1-hd":          (3000.0, 0.0),      # $30 / 1M characters
     "gpt-4o-mini-tts":   (1500.0, 0.0),      # $12 / 1M audio tokens ≈ $0.015/min ≈ $15 / 1M chars (voice latency arc 9/08)
     "eleven_turbo_v2_5": (2500.0, 0.0),      # ElevenLabs Turbo ≈ $25 / 1M chars (0.5 credits/char @ $0.05/1k credits)
+    # Flash v2.5 is the default voice model (whisper_proxy ELEVENLABS_MODEL)
+    # and had no row, so its characters were priced as Sonnet-4 input
+    # tokens: ~8x low. ElevenLabs bills Flash and Turbo at the same rate
+    # (0.5 credits/char). NOTE 2026-10-11: ElevenLabs' public pay-as-you-go
+    # API card reads $0.05 per 1k characters ($50 / 1M) for Flash/Turbo; if
+    # the account pays that card rather than plan credits, both rows are 2x low.
+    "eleven_flash_v2_5": (2500.0, 0.0),
+    # ── Other providers ──
+    # Kimi K3 (Moonshot; site_llm stages, vision_grader): $3 / $15 per MTok,
+    # cache hits $0.30 (0.1x). Moonshot's own pricing page was unreachable on
+    # 2026-10-11; figures from eesel.ai and verdent.ai guides citing it.
+    "kimi-k3":           (300.0, 1500.0),
+    # GPT-5.4 (studio_decoration_generator validator): $2.50 / $15 per MTok,
+    # cached input $0.25 (0.1x). From pricing aggregators (morphllm,
+    # cloudprice.net), 2026-10-11; not verified on openai.com.
+    "gpt-5.4":           (250.0, 1500.0),
     "whisper-1":         (0.0, 0.0),         # $0.006/min — via cost_cents_override
     "gpt-4o-mini-transcribe": (0.0, 0.0),    # per-minute — via cost_cents_override
     "gpt-4o-mini":       (15.0, 60.0),       # $0.15/$0.60 (fallback brain)
@@ -179,20 +201,54 @@ def cache_write_1h(usage) -> int:
         return 0
 
 
+# Models already reported as unknown in this process, so the warning
+# prints once per model rather than once per call.
+_UNKNOWN_MODELS_SEEN: set = set()
+
+
+# What a model with no row is priced at: the top current Claude list
+# price (Fable 5.x, $10 / $50 per MTok). Not the column maxima of the
+# whole table: those mix a per-character TTS row (tts-1-hd, 3000) with a
+# retired model's output rate (Opus 4, 7500) into a price no model has,
+# and an unlisted cheap model booked at that could trip the platform
+# spend cap for everyone. Retired Opus 4 / Claude 3 Opus have their rows.
+_UNKNOWN_MODEL_RATES: tuple[float, float] = (1000.0, 5000.0)
+
+
+def _most_expensive_rates() -> tuple[float, float]:
+    """The rate a model with no row is priced at (see _UNKNOWN_MODEL_RATES)."""
+    return _UNKNOWN_MODEL_RATES
+
+
 def _price_for_model(model: str) -> tuple[float, float]:
-    """Return (input_cents_per_MTok, output_cents_per_MTok). Falls back
-    to Sonnet pricing if no prefix matches (safe middle estimate).
+    """Return (input_cents_per_MTok, output_cents_per_MTok).
     Longest prefix wins, so specific entries beat family entries no
-    matter their dict order."""
-    if not model:
-        return (300.0, 1500.0)
-    m = model.lower()
+    matter their dict order.
+
+    A model with no row is priced at the top current Claude list price
+    (_UNKNOWN_MODEL_RATES) and announced on stdout (logging never reaches
+    Railway). It used to get
+    Sonnet-4 rates silently: a cheaper model looked fine and an expensive
+    one was under-booked, so the spend guard and the Costs view could be
+    wrong without anyone seeing it. Failing expensive keeps the daily cap
+    on the safe side until the row is added."""
+    m = (model or "").lower()
     best: tuple[float, float] | None = None
     best_len = -1
-    for prefix, prices in MODEL_PRICING_CENTS.items():
-        if m.startswith(prefix) and len(prefix) > best_len:
-            best, best_len = prices, len(prefix)
-    return best or (300.0, 1500.0)
+    if m:
+        for prefix, prices in MODEL_PRICING_CENTS.items():
+            if m.startswith(prefix) and len(prefix) > best_len:
+                best, best_len = prices, len(prefix)
+    if best is not None:
+        return best
+    worst = _most_expensive_rates()
+    key = m or "<empty>"
+    if key not in _UNKNOWN_MODELS_SEEN:
+        _UNKNOWN_MODELS_SEEN.add(key)
+        print(f"[meter] UNKNOWN MODEL '{key}' priced at the top Claude rate "
+              f"({worst[0]:g}/{worst[1]:g} cents per MTok); add it to "
+              f"MODEL_PRICING_CENTS", flush=True)
+    return worst
 
 
 def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int,
@@ -278,6 +334,7 @@ def log_api_usage_sync(
     cost_cents_override: Optional[float] = None,
     units: Optional[int] = None,
     duration_ms: Optional[int] = None,
+    cache_creation_1h_tokens: int = 0,
     lane: Optional[str] = None,
     provider: Optional[str] = None,
     response_id: Optional[str] = None,
@@ -285,6 +342,11 @@ def log_api_usage_sync(
 ) -> None:
     """Synchronous variant for sync call sites (composer/director). Same
     row shape; never raises.
+
+    `cache_creation_1h_tokens` is the 1-hour part of the cache write
+    (priced at 2x, not 1.25x). Until 2026-10-11 only the async variant took
+    it, so every call metered at the llm_call seam priced its 1-hour writes
+    at the 5-minute rate.
 
     `duration_ms` was async-only until 2026-08-09, which meant every
     composer and spec row had a NULL duration. When the Design Studio's
@@ -302,7 +364,8 @@ def log_api_usage_sync(
         return
     cost = (round(cost_cents_override, 4) if cost_cents_override is not None
             else _compute_cost_cents(model, input_tokens or 0, output_tokens or 0,
-                                     cache_read_tokens, cache_creation_tokens))
+                                     cache_read_tokens, cache_creation_tokens,
+                                     cache_creation_1h_tokens))
     body: Dict[str, Any] = {
         "endpoint": endpoint, "model": model,
         "input_tokens": int(input_tokens or 0),
@@ -328,7 +391,7 @@ def log_api_usage_sync(
         import schema_probe
         if schema_probe.has_columns("api_usage", _LINK_COLS):
             body.update(_linkage(model, lane=lane, provider=provider, response_id=response_id,
-                                 turn_id=turn_id, cache_creation_1h_tokens=None))
+                                 turn_id=turn_id, cache_creation_1h_tokens=cache_creation_1h_tokens))
     except Exception as e:  # pragma: no cover - linkage never costs the row
         logger.warning(f"api_usage linkage skipped: {e}")
     try:
@@ -431,6 +494,33 @@ async def log_api_usage(
     except Exception as e:
         # Never raise — usage logging must not break the live call.
         logger.warning(f"api_usage insert failed: {e}")
+
+
+def meter_openai_usage(endpoint: str, data: Any, *, fallback_model: str,
+                       business_id: Optional[str] = None,
+                       units: Optional[int] = None) -> None:
+    """Write one api_usage row from an OpenAI-compatible chat response.
+
+    For direct provider calls that bypass the llm_call seam (which meters
+    Anthropic responses only). OpenAI's `prompt_tokens` INCLUDE cached
+    tokens; api_usage stores fresh input and cache reads separately, the
+    way Anthropic reports them, so the cached part is split out. Never
+    raises."""
+    try:
+        usage = (data or {}).get("usage") or {}
+        prompt = int(usage.get("prompt_tokens") or 0)
+        cached = int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+        log_api_usage_sync(
+            endpoint=endpoint,
+            model=str((data or {}).get("model") or fallback_model),
+            input_tokens=max(prompt - cached, 0),
+            output_tokens=int(usage.get("completion_tokens") or 0),
+            cache_read_tokens=cached,
+            business_id=business_id,
+            units=units,
+        )
+    except Exception as e:
+        print(f"[meter] openai usage for {endpoint} not logged: {e}", flush=True)
 
 
 def now_ms() -> int:

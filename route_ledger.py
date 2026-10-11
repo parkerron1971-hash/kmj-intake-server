@@ -86,18 +86,23 @@ class Tally:
         self.frozen = False
 
     def add(self, model: str, input_tokens: int = 0, output_tokens: int = 0,
-            cache_read: int = 0, cache_write: int = 0) -> None:
+            cache_read: int = 0, cache_write: int = 0,
+            cache_write_1h: int = 0) -> None:
         if self.frozen:
             return          # background work the turn spawned, after it ended
         m = str(model or "unknown")
         with self._lock:
             row = self.by_model.setdefault(m, {"calls": 0, "in": 0, "out": 0,
-                                               "cache_read": 0, "cache_write": 0})
+                                               "cache_read": 0, "cache_write": 0,
+                                               "cache_write_1h": 0})
             row["calls"] += 1
             row["in"] += int(input_tokens or 0)
             row["out"] += int(output_tokens or 0)
             row["cache_read"] += int(cache_read or 0)
             row["cache_write"] += int(cache_write or 0)
+            # The 1-hour part of the write (already inside cache_write).
+            row["cache_write_1h"] = row.get("cache_write_1h", 0) + min(
+                max(int(cache_write_1h or 0), 0), int(cache_write or 0))
 
     def totals(self) -> Dict[str, int]:
         t = {"in": 0, "out": 0, "cache_read": 0, "cache_write": 0, "calls": 0}
@@ -113,9 +118,14 @@ class Tally:
             items = list(self.by_model.items())
         for model, row in items:
             pin, pout = _price(model)
+            # 5-minute writes cost 1.25x and 1-hour writes 2x, the same
+            # split api_usage_logger prices. Everything was 1.25x until
+            # 2026-10-11, so Chief's 1-hour segments were under-counted.
+            one_hour = row.get("cache_write_1h", 0)
             total += (row["in"] * pin + row["out"] * pout
                       + row["cache_read"] * pin * _read_mult(model)
-                      + row["cache_write"] * pin * 1.25) / 1_000_000.0
+                      + (row["cache_write"] - one_hour) * pin * 1.25
+                      + one_hour * pin * 2.0) / 1_000_000.0
         return round(total, 4)
 
 
@@ -134,7 +144,11 @@ def _price(model: str) -> Tuple[float, float]:
         import api_usage_logger
         pin, pout = api_usage_logger._price_for_model(model)
         return float(pin), float(pout)
-    except Exception:
+    except Exception as e:
+        # Unknown models are priced (expensively) inside _price_for_model;
+        # this only runs if the ledger itself can't be read. Say so rather
+        # than let a request quietly cost nothing.
+        print(f"[route] price lookup failed for {model!r}; tallied at 0: {e}", flush=True)
         return 0.0, 0.0
 
 
@@ -143,13 +157,15 @@ TALLY: "contextvars.ContextVar[Optional[Tally]]" = contextvars.ContextVar(
 
 
 def tally(model: str, input_tokens: int = 0, output_tokens: int = 0,
-          cache_read: int = 0, cache_write: int = 0) -> None:
+          cache_read: int = 0, cache_write: int = 0,
+          cache_write_1h: int = 0) -> None:
     """Add one model call to the current request's tally, if one is open.
     Never raises; costs nothing when no request is being routed."""
     try:
         t = TALLY.get()
         if t is not None:
-            t.add(model, input_tokens, output_tokens, cache_read, cache_write)
+            t.add(model, input_tokens, output_tokens, cache_read, cache_write,
+                  cache_write_1h)
     except Exception:
         pass
 
@@ -158,9 +174,15 @@ def tally_usage(model: str, usage: Optional[Dict[str, Any]]) -> None:
     """tally() from a Messages API `usage` object."""
     if not isinstance(usage, dict):
         return
+    try:
+        import api_usage_logger
+        one_hour = api_usage_logger.cache_write_1h(usage)
+    except Exception:
+        one_hour = 0
     tally(model, int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0),
           int(usage.get("cache_read_input_tokens") or 0),
-          int(usage.get("cache_creation_input_tokens") or 0))
+          int(usage.get("cache_creation_input_tokens") or 0),
+          one_hour)
 
 
 # ─── One request ─────────────────────────────────────────────────────
