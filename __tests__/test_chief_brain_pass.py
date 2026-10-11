@@ -253,6 +253,45 @@ def test_cost_cap_refuses_a_model_it_cannot_afford(world, monkeypatch):
     assert not world.calls and world.runs[0]['status'] == 'failed'
 
 
+def _route_to_provider(monkeypatch, model):
+    monkeypatch.setenv('CHIEF_PROVIDER_BACKGROUND', 'openai_compatible')
+    monkeypatch.setenv('CHIEF_PROVIDER_MODEL_BACKGROUND', model)
+    monkeypatch.setenv('CHIEF_PROVIDER_URL_BACKGROUND', 'https://models.example.test/v1')
+    monkeypatch.setenv('CHIEF_PROVIDER_KEY_ENV_BACKGROUND', 'SMALL_MODEL_KEY')
+    monkeypatch.setenv('SMALL_MODEL_KEY', 'sk-test')
+    monkeypatch.setenv('CHIEF_SUBPROCESSOR_HOSTS', 'models.example.test')
+
+
+def test_the_pass_runs_on_the_lane_seam_and_records_who_answered(world, monkeypatch):
+    import llm_call
+    _route_to_provider(monkeypatch, 'kimi-k3')
+    seen = []
+
+    def provider(route, payload, timeout):
+        seen.append((route.model, payload))
+        body = dict(world.next_reply, _provider=route.provider, model=route.model)
+        return FakeResponse(body)
+    monkeypatch.setattr(llm_call, '_openai_compatible', provider)
+    monkeypatch.setattr(llm_call, '_meter', lambda *a, **k: None)
+    say(world, BIZ, 'Make the reminder less formal, just say yo Marcus see you Thursday.')
+    out = bp.run_for_business(BIZ, NOW)
+    assert out['done'] and seen and seen[0][0] == 'kimi-k3'
+    assert not world.calls, 'the provider answered, so Claude was not called'
+    import api_usage_logger
+    cin, cout = api_usage_logger._price_for_model('kimi-k3')
+    run = world.runs[0]
+    assert run['model'] == 'kimi-k3', 'the run row names the model that answered'
+    assert run['cost_cents'] == round(run['input_tokens'] * cin / 1e6 + run['output_tokens'] * cout / 1e6, 4)
+
+
+def test_the_cost_cap_holds_for_a_pricier_provider_model(world, monkeypatch):
+    _route_to_provider(monkeypatch, 'an-unpriced-model')
+    say(world, BIZ, 'hi')
+    assert bp.run_for_business(BIZ, NOW) == {'skipped': 'cost cap'}
+    assert not world.calls and world.runs[0]['status'] == 'failed'
+    assert 'an-unpriced-model' in world.runs[0]['error']
+
+
 def test_unreadable_review_fails_cleanly(world):
     say(world, BIZ, 'hi')
     world.next_reply = {'content': [{'type': 'text', 'text': 'not json at all'}], 'usage': {}}

@@ -302,6 +302,7 @@ def run_for_business(bid: str, now: Optional[datetime] = None) -> Dict[str, Any]
     import business_brain
     import business_learning
     import chief_models
+    import lane_registry
     import llm_call
     import spend_guard
 
@@ -312,6 +313,14 @@ def run_for_business(bid: str, now: Optional[datetime] = None) -> Dict[str, Any]
         return {"skipped": "no business"}
     biz = rows[0]
     model = chief_models.model_for("background")
+    # The background lane may be routed to another provider (lane_registry),
+    # with this Claude model as its fallback. The cost cap holds for
+    # whichever of the two answers.
+    route = lane_registry.route_for("background")
+
+    def worst_cents(prompt_chars: int) -> float:
+        return max(estimate_cents(m, prompt_chars) for m in {model, route.model})
+
     run_id = _claim(bid, now.date().isoformat(), model)
     if not run_id:
         return {"skipped": "already ran today"}
@@ -344,25 +353,26 @@ def run_for_business(bid: str, now: Optional[datetime] = None) -> Dict[str, Any]
         budget = INPUT_CHAR_BUDGET
         prompt = build_prompt(biz, ev, rules=rules, pending=pending, declined=declined,
                               prior_digest=prior, since=since, budget=budget)
-        while estimate_cents(model, len(prompt)) > MAX_COST_CENTS_PER_RUN and budget > MIN_INPUT_CHARS:
+        while worst_cents(len(prompt)) > MAX_COST_CENTS_PER_RUN and budget > MIN_INPUT_CHARS:
             budget = int(budget * 0.6)
             prompt = build_prompt(biz, ev, rules=rules, pending=pending, declined=declined,
                                   prior_digest=prior, since=since, budget=budget)
-        if estimate_cents(model, len(prompt)) > MAX_COST_CENTS_PER_RUN:
-            _finish(run_id, status="failed", error=f"over the per-run cap on {model}")
+        if worst_cents(len(prompt)) > MAX_COST_CENTS_PER_RUN:
+            _finish(run_id, status="failed", error=f"over the per-run cap on {route.model}")
             return {"skipped": "cost cap"}
 
         payload = {"model": model, "max_tokens": MAX_OUTPUT_TOKENS, "system": SYSTEM,
                    "messages": [{"role": "user", "content": prompt}],
                    **chief_models.quick_call_kwargs(model)}
-        resp = llm_call.post(payload, timeout=90, task=TASK, business_id=bid)
+        resp = llm_call.post_lane("background", payload, timeout=90, task=TASK, business_id=bid)
         resp.raise_for_status()
         data = resp.json()
+        answered = route.model if data.get("_provider") else model
         usage = data.get("usage") or {}
         tokens_in = int(usage.get("input_tokens") or 0)
         tokens_out = int(usage.get("output_tokens") or 0)
         import api_usage_logger
-        cin, cout = api_usage_logger._price_for_model(model)
+        cin, cout = api_usage_logger._price_for_model(answered)
         cents = round(tokens_in * cin / 1e6 + tokens_out * cout / 1e6, 4)
 
         out = parse(data)
@@ -397,7 +407,7 @@ def run_for_business(bid: str, now: Optional[datetime] = None) -> Dict[str, Any]
             if qid:
                 filed += 1
                 known.append(r.statement)
-        _finish(run_id, status="done", input_tokens=tokens_in, output_tokens=tokens_out,
+        _finish(run_id, status="done", model=answered, input_tokens=tokens_in, output_tokens=tokens_out,
                 cost_cents=cents, proposals_filed=filed,
                 brain_version=(brain or {}).get("version"), error=note)
         print(f"[brain-pass] {bid[:8]} done in={tokens_in} out={tokens_out} "
