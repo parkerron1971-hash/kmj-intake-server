@@ -4,7 +4,7 @@ date: 2026-10-11
 agent: Claude Code (Claude Opus 5.5)
 asked: "build the best path forward. and approved to do what is needed to get this working well (Kevin, 2026-10-11, Layer Two workstream D)"
 status: waiting on review
-prs: [kmj-intake-server#lane-registry]
+prs: [kmj-intake-server#1388]
 migrations: []
 left_undone: ["only design_intent calls post_lane so far; the brain pass and the other background/fast callers move after their own PRs land", "no lane is pointed anywhere else: that needs the replay bench (workstream G) and Kevin's yes", "streaming lanes (opener, headline) are not routable yet"]
 decisions: ["the registry sits on chief_models, so CHIEF_MODEL_<LANE> keeps working and Anthropic stays the default", "a half-set lane stays on Claude and says so, never fails closed", "tools, extended thinking, cache markers and non-text blocks keep a call on Claude whatever the config says", "a provider failure falls back to the lane's Claude model in the same call", "the provider's answer is returned in the Anthropic Messages shape, so callers parse it unchanged and the seam meters it"]
