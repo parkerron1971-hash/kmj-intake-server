@@ -11835,7 +11835,7 @@ from chief_dashboard_actions import handle_get_dashboard_layout, handle_set_dash
 
 from chief_business_learning_actions import (
     handle_learn_business, handle_recall_business_knowledge, handle_correct_business_knowledge,
-    handle_capture_business_knowledge,
+    handle_capture_business_knowledge, handle_adopt_business_rule, handle_remove_business_rule,
 )
 
 from image_studio import handle_generate_image, handle_find_images, handle_capture_website_references
@@ -11864,6 +11864,8 @@ ACTION_HANDLERS = {
     "recall_business_knowledge": handle_recall_business_knowledge,
     "correct_business_knowledge": handle_correct_business_knowledge,
     "capture_business_knowledge": handle_capture_business_knowledge,
+    "adopt_business_rule": handle_adopt_business_rule,
+    "remove_business_rule": handle_remove_business_rule,
     "get_dashboard_layout": handle_get_dashboard_layout,
     "set_dashboard_focus": handle_set_dashboard_focus,
     "set_start_page": handle_set_start_page,
@@ -13107,12 +13109,21 @@ async def _execute_actions(client, biz, actions: List[Dict],
         if prompted and owner_text:
             from chief_invoice_readout import owner_invoice_scope
             resolved = owner_invoice_scope(resolved, owner_text)
-        if atype in ("learn_business", "correct_business_knowledge", "capture_business_knowledge"):
+        if atype in ("learn_business", "correct_business_knowledge", "capture_business_knowledge",
+                     "adopt_business_rule", "remove_business_rule"):
             # Never trust a model-supplied provenance field. Only an actual
             # current owner message can establish an owner fact.
             resolved = dict(resolved)
             resolved["_owner_text"] = (owner_text or "") if (
                 prompted and str(user_id) == str(biz.get("owner_id"))) else ""
+            # An owner rule can also come from the owner's tap on a proposal
+            # in the Approval Queue (action_proposals.execute: surface
+            # "approval", prompted, as the owner). Set here, never read from
+            # the model's arguments.
+            resolved["_owner_approved"] = bool(
+                atype in ("adopt_business_rule", "remove_business_rule")
+                and surface == "approval" and prompted
+                and str(user_id) == str(biz.get("owner_id")))
         if atype in ("void_invoice", "delete_invoice"):
             # "Void anyway" for a pay link that couldn't be verified is the
             # owner's word on a turn they typed, never the model's alone.
