@@ -115,7 +115,8 @@ def test_distillation_is_skipped_when_no_signal_clears_the_floor(monkeypatch):
     monkeypatch.setattr(vd, "_enabled", lambda: True)
     monkeypatch.setattr(vd, "_businesses_by_vertical",
                         lambda: {"coach": ["b1", "b2", "b3", "b4"]})
-    monkeypatch.setattr(vd, "_gather", lambda ids: {
+    monkeypatch.setattr(vd, "_known_names", lambda ids: {})
+    monkeypatch.setattr(vd, "_gather", lambda ids, names=None: {
         "situations": {"only one business does this": {"b1"}},
         "corrections": {}, "proposals": {}})
     distilled = []
@@ -167,6 +168,89 @@ def test_gather_requests_only_structural_columns(monkeypatch):
     for forbidden in ("contacts", "email", "phone", "amount", "select=*"):
         assert forbidden not in joined, (
             f"gatherer reached for {forbidden!r}: {joined}")
+
+
+# ─── known names ─────────────────────────────────────────────────────
+
+def _names_world(monkeypatch, contacts, businesses=None, fail=None):
+    seen = []
+
+    def _fake_get(path):
+        seen.append(path)
+        table = path.split("?")[0]
+        if fail and table == fail:
+            return None
+        if table == "/contacts":
+            return contacts
+        if table == "/businesses":
+            return businesses or []
+        if table == "/chief_templates":
+            return [{"business_id": b, "kind": "reminder",
+                     "situation": f"Remind {n} the day before"}
+                    for b, n in (("b1", "Marcus Webb"), ("b2", "marcus webb"),
+                                 ("b3", "Ana"))]
+        return []
+    monkeypatch.setattr(vd.sb_clients, "sb_get_as_service", _fake_get)
+    return seen
+
+
+def test_a_business_s_own_client_names_never_reach_the_evidence(monkeypatch):
+    _names_world(monkeypatch, [
+        {"business_id": "b1", "name": "Marcus Webb"},
+        {"business_id": "b2", "name": "Marcus Webb"},
+        {"business_id": "b3", "name": "Ana Lopez"}])
+    names = vd._known_names(["b1", "b2", "b3"])
+    ev = vd._gather(["b1", "b2", "b3"], names=names)
+    keys = " ".join(ev["situations"])
+    assert "marcus" not in keys.lower() and "Ana" not in keys
+    # Stripped to the same shape, three businesses now share one signal.
+    assert ev["situations"]["reminder: Remind [name] the day before"] == {"b1", "b2", "b3"}
+
+
+def test_names_are_stripped_per_business_and_by_whole_word(monkeypatch):
+    _names_world(monkeypatch, [{"business_id": "b1", "name": "Will Annabelle"}],
+                 businesses=[{"id": "b2", "name": "Glow Studio"}])
+    names = vd._known_names(["b1", "b2"])
+    assert vd._unname("Ask Will about Annabelle's rebook", names, "b1") == "Ask [name] about [name]'s rebook"
+    assert vd._unname("They will rebook", names, "b1") == "They will rebook", "a lowercase word is not a name"
+    assert vd._unname("Annabeller", names, "b1") == "Annabeller", "whole words only"
+    assert vd._unname("Ask Will", names, "b2") == "Ask Will", "one business's clients do not clean another's text"
+    assert vd._unname("Glow Studio intro offer", names, "b2") == "[name] intro offer"
+
+
+def test_known_names_selects_only_the_name(monkeypatch):
+    seen = _names_world(monkeypatch, [])
+    vd._known_names(["b1", "b2", "b3"])
+    selects = [p.split("select=")[1].split("&")[0] for p in seen]
+    assert selects == ["business_id,name", "id,name"]
+
+
+def test_known_names_reads_past_the_first_page(monkeypatch):
+    pages = []
+
+    def _fake_get(path):
+        pages.append(path)
+        if path.startswith("/contacts") and "offset=0" in path:
+            return [{"business_id": "b1", "name": f"Client{i:04d} Person"} for i in range(vd._PAGE)]
+        if path.startswith("/contacts"):
+            return [{"business_id": "b1", "name": "Zelda Last"}]
+        return []
+    monkeypatch.setattr(vd.sb_clients, "sb_get_as_service", _fake_get)
+    names = vd._known_names(["b1"])
+    assert vd._unname("Call Zelda", names, "b1") == "Call [name]"
+    assert any("offset=1000" in p for p in pages)
+
+
+@pytest.mark.parametrize("table", ["/contacts", "/businesses"])
+def test_an_unreadable_name_list_writes_nothing(monkeypatch, table):
+    monkeypatch.setattr(vd, "_enabled", lambda: True)
+    monkeypatch.setattr(vd, "_businesses_by_vertical", lambda: {"coach": ["b1", "b2", "b3"]})
+    _names_world(monkeypatch, [], fail=table)
+    distilled = []
+    monkeypatch.setattr(vd, "_distil", lambda v, e: distilled.append(e) or [])
+    out = vd.run_for_vertical("coach")
+    assert out["written"] == 0 and "names could not be read" in out["skipped"]
+    assert not distilled
 
 
 # ─── scrubbing ───────────────────────────────────────────────────────
@@ -364,7 +448,8 @@ def test_evidence_count_records_the_weakest_signal(monkeypatch):
     monkeypatch.setattr(vd, "_enabled", lambda: True)
     monkeypatch.setattr(vd, "_businesses_by_vertical",
                         lambda: {"coach": ["b1", "b2", "b3", "b4", "b5"]})
-    monkeypatch.setattr(vd, "_gather", lambda ids: {
+    monkeypatch.setattr(vd, "_known_names", lambda ids: {})
+    monkeypatch.setattr(vd, "_gather", lambda ids, names=None: {
         "situations": {"widely seen": {"b1", "b2", "b3", "b4", "b5"}},
         "corrections": {"just cleared the floor": {"b1", "b2", "b3"}},
         "proposals": {}})
