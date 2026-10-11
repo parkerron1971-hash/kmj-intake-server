@@ -281,3 +281,15 @@ def test_appointments_onboarding_is_not_a_stale_location_conflict(monkeypatch, c
         asyncio.run(sq.square(cfg, "GET", "/v2/locations", token="private-access"))
     assert exc.value.status_code == 409
     assert exc.value.detail == {"code": "square_authorization_required"}
+
+
+@pytest.mark.parametrize("errors", [None, {}, [None], [{"code": "UNAUTHORIZED", "detail": "private revised provider message"}]])
+def test_unknown_booking_auth_errors_are_redacted_and_observable(monkeypatch, cfg, caplog, errors):
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda req: httpx.Response(401, json={"errors": errors}))
+    monkeypatch.setattr(sq.httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(sq.square(cfg, "GET", "/v2/bookings", token="private-access"))
+    assert exc.value.detail == {"code": "square_authorization_required"}
+    assert "/v2/bookings authorization failure (status=401)" in caplog.text
+    assert "private" not in caplog.text + str(exc.value.detail)

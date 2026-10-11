@@ -7,3 +7,7 @@ status: in progress
 left_undone: ["free sandbox Appointments activation approval", "successful live booking preview", "external grant revocation acceptance"]
 ---
 Real OAuth consent and callback passed against Default Test Account. Location discovery/save passed. Booking preview returned Square 401 UNAUTHORIZED: Merchant not onboarded to Appointments. The frontend incorrectly described every 409 as a changed connection/location. Added allowlisted application error codes and fixed local UI copy without echoing provider bodies. No permission changes. Disconnect completed successfully and cleared the selection; reconnect acceptance is in progress. Automatic approval review blocked sandbox Appointments activation pending specific user approval; that question is open. Regression coverage includes the observed provider error, unrelated-endpoint authorization behavior, unknown error codes, diagnostic redaction and mobile wrapping.
+
+Review: all authenticated Square UI requests share the same allowlisted detail.code mapping; OAuth callback catches HTTPException and renders fixed copy, and disconnect catches it as pending revocation. No caller renders the dict as text. Added a path/status-only warning for unknown Bookings authorization failures and regressions for malformed payloads/provider wording drift, without logging provider text or tokens.
+
+Validation after review: all 53 focused backend Square tests passed. Frontend companion has 26 passing browser checks, passing typecheck gates and a successful production build.
