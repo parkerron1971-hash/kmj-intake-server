@@ -181,6 +181,10 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
             business_id=business_id,
             units=units,
             duration_ms=int((time.time() - started) * 1000),
+            # The provider's own id for this response (msg_...): proof of
+            # which call produced an output. Lane and turn come from the
+            # ambient turn_context inside the logger.
+            response_id=str((data or {}).get("id") or "") or None,
         )
         if background:
             # The tally above is local and immediately visible to this turn.
