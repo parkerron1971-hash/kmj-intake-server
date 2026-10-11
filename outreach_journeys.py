@@ -330,14 +330,21 @@ def _leap(year: int) -> bool:
 
 # ── sending ───────────────────────────────────────────────────────────
 
-async def marketing_text_consent(client, business_id: str, phone: str) -> bool:
+async def marketing_text_consent(client, business_id: str, phone: str,
+                                 own: Optional[Dict[str, Any]] = None) -> bool:
     """The person ticked "texts about offers" for this business, and has not
-    opted out (STOP always wins)."""
+    opted out (STOP always wins). For a business texting under its own
+    registered name (`own`, ISV step 4), the tick has to be since its booking
+    page asked in its own name (Kevin, 2026-10-11, the mixed rule)."""
     import sms_alerts
+    import sms_routing
     from sms_service import normalize_phone
     phone = normalize_phone(phone) or ""
     if not phone or await sms_alerts.is_opted_out(client, phone, business_id):
         return False
+    if own:
+        return await sms_routing.agreed_under_own_name(client, business_id, phone, own.get("since"),
+                                                       source=MARKETING_CONSENT)
     rows = await sms_alerts._sb_get(
         client, f"/sms_consents?phone=eq.{sms_alerts._pq(phone)}&business_id=eq.{business_id}"
                 f"&source=eq.{MARKETING_CONSENT}&select=id&limit=1") or []
@@ -354,8 +361,15 @@ async def _channel(client, business: Dict[str, Any], contact: Dict[str, Any]) ->
     import contact_fields
     import email_sender
     phone = (contact.get("phone") or "").strip()
-    if texts_on() and phone and not contact_fields.sms_opted_out(contact):
-        if await marketing_text_consent(client, str(business["id"]), phone):
+    # Texts go out for a business registered under its own name (its own
+    # approved campaign covers offers, ISV step 4), or for everyone once the
+    # shared number's switch is on (JOURNEY_TEXTS, off).
+    own = None
+    if phone:
+        import sms_routing
+        own = await sms_routing.own_registration(client, str(business["id"]))
+    if (texts_on() or own) and phone and not contact_fields.sms_opted_out(contact):
+        if await marketing_text_consent(client, str(business["id"]), phone, own):
             return "sms"
     email = (contact.get("email") or "").strip()
     if email and not contact_fields.email_opted_out(contact) and not await email_sender.is_suppressed(email):
