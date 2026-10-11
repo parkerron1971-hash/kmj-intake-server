@@ -1740,7 +1740,7 @@ def evidence_for_review(ctx, view_detail, taken):
         # Saved memories are short facts the owner told Chief ("the 90-day
         # cohort is $750"). Ranked with the prose they were dropped first
         # and a correct answer quoting one was withheld (2026-09-24).
-        'memories',
+        'memories', 'memories_for_message',
         'projects', 'open_missions', 'open_assignments', 'open_cases', 'products', 'offerings', 'contacts_lookup',
         'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'invoice_summary', 'sessions',
         'contacts_total', 'contacts_loaded', 'contacts_complete', 'context_quality')

@@ -2691,19 +2691,24 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
     # by the Chief to give the practitioner a "while you were away" recap.
     auto_recent = [ev for ev in (events or []) if ev.get("event_type") == "chief_auto_approved"]
 
-    # Semantic memory recall (2026-07-13): union the meaning-matched
-    # memories into the pool so _blend_memories ranks them alongside the
-    # importance/recency set. Fail-open — no matches just means today's
-    # behavior. Dedup by id. The match itself ran in wave 2 above (off
-    # the event loop, in parallel with the profile blocks).
-    mem_pool = list(memories or [])
+    # Semantic memory recall (2026-07-13). The meaning-matched memories
+    # depend on THIS message, so since 2026-10-11 they no longer join the
+    # cached snapshot: a hit outside the stable importance/recency set made
+    # the cached state block differ from the last turn and paid a cache
+    # rewrite, and _blend_memories could drop it anyway (it never scored
+    # similarity). The stable set stays in the snapshot; every hit it does
+    # not already show goes to the uncached turn tail as
+    # memories_for_message. Fail-open, dedup by id. The match itself ran in
+    # wave 2 above (off the event loop, in parallel with the profile blocks).
+    mem_pool = _blend_memories(list(memories or []))
+    mem_for_message: List[Dict[str, Any]] = []
     try:
         have = {str(m.get("id")) for m in mem_pool}
         for hit in (_semantic_hits or []):
             hid = str(hit.get("id"))
             if hid and hid not in have:
                 have.add(hid)
-                mem_pool.append({
+                mem_for_message.append({
                     "id": hit.get("id"),
                     "category": hit.get("category"),
                     "content": hit.get("content"),
@@ -2752,7 +2757,8 @@ async def _gather_context(client: httpx.AsyncClient, biz_id: str,
         "insights": insights or [],
         "modules": modules or [],
         "module_counts": module_counts,
-        "memories": _blend_memories(mem_pool),
+        "memories": mem_pool,
+        "memories_for_message": mem_for_message[:8],
         "notifications": notifications or [],
         "recent_queue_24h": recent_queue or [],
         "auto_recent": auto_recent,
@@ -4314,7 +4320,11 @@ CONTACT LOOKUP (use these exact IDs when referencing contacts in actions):
     # cache watch named them on 7 Oct: DATA QUALITY, UNREAD INSIGHTS, RECENT
     # UNREAD NOTIFICATIONS, RECENT EVENTS, RECENT AGENT ACTIVITY). Same text,
     # now in the per-message tail after [[CHIEF_TURN_SPLIT]].
-    live = f"""DATA QUALITY: {json.dumps(_quality_for_prompt(ctx))}
+    message_memory_lines = [_memory_prompt_line(m) for m in (ctx.get("memories_for_message") or [])]
+    message_memories = (
+        "SAVED MEMORIES MATCHING THIS MESSAGE (same standing as PRACTITIONER MEMORIES; matched by meaning):\n"
+        + "\n".join(message_memory_lines) + "\n") if message_memory_lines else ""
+    live = f"""{message_memories}DATA QUALITY: {json.dumps(_quality_for_prompt(ctx))}
   A missing/failed source means unavailable, not zero. The lists in the business snapshot above are samples unless explicitly complete (complete_lists names them; an empty complete list means none yet, so say so plainly). Never infer a total or absence from a capped list.
 UNREAD INSIGHTS:
 {chr(10).join(insight_lines) if insight_lines else '  (none)'}
@@ -15781,7 +15791,9 @@ async def chief_chat(
             _t.log(lane=lane, streamed=_STREAM_SINK.get() is not None)
 
             # Best-effort: mark memories referenced in the response
-            await _mark_referenced_memories(client, biz["id"], ctx.get("memories") or [], clean or raw)
+            await _mark_referenced_memories(client, biz["id"],
+                                            (ctx.get("memories") or []) + (ctx.get("memories_for_message") or []),
+                                            clean or raw)
 
             # Intelligence learning — pattern memory + mentor-tip cooldown.
             # Best-effort, never blocks the response. Use a separate client
