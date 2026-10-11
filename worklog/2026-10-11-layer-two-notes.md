@@ -4,7 +4,7 @@ date: 2026-10-11
 agent: Claude Code (Claude Opus 5.5)
 asked: "build the best path forward. and approved to do what is needed to get this working well (Kevin, 2026-10-11)"
 status: waiting on review
-prs: [kmj-intake-server#layer-two-notes]
+prs: [kmj-intake-server#1386]
 migrations: []
 left_undone: ["re-run the probe quarterly to check the self-hosting trigger"]
 decisions: ["no GPU work: the candidate lanes cost under a dollar a month platform-wide, against a self-hosting floor of hundreds", "trigger = candidate-lane spend at 2x the always-on floor for three months, plus replay-bench parity, plus the lane registry seam"]
