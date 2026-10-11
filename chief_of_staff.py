@@ -11253,10 +11253,16 @@ async def handle_add_voice_rule(client, biz, action) -> Dict:
     # The owner just settled what the pending edit observations were
     # pointing at. Clear them — the same step the confirm card's accept
     # takes — or the threshold stays met and Chief proposes again next turn.
+    # A failed write comes back as {"ok": False}, not an exception — check
+    # both, and print (logging never reaches Railway) so a re-proposal can
+    # be traced to its cause. The owner's reply stays a success: the rule
+    # itself was saved.
     try:
-        await asyncio.to_thread(voice_depth_agent.clear_observations_after_rule, owner_id)
+        cleared = await asyncio.to_thread(voice_depth_agent.clear_observations_after_rule, owner_id)
+        if not (cleared or {}).get("ok"):
+            print(f"[voice] add_voice_rule: observations not cleared: {cleared}", flush=True)
     except Exception as e:
-        logger.warning(f"add_voice_rule: clearing observations failed: {e}")
+        print(f"[voice] add_voice_rule: clearing observations failed: {e}", flush=True)
     kind = "do" if list_name == "voice_dos" else "don't"
     # The rule's TEXT goes in label and result: record_chief_turn audits
     # exactly those, and "Added voice do" alone kept nothing of what was
