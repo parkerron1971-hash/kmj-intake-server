@@ -4,7 +4,7 @@ date: 2026-10-11
 agent: Claude Code (Claude Opus 5.5)
 asked: "found while building refer-a-friend (step 3 of the approved Reach plan), which needs to know when a friend's visit is paid"
 status: waiting on review
-prs: [kmj-intake-server#1368]
+prs: [kmj-intake-server#1369]
 migrations: []
 left_undone: ["payments made online before this fix were not recorded on their bookings; none are on file (no booking has paid_at), so there is nothing to backfill"]
 decisions: ["read the contact from the booking's data (contact_id:data->>contact_id), where the booking widget keeps it, so the rest of the handler is unchanged", "the test checks every field the read names against module_entries' live columns, so a read that names a missing column fails in CI, not silently in production"]
