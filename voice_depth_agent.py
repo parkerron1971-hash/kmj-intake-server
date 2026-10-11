@@ -14,7 +14,7 @@ Public API:
   update_voice_sample(owner_id, slot, sample_text) -> dict
   update_voice_style(owner_id, field, value) -> dict
   add_voice_rule(owner_id, list_name, rule) -> dict
-  remove_voice_rule(owner_id, list_name, idx) -> dict
+  remove_voice_rule(owner_id, list_name, idx=None, rule=None) -> dict
   record_edit_observation(owner_id, original, edited, context, kind) -> dict
   get_observations_for_proposal(owner_id) -> list[dict]
   clear_observations_after_rule(owner_id) -> dict
@@ -253,7 +253,16 @@ def add_voice_rule(owner_id: str, list_name: str, rule: str) -> Dict[str, Any]:
     return {"ok": True, "list": list_name, "count": len(existing)}
 
 
-def remove_voice_rule(owner_id: str, list_name: str, idx: int) -> Dict[str, Any]:
+def remove_voice_rule(owner_id: str, list_name: str, idx: Optional[int] = None,
+                      rule: Optional[str] = None) -> Dict[str, Any]:
+    """Remove one rule, named by its TEXT where possible.
+
+    An index alone is a position, and positions shift: the list can change
+    between the turn that read it and the call that removes from it, and
+    the wrong rule goes. When `rule` is given it decides; `idx` is only
+    trusted when the text at that position matches. Idx-only calls (the
+    settings screen's existing shape) keep working.
+    """
     if not owner_id:
         return {"ok": False, "error": "owner_id required"}
     if list_name not in _VALID_RULE_LISTS:
@@ -261,10 +270,21 @@ def remove_voice_rule(owner_id: str, list_name: str, idx: int) -> Dict[str, Any]
 
     current = get_voice_depth(owner_id) or {}
     existing = list(current.get(list_name) or [])
-    if idx is None or idx < 0 or idx >= len(existing):
-        return {"ok": False, "error": "Index out of range"}
+    rule = (rule or "").strip()
+    if rule:
+        if idx is not None and 0 <= idx < len(existing) and str(existing[idx]).strip() == rule:
+            pos = idx
+        else:
+            matches = [i for i, r in enumerate(existing) if str(r).strip() == rule]
+            if not matches:
+                return {"ok": False, "error": "That rule isn't in the list any more"}
+            pos = matches[0]
+    else:
+        if idx is None or idx < 0 or idx >= len(existing):
+            return {"ok": False, "error": "Index out of range"}
+        pos = idx
 
-    removed = existing.pop(idx)
+    removed = existing.pop(pos)
     res = _sb_patch(
         f"/practitioner_profiles?owner_id=eq.{owner_id}",
         {list_name: existing, "updated_at": _now_iso()},

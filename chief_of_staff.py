@@ -3928,6 +3928,13 @@ def _format_site_info(ctx: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _is_owner_standing_instruction(memory) -> bool:
+    """A standing instruction in the owner's own words (source user_stated,
+    which handle_remember sets only from authenticated current-turn text)."""
+    return ((memory.get('category') or '').lower() == 'standing_instruction'
+            and (memory.get('source') or '') == 'user_stated')
+
+
 def _memory_prompt_line(memory):
     source = memory.get('source') or 'unknown'
     status = 'inferred assumption' if source == 'ai_inferred' else 'reported history; verify current facts'
@@ -4036,10 +4043,13 @@ def _format_context_parts(ctx: Dict[str, Any]):
     # Longitudinal insights (category=insight, written weekly by
     # chief_insights.py) get their own section below so the Chief treats
     # them as analysis to act on, not just facts to honor.
+    # The owner's own standing instructions render once, under STANDING
+    # INSTRUCTIONS below — not a second time here.
     memory_lines = [
         _memory_prompt_line(m)
         for m in (ctx.get("memories") or [])
         if (m.get("category") or "").lower() != "insight"
+        and not _is_owner_standing_instruction(m)
     ]
     longitudinal_lines = [
         _memory_prompt_line(m)
@@ -4071,10 +4081,17 @@ def _format_context_parts(ctx: Dict[str, Any]):
         if isinstance(_fr, dict) and _fr.get("q"):
             bp_lines.append(f"  - Q: {_fr.get('q')} — A: {_fr.get('a')}")
 
-    # Standing instructions (from memories)
-    standing = [m for m in (ctx.get("memories") or []) if (m.get("category") or "").lower() == "standing_instruction"]
+    # Standing instructions (from memories). From 2026-09-04 to 2026-10-11
+    # this block printed the standing PERMISSIONS instead (the variable
+    # name was reused further down), so it said nothing the owner had
+    # asked for. Now that it is live again under an "execute when
+    # triggered" header, only the owner's own words qualify: a
+    # standing_instruction Chief inferred, or wrote from text it read,
+    # stays an assumption in PRACTITIONER MEMORIES. Actions it triggers
+    # still pass the same gates as any other.
+    standing = [m for m in (ctx.get("memories") or []) if _is_owner_standing_instruction(m)]
     standing_lines = [
-        f"  - [★{m.get('importance', 5)}] {m.get('content')}"
+        f"  - [★{m.get('importance', 5)}] {_neutralize_untrusted(m.get('content') or '')}"
         for m in standing
     ]
 
@@ -4193,7 +4210,7 @@ def _format_context_parts(ctx: Dict[str, Any]):
     assignment_lines = chief_assignments.context_lines(ctx.get("open_assignments") or [])
     case_lines = chief_cases.context_lines(ctx.get("open_cases") or [])
     learning_lines = list(ctx.get("learning_lines") or [])
-    standing_lines = standing_permissions.context_lines(ctx.get("business") or {})
+    permission_lines = standing_permissions.context_lines(ctx.get("business") or {})
 
     mission_lines = []
     for m in (ctx.get("open_missions") or [])[:5]:
@@ -4285,7 +4302,7 @@ KEEPING AN EYE ON (problems you diagnosed with the owner: why, the fix, the numb
 {chr(10).join(learning_lines) if learning_lines else 'WHAT LANDS WITH THIS PRACTITIONER: nothing recorded yet — no outcomes from your own moves in the last 30 days.'}
 
 STANDING PERMISSIONS:
-{chr(10).join(standing_lines) if standing_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
+{chr(10).join(permission_lines) if permission_lines else '  (none — every send, charge and publish waits for their tap; grant_standing_permission is THEIR decision, in their words, never yours to suggest unprompted)'}
 
 OPEN INVOICES — TOTALS (computed from the rows below; quote these for any count, total, age or who-owes-most answer, never add them up yourself):
 {chr(10).join('  ' + x for x in (ctx.get('invoice_summary') or [])) or _empty_list_line(ctx, 'open_invoices')}
@@ -11277,11 +11294,30 @@ async def handle_add_voice_rule(client, biz, action) -> Dict:
         return _fail("add_voice_rule", str(e))
     if not result.get("ok"):
         return _fail("add_voice_rule", result.get("error", "save failed"))
+    # The owner just settled what the pending edit observations were
+    # pointing at. Clear them — the same step the confirm card's accept
+    # takes — or the threshold stays met and Chief proposes again next turn.
+    # A failed write comes back as {"ok": False}, not an exception — check
+    # both, and print (logging never reaches Railway) so a re-proposal can
+    # be traced to its cause. The owner's reply stays a success: the rule
+    # itself was saved.
+    try:
+        cleared = await asyncio.to_thread(voice_depth_agent.clear_observations_after_rule, owner_id)
+        if not (cleared or {}).get("ok"):
+            print(f"[voice] add_voice_rule: observations not cleared: {cleared}", flush=True)
+    except Exception as e:
+        print(f"[voice] add_voice_rule: clearing observations failed: {e}", flush=True)
     kind = "do" if list_name == "voice_dos" else "don't"
+    # The rule's TEXT goes in label and result: record_chief_turn audits
+    # exactly those, and "Added voice do" alone kept nothing of what was
+    # added. `list`/`rule`/`duplicate` are what undo needs to reverse it.
     return {
         "type": "add_voice_rule",
-        "result": f"Added voice {kind}.",
-        "label": f"Added voice {kind}",
+        "result": f"Added voice {kind}: '{rule[:300]}'.",
+        "label": f"Added voice {kind}: {_voice_rule_short(rule)}",
+        "list": list_name,
+        "rule": rule,
+        "duplicate": bool(result.get("duplicate")),
         "toast": {
             "message": f"Got it — added '{rule}' to your voice {kind}s.",
             "kind": "success",
@@ -11289,26 +11325,43 @@ async def handle_add_voice_rule(client, biz, action) -> Dict:
     }
 
 
+def _voice_rule_short(rule: str, n: int = 80) -> str:
+    rule = " ".join(str(rule or "").split())
+    return rule if len(rule) <= n else rule[: n - 1].rstrip() + "…"
+
+
 async def handle_remove_voice_rule(client, biz, action) -> Dict:
     list_name = (action.get("list") or "").strip()
     idx = action.get("idx")
-    if not list_name or idx is None:
-        return _fail("remove_voice_rule", "Missing list or idx")
+    rule = (action.get("rule") or action.get("text") or "")
+    rule = rule.strip() if isinstance(rule, str) else ""
+    if not list_name or (idx is None and not rule):
+        return _fail("remove_voice_rule", "Missing list, or the rule to remove")
     owner_id = biz.get("owner_id") if isinstance(biz, dict) else None
     if not owner_id:
         return _fail("remove_voice_rule", "No owner_id on business")
     try:
+        idx_int = int(idx) if idx is not None else None
+    except (TypeError, ValueError):
+        idx_int = None
+        if not rule:
+            return _fail("remove_voice_rule", "Missing list, or the rule to remove")
+    try:
         result = await asyncio.to_thread(
-            voice_depth_agent.remove_voice_rule, owner_id, list_name, int(idx)
+            voice_depth_agent.remove_voice_rule, owner_id, list_name, idx_int, rule or None
         )
     except Exception as e:
         return _fail("remove_voice_rule", str(e))
     if not result.get("ok"):
         return _fail("remove_voice_rule", result.get("error", "remove failed"))
+    removed = str(result.get("removed") or rule or "")
     return {
         "type": "remove_voice_rule",
-        "result": "Removed.",
-        "label": "Voice rule removed",
+        "result": f"Removed voice rule: '{removed[:300]}'." if removed else "Removed.",
+        "label": (f"Voice rule removed: {_voice_rule_short(removed)}"
+                  if removed else "Voice rule removed"),
+        "list": list_name,
+        "removed_rule": removed,
         "toast": {"message": "Got it — voice rule removed.", "kind": "success"},
     }
 
