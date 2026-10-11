@@ -101,9 +101,13 @@ def wired(monkeypatch):
         return "completed"
     monkeypatch.setattr(dr, "_live_status", _completed)
 
-    async def _no_emails(biz, doc):
+    async def _no_emails(biz, doc, **kw):
         return None
     monkeypatch.setattr(dr, "_send_completion_emails", _no_emails)
+
+    async def _no_pdf(document_id):
+        return None
+    monkeypatch.setattr(dr, "_signed_pdf_b64", _no_pdf)
 
     import event_spine, audit_log
     monkeypatch.setattr(event_spine, "emit", lambda *a, **k: None)

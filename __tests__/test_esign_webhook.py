@@ -110,9 +110,15 @@ def spy(monkeypatch):
     monkeypatch.setattr(audit_log, "record",
                         lambda *a, **k: s.audited.append(k.get("verb")))
 
-    async def _fake_emails(biz, doc):
+    async def _fake_emails(biz, doc, **kw):
         s.emails.append(doc["document_id"])
     monkeypatch.setattr(dr, "_send_completion_emails", _fake_emails)
+
+    # The executed copy is fetched once at completion (document checks);
+    # these tests never reach DocuSeal.
+    async def _no_pdf(document_id):
+        return None
+    monkeypatch.setattr(dr, "_signed_pdf_b64", _no_pdf)
 
     return s
 

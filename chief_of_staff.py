@@ -11784,6 +11784,13 @@ async def handle_send_report(client, biz, action) -> Dict:
     except Exception as e:
         return _fail("send_report", f"unexpected error: {type(e).__name__}: {e}")
 
+    # Document checks: the attached CSV, byte for byte, into the ledger.
+    if attachments_payload:
+        import document_ledger
+        await asyncio.to_thread(
+            document_ledger.record_document, biz_id, csv_bytes, kind="revenue_csv",
+            label=f"Revenue {start_iso} to {end_iso}", actor_type="chief")
+
     # 6) Log to events so activity feed reflects the send.
     await _sb(client, "POST", "/events", {
         "business_id": biz_id,
