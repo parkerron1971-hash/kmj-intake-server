@@ -113,13 +113,47 @@ async def handle_adopt_business_rule(client, biz, action):
         return _result(kind, str(e), failed=True)
 
 
+def _distinctive(text):
+    import re
+    words = re.findall(r"[a-z0-9]+", str(text or '').lower())
+    return {w for w in words if len(w) >= 4 or any(c.isdigit() for c in w)}
+
+
+def owner_points_at(rule_content, key, owner_text):
+    """Does the owner's message name THIS rule? Its key, or enough of its
+    own distinctive words. Any owner turn is not enough: text the owner
+    pasted could steer the model at a rule they never mentioned."""
+    text = _norm_words(owner_text)
+    if not text:
+        return False
+    if key and key.lower() in text:
+        return True
+    words = _distinctive(rule_content)
+    hits = sum(1 for w in words if w in text)
+    return hits >= (1 if len(words) <= 2 else 2)
+
+
 async def handle_remove_business_rule(client, biz, action):
     kind = 'remove_business_rule'
     key = str(action.get('key') or '').strip()
     if not key:
         return _result(kind, 'Name the rule to remove (its key from OWNER RULES).', failed=True)
-    if not action.get('_owner_approved') and not str(action.get('_owner_text') or '').strip():
-        return _result(kind, 'Only the owner can remove a rule.', failed=True)
+    if not action.get('_owner_approved'):
+        owner_text = str(action.get('_owner_text') or '')
+        if not owner_text.strip():
+            return _result(kind, 'Only the owner can remove a rule.', failed=True)
+        try:
+            row = await asyncio.to_thread(learning.load, biz['id'])
+        except Exception as e:
+            return _result(kind, str(e), failed=True)
+        target = next((f for f in ((row or {}).get('profile') or {}).get('facts') or []
+                       if f.get('key') == key and f.get('polarity')), None)
+        if not target:
+            return _result(kind, f'No rule named {key}.', failed=True)
+        if not owner_points_at(target.get('content'), key, owner_text):
+            return _result(kind, 'Which rule should I remove? Say it in your own words '
+                           f'(for example "remove the rule about {target.get("content", "")[:40]}"), '
+                           'or remove it on your What Chief knows page.', failed=True)
     try:
         row, fact = await asyncio.to_thread(learning.remove_rule, biz['id'], key)
         import business_brain

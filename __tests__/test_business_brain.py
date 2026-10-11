@@ -167,12 +167,40 @@ def test_adopt_needs_the_owners_words_or_the_owners_tap(db):
     assert db.versions, 'adopting a rule records a brain version'
 
 
-def test_remove_needs_the_owner(db):
-    _, fact = bl.adopt_rule(BUSINESS, statement='Never book before 9.', polarity='dont')
+def test_remove_needs_the_owner_to_name_that_rule(db):
+    _, fact = bl.adopt_rule(BUSINESS, statement='Never book anyone before 9.', polarity='dont')
     run = lambda a: asyncio.run(actions.handle_remove_business_rule(None, BUSINESS, a))
     assert run({'key': fact.key, '_owner_text': ''})['failed']
-    done = run({'key': fact.key, '_owner_text': 'Forget the 9am rule.'})
+    # An owner turn about something else (or pasted text steering the model)
+    # cannot remove a rule the owner never mentioned.
+    other = run({'key': fact.key, '_owner_text': 'Send the invoice to Maria and check my calendar.'})
+    assert other['failed'] and 'Which rule' in other['result']
+    vague = run({'key': fact.key, '_owner_text': 'Forget that.'})
+    assert vague['failed'] and vague['label']
+    done = run({'key': fact.key, '_owner_text': 'Remove the rule about booking before 9.'})
     assert not done.get('failed') and done['label']
+    assert not bl.rules(db.records[BIZ]['profile'])
+
+
+def test_remove_from_an_approval_needs_no_words(db):
+    _, fact = bl.adopt_rule(BUSINESS, statement='Keep drafts short.', polarity='do')
+    done = asyncio.run(actions.handle_remove_business_rule(
+        None, BUSINESS, {'key': fact.key, '_owner_text': '', '_owner_approved': True}))
+    assert not done.get('failed')
+
+
+def test_page_says_when_it_could_not_check_proposals(db, monkeypatch):
+    real = bl.sb_clients.sb_get_as_service
+
+    def flaky(path):
+        return None if path.startswith('/agent_queue?') else real(path)
+    monkeypatch.setattr(bl.sb_clients, 'sb_get_as_service', flaky)
+    app = FastAPI()
+    app.include_router(brain_router.router)
+    app.dependency_overrides[brain_router.require_user] = lambda: SimpleNamespace(id=OWNER)
+    page = TestClient(app).get(f'/brain/{BIZ}').json()
+    assert page['unavailable'] == ['pending', 'declined']
+    assert business_brain.rule_proposals(BIZ, status='draft') is None
 
 
 def test_door_sets_rule_provenance_never_the_model(db, monkeypatch):

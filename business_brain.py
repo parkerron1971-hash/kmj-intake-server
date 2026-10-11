@@ -186,18 +186,24 @@ def stamp(business: Dict[str, Any], *, digest: Optional[str] = None,
         return {}
 
 
-def rule_proposals(business_id: str, *, status: str, since: Optional[str] = None) -> List[Dict[str, Any]]:
+def rule_proposals(business_id: str, *, status: str,
+                   since: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
     """Queue rows proposing an owner rule, read back through the same spec
-    parser approval uses, so what shows here is exactly what Approve runs."""
+    parser approval uses, so what shows here is exactly what Approve runs.
+
+    None when the read failed: "could not check" is never "there are none",
+    or the nightly pass could re-propose a rule the owner declined."""
     import action_proposals
     path = (f"/agent_queue?business_id=eq.{business_id}&channel=eq.{action_proposals.CHANNEL}"
             f"&status=eq.{status}&select=id,subject,body,ai_reasoning,created_at,reviewed_at"
             "&order=created_at.desc&limit=50")
     if since:
         path += f"&created_at=gte.{since}"
-    rows = sb_clients.sb_get_as_service(path) or []
+    rows = sb_clients.sb_get_as_service(path)
+    if not isinstance(rows, list):
+        return None
     out = []
-    for r in rows if isinstance(rows, list) else []:
+    for r in rows:
         spec = action_proposals.spec_from_body(r.get("body") or "")
         action = (spec or {}).get("action") or {}
         if action.get("type") != "adopt_business_rule":

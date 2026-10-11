@@ -72,6 +72,9 @@ def read_brain(business_id: UUID, user: AuthedUser = Depends(require_user)) -> D
     facts = profile.get("facts") or []
     latest = business_brain.latest(bid)
     since = _z(datetime.now(timezone.utc) - timedelta(days=DECLINED_DAYS))
+    pending = business_brain.rule_proposals(bid, status="draft")
+    declined = business_brain.rule_proposals(bid, status="dismissed", since=since)
+    unavailable = [name for name, rows in (("pending", pending), ("declined", declined)) if rows is None]
     return {
         "ok": True,
         "revision": (row or {}).get("revision") or 0,
@@ -86,8 +89,10 @@ def read_brain(business_id: UUID, user: AuthedUser = Depends(require_user)) -> D
         "brain": ({"version": latest.get("version"), "fingerprint": latest.get("fingerprint"),
                    "digest": latest.get("digest") or "", "since": latest.get("created_at"),
                    "reason": latest.get("reason") or ""} if latest else None),
-        "pending": business_brain.rule_proposals(bid, status="draft"),
-        "declined": business_brain.rule_proposals(bid, status="dismissed", since=since),
+        "pending": pending or [],
+        "declined": declined or [],
+        # Sections that could not be read: show "couldn't check", never "none".
+        "unavailable": unavailable,
         "voice": _owner_voice(biz.get("owner_id")),
     }
 
@@ -135,7 +140,10 @@ def edit_rule(business_id: UUID, key: str, body: RuleBody, user: AuthedUser = De
         raise HTTPException(422, "Unknown rule key.")
     bid = str(business_id)
     _require_owner(bid, user)
-    row = learning.load(bid)
+    try:
+        row = learning.load(bid)
+    except RuntimeError as e:
+        raise HTTPException(503, str(e)) from e
     current = [f for f in ((row or {}).get("profile") or {}).get("facts") or []
                if f.get("key") == key and f.get("polarity")]
     if not current:

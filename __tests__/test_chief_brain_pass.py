@@ -274,3 +274,28 @@ def test_digest_reaches_the_per_business_prompt(world):
     block = vertical_context.build_vertical_context_block(
         {'id': BIZ, 'type': 'personal_services', 'settings': {}})
     assert 'OVERNIGHT NOTES' in block and 'Thursday is the slow day' in block
+
+
+def test_a_failed_evidence_read_fails_the_run_instead_of_skipping_the_window(world, monkeypatch):
+    say(world, BIZ, 'hello')
+    real = bp.sb_clients.sb_get_as_service
+
+    def flaky(path):
+        return None if path.startswith('/chief_conversations?business_id') else real(path)
+    monkeypatch.setattr(bp.sb_clients, 'sb_get_as_service', flaky)
+    out = bp.run_for_business(BIZ, NOW)
+    assert out == {'failed': 'read'} and not world.calls
+    assert world.runs[0]['status'] == 'failed', 'never "done / nothing new" on a failed read'
+
+
+def test_unreadable_guards_mean_no_proposals_this_run(world, monkeypatch):
+    say(world, BIZ, 'make it casual please')
+    real = bp.sb_clients.sb_get_as_service
+
+    def flaky(path):
+        return None if (path.startswith('/agent_queue?') and 'channel=eq.action' in path) else real(path)
+    monkeypatch.setattr(bp.sb_clients, 'sb_get_as_service', flaky)
+    out = bp.run_for_business(BIZ, NOW)
+    assert out['done'] and out['proposals'] == 0 and not world.queue
+    assert 'proposals held' in world.runs[0]['error']
+    assert business_brain.digest_for(BIZ), 'the digest still lands'
