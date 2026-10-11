@@ -145,7 +145,7 @@ def test_status_does_not_expose_credentials(client, monkeypatch):
     monkeypatch.setattr(sq, "connection", connection)
     response = client.get("/square/status", params={"business_id": BIZ})
     assert response.json()["connected"] is True
-    assert response.json()["booking_sync_enabled"] is False
+    assert response.json()["booking_sync_available"] is False
     assert "private" not in response.text
 
 
