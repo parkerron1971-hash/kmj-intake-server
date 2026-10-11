@@ -1014,12 +1014,32 @@ def _anchor_summary(biz: str, limit: int = 5) -> List[Dict[str, Any]]:
     try:
         rows = sb_clients.sb_get_as_service(
             f"/ledger_anchors?business_id=eq.{biz}"
-            f"&select=first_sequence,last_sequence,row_count,merkle_root,"
+            f"&select=id,first_sequence,last_sequence,row_count,merkle_root,"
             f"provider,provider_ref,anchored_at"
             f"&order=anchored_at.desc&limit={int(limit)}") or []
     except Exception as e:
         logger.warning(f"[ledger] anchor summary failed for {biz}: {e}")
         return []
+
+    # THE UPGRADE CACHE — the same source list_anchors() reads. A stored
+    # .ots is written at submission and never learns about its own
+    # Bitcoin confirmation; that arrives later in ledger_anchor_upgrades.
+    # Reading only the stored bytes told every auditor that a Bitcoin-
+    # confirmed anchor was "NOT on a durable public network": false, and
+    # false against the business. It is a database read, not a network
+    # call, so the page-load rule above still holds.
+    #
+    # A failed cache read is NOT "nothing upgraded". Rounding it down
+    # would put the false "still waiting" sentence back on the page during
+    # a database blip, so an unconfirmed anchor is marked unchecked instead.
+    try:
+        import ledger_anchor
+        ups = ledger_anchor.upgrades_for_strict([r.get("id") for r in rows])
+    except Exception as e:
+        logger.warning(f"[ledger] anchor upgrade read failed for {biz}: {e}")
+        ups = None
+    cache_read = ups is not None
+    ups = ups or {}
 
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -1031,16 +1051,43 @@ def _anchor_summary(biz: str, limit: int = 5) -> List[Dict[str, Any]]:
             "merkle_root": r.get("merkle_root"),
             "provider": r.get("provider"),
             "independent": False,
+            "state": None,
+            "bitcoin_block": None,
+            "explorer_url": None,
             "verify_url": None,
             "network": None,
         }
         try:
             import ledger_anchor
-            st = ledger_anchor.proof_status(r.get("provider_ref"),
-                                            provider=r.get("provider"))
-            item["independent"] = bool(st.get("confirmed"))
+            up = ups.get(str(r.get("id"))) or {}
+            # The upgraded proof is a strict superset of the stored one.
+            st = ledger_anchor.proof_status(
+                up.get("upgraded_ref") or r.get("provider_ref"),
+                provider=r.get("provider"))
+            # The cache row records what the upgrade job parsed. It is the
+            # fallback when this process cannot parse the bytes itself,
+            # never a way to claim more than the job found.
+            confirmed = bool(st.get("confirmed") or up.get("confirmed"))
+            block = st.get("bitcoin_block") or up.get("bitcoin_block")
+            item["independent"] = confirmed
+            if confirmed:
+                item["state"] = "confirmed"
+            elif not cache_read and st.get("state") == "submitted":
+                # The stored bytes say "submitted"; whether Bitcoin has
+                # since confirmed it is exactly what the failed read
+                # would have told us.
+                item["state"] = "unchecked"
+            else:
+                item["state"] = st.get("state")
             item["verify_url"] = st.get("verify_url")
             item["network"] = st.get("network")
+            if confirmed and block:
+                item["bitcoin_block"] = int(block)
+                # A block page shows the block exists and when it was
+                # mined. The full check is `ots verify` against the proof
+                # file, and the page says so rather than letting a link
+                # imply more than it shows.
+                item["explorer_url"] = f"https://mempool.space/block/{int(block)}"
         except Exception:
             pass
         out.append(item)
