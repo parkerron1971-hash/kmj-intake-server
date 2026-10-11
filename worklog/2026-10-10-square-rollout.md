@@ -3,10 +3,10 @@ title: Square pilot rollout
 date: 2026-10-10
 agent: Codex (GPT-6)
 asked: "ok finish work on it"
-status: waiting on Kevin
+status: sandbox pilot verified
 prs: [kmj-intake-server#1356, solutionist-studio#1183]
 migrations: ["APPLY-2026-10-08-square-connections.sql (applied 2026-10-10)", "APPLY-2026-10-09-square-locations.sql (applied 2026-10-10)"]
-left_undone: ["approve and activate free sandbox Appointments", "successful live preview and external-revocation acceptance"]
+left_undone: ["production seller acceptance gates", "booking import and sync are a future phase"]
 decisions: ["approved read-only pilot; no public production-seller enablement", "preserve current trunk changes"]
 related: [2026-10-09-square-location-preview.md]
 ---
@@ -27,3 +27,7 @@ Sign-in continuation: securely transferred the existing Sandbox OAuth applicatio
 Approved-consent continuation: real OAuth callback succeeded; Default Test Account location discovered and saved; disconnect completed with Square grant revocation and cleared location state; reconnect callback succeeded. Booking preview returned the specific Square condition Merchant not onboarded to Appointments (401 UNAUTHORIZED), confirmed in the Square API log. Automatic approval review blocked free sandbox Appointments activation pending specific approval, now requested. Separate backend #1368 and frontend #1195 correct misleading setup/authorization messages; the frontend also guards an existing null email status on the OAuth return page. Focused tests: 49 backend and 26 browser passed; typecheck gates passed with zero live errors and the existing 14 legacy baseline. Successful live preview and external-revocation acceptance remain unverified.
 
 Acceptance fixes: frontend #1195 merged at 91fd5808d319cefda7ef1e6272ac74c151a40552; full CI/review passed and production deployment 6988809946 succeeded. Reloaded live Integrations successfully and verified reconnect cleared saved locations, then restored the test location. Backend #1368 merged at 6bba3d5b09f44b66dae2bb6d5d98a627c9a8a802 after full CI 38098017737 passed. Focused backend count is now 53, including sanitized drift/malformed-response diagnostics. Backend deployment d888ebbd-c9b3-4202-99de-5e85482f8c1a succeeded. Live preview confirmed the corrected fixed setup guidance without losing the connection or saved location.
+
+Free-plan activation continuation: Kevin explicitly approved sandbox Appointments activation. Selected Free $0/month, used synthetic seller details and skipped download messaging. Live preview changed from the verified setup error to empty success, then displayed one synthetic 30-minute $0 appointment at October 12, 2026 10:00 AM America/New_York. Canceling that appointment in Square produced Cancelled by seller in Solutionist with the original time and duration. Synthetic client has no phone/email; Square confirmed no notifications. Test service is not publicly bookable. No payment or Solutionist import occurred.
+
+External revocation: Square dashboard disallows disconnecting a developer-owned custom app. Used the official sandbox /oauth2/revoke endpoint for only MLR3CNHEJVCZW with private credentials held in memory; output only success=true. Without modifying local connection state, the next preview discarded results and showed safe reconnect guidance. Solutionist disconnect after that revoked grant completed successfully. Restored the same approved three-scope connection for the owner pilot and selected the sandbox location again. This is out-of-band API revocation acceptance, not a claim that a production seller-dashboard test was run. Remaining public-rollout security/negative-path gates are explicit in the setup guide.
