@@ -146,3 +146,110 @@ class TestItDidNotBreakWhatWasThere:
 
     def test_erasures_still_render_beside_it(self):
         assert "{er_html}{an_html}" in RENDER or "er_html" in RENDER
+
+
+# ─── Behaviour: a Bitcoin-confirmed anchor reads as confirmed ──────────
+#
+# The bug these pin: _anchor_summary read only the .ots bytes stored at
+# submission, which never learn about their own Bitcoin confirmation.
+# The confirmation lives in ledger_anchor_upgrades. So every auditor was
+# told a confirmed anchor was "NOT on a durable public network".
+
+_ROW = {"id": "a1", "first_sequence": 1, "last_sequence": 9, "row_count": 9,
+        "merkle_root": "ab" * 32, "provider": "opentimestamps",
+        "provider_ref": "STORED", "anchored_at": "2026-08-04T12:00:00Z"}
+
+
+def _summary(monkeypatch, upgrades, status_by_ref):
+    import ledger_anchor
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [dict(_ROW)])
+    monkeypatch.setattr(ledger_anchor, "upgrades_for", lambda ids: upgrades)
+    monkeypatch.setattr(ledger_anchor, "proof_status",
+                        lambda ref, provider=None: status_by_ref[ref])
+    return audit_log._anchor_summary("biz-1")
+
+
+class TestTheUpgradeCacheIsRead:
+    def test_confirmed_via_the_cache_is_independent_with_its_block(self, monkeypatch):
+        out = _summary(
+            monkeypatch,
+            {"a1": {"anchor_id": "a1", "upgraded_ref": "UPGRADED",
+                    "bitcoin_block": 961016, "confirmed": True}},
+            {"STORED": {"state": "submitted", "confirmed": False, "bitcoin_block": None},
+             "UPGRADED": {"state": "confirmed", "confirmed": True, "bitcoin_block": 961016}})
+        a = out[0]
+        assert a["independent"] is True
+        assert a["state"] == "confirmed"
+        assert a["bitcoin_block"] == 961016
+        assert a["explorer_url"] == "https://mempool.space/block/961016"
+
+    def test_the_cache_flag_is_the_fallback_when_bytes_cannot_be_parsed(self, monkeypatch):
+        out = _summary(
+            monkeypatch,
+            {"a1": {"anchor_id": "a1", "upgraded_ref": "UPGRADED",
+                    "bitcoin_block": 961016, "confirmed": True}},
+            {"UPGRADED": {"state": "unreadable", "confirmed": False, "bitcoin_block": None}})
+        assert out[0]["independent"] is True
+        assert out[0]["bitcoin_block"] == 961016
+
+    def test_waiting_for_a_block_stays_honest(self, monkeypatch):
+        out = _summary(
+            monkeypatch, {},
+            {"STORED": {"state": "submitted", "confirmed": False, "bitcoin_block": None}})
+        a = out[0]
+        assert a["independent"] is False
+        assert a["state"] == "submitted"
+        assert a["explorer_url"] is None
+
+    def test_a_failed_cache_read_degrades_to_the_stored_bytes(self, monkeypatch):
+        import ledger_anchor
+        import sb_clients
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [dict(_ROW)])
+
+        def boom(ids):
+            raise RuntimeError("cache down")
+        monkeypatch.setattr(ledger_anchor, "upgrades_for", boom)
+        monkeypatch.setattr(ledger_anchor, "proof_status",
+                            lambda ref, provider=None: {"state": "submitted",
+                                                        "confirmed": False})
+        out = audit_log._anchor_summary("biz-1")
+        assert out and out[0]["independent"] is False
+
+
+def _page(anchor):
+    return auditor_portal._render({
+        "verification": {"hashed": 9, "intact": True, "checked": 9,
+                         "first_sequence": 1, "last_sequence": 9,
+                         "anchors": [anchor]},
+        "entries": []})
+
+
+class TestThePageStatesEachStateAsAFact:
+    BASE = {"anchored_at": "2026-08-04T12:00:00Z", "merkle_root": "ab" * 32,
+            "covers": {"first_sequence": 1, "last_sequence": 9, "rows": 9},
+            "verify_url": None}
+
+    def test_confirmed_names_the_block_and_links_it(self):
+        html = _page({**self.BASE, "independent": True, "state": "confirmed",
+                      "bitcoin_block": 961016,
+                      "explorer_url": "https://mempool.space/block/961016"})
+        assert "confirmed in block 961016" in html
+        assert "https://mempool.space/block/961016" in html
+        assert "ots verify" in html
+        assert "NOT on a durable public network" not in html
+
+    def test_waiting_says_waiting(self):
+        html = _page({**self.BASE, "independent": False, "state": "submitted"})
+        assert "waiting for its block" in html
+        assert "NOT yet on a durable public network" in html
+
+    def test_local_still_says_not_durable(self):
+        html = _page({**self.BASE, "independent": False, "state": "local"})
+        assert "recorded, but NOT on a durable public network" in html
+
+    def test_hedera_mainnet_keeps_its_mirror_link(self):
+        html = _page({**self.BASE, "independent": True, "state": "confirmed",
+                      "verify_url": "https://mainnet.mirrornode.hedera.com/api/v1/topics/0.0.1/messages"})
+        assert "published to a public network" in html
+        assert "check it yourself" in html
