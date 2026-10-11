@@ -5,8 +5,11 @@ Layer Two step 0a. Three ways spend could go uncounted or be counted low:
 
   * A model with no price row was priced at Sonnet-4 rates with no log
     line. An expensive model was under-booked, and nobody could see it.
-    It is now priced at the most expensive rate in the table and announced
-    once on stdout, so the spend guard errs high until the row is added.
+    It is now priced at the top current Claude list price (Fable, $10/$50)
+    and announced once on stdout, so the spend guard errs high until the
+    row is added. Not the table's column maxima: those combine a
+    per-character TTS row with a retired model's output rate into a price
+    no model has, high enough to trip the platform cap.
   * Rows were missing for models in use: the default ElevenLabs voice
     (eleven_flash_v2_5), Kimi K3, GPT-5.4, Fable 5.1, Mythos 5.1.
   * 1-hour cache writes were priced at the 5-minute rate (1.25x, not 2x)
@@ -32,11 +35,11 @@ from api_usage_logger import _compute_cost_cents, _price_for_model
 
 # ── Unknown models: loud, once, and expensive ─────────────────────────
 
-def test_an_unknown_model_is_priced_at_the_most_expensive_rates(capsys):
+def test_an_unknown_model_is_priced_at_the_top_claude_rate(capsys):
     api_usage_logger._UNKNOWN_MODELS_SEEN.discard("mystery-model-9")
-    worst_in = max(p[0] for p in api_usage_logger.MODEL_PRICING_CENTS.values())
-    worst_out = max(p[1] for p in api_usage_logger.MODEL_PRICING_CENTS.values())
-    assert _price_for_model("mystery-model-9") == (worst_in, worst_out)
+    assert _price_for_model("mystery-model-9") == (1000.0, 5000.0)
+    # The ceiling is a real current price: the Fable row's own.
+    assert api_usage_logger.MODEL_PRICING_CENTS["claude-fable-5"] == (1000.0, 5000.0)
     # Never the old silent Sonnet-4 fallback.
     assert _price_for_model("mystery-model-9") != (300.0, 1500.0)
     out = capsys.readouterr().out

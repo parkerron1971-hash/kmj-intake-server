@@ -205,10 +205,18 @@ def cache_write_1h(usage) -> int:
 _UNKNOWN_MODELS_SEEN: set = set()
 
 
+# What a model with no row is priced at: the top current Claude list
+# price (Fable 5.x, $10 / $50 per MTok). Not the column maxima of the
+# whole table: those mix a per-character TTS row (tts-1-hd, 3000) with a
+# retired model's output rate (Opus 4, 7500) into a price no model has,
+# and an unlisted cheap model booked at that could trip the platform
+# spend cap for everyone. Retired Opus 4 / Claude 3 Opus have their rows.
+_UNKNOWN_MODEL_RATES: tuple[float, float] = (1000.0, 5000.0)
+
+
 def _most_expensive_rates() -> tuple[float, float]:
-    """The highest input and the highest output rate anywhere in the table."""
-    return (max(p[0] for p in MODEL_PRICING_CENTS.values()),
-            max(p[1] for p in MODEL_PRICING_CENTS.values()))
+    """The rate a model with no row is priced at (see _UNKNOWN_MODEL_RATES)."""
+    return _UNKNOWN_MODEL_RATES
 
 
 def _price_for_model(model: str) -> tuple[float, float]:
@@ -216,8 +224,9 @@ def _price_for_model(model: str) -> tuple[float, float]:
     Longest prefix wins, so specific entries beat family entries no
     matter their dict order.
 
-    A model with no row is priced at the MOST EXPENSIVE rates in the table
-    and announced on stdout (logging never reaches Railway). It used to get
+    A model with no row is priced at the top current Claude list price
+    (_UNKNOWN_MODEL_RATES) and announced on stdout (logging never reaches
+    Railway). It used to get
     Sonnet-4 rates silently: a cheaper model looked fine and an expensive
     one was under-booked, so the spend guard and the Costs view could be
     wrong without anyone seeing it. Failing expensive keeps the daily cap
@@ -235,8 +244,8 @@ def _price_for_model(model: str) -> tuple[float, float]:
     key = m or "<empty>"
     if key not in _UNKNOWN_MODELS_SEEN:
         _UNKNOWN_MODELS_SEEN.add(key)
-        print(f"[meter] UNKNOWN MODEL '{key}' priced at the most expensive known "
-              f"rate ({worst[0]:g}/{worst[1]:g} cents per MTok); add it to "
+        print(f"[meter] UNKNOWN MODEL '{key}' priced at the top Claude rate "
+              f"({worst[0]:g}/{worst[1]:g} cents per MTok); add it to "
               f"MODEL_PRICING_CENTS", flush=True)
     return worst
 
