@@ -430,8 +430,9 @@ async def advance_run(client, run: Dict[str, Any]) -> Dict[str, Any]:
     each step. Stops on: completion (done), confirmation gate (awaiting_confirmation),
     or step failure (failed). Returns the final run status."""
     wf_code, wf = await _sb(client, "GET",
-        f"/workflow_definitions?id=eq.{run['workflow_id']}&select=steps&limit=1")
+        f"/workflow_definitions?id=eq.{run['workflow_id']}&select=name,steps&limit=1")
     steps = (wf[0].get("steps") if isinstance(wf, list) and wf else None) or []
+    wf_name = str((wf[0].get("name") if isinstance(wf, list) and wf else "") or "").strip()
     if not steps:
         await _patch_run(client, run["id"], {"status": "done",
                          "completed_at": _now(), "error": "no steps"})
@@ -463,6 +464,9 @@ async def advance_run(client, run: Dict[str, Any]) -> Dict[str, Any]:
                 "status": "awaiting_confirmation", "step_cursor": cursor,
                 "context": ctx, "log": log,
             })
+            # A paused run is never silent: the app has no list of waiting
+            # runs, so the notification (and its Yes button) is the way in.
+            await announce_pause(client, run, biz, step, cursor, wf_name)
             return {"status": "awaiting_confirmation", "step": cursor}
 
         log.append({"step": cursor, "action": step.get("action"),
@@ -482,6 +486,127 @@ async def advance_run(client, run: Dict[str, Any]) -> Dict[str, Any]:
     await _patch_run(client, run["id"], {"status": "done", "step_cursor": cursor,
                      "context": ctx, "log": log, "completed_at": _now()})
     return {"status": "done", "steps_run": cursor}
+
+
+# ──────────────────────────────────────────────────────────────
+# A run waiting for the owner says so (2026-10-11)
+# ──────────────────────────────────────────────────────────────
+
+# What the paused step would do, in the owner's words. Unknown verbs fall
+# back to the step's own label, then to the verb read aloud.
+_STEP_PHRASES: Dict[str, str] = {
+    "send_sms": "sends the text",
+    "draft_and_send": "sends the email",
+    "send_invoice": "sends the invoice",
+    "send_report": "sends the report",
+    "send_purchase_order": "sends the purchase order",
+    "approve_draft": "sends the draft",
+    "create_booking": "books the appointment",
+    "create_recurring_booking": "books the recurring appointments",
+    "cancel_recurring_booking": "cancels the recurring appointments",
+    "publish_post": "posts it publicly",
+    "post_clip": "posts the clip",
+    "post_image": "posts the image",
+    "marketing_post_now": "posts it",
+    "launch_campaign": "launches the campaign",
+    "mark_invoice_paid": "records the payment",
+    "create_invoice": "creates the invoice",
+    "generate_payment_link": "creates the payment link",
+}
+
+
+def pause_message(workflow_name: str, step: Dict[str, Any]) -> Tuple[str, str]:
+    """(title, body) for a run waiting on the owner, in plain words."""
+    action = str(step.get("action") or "")
+    phrase = _STEP_PHRASES.get(action)
+    if not phrase:
+        label = str(step.get("label") or "").strip()
+        phrase = (f"runs \u201c{label[:80]}\u201d" if label
+                  else f"runs its next step ({action.replace('_', ' ') or 'a step'})")
+    name = (workflow_name or "").strip()[:80]
+    who = f"Your \u2018{name}\u2019 automation" if name else "One of your automations"
+    title = f"{who} is waiting for your OK"
+    body = (f"{who} is waiting for your OK before it {phrase}. "
+            "Tap Yes to let it run. If you leave it, nothing happens.")
+    return title[:120], body[:300]
+
+
+async def announce_pause(client, run: Dict[str, Any], biz: Dict[str, Any],
+                         step: Dict[str, Any], cursor: int, workflow_name: str) -> bool:
+    """One chief_notifications row per paused step of a run (dedupe key),
+    with a Yes button that confirms it through /agents/notifications/{id}/act,
+    plus a web push when push is on. Best-effort: a failed notice must not
+    turn a safe pause into a failed run."""
+    run_id = str(run.get("id") or "")
+    biz_id = str(biz.get("id") or run.get("business_id") or "")
+    if not run_id or not biz_id:
+        return False
+    key = f"workflow_confirm:{run_id}:{cursor}"
+    title, body = pause_message(workflow_name, step)
+    try:
+        code, existing = await _sb(client, "GET",
+            f"/chief_notifications?business_id=eq.{biz_id}"
+            f"&action_payload->>dedup_key=eq.{key}&select=id&limit=1")
+        if isinstance(existing, list) and existing:
+            return False
+        code, _ = await _sb(client, "POST", "/chief_notifications", {
+            "business_id": biz_id, "type": "scheduled_reminder", "priority": "normal",
+            "title": title, "body": body, "suggested_action": "Yes, let it run",
+            "action_payload": {"type": "confirm_workflow_step", "run_id": run_id,
+                               "dedup_key": key},
+        }, prefer="return=minimal")
+        if not code or code >= 400:
+            return False
+    except Exception as e:
+        logger.warning(f"pause notice failed for run {run_id}: {e}")
+        return False
+    try:
+        import push_notifications
+        owner = biz.get("owner_id")
+        if owner and push_notifications.push_enabled():
+            push_notifications.send_to_user(str(owner), title=title, body=body,
+                                            nav="home", tag=f"workflow-{run_id}")
+    except Exception as e:
+        logger.warning(f"pause push failed for run {run_id}: {e}")
+    return True
+
+
+async def handle_confirm_workflow_step(client, biz, action) -> Dict[str, Any]:
+    """Release a run waiting for the owner's OK. Reached from the pause
+    notification's Yes button (/agents/notifications/{id}/act, where the
+    tap is the approval) or from chat when the owner says go ahead.
+    run_id "latest" (or none) = this business's most recent waiting run."""
+    biz_id = str((biz or {}).get("id") or "")
+    run_id = str((action or {}).get("run_id") or "latest").strip()
+
+    def _no(msg: str) -> Dict[str, Any]:
+        return {"type": "confirm_workflow_step", "result": f"Failed: {msg}",
+                "label": "Automation not released", "failed": True, "nav": None}
+
+    if not biz_id:
+        return _no("I couldn't tell which business this automation belongs to.")
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        if run_id == "latest":
+            path = (f"/workflow_runs?business_id=eq.{biz_id}&status=eq.awaiting_confirmation"
+                    f"&order=created_at.desc&select=id,workflow_id,status&limit=1")
+        else:
+            path = (f"/workflow_runs?id=eq.{run_id}&business_id=eq.{biz_id}"
+                    f"&select=id,workflow_id,status&limit=1")
+        code, rows = await _sb(c, "GET", path)
+        if not isinstance(rows, list) or not rows:
+            return _no("no automation of yours is waiting for an OK.")
+        run = rows[0]
+        if run.get("status") != "awaiting_confirmation":
+            return _no("that automation isn't waiting for an OK any more.")
+        code, wf = await _sb(c, "GET",
+            f"/workflow_definitions?id=eq.{run.get('workflow_id')}&select=name&limit=1")
+    name = str((wf[0].get("name") if isinstance(wf, list) and wf else "") or "your automation")
+    res = await confirm_run(str(run["id"]), confirmed_by=f"owner:{biz.get('owner_id') or ''}")
+    if not res.get("ok"):
+        return _no(str(res.get("error") or "the automation could not be released."))
+    return {"type": "confirm_workflow_step",
+            "result": f"Released: \u2018{name}\u2019 will carry on within a minute.",
+            "label": f"Released: {name[:60]}", "nav": None}
 
 
 async def _patch_run(client, run_id: str, body: Dict[str, Any]) -> None:

@@ -307,6 +307,7 @@ from chief_responsibilities import handle_responsibility_status, handle_acknowle
 from chief_business_responsibilities import handle_start_business_responsibility
 import agent_coordination
 import standing_permissions
+import workflow_engine
 import outcome_ledger
 import chief_prewarm
 import chief_tool_loop
@@ -11924,6 +11925,7 @@ ACTION_HANDLERS = {
     "responsibility_status": handle_responsibility_status,
     "acknowledge_follow_up": handle_acknowledge_follow_up,
     "start_business_responsibility": handle_start_business_responsibility,
+    "confirm_workflow_step":  workflow_engine.handle_confirm_workflow_step,
     "grant_standing_permission":  standing_permissions.handle_grant_standing_permission,
     "revoke_standing_permission": standing_permissions.handle_revoke_standing_permission,
     "close_view":             handle_close_view,

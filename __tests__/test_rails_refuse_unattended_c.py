@@ -147,3 +147,160 @@ def test_the_door_refuses_class_c_for_an_autonomous_surface(monkeypatch, surface
     r = results[0]
     assert r.get("result") and r.get("label")
     assert cos._action_failed(r)
+
+
+# ─── A paused run is never silent ────────────────────────────────────
+
+class _FakeSB:
+    """Records workflow_engine._sb calls and answers from a small table."""
+
+    def __init__(self, steps, existing_notice=False, name="New client welcome"):
+        self.steps, self.existing, self.name = steps, existing_notice, name
+        self.calls = []
+
+    async def __call__(self, client, method, path, body=None, prefer=None):
+        self.calls.append((method, path, body))
+        if method == "GET" and path.startswith("/workflow_definitions"):
+            return 200, [{"name": self.name, "steps": self.steps}]
+        if method == "GET" and path.startswith("/businesses"):
+            return 200, [_biz()]
+        if method == "GET" and path.startswith("/chief_notifications"):
+            return 200, ([{"id": "n0"}] if self.existing else [])
+        if method == "POST" and path == "/chief_notifications":
+            return 201, None
+        return 200, None
+
+    def notices(self):
+        return [b for m, p, b in self.calls if m == "POST" and p == "/chief_notifications"]
+
+
+def _run():
+    return {"id": "run-1", "workflow_id": "wf-1", "business_id": "b1",
+            "step_cursor": 0, "context": {}, "log": []}
+
+
+def test_a_pause_files_one_notice_with_a_yes_button_and_a_push(monkeypatch):
+    fake = _FakeSB([{"action": "send_sms", "params": {"message": "Welcome!"}}])
+    monkeypatch.setattr(we, "_sb", fake)
+    import push_notifications
+    pushed = []
+    monkeypatch.setattr(push_notifications, "push_enabled", lambda: True)
+    monkeypatch.setattr(push_notifications, "send_to_user",
+                        lambda uid, **k: pushed.append((uid, k)) or 1)
+    res = asyncio.run(we.advance_run(None, _run()))
+    assert res["status"] == "awaiting_confirmation"
+    [notice] = fake.notices()
+    assert notice["title"] == "Your \u2018New client welcome\u2019 automation is waiting for your OK"
+    assert "before it sends the text" in notice["body"]
+    assert notice["action_payload"] == {"type": "confirm_workflow_step", "run_id": "run-1",
+                                        "dedup_key": "workflow_confirm:run-1:0"}
+    assert notice["suggested_action"]
+    assert pushed and pushed[0][0] == "owner1"
+    assert pushed[0][1]["title"] == notice["title"] and pushed[0][1]["tag"] == "workflow-run-1"
+
+
+def test_the_notice_is_deduped_per_run_and_step(monkeypatch):
+    fake = _FakeSB([{"action": "send_sms", "params": {}}], existing_notice=True)
+    monkeypatch.setattr(we, "_sb", fake)
+    import push_notifications
+    monkeypatch.setattr(push_notifications, "push_enabled", lambda: True)
+    monkeypatch.setattr(push_notifications, "send_to_user",
+                        lambda *a, **k: pytest.fail("a deduped notice must not push again"))
+    asyncio.run(we.advance_run(None, _run()))
+    assert fake.notices() == []
+
+
+def test_no_push_when_push_is_off(monkeypatch):
+    fake = _FakeSB([{"action": "send_sms", "params": {}}])
+    monkeypatch.setattr(we, "_sb", fake)
+    import push_notifications
+    monkeypatch.setattr(push_notifications, "push_enabled", lambda: False)
+    monkeypatch.setattr(push_notifications, "send_to_user",
+                        lambda *a, **k: pytest.fail("push is off"))
+    asyncio.run(we.advance_run(None, _run()))
+    assert len(fake.notices()) == 1
+
+
+def test_an_explicit_confirmation_step_also_announces(monkeypatch):
+    fake = _FakeSB([{"action": "create_module_entry", "label": "Add them to the roster",
+                     "requires_confirmation": True}], name="")
+    monkeypatch.setattr(we, "_sb", fake)
+    import push_notifications
+    monkeypatch.setattr(push_notifications, "push_enabled", lambda: False)
+    asyncio.run(we.advance_run(None, _run()))
+    [notice] = fake.notices()
+    assert notice["title"] == "One of your automations is waiting for your OK"
+    assert "\u201cAdd them to the roster\u201d" in notice["body"]
+
+
+def test_a_failed_notice_does_not_fail_the_pause(monkeypatch):
+    fake = _FakeSB([{"action": "send_sms", "params": {}}])
+
+    async def _broken(client, method, path, body=None, prefer=None):
+        if path.startswith("/chief_notifications"):
+            raise RuntimeError("supabase down")
+        return await fake(client, method, path, body, prefer)
+    monkeypatch.setattr(we, "_sb", _broken)
+    res = asyncio.run(we.advance_run(None, _run()))
+    assert res["status"] == "awaiting_confirmation"
+
+
+# ─── The Yes button: confirm_workflow_step ───────────────────────────
+
+class _RunsSB:
+    def __init__(self, rows):
+        self.rows, self.paths = rows, []
+
+    async def __call__(self, client, method, path, body=None, prefer=None):
+        self.paths.append(path)
+        if path.startswith("/workflow_runs"):
+            return 200, self.rows
+        if path.startswith("/workflow_definitions"):
+            return 200, [{"name": "New client welcome"}]
+        return 200, None
+
+
+def test_confirm_releases_the_owners_waiting_run(monkeypatch):
+    fake = _RunsSB([{"id": "run-1", "workflow_id": "wf-1", "status": "awaiting_confirmation"}])
+    monkeypatch.setattr(we, "_sb", fake)
+    released = []
+
+    async def _confirm(run_id, confirmed_by):
+        released.append((run_id, confirmed_by))
+        return {"ok": True}
+    monkeypatch.setattr(we, "confirm_run", _confirm)
+    res = asyncio.run(we.handle_confirm_workflow_step(None, _biz(), {"run_id": "run-1"}))
+    assert released == [("run-1", "owner:owner1")]
+    assert res["result"].startswith("Released") and res["label"]
+    assert not res.get("failed")
+    # Scoped to this business: another tenant's run id cannot be released.
+    assert "business_id=eq.b1" in fake.paths[0]
+
+
+def test_confirm_latest_picks_the_newest_waiting_run(monkeypatch):
+    fake = _RunsSB([{"id": "run-9", "workflow_id": "wf-1", "status": "awaiting_confirmation"}])
+    monkeypatch.setattr(we, "_sb", fake)
+
+    async def _confirm(run_id, confirmed_by):
+        return {"ok": True}
+    monkeypatch.setattr(we, "confirm_run", _confirm)
+    res = asyncio.run(we.handle_confirm_workflow_step(None, _biz(), {}))
+    assert not res.get("failed")
+    assert "status=eq.awaiting_confirmation" in fake.paths[0]
+
+
+@pytest.mark.parametrize("rows", [[], [{"id": "run-1", "workflow_id": "wf-1", "status": "done"}]])
+def test_confirm_with_nothing_waiting_fails_politely(monkeypatch, rows):
+    monkeypatch.setattr(we, "_sb", _RunsSB(rows))
+    monkeypatch.setattr(we, "confirm_run",
+                        lambda *a, **k: pytest.fail("nothing to release"))
+    res = asyncio.run(we.handle_confirm_workflow_step(None, _biz(), {"run_id": "run-1"}))
+    assert res.get("failed") and res["result"].startswith("Failed:") and res["label"]
+
+
+def test_confirm_is_class_c_and_reachable_from_a_notification():
+    import action_registry
+    import chief_of_staff as cos
+    assert action_registry.reversibility("confirm_workflow_step") == "C"
+    assert not action_registry.is_bulk("confirm_workflow_step")
+    assert cos.ACTION_HANDLERS["confirm_workflow_step"] is we.handle_confirm_workflow_step
