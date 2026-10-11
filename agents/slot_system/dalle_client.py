@@ -129,6 +129,27 @@ def can_dalle_generate(
     return ((current + expected_cost) <= PER_SITE_DAILY_CAP_USD, current)
 
 
+def _meter_dalle(business_id: str, cost_usd: float) -> None:
+    """Also write the generation to api_usage. The per-site log above
+    enforces this module's own daily cap, but the platform spend guard and
+    the Costs view read api_usage only, so DALL-E spend was invisible to
+    both. Nothing else reads dalle_spend_log for totals, so this does not
+    double count."""
+    try:
+        from api_usage_logger import log_api_usage_sync
+        log_api_usage_sync(
+            endpoint="/slots/dalle", model=DALLE_MODEL,
+            input_tokens=0, output_tokens=0,
+            cost_cents_override=round(float(cost_usd) * 100.0, 4),
+            business_id=business_id,
+            # Cost only: the build that placed the image is priced on its
+            # own row, and an unpriced endpoint would charge DEFAULT_WEIGHT.
+            units=0,
+        )
+    except Exception as e:  # metering must never break the generation
+        print(f"[dalle] api_usage metering failed: {e}", flush=True)
+
+
 def _log_dalle_spend(
     business_id: str,
     slot_name: str,
@@ -139,6 +160,7 @@ def _log_dalle_spend(
     """Append a spend row to site_config.dalle_spend_log. Idempotent
     semantics not needed — every generation deserves its own row even
     if two land in the same second."""
+    _meter_dalle(business_id, cost_usd)
     site_id, cfg = _fetch_site_row(business_id)
     if not site_id:
         logger.warning(

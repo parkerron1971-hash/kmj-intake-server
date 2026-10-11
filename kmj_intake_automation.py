@@ -584,6 +584,8 @@ app.include_router(chief_suggestions_router)
 app.include_router(business_profile_router)
 from business_learning_router import router as business_learning_router
 app.include_router(business_learning_router)
+from brain_router import router as brain_router  # Layer Two: What Chief knows (2026-10-11)
+app.include_router(brain_router)
 from program_outcomes_router import router as program_outcomes_router
 app.include_router(program_outcomes_router)
 from financial_policy_router import router as financial_policy_router
@@ -1786,6 +1788,16 @@ async def startup():
                           "interval", hours=6, id="outcome_ledger")
     except Exception as e:
         print(f"   [warn] outcome ledger tick not scheduled: {e}")
+    # The nightly brain pass (Layer Two, 2026-10-11): for each business with
+    # activity since its last pass, one capped Haiku call writes the digest
+    # and up to two rule proposals for the owner's queue. Read and propose
+    # only. Kill switch: CHIEF_BRAIN_PASS=off.
+    try:
+        import chief_brain_pass as _brain_pass
+        scheduler.add_job(g("brain_pass", _brain_pass.nightly_tick),
+                          "cron", hour=7, minute=40, id="brain_pass", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] brain pass not scheduled: {e}")
     # Chief's week (2026-09-04): Monday, after the morning brief — what
     # Chief did on its own, what came of it, what is waiting. Counted
     # from the ledger; no model. Kill switch: CHIEF_WEEK=off.
