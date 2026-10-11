@@ -4,7 +4,7 @@ date: 2026-10-11
 agent: Claude Code (Claude Opus 5.5)
 asked: "continue to build the next steps that you just shared (Kevin, 2026-10-11, after editable thank-you words, an end date for thank-you codes and a Chief action were offered)"
 status: waiting on review
-prs: [kmj-intake-server#1371, solutionist-studio#1197]
+prs: [kmj-intake-server#1371, solutionist-studio#1198]
 migrations: [supabase/APPLY-2026-10-11-thank-you-words.sql]
 left_undone: ["Chief can't change refer-a-friend or make an offer yet (the next PR)", "changing how long codes are good for applies to new thank-yous only; ones already made keep their day"]
 decisions: ["the owner may rewrite the subject, email and text, but {{code}} must stay in the email and the text, so the regular always gets their code", "a line whose link or end day this thank-you doesn't have is left out whole, and a part that still comes out without the code is sent in the suggested words instead", "no end stays the default; an end day is 7 to 365 days from the day the thank-you is made, on the business's clock, and its last day still works", "settings (amounts, the P.S., the thank-you) save while the program is off: it is made paused; before, choosing an amount before turning it on saved nothing"]
