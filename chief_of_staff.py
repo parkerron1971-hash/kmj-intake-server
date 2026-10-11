@@ -64,6 +64,7 @@ from auth_supabase import UserSession, require_user_session
 import foundation_agent
 import business_profile_agent
 from api_usage_logger import log_api_usage, cache_write_1h
+import turn_context
 import route_ledger
 from business_profile_agent import chief_context_block as bp_chief_context_block
 import practitioner_profile_agent
@@ -1784,8 +1785,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       cache_read_tokens=cache_read_tok, cache_creation_tokens=cache_write_tok,
                       cache_creation_1h_tokens=cache_write_1h_tok,
                       business_id=business_id, task_type=prompt_shape,
-                      duration_ms=int(time.time() * 1000) - started_ms)
-                  route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok)
+                      duration_ms=int(time.time() * 1000) - started_ms,
+                      response_id=_reply_id)
+                  if timing_role == "chief_main":
+                      turn_context.note_main_call(model=model, lane=turn_context.lane(),
+                                                  response_id=_reply_id)
+                  route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok,
+                                     cache_write_1h_tok)
                   if _round == 0:
                       try:
                           import cache_watch
@@ -2008,7 +2014,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
           cache_creation_1h_tokens=cache_write_1h(usage),
           business_id=business_id, task_type=prompt_shape,
           duration_ms=int(time.time() * 1000) - started_ms,
+          response_id=(data.get("id") if isinstance(data, dict) else None),
       )
+      if timing_role == "chief_main":
+          turn_context.note_main_call(
+              model=(data.get("model") if isinstance(data, dict) else None) or model,
+              lane=turn_context.lane(),
+              response_id=(data.get("id") if isinstance(data, dict) else None))
       route_ledger.tally_usage(str((data.get("model") if isinstance(data, dict) else None) or model),
                                usage)
       if _round == 0:
@@ -7849,6 +7861,22 @@ def _approve_label(subject: Optional[str], delivery: Dict[str, Any]) -> str:
     return f"✓ Approved: {subj}"
 
 
+async def _keep_draft_original(qid: Optional[str], item: Dict[str, Any]) -> None:
+    """Chief's draft as first written survives the edit about to land
+    (Layer Two: the before/after is what a lesson is learned from).
+    Set once; best-effort."""
+    import turn_linkage
+    await asyncio.to_thread(turn_linkage.keep_original, qid, item)
+
+
+async def _mark_draft_reviewed(qid: Optional[str]) -> None:
+    """Who approved or dismissed a row, when a person is on this turn."""
+    uid = _TURN_USER_ID.get()
+    if uid:
+        import turn_linkage
+        await asyncio.to_thread(turn_linkage.mark_reviewed, qid, uid)
+
+
 async def handle_approve_draft(client, biz, action) -> Dict:
     qid = action.get("queue_id")
     if not qid:
@@ -7885,6 +7913,7 @@ async def handle_approve_draft(client, biz, action) -> Dict:
     # their document was approved while it sat untouched in the queue.
     if delivery.get("reason") == "blocked":
         return _blocked_result("approve_draft", item, delivery)
+    await _mark_draft_reviewed(qid)
 
     result_str = "approved and sent" if delivery.get("sent") else \
                  "approved (no email on file)" if delivery.get("reason") == "no_email" else \
@@ -7916,6 +7945,7 @@ async def handle_dismiss_draft(client, biz, action) -> Dict:
         "status": "dismissed",
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     })
+    await _mark_draft_reviewed(qid)
     return {
         "type": "dismiss_draft",
         "result": "dismissed",
@@ -7936,6 +7966,7 @@ async def handle_edit_draft(client, biz, action) -> Dict:
     if not rows:
         return _fail("edit_draft", f"Draft {qid} not found")
     item = rows[0]
+    await _keep_draft_original(qid, item)
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": new_body})
     delivery = await _do_approve_one(client, biz, {**item, "body": new_body})
     # The edit landed; the approval did not. Say both — a practitioner told
@@ -7945,6 +7976,7 @@ async def handle_edit_draft(client, biz, action) -> Dict:
         return {**held,
                 "result": "Edit saved, but " + held["result"][0].lower() + held["result"][1:],
                 "draft_preview": new_body[:300]}
+    await _mark_draft_reviewed(qid)
     result_str = "edited, approved, and sent" if delivery.get("sent") else "edited and approved"
     return {
         "type": "edit_draft",
@@ -7994,6 +8026,7 @@ async def handle_save_draft(client, biz, action) -> Dict:
             "left it alone. Send the whole document if you meant to "
             "replace it, or edit it in Approvals.")
 
+    await _keep_draft_original(qid, item)
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": new_body})
     return {
         "type": "save_draft",
@@ -8072,6 +8105,7 @@ async def handle_rewrite_draft(client, biz, action) -> Dict:
             "left the draft untouched rather than risk cutting it off. Ask "
             "for a change to one section, or edit it in Approvals.")
 
+    await _keep_draft_original(qid, item)
     await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {"body": rewritten})
 
     # Pass 2.5b: passive learning. A rewrite is the user effectively
@@ -11845,7 +11879,7 @@ from chief_dashboard_actions import handle_get_dashboard_layout, handle_set_dash
 
 from chief_business_learning_actions import (
     handle_learn_business, handle_recall_business_knowledge, handle_correct_business_knowledge,
-    handle_capture_business_knowledge,
+    handle_capture_business_knowledge, handle_adopt_business_rule, handle_remove_business_rule,
 )
 
 from image_studio import handle_generate_image, handle_find_images, handle_capture_website_references
@@ -11874,6 +11908,8 @@ ACTION_HANDLERS = {
     "recall_business_knowledge": handle_recall_business_knowledge,
     "correct_business_knowledge": handle_correct_business_knowledge,
     "capture_business_knowledge": handle_capture_business_knowledge,
+    "adopt_business_rule": handle_adopt_business_rule,
+    "remove_business_rule": handle_remove_business_rule,
     "get_dashboard_layout": handle_get_dashboard_layout,
     "set_dashboard_focus": handle_set_dashboard_focus,
     "set_start_page": handle_set_start_page,
@@ -13117,12 +13153,21 @@ async def _execute_actions(client, biz, actions: List[Dict],
         if prompted and owner_text:
             from chief_invoice_readout import owner_invoice_scope
             resolved = owner_invoice_scope(resolved, owner_text)
-        if atype in ("learn_business", "correct_business_knowledge", "capture_business_knowledge"):
+        if atype in ("learn_business", "correct_business_knowledge", "capture_business_knowledge",
+                     "adopt_business_rule", "remove_business_rule"):
             # Never trust a model-supplied provenance field. Only an actual
             # current owner message can establish an owner fact.
             resolved = dict(resolved)
             resolved["_owner_text"] = (owner_text or "") if (
                 prompted and str(user_id) == str(biz.get("owner_id"))) else ""
+            # An owner rule can also come from the owner's tap on a proposal
+            # in the Approval Queue (action_proposals.execute: surface
+            # "approval", prompted, as the owner). Set here, never read from
+            # the model's arguments.
+            resolved["_owner_approved"] = bool(
+                atype in ("adopt_business_rule", "remove_business_rule")
+                and surface == "approval" and prompted
+                and str(user_id) == str(biz.get("owner_id")))
         if atype in ("void_invoice", "delete_invoice"):
             # "Void anyway" for a pay link that couldn't be verified is the
             # owner's word on a turn they typed, never the model's alone.
@@ -14732,8 +14777,12 @@ async def _archive_turn(client, biz: Dict[str, Any], message: str, reply: str,
     try:
         if not biz or not biz.get("id") or not str(message or "").strip():
             return
-        await _sb(client, "POST", "/chief_conversations",
-                  _conversation_row(str(biz["id"]), message, reply, taken))
+        row = _conversation_row(str(biz["id"]), message, reply, taken)
+        import schema_probe
+        if turn_context.turn_id() and await schema_probe.has_columns_async(
+                "chief_conversations", ("turn_id",)):
+            row["turn_id"] = turn_context.turn_id()
+        await _sb(client, "POST", "/chief_conversations", row)
     except Exception as e:  # pragma: no cover
         logger.warning(f"[chief] turn archive failed (non-fatal): {e}")
 
@@ -14791,6 +14840,9 @@ async def chief_chat(
     chief_truth.record('owner:message', req.message or '', kind='owner_report')
     import image_studio
     _image_turn_token = image_studio.turn_id.set(req.request_id or str(__import__('uuid').uuid4()))
+    # Layer Two: the same id is the turn id every writer stamps (api_usage,
+    # the archive row, ledger payloads, the drafts this turn files).
+    _turn_ctx_tokens = turn_context.set_turn(image_studio.turn_id.get())
     _image_index_token = image_studio.turn_image_index.set(0)
     _image_refs_token = image_studio.turn_references.set(tuple(req.image_ids))
     import chief_build_runtime
@@ -15539,6 +15591,7 @@ async def chief_chat(
                             system += _hl.continuation_block(_headline_said)
                 except Exception as e:  # pragma: no cover — never cost the turn
                     logger.warning(f"[chief] headline skipped: {e}")
+            _lane_token = turn_context.set_lane(lane)
             try:
                 raw = await _call_claude(client, system, api_messages,
                                          max_tokens=turn_tokens,
@@ -15563,6 +15616,7 @@ async def chief_chat(
                 if isinstance(_sentence_streamer, _SentenceStreamer):
                     _sentence_streamer.finish_input()
             finally:
+                turn_context.reset_lane(_lane_token)
                 if _voice_bridge is not None:
                     await _voice_bridge.close()
             _t.mark("model")
@@ -15637,12 +15691,16 @@ async def chief_chat(
                 # full depth through four tool rounds — 33 s and 78c for a
                 # reply that ended "I couldn't start that operation"
                 # (2026-09-25).
-                actions, clean, raw = await _retry_missing_actions(
-                    client, system, api_messages, effective_message, turn_tokens,
-                    chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz,
-                    effort=chief_models.effort_for(lane),
-                    enable_web_search=_web_search_allowed(req.message or ""),
-                    stable_tools=True)
+                _lane_token = turn_context.set_lane(lane)
+                try:
+                    actions, clean, raw = await _retry_missing_actions(
+                        client, system, api_messages, effective_message, turn_tokens,
+                        chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz,
+                        effort=chief_models.effort_for(lane),
+                        enable_web_search=_web_search_allowed(req.message or ""),
+                        stable_tools=True)
+                finally:
+                    turn_context.reset_lane(_lane_token)
                 tool_taken = chief_tool_loop.writes_this_turn()
 
             # C.1.5.4 A-fix-2 — detect override from the practitioner's
@@ -15829,6 +15887,15 @@ async def chief_chat(
             # Rails Arc 4 — the unified audit log records EVERY executed
             # action, including failures and navigation (chief_activity
             # deliberately skips both). Best-effort; never blocks.
+            # Layer Two: which brain acted. Stamped once, only on a turn that
+            # did something, so every ledger row below names the version.
+            if any(isinstance(t, dict) and t.get("type") not in (None, "navigate") for t in (taken or [])):
+                try:
+                    import business_brain
+                    _brain = await asyncio.to_thread(business_brain.stamp, biz)
+                    turn_context.note_brain(_brain.get("version"), _brain.get("fp"))
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"brain stamp failed: {e}")
             try:
                 import audit_log
                 audit_log.record_chief_turn(
@@ -15840,6 +15907,16 @@ async def chief_chat(
                 )
             except Exception as e:  # pragma: no cover
                 logger.warning(f"audit hook failed: {e}")
+
+            # Layer Two: the drafts this turn filed carry its turn id and go
+            # on the outcome ledger as chat moves, so the turn joins to what
+            # came of it. Best-effort; never blocks.
+            try:
+                import turn_linkage
+                await asyncio.to_thread(turn_linkage.after_turn, biz.get("id"),
+                                        turn_context.turn_id(), taken, _action_failed)
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"turn linkage hook failed: {e}")
 
             # Final scrub: if `clean` is empty (parse fall-through) we
             # serve `raw`, which may still contain the hint markers we
@@ -15900,6 +15977,7 @@ async def chief_chat(
         sb_clients.reset_user_jwt(_jwt_token)
         chief_truth.end(_truth_token)
         image_studio.turn_id.reset(_image_turn_token)
+        turn_context.reset(_turn_ctx_tokens)
         image_studio.turn_image_index.reset(_image_index_token)
         image_studio.turn_references.reset(_image_refs_token)
         turn_scope.reset(_build_turn_token)

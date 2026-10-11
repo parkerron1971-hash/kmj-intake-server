@@ -424,6 +424,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "recall_business_knowledge": _r("reads the current business's private operating profile"),
     "correct_business_knowledge": _w("A", "versions an owner correction to private operating knowledge"),
     "capture_business_knowledge": _w("A", "immediately saves quoted owner answers and labels tentative plans"),
+    "adopt_business_rule": _w("A", "saves a do/don't the owner said or approved to the business's private rules; removable"),
+    "remove_business_rule": _w("A", "removes one of the owner's rules at the owner's request"),
     "propose_business_from_idea": _w("A", "lays a whole business out from an idea: the map row "
                                           "(status=blueprint, never accepted) plus module and "
                                           "offering DRAFTS — nothing live until each card is accepted"),

@@ -171,6 +171,25 @@ def _cap_json(value: Any) -> Dict[str, Any]:
     return {"text": str(value)[:_RESULT_CAP]}
 
 
+_AI_KEYS = ("turn", "model", "lane", "resp", "brain_version", "brain_fp")
+
+
+def _with_ai(payload: Dict[str, Any], ai: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Which AI acted, under payload["_ai"] (Layer Two).
+
+    In payload, not in columns, on purpose: the row hash covers a frozen
+    column list (ledger_canonical_v2) that includes payload, so this is
+    hashed and anchored with the row. Added AFTER the payload cap so a
+    truncated payload never loses it. Small by construction: known keys
+    only, each value capped."""
+    if not isinstance(ai, dict):
+        return payload
+    clean = {k: str(ai[k])[:120] for k in _AI_KEYS if ai.get(k) not in (None, "")}
+    if not clean:
+        return payload
+    return {**payload, "_ai": clean}
+
+
 def record(business_id: Optional[str], *, actor_type: str, verb: str,
            actor_id: Optional[str] = None, ok: bool = True,
            error: Optional[str] = None, summary: Optional[str] = None,
@@ -180,7 +199,8 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
            source: Optional[str] = None,
            authorized_by: Optional[str] = None,
            subject_refs: Optional[List[Dict[str, Any]]] = None,
-           display_timezone: Optional[str] = None) -> bool:
+           display_timezone: Optional[str] = None,
+           ai: Optional[Dict[str, Any]] = None) -> bool:
     """Append one ledger row. Best-effort: never raises into the caller.
 
     ACTION LEDGER (2026-08-03): `sequence`, `prev_hash` and `row_hash` are
@@ -210,7 +230,7 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
         "ok": bool(ok),
         "error": (str(error)[:500] if error else None),
         "summary": (str(summary)[:240] if summary else None),
-        "payload": _cap_json(payload),
+        "payload": _with_ai(_cap_json(payload), ai),
         "result": _cap_json(result),
         "source": source,
         "authorized_by": (str(authorized_by)[:120] if authorized_by else None),
@@ -282,6 +302,14 @@ def _error_text(t: Dict[str, Any]) -> str:
     return "action failed with no error message"
 
 
+def _turn_ai() -> Dict[str, Any]:
+    try:
+        import turn_context
+        return turn_context.ai_context(model=authorship.current_model())
+    except Exception:  # pragma: no cover - an annotation never costs a row
+        return {}
+
+
 def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
                       source: Optional[str], taken: List[Dict[str, Any]],
                       action_failed) -> int:
@@ -317,6 +345,9 @@ def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
             # Stage 3: the policy verdict _execute_actions stamped on the
             # result. Field 6 stops being empty on the busiest path.
             authorized_by=t.get("_authorized_by"),
+            # Layer Two: the turn, model, lane and provider response that
+            # produced this action, hashed with the row.
+            ai=_turn_ai(),
         )
         n += 1 if wrote else 0
     return n
@@ -1014,12 +1045,32 @@ def _anchor_summary(biz: str, limit: int = 5) -> List[Dict[str, Any]]:
     try:
         rows = sb_clients.sb_get_as_service(
             f"/ledger_anchors?business_id=eq.{biz}"
-            f"&select=first_sequence,last_sequence,row_count,merkle_root,"
+            f"&select=id,first_sequence,last_sequence,row_count,merkle_root,"
             f"provider,provider_ref,anchored_at"
             f"&order=anchored_at.desc&limit={int(limit)}") or []
     except Exception as e:
         logger.warning(f"[ledger] anchor summary failed for {biz}: {e}")
         return []
+
+    # THE UPGRADE CACHE — the same source list_anchors() reads. A stored
+    # .ots is written at submission and never learns about its own
+    # Bitcoin confirmation; that arrives later in ledger_anchor_upgrades.
+    # Reading only the stored bytes told every auditor that a Bitcoin-
+    # confirmed anchor was "NOT on a durable public network": false, and
+    # false against the business. It is a database read, not a network
+    # call, so the page-load rule above still holds.
+    #
+    # A failed cache read is NOT "nothing upgraded". Rounding it down
+    # would put the false "still waiting" sentence back on the page during
+    # a database blip, so an unconfirmed anchor is marked unchecked instead.
+    try:
+        import ledger_anchor
+        ups = ledger_anchor.upgrades_for_strict([r.get("id") for r in rows])
+    except Exception as e:
+        logger.warning(f"[ledger] anchor upgrade read failed for {biz}: {e}")
+        ups = None
+    cache_read = ups is not None
+    ups = ups or {}
 
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -1031,16 +1082,43 @@ def _anchor_summary(biz: str, limit: int = 5) -> List[Dict[str, Any]]:
             "merkle_root": r.get("merkle_root"),
             "provider": r.get("provider"),
             "independent": False,
+            "state": None,
+            "bitcoin_block": None,
+            "explorer_url": None,
             "verify_url": None,
             "network": None,
         }
         try:
             import ledger_anchor
-            st = ledger_anchor.proof_status(r.get("provider_ref"),
-                                            provider=r.get("provider"))
-            item["independent"] = bool(st.get("confirmed"))
+            up = ups.get(str(r.get("id"))) or {}
+            # The upgraded proof is a strict superset of the stored one.
+            st = ledger_anchor.proof_status(
+                up.get("upgraded_ref") or r.get("provider_ref"),
+                provider=r.get("provider"))
+            # The cache row records what the upgrade job parsed. It is the
+            # fallback when this process cannot parse the bytes itself,
+            # never a way to claim more than the job found.
+            confirmed = bool(st.get("confirmed") or up.get("confirmed"))
+            block = st.get("bitcoin_block") or up.get("bitcoin_block")
+            item["independent"] = confirmed
+            if confirmed:
+                item["state"] = "confirmed"
+            elif not cache_read and st.get("state") == "submitted":
+                # The stored bytes say "submitted"; whether Bitcoin has
+                # since confirmed it is exactly what the failed read
+                # would have told us.
+                item["state"] = "unchecked"
+            else:
+                item["state"] = st.get("state")
             item["verify_url"] = st.get("verify_url")
             item["network"] = st.get("network")
+            if confirmed and block:
+                item["bitcoin_block"] = int(block)
+                # A block page shows the block exists and when it was
+                # mined. The full check is `ots verify` against the proof
+                # file, and the page says so rather than letting a link
+                # imply more than it shows.
+                item["explorer_url"] = f"https://mempool.space/block/{int(block)}"
         except Exception:
             pass
         out.append(item)

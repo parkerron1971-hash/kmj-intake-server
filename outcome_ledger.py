@@ -67,6 +67,15 @@ TERMINAL = ("done", "approved", "dismissed", "expired", "replied", "completed", 
             "met", "missed", "stopped", "no_signal")
 NEGATIVE = ("dismissed", "expired")
 
+# Drafts a practitioner's own chat turn filed (turn_linkage.after_turn,
+# Layer Two step 1). Recorded so a turn joins to what came of it, and
+# resolved by the same reconciler. Kept OUT of everything that steers
+# Chief: the digest, verb retirement (which also revokes standing
+# permissions), the weekly report and the app's stats read agent and
+# assignment moves only, exactly as before. A practitioner dismissing
+# their own chat drafts must never retire a verb for the agent.
+CHAT_SURFACE = "chat"
+
 RETIRE_AFTER = 3
 RETIRE_WINDOW_DAYS = 14
 NO_SIGNAL_DAYS = 7
@@ -119,8 +128,10 @@ def _target_of(t: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
 
 
 def rows_for(business_id: str, surface: str, taken: List[Dict[str, Any]], *,
-             assignment_id: Optional[str] = None, now: Optional[datetime] = None) -> List[Dict[str, Any]]:
-    """The ledger rows one run produces. Pure; the tests read this."""
+             assignment_id: Optional[str] = None, now: Optional[datetime] = None,
+             turn_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The ledger rows one run produces. Pure; the tests read this.
+    `turn_id` rides only when given; the caller has checked the column."""
     import chief_of_staff as cos
     now = now or _now()
     out: List[Dict[str, Any]] = []
@@ -144,16 +155,26 @@ def rows_for(business_id: str, surface: str, taken: List[Dict[str, Any]], *,
             "outcome": PENDING if waits else DONE,
             "outcome_at": None if waits else _z(now),
             "made_at": _z(now),
+            **({"turn_id": str(turn_id)} if turn_id else {}),
         })
     return out
 
 
 def record_moves(business_id: str, surface: str, taken: List[Dict[str, Any]], *,
-                 assignment_id: Optional[str] = None) -> int:
-    """Sync, best-effort, never raises. Returns rows written."""
+                 assignment_id: Optional[str] = None, turn_id: Optional[str] = None) -> int:
+    """Sync, best-effort, never raises. Returns rows written.
+    `turn_id` is written only once chief_moves has the column (Layer Two
+    migration); before that the row is recorded without it."""
     if not enabled():
         return 0
-    rows = rows_for(business_id, surface, taken, assignment_id=assignment_id)
+    if turn_id:
+        try:
+            import schema_probe
+            if not schema_probe.has_columns("chief_moves", ("turn_id",)):
+                turn_id = None
+        except Exception:
+            turn_id = None
+    rows = rows_for(business_id, surface, taken, assignment_id=assignment_id, turn_id=turn_id)
     if not rows:
         return 0
     try:
@@ -267,10 +288,14 @@ def resolve_pending(now: Optional[datetime] = None) -> Dict[str, int]:
 
 # ─── Reading back ─────────────────────────────────────────────────────
 
-def recent_moves(business_id: str, days: int = DIGEST_DAYS, limit: int = 400) -> List[Dict[str, Any]]:
+def recent_moves(business_id: str, days: int = DIGEST_DAYS, limit: int = 400,
+                 include_chat: bool = False) -> List[Dict[str, Any]]:
+    """Agent and assignment moves by default; see CHAT_SURFACE for why
+    chat drafts are left out of everything that steers Chief."""
     since = _z(_now() - timedelta(days=days))
+    chat = "" if include_chat else f"&surface=neq.{CHAT_SURFACE}"
     rows = sb_clients.sb_get_as_service(
-        f"{TABLE}?business_id=eq.{business_id}&made_at=gte.{since}"
+        f"{TABLE}?business_id=eq.{business_id}&made_at=gte.{since}{chat}"
         f"&order=made_at.desc&limit={limit}&{_SELECT}")
     return rows if isinstance(rows, list) else []
 
