@@ -373,9 +373,12 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "sellable and what is blocking the ones that are not.",
         _NO_ARGS),
     "recall_conversation": (
-        "Search earlier conversation with Chief by meaning, not keyword.",
+        "Find earlier conversations with Chief that mention a word or "
+        "phrase, from the last 7 days. Matches the words as typed, not "
+        "their meaning, so search for a name or a distinctive term.",
         _obj({"query": {"type": "string",
-                        "description": "What to look for."}},
+                        "description": "A word or phrase that appears in "
+                                       "the conversation."}},
              ["query"])),
     "show_revenue": (
         "Revenue figures for this business.",
