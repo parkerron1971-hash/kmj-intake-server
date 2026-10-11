@@ -1,17 +1,21 @@
-"""Texting under each business's own name (Twilio ISV), step 1 (2026-10-11).
+"""Texting under each business's own name (Twilio ISV), steps 1 and 3 (2026-10-11).
 
 docs/plans/ISV_TEXTING_PLAN_2026-10-11.md. Pinned here:
-  1. The answers: what Twilio needs, checked; an EIN can never be saved.
+  1. The answers: what Twilio needs, checked; an EIN is never saved in them.
   2. The words Twilio reads name the business everywhere, follow Twilio's
      rejection reasons, and point at the business's own pages.
   3. The pages /texting-terms and /texting-privacy, in the business's name,
      with STOP, HELP, rates and the privacy line reviewers look for.
-  4. The owner's routes: owner only, nothing sent to Twilio, no changes once
+  4. The owner's routes: owner only, saving sends nothing, no changes once
      it's with Twilio.
+  5. Step 3: the EIN kept with the business's legal details; sending (only
+     when open and ready, once); every change told to the owner; Twilio's
+     pings and the sweep moving each registration along.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import pathlib
 import re
 import sys
@@ -135,6 +139,7 @@ def api(monkeypatch):
 
     monkeypatch.setattr(tr, "registration", lambda bid: state["row"])
     monkeypatch.setattr(tr, "site_origin", lambda bid: ORIGIN)
+    monkeypatch.setattr(tr, "ein_for", lambda bid, biz=None: state.get("ein"))
     monkeypatch.setattr(links, "bookable", lambda bid, biz: True)
     monkeypatch.setattr(tr.sb_clients, "sb_post_as_service", post)
     from fastapi.routing import APIRoute
@@ -171,7 +176,260 @@ def test_saving_the_answers_sends_nothing_and_stops_once_with_twilio(api):
     assert r.status_code == 409 and "with Twilio already" in r.json()["detail"]
 
 
-def test_owner_only_and_no_twilio_calls():
+def test_owner_only_and_twilio_only_through_texting_isv():
     src = pathlib.Path(tr.__file__).read_text(encoding="utf-8")
-    assert src.count('business_access("owner")') == 2 and 'business_access("viewer")' not in src
-    assert "twilio_sms" not in src and "import twilio" not in src
+    # get, save, EIN, send: owner only. The status ping takes no business id.
+    assert src.count('business_access("owner")') == 4 and 'business_access("viewer")' not in src
+    assert "twilio_sms" not in src and not re.search(r"^import twilio$", src, re.M) and "twilio.com" not in src
+
+
+# ── 5. step 3: the EIN, sending, updates ──────────────────────────────
+
+READY = {**GOOD, "industry": "CONSUMER"}
+
+
+@pytest.fixture
+def sending(api, monkeypatch):
+    """The routes, plus the status writes and the background send recorded."""
+    client, state = api
+    state.update(patches=[], sent=[], told=[], ein="12-3456789")
+
+    def patch(bid, fields, *, when=None):
+        state["patches"].append((fields, when))
+        row = state["row"]
+        if row is None or (when and row.get("status") not in when):
+            return []
+        row.update(fields)
+        return [dict(row)]
+
+    async def fake_send(biz, row):
+        state["sent"].append(row)
+        return "brand_pending"
+
+    monkeypatch.setattr(tr, "_patch", patch)
+    monkeypatch.setattr(tr, "_send", fake_send)
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", BIZ)
+    return client, state
+
+
+def test_the_ein_is_kept_with_the_business_details_never_the_registration(sending, monkeypatch):
+    client, state = sending
+    import business_identity
+    writes = []
+    monkeypatch.setattr(business_identity, "set_identity",
+                        lambda bid, **f: writes.append((bid, f)) or {"business_id": bid, **f})
+    r = client.put(f"/texting/registration/{BIZ}/ein", json={"ein": "123456789"})
+    assert r.status_code == 200, r.text
+    assert writes == [(BIZ, {"ein": "12-3456789"})] and state["posts"] == []      # not the registration
+    for bad in ("1234", "12-34567890", "AB-CDEFGHI"):
+        assert client.put(f"/texting/registration/{BIZ}/ein", json={"ein": bad}).status_code == 422
+    client.put(f"/texting/registration/{BIZ}", json=READY)
+    body = client.get(f"/texting/registration/{BIZ}").json()
+    assert body["ein"] == {"on_file": True, "last4": "6789"}
+    assert "12-3456789" not in json.dumps(body)                                   # only the last four go out
+    checks = {c["key"]: c["ok"] for c in body["readiness"]}
+    assert checks["ein"] is True and checks["industry"] is True
+    state["ein"] = None
+    checks = {c["key"]: c["ok"] for c in client.get(f"/texting/registration/{BIZ}").json()["readiness"]}
+    assert checks["ein"] is False
+
+
+def test_sending_only_when_open_and_ready_and_only_once(sending, monkeypatch):
+    client, state = sending
+    client.put(f"/texting/registration/{BIZ}", json=GOOD)                         # no industry yet
+    r = client.post(f"/texting/registration/{BIZ}/send")
+    assert r.status_code == 400 and "industry" in r.json()["detail"] and not state["sent"]
+    client.put(f"/texting/registration/{BIZ}", json=READY)
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", "")
+    view = client.get(f"/texting/registration/{BIZ}").json()
+    assert view["open"] is False and view["can_send"] is False
+    r = client.post(f"/texting/registration/{BIZ}/send")
+    assert r.status_code == 409 and "isn't open" in r.json()["detail"] and not state["sent"]
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", "*")
+    assert client.get(f"/texting/registration/{BIZ}").json()["can_send"] is True
+    r = client.post(f"/texting/registration/{BIZ}/send")
+    assert r.status_code == 200, r.text
+    assert state["patches"][-1] == ({"status": "submitted", "failure": None}, tr.EDITABLE)
+    assert [row["status"] for row in state["sent"]] == ["submitted"]               # marked before it leaves
+    assert r.json()["status"] == "submitted" and r.json()["steps"][0]["state"] == "now"
+    r = client.post(f"/texting/registration/{BIZ}/send")
+    assert r.status_code == 409 and len(state["sent"]) == 1                        # a second press sends nothing
+
+
+def test_no_ein_and_sent_back_after_review_are_not_resent(sending):
+    client, state = sending
+    client.put(f"/texting/registration/{BIZ}", json={**READY, "business_type": "sole_proprietor",
+                                                      "has_ein": False, "industry": None})
+    r = client.post(f"/texting/registration/{BIZ}/send")
+    assert r.status_code == 409 and "with an EIN" in r.json()["detail"]
+    client.put(f"/texting/registration/{BIZ}", json=READY)
+    state["row"].update(status="failed", twilio={"rejected_after_review": True}, failure="TAX_ID mismatch")
+    view = client.get(f"/texting/registration/{BIZ}").json()
+    assert view["can_send"] is False and view["failure"] == "TAX_ID mismatch" and view["rejected_after_review"]
+    r = client.post(f"/texting/registration/{BIZ}/send")
+    assert r.status_code == 409 and "taking it up with Twilio" in r.json()["detail"] and not state["sent"]
+
+
+def _rig(monkeypatch, row):
+    """_send/_check against a fake texting_isv and a recorded owner."""
+    state = {"row": dict(row), "told": [], "patches": []}
+
+    def patch(bid, fields, *, when=None):
+        state["patches"].append((fields, when))
+        if when and state["row"].get("status") not in when:
+            return []
+        state["row"].update(fields)
+        return [dict(state["row"])]
+
+    async def tell(biz, status, reasons=None):
+        state["told"].append((status, reasons))
+        return {}
+
+    monkeypatch.setattr(tr, "_patch", patch)
+    monkeypatch.setattr(tr, "_tell_owner", tell)
+    monkeypatch.setattr(tr, "ein_for", lambda bid, biz=None: "12-3456789")
+    monkeypatch.setattr(tr, "site_origin", lambda bid: ORIGIN)
+    return state
+
+
+BUSINESS = {"id": BIZ, "name": "Northside Cuts", "owner_id": "u1", "settings": {}}
+
+
+def test_a_send_tells_the_owner_how_it_went(monkeypatch):
+    state = _rig(monkeypatch, {"status": "submitted", "answers": READY, "twilio": {}})
+    seen = {}
+
+    def ok(t, **kw):
+        seen.update(kw, t=dict(t))
+        return t
+
+    monkeypatch.setattr(tr.texting_isv, "send", ok)
+    assert run(tr._send(BUSINESS, state["row"])) == "brand_pending"
+    assert state["row"]["status"] == "brand_pending" and state["told"] == [("brand_pending", None)]
+    assert seen["ein"] == "12-3456789" and seen["website"] == "https://northsidecuts.com"
+    assert seen["callback"].endswith("/texting/twilio-status")
+    words = seen["t"]["campaign_words"]                                    # the words the owner saw, kept
+    assert words["description"].startswith("Northside Cuts texts") and seen["t"]["sent_at"]
+
+    def needs_fix(t, **kw):
+        raise tr.texting_isv.NeedsFix(["The Business Name is missing."])
+
+    state = _rig(monkeypatch, {"status": "submitted", "answers": READY, "twilio": {}})
+    monkeypatch.setattr(tr.texting_isv, "send", needs_fix)
+    assert run(tr._send(BUSINESS, state["row"])) == "failed"
+    assert state["row"]["failure"] == "The Business Name is missing."
+    assert state["told"] == [("failed", ["The Business Name is missing."])]
+
+    def down(t, **kw):
+        raise tr.texting_isv.TwilioDown("503")
+
+    state = _rig(monkeypatch, {"status": "submitted", "answers": READY, "twilio": {}})
+    monkeypatch.setattr(tr.texting_isv, "send", down)
+    assert run(tr._send(BUSINESS, state["row"])) == "submitted"
+    assert state["row"]["status"] == "submitted" and state["told"] == []     # nothing to tell; the sweep retries
+
+
+def test_where_it_stands_is_told_once_per_change(monkeypatch):
+    sent = {"account_sid": "AC" + "2" * 32, "brand_sid": "BN1", "service_sid": "MG1"}
+    state = _rig(monkeypatch, {"status": "brand_pending", "twilio": sent})
+    stages = iter([{"stage": "brand", "reasons": []}, {"stage": "campaign", "reasons": []},
+                   {"stage": "campaign", "reasons": []}, {"stage": "approved", "reasons": []}])
+    monkeypatch.setattr(tr.texting_isv, "check", lambda t, save: next(stages))
+    for _ in range(4):
+        run(tr._check(BUSINESS, state["row"]))
+    assert state["row"]["status"] == "approved"
+    assert [s for s, _ in state["told"]] == ["campaign_pending", "approved"]
+
+    state = _rig(monkeypatch, {"status": "campaign_pending", "twilio": sent})
+    monkeypatch.setattr(tr.texting_isv, "check",
+                        lambda t, save: {"stage": "failed", "reasons": ["Opt-in names a different business."]})
+    assert run(tr._check(BUSINESS, state["row"])) == "failed"
+    assert state["row"]["twilio"]["rejected_after_review"] is True
+    assert state["told"] == [("failed", ["Opt-in names a different business."])]
+
+
+def test_the_sweep_resumes_a_stalled_send_but_not_a_running_one(monkeypatch):
+    now = tr._now()
+    rows = {"fresh": {"status": "submitted", "updated_at": now.isoformat(), "twilio": {}},
+            "stale": {"status": "submitted", "updated_at": (now - tr.timedelta(minutes=30)).isoformat(),
+                      "twilio": {}}}
+    resumed = []
+
+    async def fake_send(biz, row):
+        resumed.append(row)
+        return "brand_pending"
+
+    monkeypatch.setattr(tr, "_send", fake_send)
+    monkeypatch.setattr(tr, "_business", lambda bid: BUSINESS)
+    for key, expect in (("fresh", "submitted"), ("stale", "brand_pending")):
+        monkeypatch.setattr(tr, "registration", lambda bid, r=rows[key]: r)
+        assert run(tr.advance(BIZ)) == expect
+    assert len(resumed) == 1
+
+    monkeypatch.setattr(tr, "_read", lambda path: [{"business_id": BIZ, "status": "brand_pending"}])
+    monkeypatch.setattr(tr, "advance", lambda bid: _done("campaign_pending"))
+    assert run(tr.sweep_tick()) == {"checked": 1, "moved": 1}
+
+
+async def _done(value):
+    return value
+
+
+def test_twilios_ping_only_names_which_registration_to_ask_about(monkeypatch):
+    app = FastAPI()
+    app.include_router(tr.router)
+    client = TestClient(app)
+    queries, advanced = [], []
+    monkeypatch.setattr(tr, "_read", lambda path: queries.append(path) or [{"business_id": BIZ}])
+    monkeypatch.setattr(tr, "_background", lambda coro: advanced.append(coro) or coro.close())
+    monkeypatch.setattr(tr, "_POKED", {})
+    sub = "AC" + "2" * 32
+    assert client.post("/texting/twilio-status", data={"AccountSid": sub, "Status": "twilio-approved"}).status_code == 204
+    assert f"twilio->>account_sid.eq.{sub}" in queries[0] and len(advanced) == 1
+    client.post("/texting/twilio-status", data={"AccountSid": sub})
+    assert len(advanced) == 1                                                # at most once a minute
+    queries.clear()
+    client.post("/texting/twilio-status", data={"AccountSid": "AC1);drop", "BundleSid": "nope"})
+    assert queries == []                                                     # nothing odd reaches the query
+
+
+def test_the_owner_hears_in_the_app_by_push_and_by_email(monkeypatch):
+    import email_domain_monitor
+    import email_sender
+    import push_notifications
+    posts, pushes, emails = [], [], []
+    monkeypatch.setattr(tr.sb_clients, "sb_post_as_service", lambda path, row, *a: posts.append((path, row)) or [row])
+    monkeypatch.setattr(push_notifications, "send_to_business", lambda bid, **kw: pushes.append(kw) or 1)
+
+    async def owner_email(uid):
+        return "andre@example.com"
+
+    async def resend(**kw):
+        emails.append(kw)
+
+    monkeypatch.setattr(email_domain_monitor, "_owner_email", owner_email)
+    monkeypatch.setattr(email_sender, "send_via_resend", resend)
+    out = run(tr._tell_owner(BUSINESS, "failed", ["The EIN doesn't match the legal name."]))
+    assert out == {"in_app": True, "push": True, "email": True}
+    [(path, row)] = posts
+    assert path == "/chief_notifications" and row["data"]["nav"] == {"tab": "operate", "sub": "sms"}
+    assert row["title"] == "Your texting registration needs a fix" and row["priority"] == "high"
+    assert row["body"].startswith("The EIN doesn't match the legal name. Open Operate, Text")
+    assert pushes[0]["nav"] == "operate:sms" and emails[0]["to_email"] == "andre@example.com"
+    assert run(tr._tell_owner(BUSINESS, "approved"))["in_app"]
+    assert posts[-1][1]["title"] == "Northside Cuts can text under its own name"
+
+    def boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(tr.sb_clients, "sb_post_as_service", boom)
+    monkeypatch.setattr(push_notifications, "send_to_business", boom)
+    assert run(tr._tell_owner(BUSINESS, "brand_pending"))["in_app"] is False     # never raises
+
+
+def test_who_can_send_is_a_switch():
+    import os
+    for raw, expect in (("", False), ("*", True), (BIZ, True), (f"x, {BIZ}", True), ("someone-else", False)):
+        os.environ["TEXTING_REGISTRATION_OPEN"] = raw
+        assert tr.is_open(BIZ) is expect, raw
+    os.environ.pop("TEXTING_REGISTRATION_OPEN", None)
