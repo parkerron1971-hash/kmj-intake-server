@@ -144,15 +144,16 @@ def interpret(descriptors: Any, business_type: Optional[str] = None) -> Optional
     if not words:
         return None  # nothing to reason about → keyword fallback / default
 
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
     model = chief_models.model_for("background")
     try:
-        resp = llm_call.post({
+        # Through the lane registry (Layer Two): the background lane can be
+        # pointed at another provider by config, with this model as fallback.
+        resp = llm_call.post_lane("background", {
             "model": model, "max_tokens": 250, **chief_models.quick_call_kwargs(model),
             "system": _SYSTEM,
             "messages": [{"role": "user",
                           "content": _build_user_msg(words, business_type)}],
-        }, timeout=httpx.Timeout(connect=8.0, read=30.0, write=15.0, pool=8.0), key=key)
+        }, timeout=httpx.Timeout(connect=8.0, read=30.0, write=15.0, pool=8.0), task="design_intent")
     except httpx.HTTPError as e:
         logger.info(f"[design_intent] call failed: {e}")
         return None
