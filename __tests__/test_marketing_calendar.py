@@ -29,6 +29,11 @@ def run(x):
     return asyncio.run(x)
 
 
+@pytest.fixture(autouse=True)
+def no_offers(monkeypatch):
+    monkeypatch.setattr(cal, "_offers", lambda bid, first, following: [])
+
+
 def test_a_month_starts_at_the_business_local_midnight():
     first, start, end = cal.month_bounds("2026-11", CHI)
     assert first.isoformat() == "2026-11-01"
@@ -78,7 +83,7 @@ def test_the_month_puts_posts_and_outreach_in_time_order(monkeypatch):
     monkeypatch.setattr(cal, "_campaigns", lambda bid: ([campaign()], {"11111111-2222-4333-8444-555555555555": {0: 41}}))
     out = run(cal.month(BIZ, "2026-10", tz=CHI, now=NOW))
     assert out["month"] == "2026-10" and out["time_zone"] == "America/Chicago"
-    assert out["sources"] == {"posts": "loaded", "campaigns": "loaded"}
+    assert out["sources"] == {"posts": "loaded", "campaigns": "loaded", "offers": "loaded"}
     assert [(i["kind"], i["at"][:10]) for i in out["items"]] == [
         ("email", "2026-10-10"), ("post", "2026-10-12"), ("text", "2026-10-13"), ("email", "2026-10-19")]
     assert out["items"][1]["post"]["accounts"] == ["Instagram"] and "provider_account_id" not in repr(out)
@@ -91,7 +96,7 @@ def test_a_read_that_fails_is_named_never_an_empty_month(monkeypatch):
     monkeypatch.setattr(cal, "_posts", down)
     monkeypatch.setattr(cal, "_campaigns", lambda bid: ([campaign()], {}))
     out = run(cal.month(BIZ, "2026-10", tz=CHI, now=NOW))
-    assert out["sources"] == {"posts": "unavailable", "campaigns": "loaded"}
+    assert out["sources"] == {"posts": "unavailable", "campaigns": "loaded", "offers": "loaded"}
     assert out["items"] and all(i["kind"] != "post" for i in out["items"])
 
     async def none(bid, start, end):
@@ -100,7 +105,7 @@ def test_a_read_that_fails_is_named_never_an_empty_month(monkeypatch):
     monkeypatch.setattr(cal, "_posts", none)
     monkeypatch.setattr(cal, "_campaigns", lambda bid: (None, {}))
     out = run(cal.month(BIZ, "2026-10", tz=CHI, now=NOW))
-    assert out["sources"] == {"posts": "loaded", "campaigns": "unavailable"} and out["items"] == []
+    assert out["sources"] == {"posts": "loaded", "campaigns": "unavailable", "offers": "loaded"} and out["items"] == []
 
 
 def test_a_month_at_its_row_limit_is_a_floor(monkeypatch):
@@ -133,3 +138,20 @@ def test_the_route_is_a_viewer_read():
     src = pathlib.Path(bm.__file__).read_text(encoding="utf-8")
     body = src[src.index("async def calendar_route("):src.index("# ── results")]
     assert "business_access('viewer')" in body and "business_tz, biz" in body
+
+
+def test_an_offer_shows_on_the_day_it_starts_and_ends(monkeypatch):
+    async def none(bid, start, end):
+        return []
+
+    monkeypatch.setattr(cal, "_posts", none)
+    monkeypatch.setattr(cal, "_campaigns", lambda bid: ([], {}))
+    monkeypatch.setattr(cal, "_offers", lambda bid, first, following: [
+        {"id": "o1", "code": "FIRST10", "title": "$10 off your first visit", "status": "on",
+         "starts_on": "2026-10-13", "ends_on": "2026-11-01"}])
+    out = run(cal.month(BIZ, "2026-10", tz=CHI, now=NOW))
+    assert [(i["kind"], i["edge"], i["at"]) for i in out["items"]] == [("offer", "starts", "2026-10-13T14:00:00+00:00")]
+    nov = run(cal.month(BIZ, "2026-11", tz=CHI, now=NOW))
+    assert [(i["edge"], i["code"]) for i in nov["items"]] == [("ends", "FIRST10")]
+    monkeypatch.setattr(cal, "_offers", lambda bid, first, following: None)
+    assert run(cal.month(BIZ, "2026-10", tz=CHI, now=NOW))["sources"]["offers"] == "unavailable"

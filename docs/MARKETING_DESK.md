@@ -558,6 +558,42 @@ now, texts after".
 - **Sweep.** `journeys_tick` every 30 minutes (`kmj_intake_automation`).
 - **Migration.** `supabase/APPLY-2026-10-09-journeys.sql`.
 
+### Offers (2026-10-10, step 3)
+
+`offers.py` (`GET /offers/{business_id}` viewer; `POST` and `PATCH
+/offers/{business_id}[/{offer_id}]` owner; `GET
+/offers/public/{business_id}/{code}` the booking page's read of an offer's
+words, public by design). The approved Offers board, and Kevin's four
+defaults ("go", 2026-10-10).
+
+- **The offer.** An amount off, a percent off or a free item; for anyone, a
+  first visit or regulars; optionally only some days and hours on the
+  business's clock; a start and an end day; once per person; up to N uses;
+  on or paused. A code like FIRST10 / BACK5 / SAVE15 / FREE is suggested.
+  Making one needs card payments connected (Stripe), else a 409 that says
+  so (default 4).
+- **Its links.** `business_marketing_sent_links.offer_link`: part 0 to share,
+  part 1 for the printed QR (counted apart), both to `/book?offer=CODE`
+  (`marketing_links` kind `offer`). Nothing bookable online: no link; the
+  code still works at the counter.
+- **At booking.** Both booking doors take `offer_code`; `offers.evaluate`
+  decides from the business's own records (sessions for first visit /
+  regulars, earlier bookings for one per person, uses so far, the slot's
+  day and hour) whether it applies and why not (default 2), and the booking
+  keeps the decision in `data.offer` (what the form sent under that key is
+  dropped). The appointment's calendar note says "Offer FIRST10: ... take it
+  off at the counter" unless paid online. A code that isn't one of the
+  business's offers changes nothing.
+- **At checkout.** `stripe_payments_router.booking_checkout`: an offer that
+  applies comes off the online payment only when it is the full price (no
+  deposit) and leaves at least 50 cents; the service line is charged less
+  and named with the offer, the tip stays whole, and typed codes are off
+  for that payment (default 1). Otherwise the counter takes it.
+- **Results.** Bookings that used it, what they were booked for, what was
+  paid online for them, and taps on its link and its QR.
+- **Calendar.** An offer shows on the Month on the day it starts and ends.
+- **Migration.** `supabase/APPLY-2026-10-10-offers.sql`.
+
 ### The weekly suggestion and the fan-out (B8)
 
 `business_marketing_planner.py` (2026-10-07). A business at the `suggest`

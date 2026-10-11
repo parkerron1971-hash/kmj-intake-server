@@ -305,6 +305,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "marketing_links",
     # The notes Outreach journeys sent (APPLY-2026-10-09-journeys.sql).
     "journey_sends",
+    # The business's offers (APPLY-2026-10-10-offers.sql).
+    "offers",
     "marketing_posts",
     "marketing_runs",
     "marketing_desks",
@@ -692,6 +694,9 @@ _IMPORT_SKIP = {
     "marketing_links", "marketing_link_hits",
     # The journeys' sent notes: history, never re-sent from a file.
     "journey_sends",
+    # Offers: a restored business makes its offers again (the codes and their
+    # rules are its own decisions); the export keeps them for reference.
+    "offers",
     # The desk's settings are not restored either (review of #1307): an
     # uploaded file could switch the weekly plan on or name another
     # business's accounts and photos. The owner sets the desk up again; the
