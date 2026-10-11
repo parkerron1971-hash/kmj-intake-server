@@ -110,10 +110,11 @@ async def sync_due_tick():
     if not enabled(): return
     try:
         cfg = sq.config()
+        now = datetime.now(timezone.utc).isoformat()
         rows = await sq.db('GET','square_booking_sync',params={
             'environment':'eq.'+cfg.environment, 'enabled':'eq.true',
             'owner_id':'in.('+','.join(sorted(cfg.owners))+')',
-            'due_at':'lte.'+datetime.now(timezone.utc).isoformat(),
+            'due_at':'lte.'+now, 'or':'(lease_until.is.null,lease_until.lt.'+now+')',
             'select':'business_id,owner_id', 'order':'due_at.asc', 'limit':'5'})
         # Max 5 accounts / tick, concurrent under per-account DB leases.
         results = await asyncio.gather(*(sync_one(r['business_id'],r['owner_id'],cfg) for r in rows), return_exceptions=True)

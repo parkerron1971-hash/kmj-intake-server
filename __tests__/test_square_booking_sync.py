@@ -126,3 +126,34 @@ def test_production_configuration_requires_explicit_gate(monkeypatch,cfg):
     monkeypatch.setenv('SQUARE_PRODUCTION_APPLICATION_ID','sq0idp-real')
     monkeypatch.setenv('SQUARE_PILOT_OWNER_IDS','*')
     with pytest.raises(HTTPException): sq.config()
+
+
+def test_scheduler_filters_due_unleased_pilot_accounts_and_isolates_failures(monkeypatch,cfg):
+    monkeypatch.setattr(sq,'config',lambda:cfg)
+    calls=[]
+    async def db(method,path,**kwargs):
+        p=kwargs['params']
+        assert path=='square_booking_sync' and method=='GET'
+        assert p['environment']=='eq.sandbox' and p['owner_id']=='in.('+USER+')'
+        assert p['limit']=='5' and p['order']=='due_at.asc'
+        assert p['due_at'].startswith('lte.') and p['or'].startswith('(lease_until.is.null,lease_until.lt.')
+        assert p['select']=='business_id,owner_id'
+        return [{'business_id':BIZ,'owner_id':USER},{'business_id':'second','owner_id':USER}]
+    async def one(business,owner,config):
+        calls.append((business,owner))
+        if business==BIZ: raise HTTPException(503,'private')
+        return True
+    monkeypatch.setattr(sq,'db',db);monkeypatch.setattr(sync,'sync_one',one)
+    asyncio.run(sync.sync_due_tick())
+    assert calls==[(BIZ,USER),('second',USER)]
+
+
+def test_scheduler_storage_failure_is_safe_and_disabled_tick_is_silent(monkeypatch,cfg,caplog):
+    monkeypatch.setattr(sq,'config',lambda:cfg)
+    calls=[]
+    async def db(*a,**k): calls.append(True);raise HTTPException(503,'private credentials')
+    monkeypatch.setattr(sq,'db',db)
+    asyncio.run(sync.sync_due_tick())
+    assert len(calls)==1 and 'private' not in caplog.text
+    monkeypatch.setenv('SQUARE_BOOKING_SYNC_ENABLED','false')
+    asyncio.run(sync.sync_due_tick());assert len(calls)==1
