@@ -624,7 +624,17 @@ $10, get $10") and Kevin's default 3 ("go", 2026-10-10).
   the regular is told by email (text only under the journeys' rules), in
   daytime, claimed before it is sent. No way to reach them: the card says
   "tell them at the counter". Kill switch `REFER_A_FRIEND=off`.
-- **Migration.** `supabase/APPLY-2026-10-11-refer-a-friend.sql`.
+- **The thank-you's words and end day** (2026-10-11, second PR). The owner
+  can rewrite the subject, email and text (`offers.thanks_words`, over
+  `THANKS_DEFAULTS`); `{{code}}` must stay in the email and the text, a
+  line whose link or end day this thank-you doesn't have is left out, and
+  a part that comes out without the code falls back to the suggested words.
+  `offers.thanks_days` (7 to 365, or no end) sets `referral_rewards.expires_on`
+  when a thank-you is made, on the business's clock; after that day the
+  booking page says it ended. Settings save while the program is off (it
+  is made paused).
+- **Migration.** `supabase/APPLY-2026-10-11-refer-a-friend.sql`, then
+  `supabase/APPLY-2026-10-11-thank-you-words.sql`.
 
 ### The weekly suggestion and the fan-out (B8)
 

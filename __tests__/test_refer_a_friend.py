@@ -71,13 +71,38 @@ def test_the_words():
     assert w["email"].startswith("Hi Andre,\n\nMaya came in, thanks to you. Here's $10 off your next visit: "
                                  "use the code THANKS-7KQ2 when you book, or say it at the counter.\n"
                                  f"{BOOK}?offer=THANKS-7KQ2\n")
-    assert f"Your own link still works:\n{BOOK}?offer=ANDRE-7K\n\nNorthside Cuts" in w["email"]
-    assert w["text"] == ("Thanks for sending Maya, Andre! $10 off your next visit with the code THANKS-7KQ2. "
+    assert f"Your own link still works: {BOOK}?offer=ANDRE-7K\n\nNorthside Cuts" in w["email"]
+    assert "good through" not in w["email"].lower()                         # no end: that line is left out
+    assert w["text"] == ("Thanks for sending Maya, Andre! $10 off your next visit with the code THANKS-7KQ2.\n"
                          f"Book: {BOOK}?offer=THANKS-7KQ2")
     bare = rf.thanks_words(business={"name": "Northside Cuts"}, referrer={"name": ""}, friend=None,
                            reward={"amount_cents": 1000, "code": "THANKS-7KQ2"}, book=None, own_link=None)
-    assert bare["subject"] == "Thank you for sending a friend" and "Your friend came in" in bare["email"]
-    assert "http" not in bare["email"] and "Hi there," in bare["email"]
+    assert bare["subject"] == "Thank you for sending your friend" and "\nYour friend came in" in bare["email"]
+    assert "http" not in bare["email"] and "Hi there," in bare["email"] and "own link" not in bare["email"]
+    assert "Book:" not in bare["text"] and "THANKS-7KQ2" in bare["text"]
+    ends = rf.thanks_words(business={"name": "Northside Cuts"}, referrer={"name": "Andre"}, friend=None,
+                           reward={"amount_cents": 1000, "code": "THANKS-7KQ2", "expires_on": "2027-01-09"},
+                           book=None, own_link=None)
+    assert "It's good through Sat, Jan 9." in ends["email"] and "Good through Sat, Jan 9." in ends["text"]
+
+
+def test_the_owners_own_thank_you_words():
+    mine = {"subject": "{{friend}} says hi!", "email": "Hey {{first_name}}! Take {{amount}} off with {{code}}.\n{{book_link}}",
+            "text": "{{code}} = {{amount}} off. Thanks, {{first_name}}!"}
+    w = rf.thanks_words(business={"name": "Northside Cuts"}, referrer={"name": "Andre"}, friend={"name": "Maya"},
+                        reward={"amount_cents": 1500, "code": "THANKS-7KQ2"}, book=BOOK, own_link=None, words=mine)
+    assert w == {"subject": "Maya says hi!", "email": f"Hey Andre! Take $15 off with THANKS-7KQ2.\n{BOOK}?offer=THANKS-7KQ2",
+                 "text": "THANKS-7KQ2 = $15 off. Thanks, Andre!"}
+    # A line that drops (no booking page) taking the code with it: the suggested words, so the code arrives.
+    risky = {"email": "Hi {{first_name}}\nBook with {{code}}: {{book_link}}"}
+    w = rf.thanks_words(business={"name": "N"}, referrer={"name": "Andre"}, friend=None,
+                        reward={"amount_cents": 1000, "code": "THANKS-7KQ2"}, book=None, own_link=None, words=risky)
+    assert "THANKS-7KQ2" in w["email"] and w["email"].startswith("Hi Andre,\n\nYour friend came in")
+    assert rf.check_words({"email": " {{code}} thanks "}) == {"email": "{{code}} thanks"}
+    for bad, why in (({"email": "no code here"}, "Keep {{code}}"), ({"text": ""}, "can't be empty"),
+                     ({"subject": "x" * 151}, "longer than 150"), ({"footer": "x"}, "subject, the email or the text")):
+        with pytest.raises(ValueError, match=re.escape(why)):
+            rf.check_words(bad)
 
 
 def test_codes_are_sayable_and_fit_an_offer_code():
@@ -168,6 +193,21 @@ def test_a_thank_you_is_for_the_regular_once(monkeypatch):
     assert ev("THANKS-7KQ2", contact=C_REF)["why"] == "You've already used this thank-you."
 
 
+def test_a_thank_you_with_an_end_day(monkeypatch):
+    reward = {"id": RID, "code": "THANKS-7KQ2", "referrer_contact_id": C_REF, "amount_cents": 1000,
+              "expires_on": "2026-10-14"}
+    Reads(monkeypatch, reward=reward)
+    assert ev("THANKS-7KQ2", contact=C_REF)["why"] == "This thank-you ended Oct 14."
+    Reads(monkeypatch, reward={**reward, "expires_on": "2026-10-15"})                 # its last day: still good
+    assert ev("THANKS-7KQ2", contact=C_REF)["applies"] is True
+    Reads(monkeypatch, reward={"amount_cents": 1000, "expires_on": "2099-11-01"})
+    assert rf.public_words(BIZ, "THANKS-7KQ2")["when"] == "Through Sun, Nov 1"
+    Reads(monkeypatch, reward={"amount_cents": 1000, "expires_on": "2020-01-01"})
+    assert rf.public_words(BIZ, "THANKS-7KQ2") is None
+    assert rf.expiry(prog(thanks_days=30), {"id": BIZ}, NOW).isoformat() == "2026-11-14"
+    assert rf.expiry(prog(), {"id": BIZ}, NOW) is None
+
+
 def test_the_booking_page_shows_the_friends_offer_while_it_is_on(monkeypatch):
     Reads(monkeypatch, link=LINK, names={C_REF: "Andre Smith"})
     assert rf.public_words(BIZ, "andre-7k") == {"code": "ANDRE-7K", "title": "$10 off your first visit, from Andre",
@@ -217,6 +257,8 @@ class Store:
                 return []
             if path.startswith("/offers?") and "source=eq.referral" in path:
                 return [program] if program else []
+            if path.startswith("/businesses?"):
+                return [{"id": BIZ, "settings": {}}]
             if path.startswith("/invoices?"):
                 assert f"business_id=eq.{BIZ}" in path and "status=eq.paid" in path
                 return list(invoices)
@@ -241,6 +283,9 @@ def test_a_paid_friends_visit_makes_one_thank_you(monkeypatch):
     s = Store(monkeypatch, entries=[friend_entry(E2, paid_at=None)],
               invoices=[{"contact_id": C_FRIEND, "paid_at": "2026-10-14T21:00:00+00:00"}])
     assert rf.issue_paid(NOW) == 1 and s.posts[0][1]["paid_how"] == "invoice"
+    assert s.posts[0][1]["expires_on"] is None                               # no end day set
+    s = Store(monkeypatch, entries=[friend_entry(E1)], program=prog(thanks_days=30))
+    assert rf.issue_paid(NOW) == 1 and s.posts[0][1]["expires_on"] == "2026-11-14"   # 30 days, business clock
 
 
 def test_never_twice_and_never_for_your_own_link(monkeypatch):
@@ -389,6 +434,31 @@ def test_switching_it_on_needs_card_payments_and_makes_the_program(api):
     assert r.status_code == 200 and state["patches"][-1][1]["status"] == "paused"
     assert state["patches"][-1][1]["in_notes"] is False and "source=eq.referral" in state["patches"][-1][0]
     assert client.put(f"/offers/{BIZ}/referral", json={"on": True, "reward_cents": 50}).status_code == 422
+
+
+def test_settings_save_while_it_is_off_and_the_thank_you_settings(api):
+    client, state = api
+    state["ready"] = False                                                   # no card payments yet: settings still save
+    r = client.put(f"/offers/{BIZ}/referral", json={"on": False, "friend_cents": 1500, "reward_cents": 1500})
+    assert r.status_code == 200
+    [(path, row)] = state["posts"]
+    assert row["status"] == "paused" and row["amount_cents"] == 1500 and row["reward_cents"] == 1500
+    assert client.put(f"/offers/{BIZ}/referral", json={"on": False}).status_code == 200    # nothing to set: no new row
+    assert len(state["posts"]) == 1
+    r = client.put(f"/offers/{BIZ}/referral", json={"on": False, "thanks_days": 60,
+                                                    "thanks_words": {"text": "{{code}} for you, {{first_name}}"}})
+    assert r.status_code == 200, r.text
+    body = state["patches"][-1][1]
+    assert body["thanks_days"] == 60 and body["thanks_words"] == {"text": "{{code}} for you, {{first_name}}"}
+    assert body["status"] == "paused"
+    client.put(f"/offers/{BIZ}/referral", json={"on": False, "thanks_words": {"subject": "Thanks!"}})
+    assert state["patches"][-1][1]["thanks_words"] == {"text": "{{code}} for you, {{first_name}}", "subject": "Thanks!"}
+    client.put(f"/offers/{BIZ}/referral", json={"on": False, "thanks_days": 0, "reset_words": True})
+    assert state["patches"][-1][1]["thanks_days"] is None and state["patches"][-1][1]["thanks_words"] is None
+    for bad in ({"on": False, "thanks_days": 3}, {"on": False, "thanks_words": {"email": "no code"}},
+                {"on": False, "thanks_days": 400}):
+        r = client.put(f"/offers/{BIZ}/referral", json=bad)
+        assert r.status_code == 422, bad
 
 
 def test_a_clients_link_to_send_yourself(api):
