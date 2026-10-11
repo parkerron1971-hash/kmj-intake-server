@@ -6,7 +6,7 @@ asked: "ok finish work on it"
 status: waiting on Kevin
 prs: [kmj-intake-server#1356, solutionist-studio#1183]
 migrations: ["APPLY-2026-10-08-square-connections.sql (applied 2026-10-10)", "APPLY-2026-10-09-square-locations.sql (applied 2026-10-10)"]
-left_undone: ["sandbox account consent", "complete real OAuth/preview/disconnect acceptance"]
+left_undone: ["approve and activate free sandbox Appointments", "successful live preview and external-revocation acceptance", "deploy acceptance fixes #1368/#1195"]
 decisions: ["approved read-only pilot; no public production-seller enablement", "preserve current trunk changes"]
 related: [2026-10-09-square-location-preview.md]
 ---
@@ -23,3 +23,5 @@ Rollout: backend #1356 merged as c95fed7311f4739568b741d7a1e59c3df1377667 and Ra
 Frontend production verification: Vercel deployment 7y9ktja9AGdYwMwdMQoxbDpNNzG2 succeeded for merge commit 5e2f91e506277620912ff3a7a24f47216b5e51ab. The public app entry leads to main-D0XPMhsB.js → PractitionerBuild-C1Q1TaIF.js → IntegrationsHub-Bp0sUXql.js; the final asset contains Square Appointments and /square/bookings/preview. Both implementation deployments are complete. The remaining handoff is only private secret configuration and real sandbox acceptance after Square sign-in.
 
 Sign-in continuation: securely transferred the existing Sandbox OAuth application secret into Railway and enabled the sandbox-only, single-owner pilot. Activation deployment bfe499a8-e7d0-4c3f-8a00-6ab8b5326e70 succeeded at the existing backend merge commit. Launched Default Test Account in the Sandbox Seller Dashboard. The deployed Solutionist Square card shows Sandbox / Not connected and its Connect button successfully reaches Square consent with appointment, all-appointment/calendar, and merchant-profile reads only. Browser action-time permission confirmation requested at the actual consent screen; no grant, callback or preview success is claimed while it is pending. No payment settings changed.
+
+Approved-consent continuation: real OAuth callback succeeded; Default Test Account location discovered and saved; disconnect completed with Square grant revocation and cleared location state; reconnect callback succeeded. Booking preview returned the specific Square condition Merchant not onboarded to Appointments (401 UNAUTHORIZED), confirmed in the Square API log. Automatic approval review blocked free sandbox Appointments activation pending specific approval, now requested. Separate backend #1368 and frontend #1195 correct misleading setup/authorization messages; the frontend also guards an existing null email status on the OAuth return page. Focused tests: 49 backend and 26 browser passed; typecheck gates passed with zero live errors and the existing 14 legacy baseline. Successful live preview and external-revocation acceptance remain unverified.
