@@ -32,11 +32,12 @@ HOW TO POINT THIS SOMEWHERE ELSE
   follows it — that is the HIPAA-eligible-endpoint swap, and it is now a
   one-env-var change instead of a 36-file edit. Unset = api.anthropic.com.
 
-WHERE THE ORCHESTRATOR GOES LATER
-  `apost`/`post`/`sdk_client` all accept an optional `task=` hint. Today it
-  is metadata and changes no routing. When Section 8 lands, `_route(task)`
-  becomes the one function that maps a task to a model/provider, and no
-  business logic has to move to get there.
+WHERE THE ORCHESTRATOR GOES
+  `post_lane(lane, payload)` (Layer Two, 2026-10-11) is the lane-based entry:
+  lane_registry maps each lane to a provider and model, Anthropic by default,
+  any OpenAI-compatible endpoint by config, always with the lane's Claude
+  model as the fallback. `apost`/`post`/`sdk_client` keep their optional
+  `task=` hint, which is still metadata and changes no routing.
 
 WHAT THIS IS NOT
   Not a retry/fallback policy. `model_ladder.py` already owns that for the
@@ -348,6 +349,120 @@ def post(payload: Optional[Dict[str, Any]] = None,
     )
     _meter(resp, payload, caller, started, business_id=business_id, units=units)
     return resp
+
+
+# ──────────────────────────────────────────────────────────────
+# Lanes (Layer Two workstream D): one call, any provider, Claude fallback
+# ──────────────────────────────────────────────────────────────
+
+# Keys an OpenAI-compatible provider can honour. Anything else in the payload
+# (tools, betas, output config...) is Anthropic-only, so the call stays on Claude.
+_PORTABLE_KEYS = {"model", "max_tokens", "system", "messages", "thinking",
+                  "stop_sequences", "metadata", "temperature"}
+
+
+def _blocks_text(content: Any) -> Optional[str]:
+    """Plain text of a system or message content, or None when it holds
+    anything but text (images, documents, tool blocks, cache markers)."""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    out = []
+    for b in content:
+        if not isinstance(b, dict) or b.get("type") != "text" or b.get("cache_control"):
+            return None
+        out.append(str(b.get("text") or ""))
+    return "\n".join(out)
+
+
+def needs_anthropic(payload: Dict[str, Any]) -> Optional[str]:
+    """Why this call must stay on Claude, or None if it is portable."""
+    extra = sorted(k for k in (payload or {}) if k not in _PORTABLE_KEYS)
+    if extra:
+        return "uses " + ", ".join(extra)
+    thinking = (payload or {}).get("thinking")
+    if thinking and (not isinstance(thinking, dict) or thinking.get("type") != "disabled"):
+        return "uses extended thinking"
+    if "system" in payload and _blocks_text(payload["system"]) is None:
+        return "system prompt has non-text or cached blocks"
+    for m in payload.get("messages") or []:
+        if _blocks_text((m or {}).get("content")) is None:
+            return "a message has non-text or cached blocks"
+    return None
+
+
+def _openai_compatible(route, payload: Dict[str, Any], timeout: Any) -> httpx.Response:
+    """Call an OpenAI-compatible /chat/completions and answer in the
+    Anthropic Messages shape, so callers parse it exactly as before."""
+    messages = []
+    system = _blocks_text(payload.get("system")) if "system" in payload else None
+    if system:
+        messages.append({"role": "system", "content": system})
+    for m in payload.get("messages") or []:
+        messages.append({"role": m.get("role"), "content": _blocks_text(m.get("content")) or ""})
+    body: Dict[str, Any] = {"model": route.model, "messages": messages,
+                            "max_tokens": int(payload.get("max_tokens") or 1024)}
+    if payload.get("stop_sequences"):
+        body["stop"] = list(payload["stop_sequences"])[:4]
+    url = f"{route.base_url}/chat/completions"
+    r = httpx.post(url, json=body, timeout=DEFAULT_TIMEOUT if timeout is None else timeout,
+                   headers={"Authorization": f"Bearer {os.environ.get(route.key_env or '', '')}",
+                            "Content-Type": "application/json"})
+    r.raise_for_status()
+    data = r.json()
+    choice = (data.get("choices") or [{}])[0]
+    text = str(((choice.get("message") or {}).get("content")) or "").strip()
+    if not text:
+        raise RuntimeError("empty completion")
+    usage = data.get("usage") or {}
+    shaped = {
+        "id": data.get("id") or "",
+        "type": "message", "role": "assistant",
+        "model": data.get("model") or route.model,
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "max_tokens" if choice.get("finish_reason") == "length" else "end_turn",
+        "usage": {"input_tokens": int(usage.get("prompt_tokens") or 0),
+                  "output_tokens": int(usage.get("completion_tokens") or 0)},
+        "_provider": route.provider,
+    }
+    return httpx.Response(200, json=shaped, request=httpx.Request("POST", url))
+
+
+def post_lane(lane: str,
+              payload: Dict[str, Any],
+              *,
+              plan: Optional[str] = None,
+              timeout: Any = None,
+              task: Optional[str] = None,
+              business_id: Optional[str] = None,
+              units: Optional[int] = None) -> httpx.Response:
+    """Synchronous call on a LANE rather than a model. The lane registry
+    decides provider and model (lane_registry.route_for). Anthropic lanes
+    behave exactly like post(). A non-Anthropic lane is tried first and
+    falls back to the lane's Claude model on any failure, and a call that
+    uses Anthropic-only features never leaves Claude. Metered either way."""
+    import lane_registry
+    route = lane_registry.route_for(lane, plan)
+    payload = dict(payload or {})
+    if not route.is_anthropic:
+        why = needs_anthropic(payload)
+        if why:
+            print(f"[route] lane {lane}: call {why}; staying on {route.fallback_model}", flush=True)
+        else:
+            caller, started = _caller_module(), time.time()
+            try:
+                resp = _openai_compatible(route, payload, timeout)
+                _meter(resp, {**payload, "model": route.model}, caller, started,
+                       business_id=business_id, units=units)
+                return resp
+            except Exception as e:
+                print(f"[route] lane {lane}: {route.provider}/{route.model} failed "
+                      f"({type(e).__name__}); falling back to {route.fallback_model}", flush=True)
+        payload["model"] = route.fallback_model
+        return post(payload, timeout=timeout, task=task or lane, business_id=business_id, units=units)
+    payload.setdefault("model", route.model)
+    return post(payload, timeout=timeout, task=task or lane, business_id=business_id, units=units)
 
 
 def astream(client: httpx.AsyncClient,
