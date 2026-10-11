@@ -20,6 +20,36 @@ router = APIRouter(prefix="/voice", tags=["voice-depth"])
 logger = logging.getLogger("voice_depth_router")
 
 
+def _audit_rule_change(owner_id: str, verb: str, summary: str,
+                       payload: Dict[str, Any]) -> None:
+    """Ledger row for a voice-rule change made on a settings screen.
+
+    The chat path is audited by record_chief_turn; these REST routes wrote
+    nothing, so a rule added or removed in Brand Studio left no trace.
+    Voice rules belong to the OWNER and shape every one of their
+    businesses, so the row goes to each business they own (almost always
+    one). Best-effort: a ledger hiccup never fails the owner's edit.
+    """
+    try:
+        import audit_log
+        import sb_clients
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?owner_id=eq.{owner_id}&select=id&limit=10") or []
+        for r in rows:
+            bid = (r or {}).get("id")
+            if bid:
+                audit_log.record(bid, actor_type="user", actor_id=owner_id,
+                                 verb=verb, ok=True, summary=summary[:500],
+                                 payload=payload, source="desktop")
+    except Exception as e:
+        logger.warning(f"voice rule audit failed: {e}")
+
+
+def _short(rule: str, n: int = 80) -> str:
+    rule = " ".join(str(rule or "").split())
+    return rule if len(rule) <= n else rule[: n - 1].rstrip() + "…"
+
+
 @router.get("/health")
 def health() -> JSONResponse:
     return JSONResponse({"ok": True, "service": "voice-depth"})
@@ -74,6 +104,11 @@ def add_rule(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(req
     result = voice_depth_agent.add_voice_rule(owner_id, list_name, rule)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "add failed"))
+    if not result.get("duplicate"):
+        kind = "do" if list_name == "voice_dos" else "don't"
+        _audit_rule_change(owner_id, "add_voice_rule",
+                           f"Added voice {kind}: {_short(rule)}",
+                           {"list": list_name, "rule": str(rule)[:500]})
     return JSONResponse(result)
 
 
@@ -81,18 +116,29 @@ def add_rule(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(req
 def remove_rule(owner_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)) -> JSONResponse:
     if user.id != owner_id:
         raise HTTPException(status_code=403, detail="Not your voice profile")
-    """Body: {list: 'voice_dos'|'voice_donts', idx: 0}"""
+    """Body: {list: 'voice_dos'|'voice_donts', idx: 0, rule?: '<exact text>'}
+
+    `rule` makes the removal name the rule by text; idx alone still works.
+    """
     list_name = (body or {}).get("list")
     idx = (body or {}).get("idx")
-    if list_name is None or idx is None:
+    rule = (body or {}).get("rule")
+    rule = rule.strip() if isinstance(rule, str) else ""
+    if list_name is None or (idx is None and not rule):
         raise HTTPException(status_code=400, detail="Missing list or idx")
-    try:
-        idx_int = int(idx)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="idx must be an integer")
-    result = voice_depth_agent.remove_voice_rule(owner_id, list_name, idx_int)
+    idx_int = None
+    if idx is not None:
+        try:
+            idx_int = int(idx)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="idx must be an integer")
+    result = voice_depth_agent.remove_voice_rule(owner_id, list_name, idx_int, rule or None)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "remove failed"))
+    removed = str(result.get("removed") or "")
+    _audit_rule_change(owner_id, "remove_voice_rule",
+                       f"Voice rule removed: {_short(removed)}" if removed else "Voice rule removed",
+                       {"list": list_name, "rule": removed[:500]})
     return JSONResponse(result)
 
 

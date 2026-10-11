@@ -373,9 +373,12 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "sellable and what is blocking the ones that are not.",
         _NO_ARGS),
     "recall_conversation": (
-        "Search earlier conversation with Chief by meaning, not keyword.",
+        "Find earlier conversations with Chief that mention a word or "
+        "phrase, from the last 7 days. Matches the words as typed, not "
+        "their meaning, so search for a name or a distinctive term.",
         _obj({"query": {"type": "string",
-                        "description": "What to look for."}},
+                        "description": "A word or phrase that appears in "
+                                       "the conversation."}},
              ["query"])),
     "show_revenue": (
         "Revenue figures for this business.",
@@ -431,10 +434,19 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "business. Returns the proposal and saves NOTHING. Costs model "
         "tokens, so do not call it speculatively.",
         _NO_ARGS),
+    # The handler needs both arguments; this used to be _NO_ARGS, so every
+    # call failed "Missing or invalid list/rule" before reaching the owner.
     "propose_voice_rule": (
         "Suggest a writing-voice rule from observed edits. Returns the "
         "suggestion and stores nothing.",
-        _NO_ARGS),
+        _obj({"list": {"type": "string", "enum": ["voice_dos", "voice_donts"],
+                       "description": "voice_dos for something to always do, "
+                                      "voice_donts for something to never do."},
+              "rule": {"type": "string",
+                       "description": "The rule in one short sentence, in the "
+                                      "owner's terms, e.g. 'Open client texts "
+                                      "with their first name.'"}},
+             ["list", "rule"])),
     # Deliberately exposed (tripwire bump 19 → 21). campaign_status is
     # operational marketing state — the same class as list_scheduled and
     # site_health, both already here; audience members are counted, never

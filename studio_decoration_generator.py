@@ -448,6 +448,12 @@ def call_gpt(prompt, max_tokens=2500):
     response.raise_for_status()
     response.encoding = "utf-8"
     data = _decode_utf8_response(response)
+    # This call goes straight to OpenAI, so the llm_call seam never saw it
+    # and it was never metered (2026-10-11). units=0: it's a cost row, and
+    # the action that ran it is priced on its own row.
+    import api_usage_logger
+    api_usage_logger.meter_openai_usage(
+        "/studio/decoration-validator", data, fallback_model=GPT_MODEL, units=0)
     return data["choices"][0]["message"]["content"]
 
 

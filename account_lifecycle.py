@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "chief_reflection_runs": "nightly brain-pass run log (status, tokens, cost); operations metadata, not the business's content; the digest it wrote is exported in business_brain_versions; cascade on business deletion",
     "square_booking_sync": "temporary Square appointment copies; reconnect and opt in to sync; cascade through square_connections",
     "square_connections": "encrypted Square OAuth credentials and one-time login state; never portable, cascade on business deletion",
     "chief_event_deliveries": "internal worker leases and replay fences; not portable, cascade on business deletion",
@@ -205,6 +206,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "chief_assignments",      # the outcomes they handed Chief + its moves log (9/4)
     "chief_cases",            # problems Chief diagnosed, forecasts and results (10/5)
     "chief_moves",            # what came of each of Chief's moves (9/4)
+    "business_brain_versions",  # each distinct brain the business had: exported, so the brain travels with the business (10/11)
     "chief_proposals",
     "chief_bookkeeping_proposals",
     "chief_learning_signals",
