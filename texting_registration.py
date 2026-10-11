@@ -1,10 +1,11 @@
-"""texting_registration.py — texting under each business's own name (ISV), step 1.
+"""texting_registration.py — texting under each business's own name (ISV).
 
 docs/plans/ISV_TEXTING_PLAN_2026-10-11.md (Kevin, 2026-10-11: "write up the
 isv build plan and start it"). Twilio's rules for a platform like ours: each
 business that texts is registered as its OWN brand with its own campaign,
-because one campaign for many companies is rejected (error 30926). Step 1
-builds everything Twilio's reviewers check, with no Twilio calls and no money:
+because one campaign for many companies is rejected (error 30926).
+
+Step 1, everything Twilio's reviewers check (no Twilio calls, no money):
 
   THE PAGES. Each business site serves /texting-terms and /texting-privacy in
   the business's own name: who texts, what about, how often, STOP and HELP,
@@ -17,28 +18,56 @@ builds everything Twilio's reviewers check, with no Twilio calls and no money:
   sends, who receives and why, the message flow quoting the opt-in boxes,
   sample messages that name the business, and the keyword replies.
 
-  THE ANSWERS. What only the owner knows (legal name, business type, address,
-  website, the person Twilio may contact), saved in texting_registrations.
-  NEVER the EIN: it is typed at submit (step 3) and goes straight to Twilio;
-  here only whether there is one.
+  THE ANSWERS. What only the owner knows (legal name, business type,
+  industry, address, website, the person Twilio may contact), saved in
+  texting_registrations. The EIN is NOT kept here: it lives once, with the
+  business's other legal details (business_profiles.ein, the same place
+  About Your Business and the 1099 panel keep it; Kevin, 2026-10-11: "we can
+  store EIN numbers because we created a place to have them"). This table
+  still refuses an "ein" key so it never becomes a second copy.
 
-  READINESS. What a reviewer will look for, checked: the site is live, booking
-  is live, the pages answer, the answers are complete.
+  READINESS. What a reviewer will look for, checked: the site is live,
+  booking is live, the pages answer, the answers and the EIN are in.
+
+Step 3, sending it and keeping the owner posted (texting_isv.py talks to
+Twilio; a sub-account per business, Kevin's decision D3):
+
+  SEND. POST /texting/registration/{biz}/send (owner): status `submitted`
+  first (so a second press can't send twice), then in the background the
+  sub-account, profile, trust product, brand and messaging service, and
+  status `brand_pending`. Twilio's own check failing → `failed` with its
+  reasons, and the owner can fix the details and send again.
+
+  ALONG THE WAY. Twilio's status pings (POST /texting/twilio-status) and a sweep
+  every 15 minutes ask Twilio where each registration stands: the campaign
+  goes in once the brand is approved (`campaign_pending`), then `approved`,
+  or `failed` with the carriers' reasons. A registration whose sending was
+  cut short (a deploy, Twilio down) is picked up where it stopped.
+
+  UPDATES. Every change is told to the owner in the app, by push and by
+  email, in plain words, and shows on the registration screen.
+
+  OPEN. TEXTING_REGISTRATION_OPEN: unset = nobody can send yet (our primary
+  profile must be "ISV Reseller or Partner" first, ticket #29903903), `*` =
+  every business, or a comma list of business ids (the pilot).
 """
 from __future__ import annotations
 
 import asyncio
 import html
 import logging
+import os
 import re
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import sb_clients
+import texting_isv
 from business_access import business_access
 
 logger = logging.getLogger("texting_registration")
@@ -48,19 +77,29 @@ router = APIRouter(prefix="/texting", tags=["texting"])
 USE_CASE = "LOW_VOLUME"            # Twilio's "Low Volume Mixed"
 BUSINESS_TYPES = {"sole_proprietor": "Sole proprietor", "llc": "LLC", "corporation": "Corporation",
                   "partnership": "Partnership", "nonprofit": "Nonprofit"}
+INDUSTRIES = texting_isv.INDUSTRIES
 STATES = set("AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY "
              "NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY PR".split())
 PRIVACY_LINE = ("We do not sell or share your mobile number or your SMS opt-in data and consent with third "
                 "parties or affiliates for their marketing purposes.")
 TERMS_PATH, PRIVACY_PATH = "/texting-terms", "/texting-privacy"
 
+# The statuses an owner can still edit and send from.
+EDITABLE = ("draft", "failed")
+IN_FLIGHT = ("submitted", "brand_pending", "campaign_pending")
+SWEEP_LIMIT = 50
+STALL_MINUTES = 5      # a `submitted` row untouched this long is resumed by the sweep
+POKE_SECONDS = 60      # Twilio's status pings, at most one check a minute per business
+
 
 class Answers(BaseModel):
     """What the owner tells us for Twilio. extra="forbid": an "ein" key is
-    refused, so a tax ID can never be saved here by mistake."""
+    refused, so a tax ID can never be saved here (it lives in the business's
+    details; see PUT .../ein)."""
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     legal_name: str = Field(min_length=2, max_length=120)
     business_type: str
+    industry: Optional[str] = None
     has_ein: bool
     street: str = Field(min_length=3, max_length=120)
     city: str = Field(min_length=2, max_length=80)
@@ -77,6 +116,8 @@ class Answers(BaseModel):
     def check(self):
         if self.business_type not in BUSINESS_TYPES:
             raise ValueError("Choose sole proprietor, LLC, corporation, partnership or nonprofit.")
+        if self.industry is not None and self.industry not in INDUSTRIES:
+            raise ValueError("Choose the industry closest to your business.")
         self.state = self.state.upper()
         if self.state not in STATES:
             raise ValueError("Use the two-letter state, like MI.")
@@ -94,6 +135,19 @@ class Answers(BaseModel):
         self.rep_phone = "+" + digits
         if self.business_type == "sole_proprietor" and self.has_ein:
             raise ValueError("A sole proprietor with an EIN registers as an LLC or the business type on the EIN.")
+        return self
+
+
+class EinIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    ein: str
+
+    @model_validator(mode="after")
+    def check(self):
+        digits = re.sub(r"\D", "", self.ein)
+        if len(digits) != 9 or self.ein.replace("-", "").replace(" ", "") != digits:
+            raise ValueError("Use the nine-digit EIN, like 12-3456789.")
+        self.ein = f"{digits[:2]}-{digits[2:]}"
         return self
 
 
@@ -237,7 +291,7 @@ def privacy_html(name: str, origin: str, contact_email: Optional[str] = None) ->
     return _page("Text messaging privacy policy", name, body, origin)
 
 
-# ── the answers and readiness ─────────────────────────────────────────
+# ── the answers, the EIN and readiness ────────────────────────────────
 
 def _read(path: str) -> List[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(path)
@@ -260,8 +314,25 @@ def site_origin(business_id: str) -> Optional[str]:
     return links.origin(site) if site else None
 
 
+def ein_for(business_id: str, business: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """The business's EIN from where it already keeps it (business_profiles,
+    with the legacy 1099 payer blob as the fallback), or None."""
+    import business_identity
+    ein = business_identity.get_identity(business_id, business).get("ein") or ""
+    digits = re.sub(r"\D", "", ein)
+    return f"{digits[:2]}-{digits[2:]}" if len(digits) == 9 else None
+
+
+def is_open(business_id: str) -> bool:
+    """Whether this business can send its registration (see OPEN above)."""
+    raw = (os.environ.get("TEXTING_REGISTRATION_OPEN") or "").strip()
+    if raw == "*":
+        return True
+    return str(business_id) in {x.strip() for x in raw.split(",") if x.strip()}
+
+
 def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], origin: Optional[str],
-              bookable: Optional[bool]) -> List[Dict[str, Any]]:
+              bookable: Optional[bool], ein_on_file: Optional[bool] = None) -> List[Dict[str, Any]]:
     """What Twilio's reviewers look for, each {key, ok, label, fix}. A check
     that couldn't be read is ok None (never a guess)."""
     out = [
@@ -275,6 +346,28 @@ def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], or
         {"key": "answers", "ok": bool(answers), "label": "Your business details for the registration",
          "fix": "Add your legal business name, address and the person Twilio can contact."},
     ]
+    if answers and answers.get("has_ein"):
+        if answers.get("business_type") != "nonprofit":
+            out.append({"key": "industry", "ok": answers.get("industry") in INDUSTRIES,
+                        "label": "Your industry", "fix": "Choose the industry closest to your business."})
+        out.append({"key": "ein", "ok": ein_on_file, "label": "Your EIN is on file",
+                    "fix": "Add your EIN below. It's kept with your business's legal details."})
+    return out
+
+
+def _stage(status: str) -> List[Dict[str, Any]]:
+    """The three steps the owner watches, each done / now / next / failed."""
+    order = ["business", "campaign", "live"]
+    labels = {"business": "Twilio checks your business (minutes to a few days)",
+              "campaign": "Carriers review how you text (usually about 2 weeks)",
+              "live": "You text under your own name"}
+    at = {"submitted": 0, "brand_pending": 0, "campaign_pending": 1, "approved": 3}.get(status)
+    out = []
+    for i, key in enumerate(order):
+        state = "next"
+        if at is not None:
+            state = "done" if i < at else ("now" if i == at else "next")
+        out.append({"key": key, "label": labels[key], "state": state})
     return out
 
 
@@ -295,24 +388,48 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
         bookable = await asyncio.to_thread(links.bookable, bid, business)
     except Exception as e:
         logger.warning("texting registration: booking unread for %s: %s", bid[:8], e)
+    ein: Optional[str] = None
+    ein_known = True
+    try:
+        ein = await asyncio.to_thread(ein_for, bid, business)
+    except Exception as e:
+        logger.warning("texting registration: EIN unread for %s: %s", bid[:8], e)
+        ein_known = False
     answers = (row or {}).get("answers") or None
     name = str((answers or {}).get("legal_name") or business.get("name") or "Your business")
     shown_name = str(business.get("name") or name)
+    status = (row or {}).get("status") or "not_started"
+    checks = readiness(business, answers=answers, origin=origin, bookable=bookable,
+                       ein_on_file=bool(ein) if ein_known else None)
+    open_ = is_open(bid)
+    ready = all(c["ok"] is True for c in checks)
+    twilio = (row or {}).get("twilio") or {}
+    rejected = bool(twilio.get("rejected_after_review"))
+    sendable = bool(open_ and ready and status in EDITABLE and not rejected and (answers or {}).get("has_ein"))
     return {
-        "status": (row or {}).get("status") or "not_started",
+        "status": status,
         "answers": answers,
         "brand_path": brand_path(answers),
-        "readiness": readiness(business, answers=answers, origin=origin, bookable=bookable),
+        "readiness": checks,
         "words": campaign_words(shown_name, origin) if origin else None,
         "pages": {"terms": f"{origin}{TERMS_PATH}", "privacy": f"{origin}{PRIVACY_PATH}"} if origin else None,
         "business_types": BUSINESS_TYPES,
+        "industries": INDUSTRIES,
+        "ein": {"on_file": bool(ein), "last4": ein[-4:] if ein else None} if ein_known else None,
+        "open": open_,
+        "can_send": sendable,
+        "steps": _stage(status),
+        "failure": (row or {}).get("failure") if status == "failed" else None,
+        "rejected_after_review": rejected,
+        "sent_at": twilio.get("sent_at"),
     }
 
 
 @router.get("/registration/{business_id}")
 async def get_registration(business_id: str, biz: dict = Depends(business_access("owner"))):
-    """The owner's texting registration: answers, readiness, and the words
-    Twilio will read. Owner only (it holds the representative's details)."""
+    """The owner's texting registration: answers, readiness, the words Twilio
+    will read, and where it stands. Owner only (it holds the representative's
+    details)."""
     return {"ok": True, **await overview(biz)}
 
 
@@ -326,7 +443,7 @@ async def save_registration(business_id: str, body: Answers, biz: dict = Depends
         current = await asyncio.to_thread(registration, bid)
     except RuntimeError:
         raise HTTPException(503, "Your details couldn't be saved just now. Nothing changed.") from None
-    if current and current.get("status") not in (None, "draft", "failed"):
+    if current and current.get("status") not in (None, *EDITABLE):
         raise HTTPException(409, "Your registration is with Twilio already, so these details can't change here. "
                                  "If something is wrong, tell us and we'll update it with Twilio.")
     saved = await asyncio.to_thread(
@@ -335,6 +452,290 @@ async def save_registration(business_id: str, body: Answers, biz: dict = Depends
     if not saved:
         raise HTTPException(503, "Your details couldn't be saved just now. Nothing changed.")
     return {"ok": True, **await overview(biz)}
+
+
+@router.put("/registration/{business_id}/ein")
+async def save_ein(business_id: str, body: EinIn, biz: dict = Depends(business_access("owner"))):
+    """Keep the EIN with the business's legal details (business_profiles.ein,
+    the one place it lives). Owner only; never written to the registration."""
+    bid = str(UUID(str(biz["id"])))
+    import business_identity
+    written = await asyncio.to_thread(business_identity.set_identity, bid, ein=body.ein)
+    if not written:
+        raise HTTPException(503, "Your EIN couldn't be saved just now. Nothing changed.")
+    return {"ok": True, **await overview(biz)}
+
+
+# ── sending it, and where it stands ───────────────────────────────────
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _patch(business_id: str, fields: Dict[str, Any], *, when: Optional[tuple] = None) -> Optional[List[Any]]:
+    """Update the row; with `when`, only from those statuses. The rows
+    changed, [] when the status had moved on, None when the write failed."""
+    path = f"/texting_registrations?business_id=eq.{business_id}"
+    if when:
+        path += f"&status=in.({','.join(when)})"
+    res = sb_clients.sb_patch_as_service(path, {**fields, "updated_at": _now().isoformat()})
+    return res if isinstance(res, list) else None
+
+
+def _saver(business_id: str):
+    """Save the Twilio ids as each step lands, so a cut-short send resumes."""
+    def save(t: Dict[str, Any]) -> None:
+        if _patch(business_id, {"twilio": {**t, "touched_at": _now().isoformat()}}) is None:
+            raise texting_isv.TwilioDown("the registration couldn't be saved")
+    return save
+
+
+UPDATES = {
+    "brand_pending": ("Your texting registration is with Twilio",
+                      "We sent {name}'s registration. Twilio checks the business first (minutes to a few days), "
+                      "then the carriers review how you text (usually about 2 weeks). We'll tell you at each step."),
+    "campaign_pending": ("Twilio verified {name}",
+                         "Next, the carriers review how {name} texts its clients. That usually takes about 2 weeks."),
+    "approved": ("{name} can text under its own name",
+                 "The carriers approved {name}'s texting. Your texts can now go out under your own name."),
+    "failed": ("Your texting registration needs a fix",
+               "{reasons} Open Operate, Text, Your name on texts to see what to change."),
+}
+
+
+async def _tell_owner(business: Dict[str, Any], status: str, reasons: Optional[List[str]] = None) -> Dict[str, bool]:
+    """In the app, by push and by email; each best-effort, none can undo the
+    status change."""
+    if status not in UPDATES:
+        return {}
+    name = str(business.get("name") or "Your business")
+    title, body = (s.format(name=name, reasons=" ".join(reasons or []) or "Twilio sent it back.")
+                   for s in UPDATES[status])
+    out = {"in_app": False, "push": False, "email": False}
+    bid = str(business.get("id"))
+    try:
+        await asyncio.to_thread(sb_clients.sb_post_as_service, "/chief_notifications", {
+            "business_id": bid, "type": "alert" if status == "failed" else "info",
+            "title": title[:120], "body": body[:600], "priority": "high" if status == "failed" else "normal",
+            "status": "unread",
+            "data": {"kind": f"texting_registration_{status}", "nav": {"tab": "operate", "sub": "sms"}}})
+        out["in_app"] = True
+    except Exception as e:
+        logger.warning("texting update in-app failed for %s: %s", bid[:8], e)
+    try:
+        import push_notifications
+        out["push"] = bool(await asyncio.to_thread(push_notifications.send_to_business, bid, title=title,
+                                                   body=body[:180], nav="operate:sms",
+                                                   tag=f"texting-registration-{status}"))
+    except Exception as e:
+        logger.warning("texting update push failed for %s: %s", bid[:8], e)
+    try:
+        import email_domain_monitor
+        import email_sender
+        to_email = await email_domain_monitor._owner_email(str(business.get("owner_id") or ""))
+        if to_email:
+            await email_sender.send_via_resend(
+                to_email=to_email, to_name=None,
+                from_email=os.environ.get("RESEND_FROM_EMAIL") or email_sender.DEFAULT_FROM_EMAIL,
+                from_name=email_sender.DEFAULT_FROM_NAME, subject=title, body=body, reply_to=None)
+            out["email"] = True
+    except Exception as e:
+        logger.warning("texting update email failed for %s: %s", bid[:8], e)
+    return out
+
+
+def _business(business_id: str) -> Optional[Dict[str, Any]]:
+    rows = _read(f"/businesses?id=eq.{UUID(str(business_id))}&select=*&limit=1")
+    return rows[0] if rows else None
+
+
+async def _send(business: Dict[str, Any], row: Dict[str, Any]) -> str:
+    """Steps 0 to 4 for one business, from wherever it stopped. Returns the
+    status it ends in."""
+    bid = str(business["id"])
+    answers = row.get("answers") or {}
+    t = dict(row.get("twilio") or {})
+    try:
+        ein = await asyncio.to_thread(ein_for, bid, business)
+        if not ein:
+            raise texting_isv.NeedsFix(["Add your EIN: it's needed to register the business."])
+        origin = await asyncio.to_thread(site_origin, bid)
+        if not origin:
+            raise texting_isv.NeedsFix(["Publish your website: Twilio's reviewers open it."])
+        shown = str(business.get("name") or answers.get("legal_name"))
+        t.setdefault("campaign_words", campaign_words(shown, origin))
+        t.setdefault("sent_at", _now().isoformat())
+        await asyncio.to_thread(
+            texting_isv.send, t, business_id=bid, name=shown, answers=answers, ein=ein,
+            website=answers.get("website") or origin,
+            callback=f"{texting_isv.webhook_base()}/texting/twilio-status", save=_saver(bid))
+    except texting_isv.NeedsFix as e:
+        await asyncio.to_thread(_patch, bid, {"status": "failed", "failure": " ".join(e.reasons)[:1000]},
+                                when=("submitted",))
+        await _tell_owner(business, "failed", e.reasons)
+        return "failed"
+    except texting_isv.TwilioRefused as e:
+        logger.warning("texting registration refused for %s: %s", bid[:8], e)
+        reasons = [f"Twilio said: {e.message}"]
+        await asyncio.to_thread(_patch, bid, {"status": "failed", "failure": reasons[0][:1000]}, when=("submitted",))
+        await _tell_owner(business, "failed", reasons)
+        return "failed"
+    except (texting_isv.TwilioDown, RuntimeError) as e:
+        # Nothing wrong with the business: the sweep picks it up again.
+        logger.warning("texting registration for %s paused: %s", bid[:8], e)
+        return "submitted"
+    moved = await asyncio.to_thread(_patch, bid, {"status": "brand_pending", "failure": None}, when=("submitted",))
+    if moved:
+        await _tell_owner(business, "brand_pending")
+    return "brand_pending"
+
+
+async def _check(business: Dict[str, Any], row: Dict[str, Any]) -> str:
+    """Ask Twilio where a sent registration stands and move it along."""
+    bid = str(business["id"])
+    t = dict(row.get("twilio") or {})
+    status = str(row.get("status"))
+    try:
+        res = await asyncio.to_thread(texting_isv.check, t, _saver(bid))
+    except texting_isv.TwilioRefused as e:
+        logger.warning("texting check refused for %s: %s", bid[:8], e)
+        return status
+    except (texting_isv.TwilioDown, RuntimeError) as e:
+        logger.warning("texting check for %s paused: %s", bid[:8], e)
+        return status
+    new = {"brand": "brand_pending", "campaign": "campaign_pending", "approved": "approved",
+           "failed": "failed"}[res["stage"]]
+    if new == status:
+        return status
+    fields: Dict[str, Any] = {"status": new}
+    if new == "failed":
+        # Sent back after review: resending the same registration can't fix
+        # it, so the owner isn't offered that (see send_registration).
+        fields["failure"] = " ".join(res["reasons"])[:1000]
+        fields["twilio"] = {**t, "rejected_after_review": True}
+    moved = await asyncio.to_thread(_patch, bid, fields, when=(status,))
+    if moved:
+        await _tell_owner(business, new, res.get("reasons"))
+    return new
+
+
+async def advance(business_id: str) -> Optional[str]:
+    """Move one registration along: resume a cut-short send, or ask Twilio
+    where it stands. Returns the status it ends in."""
+    try:
+        row = await asyncio.to_thread(registration, business_id)
+        business = await asyncio.to_thread(_business, business_id)
+    except RuntimeError:
+        return None
+    if not row or not business:
+        return None
+    status = row.get("status")
+    if status == "submitted":
+        # Every step a send takes saves the row, so updated_at is its heartbeat.
+        try:
+            fresh = _now() - datetime.fromisoformat(str(row.get("updated_at")).replace("Z", "+00:00")) \
+                < timedelta(minutes=STALL_MINUTES)
+        except ValueError:
+            fresh = False
+        if fresh:
+            return status      # a send is (or just was) running
+        return await _send(business, row)
+    if status in ("brand_pending", "campaign_pending") and (row.get("twilio") or {}).get("brand_sid"):
+        return await _check(business, row)
+    return status
+
+
+@router.post("/registration/{business_id}/send")
+async def send_registration(business_id: str, biz: dict = Depends(business_access("owner"))):
+    """Send the registration to Twilio. Owner only, once: the status turns
+    `submitted` before anything leaves, so a second press is refused."""
+    bid = str(UUID(str(biz["id"])))
+    view = await overview(biz)
+    if not view["open"]:
+        raise HTTPException(409, "Registration isn't open for your business yet. We'll tell you when it is.")
+    if view["status"] not in EDITABLE:
+        raise HTTPException(409, "Your registration is with Twilio already.")
+    if view["rejected_after_review"]:
+        raise HTTPException(409, "Twilio sent your registration back after review. Sending the same one again "
+                                 "won't fix it, so we're taking it up with Twilio and will tell you what happens.")
+    if not (view["answers"] or {}).get("has_ein"):
+        raise HTTPException(409, "Registration here is for businesses with an EIN.")
+    missing = [c["fix"] for c in view["readiness"] if c["ok"] is not True]
+    if missing:
+        raise HTTPException(400, " ".join(missing))
+    moved = await asyncio.to_thread(_patch, bid, {"status": "submitted", "failure": None}, when=EDITABLE)
+    if moved is None:
+        raise HTTPException(503, "Your registration couldn't be sent just now. Nothing was sent.")
+    if not moved:
+        raise HTTPException(409, "Your registration is being sent already.")
+    _background(_send(biz, moved[0]))
+    return {"ok": True, **await overview(biz)}
+
+
+_TASKS: set = set()
+
+
+def _background(coro) -> None:
+    """Run it after the response, holding a reference so it isn't collected
+    mid-send (a deploy can still cut it short; the sweep resumes it)."""
+    task = asyncio.create_task(coro)
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+
+
+_POKED: Dict[str, float] = {}
+_SID = re.compile(r"^(AC|BU)[0-9a-f]{32}$")
+
+
+def _registration_for(sids: List[str]) -> Optional[str]:
+    """The business whose registration holds one of these Twilio ids."""
+    keys = [("account_sid", s) for s in sids if s.startswith("AC")] + \
+           [(k, s) for s in sids if s.startswith("BU") for k in ("profile_sid", "trust_sid")]
+    if not keys:
+        return None
+    ors = ",".join(f"twilio->>{k}.eq.{s}" for k, s in keys)
+    rows = _read(f"/texting_registrations?or=({ors})&select=business_id&limit=1")
+    return str(rows[0]["business_id"]) if rows else None
+
+
+@router.post("/twilio-status")
+async def twilio_status(request: Request):
+    """Twilio's status ping for a business's profile or trust product. Never
+    trusted for what it says: it only names which registration to ask Twilio
+    about ourselves, at most once a minute per business. Nothing matched →
+    nothing happens (the sweep runs every 15 minutes anyway)."""
+    try:
+        form = await request.form()
+        sids = [str(v) for k, v in form.items()
+                if k.lower().replace("_", "") in ("accountsid", "bundlesid", "customerprofilesid", "trustproductsid")
+                and _SID.match(str(v))]
+        bid = await asyncio.to_thread(_registration_for, sids)
+    except Exception as e:
+        logger.warning("texting status ping unread: %s", e)
+        return Response(status_code=204)
+    now = time.monotonic()
+    if bid and now - _POKED.get(bid, 0.0) >= POKE_SECONDS:
+        _POKED[bid] = now
+        _background(advance(bid))
+    return Response(status_code=204)
+
+
+async def sweep_tick() -> Dict[str, Any]:
+    """Every 15 minutes: each registration on its way, moved along."""
+    try:
+        rows = await asyncio.to_thread(
+            _read, f"/texting_registrations?status=in.({','.join(IN_FLIGHT)})"
+                   f"&select=business_id,status&order=updated_at.asc&limit={SWEEP_LIMIT}")
+    except RuntimeError:
+        return {"read": False}
+    moved = 0
+    for r in rows:
+        try:
+            if await advance(str(r["business_id"])) != r.get("status"):
+                moved += 1
+        except Exception as e:
+            logger.warning("texting sweep failed for %s: %s", str(r.get("business_id"))[:8], e)
+    return {"checked": len(rows), "moved": moved}
 
 
 # ── the public pages (public_site serves them on the business's site) ──
