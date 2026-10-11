@@ -208,12 +208,16 @@ def test_a_business_s_own_client_names_never_reach_the_evidence(monkeypatch):
 
 
 def test_names_are_stripped_per_business_and_by_whole_word(monkeypatch):
-    _names_world(monkeypatch, [{"business_id": "b1", "name": "Will Annabelle"}],
+    _names_world(monkeypatch, [{"business_id": "b1", "name": "Will Annabelle"},
+                               {"business_id": "b1", "name": "rosa mcdonald"},
+                               {"business_id": "b1", "name": "Ian McDonald"}],
                  businesses=[{"id": "b2", "name": "Glow Studio"}])
     names = vd._known_names(["b1", "b2"])
     assert vd._unname("Ask Will about Annabelle's rebook", names, "b1") == "Ask [name] about [name]'s rebook"
     assert vd._unname("They will rebook", names, "b1") == "They will rebook", "a lowercase word is not a name"
     assert vd._unname("Annabeller", names, "b1") == "Annabeller", "whole words only"
+    assert vd._unname("Rosa and McDonald and Mcdonald", names, "b1") == "[name] and [name] and [name]"
+    assert vd._unname("a rosa bush", names, "b1") == "a rosa bush", "a name stored in lowercase stays a word"
     assert vd._unname("Ask Will", names, "b2") == "Ask Will", "one business's clients do not clean another's text"
     assert vd._unname("Glow Studio intro offer", names, "b2") == "[name] intro offer"
 

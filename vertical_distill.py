@@ -199,6 +199,8 @@ def _known_names(business_ids: List[str]) -> Optional[Dict[str, "re.Pattern[str]
         for part in re.findall(r"[^\W\d_][\w'-]*", name):
             if len(part) >= _MIN_NAME_PART:
                 parts[bid].update({part[:1].upper() + part[1:].lower(), part.upper()})
+                if part != part.lower():          # as written: McDonald, DeShawn
+                    parts[bid].add(part)
     out: Dict[str, "re.Pattern[str]"] = {}
     for bid in set(full) | set(parts):
         alts = ([f"(?i:{re.escape(n)})" for n in sorted(full[bid], key=len, reverse=True)]
