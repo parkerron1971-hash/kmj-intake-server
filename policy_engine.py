@@ -19,7 +19,7 @@ strings already existed and were all discarded.
 
 WHAT THIS DELIBERATELY DOES NOT DO. It is not a new gate that silently
 changes what the product allows. Every existing block stays exactly as it
-was, and the engine BLOCKS only four things:
+was, and the engine BLOCKS only five things:
 
   1. verbs the action registry does not classify (drift fails closed,
      matching _gate_class_c),
@@ -31,10 +31,20 @@ was, and the engine BLOCKS only four things:
      automations (see is_paused — the switch that four of the five paths
      that act have never read).
 
-Everything else is RECORDED, not refused — including class-C verbs on a
-recurrence. Recurring invoices are a real feature; whether they should
-keep firing unattended is Kevin's product ruling, and the ledger's job is
-to make it visible rather than to decide it in a helper.
+  5. an irreversible (class C) action running unattended, UNLESS the
+     owner set that action up: scheduled it, confirmed the workflow
+     step, granted the category on the Trust Track, or turned a team's
+     autopilot to smart or full (see OWNER_AUTHORITIES). Kevin's ruling,
+     2026-10-11: authority lives in the rails, so an unattended class-C
+     action runs only on an instruction the owner gave. Before that it
+     was recorded ("{surface}:C:unattended") and allowed, and the agent
+     and assignment paths stayed off class C only because their tool
+     loop never offered it. POLICY_UNATTENDED_C=allow restores the old
+     record-only behaviour. Recurring invoices are untouched: their
+     generator writes draft children directly, and a recurring send the
+     owner scheduled is owner_scheduled.
+
+Everything else is RECORDED, not refused.
 
 THE PROMISE THIS KEEPS. launch_access seeds
 settings.autonomy.client_facing_autonomy = "disabled" for law / therapy /
@@ -87,6 +97,38 @@ CLIENT_FACING = frozenset({
 })
 
 _REGULATED_HINTS = ("law", "therap", "counsel")
+
+# The owner acts that let an irreversible (class C) action run with nobody
+# watching. A caller names one only when its path really is that act;
+# the engine never infers it. The key lands in the ledger's rule string
+# ("scheduled:C:owner_scheduled"), so the rule names what actually ran;
+# the value is the plain-words fact the Verdict's reason carries.
+OWNER_AUTHORITIES: Dict[str, str] = {
+    # chief_scheduler. Rows are written only by schedule_action (itself
+    # class C, so only a prompted chat turn can file one) and by the
+    # owner approving a post with a time (content_approval).
+    "owner_scheduled": "you scheduled it",
+    # workflow_engine. The owner confirmed this step of the run
+    # (POST /workflows/runs/{id}/confirm).
+    "confirmed_step": "you confirmed this workflow step",
+    # rules_router's trusted sweep. The owner granted the category on
+    # the Trust Track after it earned the bar (POST /trust-track/grant).
+    "trust_grant": "you granted Chief this kind of proposal",
+    # The autopilot sweep. The owner set this team's autopilot to smart
+    # or full in Settings; the backend never writes that level itself.
+    "autopilot_level": "you turned on autopilot for this team",
+}
+
+UNATTENDED_C_RULE = "class-c:never-unattended"
+
+
+def unattended_c_mode() -> str:
+    """'refuse' (default) or 'allow' (the record-only behaviour before
+    2026-10-11). Read per call, so flipping it needs no restart.
+    Anything unrecognised refuses: a typo must not reopen the door."""
+    import os
+    raw = (os.environ.get("POLICY_UNATTENDED_C") or "refuse").strip().lower()
+    return "allow" if raw == "allow" else "refuse"
 
 
 @dataclass(frozen=True)
@@ -183,7 +225,8 @@ def role_of(business_id: str, user_id: Optional[str]) -> Optional[str]:
 
 def evaluate(business_id: str, *, verb: str, surface: str,
              prompted: bool, user_id: Optional[str] = None,
-             biz_row: Optional[Dict[str, Any]] = None) -> Verdict:
+             biz_row: Optional[Dict[str, Any]] = None,
+             owner_authority: Optional[str] = None) -> Verdict:
     """Evaluate one action.
 
     surface  — where it came from: chat | scheduler | workflow |
@@ -193,6 +236,10 @@ def evaluate(business_id: str, *, verb: str, surface: str,
                sweep, schedule, or workflow decided on its own. There is
                no runtime flag for this anywhere in the codebase; it is a
                property of the call path, so callers state it.
+    owner_authority — for an unattended call only: the owner act this
+               path IS (a key of OWNER_AUTHORITIES). Without one, an
+               unattended class-C action is refused. An unknown key counts
+               as none.
     """
     if not business_id or not verb:
         return Verdict(False, "policy:invalid", "Missing business or verb.")
@@ -274,12 +321,23 @@ def evaluate(business_id: str, *, verb: str, surface: str,
                 "enable client-facing autonomy in Settings.",
                 role)
 
-    # Class C unattended is RECORDED, not refused. Recurring invoices are
-    # a real feature; making the exposure visible is this stage's job,
-    # deciding it is Kevin's.
+    # Class C unattended runs only on an owner instruction (Kevin,
+    # 2026-10-11). The rule names the instruction, so the ledger says
+    # which owner act let it through.
     if rev == "C" and not prompted:
-        return Verdict(True, f"{surface}:C:unattended",
-                       f"{verb} is irreversible and ran without a prompt.",
+        if owner_authority in OWNER_AUTHORITIES:
+            return Verdict(True, f"{surface}:C:{owner_authority}",
+                           f"{verb} can't be undone and ran on its own "
+                           f"because {OWNER_AUTHORITIES[owner_authority]}.",
+                           role)
+        if unattended_c_mode() == "allow":
+            return Verdict(True, f"{surface}:C:unattended",
+                           f"{verb} is irreversible and ran without a prompt.",
+                           role)
+        return Verdict(False, UNATTENDED_C_RULE,
+                       f"{verb} can't be undone, so Chief doesn't do it on "
+                       "its own. Approve it in your queue, ask Chief to do "
+                       "it now, or schedule it yourself.",
                        role)
 
     # The rule string names RULES THAT RAN — nothing else. It used to
@@ -299,7 +357,7 @@ def evaluate(business_id: str, *, verb: str, surface: str,
 # evaluate() above answers exactly one question, in every branch: MAY
 # CHIEF DO THIS ON THE PRACTITIONER'S BEHALF, UNPROMPTED, INSIDE THEIR
 # BUSINESS? The seat role, the pause switch, the bulk rule, the
-# client-facing autonomy promise and the class-C-unattended record are
+# client-facing autonomy promise and the class-C-unattended rule are
 # all shapes of that one question.
 #
 # A client acting on their own record is not that question. They hold no

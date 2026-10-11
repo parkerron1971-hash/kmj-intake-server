@@ -636,9 +636,13 @@ def _run_trusted_sweep_sync() -> None:
             verdict = None
             try:
                 import policy_engine
+                # The category is in trusted_proposal_types only because
+                # the owner granted it (trust_grant above), so the sweep
+                # names that act; an irreversible send runs on it.
                 verdict = policy_engine.evaluate(
                     biz, verb=_PROPOSAL_EQUIVALENT_VERB.get(ptype, ptype),
-                    surface="trust-track", prompted=False, biz_row=biz_row)
+                    surface="trust-track", prompted=False, biz_row=biz_row,
+                    owner_authority="trust_grant")
             except Exception as e:
                 # FAIL CLOSED, matching chief_scheduler and
                 # workflow_engine. A safety check that cannot run is not

@@ -87,6 +87,19 @@ PROPOSALS: Dict[str, Tuple[str, str, Dict[str, Any]]] = {
         "only when the practitioner approves it.",
         _obj({"product_id": {"type": "string"},
               "name": {"type": "string", "description": "The product's name, if you do not have the id."}})),
+    "propose_adopt_business_rule": (
+        "adopt_business_rule",
+        "PROPOSE a standing rule for how Chief works for this business, "
+        "learned from what the owner keeps doing (for example, rewriting "
+        "formal drafts casually). Nothing changes until the owner approves "
+        "it in their queue; they can remove it any time.",
+        _obj({"statement": {"type": "string", "maxLength": 300,
+                            "description": "The rule in plain words, as the owner would say it."},
+              "polarity": {"type": "string", "enum": ["do", "dont"]},
+              "kind": {"type": "string", "enum": ["preference", "voice", "workflow", "exception"]},
+              "scope": {"type": "string", "maxLength": 80,
+                        "description": "Where it applies, e.g. client texts. Optional."}},
+             ["statement", "polarity"])),
     "propose_publish_to_site": (
         "publish_to_site",
         "PROPOSE publishing a planned post to the business's own news "
@@ -94,6 +107,11 @@ PROPOSALS: Dict[str, Tuple[str, str, Dict[str, Any]]] = {
         _obj({"post_id": {"type": "string"},
               "post_title": {"type": "string", "description": "The planned post's title, if you do not have the id."}})),
 }
+
+# Reversible verbs that still always wait for the owner: they change who
+# Chief is for this business, so they are the owner's decision, never an
+# agent's and never a standing permission's.
+OWNER_DECISION_VERBS = {"adopt_business_rule"}
 
 # Arguments a proposal may never carry: a raw recipient. A text goes to
 # a contact on file or it does not go.
@@ -149,6 +167,13 @@ def action_for(tool: str, arguments: Optional[Dict[str, Any]]) -> Dict[str, Any]
         raise ValueError("propose_generate_payment_link needs product_id or name")
     if verb == "publish_to_site" and not (args.get("post_id") or args.get("post_title")):
         raise ValueError("propose_publish_to_site needs post_id or post_title")
+    if verb == "adopt_business_rule":
+        if args.get("polarity") not in ("do", "dont"):
+            raise ValueError("propose_adopt_business_rule needs polarity do or dont")
+        if len(args.get("statement") or "") > 300:
+            raise ValueError("keep a rule under 300 characters")
+        if args.get("kind") and args["kind"] not in ("preference", "voice", "workflow", "exception"):
+            raise ValueError("kind must be preference, voice, workflow or exception")
     return {"type": verb, **args}
 
 
@@ -169,6 +194,9 @@ def describe(action: Dict[str, Any]) -> str:
         return f"Create a payment link for {action.get('name') or 'product ' + str(action.get('product_id') or '')[:8]}"
     if verb == "publish_to_site":
         return f"Publish “{action.get('post_title') or 'post ' + str(action.get('post_id') or '')[:8]}” to the site's news page"
+    if verb == "adopt_business_rule":
+        where = f" for {action['scope']}" if action.get("scope") else ""
+        return f"New rule{where}: “{action.get('statement')}”"
     return f"Run {verb}"
 
 
@@ -216,7 +244,7 @@ def file(business_id: str, action: Dict[str, Any], *, actor: str,
     verb = action.get("type")
     if verb not in verbs():
         raise ValueError(f"{verb!r} cannot be proposed")
-    if action_registry.reversibility(verb) != "C":
+    if action_registry.reversibility(verb) != "C" and verb not in OWNER_DECISION_VERBS:
         raise ValueError(f"{verb!r} is not class C — do it with its own tool")
     spec = {"action": action, "actor": actor, "surface": surface}
     # A standing permission (standing_permissions, 2026-09-04): the row
@@ -246,6 +274,12 @@ def file(business_id: str, action: Dict[str, Any], *, actor: str,
     import proposal_life
     row.update(proposal_life.filing_extras())
     row.update(standing_extra)
+    # Layer Two: a proposal filed inside a chat turn carries that turn's id.
+    import turn_context
+    if turn_context.turn_id():
+        import schema_probe
+        if schema_probe.has_columns("agent_queue", ("turn_id",)):
+            row["turn_id"] = turn_context.turn_id()
     res = sb_clients.sb_post_as_service("/agent_queue", row)
     qid: Optional[str] = None
     if isinstance(res, list) and res:

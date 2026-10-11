@@ -150,7 +150,8 @@ def test_scheduler_refuses_bulk_and_stamps_the_class(fake, monkeypatch):
 
 def test_scheduler_records_reversibility_and_cadence(fake, monkeypatch):
     """A class-C verb on a recurrence still runs (recurring invoices are
-    a real feature) — but the ledger now says so in authorized_by."""
+    a real feature) — and the ledger names the owner act behind it: the
+    owner scheduled it (2026-10-11)."""
     import chief_scheduler as cs
     monkeypatch.setattr(cs.sb_clients, "sb_patch_as_service", lambda p, b: [])
     audited = {}
@@ -168,6 +169,6 @@ def test_scheduler_records_reversibility_and_cadence(fake, monkeypatch):
         "action": {"type": "send_invoice"}, "label": "monthly invoice"}))
     # Stage 3: the shared evaluator produces the rule; cadence lives in
     # payload.recurrence rather than being duplicated into the string.
-    assert audited["payload"]["authorized_by"] == "scheduled:C:unattended"
+    assert audited["payload"]["authorized_by"] == "scheduled:C:owner_scheduled"
     assert audited["payload"]["recurrence"] == "monthly"
     assert audited["ok"] is True

@@ -148,6 +148,13 @@ async def approve_draft_endpoint(
     if payload.body is not None:
         edits["body"] = payload.body
     if edits:
+        # Layer Two: Chief's draft as first written is kept (set once)
+        # before the edit lands, so the before/after can teach.
+        # The app may send the text back unchanged; only a real change
+        # has an original worth keeping.
+        if any(edits[k] != item.get(k) for k in edits):
+            import turn_linkage
+            turn_linkage.keep_original(queue_id, item)
         # Connected drafts persist edits atomically with the one-send claim.
         if not item.get("connected_ai_job_id"):
             sb_clients.sb_patch_as_service(f"/agent_queue?id=eq.{queue_id}", edits)
@@ -200,6 +207,9 @@ async def approve_draft_endpoint(
     if not ok:
         raise HTTPException(500, "approve failed — the draft is unchanged or partially processed; check History")
 
+    import turn_linkage
+    turn_linkage.mark_reviewed(queue_id, str(user.id))
+
     return {
         "ok": True,
         "status": "sent" if delivery.get("sent") else "approved",
@@ -231,6 +241,8 @@ async def dismiss_draft_endpoint(
         "status": "dismissed",
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     })
+    import turn_linkage
+    turn_linkage.mark_reviewed(queue_id, str(user.id))
 
     audit_log.record(
         business_id,

@@ -41,7 +41,10 @@ def test_every_proposal_is_class_c_not_bulk_and_not_a_write_tool():
     assert ap.PROPOSALS, "the reviewed set is empty"
     for name, (verb, desc, schema) in ap.PROPOSALS.items():
         assert name == f"propose_{verb}"
-        assert action_registry.reversibility(verb) == "C", verb
+        # The one exception: reversible verbs that are the owner's decision
+        # (an owner rule) still only ever arrive as a proposal.
+        assert (action_registry.reversibility(verb) == "C"
+                or verb in ap.OWNER_DECISION_VERBS), verb
         assert not action_registry.is_bulk(verb), verb
         assert verb not in mcp.WRITE_TOOL_SCHEMAS, verb
         assert "PROPOSE" in desc and "approv" in desc.lower(), name
