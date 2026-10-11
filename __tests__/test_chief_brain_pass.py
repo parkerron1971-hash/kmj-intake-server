@@ -116,7 +116,6 @@ def world(monkeypatch):
     monkeypatch.setattr(bp.sb_clients, 'sb_post_as_service', post)
     monkeypatch.setattr(bp.sb_clients, 'sb_patch_as_service', patch)
     business_brain._probe.update(ok=True, at=10 ** 12)
-    business_brain._col_probe.clear()
     monkeypatch.setattr(business_brain, 'has_columns', lambda table, cols: table != 'agent_queue')
 
     import llm_call

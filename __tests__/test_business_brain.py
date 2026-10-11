@@ -329,3 +329,26 @@ def test_page_add_edit_remove_and_ledger(db):
     assert all('statement' in k['payload'] for _, k in db.ledger)
     too_long = client.post(f'/brain/{BIZ}/rules', json={'statement': 'x' * 301, 'polarity': 'do'})
     assert too_long.status_code == 422
+
+
+def test_a_turns_ledger_rows_name_the_brain_that_acted():
+    import audit_log
+    import turn_context
+    tokens = turn_context.set_turn('turn-1')
+    try:
+        turn_context.note_brain(7, 'ab' * 32)
+        ctx = turn_context.ai_context(model='claude-sonnet-5-5')
+        assert ctx['turn'] == 'turn-1' and ctx['brain_version'] == '7'
+        ai = audit_log._with_ai({'label': 'Sent'}, ctx)['_ai']
+        assert ai['brain_version'] == '7' and ai['brain_fp'].startswith('abab')
+    finally:
+        turn_context.reset(tokens)
+
+
+def test_page_ledger_rows_carry_the_brain_version(db):
+    app = FastAPI()
+    app.include_router(brain_router.router)
+    app.dependency_overrides[brain_router.require_user] = lambda: SimpleNamespace(id=OWNER)
+    TestClient(app).post(f'/brain/{BIZ}/rules', json={'statement': 'Be brief.', 'polarity': 'do'})
+    _, kwargs = db.ledger[-1]
+    assert kwargs['ai']['brain_version'] >= 1 and len(kwargs['ai']['brain_fp']) == 64

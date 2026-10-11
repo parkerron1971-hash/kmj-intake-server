@@ -53,24 +53,10 @@ def table_ready() -> bool:
     return ok
 
 
-_col_probe: Dict[str, Any] = {}
-
-
 def has_columns(table: str, cols) -> bool:
-    """Do these columns exist yet? Same cached probe as table_ready, keyed by
-    table and columns, for code that must run before and after a migration."""
-    if not os.environ.get("SUPABASE_URL"):
-        return False
-    key = f"{table}:{','.join(cols)}"
-    hit = _col_probe.get(key)
-    if hit and time.monotonic() - hit[1] < _PROBE_TTL_S:
-        return hit[0]
-    try:
-        ok = isinstance(sb_clients.sb_get_as_service(f"/{table}?select={','.join(cols)}&limit=1"), list)
-    except Exception:
-        ok = False
-    _col_probe[key] = (ok, time.monotonic())
-    return ok
+    """Do these columns exist yet? The shared cached probe (schema_probe)."""
+    import schema_probe
+    return schema_probe.has_columns(table, tuple(cols))
 
 
 def _sha(text: str) -> str:

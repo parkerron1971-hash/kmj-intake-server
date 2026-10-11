@@ -97,11 +97,14 @@ def read_brain(business_id: UUID, user: AuthedUser = Depends(require_user)) -> D
     }
 
 
-def _ledger(bid: str, user: AuthedUser, verb: str, summary: str, payload: Dict[str, Any]) -> None:
+def _ledger(bid: str, user: AuthedUser, verb: str, summary: str, payload: Dict[str, Any],
+            brain: Optional[Dict[str, Any]] = None) -> None:
     import audit_log
     audit_log.record(bid, actor_type="user", actor_id=str(user.id), verb=verb,
                      summary=summary[:200], payload=payload, source="desktop",
-                     authorized_by="owner:brain_page")
+                     authorized_by="owner:brain_page",
+                     ai={"brain_version": (brain or {}).get("version"),
+                         "brain_fp": (brain or {}).get("fp")})
 
 
 def _save_rule(bid: str, body: RuleBody, user: AuthedUser, key: Optional[str]) -> Dict[str, Any]:
@@ -123,8 +126,7 @@ def _save_rule(bid: str, body: RuleBody, user: AuthedUser, key: Optional[str]) -
     _ledger(bid, user, "adopt_business_rule",
             f"{'Edited' if key else 'Added'} rule: {fact.content}",
             {"key": fact.key, "polarity": fact.polarity, "scope": fact.scope,
-             "statement": fact.content, "_ai": {"brain_v": brain.get("version"),
-                                               "brain_fp": brain.get("fp")} if brain else {}})
+             "statement": fact.content}, brain)
     return {"ok": True, "rule": fact.model_dump(mode="json"), "brain": brain or None,
             "revision": (row or {}).get("revision")}
 
@@ -166,8 +168,7 @@ def delete_rule(business_id: UUID, key: str, user: AuthedUser = Depends(require_
         raise HTTPException(503, str(e)) from e
     brain = business_brain.stamp(biz, reason=f"rule removed on page: {key}")
     _ledger(bid, user, "remove_business_rule", f"Removed rule: {fact.content}",
-            {"key": key, "statement": fact.content,
-             "_ai": {"brain_v": brain.get("version"), "brain_fp": brain.get("fp")} if brain else {}})
+            {"key": key, "statement": fact.content}, brain)
     return {"ok": True, "removed": key, "brain": brain or None,
             "revision": (row or {}).get("revision")}
 

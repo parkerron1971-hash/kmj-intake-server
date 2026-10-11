@@ -15875,6 +15875,15 @@ async def chief_chat(
             # Rails Arc 4 — the unified audit log records EVERY executed
             # action, including failures and navigation (chief_activity
             # deliberately skips both). Best-effort; never blocks.
+            # Layer Two: which brain acted. Stamped once, only on a turn that
+            # did something, so every ledger row below names the version.
+            if any(isinstance(t, dict) and t.get("type") not in (None, "navigate") for t in (taken or [])):
+                try:
+                    import business_brain
+                    _brain = await asyncio.to_thread(business_brain.stamp, biz)
+                    turn_context.note_brain(_brain.get("version"), _brain.get("fp"))
+                except Exception as e:  # pragma: no cover
+                    logger.warning(f"brain stamp failed: {e}")
             try:
                 import audit_log
                 audit_log.record_chief_turn(
