@@ -26,19 +26,30 @@ ROWS = [{"id": "q1", "business_id": "biz1", "status": "draft", "subject": "One"}
 
 @pytest.fixture
 def queue(monkeypatch):
-    marked = []
+    marked = _Marked()
 
     async def _query(client, biz_id, filter_str):
         return [dict(r) for r in ROWS]
 
     async def _sb(client, method, path, body=None):
-        return []
+        if method == "GET":
+            return [dict(ROWS[0])]
+        if method == "PATCH" and any(f"id=eq.{q}" in path for q in queue_failing):
+            return None
+        return [{"id": path.split("id=eq.")[-1]}]
+
+    queue_failing = set()
 
     monkeypatch.setattr(cos, "_query_queue_by_filter", _query)
     monkeypatch.setattr(cos, "_sb", _sb)
     monkeypatch.setattr(turn_linkage, "mark_reviewed",
                         lambda qid, uid: marked.append((qid, uid)) or True)
+    marked.failing = queue_failing
     return marked
+
+
+class _Marked(list):
+    pass
 
 
 def _as_user(coro, uid="user-7"):
@@ -73,3 +84,23 @@ def test_a_sweep_with_no_person_on_the_turn_names_nobody(queue):
     res = _as_user(cos.handle_bulk_dismiss(None, BIZ, {"filter": "all"}), uid=None)
     assert res["result"] == "dismissed 2 of 2"
     assert queue == []
+
+
+def test_a_row_the_database_did_not_change_is_neither_counted_nor_marked(queue):
+    queue.failing.add("q2")
+    res = _as_user(cos.handle_bulk_dismiss(None, BIZ, {"filter": "all"}))
+    assert res["result"] == "dismissed 1 of 2"
+    assert queue == [("q1", "user-7")]
+
+
+def test_a_single_dismiss_that_did_not_save_says_so(queue):
+    queue.failing.add("q1")
+    res = _as_user(cos.handle_dismiss_draft(None, BIZ, {"queue_id": "q1"}))
+    assert res.get("failed") is True and "still waiting" in res["result"]
+    assert queue == []
+
+
+def test_a_single_dismiss_that_saved_names_the_reviewer(queue):
+    res = _as_user(cos.handle_dismiss_draft(None, BIZ, {"queue_id": "q1"}))
+    assert res["result"] == "dismissed"
+    assert queue == [("q1", "user-7")]

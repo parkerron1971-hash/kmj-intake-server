@@ -7967,10 +7967,13 @@ async def handle_dismiss_draft(client, biz, action) -> Dict:
     if not rows:
         return _fail("dismiss_draft", f"Draft {qid} not found")
     item = rows[0]
-    await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
+    saved = await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
         "status": "dismissed",
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     })
+    if not saved:
+        return _fail("dismiss_draft",
+                     f"Couldn't dismiss {item.get('subject') or 'the draft'}; it is still waiting")
     await _mark_draft_reviewed(qid)
     return {
         "type": "dismiss_draft",
@@ -8233,9 +8236,11 @@ async def handle_bulk_dismiss(client, biz, action) -> Dict:
     for item in items:
         qid = item.get("id")
         if qid:
-            await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
+            saved = await _sb(client, "PATCH", f"/agent_queue?id=eq.{qid}", {
                 "status": "dismissed", "reviewed_at": now_iso,
             })
+            if not saved:       # still a draft: not counted, nobody's name on it
+                continue
             await _mark_draft_reviewed(qid)
             dismissed.append(item.get("subject") or qid)
     return {
