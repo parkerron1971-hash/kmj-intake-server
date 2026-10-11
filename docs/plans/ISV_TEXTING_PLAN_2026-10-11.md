@@ -70,10 +70,19 @@ several weeks); a rejection restarts the review. Businesses go in parallel.
   campaign). Default: any business that wants two-way texting, broadcasts or
   automatic notes registers (and gets a number); fixed confirmations and
   reminders keep going out from the shared number for everyone meanwhile.
-- **D3 Subaccount per business.** Twilio recommends it (isolates billing and
-  suspensions). Default: wait for Twilio's answer on the ticket, then decide.
-- **D4 EIN.** Default: never stored by us. The owner types it at submit time
-  and it goes straight to Twilio; we keep only whether one was given.
+  **Kevin, 2026-10-11:** "offer the text where it's allowed with just our
+  business": appointment confirmations and reminders keep going out from
+  our shared number for every business, one-way (STOP and HELP answered),
+  in our words and our name; owner-written texts need the business's own
+  registration.
+- **D3 Subaccount per business. DECIDED (Kevin, 2026-10-11): a sub-account
+  for each business.** Twilio recommends it (isolates billing and
+  suspensions). Every registration call is made as the sub-account.
+- **D4 EIN. DECIDED (Kevin, 2026-10-11): kept on the platform**, "because we
+  created a place to have them": once, with the business's legal details
+  (`business_profiles.ein`, where About Your Business and the 1099 panel
+  already keep it), never a second copy in `texting_registrations`. The
+  registration screen shows only the last four digits.
 - **D5 No EIN (sole proprietors).** Default: the Sole Proprietor path ($4.50
   + $2/month, one number, the owner confirms by a code texted to their own
   mobile within 24 hours).
@@ -102,12 +111,16 @@ calls, no money).** *Started 2026-10-11.*
 the answers form, the readiness checklist, the exact words Twilio will see,
 and later the approval status ("Being approved, usually about 2 weeks").
 
-**Step 3: submit to Twilio (after the ticket and D1–D3).** A Twilio ISV
-client: create the profile, trust product, brand, Messaging Service and
-campaign through the API; the EIN typed at submit; a sweep (and Twilio's
-status callbacks) moves the status along and shows a rejection's reason in
-plain words with what to fix. Pilot on one of Kevin's own businesses first
-(KMJ Creative Solutions or Love City), because a rejection costs two weeks.
+**Step 3: submit to Twilio.** *Built 2026-10-11 (texting_isv.py, the send
+route, the sweep, the owner's updates); goes live when Twilio's ISV guide
+prerequisite is met: our primary profile as "ISV Reseller or Partner"
+(ticket #29903903), then TEXTING_REGISTRATION_OPEN names the pilot.* A
+Twilio ISV client: create the sub-account, profile, trust product, brand,
+Messaging Service and campaign through the API; the EIN read from the
+business's details; a sweep (and Twilio's status callbacks) moves the
+status along and shows a rejection's reason in plain words. Every change
+reaches the owner in the app, by push and by email. Pilot on KMJ Creative
+Solutions first (its EIN is on file), because a rejection costs two weeks.
 
 - The booking page's booking-texts checkbox names "Solutionist System",
   not the business, and links our privacy and terms pages. Under ISV the
@@ -135,5 +148,7 @@ exception) and replies for businesses not yet approved.
   privacy line, URL shorteners), and the pilot runs on our own business.
 - Our current campaign must keep working while businesses move: asked in the
   ticket; nothing in steps 1–2 touches it.
-- EIN and the representative's details are sensitive: the EIN is never
-  stored; the rest is the owner's own data, service-role only (RLS on).
+- EIN and the representative's details are sensitive: the EIN lives once, in
+  the business's legal details (owner and the business's team can read it,
+  as for 1099s); the registration screen shows the last four; the rest is
+  the owner's own data, service-role only (RLS on).
