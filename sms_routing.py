@@ -5,6 +5,17 @@ THE MODEL: one Twilio number for the whole platform. Every inbound is
 routed internally: BINDING FIRST, KEYWORD SECOND. The keyword
 introduces the relationship; the stored binding sustains it.
 
+THREADS (2026-10-11): a business that texts someone from the shared
+number (a booking confirmation, a reminder, a note) never made a binding,
+so their reply ("running 10 min late") was told to text a keyword. Now
+the businesses this person has texted with in the last THREAD_DAYS are
+candidates too, alongside their bindings: one candidate takes the reply,
+the most recent conversation within CONTINUITY_HOURS wins among several,
+otherwise they choose. Threads are read from sms_messages and never
+written to sms_bindings, because a binding is also consent for automated
+alerts (sms_alerts.has_sms_consent) and texting someone is not their
+consent.
+
 Trust-layer handler (per the Chief handler discipline):
   (a) FIRST-PASS NARRATION — every branch logs what it saw and why it
       chose its path (the [ROUTE] lines).
@@ -93,6 +104,10 @@ KEYWORD_RE = re.compile(r"^[A-Z0-9]{3,20}$")
 # Bare replies keep flowing to the same practitioner within this window
 # when a customer is bound to several (conversation continuity).
 CONTINUITY_HOURS = 72
+# A reply to the shared number goes to a business that has been texting
+# this person within this many days (a reminder, a confirmation, a note),
+# even without a keyword (2026-10-11). Routing only, never consent.
+THREAD_DAYS = 30
 
 
 # ─── Outbound (single seam for auto-replies + broadcast) ──────────────
@@ -156,6 +171,55 @@ async def _bind(client: httpx.AsyncClient, phone: str, business_id: str) -> None
             f"/sms_bindings?customer_phone=eq.{_pq(phone)}&business_id=eq.{business_id}",
             {"last_routed_at": now},
         )
+
+
+async def _recent_threads(client: httpx.AsyncClient, phone: str) -> Dict[str, str]:
+    """{business_id: its latest message with this phone (ISO)} over the last
+    THREAD_DAYS, either direction (sms_messages). Routing only: unlike a
+    binding, a thread is never consent. A failed read is {} (the router
+    then asks, as before), never a guess."""
+    since = (datetime.now(timezone.utc) - timedelta(days=THREAD_DAYS)).isoformat()
+    try:
+        rows = await _sb_get(
+            client,
+            f"/sms_messages?phone_number=eq.{_pq(phone)}&business_id=not.is.null"
+            f"&created_at=gte.{_pq(since)}&select=business_id,created_at"
+            f"&order=created_at.desc&limit=200",
+        ) or []
+    except Exception as e:
+        logger.warning(f"[ROUTE] threads unread for {phone}: {e}")
+        return {}
+    out: Dict[str, str] = {}
+    for r in rows:
+        bid = str(r.get("business_id") or "")
+        if bid and bid not in out:
+            out[bid] = str(r.get("created_at") or "")
+    return out
+
+
+def _when(value: Any) -> Optional[datetime]:
+    try:
+        d = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def _candidates(bindings: List[Dict[str, Any]], threads: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Every business this person may be answering, with its latest activity
+    (`last`, a datetime or None): keyword bindings first, oldest first, then
+    businesses that have only been texting with them, by id. A stable order,
+    so "Reply 1" means the same business when the answer comes back."""
+    out: List[Dict[str, Any]] = []
+    for b in bindings:
+        bid = str(b["business_id"])
+        times = [t for t in (_when(b.get("last_routed_at")), _when(threads.get(bid))) if t is not None]
+        out.append({"business_id": bid, "bound": True, "last": max(times) if times else None})
+    bound = {c["business_id"] for c in out}
+    for bid in sorted(threads):
+        if bid not in bound:
+            out.append({"business_id": bid, "bound": False, "last": _when(threads[bid])})
+    return out
 
 
 async def _touch_binding(client: httpx.AsyncClient, phone: str, business_id: str) -> None:
@@ -322,57 +386,63 @@ async def route_inbound(
             # Not a known keyword — fall through to binding routing
             # (it's probably just the first word of a sentence).
 
-        # ── Binding-first routing (sustains the relationship) ──
+        # ── Who they may be answering (sustains the relationship) ──
+        # Keyword bindings, and every business that has been texting with
+        # them lately (threads): a client who replies "running late" to the
+        # reminder a business sent from the shared number reaches that
+        # business, without ever having texted its keyword. A thread is
+        # routing only: it is never consent (has_sms_consent counts
+        # bindings, so threads are kept out of sms_bindings).
         bindings = await _bindings_for(client, phone)
+        threads = await _recent_threads(client, phone)
+        candidates = _candidates(bindings, threads)
 
-        if len(bindings) == 1:
-            business_id = bindings[0]["business_id"]
-            logger.info(f"[ROUTE] bound {phone} → biz {business_id[:8]}")
-            await _touch_binding(client, phone, business_id)
+        async def _route(c: Dict[str, Any], how: str) -> Dict[str, Any]:
+            business_id = c["business_id"]
+            logger.info(f"[ROUTE] {how} {phone} → biz {business_id[:8]}")
+            if c["bound"]:
+                await _touch_binding(client, phone, business_id)
             await record_inbound_sms(
                 client, from_number=phone, text=body,
                 provider_id=provider_id, media=media, business_id=business_id,
             )
             return {"action": "routed", "business_id": business_id, "reply": None}
 
-        if len(bindings) > 1:
+        if len(candidates) == 1:
+            return await _route(candidates[0], "bound" if candidates[0]["bound"] else "thread")
+
+        if len(candidates) > 1:
             # Continuity: an active conversation wins.
             now = datetime.now(timezone.utc)
-            def _recent(b):
-                try:
-                    ts = datetime.fromisoformat(str(b.get("last_routed_at")).replace("Z", "+00:00"))
-                    return (now - ts) <= timedelta(hours=CONTINUITY_HOURS)
-                except Exception:
-                    return False
             recent = sorted(
-                (b for b in bindings if _recent(b)),
-                key=lambda b: str(b.get("last_routed_at")), reverse=True,
+                (c for c in candidates
+                 if c["last"] is not None and (now - c["last"]) <= timedelta(hours=CONTINUITY_HOURS)),
+                key=lambda c: c["last"], reverse=True,
             )
             if recent:
-                business_id = recent[0]["business_id"]
-                logger.info(f"[ROUTE] multi-bound {phone} → continuity biz {business_id[:8]}")
-                await _touch_binding(client, phone, business_id)
-                await record_inbound_sms(
-                    client, from_number=phone, text=body,
-                    provider_id=provider_id, media=media, business_id=business_id,
-                )
-                return {"action": "routed", "business_id": business_id, "reply": None}
+                return await _route(recent[0], "continuity")
 
-            # Numeric selection reply? ("1" / "2" — ordered by bound_at)
-            if body.isdigit() and 1 <= int(body) <= len(bindings):
-                chosen = bindings[int(body) - 1]["business_id"]
-                await _touch_binding(client, phone, chosen)
-                name = await _biz_name(client, chosen)
-                logger.info(f"[ROUTE] multi-bound {phone} selected {int(body)} → biz {chosen[:8]}")
-                return {"action": "selected", "business_id": chosen, "reply": (
-                    f"{sender_brand()}: Connected with {name} - send your message."
-                )}
+            # Numeric selection reply? ("1" / "2" — the order the prompt listed)
+            if body.isdigit() and 1 <= int(body) <= min(len(candidates), 5):
+                chosen = candidates[int(body) - 1]
+                business_id = chosen["business_id"]
+                name = await _biz_name(client, business_id)
+                reply = f"{sender_brand()}: Connected with {name} - send your message."
+                if chosen["bound"]:
+                    await _touch_binding(client, phone, business_id)
+                else:
+                    # The choice is kept in their thread with that business
+                    # (so the next message continues there), not as a
+                    # binding: choosing is not consent.
+                    await _store_sms(client, business_id, None, phone, reply, "outbound", sent_by="system")
+                logger.info(f"[ROUTE] multi {phone} selected {int(body)} → biz {business_id[:8]}")
+                return {"action": "selected", "business_id": business_id, "reply": reply}
 
             # Undecidable — never route silently to the wrong one.
             names = []
-            for i, b in enumerate(bindings[:5], start=1):
-                names.append(f"{i} for {await _biz_name(client, b['business_id'])}")
-            logger.info(f"[ROUTE] multi-bound {phone} — disambiguation prompt")
+            for i, c in enumerate(candidates[:5], start=1):
+                names.append(f"{i} for {await _biz_name(client, c['business_id'])}")
+            logger.info(f"[ROUTE] multi {phone} — disambiguation prompt")
             return {"action": "disambiguate", "reply": (
                 f"{sender_brand()}: You're connected with more than one business. "
                 f"Reply {', '.join(names)}."
