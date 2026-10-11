@@ -1028,12 +1028,18 @@ def _anchor_summary(biz: str, limit: int = 5) -> List[Dict[str, Any]]:
     # confirmed anchor was "NOT on a durable public network": false, and
     # false against the business. It is a database read, not a network
     # call, so the page-load rule above still holds.
+    #
+    # A failed cache read is NOT "nothing upgraded". Rounding it down
+    # would put the false "still waiting" sentence back on the page during
+    # a database blip, so an unconfirmed anchor is marked unchecked instead.
     try:
         import ledger_anchor
-        ups = ledger_anchor.upgrades_for([r.get("id") for r in rows])
+        ups = ledger_anchor.upgrades_for_strict([r.get("id") for r in rows])
     except Exception as e:
         logger.warning(f"[ledger] anchor upgrade read failed for {biz}: {e}")
-        ups = {}
+        ups = None
+    cache_read = ups is not None
+    ups = ups or {}
 
     out: List[Dict[str, Any]] = []
     for r in rows:
@@ -1064,7 +1070,15 @@ def _anchor_summary(biz: str, limit: int = 5) -> List[Dict[str, Any]]:
             confirmed = bool(st.get("confirmed") or up.get("confirmed"))
             block = st.get("bitcoin_block") or up.get("bitcoin_block")
             item["independent"] = confirmed
-            item["state"] = "confirmed" if confirmed else st.get("state")
+            if confirmed:
+                item["state"] = "confirmed"
+            elif not cache_read and st.get("state") == "submitted":
+                # The stored bytes say "submitted"; whether Bitcoin has
+                # since confirmed it is exactly what the failed read
+                # would have told us.
+                item["state"] = "unchecked"
+            else:
+                item["state"] = st.get("state")
             item["verify_url"] = st.get("verify_url")
             item["network"] = st.get("network")
             if confirmed and block:

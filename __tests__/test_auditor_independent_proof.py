@@ -164,7 +164,7 @@ def _summary(monkeypatch, upgrades, status_by_ref):
     import ledger_anchor
     import sb_clients
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [dict(_ROW)])
-    monkeypatch.setattr(ledger_anchor, "upgrades_for", lambda ids: upgrades)
+    monkeypatch.setattr(ledger_anchor, "upgrades_for_strict", lambda ids: upgrades)
     monkeypatch.setattr(ledger_anchor, "proof_status",
                         lambda ref, provider=None: status_by_ref[ref])
     return audit_log._anchor_summary("biz-1")
@@ -202,19 +202,49 @@ class TestTheUpgradeCacheIsRead:
         assert a["state"] == "submitted"
         assert a["explorer_url"] is None
 
-    def test_a_failed_cache_read_degrades_to_the_stored_bytes(self, monkeypatch):
+    def test_a_failed_cache_read_is_unchecked_not_waiting(self, monkeypatch):
+        """The real failure shape: sb_get_as_service answers None on a
+        transport or HTTP error. That must not read as "nothing upgraded",
+        or a Bitcoin-confirmed anchor goes back to saying it is waiting."""
         import ledger_anchor
         import sb_clients
-        monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [dict(_ROW)])
 
-        def boom(ids):
-            raise RuntimeError("cache down")
-        monkeypatch.setattr(ledger_anchor, "upgrades_for", boom)
+        def get(path):
+            if path.startswith("/ledger_anchors?"):
+                return [dict(_ROW)]
+            assert path.startswith("/ledger_anchor_upgrades?")
+            return None
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
         monkeypatch.setattr(ledger_anchor, "proof_status",
                             lambda ref, provider=None: {"state": "submitted",
                                                         "confirmed": False})
         out = audit_log._anchor_summary("biz-1")
-        assert out and out[0]["independent"] is False
+        assert out[0]["independent"] is False
+        assert out[0]["state"] == "unchecked"
+
+    def test_an_empty_cache_is_a_real_answer(self, monkeypatch):
+        """[] from the cache means checked and not yet upgraded, so a
+        submitted proof honestly reads as waiting."""
+        import ledger_anchor
+        import sb_clients
+
+        def get(path):
+            if path.startswith("/ledger_anchors?"):
+                return [dict(_ROW)]
+            return []
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+        monkeypatch.setattr(ledger_anchor, "proof_status",
+                            lambda ref, provider=None: {"state": "submitted",
+                                                        "confirmed": False})
+        assert audit_log._anchor_summary("biz-1")[0]["state"] == "submitted"
+
+    def test_the_lenient_reader_is_unchanged_for_other_surfaces(self, monkeypatch):
+        import ledger_anchor
+        import sb_clients
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: None)
+        assert ledger_anchor.upgrades_for(["a1"]) == {}
+        assert ledger_anchor.upgrades_for_strict(["a1"]) is None
+        assert ledger_anchor.upgrades_for_strict([]) == {}
 
 
 def _page(anchor):
@@ -237,6 +267,12 @@ class TestThePageStatesEachStateAsAFact:
         assert "confirmed in block 961016" in html
         assert "https://mempool.space/block/961016" in html
         assert "ots verify" in html
+        assert "NOT on a durable public network" not in html
+
+    def test_unchecked_says_it_could_not_be_read(self):
+        html = _page({**self.BASE, "independent": False, "state": "unchecked"})
+        assert "could not be read just now" in html
+        assert "waiting for its block" not in html
         assert "NOT on a durable public network" not in html
 
     def test_waiting_says_waiting(self):

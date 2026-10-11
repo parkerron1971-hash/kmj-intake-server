@@ -556,6 +556,9 @@ def _render(d: Dict[str, Any]) -> str:
                 claim = f"published to Bitcoin, confirmed in block {_e(block)}"
             elif a.get("independent"):
                 claim = "published to a public network"
+            elif a.get("state") == "unchecked":
+                claim = ("sent to independent Bitcoin timestamp servers; whether "
+                         "it is in a Bitcoin block yet could not be read just now")
             elif a.get("state") == "submitted":
                 claim = ("sent to independent Bitcoin timestamp servers and "
                          "waiting for its block, so NOT yet on a durable public "
