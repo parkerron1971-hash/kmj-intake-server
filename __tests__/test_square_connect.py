@@ -263,3 +263,21 @@ def test_disconnect_lost_revision_reports_current_state(client, monkeypatch, sta
     if pending is not None:
         assert response.json()["revocation_pending"] is pending
         assert response.json()["disconnected"] is True
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_appointments_onboarding_is_not_a_stale_location_conflict(monkeypatch, cfg, status):
+    original = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda req: httpx.Response(status, json={"errors": [
+        {"code": "UNAUTHORIZED", "detail": "Merchant not onboarded to Appointments"},
+        {"detail": "private-access private-secret"},
+    ]}))
+    monkeypatch.setattr(sq.httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(sq.square(cfg, "GET", "/v2/bookings", token="private-access"))
+    assert exc.value.status_code == 422
+    assert exc.value.detail == {"code": "square_appointments_setup_required"}
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(sq.square(cfg, "GET", "/v2/locations", token="private-access"))
+    assert exc.value.status_code == 409
+    assert exc.value.detail == {"code": "square_authorization_required"}

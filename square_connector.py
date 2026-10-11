@@ -118,7 +118,15 @@ async def square(cfg: Config, method: str, path: str, *, token=None, body=None, 
     if response.status_code == 429:
         raise HTTPException(503, "Square is busy. Try again shortly.")
     if response.status_code in (401, 403):
-        raise HTTPException(409, "Square authorization needs attention. Disconnect and reconnect Square.")
+        errors = payload.get("errors", []) if isinstance(payload, dict) else []
+        # Recognize only the observed provider condition; never relay diagnostics.
+        if path == "/v2/bookings" and isinstance(errors, list) and any(
+            isinstance(error, dict) and error.get("code") == "UNAUTHORIZED"
+            and error.get("detail") == "Merchant not onboarded to Appointments"
+            for error in errors
+        ):
+            raise HTTPException(422, {"code": "square_appointments_setup_required"})
+        raise HTTPException(409, {"code": "square_authorization_required"})
     if not response.is_success or not isinstance(payload, dict) or payload.get("errors"):
         raise HTTPException(502, "Square could not complete the request. Try again.")
     return payload
