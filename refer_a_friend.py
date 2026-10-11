@@ -52,12 +52,12 @@ import os
 import re
 import secrets
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import offers
 import sb_clients
@@ -73,7 +73,7 @@ SAFE = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I/L: read aloud at the co
 WINDOW = timedelta(days=180)        # a friend's booking older than this earns nothing new
 SEND_WITHIN = timedelta(days=30)    # an unsent thank-you older than this stays for the counter
 TICK_LIMIT = 500
-COLUMNS = offers.COLUMNS + ",reward_cents,in_notes"
+COLUMNS = offers.COLUMNS + ",reward_cents,in_notes,thanks_words,thanks_days"
 
 
 def enabled() -> bool:
@@ -121,28 +121,84 @@ def ps_words(program: Dict[str, Any], link: str, channel: str = "email") -> str:
             f"one once they've been in. Your own link: {link}")
 
 
+# The thank-you's words: the owner's own (offers.thanks_words) over these.
+# {{code}} must stay in the email and the text, so the regular always gets
+# their code. A line holding a link or the end day that this thank-you
+# doesn't have ({{book_link}} with nothing bookable online, {{own_link}}
+# that couldn't be made, {{ends}} with no end) is left out whole.
+THANKS_DEFAULTS: Dict[str, str] = {
+    "subject": "Thank you for sending {{friend}}",
+    "email": ("Hi {{first_name}},\n\n{{friend}} came in, thanks to you. Here's {{amount}} off your next visit: "
+              "use the code {{code}} when you book, or say it at the counter.\n{{book_link}}\n"
+              "It's good through {{ends}}.\n\n"
+              "Know someone else who'd like {{business}}? Your own link still works: {{own_link}}\n\n{{business}}"),
+    "text": ("Thanks for sending {{friend}}, {{first_name}}! {{amount}} off your next visit with the code {{code}}.\n"
+             "Good through {{ends}}.\nBook: {{book_link}}"),
+}
+THANKS_LIMITS = {"subject": 150, "email": 2000, "text": 320}
+DROP_WHEN_EMPTY = ("book_link", "own_link", "ends")
+THANKS_DAYS = (7, 365)
+
+
+def check_words(words: Dict[str, Any]) -> Dict[str, str]:
+    """The owner's thank-you words, checked: what they may change, within
+    the limits, with {{code}} kept where the code must go. Raises ValueError
+    in plain words."""
+    out: Dict[str, str] = {}
+    for k, v in (words or {}).items():
+        if k not in THANKS_DEFAULTS:
+            raise ValueError("Change the subject, the email or the text.")
+        text = str(v or "").strip()
+        if not text:
+            raise ValueError("The words can't be empty. Use the suggested words to start again.")
+        if len(text) > THANKS_LIMITS[k]:
+            raise ValueError(f"That's longer than {THANKS_LIMITS[k]} characters.")
+        if k != "subject" and "{{code}}" not in text:
+            raise ValueError("Keep {{code}} in the email and the text, so they get their code.")
+        out[k] = text
+    return out
+
+
+def ends_words(expires_on: Any) -> str:
+    d = offers._date(expires_on)
+    return d.strftime("%a, %b ") + str(d.day) if d else ""
+
+
+def _fill(template: str, values: Dict[str, str]) -> str:
+    lines = []
+    for line in template.split("\n"):
+        if any(f"{{{{{k}}}}}" in line and not values.get(k) for k in DROP_WHEN_EMPTY):
+            continue
+        opens_with_friend = line.startswith("{{friend}}")     # "your friend came in" opens a sentence
+        for k, v in values.items():
+            line = line.replace(f"{{{{{k}}}}}", v)
+        line = line.rstrip()
+        lines.append(line[:1].upper() + line[1:] if opens_with_friend else line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def thanks_words(*, business: Dict[str, Any], referrer: Dict[str, Any], friend: Optional[Dict[str, Any]],
-                 reward: Dict[str, Any], book: Optional[str], own_link: Optional[str]) -> Dict[str, str]:
-    """The thank-you the regular gets: subject, email and text."""
-    first = first_name(referrer.get("name")) or "there"
-    pal = first_name((friend or {}).get("name"))
-    money = offers.money(reward["amount_cents"])
+                 reward: Dict[str, Any], book: Optional[str], own_link: Optional[str],
+                 words: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """The thank-you the regular gets: subject, email and text, in the
+    owner's words (words) over the suggested ones. A part that comes out
+    without the code falls back to the suggested words, so the code always
+    reaches them."""
     code = reward["code"]
-    biz = (business.get("name") or "us").strip()
-    book_link = f"{book}?offer={code}" if book else None
-    email = [f"Hi {first},", "",
-             f"{pal or 'Your friend'} came in, thanks to you. Here's {money} off your next visit: use the code "
-             f"{code} when you book, or say it at the counter."]
-    if book_link:
-        email.append(book_link)
-    if own_link:
-        email += ["", f"Know someone else who'd like {biz}? Your own link still works:", own_link]
-    email += ["", biz]
-    text = f"Thanks for sending {pal or 'a friend'}, {first}! {money} off your next visit with the code {code}."
-    if book_link:
-        text += f" Book: {book_link}"
-    return {"subject": f"Thank you for sending {pal}" if pal else "Thank you for sending a friend",
-            "email": "\n".join(email), "text": text}
+    values = {"first_name": first_name(referrer.get("name")) or "there",
+              "friend": first_name((friend or {}).get("name")) or "your friend",
+              "amount": offers.money(reward["amount_cents"]), "code": code,
+              "business": (business.get("name") or "us").strip(),
+              "book_link": f"{book}?offer={code}" if book else "", "own_link": own_link or "",
+              "ends": ends_words(reward.get("expires_on"))}
+    mine = {k: v for k, v in (words or {}).items() if k in THANKS_DEFAULTS and isinstance(v, str) and v.strip()}
+    out = {}
+    for part, default in THANKS_DEFAULTS.items():
+        filled = _fill(mine.get(part) or default, values)
+        if part != "subject" and code not in filled:
+            filled = _fill(default, values)
+        out[part] = filled[:THANKS_LIMITS[part]] if part == "subject" else filled
+    return out
 
 
 # ── codes ─────────────────────────────────────────────────────────────
@@ -261,7 +317,7 @@ def evaluate(business: Dict[str, Any], code: Any, *, contact_id: Optional[str], 
         link = _read(f"/referral_links?business_id=eq.{bid}&code=eq.{code}&select=contact_id,code&limit=1")
         reward = [] if link else _read(
             f"/referral_rewards?business_id=eq.{bid}&code=eq.{code}"
-            "&select=id,code,referrer_contact_id,amount_cents&limit=1")
+            "&select=id,code,referrer_contact_id,amount_cents,expires_on&limit=1")
     except Exception as e:
         logger.warning("referral code unread biz=%s: %s", bid[:8], e)
         return None
@@ -270,7 +326,7 @@ def evaluate(business: Dict[str, Any], code: Any, *, contact_id: Optional[str], 
         return _friend(business, link[0], contact_id=contact_id, slot_iso=slot_iso, service_cents=service_cents,
                        now=now)
     if reward:
-        return _thanks(business, reward[0], contact_id=contact_id, service_cents=service_cents)
+        return _thanks(business, reward[0], contact_id=contact_id, service_cents=service_cents, now=now)
     return None
 
 
@@ -307,15 +363,18 @@ def _friend(business: Dict[str, Any], link: Dict[str, Any], *, contact_id: Optio
 
 
 def _thanks(business: Dict[str, Any], reward: Dict[str, Any], *, contact_id: Optional[str],
-            service_cents: Optional[int]) -> Dict[str, Any]:
+            service_cents: Optional[int], now: datetime) -> Dict[str, Any]:
     bid = str(business["id"])
     rid = str(UUID(str(reward["id"])))
     out = {"id": rid, "code": reward["code"], "title": thanks_title(reward["amount_cents"]), "kind": "amount_off",
            "source": "referral", "part": "thanks", "applies": False, "why": None, "discount_cents": 0}
     try:
+        ends = offers._date(reward.get("expires_on"))
         if not contact_id or str(contact_id) != str(reward["referrer_contact_id"]):
             why = ("This thank-you is for the client who sent a friend. Book with the email they use here, "
                    "or say the code at the counter.")
+        elif ends and _today(business, now) > ends:
+            why = f"This thank-you ended {ends.strftime('%b')} {ends.day}."
         elif _read(f"/module_entries?business_id=eq.{bid}&data->offer->>id=eq.{rid}"
                    "&data->offer->>applies=eq.true&status=eq.active&select=id&limit=1"):
             why = "You've already used this thank-you."
@@ -343,10 +402,27 @@ def public_words(business_id: str, code: Any) -> Optional[Dict[str, Any]]:
             return None
         name = _names(business_id, [link[0]["contact_id"]]).get(str(link[0]["contact_id"]), {}).get("name")
         return {"code": code, "title": friend_title(prog, name), "when": ""}      # the title says when
-    reward = _read(f"/referral_rewards?business_id=eq.{business_id}&code=eq.{code}&select=amount_cents&limit=1")
+    reward = _read(f"/referral_rewards?business_id=eq.{business_id}&code=eq.{code}"
+                   "&select=amount_cents,expires_on&limit=1")
     if reward:
-        return {"code": code, "title": thanks_title(reward[0]["amount_cents"]), "when": ""}
+        ends = offers._date(reward[0].get("expires_on"))
+        if ends and ends < datetime.now(timezone.utc).date() - timedelta(days=1):
+            return None
+        return {"code": code, "title": thanks_title(reward[0]["amount_cents"]),
+                "when": f"Through {ends_words(ends)}" if ends else ""}
     return None
+
+
+def _today(business: Dict[str, Any], now: datetime) -> date:
+    import business_marketing
+    return now.astimezone(business_marketing.business_tz(business)).date()
+
+
+def expiry(prog: Dict[str, Any], business: Dict[str, Any], now: datetime) -> Optional[date]:
+    """The last day a thank-you made now works: thanks_days from today on the
+    business's clock, or None (no end)."""
+    days = prog.get("thanks_days")
+    return _today(business, now) + timedelta(days=int(days)) if days else None
 
 
 # ── the thank-you ─────────────────────────────────────────────────────
@@ -371,10 +447,11 @@ def paid_how(entry: Dict[str, Any], invoices: List[Dict[str, Any]], now: datetim
     return None
 
 
-def issue(business_id: str, entry: Dict[str, Any], how: str, reward_cents: int) -> Optional[Dict[str, Any]]:
+def issue(business_id: str, entry: Dict[str, Any], how: str, reward_cents: int, *,
+          expires_on: Optional[date] = None) -> Optional[Dict[str, Any]]:
     """The thank-you for one friend's booking: one row, made once. None when
     it exists already (this booking or this friend), the friend used their
-    own link, or nothing could be saved."""
+    own link, or nothing could be saved. expires_on: its last day (expiry)."""
     offer = entry.get("offer") or {}
     referrer = offer.get("referrer_contact_id")
     friend = entry.get("contact_id")
@@ -391,7 +468,8 @@ def issue(business_id: str, entry: Dict[str, Any], how: str, reward_cents: int) 
         saved = sb_clients.sb_post_as_service("/referral_rewards", {
             "business_id": business_id, "referrer_contact_id": str(UUID(str(referrer))),
             "friend_contact_id": str(UUID(str(friend))) if friend else None, "friend_booking_id": eid,
-            "code": code, "amount_cents": int(reward_cents), "paid_how": how})
+            "code": code, "amount_cents": int(reward_cents), "paid_how": how,
+            "expires_on": expires_on.isoformat() if expires_on else None})
         if saved:
             return saved[0]
         if _read(f"/referral_rewards?business_id=eq.{business_id}&or=({seen})&select=id&limit=1"):
@@ -429,9 +507,13 @@ def issue_paid(now: datetime) -> int:
             friends = [e["contact_id"] for e in entries if e.get("contact_id")]
             invoices = _read(f"/invoices?business_id=eq.{bid}&contact_id=in.({_ids(friends)})&status=eq.paid"
                              "&select=contact_id,paid_at&limit=1000") if friends else []
+            ends = None
+            if prog.get("thanks_days"):
+                business = _read(f"/businesses?id=eq.{bid}&select=*&limit=1")
+                ends = expiry(prog, business[0], now) if business else None
             for e in entries:
                 how = paid_how(e, invoices, now)
-                if how and issue(bid, e, how, int(prog.get("reward_cents") or DEFAULT_CENTS)):
+                if how and issue(bid, e, how, int(prog.get("reward_cents") or DEFAULT_CENTS), expires_on=ends):
                     made += 1
         except Exception as e:
             logger.warning("thank-yous skipped biz=%s: %s", bid[:8], e)
@@ -468,6 +550,10 @@ async def send_unsent(now: datetime) -> Dict[str, int]:
                 book = await asyncio.to_thread(booking_page, business)
             except Exception:
                 book = None
+            try:
+                own_words = ((await asyncio.to_thread(program, bid)) or {}).get("thanks_words")
+            except Exception:
+                own_words = None                      # the suggested words still carry the code
             for r in mine:
                 referrer = people.get(str(r["referrer_contact_id"]))
                 channel = (await journeys._channel(client, business, referrer) if referrer else None) or "none"
@@ -487,7 +573,7 @@ async def send_unsent(now: datetime) -> Dict[str, int]:
                         own = None
                 words = thanks_words(business=business, referrer=referrer,
                                      friend=people.get(str(r.get("friend_contact_id"))), reward=r, book=book,
-                                     own_link=own)
+                                     own_link=own, words=own_words)
                 try:
                     await journeys.send(client, business, referrer, channel, subject=words["subject"],
                                         email=words["email"], text=words["text"],
@@ -555,6 +641,10 @@ async def overview(business: Dict[str, Any], *, now: Optional[datetime] = None) 
         "friend_cents": shown["amount_cents"], "reward_cents": shown["reward_cents"],
         "in_notes": bool(shown.get("in_notes")), "ps": ps_words(shown, "(their own link)"),
         "rebook_on": bool(rebook.get("on")) and journeys.allowed(business, "rebook"),
+        "thanks_days": shown.get("thanks_days"),
+        "thanks_words": {**THANKS_DEFAULTS, **{k: v for k, v in (shown.get("thanks_words") or {}).items()
+                                               if k in THANKS_DEFAULTS}},
+        "thanks_defaults": THANKS_DEFAULTS,
         "results": None, "waiting": [], "thanks": []}
     if not prog:
         return out
@@ -591,6 +681,7 @@ async def overview(business: Dict[str, Any], *, now: Optional[datetime] = None) 
     out["thanks"] = [{"id": str(r["id"]), "code": r["code"], "amount_cents": r["amount_cents"],
                       "referrer": name(r["referrer_contact_id"]), "friend": name(r.get("friend_contact_id")),
                       "issued_at": r["issued_at"], "sent_by": r.get("sent_by"), "sent_at": r.get("sent_at"),
+                      "expires_on": r.get("expires_on"),
                       "used": None if used is None else str(r["id"]) in used} for r in rewards[:10]]
     return out
 
@@ -601,6 +692,20 @@ class ReferralIn(BaseModel):
     friend_cents: Optional[int] = Field(default=None, ge=100, le=100_000)
     reward_cents: Optional[int] = Field(default=None, ge=100, le=100_000)
     in_notes: Optional[bool] = None
+    # The thank-you: how many days a new code is good for (0 = no end), and
+    # the owner's words (any of subject / email / text; reset_words goes back
+    # to the suggested ones).
+    thanks_days: Optional[int] = Field(default=None, ge=0, le=THANKS_DAYS[1])
+    thanks_words: Optional[Dict[str, str]] = None
+    reset_words: bool = False
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.thanks_days and self.thanks_days < THANKS_DAYS[0]:
+            raise ValueError(f"A thank-you is good for at least {THANKS_DAYS[0]} days, or has no end.")
+        if self.thanks_words is not None:
+            self.thanks_words = check_words(self.thanks_words)
+        return self
 
 
 class LinkIn(BaseModel):
@@ -615,7 +720,9 @@ class PaidIn(BaseModel):
 
 @router.put("/{business_id}/referral")
 async def set_referral(business_id: str, body: ReferralIn, biz: dict = Depends(business_access("owner"))):
-    """Turn refer-a-friend on or off, and set what each side gets."""
+    """Turn refer-a-friend on or off, and set what each side gets and the
+    thank-you (its words, how long it's good for). Settings save while it's
+    off too: the program is made paused, and turning it on later keeps them."""
     bid = str(biz["id"])
     if body.on and not offers.payments_ready(biz):
         raise HTTPException(409, "Connect card payments in Payments first, so the friend's offer can be taken off "
@@ -624,28 +731,35 @@ async def set_referral(business_id: str, body: ReferralIn, biz: dict = Depends(b
         prog = await asyncio.to_thread(program, bid)
     except RuntimeError:
         raise HTTPException(503, "Refer a friend couldn't be read just now. Nothing changed.") from None
+    settings: Dict[str, Any] = {}
+    if body.friend_cents is not None:
+        settings["amount_cents"] = body.friend_cents
+    if body.reward_cents is not None:
+        settings["reward_cents"] = body.reward_cents
+    if body.in_notes is not None:
+        settings["in_notes"] = body.in_notes
+    if body.thanks_days is not None:
+        settings["thanks_days"] = body.thanks_days or None
+    if body.reset_words:
+        settings["thanks_words"] = None
+    elif body.thanks_words:
+        settings["thanks_words"] = {**((prog or {}).get("thanks_words") or {}), **body.thanks_words}
     if prog is None:
-        if not body.on:
+        if not body.on and not settings:
             return {"ok": True, "referral": await overview(biz)}
         code = PROGRAM_CODE
         if await asyncio.to_thread(code_in_use, bid, code):
             code = f"{PROGRAM_CODE}-{_random(4)}"
-        row = {"business_id": bid, "code": code, "kind": "amount_off", "amount_cents": body.friend_cents or DEFAULT_CENTS,
-               "title": "Refer a friend", "who": "first_visit", "one_per_person": True, "status": "on",
-               "source": "referral", "reward_cents": body.reward_cents or DEFAULT_CENTS,
-               "in_notes": True if body.in_notes is None else body.in_notes}
+        row = {"business_id": bid, "code": code, "kind": "amount_off", "amount_cents": DEFAULT_CENTS,
+               "title": "Refer a friend", "who": "first_visit", "one_per_person": True,
+               "status": "on" if body.on else "paused", "source": "referral", "reward_cents": DEFAULT_CENTS,
+               "in_notes": True, **settings}
         saved = await asyncio.to_thread(sb_clients.sb_post_as_service, "/offers", row)
         if not saved:
-            raise HTTPException(503, "Refer a friend didn't switch on. Try again in a minute.")
+            raise HTTPException(503, "That didn't save. Nothing changed. Try again in a minute.")
     else:
         patch: Dict[str, Any] = {"status": "on" if body.on else "paused",
-                                 "updated_at": datetime.now(timezone.utc).isoformat()}
-        if body.friend_cents is not None:
-            patch["amount_cents"] = body.friend_cents
-        if body.reward_cents is not None:
-            patch["reward_cents"] = body.reward_cents
-        if body.in_notes is not None:
-            patch["in_notes"] = body.in_notes
+                                 "updated_at": datetime.now(timezone.utc).isoformat(), **settings}
         saved = await asyncio.to_thread(
             sb_clients.sb_patch_as_service, f"/offers?id=eq.{prog['id']}&business_id=eq.{bid}&source=eq.referral",
             patch)
@@ -691,8 +805,10 @@ async def friend_paid(business_id: str, body: PaidIn, biz: dict = Depends(busine
     offer = (entry or {}).get("offer") or {}
     if not entry or entry.get("status") != "active" or offer.get("part") != "friend" or not offer.get("applies"):
         raise HTTPException(404, "That isn't a booking a friend made with a client's link.")
-    reward = await asyncio.to_thread(issue, bid, entry, "owner",
-                                     int((prog or {}).get("reward_cents") or DEFAULT_CENTS))
+    ends = expiry(prog, biz, datetime.now(timezone.utc)) if prog else None
+    reward = await asyncio.to_thread(lambda: issue(bid, entry, "owner",
+                                                   int((prog or {}).get("reward_cents") or DEFAULT_CENTS),
+                                                   expires_on=ends))
     if reward is None:
         raise HTTPException(409, "Their thank-you was already made.")
     return {"ok": True, "referral": await overview(biz)}
