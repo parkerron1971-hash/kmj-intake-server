@@ -119,11 +119,12 @@ async def _execute_row(row: Dict[str, Any]) -> None:
     # fired unprompted, forever, on a recurrence, with the chat path's
     # _gate_class_c nowhere near it.
     #
-    # What this gate does NOT do: block recurring class-C. Recurring
-    # invoices are a deliberate product feature (see action_registry's
-    # note on create_invoice + auto_send), so refusing them here would
-    # break intended behavior — that's Kevin's ruling to make, not a
-    # gate's. What it DOES enforce is the registry's own standing rule
+    # Recurring class C keeps running: every row here was put on the
+    # schedule by the owner (schedule_action, which is itself class C and
+    # so only reachable from a prompted chat turn, or approving a post
+    # with a time), so the call names owner_scheduled and the engine's
+    # unattended-class-C refusal (2026-10-11) lets it through with that
+    # rule on the ledger. What this gate also enforces is the registry's own standing rule
     # that BULK verbs are never autonomy-eligible at any class, which
     # this path has been quietly violating. Unknown/unclassified fails
     # closed, matching _gate_class_c.
@@ -138,7 +139,7 @@ async def _execute_row(row: Dict[str, Any]) -> None:
             import policy_engine
             verdict = policy_engine.evaluate(
                 str(biz.get("id") or ""), verb=atype, surface="scheduled",
-                prompted=False, biz_row=biz)
+                prompted=False, biz_row=biz, owner_authority="owner_scheduled")
             # Cadence is NOT appended to the rule: "scheduled" already
             # implies unattended, and payload.recurrence carries the
             # once-vs-recurring fact in a queryable field.

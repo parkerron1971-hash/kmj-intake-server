@@ -195,6 +195,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                  "go through the door under their own class"),
     "stop_assignment":        _w("A", "flips an open assignment to stopped; moves already "
                                  "made stay made, nothing new happens"),
+    "confirm_workflow_step":  _w("C", "releases an automation step that paused for the owner's OK; "
+                                 "the step it releases may send, charge or book, so the verb "
+                                 "carries that step's worst class. The owner's tap on the pause "
+                                 "notification, or their words in chat, is the approval"),
     "grant_standing_permission":  _w("C", "lets Chief run one KIND of class-C proposal on its own "
                                      "after a recall window — the verb that releases future sends "
                                      "is classified by what it can set in motion; the practitioner's "

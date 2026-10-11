@@ -72,13 +72,15 @@ def test_owner_can_switch_it_on(fake):
     """The setting is a real control, not decoration — an explicit
     'enabled' lets a regulated practice opt in."""
     v = pe.evaluate("b1", verb="send_sms", surface="autopilot",
-                    prompted=False, biz_row=_biz("therapist", autonomy="enabled"))
+                    prompted=False, biz_row=_biz("therapist", autonomy="enabled"),
+                    owner_authority="autopilot_level")
     assert v.allowed
 
 
 def test_unregulated_business_is_unaffected(fake):
     v = pe.evaluate("b1", verb="send_sms", surface="autopilot",
-                    prompted=False, biz_row=_biz("coach"))
+                    prompted=False, biz_row=_biz("coach"),
+                    owner_authority="autopilot_level")
     assert v.allowed
 
 
@@ -87,7 +89,8 @@ def test_non_client_facing_work_still_runs_for_regulated(fake):
     therapist to switch the protection off."""
     for verb in ("create_invoice", "log_expense", "create_task"):
         v = pe.evaluate("b1", verb=verb, surface="scheduled",
-                        prompted=False, biz_row=_biz("therapist"))
+                        prompted=False, biz_row=_biz("therapist"),
+                        owner_authority="owner_scheduled")
         assert v.allowed, f"{verb} is not client contact and must still run"
 
 
@@ -107,14 +110,92 @@ def test_registry_drift_fails_closed(fake):
     assert v.rule == "registry:unclassified"
 
 
-def test_class_c_unattended_is_recorded_not_refused(fake):
-    """Recurring invoices are a real feature. Whether they should keep
-    firing unattended is Kevin's ruling; the ledger's job is to make the
-    exposure visible, not to decide it in a helper."""
+# ─── Unattended class C runs only on an owner instruction (2026-10-11) ─
+
+def test_owner_scheduled_class_c_still_runs(fake):
+    """Recurring invoices and other schedules the owner set up keep
+    running, and the ledger names the owner act that let them."""
     v = pe.evaluate("b1", verb="create_invoice", surface="scheduled",
-                    prompted=False, biz_row=_biz())
+                    prompted=False, biz_row=_biz(), owner_authority="owner_scheduled")
     assert v.allowed
-    assert v.rule == "scheduled:C:unattended"
+    assert v.rule == "scheduled:C:owner_scheduled"
+    assert "you scheduled it" in v.reason
+
+
+@pytest.mark.parametrize("surface,authority", [
+    ("scheduled", "owner_scheduled"),
+    ("workflow", "confirmed_step"),
+    ("trust-track", "trust_grant"),
+    ("autopilot", "autopilot_level"),
+])
+def test_every_owner_authority_lets_class_c_through(fake, surface, authority):
+    v = pe.evaluate("b1", verb="send_sms", surface=surface, prompted=False,
+                    biz_row=_biz(), owner_authority=authority)
+    assert v.allowed
+    assert v.rule == f"{surface}:C:{authority}"
+
+
+@pytest.mark.parametrize("surface", ["agent", "assignment", "plan", "workflow",
+                                     "autopilot", "scheduled", "trust-track", "connector"])
+def test_unattended_class_c_without_an_owner_act_is_refused(fake, surface, monkeypatch):
+    """The agent and assignment loops stayed off class C only because
+    their tools never offered it. The rails now refuse it themselves."""
+    monkeypatch.delenv("POLICY_UNATTENDED_C", raising=False)
+    for verb in ("send_sms", "send_invoice", "create_invoice", "mark_invoice_paid"):
+        v = pe.evaluate("b1", verb=verb, surface=surface, prompted=False, biz_row=_biz())
+        assert not v.allowed, f"{verb} on {surface} must not run unattended"
+        assert v.rule == pe.UNATTENDED_C_RULE
+        assert " " not in v.rule and len(v.reason.split()) > 3
+
+
+def test_an_unknown_authority_counts_as_none(fake):
+    v = pe.evaluate("b1", verb="send_sms", surface="agent", prompted=False,
+                    biz_row=_biz(), owner_authority="chief_decided")
+    assert not v.allowed and v.rule == pe.UNATTENDED_C_RULE
+
+
+def test_prompted_class_c_is_untouched(fake):
+    """The practitioner asking is the approval; nothing about chat,
+    approvals or standing releases changes."""
+    for surface in ("chat", "approval", "standing", "notification"):
+        v = pe.evaluate("b1", verb="send_sms", surface=surface, prompted=True, biz_row=_biz())
+        assert v.allowed
+        assert v.rule == f"{surface}:C"
+
+
+def test_unattended_class_a_is_untouched(fake):
+    v = pe.evaluate("b1", verb="create_task", surface="agent", prompted=False, biz_row=_biz())
+    assert v.allowed and v.rule == "agent:A"
+
+
+def test_kill_switch_restores_record_only(fake, monkeypatch):
+    monkeypatch.setenv("POLICY_UNATTENDED_C", "allow")
+    v = pe.evaluate("b1", verb="send_sms", surface="agent", prompted=False, biz_row=_biz())
+    assert v.allowed
+    assert v.rule == "agent:C:unattended"
+    # An owner act still names itself under the switch.
+    v = pe.evaluate("b1", verb="send_sms", surface="scheduled", prompted=False,
+                    biz_row=_biz(), owner_authority="owner_scheduled")
+    assert v.rule == "scheduled:C:owner_scheduled"
+
+
+def test_kill_switch_typo_still_refuses(fake, monkeypatch):
+    monkeypatch.setenv("POLICY_UNATTENDED_C", "alow")
+    v = pe.evaluate("b1", verb="send_sms", surface="agent", prompted=False, biz_row=_biz())
+    assert not v.allowed
+
+
+def test_the_earlier_refusals_still_win(fake):
+    """A paused business, a bulk verb and a regulated practice keep the
+    reason the practitioner recognises, even with an owner act named."""
+    v = pe.evaluate("b1", verb="send_sms", surface="autopilot", prompted=False,
+                    biz_row=_biz("therapist"), owner_authority="autopilot_level")
+    assert v.rule == "vertical:client_facing_disabled"
+    paused = _biz()
+    paused["settings"]["automations_paused"] = True
+    v = pe.evaluate("b1", verb="send_sms", surface="scheduled", prompted=False,
+                    biz_row=paused, owner_authority="owner_scheduled")
+    assert v.rule == "business:automations_paused"
 
 
 def test_reads_are_cheap_and_allowed(fake):
