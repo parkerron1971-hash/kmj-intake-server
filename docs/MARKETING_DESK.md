@@ -636,6 +636,20 @@ $10, get $10") and Kevin's default 3 ("go", 2026-10-10).
 - **Migration.** `supabase/APPLY-2026-10-11-refer-a-friend.sql`, then
   `supabase/APPLY-2026-10-11-thank-you-words.sql`.
 
+### Chief and offers (2026-10-11)
+
+`chief_offer_actions.py`: Chief does in chat what the owner does in Grow,
+Offers, through the page's own functions (no second write path). Owner
+only, on the owner's word in this chat turn; never unattended, never
+scheduled (`schedule_action` refuses them). Class C: a voice turn is held
+for a spoken yes that names what it gives.
+
+| verb | class | how | what |
+|---|---|---|---|
+| `make_offer` | write C | tag | an offer (`offers.create_offer`): amount, percent or free item; who; slow hours; start and end day; most uses; code. Nothing goes out; the reply gives the code and link |
+| `change_offer` | write C | tag | pause or turn back on an offer by its code, or its end day or most uses (`offers.change_offer`) |
+| `set_refer_a_friend` | write C | tag | refer a friend on or off, dollars each way, the P.S. on rebook notes, how long thank-you codes are good for (`refer_a_friend.set_referral`) |
+
 ### The weekly suggestion and the fan-out (B8)
 
 `business_marketing_planner.py` (2026-10-07). A business at the `suggest`

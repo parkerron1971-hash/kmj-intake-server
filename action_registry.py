@@ -649,6 +649,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                     "connected accounts. A post that was seen cannot be unseen. Owner only, on "
                                     "the owner's yes in the turn; never unattended (chief_marketing_actions "
                                     "holds every run nobody asked for)"),
+    # Offers and refer a friend (2026-10-11, chief_offer_actions): the Offers
+    # page's own functions. Money-touching, so never unprompted.
+    "make_offer":           _w("C", "makes an offer (offers.create_offer): a code and link that lower what a "
+                                    "customer pays at booking once someone uses it. Nothing is sent; it can be "
+                                    "paused. Owner only, never unattended"),
+    "change_offer":         _w("C", "pauses or turns back on one of the owner's offers, or changes its end day "
+                                    "or most uses (offers.change_offer): what customers pay at booking changes "
+                                    "with it. Owner only, never unattended"),
+    "set_refer_a_friend":   _w("C", "turns refer a friend on or off and sets what each side gets "
+                                    "(refer_a_friend.set_referral): once on, the friend's first-visit discount "
+                                    "applies at booking and thank-you codes worth money are emailed by themselves. "
+                                    "Owner only, never unattended"),
     "create_booking":       _w("C", "creates the appointment AND emails the client a confirmation "
                                     "(send_confirmation defaults true). The send is what makes this "
                                     "C while cancel/reschedule are A"),
