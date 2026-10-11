@@ -58,7 +58,7 @@ Each merchant may connect to only one Solutionist business per environment. Sand
 
 If the token exchange succeeds but persistence fails or the merchant is already bound elsewhere, the callback refuses the connection. It deliberately does not revoke that merchant's entire grant, which would break the other business's valid connection. Check Solutionist status; an unpersisted grant can be removed from the Square seller dashboard when no valid connection relies on it. Authorization attempts expire in ten minutes and a new start invalidates older attempts.
 
-Refresh is on demand seven days before expiry; there is no background refresh or revocation-retry worker yet. Revocation from the Square dashboard is detected on the next API call, not pushed to this pilot. An expired/invalid authorization yields a reconnect message. These are pilot limitations, not production-sync readiness.
+Refresh is on demand seven days before expiry, including reads performed by the automatic sync worker. There is no automatic revocation-retry worker yet. Revocation from the Square dashboard is detected on the next API call, not pushed to this pilot. An expired/invalid authorization yields a reconnect message. These are pilot limitations, not production-sync readiness.
 
 ## Verification (read-only)
 
