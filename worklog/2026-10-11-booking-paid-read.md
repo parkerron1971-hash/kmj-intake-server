@@ -6,7 +6,7 @@ asked: "found while building refer-a-friend (step 3 of the approved Reach plan),
 status: waiting on review
 prs: [kmj-intake-server#1369]
 migrations: []
-left_undone: ["payments made online before this fix were not recorded on their bookings; none are on file (no booking has paid_at), so there is nothing to backfill"]
+left_undone: ["a booking paid online before this fix still shows unpaid here; any such payment is in Stripe (Payments), not on the booking, and is not backfilled"]
 decisions: ["read the contact from the booking's data (contact_id:data->>contact_id), where the booking widget keeps it, so the rest of the handler is unchanged", "the test checks every field the read names against module_entries' live columns, so a read that names a missing column fails in CI, not silently in production"]
 related: [2026-10-10-offers.md]
 ---
