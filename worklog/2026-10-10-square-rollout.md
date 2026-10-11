@@ -6,7 +6,7 @@ asked: "ok finish work on it"
 status: waiting on Kevin
 prs: [kmj-intake-server#1356, solutionist-studio#1183]
 migrations: ["APPLY-2026-10-08-square-connections.sql (applied 2026-10-10)", "APPLY-2026-10-09-square-locations.sql (applied 2026-10-10)"]
-left_undone: ["Square developer sign-in", "store Sandbox OAuth application secret", "enable owner-only sandbox pilot and complete real OAuth/preview/disconnect acceptance"]
+left_undone: ["sandbox account consent", "complete real OAuth/preview/disconnect acceptance"]
 decisions: ["approved read-only pilot; no public production-seller enablement", "preserve current trunk changes"]
 related: [2026-10-09-square-location-preview.md]
 ---
@@ -21,3 +21,5 @@ Live navigation preflight found the OAuth return link used an unsupported top-le
 Rollout: backend #1356 merged as c95fed7311f4739568b741d7a1e59c3df1377667 and Railway deployment c5b1bf4c-57f4-416f-a91b-536b56097e15 succeeded. Frontend #1183 merged as 5e2f91e506277620912ff3a7a24f47216b5e51ab after full frontend CI passed. Both migrations applied to the verified production Supabase project; live results: RLS true, policies 0, location columns 3, service-only SECURITY INVOKER functions 8, browser table access false, service table access true. Status/locations endpoints reject unauthenticated requests with 401; OAuth entry/callback fail closed with 503 while disabled. No Square merchant has been connected and no bookings imported. Sign-in is the remaining external blocker. The SQL editor initially combined text during the second paste; that attempt failed parsing. Replaced the entire editor with verified exact SQL and then successfully applied the location migration.
 
 Frontend production verification: Vercel deployment 7y9ktja9AGdYwMwdMQoxbDpNNzG2 succeeded for merge commit 5e2f91e506277620912ff3a7a24f47216b5e51ab. The public app entry leads to main-D0XPMhsB.js → PractitionerBuild-C1Q1TaIF.js → IntegrationsHub-Bp0sUXql.js; the final asset contains Square Appointments and /square/bookings/preview. Both implementation deployments are complete. The remaining handoff is only private secret configuration and real sandbox acceptance after Square sign-in.
+
+Sign-in continuation: securely transferred the existing Sandbox OAuth application secret into Railway and enabled the sandbox-only, single-owner pilot. Activation deployment bfe499a8-e7d0-4c3f-8a00-6ab8b5326e70 succeeded at the existing backend merge commit. Launched Default Test Account in the Sandbox Seller Dashboard. The deployed Solutionist Square card shows Sandbox / Not connected and its Connect button successfully reaches Square consent with appointment, all-appointment/calendar, and merchant-profile reads only. Browser action-time permission confirmation requested at the actual consent screen; no grant, callback or preview success is claimed while it is pending. No payment settings changed.
