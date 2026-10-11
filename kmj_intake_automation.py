@@ -687,7 +687,10 @@ from journeys_router import router as journeys_api_router
 app.include_router(journeys_api_router)
 # Offers (2026-10-10, the Reach plan's step 3): a code, a link and a QR code
 # in one. /offers/* (business_access; /offers/public/* is the booking page's
-# read of an offer's words).
+# read of an offer's words). Refer a friend (2026-10-11) adds
+# /offers/{biz}/referral* (owner); its thank-you sweep registers in startup().
+from refer_a_friend import router as referral_api_router
+app.include_router(referral_api_router)
 from offers import router as offers_api_router
 app.include_router(offers_api_router)
 # S6 per-business email identity — /email-domain/* (owner-only). Domain
@@ -1824,6 +1827,14 @@ async def startup():
                           "interval", minutes=30, id="journeys_tick")
     except Exception as e:
         print(f"   [warn] journeys sweep not scheduled: {e}")
+    # Refer a friend (2026-10-11): a regular's thank-you code once the
+    # friend's visit is paid, sent in daytime. Kill switch: REFER_A_FRIEND=off.
+    try:
+        import refer_a_friend as _referral
+        scheduler.add_job(g("referral_tick", _referral.rewards_tick),
+                          "interval", minutes=15, id="referral_tick")
+    except Exception as e:
+        print(f"   [warn] referral sweep not scheduled: {e}")
     # Chief Layers arc — trusted-autonomy sweep: executes pending
     # proposals ONLY in categories the practitioner explicitly granted
     # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.

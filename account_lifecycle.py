@@ -307,6 +307,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "journey_sends",
     # The business's offers (APPLY-2026-10-10-offers.sql).
     "offers",
+    # Refer a friend: each client's code and the thank-yous made
+    # (APPLY-2026-10-11-refer-a-friend.sql).
+    "referral_links",
+    "referral_rewards",
     "marketing_posts",
     "marketing_runs",
     "marketing_desks",
@@ -697,6 +701,9 @@ _IMPORT_SKIP = {
     # Offers: a restored business makes its offers again (the codes and their
     # rules are its own decisions); the export keeps them for reference.
     "offers",
+    # Refer a friend: codes and thank-yous name contacts by id, and a restore
+    # gives contacts new ids; the export keeps them for reference.
+    "referral_links", "referral_rewards",
     # The desk's settings are not restored either (review of #1307): an
     # uploaded file could switch the weekly plan on or name another
     # business's accounts and photos. The owner sets the desk up again; the

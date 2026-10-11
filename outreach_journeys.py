@@ -369,32 +369,48 @@ def _claim(business_id: str, kind: str, contact_id: str, key: str, channel: str)
     return bool(saved)
 
 
-async def _deliver(client, business: Dict[str, Any], kind: str, cfg: Dict[str, Any], contact: Dict[str, Any],
-                   channel: str, link: Optional[str], review: Optional[str]) -> None:
-    words = {"contact": contact, "business": business, "link": link, "review": review}
+async def send(client, business: Dict[str, Any], contact: Dict[str, Any], channel: str, *, subject: str,
+               email: str, text: str, event: Dict[str, Any]) -> None:
+    """One note to one person, by email (the business's sender, reply
+    routing, suppression, unsubscribe) or by text, logged on their timeline.
+    Raises when it can't be sent. refer_a_friend's thank-you goes this way."""
     if channel == "email":
         import email_sender
         await email_sender.send_via_resend(
             to_email=contact["email"].strip(), to_name=contact.get("name"),
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
-            from_name=business.get("name") or None,
-            subject=fill(cfg["subject"], **words), body=fill(cfg["email"], **words),
+            from_name=business.get("name") or None, subject=subject, body=email,
             reply_to=email_sender.build_routed_reply_to(str(business["id"]), str(contact["id"])) or None,
             business_id=str(business["id"]))
     else:
         from sms_routing import _send_platform_sms
         from sms_service import _store_sms, compose_outbound_body, normalize_phone
         phone = normalize_phone(contact.get("phone") or "")
-        body = compose_outbound_body(business.get("name"), fill(cfg["text"], **words), include_optout=True)
+        body = compose_outbound_body(business.get("name"), text, include_optout=True)
         msg_id = await _send_platform_sms(phone, body, business_id=str(business["id"]))
         await _store_sms(client, str(business["id"]), str(contact["id"]), phone, body, "outbound",
                          telnyx_id=msg_id or "", sent_by="system")
     try:
         sb_clients.sb_post_as_service("/events", {
             "business_id": str(business["id"]), "contact_id": str(contact["id"]), "event_type": "journey_sent",
-            "source": "journeys", "data": {"journey": kind, "channel": channel}})
+            "source": "journeys", "data": event})
     except Exception as e:  # pragma: no cover - the note went out; the log is best-effort
         logger.warning(f"journey event log failed: {e}")
+
+
+async def _deliver(client, business: Dict[str, Any], kind: str, cfg: Dict[str, Any], contact: Dict[str, Any],
+                   channel: str, link: Optional[str], review: Optional[str], ps: Optional[str] = None) -> None:
+    """ps: refer-a-friend's line with the client's own link (rebook only, when
+    the owner switched it on with those words in front of them). A text
+    keeps it only while the text stays within LIMITS."""
+    words = {"contact": contact, "business": business, "link": link, "review": review}
+    email, text = fill(cfg["email"], **words), fill(cfg["text"], **words)
+    if ps:
+        email = f"{email}\n\n{ps}"
+        if len(text) + 1 + len(ps) <= LIMITS["text"]:
+            text = f"{text} {ps}"
+    await send(client, business, contact, channel, subject=fill(cfg["subject"], **words), email=email, text=text,
+               event={"journey": kind, "channel": channel})
 
 
 # ── the sweep ─────────────────────────────────────────────────────────
@@ -471,6 +487,15 @@ async def run_business(business: Dict[str, Any], *, now: datetime, budget: int) 
     if not todo:
         return stats
     contacts = await asyncio.to_thread(_contacts, bid, sorted({c for _, c, _ in todo}))
+    referral, book = None, None
+    if any(kind == "rebook" for kind, _, _ in todo):
+        import refer_a_friend
+        referral = await asyncio.to_thread(refer_a_friend.for_notes, bid)
+        if referral:
+            try:
+                book = await asyncio.to_thread(refer_a_friend.booking_page, business)
+            except Exception as e:
+                logger.warning(f"referral booking page unread biz={bid[:8]}: {e}")
     links: Dict[Tuple[str, str], Optional[str]] = {}
     async with httpx.AsyncClient(timeout=30.0) as client:
         for kind, cid, key in todo:
@@ -498,8 +523,11 @@ async def run_business(business: Dict[str, Any], *, now: datetime, budget: int) 
             if not await asyncio.to_thread(_claim, bid, kind, cid, key, channel):
                 stats["skipped"] += 1               # already sent (or claimed by another worker)
                 continue
+            ps = None
+            if kind == "rebook" and referral:
+                ps = await asyncio.to_thread(refer_a_friend.ps_for, business, referral, contact, book, channel)
             try:
-                await _deliver(client, business, kind, cfg, contact, channel, links[(kind, channel)], review)
+                await _deliver(client, business, kind, cfg, contact, channel, links[(kind, channel)], review, ps)
             except Exception as e:
                 logger.warning(f"journey note failed biz={bid[:8]} {kind}: {e}")
                 stats["skipped"] += 1
@@ -560,6 +588,8 @@ async def overview(business: Dict[str, Any], *, now: Optional[datetime] = None) 
         f"&select=journey,channel&limit=10000")
     level = business_marketing.level_for(business)
     week = level["level"] in WEEK_LEVELS
+    import refer_a_friend
+    referral = await asyncio.to_thread(refer_a_friend.for_notes, bid)
     out = []
     for kind in JOURNEYS:
         ok = kind not in WEEK_ONLY or week
@@ -578,6 +608,9 @@ async def overview(business: Dict[str, Any], *, now: Optional[datetime] = None) 
         out.append({"kind": kind, "on": bool(cfg.get("on")) and ok, "locked": not ok,
                     "settings": {k: cfg[k] for k in ("days", "hours_after") if k in cfg},
                     "words": {w: cfg[w] for w in WORDS}, "defaults": {w: DEFAULTS[kind][w] for w in WORDS},
-                    "sent": counts, "through_link": through})
+                    "sent": counts, "through_link": through,
+                    # Refer a friend's P.S., added to this note while that is on (Grow, Offers).
+                    "ps": refer_a_friend.ps_words(referral, "(their own link)")
+                    if kind == "rebook" and referral else None})
     return {"journeys": out, "review_url": review_url(settings), "texts_on": texts_on(),
             "level": level["level"], "upgrade": level["upgrade"], "daily_cap": DAILY_CAP}
