@@ -902,7 +902,7 @@ async def _release_sms_lines(client: httpx.AsyncClient, business_id: str) -> int
             f"{SUPABASE_URL}/rest/v1/sms_numbers", headers=_service_headers(),
             params={"business_id": f"eq.{business_id}",
                     "status": "in.(active,suspended,releasing)",
-                    "select": "id,phone_number,provider_sid"})
+                    "select": "id,phone_number,provider_sid,account_sid"})
         rows = r.json() if r.status_code < 400 else []
     except Exception as e:
         logger.warning(f"[lifecycle] could not list sms lines for {business_id}: {e}")
@@ -913,8 +913,10 @@ async def _release_sms_lines(client: httpx.AsyncClient, business_id: str) -> int
             if sid:
                 import twilio_sms
                 from starlette.concurrency import run_in_threadpool
-                await run_in_threadpool(twilio_sms.detach_from_service, sid)
-                await run_in_threadpool(twilio_sms.release_number, sid)
+                # A business's own number (ISV) is released from its sub-account.
+                extra = (row["account_sid"],) if row.get("account_sid") else ()
+                await run_in_threadpool(twilio_sms.detach_from_service, sid, *extra)
+                await run_in_threadpool(twilio_sms.release_number, sid, *extra)
             released += 1
         except Exception as e:
             logger.error(f"[lifecycle] release of {row.get('phone_number')} (sid={sid}) "

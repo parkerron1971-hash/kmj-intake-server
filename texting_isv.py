@@ -25,6 +25,9 @@ Low-Volume Standard brands) step by step:
      our inbound and delivery webhooks.
   5. The CAMPAIGN (Low Volume Mixed), only once Twilio approves the brand,
      with the exact words the owner saw when they sent it.
+  6. Once approved (plan step 4), the business's NUMBER in its sub-account:
+     the one it already has with us moves there, or one is bought there,
+     and joins its messaging service (ensure_number).
 
 Every step is safe to run again. A step that already happened is found (its
 id saved on the registration, or found in the business's own sub-account,
@@ -486,6 +489,74 @@ def send(t: Dict[str, Any], *, business_id: str, name: str, answers: Dict[str, A
     ensure_brand(api, t, save)
     ensure_service(api, t, name, save)
     return t
+
+
+# ── the business's number, once approved (plan step 4) ───────────────
+
+def sub_token(account_sid: str) -> str:
+    """The sub-account's auth token (memory only): Twilio signs webhooks for
+    a sub-account's numbers with it."""
+    return sub_api(account_sid)._token
+
+
+def _attach_number(api: Api, service_sid: str, pn_sid: str) -> None:
+    try:
+        api.post(f"{MESSAGING}/Services/{service_sid}/PhoneNumbers", {"PhoneNumberSid": pn_sid})
+    except TwilioRefused as e:
+        if "already" in e.message.lower() or e.code == 21710:
+            return
+        raise
+
+
+def ensure_number(t: Dict[str, Any], *, platform_sid: Optional[str], area_code: Optional[str],
+                  save: Save) -> Dict[str, Any]:
+    """Step 4: the business's number in its own sub-account, on its own
+    messaging service. The number it already has with us (platform_sid)
+    MOVES, so its clients keep it; otherwise one is bought in the business's
+    area code. Returns {sid, phone_number, moved}. Idempotent: a number
+    already in the sub-account is found, never bought twice."""
+    api = sub_api(str(t["account_sid"]))
+    mg = str(t["service_sid"])
+    base = webhook_base()
+    if not t.get("number_sid"):
+        if platform_sid:
+            try:
+                api.get(f"{API}/Accounts/{api.sid}/IncomingPhoneNumbers/{platform_sid}.json")
+                moved = True                              # moved already (a retry)
+            except TwilioRefused:
+                moved = False
+            if not moved:
+                p = parent()
+                p.post(f"{API}/Accounts/{p.sid}/IncomingPhoneNumbers/{platform_sid}.json",
+                       {"AccountSid": api.sid})
+            num = api.get(f"{API}/Accounts/{api.sid}/IncomingPhoneNumbers/{platform_sid}.json")
+            t.update(number_sid=num["sid"], number=num.get("phone_number"), number_moved=True)
+        else:
+            have = api.get(f"{API}/Accounts/{api.sid}/IncomingPhoneNumbers.json").get("incoming_phone_numbers") or []
+            if have:
+                num = have[0]
+            else:
+                params: Dict[str, Any] = {"SmsEnabled": "true", "PageSize": 5}
+                if area_code:
+                    params["AreaCode"] = area_code
+                found = api.get(f"{API}/Accounts/{api.sid}/AvailablePhoneNumbers/US/Local.json", params) \
+                    .get("available_phone_numbers") or []
+                if not found and area_code:
+                    found = api.get(f"{API}/Accounts/{api.sid}/AvailablePhoneNumbers/US/Local.json",
+                                    {"SmsEnabled": "true", "PageSize": 5}).get("available_phone_numbers") or []
+                if not found:
+                    raise TwilioDown("no local numbers available right now")
+                num = api.post(f"{API}/Accounts/{api.sid}/IncomingPhoneNumbers.json", {
+                    "PhoneNumber": found[0]["phone_number"], "FriendlyName": "Solutionist business line",
+                    "SmsUrl": f"{base}/webhooks/twilio/sms", "SmsMethod": "POST",
+                    "StatusCallback": f"{base}/webhooks/twilio/status", "StatusCallbackMethod": "POST"})
+            t.update(number_sid=num["sid"], number=num.get("phone_number"), number_moved=False)
+        save(t)
+    if not t.get("number_attached"):
+        _attach_number(api, mg, str(t["number_sid"]))
+        t["number_attached"] = True
+        save(t)
+    return {"sid": t["number_sid"], "phone_number": t["number"], "moved": bool(t.get("number_moved"))}
 
 
 # ── where it stands (the sweep and Twilio's status pings) ─────────────
