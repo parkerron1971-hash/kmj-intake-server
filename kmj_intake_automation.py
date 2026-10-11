@@ -1622,6 +1622,13 @@ async def startup():
                           "interval", minutes=10, id="booking_session_sync")
     except Exception as e:
         print(f"   [warn] booking-session sync not scheduled: {e}")
+    # Square trial copies stay separate from native bookings, sessions and reminders.
+    try:
+        import square_booking_sync as _square_sync
+        scheduler.add_job(g('square_booking_sync', _square_sync.sync_due_tick),
+                          'interval', minutes=1, id='square_booking_sync', max_instances=1)
+    except Exception:
+        print('   [warn] Square booking sync not scheduled')
     # Outside calendars (2026-09-26): re-read every connected private
     # calendar feed so its busy times keep blocking slots. The tick looks
     # every 5 minutes; each feed is due 15 minutes after its last sync

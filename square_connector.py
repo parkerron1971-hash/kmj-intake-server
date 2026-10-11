@@ -49,6 +49,11 @@ def config() -> Config:
     try:
         if environment not in {"sandbox", "production"} or not all(values) or not owners:
             raise ValueError()
+        for owner_id in owners:
+            UUID(owner_id)
+        if environment == 'production':
+            if os.getenv('SQUARE_PRODUCTION_PILOT_APPROVED', 'false').lower() != 'true' or values[0].startswith('sandbox-'):
+                raise ValueError()
         Fernet(values[2].encode())
         for url in values[3:]:
             parsed = urlsplit(url)

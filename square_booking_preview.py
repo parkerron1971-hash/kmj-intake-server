@@ -75,13 +75,15 @@ def booking_row(booking, location, start, end):
         at = instant(booking['start_at'])
         booking_id = booking['id']
         version = booking.get('version', 0)
-        if not isinstance(booking_id, str) or not booking_id or type(version) is not int:
+        if not isinstance(booking_id, str) or not booking_id or type(version) is not int or version < 0:
             raise ValueError()
     except (KeyError, ValueError, HTTPException):
         raise HTTPException(502, 'Square returned an incomplete appointment. Try again.') from None
     if booking.get('location_id') != location['id'] or not start <= at < end:
         return None
     segments = booking.get('appointment_segments', [])
+    if not isinstance(segments, list) or any(not isinstance(segment, dict) for segment in segments):
+        raise HTTPException(502, 'Square returned an incomplete appointment. Try again.')
     durations = [s.get('duration_minutes') for s in segments]
     duration = sum(durations) if durations and all(type(v) is int and v >= 0 for v in durations) else None
     return {'id': booking_id, 'version': version, 'start_at': at.isoformat(),
@@ -91,7 +93,9 @@ def booking_row(booking, location, start, end):
             'all_day': booking.get('all_day') is True}
 
 
-async def preview(business_id, cfg, body: PreviewRequest):
+async def preview(business_id, cfg, body: PreviewRequest, *, max_rows=None, max_requests=None):
+    max_rows = MAX_ROWS if max_rows is None else max_rows
+    max_requests = MAX_REQUESTS if max_requests is None else max_requests
     start, end = instant(body.start_at), instant(body.end_at)
     if end <= start or end - start > timedelta(days=93):
         raise HTTPException(422, 'Choose a date range of up to 93 days, with the end after the start.')
@@ -114,7 +118,7 @@ async def preview(business_id, cfg, body: PreviewRequest):
             window_end = min(window + timedelta(days=31), end)
             cursor, seen_cursors = None, set()
             while True:
-                if requests >= MAX_REQUESTS:
+                if requests >= max_requests:
                     truncated = True
                     break
                 params = {'location_id': loc_id, 'start_at_min': window.isoformat(),
@@ -123,12 +127,15 @@ async def preview(business_id, cfg, body: PreviewRequest):
                     params['cursor'] = cursor
                 payload = await sq.square(cfg, 'GET', '/v2/bookings', token=token, params=params)
                 requests += 1
-                for booking in payload.get('bookings', []):
+                page = payload.get('bookings', [])
+                if not isinstance(page, list) or any(not isinstance(item, dict) for item in page):
+                    raise HTTPException(502, 'Square returned an incomplete appointment list.')
+                for booking in page:
                     item = booking_row(booking, by_id[loc_id], start, end)
                     if item is None:
                         continue
                     old = bookings.get(item['id'])
-                    if old is None and len(bookings) >= MAX_ROWS:
+                    if old is None and len(bookings) >= max_rows:
                         truncated = True
                         break
                     if old is None or item['version'] > old['version']:
