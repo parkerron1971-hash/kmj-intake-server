@@ -170,7 +170,7 @@ ROOMS: Dict[str, Dict[str, str]] = {
         "purpose": "Emails and texts sent to many people at once, with results.",
         "next_rule": "Send the first one to their existing people, not strangers."},
     "grow/offers": {"label": "Offers",
-        "purpose": "A reason to come in: a code, a link and a QR code in one, checked at booking and counted.",
+        "purpose": "A reason to come in: a code, a link and a QR code in one, checked at booking and counted; and refer a friend, where each client's own link gives a friend money off a first visit and earns the client a thank-you code once that visit is paid.",
         "next_rule": "Make one offer for a first visit or a slow afternoon, then share its link."},
     "grow/funnel": {"label": "Lead Flow",
         "purpose": "How new people move from first contact to paying.",

@@ -594,6 +594,38 @@ defaults ("go", 2026-10-10).
 - **Calendar.** An offer shows on the Month on the day it starts and ends.
 - **Migration.** `supabase/APPLY-2026-10-10-offers.sql`.
 
+### Refer a friend (2026-10-11, step 3)
+
+`refer_a_friend.py` (`PUT /offers/{business_id}/referral`, `POST
+.../referral/link`, `POST .../referral/paid`, all owner; its card rides on
+`GET /offers/{business_id}` as `referral`). The approved Offers board ("give
+$10, get $10") and Kevin's default 3 ("go", 2026-10-10).
+
+- **The program.** The business's one `offers` row with source `referral`:
+  what the friend gets (`amount_cents`, a first visit, once per person), what
+  the regular gets (`reward_cents`), on or paused, and `in_notes`. Turning it
+  on needs card payments connected, like any offer.
+- **Each client's link.** `referral_links`: their own code (ANDRE-7K), made
+  the first time it's needed, on `/book?offer=CODE`. The owner can copy any
+  client's link; with `in_notes` on, a P.S. with the link rides on that
+  client's rebook note (`outreach_journeys`), in words the owner sees on the
+  switch and on the rebook card.
+- **At booking.** `offers.evaluate` hands any code that isn't an owner's
+  offer to `refer_a_friend.evaluate`: a client's code is the friend's offer
+  (`data.offer.source` `referral`, `part` `friend`, the referrer, the
+  visit's time; never the client's own link); a THANKS-XXXX code is the
+  regular's reward, for that regular only, once. Both come off online on the
+  same terms as any offer. The program row's own code is never usable.
+- **The thank-you.** `rewards_tick` (every 15 minutes): a friend's booking
+  that is still booked counts as paid when it was paid in full online and
+  its time has passed, when an invoice for the friend was marked paid after
+  they booked, or when the owner says so (`/referral/paid`). Then exactly
+  one `referral_rewards` row (unique per friend booking and per friend), and
+  the regular is told by email (text only under the journeys' rules), in
+  daytime, claimed before it is sent. No way to reach them: the card says
+  "tell them at the counter". Kill switch `REFER_A_FRIEND=off`.
+- **Migration.** `supabase/APPLY-2026-10-11-refer-a-friend.sql`.
+
 ### The weekly suggestion and the fan-out (B8)
 
 `business_marketing_planner.py` (2026-10-07). A business at the `suggest`

@@ -9,7 +9,10 @@ The Reach plan's step 3 (the approved Offers board; Kevin, 2026-10-10:
   2. Who and when (first visit, regulars, slow hours, one per person, up to
      N uses) are checked by our own booking page: the payment processor
      can't, so the offer is never a code anyone can type at checkout.
-  3. (refer-a-friend: its own module.)
+  3. Refer-a-friend (refer_a_friend.py): a client's own code is the friend's
+     offer, first visit only; the regular's thank-you code is sent when the
+     friend's visit is paid. evaluate() hands it any code that isn't one of
+     the owner's offers.
   4. Offers need card payments connected (Payments); without them the
      Offers page says so and links there.
 
@@ -271,19 +274,36 @@ def find(business_id: str, code: Any) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
+def history(business_id: str, contact_id: Optional[str], offer_id: str, now: datetime) -> Tuple[int, bool]:
+    """(earlier visits, used this offer before) for one person. Raises on a
+    failed read."""
+    if not contact_id:
+        return 0, False
+    cid = str(UUID(str(contact_id)))
+    oid = str(UUID(str(offer_id)))
+    past = len(_read(f"/sessions?business_id=eq.{business_id}&contact_id=eq.{cid}&status=in.(scheduled,completed)"
+                     f"&scheduled_for=lt.{now.isoformat().replace('+', '%2B')}&select=id&limit=5"))
+    used_before = bool(_read(f"/module_entries?business_id=eq.{business_id}&data->offer->>id=eq.{oid}"
+                             f"&data->offer->>applies=eq.true&data->>contact_id=eq.{cid}&select=id&limit=1"))
+    return past, used_before
+
+
 def evaluate(business: Dict[str, Any], code: Any, *, contact_id: Optional[str], slot_iso: Optional[str],
              service_cents: Optional[int], now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     """The booking's offer decision (stored on the booking as data.offer), or
-    None when the code isn't one of this business's offers. Never raises:
-    a read that fails records the offer as not applied, with why."""
+    None when the code isn't one of this business's offers, a client's
+    refer-a-friend code or a thank-you code. Never raises: a read that fails
+    records the offer as not applied, with why."""
     bid = str(business["id"])
     try:
         offer = find(bid, code)
     except Exception:
         logger.warning("offer read failed for %s", bid[:8])
         return None
-    if not offer:
-        return None
+    if not offer or offer.get("source") != "owner":
+        import refer_a_friend
+        return refer_a_friend.evaluate(business, code, contact_id=contact_id, slot_iso=slot_iso,
+                                       service_cents=service_cents, now=now)
     out = {"id": str(offer["id"]), "code": offer["code"], "title": offer["title"], "kind": offer["kind"],
            "applies": False, "why": None, "discount_cents": 0}
     try:
@@ -291,14 +311,7 @@ def evaluate(business: Dict[str, Any], code: Any, *, contact_id: Optional[str], 
         now = now or datetime.now(timezone.utc)
         tz = business_marketing.business_tz(business)
         oid = str(UUID(str(offer["id"])))
-        past = 0
-        used_before = False
-        if contact_id:
-            cid = str(UUID(str(contact_id)))
-            past = len(_read(f"/sessions?business_id=eq.{bid}&contact_id=eq.{cid}&status=in.(scheduled,completed)"
-                             f"&scheduled_for=lt.{now.isoformat().replace('+', '%2B')}&select=id&limit=5"))
-            used_before = bool(_read(f"/module_entries?business_id=eq.{bid}&data->offer->>id=eq.{oid}"
-                                     f"&data->offer->>applies=eq.true&data->>contact_id=eq.{cid}&select=id&limit=1"))
+        past, used_before = history(bid, contact_id, oid, now)
         limit = int(offer.get("max_uses") or 0)
         uses = len(_read(f"/module_entries?business_id=eq.{bid}&data->offer->>id=eq.{oid}"
                          f"&data->offer->>applies=eq.true&status=eq.active&select=id&limit={limit + 1}")) if limit else 0
@@ -423,7 +436,13 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning("offer link not made for %s: %s", bid[:8], e)
             share = printed = None
         out.append({**_public(r), "link": share, "print_link": printed, "results": measured.get(str(r["id"]))})
-    return {"offers": out, "payments_ready": payments_ready(business)}
+    import refer_a_friend
+    try:
+        referral = await refer_a_friend.overview(business)
+    except Exception as e:
+        logger.warning("refer-a-friend unread for %s: %s", bid[:8], e)
+        referral = {"readable": False}
+    return {"offers": out, "payments_ready": payments_ready(business), "referral": referral}
 
 
 @router.get("/{business_id}")
@@ -445,9 +464,17 @@ async def create_offer(business_id: str, body: OfferIn, biz: dict = Depends(busi
     row["hours"] = body.hours.model_dump() if body.hours else None
     if row.get("free_item"):
         row["free_item"] = row["free_item"].strip()
+    import refer_a_friend
     code = body.code or suggest_code(row, taken)
-    if code in taken:
-        raise HTTPException(409, f"You already have an offer with the code {code}. Choose another.")
+    try:
+        while not body.code and await asyncio.to_thread(refer_a_friend.code_in_use, bid, code):
+            taken.add(code)
+            code = suggest_code(row, taken)
+        clash = code in taken or await asyncio.to_thread(refer_a_friend.code_in_use, bid, code)
+    except RuntimeError:
+        raise HTTPException(503, "Your offers couldn't be read just now. Nothing was made.") from None
+    if clash:
+        raise HTTPException(409, f"You already have an offer or a client's code {code}. Choose another.")
     row.update(business_id=bid, code=code, title=(body.title or "").strip() or default_title(row),
                status="on", source="owner")
     saved = await asyncio.to_thread(sb_clients.sb_post_as_service, "/offers", row)
@@ -487,7 +514,16 @@ async def public_offer(business_id: str, code: str):
         offer = await asyncio.to_thread(find, bid, code)
     except RuntimeError:
         raise HTTPException(503, "Offers couldn't be read just now.") from None
-    if not offer or offer.get("status") != "on" or offer.get("source") != "owner":
+    if not offer or offer.get("source") != "owner":
+        import refer_a_friend
+        try:
+            words = await asyncio.to_thread(refer_a_friend.public_words, bid, code)
+        except RuntimeError:
+            raise HTTPException(503, "Offers couldn't be read just now.") from None
+        if not words:
+            raise HTTPException(404, "No such offer.")
+        return {"ok": True, **words}
+    if offer.get("status") != "on":
         raise HTTPException(404, "No such offer.")
     ends = _date(offer.get("ends_on"))
     if ends and ends < datetime.now(timezone.utc).date() - timedelta(days=1):
