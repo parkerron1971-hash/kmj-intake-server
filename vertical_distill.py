@@ -80,10 +80,13 @@ logger = logging.getLogger("vertical_distill")
 # your numbers never leave your account." Two thirds of that is
 # structural: message bodies are never read, and _scrub strips numbers.
 # Client names are only partly structural: _unname strips the names in the
-# business's own contact list, but a name the practitioner typed that is
-# not a contact (a client's child, a misspelling) still gets through, since
-# the fields that do get used (a template's `situation`, an override
-# reason) are practitioner-written free text.
+# business's own contact list, but two kinds still get through, since the
+# fields that do get used (a template's `situation`, an override reason)
+# are practitioner-written free text:
+#   - a name that is not a contact (a client's child, a misspelling);
+#   - a contact's first name typed in lowercase ("remind marcus"). A whole
+#     name matches in any case, but a single part only matches capitalised,
+#     so a client called Will does not strip "will" from every sentence.
 #
 # What actually protects such a name is this floor: it can only travel if
 # MIN_BUSINESSES separate businesses independently wrote the identical
