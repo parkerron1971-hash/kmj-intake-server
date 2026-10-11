@@ -174,9 +174,13 @@ def test_refresh_of_a_current_row_does_ask_docuseal(monkeypatch):
         return "completed"
     monkeypatch.setattr(docuseal_router, "_live_status", _live)
 
-    async def _no_emails(biz, doc):
+    async def _no_emails(biz, doc, **kw):
         return None
     monkeypatch.setattr(docuseal_router, "_send_completion_emails", _no_emails)
+
+    async def _no_pdf(document_id):
+        return None
+    monkeypatch.setattr(docuseal_router, "_signed_pdf_b64", _no_pdf)
     import event_spine, audit_log
     monkeypatch.setattr(event_spine, "emit", lambda *a, **k: None)
     monkeypatch.setattr(audit_log, "record", lambda *a, **k: None)

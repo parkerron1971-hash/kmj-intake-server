@@ -600,3 +600,39 @@ is checked against.
 - **Conversational portal entry.** "Show me every time Chief touched this
   client's invoices in July" → a filter. The filter mechanics exist and work;
   the Chief binding does not.
+
+## Document checks (2026-10-11)
+
+The anchored ledger does the job of a signature for files the system sends.
+
+- **What is recorded.** When a document leaves as a file, the SHA-256 of the
+  exact bytes goes into that business's ledger row as `payload.doc_sha256`,
+  with `doc_kind` and a short `doc_label` (`document_ledger.py`). `payload` is
+  covered by the row hash (`ledger_canonical_v2`), so the existing Merkle
+  anchoring publishes it to Bitcoin and Hedera. No new key, signature or
+  anchoring path.
+- **Which documents.** The executed copy of a DocuSeal agreement (in the
+  `esign_completed` row; the same bytes are attached to both confirmation
+  emails), Chief's contract/proposal PDF, Foundation documents filed to the
+  vault, the customer statement and the accountant package emailed from
+  Reports, and the revenue CSV Chief emails. Each other path writes one
+  `document_recorded` row. If a file cannot be fetched (DocuSeal, 45 s bound),
+  the row says `doc_hashed: false` rather than inventing a hash.
+- **Not yet hashed.** Documents rendered fresh on every download (superbills,
+  report exports, 1099 drafts, program-outcome PDFs) and booking-confirmation
+  calendar files. A re-render has different bytes, so hashing them means
+  storing what was handed over first.
+- **The public check.** `/public/verify` hashes a file in the visitor's browser
+  (WebCrypto); only the 64-character hash is sent to
+  `POST /public/verify/document`, which is strict-rate-limited per IP
+  (`document_check`). It returns facts only: the business's display name, the
+  kind of document, when it was recorded, the ledger record number, whether
+  the business's chain verifies at that record (`ledger_verify`), and the
+  public anchors covering it (independent providers only). Never the payload,
+  the label, contact data or neighbouring rows. No match: "No record of this
+  exact file. Even a one-character change makes a different file."
+- **Wording.** Facts, never vouching: "matches the signed agreement <Business>
+  recorded on <date>". A test bans trusted / trustworthy / legitimate / safe.
+- **Scale.** The lookup filters `audit_log` on `payload->>doc_sha256`. At
+  current volume that needs no index; add an expression index if the ledger
+  grows large.

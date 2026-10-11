@@ -812,6 +812,8 @@ app.include_router(_health_router)
 # would otherwise be swallowed by its `/{path:path}` catch-all.
 from auditor_portal import router as auditor_portal_router
 app.include_router(auditor_portal_router)
+from document_ledger import router as document_ledger_router  # public document checks (2026-10-11)
+app.include_router(document_ledger_router)
 
 # The agent-readable site API (2026-09-04): /public/agent/{slug}/… —
 # services, per-date availability, and booking for a customer's agent.
