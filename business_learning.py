@@ -19,7 +19,18 @@ import sb_clients
 log = logging.getLogger(__name__)
 _UNSET = object()
 KINDS = Literal['identity', 'customer', 'offering', 'workflow', 'resource',
-                'payment', 'exception', 'terminology', 'voice', 'seasonality', 'metric']
+                'payment', 'exception', 'terminology', 'voice', 'seasonality', 'metric',
+                'preference']
+POLARITY = Literal['do', 'dont']
+
+# Owner rules (Layer Two, 2026-10-11): a fact with a polarity is a standing
+# do/don't the owner adopted for how Chief works for this business. Rules are
+# owner facts only, are capped so the prompt stays lean, and render ahead of
+# every other fact. Chief proposes; only the owner's words or the owner's tap
+# on a proposal make one.
+MAX_RULES = 25
+RULE_MAX_CHARS = 300
+RULES_BLOCK_MAX_CHARS = 3200
 
 
 class StrictModel(BaseModel):
@@ -42,6 +53,13 @@ class Fact(StrictModel):
     basis: Literal['assumption', 'owner', 'research'] = 'assumption'
     owner_quote: str = Field(default='', max_length=2000)
     evidence_ids: list[str] = Field(default_factory=list, max_length=5)
+    # A rule: 'do' or 'dont'. None for every ordinary fact.
+    polarity: POLARITY | None = None
+    # Where the rule applies, in the owner's terms ("client texts"). Optional.
+    scope: str = Field(default='', max_length=80)
+    # How the rule arrived: said in chat, approved from a proposal, or typed
+    # on the What Chief knows page.
+    origin: Literal['', 'chat', 'proposal', 'owner_page'] = ''
 
 
 class Gap(StrictModel):
@@ -68,7 +86,7 @@ class Profile(StrictModel):
     schema_version: Literal[1] = 1
     trade_label: str = Field(min_length=1, max_length=120)
     summary: str = Field(min_length=1, max_length=1000)
-    facts: list[Fact] = Field(default_factory=list, max_length=60)
+    facts: list[Fact] = Field(default_factory=list, max_length=60 + MAX_RULES)
     gaps: list[Gap] = Field(default_factory=list, max_length=16)
     evidence: list[Evidence] = Field(default_factory=list, max_length=60)
 
@@ -84,6 +102,10 @@ class Profile(StrictModel):
                 raise ValueError('owner fact needs the owner quotation')
             if f.basis == 'research' and (not f.evidence_ids or not set(f.evidence_ids) <= ids):
                 raise ValueError('research fact needs stored evidence')
+            if f.polarity and f.basis != 'owner':
+                raise ValueError("a rule must be the owner's own: only owner facts carry a polarity")
+        if sum(1 for f in self.facts if f.polarity) > MAX_RULES:
+            raise ValueError(f'at most {MAX_RULES} owner rules')
         return self
 
 
@@ -146,8 +168,9 @@ def context_block(business, query='', max_chars=4200, *, profile_row=_UNSET):
                     'Use capture_business_knowledge to keep answers immediately. Generic defaults are assumptions.')
         return 'PRIVATE BUSINESS OPERATING KNOWLEDGE: no profile yet (knowledge revision 0).'
     p = Profile.model_validate(row['profile'])
+    rules_text = rules_block(p)
     terms = set(query.lower().split())
-    facts = sorted(p.facts, key=lambda f: (
+    facts = sorted((f for f in p.facts if not f.polarity), key=lambda f: (
         f.basis == 'owner', len(terms & set(f.content.lower().split()))), reverse=True)
     now = datetime.now(timezone.utc)
     evidence = {e.id: e for e in p.evidence}
@@ -167,7 +190,111 @@ def context_block(business, query='', max_chars=4200, *, profile_row=_UNSET):
         if len('\n'.join(lines)) + len(line) + 1 > max_chars:
             continue
         lines.append(line)
-    return '\n'.join(lines)[:max_chars]
+    body = '\n'.join(lines)[:max_chars]
+    return (rules_text + '\n' + body) if rules_text else body
+
+
+def rules(profile) -> list[Fact]:
+    p = profile if isinstance(profile, Profile) else Profile.model_validate(profile)
+    return [f for f in p.facts if f.polarity]
+
+
+def rules_block(profile) -> str:
+    """The owner's rules, ahead of everything else and on their own budget."""
+    active = rules(profile)
+    if not active:
+        return ''
+    lines = ['OWNER RULES: the owner adopted each of these for how you work for this business. '
+             'Follow them every time unless the owner says otherwise in this conversation. '
+             "They change only through adopt_business_rule / remove_business_rule or the owner's page."]
+    for f in active:
+        where = f' ({f.scope})' if f.scope else ''
+        line = f"- {'DO' if f.polarity == 'do' else 'DON’T'}{where}: {f.content} [{f.key}]"
+        if len('\n'.join(lines)) + len(line) + 1 > RULES_BLOCK_MAX_CHARS:
+            break
+        lines.append(line)
+    return '\n'.join(lines)
+
+
+class RuleCapReached(ValueError):
+    pass
+
+
+def _normal(text):
+    return ' '.join(str(text or '').lower().split())
+
+
+def rule_key(statement):
+    return 'rule_' + hashlib.sha256(_normal(statement).encode()).hexdigest()[:12]
+
+
+def _empty_profile(business):
+    return Profile(
+        trade_label=str((business.get('settings') or {}).get('custom_type')
+                        or business.get('type') or business.get('name') or 'Business')[:120],
+        summary='Working knowledge captured from the owner. Read individual facts and open questions.')
+
+
+def adopt_rule(business, *, statement, polarity, kind='preference', scope='', key=None,
+               origin='chat'):
+    """Save one owner rule. The caller has established that the owner said or
+    approved exactly this statement; it is stored verbatim as the owner's quote.
+
+    Idempotent: the same rule again is a no-op that returns the stored rule.
+    A key that already names a rule replaces it (an edit). Retries once when
+    another writer saved a revision in between."""
+    statement = ' '.join(str(statement or '').split())
+    scope = ' '.join(str(scope or '').split())[:80]
+    if not statement:
+        raise ValueError('A rule needs the words to follow.')
+    if len(statement) > RULE_MAX_CHARS:
+        raise ValueError(f'Keep a rule under {RULE_MAX_CHARS} characters.')
+    if polarity not in ('do', 'dont'):
+        raise ValueError("A rule is either a do or a don't.")
+    for attempt in (1, 2):
+        row = load(business['id'])
+        p = Profile.model_validate(row['profile']) if row else _empty_profile(business)
+        revision = row['revision'] if row else 0
+        k = key or rule_key(statement)
+        existing = {f.key: f for f in p.facts}
+        same = next((f for f in p.facts if f.polarity == polarity and f.scope == scope
+                     and _normal(f.content) == _normal(statement)), None)
+        if same and (not key or same.key == key):
+            return row, same
+        if k in existing and not existing[k].polarity:
+            raise ValueError(f'{k} is a business fact, not a rule. Use another key.')
+        others = [f for f in p.facts if f.polarity and f.key != k]
+        if len(others) >= MAX_RULES:
+            raise RuleCapReached(
+                f'You already have {MAX_RULES} rules. Remove or merge one before adding another.')
+        fact = Fact(key=k, kind=kind, content=statement, basis='owner', owner_quote=statement,
+                    polarity=polarity, scope=scope, origin=origin)
+        p.facts = [f for f in p.facts if f.key != k] + [fact]
+        try:
+            saved = save(business['id'], p.model_dump(mode='json'), revision, f'Owner rule: {k}')
+            return saved, fact
+        except Conflict:
+            if attempt == 2:
+                raise
+
+
+def remove_rule(business_id, key):
+    """Remove one owner rule. The history table keeps the revision it was in."""
+    for attempt in (1, 2):
+        row = load(business_id)
+        if not row:
+            raise ValueError('There are no rules on file yet.')
+        p = Profile.model_validate(row['profile'])
+        target = next((f for f in p.facts if f.key == key and f.polarity), None)
+        if not target:
+            raise ValueError(f'No rule named {key}. Recall the rules to see their keys.')
+        p.facts = [f for f in p.facts if f.key != key]
+        try:
+            return save(business_id, p.model_dump(mode='json'), row['revision'],
+                        f'Owner removed rule: {key}'), target
+        except Conflict:
+            if attempt == 2:
+                raise
 
 
 def _call(business_id, system, user, research=False):
@@ -259,6 +386,11 @@ def learn(business_id, description, research_question='', progress_cb=None):
     raw = json.loads(text)
     all_evidence = {e.id: e for e in (old.evidence if old else []) + evidence}
     raw['evidence'] = [e.model_dump(mode='json') for e in all_evidence.values()]
+    for f in raw.get('facts') or []:
+        if isinstance(f, dict):
+            # Rules come only from the owner's words or the owner's tap.
+            f.pop('polarity', None)
+            f['origin'] = ''
     candidate = Profile.model_validate(raw)
     old_facts = {f.key: f for f in old.facts} if old else {}
     for f in candidate.facts:
@@ -379,6 +511,15 @@ then emit [ACTION:{"type":"correct_business_knowledge","key":"stable_fact_key",
 "kind":"workflow","statement":"EXACT quote from the current owner message",
 "expected_revision":1,"resolves_gap":"optional_owner_gap_key"}].
 Store the report as what the owner said, never as statistically proven effectiveness.
+OWNER RULES: when the owner states a standing do or don't about HOW you work or write for this
+business ("always text clients by first name", "never book before 9", "from now on keep drafts
+short"), save it in the same turn with [ACTION:{"type":"adopt_business_rule","polarity":"do",
+"kind":"preference","statement":"EXACT quote from the current owner message","scope":"client texts"}].
+polarity is do or dont; kind is usually preference, voice or workflow. A routine with a trigger
+("every Monday send me...") is a standing_instruction memory instead, not a rule. Never adopt your
+own idea as a rule: suggest it and let the owner say it. Remove one when the owner asks with
+[ACTION:{"type":"remove_business_rule","key":"rule_key_from_OWNER_RULES"}]. Rules are capped at 25;
+at the cap, offer to merge two before adding.
 Do not claim saved until the action succeeds. Do not claim a booking rule or module changed
 when only knowledge changed: use the existing specific update action when requested.
 Assumptions remain labeled. Never share this profile with another business or promote it

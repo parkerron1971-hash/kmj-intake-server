@@ -151,7 +151,7 @@ def test_workflow_dispatcher_audits_and_refuses_bulk():
     all. A workflow step is unattended by definition, so bulk is refused
     the same way it is on the scheduler."""
     src = pathlib.Path(_here.parent / "workflow_engine.py").read_text(encoding="utf-8")
-    body = src.split("Fall back to Chief's existing action verbs")[1][:2600]
+    body = src.split("Fall back to Chief's existing action verbs")[1][:3200]
     assert "audit_log.record(" in body, "workflow dispatch must leave a ledger row"
     # Stage 3 moved the bulk rule into the shared evaluator so scheduler,
     # workflow and notification paths cannot drift apart.

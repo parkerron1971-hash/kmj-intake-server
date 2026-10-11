@@ -58,6 +58,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # The public waitlist: an anonymous insert per novel email, with no
     # limiter at all until now.
     "waitlist": (int(os.environ.get("RL_WAITLIST_PER_HOUR", "10")), 3600),
+    # The public document check (document_ledger): anonymous, a hash in and
+    # facts out, no model call. Strict and per IP, so it cannot be used to
+    # sweep the ledger for hashes.
+    "document_check": (int(os.environ.get("RL_DOCUMENT_CHECK_PER_MIN", "20")), 60),
     # Web-form SMS consent: writes the A2P audit trail, and was limited
     # only per PHONE, which the caller chooses. Per IP too, strict.
     "sms_opt_in": (int(os.environ.get("RL_SMS_OPT_IN_PER_HOUR", "10")), 3600),

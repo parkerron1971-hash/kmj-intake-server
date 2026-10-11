@@ -1,6 +1,10 @@
 # The Action Ledger
 
-**Status:** Stages 0–4 shipped 2026-08-03. Stage 5 (anchoring) is designed, not built.
+**Status:** Stages 0–4 shipped 2026-08-03. Stage 5 (anchoring) shipped
+2026-08-04 with OpenTimestamps → Bitcoin and a Hedera adapter; anchoring to
+several providers at once followed on 2026-08-07. Which providers actually publish is set per
+deployment by `LEDGER_ANCHOR_PROVIDERS` (see Stage 5); this repo cannot
+tell you what production runs. The operator Anchor Health panel can.
 
 Chief acts autonomously inside real businesses. The system stored *state* —
 what is true right now. The ledger stores *history*: what happened, who
@@ -278,22 +282,36 @@ not cost a practice its anchor, and the proof is valid if any single calendar
 honours it. If *every* calendar fails, `anchor()` returns an error and **no
 receipt is written** — a row here asserts a proof exists.
 
-**Upgrades are never written back.** `ledger_anchors` is append-only, so the
-stored receipt can never be rewritten — and does not need to be. A pending
-proof already carries everything needed to fetch its Bitcoin attestation, so
-`proof_status()` recomputes the current state on each read. The receipt stays
-immutable and the answer stays current, which would otherwise be in tension.
+**Upgrades are never written back to the receipt.** `ledger_anchors` is
+append-only, so the stored receipt can never be rewritten — and does not
+need to be. An hourly upgrade tick (`anchor_scheduler.upgrade_tick`, batch
+size `LEDGER_ANCHOR_UPGRADE_BATCH`) asks the calendars for each pending
+proof's Bitcoin attestation and stores the upgraded proof in
+`ledger_anchor_upgrades` (`APPLY-2026-08-07-anchor-upgrades.sql`), a
+separate mutable cache. Every surface that reports an anchor reads that
+cache first: `GET /audit/anchors`, the in-app banner, and the auditor
+portal's "Independent proof" list, which names the Bitcoin block once there
+is one. The receipt stays immutable and the answer stays current.
 
 **`GET /audit/anchor.ots?biz=&sequence=`** hands over the proof file. That
 route is the point of the whole stage: an auditor runs `ots verify` against
 Bitcoin, and nothing in that check involves our code, our servers, or our
 good faith.
 
-Enabled with `LEDGER_ANCHOR_PROVIDER=opentimestamps`. Unset, it falls back to
-`local` — so a missing env var degrades to "we published nothing", never to a
-false claim of independence.
+Enabled with `LEDGER_ANCHOR_PROVIDERS=opentimestamps` (comma-separated, e.g.
+`opentimestamps,hedera`; the older single `LEDGER_ANCHOR_PROVIDER` is still
+read). Unset, it falls back to `local` — so a missing env var degrades to
+"we published nothing", never to a false claim of independence. Each
+configured provider anchors independently: one failing records a row in
+`ledger_anchor_failures` and does not stop the others.
 
-### Second adapter: Hedera (built, not configured)
+**Schedule.** A sweep runs every `LEDGER_ANCHOR_INTERVAL_HOURS` (default 6,
+first run a few minutes after boot), anchoring at most
+`LEDGER_ANCHOR_MAX_PER_TICK` businesses (default 25) per pass.
+`LEDGER_ANCHOR_SCHEDULE=off` stops it; the owner's `POST /audit/anchor` still
+works by hand.
+
+### Second adapter: Hedera (built; on only where configured)
 
 Kevin's original choice, and the one the spec named. Both exist because they
 fail and succeed differently:
@@ -322,12 +340,14 @@ testnet proofs.
 
 **Configuration** (all three required, or it refuses by name and writes no
 receipt): `HEDERA_ACCOUNT_ID`, `HEDERA_PRIVATE_KEY`, `HEDERA_TOPIC_ID`, plus
-`HEDERA_NETWORK=mainnet`. Uses `hiero-sdk-python` — the *native* SDK; the older
+`HEDERA_NETWORK`, which defaults to `testnet`. Only `mainnet` counts as
+independent. Uses `hiero-sdk-python` — the *native* SDK; the older
 `hedera-sdk-py` wraps the Java SDK through pyjnius and would drag a JVM into
 the image.
 
-Nothing is configured yet, so selecting `hedera` today fails cleanly rather
-than anchoring nowhere.
+Selecting `hedera` without all three set fails cleanly rather than anchoring
+nowhere. Whether a given deployment has it on, and on which network, is a
+fact about that deployment's environment, not about this code.
 
 **Never publish business data — only a fingerprint.** The public network
 holds proof of non-alteration and nothing else.
@@ -600,3 +620,39 @@ is checked against.
 - **Conversational portal entry.** "Show me every time Chief touched this
   client's invoices in July" → a filter. The filter mechanics exist and work;
   the Chief binding does not.
+
+## Document checks (2026-10-11)
+
+The anchored ledger does the job of a signature for files the system sends.
+
+- **What is recorded.** When a document leaves as a file, the SHA-256 of the
+  exact bytes goes into that business's ledger row as `payload.doc_sha256`,
+  with `doc_kind` and a short `doc_label` (`document_ledger.py`). `payload` is
+  covered by the row hash (`ledger_canonical_v2`), so the existing Merkle
+  anchoring publishes it to Bitcoin and Hedera. No new key, signature or
+  anchoring path.
+- **Which documents.** The executed copy of a DocuSeal agreement (in the
+  `esign_completed` row; the same bytes are attached to both confirmation
+  emails), Chief's contract/proposal PDF, Foundation documents filed to the
+  vault, the customer statement and the accountant package emailed from
+  Reports, and the revenue CSV Chief emails. Each other path writes one
+  `document_recorded` row. If a file cannot be fetched (DocuSeal, 45 s bound),
+  the row says `doc_hashed: false` rather than inventing a hash.
+- **Not yet hashed.** Documents rendered fresh on every download (superbills,
+  report exports, 1099 drafts, program-outcome PDFs) and booking-confirmation
+  calendar files. A re-render has different bytes, so hashing them means
+  storing what was handed over first.
+- **The public check.** `/public/verify` hashes a file in the visitor's browser
+  (WebCrypto); only the 64-character hash is sent to
+  `POST /public/verify/document`, which is strict-rate-limited per IP
+  (`document_check`). It returns facts only: the business's display name, the
+  kind of document, when it was recorded, the ledger record number, whether
+  the business's chain verifies at that record (`ledger_verify`), and the
+  public anchors covering it (independent providers only). Never the payload,
+  the label, contact data or neighbouring rows. No match: "No record of this
+  exact file. Even a one-character change makes a different file."
+- **Wording.** Facts, never vouching: "matches the signed agreement <Business>
+  recorded on <date>". A test bans trusted / trustworthy / legitimate / safe.
+- **Scale.** The lookup filters `audit_log` on `payload->>doc_sha256`. At
+  current volume that needs no index; add an expression index if the ledger
+  grows large.

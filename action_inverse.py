@@ -92,6 +92,40 @@ def _swap(verb: str, keys: tuple) -> Callable:
     return build
 
 
+_VOICE_LISTS = ("voice_dos", "voice_donts")
+
+
+def _voice_rule_target(action: Dict[str, Any], result: Dict[str, Any]):
+    """(list, rule text) a voice-rule inverse must name, or (None, None).
+
+    Both handlers take `list` and a rule's TEXT — the old _swap copied only
+    rule/rule_id/text, so the inverse always lacked `list` and failed. The
+    text wins over a position: an index recorded at undo time can point at
+    a different rule by the time undo runs.
+    """
+    lst = (action.get("list") or result.get("list") or "").strip()
+    rule = (action.get("rule") or action.get("text")
+            or result.get("rule") or result.get("removed_rule") or "")
+    rule = rule.strip() if isinstance(rule, str) else ""
+    if lst not in _VOICE_LISTS or not rule:
+        return None, None
+    return lst, rule
+
+
+def _undo_add_voice_rule(action, result):
+    # A duplicate add changed nothing; "undoing" it would delete a rule
+    # the owner already had before this action.
+    if result.get("duplicate"):
+        return None
+    lst, rule = _voice_rule_target(action, result)
+    return {"type": "remove_voice_rule", "list": lst, "rule": rule} if lst else None
+
+
+def _undo_remove_voice_rule(action, result):
+    lst, rule = _voice_rule_target(action, result)
+    return {"type": "add_voice_rule", "list": lst, "rule": rule} if lst else None
+
+
 INVERSES: Dict[str, Inverse] = {
 
     # Undo prepares a class-A cancellation plan; a separate approval is required
@@ -113,12 +147,12 @@ INVERSES: Dict[str, Inverse] = {
     "add_voice_rule": Inverse(
         "remove_voice_rule",
         "remove that voice rule again",
-        _swap("remove_voice_rule", ("rule", "rule_id", "text"))),
+        _undo_add_voice_rule),
 
     "remove_voice_rule": Inverse(
         "add_voice_rule",
         "put that voice rule back",
-        _swap("add_voice_rule", ("rule", "rule_id", "text"))),
+        _undo_remove_voice_rule),
 
     # remember → forget. The registry is explicit that forget is a
     # deactivation (is_active flip), not a delete, so this is genuinely

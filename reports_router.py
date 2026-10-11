@@ -526,6 +526,12 @@ async def accountant_send(biz: str, year: Optional[int] = None,
                           "content_type": "application/zip"}],
             business_id=biz)
         email_sent = True
+        import asyncio as _asyncio
+        import document_ledger
+        await _asyncio.to_thread(
+            document_ledger.record_document, biz, blob, kind="accountant_package",
+            label=f"{y} financial package", actor_type="user", actor_id=str(user.id),
+            source="desktop")
     except Exception as e:
         logger.warning(f"[i6] accountant package email failed: {e}")
     return {"ok": True, "email_sent": email_sent, "recipient": to_email,
@@ -906,6 +912,12 @@ async def customer_statement_send(biz: str, contact_id: str,
                           "content_type": "application/pdf"}],
             business_id=biz)
         email_sent = True
+        import asyncio as _asyncio
+        import document_ledger
+        await _asyncio.to_thread(
+            document_ledger.record_document, biz, pdf, kind="customer_statement",
+            label="Customer statement", actor_type="user", actor_id=str(user.id),
+            target_type="contact", target_id=contact.get("id"), source="desktop")
     except Exception as e:
         logger.warning(f"[i8] statement email failed: {e}")
     return {"ok": True, "email_sent": email_sent, "recipient": to_email,

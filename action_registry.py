@@ -195,6 +195,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                  "go through the door under their own class"),
     "stop_assignment":        _w("A", "flips an open assignment to stopped; moves already "
                                  "made stay made, nothing new happens"),
+    "confirm_workflow_step":  _w("C", "releases an automation step that paused for the owner's OK; "
+                                 "the step it releases may send, charge or book, so the verb "
+                                 "carries that step's worst class. The owner's tap on the pause "
+                                 "notification, or their words in chat, is the approval"),
     "grant_standing_permission":  _w("C", "lets Chief run one KIND of class-C proposal on its own "
                                      "after a recall window — the verb that releases future sends "
                                      "is classified by what it can set in motion; the practitioner's "
@@ -424,6 +428,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "recall_business_knowledge": _r("reads the current business's private operating profile"),
     "correct_business_knowledge": _w("A", "versions an owner correction to private operating knowledge"),
     "capture_business_knowledge": _w("A", "immediately saves quoted owner answers and labels tentative plans"),
+    "adopt_business_rule": _w("A", "saves a do/don't the owner said or approved to the business's private rules; removable"),
+    "remove_business_rule": _w("A", "removes one of the owner's rules at the owner's request"),
     "propose_business_from_idea": _w("A", "lays a whole business out from an idea: the map row "
                                           "(status=blueprint, never accepted) plus module and "
                                           "offering DRAFTS — nothing live until each card is accepted"),
