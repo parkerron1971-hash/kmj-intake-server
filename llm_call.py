@@ -167,7 +167,7 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
                                          or (payload or {}).get("model") or "unknown"), usage)
         except Exception:
             pass
-        from api_usage_logger import log_api_usage_sync
+        from api_usage_logger import log_api_usage_sync, cache_write_1h
         row = dict(
             endpoint=f"llm:{caller}",
             model=str((data or {}).get("model")
@@ -176,6 +176,8 @@ def _meter(response: Any, payload: Optional[Dict[str, Any]],
             output_tokens=int(usage.get("output_tokens") or 0),
             cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
             cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            # The 1-hour part of that write costs 2x, not 1.25x.
+            cache_creation_1h_tokens=cache_write_1h(usage),
             business_id=business_id,
             units=units,
             duration_ms=int((time.time() - started) * 1000),

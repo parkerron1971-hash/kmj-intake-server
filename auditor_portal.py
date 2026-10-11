@@ -542,14 +542,37 @@ def _render(d: Dict[str, Any]) -> str:
                      if cov.get("first_sequence") is not None else "—")
             root = _e(str(a.get("merkle_root") or "")[:24])
             url = a.get("verify_url")
+            block = a.get("bitcoin_block")
+            explorer = a.get("explorer_url")
             # Only the word "independently" is load-bearing here, so it is
             # only used when the receipt actually says a durable public
             # network. A testnet proof looks identical and disappears.
-            claim = ("published to a public network"
-                     if a.get("independent") else
-                     "recorded, but NOT on a durable public network")
-            link = (f"<a href='{_e(url)}' rel='noopener nofollow'>check it yourself</a>"
-                    if url else "")
+            #
+            # A Bitcoin anchor is a fact with a block number, so it says
+            # the number. One still waiting for its block says that, as a
+            # fact about timing, rather than reading the same as an anchor
+            # that never left our servers.
+            if a.get("independent") and block:
+                claim = f"published to Bitcoin, confirmed in block {_e(block)}"
+            elif a.get("independent"):
+                claim = "published to a public network"
+            elif a.get("state") == "unchecked":
+                claim = ("sent to independent Bitcoin timestamp servers; whether "
+                         "it is in a Bitcoin block yet could not be read just now")
+            elif a.get("state") == "submitted":
+                claim = ("sent to independent Bitcoin timestamp servers and "
+                         "waiting for its block, so NOT yet on a durable public "
+                         "network (this normally takes a few hours)")
+            else:
+                claim = "recorded, but NOT on a durable public network"
+            if url:
+                link = f"<a href='{_e(url)}' rel='noopener nofollow'>check it yourself</a>"
+            elif explorer:
+                link = (f"<a href='{_e(explorer)}' rel='noopener nofollow'>see "
+                        f"block {_e(block)}</a> (the full check is the "
+                        f"business's .ots proof file and <code>ots verify</code>)")
+            else:
+                link = ""
             items.append(
                 f"<li><b>{_e(str(a.get('anchored_at'))[:16])}</b> — records {where}, "
                 f"{claim}. Fingerprint <code>{root}…</code> {link}</li>")

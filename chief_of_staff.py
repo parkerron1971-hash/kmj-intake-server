@@ -1785,7 +1785,8 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
                       cache_creation_1h_tokens=cache_write_1h_tok,
                       business_id=business_id, task_type=prompt_shape,
                       duration_ms=int(time.time() * 1000) - started_ms)
-                  route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok)
+                  route_ledger.tally(model, in_tok, out_tok, cache_read_tok, cache_write_tok,
+                                     cache_write_1h_tok)
                   if _round == 0:
                       try:
                           import cache_watch
