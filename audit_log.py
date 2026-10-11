@@ -171,6 +171,25 @@ def _cap_json(value: Any) -> Dict[str, Any]:
     return {"text": str(value)[:_RESULT_CAP]}
 
 
+_AI_KEYS = ("turn", "model", "lane", "resp", "brain_version", "brain_fp")
+
+
+def _with_ai(payload: Dict[str, Any], ai: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Which AI acted, under payload["_ai"] (Layer Two).
+
+    In payload, not in columns, on purpose: the row hash covers a frozen
+    column list (ledger_canonical_v2) that includes payload, so this is
+    hashed and anchored with the row. Added AFTER the payload cap so a
+    truncated payload never loses it. Small by construction: known keys
+    only, each value capped."""
+    if not isinstance(ai, dict):
+        return payload
+    clean = {k: str(ai[k])[:120] for k in _AI_KEYS if ai.get(k) not in (None, "")}
+    if not clean:
+        return payload
+    return {**payload, "_ai": clean}
+
+
 def record(business_id: Optional[str], *, actor_type: str, verb: str,
            actor_id: Optional[str] = None, ok: bool = True,
            error: Optional[str] = None, summary: Optional[str] = None,
@@ -180,7 +199,8 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
            source: Optional[str] = None,
            authorized_by: Optional[str] = None,
            subject_refs: Optional[List[Dict[str, Any]]] = None,
-           display_timezone: Optional[str] = None) -> bool:
+           display_timezone: Optional[str] = None,
+           ai: Optional[Dict[str, Any]] = None) -> bool:
     """Append one ledger row. Best-effort: never raises into the caller.
 
     ACTION LEDGER (2026-08-03): `sequence`, `prev_hash` and `row_hash` are
@@ -210,7 +230,7 @@ def record(business_id: Optional[str], *, actor_type: str, verb: str,
         "ok": bool(ok),
         "error": (str(error)[:500] if error else None),
         "summary": (str(summary)[:240] if summary else None),
-        "payload": _cap_json(payload),
+        "payload": _with_ai(_cap_json(payload), ai),
         "result": _cap_json(result),
         "source": source,
         "authorized_by": (str(authorized_by)[:120] if authorized_by else None),
@@ -282,6 +302,14 @@ def _error_text(t: Dict[str, Any]) -> str:
     return "action failed with no error message"
 
 
+def _turn_ai() -> Dict[str, Any]:
+    try:
+        import turn_context
+        return turn_context.ai_context(model=authorship.current_model())
+    except Exception:  # pragma: no cover - an annotation never costs a row
+        return {}
+
+
 def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
                       source: Optional[str], taken: List[Dict[str, Any]],
                       action_failed) -> int:
@@ -317,6 +345,9 @@ def record_chief_turn(*, user_id: Optional[str], business_id: Optional[str],
             # Stage 3: the policy verdict _execute_actions stamped on the
             # result. Field 6 stops being empty on the busiest path.
             authorized_by=t.get("_authorized_by"),
+            # Layer Two: the turn, model, lane and provider response that
+            # produced this action, hashed with the row.
+            ai=_turn_ai(),
         )
         n += 1 if wrote else 0
     return n

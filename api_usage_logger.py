@@ -46,6 +46,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 import billing_context
+import turn_context
 
 
 logger = logging.getLogger("api_usage_logger")
@@ -221,6 +222,48 @@ def _compute_cost_cents(model: str, input_tokens: int, output_tokens: int,
     return round(cost, 4)
 
 
+# ─── Turn linkage (Layer Two, step 1) ─────────────────────────────────
+# One id joins a Chief turn's model calls to its archive row, its ledger
+# rows and its drafts. These columns arrive with
+# APPLY-2026-10-11-layer-two-foundation.sql; until the probe sees them the
+# row is written exactly as before (an unknown column would 400 the insert
+# and lose the row).
+_LINK_COLS = ("turn_id", "lane", "provider", "response_id", "cache_creation_1h_tokens")
+
+_PROVIDER_PREFIXES = (
+    ("claude", "anthropic"), ("anthropic", "anthropic"),
+    ("gpt-", "openai"), ("text-embedding", "openai"), ("tts-", "openai"),
+    ("whisper", "openai"), ("dall-e", "openai"), ("o1", "openai"), ("o3", "openai"), ("o4", "openai"),
+    ("eleven", "elevenlabs"), ("kimi", "moonshot"), ("moonshot", "moonshot"),
+)
+
+
+def provider_for(model: Optional[str]) -> Optional[str]:
+    """Who served a model, from its name. None when the name says nothing;
+    an explicit provider from the caller always wins over this."""
+    m = str(model or "").strip().lower()
+    for prefix, provider in _PROVIDER_PREFIXES:
+        if m.startswith(prefix):
+            return provider
+    return None
+
+
+def _linkage(model: Optional[str], *, lane: Optional[str], provider: Optional[str],
+             response_id: Optional[str], turn_id: Optional[str],
+             cache_creation_1h_tokens: Optional[int]) -> Dict[str, Any]:
+    """The link fields for one row, empties left out. Pure."""
+    out: Dict[str, Any] = {}
+    tid = turn_id if turn_id is not None else turn_context.turn_id()
+    ln = lane if lane is not None else turn_context.lane()
+    pv = provider or provider_for(model)
+    for key, value in (("turn_id", tid), ("lane", ln), ("provider", pv), ("response_id", response_id)):
+        if value:
+            out[key] = str(value)[:120]
+    if cache_creation_1h_tokens:
+        out["cache_creation_1h_tokens"] = int(cache_creation_1h_tokens)
+    return out
+
+
 def log_api_usage_sync(
     *,
     endpoint: str,
@@ -235,6 +278,10 @@ def log_api_usage_sync(
     cost_cents_override: Optional[float] = None,
     units: Optional[int] = None,
     duration_ms: Optional[int] = None,
+    lane: Optional[str] = None,
+    provider: Optional[str] = None,
+    response_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
 ) -> None:
     """Synchronous variant for sync call sites (composer/director). Same
     row shape; never raises.
@@ -278,6 +325,13 @@ def log_api_usage_sync(
     if units is not None: body["units"] = int(units)
     if duration_ms is not None: body["duration_ms"] = int(duration_ms)
     try:
+        import schema_probe
+        if schema_probe.has_columns("api_usage", _LINK_COLS):
+            body.update(_linkage(model, lane=lane, provider=provider, response_id=response_id,
+                                 turn_id=turn_id, cache_creation_1h_tokens=None))
+    except Exception as e:  # pragma: no cover - linkage never costs the row
+        logger.warning(f"api_usage linkage skipped: {e}")
+    try:
         httpx.post(
             f"{SUPABASE_URL}/rest/v1/api_usage",
             headers={
@@ -309,8 +363,16 @@ async def log_api_usage(
     cost_cents_override: Optional[float] = None,
     units: Optional[int] = None,
     cache_creation_1h_tokens: int = 0,
+    lane: Optional[str] = None,
+    provider: Optional[str] = None,
+    response_id: Optional[str] = None,
+    turn_id: Optional[str] = None,
 ) -> None:
     """Append one row to api_usage. Never raises.
+
+    `lane` / `turn_id` default to the ambient turn_context; `provider` to
+    provider_for(model). They are written only once the Layer Two columns
+    exist (_LINK_COLS).
 
     `units` = the PRICE of this action in credits (see log_api_usage_sync)."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
@@ -344,6 +406,13 @@ async def log_api_usage(
     if duration_ms is not None: body["duration_ms"] = int(duration_ms)
     if error:       body["error"] = str(error)[:500]
     if units is not None: body["units"] = int(units)
+    try:
+        import schema_probe
+        if await schema_probe.has_columns_async("api_usage", _LINK_COLS):
+            body.update(_linkage(model, lane=lane, provider=provider, response_id=response_id,
+                                 turn_id=turn_id, cache_creation_1h_tokens=cache_creation_1h_tokens))
+    except Exception as e:  # pragma: no cover - linkage never costs the row
+        logger.warning(f"api_usage linkage skipped: {e}")
 
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
