@@ -135,8 +135,20 @@ def test_the_maturity_block_still_folds_into_the_profile(gather):
 
 def test_semantic_hits_still_reach_the_memory_pool(gather):
     _, ctx = gather(delay=0.0)
-    ids = {str(m.get("id")) for m in (ctx.get("memories") or [])}
-    assert "sem-1" in ids, "the semantic match ran but its hits were dropped"
+    for_message = {str(m.get("id")) for m in (ctx.get("memories_for_message") or [])}
+    assert "sem-1" in for_message, "the semantic match ran but its hits were dropped"
+
+
+def test_message_matched_memories_stay_out_of_the_cached_snapshot(gather):
+    """A hit depends on this message; in the cached state block it made the
+    block differ from the last turn and paid a cache rewrite (2026-10-11)."""
+    import chief_of_staff as cos
+    _, ctx = gather(delay=0.0)
+    stable = {str(m.get("id")) for m in (ctx.get("memories") or [])}
+    assert "sem-1" not in stable
+    cached, live = cos._format_context_parts(ctx)
+    assert "semantic hit" not in cached
+    assert "SAVED MEMORIES MATCHING THIS MESSAGE" in live and "semantic hit" in live
 
 
 def test_no_query_text_skips_the_semantic_match(gather):
