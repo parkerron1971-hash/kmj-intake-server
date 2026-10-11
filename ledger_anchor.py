@@ -1344,12 +1344,32 @@ UPGRADE_SCAN_LIMIT = 500
 
 def upgrades_for(anchor_ids: Any) -> Dict[str, Dict[str, Any]]:
     """Cached upgrades keyed by anchor id, for surfaces that list anchors."""
+    return upgrades_for_strict(anchor_ids) or {}
+
+
+def upgrades_for_strict(anchor_ids: Any) -> Optional[Dict[str, Dict[str, Any]]]:
+    """The same read, but a failed read answers None rather than {}.
+
+    {} means "checked, and nothing has been upgraded". None means "could
+    not check". A surface shown to an outside party has to tell those
+    apart: rounding a failed read down to "no upgrades" makes a Bitcoin-
+    confirmed anchor read as still waiting for its block.
+    """
     ids = sorted({str(i) for i in (anchor_ids or []) if i})
     if not ids:
         return {}
-    rows = _safe_get("/ledger_anchor_upgrades?anchor_id=in.(" + ",".join(ids)
-                     + ")&select=anchor_id,upgraded_ref,bitcoin_block,confirmed"
-                     + f"&limit={len(ids)}")
+    try:
+        rows = sb_clients.sb_get_as_service(
+            "/ledger_anchor_upgrades?anchor_id=in.(" + ",".join(ids)
+            + ")&select=anchor_id,upgraded_ref,bitcoin_block,confirmed"
+            + f"&limit={len(ids)}")
+    except Exception as e:
+        logger.warning("[anchor-upgrades] %s: %s", type(e).__name__, str(e)[:120])
+        return None
+    # sb_get_as_service answers None on a transport error or an HTTP
+    # error status, and a list (possibly empty) on success.
+    if rows is None:
+        return None
     return {str(r.get("anchor_id")): r for r in rows}
 
 

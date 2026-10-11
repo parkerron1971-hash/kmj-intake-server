@@ -274,6 +274,12 @@ def file(business_id: str, action: Dict[str, Any], *, actor: str,
     import proposal_life
     row.update(proposal_life.filing_extras())
     row.update(standing_extra)
+    # Layer Two: a proposal filed inside a chat turn carries that turn's id.
+    import turn_context
+    if turn_context.turn_id():
+        import schema_probe
+        if schema_probe.has_columns("agent_queue", ("turn_id",)):
+            row["turn_id"] = turn_context.turn_id()
     res = sb_clients.sb_post_as_service("/agent_queue", row)
     qid: Optional[str] = None
     if isinstance(res, list) and res:
