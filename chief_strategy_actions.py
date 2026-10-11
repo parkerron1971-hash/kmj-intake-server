@@ -205,6 +205,11 @@ async def handle_schedule_action(client, biz, action) -> Dict:
         # scheduled run is not (chief_marketing_actions).
         return _fail("schedule_action", "the marketing desk keeps its own times: give the post its time "
                      "with marketing_new_post or marketing_edit_post \"when\" instead, so nothing was scheduled")
+    if itype in ("make_offer", "change_offer", "set_refer_a_friend"):
+        # Offers change what customers pay: only on the owner's word in a
+        # chat turn, which a scheduled run is not (chief_offer_actions).
+        return _fail("schedule_action", "offers change only when the owner asks in chat, so nothing was "
+                     "scheduled: make or change it now, and give it a start or end day instead")
     if itype not in _handlers():
         return _fail("schedule_action", f"unknown action '{itype}'")
 
