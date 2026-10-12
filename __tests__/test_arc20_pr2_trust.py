@@ -84,8 +84,11 @@ def test_trust_track_graduation_math(fake):
     assert cats["propose_task"]["graduation_candidate"] is False  # n too small
 
 
-def test_regulated_vertical_autonomy_defaults(fake):
+def test_regulated_vertical_autonomy_defaults(fake, monkeypatch):
     fb = fake
+    # Therapy practices are paused (vertical_scope.is_paused); the autonomy
+    # default must still hold the day they reopen.
+    monkeypatch.setenv("PAUSED_VERTICALS", "none")
     fb.rows("user_profiles").append({"user_id": "gf", "is_grandfathered": True})
     out = la.create_business(
         la.CreateBusinessBody(name="Hartwell Law", type="lawyer"), _u("gf"))

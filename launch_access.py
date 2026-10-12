@@ -286,6 +286,7 @@ def create_business(body: CreateBusinessBody,
     """Replaces the frontend's direct PostgREST insert. Enforces, in order:
       1. Launch admission (invite-only): grandfathered or invited.
       2. Tier business cap (grandfathered bypass; advisory→REAL now).
+      3. Paused kinds of practice (therapy, counseling, health care).
     Insert payload mirrors OnboardingFlow exactly (whitelisted fields)."""
     uid = str(user.id)
     grandfathered = usage_metering.is_grandfathered_user(uid)
@@ -312,6 +313,13 @@ def create_business(body: CreateBusinessBody,
     btype = (body.type or "").strip() or "custom"
     if not name:
         raise HTTPException(400, "business name required")
+    # Therapy, counseling and health care practices are paused (2026-10-12):
+    # opening one would put protected health information on vendors with no
+    # BAA. vertical_scope.py has the reasoning and the reopen switch.
+    import vertical_scope
+    if vertical_scope.is_paused(btype):
+        raise HTTPException(422, {"error": "vertical_paused",
+                                  "message": vertical_scope.PAUSED_MESSAGE})
     # Arc 20B Part 6 — regulated-vertical ruling: lawyer + therapist (and
     # counseling-adjacent) businesses ship with client-facing autonomy
     # DISABLED by default; enabling later requires explicit practitioner
