@@ -131,3 +131,16 @@ def test_heavy_lanes_and_explicit_rollback(monkeypatch):
     monkeypatch.setenv("CHIEF_MODEL_DEEP", "claude-opus-4-8")
     assert chief_models.model_for("deep", "professional") == "claude-opus-4-8"
     assert chief_models.max_tokens_for("deep", model="claude-opus-4-8") == old_budget
+
+
+@pytest.mark.parametrize("plan", ["starter", "practice", "professional"])
+@pytest.mark.parametrize("lane", ["deep", "insight"])
+def test_effort_and_budget_follow_the_resolved_tier(monkeypatch, plan, lane):
+    monkeypatch.delenv(f"CHIEF_MODEL_{lane.upper()}", raising=False)
+    monkeypatch.delenv(f"CHIEF_EFFORT_{lane.upper()}", raising=False)
+    model = chief_models.model_for(lane, plan)
+    base = chief_models.max_tokens_for(lane)
+    assert chief_models.effort_for(lane, model=model) == ("high" if plan == "professional" else None)
+    assert chief_models.max_tokens_for(lane, model=model) == base + (8192 if plan == "professional" else 0)
+    monkeypatch.setenv(f"CHIEF_EFFORT_{lane.upper()}", "low")
+    assert chief_models.effort_for(lane, model=model) == "low"

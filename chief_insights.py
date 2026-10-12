@@ -198,7 +198,7 @@ def _synthesize(biz: Dict[str, Any], digest: Dict[str, Any],
         _plan = None
     model = chief_models.model_for("insight", _plan)
     import model_ladder
-    effort = chief_models.effort_for("insight")
+    effort = chief_models.effort_for("insight", model=model)
 
     mem_lines = "\n".join(
         f"- [{m.get('category')}] {m.get('content')}" for m in memories[:30]

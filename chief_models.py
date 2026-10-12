@@ -227,7 +227,7 @@ def lane_for_chat(mode: str = "", client_surface: str = "") -> str:
 def max_tokens_for(lane: str, default: int = 1600, *, model: str = "") -> int:
     import model_ladder
     tokens = _LANE_MAX_TOKENS.get((lane or "").strip().lower(), default)
-    return model_ladder.opus_55_max_tokens(model, tokens, effort_for(lane))
+    return model_ladder.opus_55_max_tokens(model, tokens, effort_for(lane, model=model))
 
 
 # How hard the model thinks before it answers (output_config.effort).
@@ -236,7 +236,8 @@ def max_tokens_for(lane: str, default: int = 1600, *, model: str = "") -> int:
 # a ~250-token answer — most of a minute of silence was thinking nobody
 # reads. A conversation lane answers at "medium"; a spoken turn, where a
 # pause is felt most, at "low". The deep lane (coaches, heavy analysis)
-# uses explicit high effort, as does weekly insight synthesis. Override with CHIEF_EFFORT_<LANE>
+# uses high effort on Opus 5.5, as does weekly insight synthesis. Other
+# heavy-lane models keep their prior defaults. Override with CHIEF_EFFORT_<LANE>
 # (low / medium / high / xhigh / max; "default" = the model's own).
 #
 # Chat moved medium -> low with Sonnet 5.5 (2026-09-28), whose levels are
@@ -254,11 +255,13 @@ _LANE_EFFORT = {
 _EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
-def effort_for(lane: str) -> str | None:
+def effort_for(lane: str, *, model: str = "") -> str | None:
     key = (lane or "chat").strip().lower()
     env = (os.environ.get(f"CHIEF_EFFORT_{key.upper()}") or "").strip().lower()
     if env:
         return env if env in _EFFORTS else None
+    if key in _LADDER_LANES and "opus-5-5" not in (model or model_for(key)).lower():
+        return None
     return _LANE_EFFORT.get(key)
 
 

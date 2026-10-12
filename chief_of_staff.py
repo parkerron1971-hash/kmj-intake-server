@@ -15690,7 +15690,9 @@ async def chief_chat(
                                          stream_sink=_sentence_streamer,
                                          read_tools=_read_tools,
                                          tool_biz=biz,
-                                         effort=chief_models.effort_for(lane), timing_role="chief_main")
+                                         effort=chief_models.effort_for(
+                                             lane, model=chief_models.model_for(lane, _plan)),
+                                         timing_role="chief_main")
                 if isinstance(_sentence_streamer, _SentenceStreamer):
                     _sentence_streamer.finish_input()
             finally:
@@ -15774,7 +15776,7 @@ async def chief_chat(
                     actions, clean, raw = await _retry_missing_actions(
                         client, system, api_messages, effective_message, turn_tokens,
                         chief_models.model_for(lane, _plan), read_tools=_read_tools, tool_biz=biz,
-                        effort=chief_models.effort_for(lane),
+                        effort=chief_models.effort_for(lane, model=chief_models.model_for(lane, _plan)),
                         enable_web_search=_web_search_allowed(req.message or ""),
                         stable_tools=True)
                 finally:

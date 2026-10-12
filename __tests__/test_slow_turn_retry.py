@@ -39,7 +39,7 @@ def test_the_retry_rides_the_turns_own_effort_and_tools(monkeypatch):
 def test_the_turn_passes_its_settings_to_the_retry():
     src = inspect.getsource(cos.chief_chat)
     call = src[src.index("await _retry_missing_actions("):][:600]
-    assert "effort=chief_models.effort_for(lane)" in call
+    assert "effort=chief_models.effort_for(lane, model=chief_models.model_for(lane, _plan))" in call
     assert "stable_tools=True" in call
     assert "enable_web_search=_web_search_allowed(" in call
 

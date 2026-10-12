@@ -40,6 +40,6 @@ def test_env_overrides_and_default_means_the_models_own(monkeypatch):
 
 def test_the_main_turn_passes_the_lane_effort_and_the_call_sends_it():
     chat_src = inspect.getsource(cos.chief_chat)
-    assert "effort=chief_models.effort_for(lane)" in chat_src
+    assert "lane, model=chief_models.model_for(lane, _plan)" in chat_src
     call_src = inspect.getsource(cos._call_claude)
     assert "effort_kwargs(model, effort)" in call_src
