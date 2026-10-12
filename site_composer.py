@@ -1315,7 +1315,7 @@ SPEC_MAX_TOKENS = 4000  # was 1600 — truncated rich page specs mid-JSON
 
 
 def _spec_model() -> str:
-    return (os.environ.get("SITE_SPEC_MODEL") or "").strip() or "claude-opus-4-7"
+    return (os.environ.get("SITE_SPEC_MODEL") or "").strip() or "claude-opus-5-5"
 
 
 def _call_spec_stage(*, system: str, user: str, business_id: str) -> str:
@@ -1325,6 +1325,9 @@ def _call_spec_stage(*, system: str, user: str, business_id: str) -> str:
     import model_ladder
     import site_llm
 
+    effort = (os.environ.get("SITE_SPEC_EFFORT") or "medium").strip().lower()
+    budget = model_ladder.opus_55_max_tokens(_spec_model(), SPEC_MAX_TOKENS, effort)
+
     def _do(model: str, max_tokens: int, timeout: float):
         from anthropic import Anthropic
         client = llm_call.sdk_client(key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -1332,26 +1335,27 @@ def _call_spec_stage(*, system: str, user: str, business_id: str) -> str:
             model=model, max_tokens=max_tokens,
             system=system, messages=[{"role": "user", "content": user}],
             timeout=timeout,
-            **model_ladder.sampling_kwargs(model, None))
+            **model_ladder.sampling_kwargs(model, None),
+            **model_ladder.sdk_effort_kwargs(model, effort))
 
     if site_llm.provider() == "moonshot":
         try:
             msg = site_llm.create_message(
-                model=_spec_model(), max_tokens=SPEC_MAX_TOKENS,
+                model=_spec_model(), max_tokens=budget,
                 system=system, user_content=user,
-                timeout=model_ladder.timeout_for("spec", _spec_model()) + 120.0,
-                task="composer/spec")
+                timeout=model_ladder.timeout_for("spec", _spec_model(), budget) + 120.0,
+                task="composer/spec", effort=effort)
             used_model = getattr(msg, "model", "moonshot")
         except Exception as _ms_err:
             logger.warning(f"[composer] moonshot spec call failed "
                            f"({type(_ms_err).__name__}) — full ladder fallback")
             msg, used_model = model_ladder.call_with_ladder(
                 _do, model=_spec_model(), task="spec",
-                business_id=business_id, max_tokens=SPEC_MAX_TOKENS)
+                business_id=business_id, max_tokens=budget)
     else:
         msg, used_model = model_ladder.call_with_ladder(
             _do, model=_spec_model(), task="spec",
-            business_id=business_id, max_tokens=SPEC_MAX_TOKENS)
+            business_id=business_id, max_tokens=budget)
     try:
         from api_usage_logger import log_api_usage_sync
         u = getattr(msg, "usage", None)

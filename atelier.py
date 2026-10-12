@@ -248,6 +248,9 @@ def _call_llm(system: str, user: str, business_id: str,
     logger.info(f"[atelier] authoring with model={_model()} for "
                 f"{(business_id or 'unknown')[:8]}")
 
+    effort = (os.environ.get("ATELIER_EFFORT") or "medium").strip().lower()
+    budget = model_ladder.opus_55_max_tokens(_model(), ATELIER_MAX_TOKENS, effort)
+
     def _do(model: str, max_tokens: int, timeout: float):
         return client.messages.create(
             model=model, max_tokens=max_tokens,
@@ -256,6 +259,7 @@ def _call_llm(system: str, user: str, business_id: str,
             # Opus 4.7/4.8 / Sonnet 5 / Fable 400 on temperature —
             # omitted there, kept on Sonnet 4.x.
             **model_ladder.sampling_kwargs(model, ATELIER_TEMPERATURE),
+            **model_ladder.sdk_effort_kwargs(model, effort),
         )
 
     try:
@@ -268,14 +272,14 @@ def _call_llm(system: str, user: str, business_id: str,
         import site_llm
         if site_llm.provider() == "moonshot":
             msg = site_llm.create_message(
-                model=_model(), max_tokens=ATELIER_MAX_TOKENS,
+                model=_model(), max_tokens=budget,
                 temperature=ATELIER_TEMPERATURE, system=system,
-                user_content=user, timeout=90.0, task="atelier")
+                user_content=user, timeout=90.0, task="atelier", effort=effort)
             used_model = getattr(msg, "model", "moonshot")
         else:
             msg, used_model = model_ladder.call_with_ladder(
                 _do, model=_model(), task="atelier",
-                business_id=business_id or "", max_tokens=ATELIER_MAX_TOKENS)
+                business_id=business_id or "", max_tokens=budget)
     except Exception as e:
         # Every rung failed. LOUD + breadcrumbed (to_model=None records
         # 'no rung succeeded') — a bare module-only page is never a
