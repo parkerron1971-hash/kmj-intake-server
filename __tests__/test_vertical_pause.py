@@ -27,8 +27,9 @@ def _default_pause(monkeypatch):
 
 
 @pytest.mark.parametrize("btype", [
-    "therapist", "Therapist / Counselor", "counselor", "LMFT practice", "lcsw",
+    "therapist", "Therapist / Counselor", "counselor", "counseling", "LMFT practice", "lcsw",
     "Psychologist", "mental_health", "Northside Behavioral Health",
+    "Marriage counseling", "grief counselor",
     "physical therapy", "speech-therapy clinic",
     "Dental office", "chiropractor", "Family medical practice", "home health",
     "Lawrence family dental",
@@ -41,6 +42,9 @@ def test_these_are_paused(btype):
     "barber", "lawyer", "Law firm", "Attorney and Counselor at Law", "legal counsel",
     "massage therapy", "fitness_wellness", "wellness studio", "life coach", "coach",
     "consultant", "ministry", "custom", "", None,
+    "Career counselor", "Financial counseling", "Credit counseling", "School counselor",
+    "Pastoral counseling", "Incidental Events", "Scalp Care Studio", "helpcenter",
+    "Paramedical tattoo",
 ])
 def test_these_stay_open(btype):
     assert vs.is_paused(btype) is False

@@ -148,16 +148,26 @@ OUT_OF_SCOPE: Dict[str, ScopeRule] = {
 # lists the paused families (default: both below); "none" reopens all.
 #
 # A family matches on the canonical vertical OR on words in a free-text type,
-# because "Northside LMFT practice" resolves to custom, not therapist. Bare
-# "counsel" is not a word here: legal counsel and "attorney and counselor at
-# law" are lawyers, and lawyers are welcome. Massage is personal services.
+# because "Northside LMFT practice" resolves to custom, not therapist. Words
+# match at the start of a word ("dental" never matches "incidental"). Bare
+# counselor/counseling is NOT a word here: career, credit, financial, school
+# and pastoral counselors are welcome, so counseling only matches beside a
+# clinical word ("marriage counseling", "grief counselor"). The exact type
+# "counselor" still resolves to the therapist vertical. Legal counsel and
+# "attorney and counselor at law" are lawyers. Massage is personal services.
+#
+# This is a signup gate that keeps the product honest, not a HIPAA control:
+# a practice can still pick another type. The terms' no-health-records
+# clause is the control.
 
 PAUSED_FAMILIES: Dict[str, Dict[str, Tuple[str, ...]]] = {
     "therapist": {
         "canonical": ("therapist",),
-        "words": ("therap", "counselor", "counsellor", "counseling", "counselling",
-                  "psycholog", "psychiatr", "mental health", "behavioral health",
-                  "behavioural health", "lmft", "lcsw", "lpc"),
+        "words": ("therap", "psycholog", "psychiatr", "mental health",
+                  "behavioral health", "behavioural health", "lmft", "lcsw", "lpc",
+                  "marriage counsel", "family counsel", "couples counsel",
+                  "grief counsel", "trauma counsel", "addiction counsel",
+                  "substance abuse counsel", "clinical counsel"),
     },
     "health_care": {
         "canonical": (),
@@ -195,7 +205,8 @@ def is_paused(business_type: Optional[str]) -> bool:
         fam = PAUSED_FAMILIES[name]
         if canonical in fam["canonical"]:
             return True
-        if any(w in text for w in fam["words"]) and not _NOT_PAUSED.search(text):
+        if (any(re.search(r"\b" + re.escape(w), text) for w in fam["words"])
+                and not _NOT_PAUSED.search(text)):
             return True
     return False
 
