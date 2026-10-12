@@ -406,7 +406,7 @@ def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], or
          "label": "Your texting terms and privacy pages are up" + (f" ({origin}{TERMS_PATH})" if origin else ""),
          "fix": "They go up with your website."},
         {"key": "answers", "ok": bool(answers), "label": "Your business details for the registration",
-         "fix": "Add your legal business name, address and the person Twilio can contact."},
+         "fix": "Add your legal business name, address and the person the reviewers can contact."},
     ]
     if answers and answers.get("has_ein"):
         if answers.get("business_type") != "nonprofit":
@@ -416,8 +416,8 @@ def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], or
                     "fix": "Add your EIN below. It's kept with your business's legal details."})
     elif answers:
         out.append({"key": "mobile", "ok": bool(answers.get("mobile_phone")),
-                    "label": "Your own cell phone, for Twilio's confirmation text",
-                    "fix": "Add your own cell number: Twilio texts it once, and you reply YES."})
+                    "label": "Your own cell phone, for the verification text",
+                    "fix": "Add your own cell number: a verification text comes to it once, and you reply YES."})
     return out
 
 
@@ -427,9 +427,9 @@ def _stage(status: str, twilio: Optional[Dict[str, Any]] = None) -> List[Dict[st
     t = twilio or {}
     sole = texting_isv.sole_prop(t)
     order = ["business", "confirm", "campaign", "live"] if sole else ["business", "campaign", "live"]
-    labels = {"business": "Twilio checks your business (minutes to a few days)",
-              "confirm": "You reply YES to Twilio's text on your cell",
-              "campaign": "Carriers review how you text (usually about 2 weeks)",
+    labels = {"business": "Your business is verified (minutes to a few days)",
+              "confirm": "You reply YES to the verification text on your cell",
+              "campaign": "The phone companies review how you text (usually about 2 weeks)",
               "live": "You text under your own name"}
     at = {"submitted": 0, "brand_pending": 0, "campaign_pending": order.index("campaign"),
           "approved": len(order)}.get(status)
@@ -532,8 +532,8 @@ async def save_registration(business_id: str, body: Answers, biz: dict = Depends
     except RuntimeError:
         raise HTTPException(503, "Your details couldn't be saved just now. Nothing changed.") from None
     if current and current.get("status") not in (None, *EDITABLE):
-        raise HTTPException(409, "Your registration is with Twilio already, so these details can't change here. "
-                                 "If something is wrong, tell us and we'll update it with Twilio.")
+        raise HTTPException(409, "Your registration has been sent for approval, so these details can't change here. "
+                                 "If something is wrong, tell us and we'll update it.")
     saved = await asyncio.to_thread(
         sb_clients.sb_post_as_service, "/texting_registrations?on_conflict=business_id",
         {**row, "status": (current or {}).get("status") or "draft"}, "resolution=merge-duplicates,return=representation")
@@ -579,15 +579,18 @@ def _saver(business_id: str):
 
 
 UPDATES = {
-    "brand_pending": ("Your texting registration is with Twilio",
-                      "We sent {name}'s registration. Twilio checks the business first (minutes to a few days), "
-                      "then the carriers review how you text (usually about 2 weeks). We'll tell you at each step."),
-    "campaign_pending": ("Twilio verified {name}",
-                         "Next, the carriers review how {name} texts its clients. That usually takes about 2 weeks."),
+    "brand_pending": ("Your texting registration is sent",
+                      "Solutionist sent {name}'s registration. First your business is verified (minutes to a few "
+                      "days), then the phone companies review how you text (usually about 2 weeks). We'll tell you "
+                      "at each step."),
+    "campaign_pending": ("{name} is verified",
+                         "Next, the phone companies review how {name} texts its clients. That usually takes about "
+                         "2 weeks."),
     "approved": ("{name} can text under its own name",
-                 "The carriers approved {name}'s texting. We're setting up your number under your own name now."),
-    "confirm": ("Reply YES to Twilio's text",
-                "Twilio verified {name}. To finish, reply YES to the text it just sent your cell from "
+                 "The phone companies approved {name}'s texting. Solutionist is setting up your number under your own "
+                 "name now."),
+    "confirm": ("Reply YES to the verification text",
+                "{name} is verified. To finish, reply YES to the verification text just sent to your cell from "
                 f"{texting_isv.OTP_FROM}, within 24 hours. If it didn't come or ran out, open Operate, "
                 "Text, Your name on texts and send a new one."),
     "number_ready": ("Your texts now go out under {name}",
@@ -605,7 +608,7 @@ async def _tell_owner(business: Dict[str, Any], status: str, reasons: Optional[L
     if status not in UPDATES:
         return {}
     name = str(business.get("name") or "Your business")
-    title, body = (s.format(name=name, reasons=" ".join(reasons or []) or "Twilio sent it back.",
+    title, body = (s.format(name=name, reasons=" ".join(reasons or []) or "It came back without a reason.",
                             number=_pretty(number) if number else "Your number")
                    for s in UPDATES[status])
     out = {"in_app": False, "push": False, "email": False}
@@ -728,7 +731,7 @@ async def _send(business: Dict[str, Any], row: Dict[str, Any]) -> str:
             raise texting_isv.NeedsFix(["Add your EIN: it's needed to register the business."])
         origin = await asyncio.to_thread(site_origin, bid)
         if not origin:
-            raise texting_isv.NeedsFix(["Publish your website: Twilio's reviewers open it."])
+            raise texting_isv.NeedsFix(["Publish your website: the reviewers open it."])
         shown = str(business.get("name") or answers.get("legal_name"))
         t.setdefault("campaign_words", campaign_words(shown, origin))
         t.setdefault("sent_at", _now().isoformat())
@@ -743,7 +746,7 @@ async def _send(business: Dict[str, Any], row: Dict[str, Any]) -> str:
         return "failed"
     except texting_isv.TwilioRefused as e:
         logger.warning("texting registration refused for %s: %s", bid[:8], e)
-        reasons = [f"Twilio said: {e.message}"]
+        reasons = [f"The registration came back: {e.message}"]
         await asyncio.to_thread(_patch, bid, {"status": "failed", "failure": reasons[0][:1000]}, when=("submitted",))
         await _tell_owner(business, "failed", reasons)
         return "failed"
@@ -838,10 +841,10 @@ async def send_registration(business_id: str, biz: dict = Depends(business_acces
     if not view["open"]:
         raise HTTPException(409, "Registration isn't open for your business yet. We'll tell you when it is.")
     if view["status"] not in EDITABLE:
-        raise HTTPException(409, "Your registration is with Twilio already.")
+        raise HTTPException(409, "Your registration has been sent already.")
     if view["rejected_after_review"]:
-        raise HTTPException(409, "Twilio sent your registration back after review. Sending the same one again "
-                                 "won't fix it, so we're taking it up with Twilio and will tell you what happens.")
+        raise HTTPException(409, "Your registration came back after review. Sending the same one again won't "
+                                 "fix it, so Solutionist is looking into it and will tell you what happens.")
     missing = [c["fix"] for c in view["readiness"] if c["ok"] is not True]
     if missing:
         raise HTTPException(400, " ".join(missing))
@@ -873,7 +876,7 @@ async def resend_code(business_id: str, biz: dict = Depends(business_access("own
         await asyncio.to_thread(texting_isv.resend_code, t)
     except (texting_isv.TwilioRefused, texting_isv.TwilioDown, RuntimeError) as e:
         logger.warning("texting resend code for %s failed: %s", bid[:8], e)
-        raise HTTPException(502, "Twilio couldn't send a new text just now. Try again in a few minutes.") from None
+        raise HTTPException(502, "A new verification text couldn't be sent just now. Try again in a few minutes.") from None
     t["code_sent_at"] = _now().isoformat()
     await asyncio.to_thread(_patch, bid, {"twilio": t})
     return {"ok": True, **await overview(biz)}

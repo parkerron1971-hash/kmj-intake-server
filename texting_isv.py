@@ -290,7 +290,7 @@ def sole_proprietor_information(answers: Dict[str, Any]) -> Dict[str, Any]:
     usable for at most three registrations."""
     mobile = answers.get("mobile_phone") or answers.get("rep_phone")
     if not mobile:
-        raise NeedsFix(["Add your own cell phone number: Twilio texts it to confirm."])
+        raise NeedsFix(["Add your own cell phone number: the verification text goes to it."])
     return {"brand_name": answers["legal_name"], "mobile_phone_number": mobile}
 
 
@@ -333,7 +333,7 @@ def _reasons(evaluation: Dict[str, Any]) -> List[str]:
                 out.append(str(bad["failure_reason"]))
         if not res.get("invalid") and res.get("failure_reason"):
             out.append(str(res["failure_reason"]))
-    return list(dict.fromkeys(out))[:6] or ["Twilio's check didn't pass, and it didn't say why."]
+    return list(dict.fromkeys(out))[:6] or ["The check didn't pass, and it didn't say why."]
 
 
 def _errors(obj: Dict[str, Any]) -> List[str]:
@@ -618,11 +618,11 @@ def check(t: Dict[str, Any], save: Save) -> Dict[str, Any]:
         if t.get(key):
             bundle = api.get(f"{url}/{t[key]}")
             if bundle.get("status") == "twilio-rejected":
-                return {"stage": "failed", "reasons": _errors(bundle) or ["Twilio didn't approve the business details."]}
+                return {"stage": "failed", "reasons": _errors(bundle) or ["The business details weren't approved."]}
     brand = api.get(f"{MESSAGING}/a2p/BrandRegistrations/{t['brand_sid']}")
     b = str(brand.get("status") or "").upper()
     if b in ("FAILED", "SUSPENDED", "DELETED"):
-        return {"stage": "failed", "reasons": _errors(brand) or ["The carriers' registry didn't verify the business."]}
+        return {"stage": "failed", "reasons": _errors(brand) or ["The business couldn't be verified."]}
     if b != "APPROVED":
         return {"stage": "brand", "reasons": []}
     if sole_prop(t) and str(brand.get("identity_status") or "").upper() != "VERIFIED":
@@ -646,7 +646,7 @@ def check(t: Dict[str, Any], save: Save) -> Dict[str, Any]:
     if c == "VERIFIED":
         return {"stage": "approved", "reasons": []}
     if c in ("FAILED", "SUSPENDED"):
-        return {"stage": "failed", "reasons": _errors(camp) or ["The carriers didn't approve how the business texts."]}
+        return {"stage": "failed", "reasons": _errors(camp) or ["The phone companies didn't approve how the business texts."]}
     return {"stage": "campaign", "reasons": []}
 
 

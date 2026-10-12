@@ -149,7 +149,7 @@ def test_the_owner_is_told_once_to_reply_yes(monkeypatch):
     assert [s["key"] for s in steps] == ["business", "confirm", "campaign", "live"]
     assert [s["state"] for s in steps] == ["done", "now", "next", "next"]
     title, body = tr.UPDATES["confirm"]
-    assert title == "Reply YES to Twilio's text" and "+1 (915) 278-2000" in body and "24 hours" in body
+    assert title == "Reply YES to the verification text" and "+1 (915) 278-2000" in body and "24 hours" in body
 
 
 # ── 3. a new YES text ─────────────────────────────────────────────────
