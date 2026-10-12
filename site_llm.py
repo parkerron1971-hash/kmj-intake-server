@@ -18,6 +18,10 @@
 #                          (moonshot default: "kimi-k3")
 #   MOONSHOT_API_KEY       required for moonshot
 #   MOONSHOT_BASE_URL      default https://api.moonshot.ai/v1
+#   CHIEF_SUBPROCESSOR_HOSTS  moonshot runs only when this lists its host
+#                          (lane_registry.listed_subprocessor): the privacy
+#                          policy must name a provider before a business's
+#                          site content goes to it. Unlisted = Claude.
 #
 # Moonshot's API is OpenAI-compatible (POST /chat/completions), so no
 # extra SDK — plain httpx. The response is wrapped to quack like the
@@ -65,8 +69,32 @@ class _Message:
         self.model = model
 
 
+_UNLISTED_WARNED = False
+
+
+def _moonshot_base() -> str:
+    return (os.environ.get("MOONSHOT_BASE_URL") or "https://api.moonshot.ai/v1").rstrip("/")
+
+
+def _only_if_listed(name: str) -> str:
+    """Moonshot only when its host is a listed subprocessor (2026-10-12): a
+    business's site content may only go to a company the privacy policy
+    names. Any other answer passes through unchanged."""
+    global _UNLISTED_WARNED
+    if name != "moonshot":
+        return name
+    import lane_registry
+    if lane_registry.listed_subprocessor(_moonshot_base()):
+        return name
+    if not _UNLISTED_WARNED:
+        _UNLISTED_WARNED = True
+        print(f"[site_llm] moonshot is selected but {_moonshot_base()} is not an https host "
+              f"listed in CHIEF_SUBPROCESSOR_HOSTS; site content stays on Claude", flush=True)
+    return "anthropic"
+
+
 def provider() -> str:
-    return (os.environ.get("SITE_BUILDER_PROVIDER") or "anthropic").strip().lower()
+    return _only_if_listed((os.environ.get("SITE_BUILDER_PROVIDER") or "anthropic").strip().lower())
 
 
 def provider_for(task: str = "") -> str:
@@ -100,7 +128,7 @@ def provider_for(task: str = "") -> str:
                     if kk and t.startswith(kk) and len(kk) > len(best):
                         best = kk
                 if best:
-                    return str(m[best]).strip().lower()
+                    return _only_if_listed(str(m[best]).strip().lower())
         except Exception as e:
             logger.warning(f"[site_llm] SITE_STAGE_PROVIDERS unparseable: {e}")
     if t.startswith("drl"):
@@ -128,7 +156,7 @@ def judge_provider() -> str:
             "[site_llm] SITE_JUDGE_PROVIDER=%s is set but no longer honored "
             "for the judge (self-grading hazard) — set SHIP_JUDGE_PROVIDER "
             "explicitly if a non-Claude judge is truly intended.", legacy)
-    return (pinned or "anthropic")
+    return _only_if_listed(pinned or "anthropic")
 
 
 def _moonshot_model() -> str:
@@ -193,7 +221,7 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
     would have used — kept as the fail-open fallback and the default
     provider's model. `provider_name` overrides the global switch for
     call sites with their own toggle (the judge)."""
-    if (provider_name or provider_for(task)) == "moonshot":
+    if _only_if_listed(provider_name or provider_for(task)) == "moonshot":
         try:
             msg = _call_moonshot(
                 max_tokens=max_tokens, temperature=temperature,

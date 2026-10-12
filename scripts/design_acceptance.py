@@ -137,6 +137,12 @@ def run_build(business_id: str, mode: str) -> Dict[str, Any]:
         os.environ.pop("SITE_BUILDER_PROVIDER", None)
     else:
         os.environ["SITE_BUILDER_PROVIDER"] = "moonshot"
+        # site_llm runs moonshot only for a listed subprocessor. Running this
+        # harness in a moonshot mode is the operator choosing to send this
+        # fixture there, so it lists the host for this process only.
+        hosts = os.environ.get("CHIEF_SUBPROCESSOR_HOSTS", "")
+        if "moonshot.ai" not in hosts:
+            os.environ["CHIEF_SUBPROCESSOR_HOSTS"] = ",".join(h for h in (hosts, "api.moonshot.ai") if h)
     poisoned_key: Optional[str] = None
     if mode == "fallback":
         poisoned_key = os.environ.get("MOONSHOT_API_KEY")
