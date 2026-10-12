@@ -536,6 +536,19 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
             f"{to_clean} has opted out of texts (STOP). "
             f"They can text START to opt back in.", 422)
 
+    # A business texting under its own registered name (ISV step 4): texts
+    # it writes go from its own number only to people who agreed under its
+    # name, or have texted it, since it registered (Kevin, 2026-10-11, the
+    # mixed rule). Booking confirmations and reminders aren't sent from here
+    # and keep their own rule.
+    import sms_routing
+    own = await sms_routing.own_registration(client, business_id)
+    if own and not await sms_routing.agreed_under_own_name(client, business_id, to_clean, own.get("since")):
+        raise SmsSendError(
+            "This person agreed to texts before your business registered its own number, so texts you "
+            "write can't go to them from it yet. Their booking confirmations and reminders still reach "
+            "them. Once they tick the texts box when they book with you, or text your number, you can text them.", 422)
+
     # Resolve contact by phone if caller didn't supply one.
     if not contact_id and business_id:
         match = await _find_contact_by_phone(client, business_id, to_clean)

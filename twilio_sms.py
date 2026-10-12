@@ -150,6 +150,75 @@ def platform_number() -> str:
 
 _warned_unpinned = False
 
+# ─── Numbers in a business's own sub-account (ISV plan step 4) ─────────
+# Once a business is registered under its own name, its number lives in
+# its own Twilio sub-account, on its own Messaging Service (its own
+# campaign). sms_numbers.account_sid says so (NULL = our main account).
+# Sends from such a number go through that account and service; Twilio
+# signs its webhooks with that account's token.
+
+_ROUTE_TTL = 300.0
+_ROUTES: Dict[str, tuple] = {}
+
+
+def own_account_route(number: str) -> Optional[Dict[str, str]]:
+    """{account_sid, service_sid} when this number lives in a business's
+    sub-account, else None. Cached five minutes; an unreadable lookup is
+    not cached (and reads as our main account)."""
+    import time as _time
+    hit = _ROUTES.get(number)
+    if hit and hit[1] > _time.monotonic():
+        return hit[0]
+    from urllib.parse import quote
+    import sb_clients
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/sms_numbers?phone_number=eq.{quote(number, safe='')}&account_sid=not.is.null"
+            f"&status=in.(active,suspended)&select=account_sid,messaging_service_sid&limit=1")
+    except Exception as e:
+        logger.warning(f"own-account lookup failed for a sender: {e}")
+        return None
+    if not isinstance(rows, list):
+        return None
+    route = ({"account_sid": rows[0]["account_sid"], "service_sid": rows[0]["messaging_service_sid"]}
+             if rows and rows[0].get("messaging_service_sid") else None)
+    _ROUTES[number] = (route, _time.monotonic() + _ROUTE_TTL)
+    return route
+
+
+def _account_client(account_sid: str):
+    """A client acting in a sub-account: our account's credentials, the
+    sub-account's id in every path (Twilio lets a parent act for its
+    sub-accounts on the 2010 API)."""
+    from twilio.rest import Client
+    return Client(_require_env("TWILIO_ACCOUNT_SID"), _require_env("TWILIO_AUTH_TOKEN"), account_sid)
+
+
+def webhook_token(account_sid: Optional[str]) -> Optional[str]:
+    """The token Twilio signed this webhook with: ours for our account (and
+    for a request that names none), the sub-account's for a business's own
+    number. None for an account we don't know: the request is refused."""
+    ours = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
+    parent = (os.environ.get("TWILIO_ACCOUNT_SID") or "").strip()
+    if not account_sid or account_sid == parent:
+        return ours
+    import sb_clients
+    if not (account_sid.startswith("AC") and account_sid.isalnum()):
+        return None
+    try:
+        rows = sb_clients.sb_get_as_service(f"/sms_numbers?account_sid=eq.{account_sid}&select=id&limit=1")
+    except Exception as e:
+        logger.warning(f"sub-account lookup failed: {e}")
+        return None
+    if not rows:
+        return None
+    try:
+        import texting_isv
+        return texting_isv.sub_token(account_sid)
+    except Exception as e:
+        logger.warning(f"sub-account token unread for {account_sid[:8]}: {e}")
+        return None
+
 
 def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
     """Send one SMS through the Messaging Service, PINNED to a sender.
@@ -171,8 +240,15 @@ def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
     stopping texts; provisioning a dedicated number refuses to run in
     that state, which is what keeps the old path safe."""
     global _warned_unpinned
-    messaging_service_sid = _require_env("TWILIO_MESSAGING_SERVICE_SID")
     sender = (from_number or "").strip() or platform_number()
+    route = own_account_route(sender) if sender and sender != platform_number() else None
+    if route:
+        # The business's own number, in its own sub-account and campaign.
+        message = _account_client(route["account_sid"]).messages.create(
+            to=to, body=gsm_safe(body), messaging_service_sid=route["service_sid"], from_=sender)
+        logger.info(f"sent SMS to={to} from={sender} (own account) sid={message.sid}")
+        return message.sid
+    messaging_service_sid = _require_env("TWILIO_MESSAGING_SERVICE_SID")
     kwargs = dict(to=to, body=gsm_safe(body), messaging_service_sid=messaging_service_sid)
     if sender:
         kwargs["from_"] = sender
@@ -261,8 +337,12 @@ def attach_to_service(pn_sid: str) -> str:
     return mg
 
 
-def detach_from_service(pn_sid: str) -> None:
-    """Best effort — a number already out of the pool is fine."""
+def detach_from_service(pn_sid: str, account_sid: Optional[str] = None) -> None:
+    """Best effort — a number already out of the pool is fine. A number in
+    a business's own sub-account isn't in our pool: releasing it takes it
+    off its own service, so there is nothing to detach here."""
+    if account_sid:
+        return
     mg = _require_env("TWILIO_MESSAGING_SERVICE_SID")
     try:
         _twilio_admin_client().messaging.v1.services(mg).phone_numbers(pn_sid).delete()
@@ -270,9 +350,11 @@ def detach_from_service(pn_sid: str) -> None:
         logger.warning(f"detach {pn_sid} from {mg}: {e}")
 
 
-def release_number(pn_sid: str) -> None:
-    _twilio_admin_client().incoming_phone_numbers(pn_sid).delete()
-    logger.info(f"released {pn_sid}")
+def release_number(pn_sid: str, account_sid: Optional[str] = None) -> None:
+    """Hand the number back to Twilio, from whichever account holds it."""
+    client = _account_client(account_sid) if account_sid else _twilio_admin_client()
+    client.incoming_phone_numbers(pn_sid).delete()
+    logger.info(f"released {pn_sid}{' (own account)' if account_sid else ''}")
 
 
 # ─── Test send ─────────────────────────────────────────────────────────
@@ -316,7 +398,13 @@ async def twilio_inbound_sms(request: Request):
     auth_token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
     if auth_token:
         from twilio.request_validator import RequestValidator
-        validator = RequestValidator(auth_token)
+        # A business's own number (its sub-account) is signed with that
+        # account's token; ours with ours; an account we don't know, refused.
+        token = await run_in_threadpool(webhook_token, params.get("AccountSid"))
+        if not token:
+            logger.warning("inbound SMS REJECTED — unknown account")
+            return Response(status_code=403)
+        validator = RequestValidator(token)
         signature = request.headers.get("x-twilio-signature", "")
         if not validator.validate(_public_url(request), params, signature):
             logger.warning("inbound SMS REJECTED — invalid X-Twilio-Signature")
@@ -438,7 +526,10 @@ async def twilio_status_callback(request: Request, background: BackgroundTasks):
     auth_token = (os.environ.get("TWILIO_AUTH_TOKEN") or "").strip()
     if auth_token:
         from twilio.request_validator import RequestValidator
-        validator = RequestValidator(auth_token)
+        token = await run_in_threadpool(webhook_token, params.get("AccountSid"))
+        if not token:
+            return Response(status_code=403)
+        validator = RequestValidator(token)
         if not validator.validate(_public_url(request), params,
                                   request.headers.get("x-twilio-signature", "")):
             return Response(status_code=403)

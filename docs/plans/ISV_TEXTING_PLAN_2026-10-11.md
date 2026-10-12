@@ -85,7 +85,14 @@ several weeks); a rejection restarts the review. Businesses go in parallel.
   registration screen shows only the last four digits.
 - **D5 No EIN (sole proprietors).** Default: the Sole Proprietor path ($4.50
   + $2/month, one number, the owner confirms by a code texted to their own
-  mobile within 24 hours).
+  mobile within 24 hours). **Kevin, 2026-10-11: "Build it now."** Built on
+  the same flow (texting_isv `path = sole_prop`): a Starter profile, the
+  Sole Proprietor bundle with the owner's own cell, a SOLE_PROPRIETOR brand;
+  once approved, Twilio texts the cell from +1 (915) 278-2000 and the owner
+  replies YES (told in the app, by push and email; "Send a new text" on the
+  screen, at most every ten minutes); then a SOLE_PROPRIETOR campaign and
+  one number. Only a sole proprietor may register without an EIN (Twilio:
+  every LLC has one).
 - **D6 Use case.** Default: Low Volume Mixed for everyone (covers marketing
   too, up to ~6,000 texts a day); Standard only for a business that outgrows
   it.
@@ -130,7 +137,17 @@ Solutions first (its EIN is on file), because a rejection costs two weeks.
   `/texting-terms` and `/texting-privacy`; other businesses keep today's
   words. (The site contact form already names the business first.)
 
-**Step 4: send under the business's name.** On approval: buy or move the
+**Step 4: send under the business's name.** *Plumbing built 2026-10-11
+(step 4a): on approval the number the business already has with us MOVES
+into its sub-account (clients keep it), or one is bought there in its area
+code; it joins the business's own Messaging Service; sms_numbers.account_sid
+records where it lives; sends from it go through that account, webhooks for
+it are checked with that account's token, and releasing it happens there.
+Step 4b, built 2026-10-11 as Kevin chose: the business's name leads the
+texts from its own number; confirmations and reminders go to all its clients
+from it, owner-written texts and offers only to people who agreed to texts
+from the business itself (since its registration was sent) or who have
+texted it since.* On approval: buy or move the
 business's number into its own Messaging Service; `sms_routing.sender_brand()`
 returns the business; owner-written texts, broadcasts and automatic notes go
 from its line; journeys may text (marketing is inside Low Volume Mixed), so
