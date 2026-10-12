@@ -42,7 +42,9 @@ defences are structural rather than careful.
 4. CONTRIBUTION IS CONSENSUAL AND REVOCABLE.
    `settings.feed2.contribute` — on by default (Kevin's ruling
    2026-07-27), off with one toggle, honoured on the READ side so
-   switching it off stops future contribution immediately.
+   switching it off stops future contribution immediately. Law practices
+   are the exception (2026-10-12): they owe their clients confidentiality
+   of their own, so they contribute only once they switch it on.
 
 5. OUTPUT IS BOUNDED AND AUDITABLE.
    Rows carry `evidence_count` and `source='learned'`, so anything that
@@ -113,22 +115,31 @@ def _enabled() -> bool:
 
 # ─── consent ─────────────────────────────────────────────────────────
 
+def default_contributes(business_type: Optional[str]) -> bool:
+    """What a business that never touched the switch does: contribute,
+    unless it is a law practice (opt-in, 2026-10-12)."""
+    import vertical_family
+    return not vertical_family.is_legal_like(business_type)
+
+
 def contributes(business: Dict[str, Any]) -> bool:
     """Does this business contribute its patterns to its vertical?
 
     Default TRUE (Kevin's ruling 2026-07-27: on by default with an off
-    switch). Read defensively — a malformed settings blob means the
-    business is treated as contributing, which matches the default, but
-    an explicit false always wins."""
-    settings = (business or {}).get("settings") or {}
+    switch), except a law practice, which defaults to FALSE. Read
+    defensively — a malformed settings blob means the default for the
+    business's type, and an explicit value always wins."""
+    business = business or {}
+    default = default_contributes(business.get("type"))
+    settings = business.get("settings") or {}
     if not isinstance(settings, dict):
-        return True
+        return default
     feed2 = settings.get("feed2")
     if isinstance(feed2, dict) and "contribute" in feed2:
         return bool(feed2.get("contribute"))
     if "feed2_contribute" in settings:      # flat form, tolerated
         return bool(settings.get("feed2_contribute"))
-    return True
+    return default
 
 
 # ─── scrubbing ───────────────────────────────────────────────────────

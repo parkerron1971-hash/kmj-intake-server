@@ -43,6 +43,27 @@ def test_contribution_is_on_by_default():
     assert vd.contributes({"id": "b1", "settings": {"unrelated": 1}})
 
 
+def test_a_law_practice_contributes_only_once_it_opts_in():
+    """2026-10-12: law practices owe their clients confidentiality of
+    their own, so for them the switch starts off."""
+    for t in ("lawyer", "law_firm", "attorney", "Legal Services"):
+        assert not vd.contributes({"type": t, "settings": {}}), t
+        assert not vd.contributes({"type": t, "settings": "not-a-dict"}), t
+        assert vd.contributes({"type": t, "settings": {"feed2": {"contribute": True}}}), t
+    assert vd.contributes({"type": "barber", "settings": {}})
+    assert vd.default_contributes("coach") and not vd.default_contributes("lawyer")
+
+
+def test_the_scan_leaves_out_a_law_practice_that_never_opted_in(monkeypatch):
+    rows = [{"id": "l1", "type": "lawyer", "settings": {}},
+            {"id": "l2", "type": "lawyer", "settings": {"feed2": {"contribute": True}}},
+            {"id": "c1", "type": "coach", "settings": {}}]
+    monkeypatch.setattr(vd.sb_clients, "sb_get_as_service", lambda p: rows)
+    groups = vd._businesses_by_vertical()
+    assert groups.get("lawyer") == ["l2"]
+    assert groups.get("coach") == ["c1"]
+
+
 def test_contribution_can_be_switched_off():
     assert not vd.contributes({"settings": {"feed2": {"contribute": False}}})
     assert not vd.contributes({"settings": {"feed2_contribute": False}})
