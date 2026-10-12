@@ -138,7 +138,7 @@ class TestEveryProcessorIsDisclosed:
     def test_the_policy_was_updated_when_the_processors_were(self):
         """A disclosure edit with a stale date reads as an older policy
         than it is."""
-        assert legal_content.LAST_UPDATED_DATE == "August 23, 2026"
+        assert legal_content.LAST_UPDATED_DATE == "October 12, 2026"
 
 
 def _source(module):
