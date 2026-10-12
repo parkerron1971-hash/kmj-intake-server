@@ -140,6 +140,7 @@ def api(monkeypatch):
     monkeypatch.setattr(tr, "registration", lambda bid: state["row"])
     monkeypatch.setattr(tr, "site_origin", lambda bid: ORIGIN)
     monkeypatch.setattr(tr, "ein_for", lambda bid, biz=None: state.get("ein"))
+    monkeypatch.setattr(tr, "about_for", lambda bid, biz=None: state.get("about"))
     monkeypatch.setattr(links, "bookable", lambda bid, biz: True)
     monkeypatch.setattr(tr.sb_clients, "sb_post_as_service", post)
     from fastapi.routing import APIRoute
@@ -174,6 +175,33 @@ def test_saving_the_answers_sends_nothing_and_stops_once_with_twilio(api):
     state["row"]["status"] = "brand_pending"
     r = client.put(f"/texting/registration/{BIZ}", json=GOOD)
     assert r.status_code == 409 and "with Twilio already" in r.json()["detail"]
+
+
+def test_the_form_starts_from_about_your_business():
+    ident = {"legal_name": "KMJ Creative Solutions", "legal_name_is_fallback": False, "entity_type": "single_member_llc",
+             "ein": "12-3456789", "address_line1": "2126 Torrent Street", "address_line2": "Suite 2",
+             "address_city": "Muskegon", "address_state": "mi", "address_zip": "49441-1234", "phone": "2315550100"}
+    assert tr.from_about(ident) == {
+        "legal_name": "KMJ Creative Solutions", "business_type": "llc", "has_ein": True,
+        "street": "2126 Torrent Street, Suite 2", "city": "Muskegon", "state": "MI", "postal_code": "49441"}
+    assert "ein" not in tr.from_about(ident)                                     # whether, never what
+    # Only filed facts: the display name standing in, or an S-corp election, isn't guessed at.
+    shown = tr.from_about({**ident, "legal_name_is_fallback": True, "entity_type": "s_corp"})
+    assert "legal_name" not in shown and "business_type" not in shown
+    assert tr.from_about({"entity_type": "sole_prop"}) == {"business_type": "sole_proprietor", "has_ein": False}
+    assert tr.from_about({"legal_name": None, "address_zip": "494"}) is None and tr.from_about({}) is None
+
+
+def test_the_owner_sees_it_until_they_save_their_own(api):
+    client, state = api
+    state["about"] = {"legal_name": "Northside Cuts LLC", "business_type": "llc", "has_ein": True,
+                      "street": "12 Main St", "city": "Muskegon", "state": "MI", "postal_code": "49441"}
+    body = client.get(f"/texting/registration/{BIZ}").json()
+    assert body["answers"] is None and body["from_about"]["street"] == "12 Main St"
+    assert {c["key"]: c["ok"] for c in body["readiness"]}["answers"] is False    # a start, not saved answers
+    client.put(f"/texting/registration/{BIZ}", json=GOOD)
+    body = client.get(f"/texting/registration/{BIZ}").json()
+    assert body["answers"]["legal_name"] == "Northside Cuts LLC" and body["from_about"] is None
 
 
 def test_owner_only_and_twilio_only_through_texting_isv():

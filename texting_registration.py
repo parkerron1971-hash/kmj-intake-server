@@ -340,6 +340,51 @@ def ein_for(business_id: str, business: Optional[Dict[str, Any]] = None) -> Opti
     return f"{digits[:2]}-{digits[2:]}" if len(digits) == 9 else None
 
 
+# About Your Business's entity types → the form's business types. An S-corp
+# is an election an LLC or a corporation makes, so it leaves the type to the
+# owner.
+ABOUT_TYPES = {"sole_prop": "sole_proprietor", "single_member_llc": "llc", "multi_member_llc": "llc",
+               "partnership": "partnership", "c_corp": "corporation", "nonprofit": "nonprofit"}
+
+
+def from_about(ident: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The form's starting answers from what About Your Business already keeps
+    (Kevin, 2026-10-12: "make the form start from About Your Business"), so
+    the owner doesn't type the legal name and address twice. Only filed facts:
+    never the display name standing in for a legal name, and never the EIN
+    itself (has_ein says whether one is on file). None when there's nothing."""
+    if not ident:
+        return None
+    out: Dict[str, Any] = {}
+    if ident.get("legal_name") and not ident.get("legal_name_is_fallback"):
+        out["legal_name"] = str(ident["legal_name"])[:120]
+    kind = ABOUT_TYPES.get(str(ident.get("entity_type") or ""))
+    if kind:
+        out["business_type"] = kind
+    if len(re.sub(r"\D", "", str(ident.get("ein") or ""))) == 9:
+        out["has_ein"] = True
+    elif kind == "sole_proprietor":
+        out["has_ein"] = False
+    street = ", ".join(str(p).strip() for p in (ident.get("address_line1"), ident.get("address_line2"))
+                       if p and str(p).strip())
+    if street:
+        out["street"] = street[:120]
+    if ident.get("address_city"):
+        out["city"] = str(ident["address_city"]).strip()[:80]
+    state = str(ident.get("address_state") or "").strip().upper()
+    if len(state) == 2:
+        out["state"] = state
+    zip5 = re.sub(r"\D", "", str(ident.get("address_zip") or ""))[:5]
+    if len(zip5) == 5:
+        out["postal_code"] = zip5
+    return out or None
+
+
+def about_for(business_id: str, business: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    import business_identity
+    return from_about(business_identity.get_identity(business_id, business))
+
+
 def is_open(business_id: str) -> bool:
     """Whether this business can send its registration (see OPEN above)."""
     raw = (os.environ.get("TEXTING_REGISTRATION_OPEN") or "").strip()
@@ -424,6 +469,14 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("texting registration: EIN unread for %s: %s", bid[:8], e)
         ein_known = False
     answers = (row or {}).get("answers") or None
+    # Until the owner saves their own answers, the form starts from About
+    # Your Business.
+    about: Optional[Dict[str, Any]] = None
+    if not answers:
+        try:
+            about = await asyncio.to_thread(about_for, bid, business)
+        except Exception as e:
+            logger.warning("texting registration: business details unread for %s: %s", bid[:8], e)
     name = str((answers or {}).get("legal_name") or business.get("name") or "Your business")
     shown_name = str(business.get("name") or name)
     status = (row or {}).get("status") or "not_started"
@@ -439,6 +492,7 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": status,
         "answers": answers,
+        "from_about": about,
         "brand_path": brand_path(answers),
         "readiness": checks,
         "words": campaign_words(shown_name, origin) if origin else None,
