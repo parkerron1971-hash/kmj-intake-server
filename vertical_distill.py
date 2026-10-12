@@ -34,7 +34,10 @@ defences are structural rather than careful.
    Situation strings are short and practitioner-written, but they can
    still contain a name or a number. `_scrub()` runs over everything on
    the way in, and it strips aggressively — a mangled pattern is a cost
-   worth paying.
+   worth paying. Before that, `_unname()` strips the names this business
+   is known to hold: its own clients' names and its own name, read by
+   `_known_names()` as a deny-list. If those names cannot be read, the run
+   writes nothing.
 
 4. CONTRIBUTION IS CONSENSUAL AND REVOCABLE.
    `settings.feed2.contribute` — on by default (Kevin's ruling
@@ -76,11 +79,16 @@ logger = logging.getLogger("vertical_distill")
 # Settings → Chief & agents tells them "your clients, your messages, and
 # your numbers never leave your account." Two thirds of that is
 # structural: message bodies are never read, and _scrub strips numbers.
-# CLIENT NAMES ARE NOT. _scrub cannot reliably recognise a name, and the
+# Client names are only partly structural: _unname strips the names in the
+# business's own contact list, but two kinds still get through, since the
 # fields that do get used (a template's `situation`, an override reason)
-# are practitioner-written free text.
+# are practitioner-written free text:
+#   - a name that is not a contact (a client's child, a misspelling);
+#   - a contact's first name typed in lowercase ("remind marcus"). A whole
+#     name matches in any case, but a single part only matches capitalised,
+#     so a client called Will does not strip "will" from every sentence.
 #
-# What actually protects a name is this floor: it can only travel if
+# What actually protects such a name is this floor: it can only travel if
 # MIN_BUSINESSES separate businesses independently wrote the identical
 # string containing it. At 3 that is vanishingly unlikely. At 1 it is
 # certain. So lowering this does not merely weaken a heuristic — it makes
@@ -147,6 +155,69 @@ def _scrub(text: str) -> str:
     return " ".join(t.split())[:180]
 
 
+# ─── known names ─────────────────────────────────────────────────────
+
+_PAGE = 1000            # PostgREST's usual row cap; pages are read until short
+_MIN_NAME_PART = 3      # "Al", "Jo": too short to strip without mangling
+
+
+def _read_all(path: str) -> Optional[List[Dict[str, Any]]]:
+    """Every row of a service-role read, page by page. None if any page
+    fails, because a deny-list that silently stops at row 1,000 is not one."""
+    out: List[Dict[str, Any]] = []
+    offset = 0
+    while True:
+        rows = sb_clients.sb_get_as_service(f"{path}&limit={_PAGE}&offset={offset}")
+        if not isinstance(rows, list):
+            return None
+        out.extend(r for r in rows if isinstance(r, dict))
+        if len(rows) < _PAGE:
+            return out
+        offset += _PAGE
+
+
+def _known_names(business_ids: List[str]) -> Optional[Dict[str, "re.Pattern[str]"]]:
+    """One pattern per business matching the names it holds: each client's
+    full name (any case) and each part of it as a name is written
+    (capitalised, so a client called Will does not strip "will"), plus the
+    business's own name. Only `name` is selected. None when either read
+    fails — the caller then writes nothing."""
+    id_list = ",".join(business_ids)
+    contacts = _read_all(f"/contacts?business_id=in.({id_list})&select=business_id,name&order=id")
+    businesses = _read_all(f"/businesses?id=in.({id_list})&select=id,name&order=id")
+    if contacts is None or businesses is None:
+        return None
+    full: Dict[str, Set[str]] = defaultdict(set)
+    parts: Dict[str, Set[str]] = defaultdict(set)
+    for b in businesses:
+        name = " ".join(str(b.get("name") or "").split())
+        if len(name) >= _MIN_NAME_PART and b.get("id"):
+            full[str(b["id"])].add(name.lower())
+    for c in contacts:
+        bid = str(c.get("business_id") or "")
+        name = " ".join(str(c.get("name") or "").split())
+        if not bid or len(name) < _MIN_NAME_PART:
+            continue
+        full[bid].add(name.lower())
+        for part in re.findall(r"[^\W\d_][\w'-]*", name):
+            if len(part) >= _MIN_NAME_PART:
+                parts[bid].update({part[:1].upper() + part[1:].lower(), part.upper()})
+                if part != part.lower():          # as written: McDonald, DeShawn
+                    parts[bid].add(part)
+    out: Dict[str, "re.Pattern[str]"] = {}
+    for bid in set(full) | set(parts):
+        alts = ([f"(?i:{re.escape(n)})" for n in sorted(full[bid], key=len, reverse=True)]
+                + [re.escape(n) for n in sorted(parts[bid], key=len, reverse=True)])
+        out[bid] = re.compile(r"(?<!\w)(?:" + "|".join(alts) + r")(?!\w)")
+    return out
+
+
+def _unname(text: str, names: Optional[Dict[str, "re.Pattern[str]"]], business_id: str) -> str:
+    """Replace the names this business holds with [name]."""
+    pattern = (names or {}).get(str(business_id or ""))
+    return pattern.sub("[name]", text or "") if pattern else (text or "")
+
+
 # ─── evidence gathering ──────────────────────────────────────────────
 
 def _businesses_by_vertical() -> Dict[str, List[str]]:
@@ -171,11 +242,13 @@ def _businesses_by_vertical() -> Dict[str, List[str]]:
     return dict(out)
 
 
-def _gather(business_ids: List[str]) -> Dict[str, Any]:
+def _gather(business_ids: List[str],
+            names: Optional[Dict[str, "re.Pattern[str]"]] = None) -> Dict[str, Any]:
     """Structural signals only. Note what is absent: no message bodies, no
     contact rows, no invoice amounts. The richest-looking source —
     chief_templates.body, real messages that worked — is exactly the one
-    that must not be read, so it is not."""
+    that must not be read, so it is not. `names` (from _known_names) is
+    the deny-list each business's free text is cleaned with."""
     since = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
     id_list = ",".join(business_ids)
 
@@ -189,7 +262,7 @@ def _gather(business_ids: List[str]) -> Dict[str, Any]:
             f"/chief_templates?business_id=in.({id_list})"
             f"&select=business_id,kind,situation,uses&limit=600") or []
         for r in rows:
-            sit = _scrub(r.get("situation") or "")
+            sit = _scrub(_unname(r.get("situation") or "", names, r.get("business_id")))
             if sit:
                 situations[f"{r.get('kind')}: {sit}"].add(r["business_id"])
     except Exception as e:
@@ -204,7 +277,7 @@ def _gather(business_ids: List[str]) -> Dict[str, Any]:
             f"&created_at=gte.{since}"
             f"&select=business_id,proposal_type,override_reason&limit=600") or []
         for r in rows:
-            reason = _scrub(r.get("override_reason") or "")
+            reason = _scrub(_unname(r.get("override_reason") or "", names, r.get("business_id")))
             if reason:
                 corrections[f"{r.get('proposal_type')}: {reason}"].add(r["business_id"])
     except Exception as e:
@@ -334,7 +407,12 @@ def run_for_vertical(vertical: str) -> Dict[str, Any]:
         report["skipped"] = f"only {len(biz_ids)} contributing businesses"
         return report
 
-    ev = _gather(biz_ids)
+    names = _known_names(biz_ids)
+    if names is None:
+        report["skipped"] = "client names could not be read, so they could not be stripped"
+        return report
+
+    ev = _gather(biz_ids, names=names)
     signals = (_k_anonymous(ev["situations"])
                + _k_anonymous(ev["corrections"])
                + _k_anonymous(ev["proposals"]))
