@@ -136,10 +136,11 @@ into its sub-account (clients keep it), or one is bought there in its area
 code; it joins the business's own Messaging Service; sms_numbers.account_sid
 records where it lives; sends from it go through that account, webhooks for
 it are checked with that account's token, and releasing it happens there.
-Next (4b, decided by Kevin 2026-10-11): the business's name leads the texts
-from its own number; confirmations and reminders go to all its clients from
-it, owner-written texts and offers only to people who agreed to texts from
-the business itself.* On approval: buy or move the
+Step 4b, built 2026-10-11 as Kevin chose: the business's name leads the
+texts from its own number; confirmations and reminders go to all its clients
+from it, owner-written texts and offers only to people who agreed to texts
+from the business itself (since its registration was sent) or who have
+texted it since.* On approval: buy or move the
 business's number into its own Messaging Service; `sms_routing.sender_brand()`
 returns the business; owner-written texts, broadcasts and automatic notes go
 from its line; journeys may text (marketing is inside Low Volume Mixed), so

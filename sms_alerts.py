@@ -69,7 +69,7 @@ from sms_service import (
     _sb_get, _store_sms, _log_event, _find_contact_by_phone,
     normalize_phone, is_opted_out,
 )
-from sms_routing import _send_platform_sms, sender_brand
+from sms_routing import _send_platform_sms, own_registration, sender_brand
 
 logger = logging.getLogger("sms_alerts")
 if not logger.handlers:
@@ -198,8 +198,15 @@ def _fmt_local(iso_str: str, tz: ZoneInfo) -> Dict[str, str]:
 
 
 def confirmation_text(first_name: str, business_name: str,
-                      date_str: str, time_str: str) -> str:
-    """Campaign sample #1 shape."""
+                      date_str: str, time_str: str, *, own_name: bool = False) -> str:
+    """Campaign sample #1 shape. own_name: the business texts under its own
+    registered name (its own number and campaign, ISV plan step 4), so the
+    text leads with it, as that campaign's samples do (Kevin, 2026-10-11)."""
+    if own_name:
+        return (
+            f"{business_name}: Hi {first_name}, your booking is confirmed for {date_str} at "
+            f"{time_str}. Reply to this message with any questions. Reply STOP to opt out."
+        )
     return (
         f"{sender_brand()}: Hi {first_name}, your booking with {business_name} "
         f"is confirmed for {date_str} at {time_str}. Reply to this message "
@@ -207,9 +214,14 @@ def confirmation_text(first_name: str, business_name: str,
     )
 
 
-def reminder_text(business_name: str, day_str: str, time_str: str) -> str:
+def reminder_text(business_name: str, day_str: str, time_str: str, *, own_name: bool = False) -> str:
     """Campaign sample #2 shape. Plain hyphen on purpose: an em dash
     is outside GSM-7 and bills the reminder as 3 segments, not 2."""
+    if own_name:
+        return (
+            f"Reminder from {business_name}: your appointment is {day_str} at {time_str}. "
+            f"Reply to this message if you need to make a change. Reply STOP to unsubscribe."
+        )
     return (
         f"{sender_brand()}: Reminder from {business_name} - your appointment "
         f"is {day_str} at {time_str}. Reply to this message if you need to "
@@ -258,7 +270,8 @@ async def send_booking_confirmation(
                 return {"status": "no_consent"}
 
             first = (customer_name or "").strip().split()[0] if (customer_name or "").strip() else "there"
-            body = confirmation_text(first, biz_name, parts["date"], parts["time"])
+            own = await own_registration(client, biz_id)
+            body = confirmation_text(first, biz_name, parts["date"], parts["time"], own_name=bool(own))
 
             provider_id = await _send_platform_sms(
                 phone, body, business_id=biz_id, client=client)
@@ -408,8 +421,9 @@ async def reminder_sweep() -> Dict[str, int]:
                     stats["skipped_no_phone"] += 1
                     continue
 
+                own = await own_registration(client, biz["id"])
                 body = reminder_text(biz.get("name") or "the business",
-                                     parts["day"], parts["time"])
+                                     parts["day"], parts["time"], own_name=bool(own))
                 try:
                     provider_id = await _send_platform_sms(
                         phone, body, business_id=biz["id"], client=client)
