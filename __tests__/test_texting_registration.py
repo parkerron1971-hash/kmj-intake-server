@@ -174,7 +174,26 @@ def test_saving_the_answers_sends_nothing_and_stops_once_with_twilio(api):
     assert client.put(f"/texting/registration/{BIZ}", json={**GOOD, "ein": "12-3456789"}).status_code == 422
     state["row"]["status"] = "brand_pending"
     r = client.put(f"/texting/registration/{BIZ}", json=GOOD)
-    assert r.status_code == 409 and "with Twilio already" in r.json()["detail"]
+    assert r.status_code == 409 and "sent for approval" in r.json()["detail"]
+
+
+def test_the_owner_never_hears_twilio():
+    """Texting is ours to the owner (Kevin, 2026-10-12): Solutionist for what
+    we do, "the phone companies" for their approval, never Twilio or
+    "carriers" in anything the owner reads."""
+    import texting_isv
+    said = [s for pair in tr.UPDATES.values() for s in pair]
+    said += [st["label"] for status in ("draft", "brand_pending", "campaign_pending", "approved")
+             for tw in ({}, {"path": "sole_prop", "confirm_told": True}) for st in tr._stage(status, tw)]
+    said += [c[k] for c in tr.readiness({"name": "N"}, answers={**GOOD, "has_ein": False, "business_type":
+             "sole_proprietor"}, origin=ORIGIN, bookable=True, ein_on_file=None) for k in ("label", "fix")]
+    src = pathlib.Path(tr.__file__).read_text(encoding="utf-8") + pathlib.Path(texting_isv.__file__).read_text(encoding="utf-8")
+    said += re.findall(r'HTTPException\(\d+,\s*((?:"[^"]*"\s*)+)', src)
+    said += re.findall(r'NeedsFix\(\[([^\]]*)\]', src)
+    said += re.findall(r'"reasons": _errors\(\w+\) or \[([^\]]*)\]', src)
+    assert len(said) > 30
+    for words in said:
+        assert not re.search(r"twilio|carrier", words, re.I), words
 
 
 def test_the_form_starts_from_about_your_business():
@@ -309,7 +328,7 @@ def test_sent_back_after_review_is_not_resent(sending):
     view = client.get(f"/texting/registration/{BIZ}").json()
     assert view["can_send"] is False and view["failure"] == "TAX_ID mismatch" and view["rejected_after_review"]
     r = client.post(f"/texting/registration/{BIZ}/send")
-    assert r.status_code == 409 and "taking it up with Twilio" in r.json()["detail"] and not state["sent"]
+    assert r.status_code == 409 and "Solutionist is looking into it" in r.json()["detail"] and not state["sent"]
 
 
 def _rig(monkeypatch, row):
