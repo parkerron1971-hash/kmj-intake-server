@@ -56,6 +56,19 @@ MESSAGING = "https://messaging.twilio.com/v1"
 
 PROFILE_POLICY = "RNdfbf3fae0e1107f8aded0e7cead80bf5"   # Secondary Customer Profile
 A2P_POLICY = "RNb0d4771c2c98518d916a3d4cd70a8f8b"       # A2P messaging trust product
+# Sole proprietors (no EIN; Twilio's "New Sole Proprietor A2P 10DLC
+# Registration for ISVs" walkthrough): a Starter profile, a Sole Proprietor
+# trust bundle, a SOLE_PROPRIETOR brand that the owner confirms by replying
+# YES to a text on their own mobile, and a SOLE_PROPRIETOR campaign with one
+# number.
+STARTER_POLICY = "RN806dd6cd175f314e1f96a9727ee271f4"
+SOLE_PROP_POLICY = "RN670d5d2e282a6130ae063b234b6019c8"
+SOLE_PROP_USE_CASE = "SOLE_PROPRIETOR"
+OTP_FROM = "+1 (915) 278-2000"   # Twilio's guide: the code text comes from this number
+
+
+def sole_prop(t: Dict[str, Any]) -> bool:
+    return t.get("path") == "sole_prop"
 # Our approved primary customer profile (The Solutionist System LLC). Not a
 # secret; the env var lets a test account point elsewhere.
 PRIMARY_PROFILE_SID = "BUf7450203af9b02e67766ef6403943c37"
@@ -264,6 +277,23 @@ def representative(answers: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def starter_information(answers: Dict[str, Any]) -> Dict[str, Any]:
+    """A sole proprietor's Starter profile: who they are and how to reach them."""
+    return {"first_name": answers["rep_first_name"], "last_name": answers["rep_last_name"],
+            "email": answers["rep_email"], "phone_number": answers["rep_phone"]}
+
+
+def sole_proprietor_information(answers: Dict[str, Any]) -> Dict[str, Any]:
+    """The brand name (the owner's name or the name they trade under) and the
+    owner's OWN mobile, where Twilio texts the YES confirmation. Twilio: a
+    real US mobile, never a number bought from a provider like Twilio, and
+    usable for at most three registrations."""
+    mobile = answers.get("mobile_phone") or answers.get("rep_phone")
+    if not mobile:
+        raise NeedsFix(["Add your own cell phone number: Twilio texts it to confirm."])
+    return {"brand_name": answers["legal_name"], "mobile_phone_number": mobile}
+
+
 def address(answers: Dict[str, Any]) -> Dict[str, Any]:
     return {"CustomerName": answers["legal_name"], "Street": answers["street"], "City": answers["city"],
             "Region": answers["state"], "PostalCode": answers["postal_code"], "IsoCountry": "US"}
@@ -376,13 +406,14 @@ def ensure_account(t: Dict[str, Any], business_id: str, save: Save) -> Api:
 
 def ensure_profile(api: Api, t: Dict[str, Any], answers: Dict[str, Any], *, ein: str, website: str,
                    callback: str, save: Save) -> None:
-    """Step 1: the Secondary Customer Profile, checked and submitted."""
+    """Step 1: the Secondary Customer Profile (a Starter profile for a sole
+    proprietor), checked and submitted."""
     legal = answers["legal_name"]
+    policy = STARTER_POLICY if sole_prop(t) else PROFILE_POLICY
     if not t.get("profile_sid"):
-        found = _find(api, f"{TRUSTHUB}/CustomerProfiles", "results",
-                      lambda p: p.get("policy_sid") == PROFILE_POLICY)
+        found = _find(api, f"{TRUSTHUB}/CustomerProfiles", "results", lambda p: p.get("policy_sid") == policy)
         made = found or api.post(f"{TRUSTHUB}/CustomerProfiles", {
-            "PolicySid": PROFILE_POLICY, "FriendlyName": f"{legal} secondary profile"[:64],
+            "PolicySid": policy, "FriendlyName": f"{legal} {'starter' if sole_prop(t) else 'secondary'} profile"[:64],
             "Email": isv_email(), "StatusCallback": callback})
         t["profile_sid"] = made["sid"]
         save(t)
@@ -390,10 +421,15 @@ def ensure_profile(api: Api, t: Dict[str, Any], answers: Dict[str, Any], *, ein:
     if t.get("profile_submitted"):
         return
     assign = f"{TRUSTHUB}/CustomerProfiles/{bu}/EntityAssignments"
-    biz = _end_user(api, t, "business_end_user", "customer_profile_business_information",
-                    f"{legal} business information", business_information(answers, ein=ein, website=website), save)
-    rep = _end_user(api, t, "rep_end_user", "authorized_representative_1", f"{legal} authorized rep",
-                    representative(answers), save)
+    if sole_prop(t):
+        people = [_end_user(api, t, "starter_end_user", "starter_customer_profile_information",
+                            f"{legal} starter information", starter_information(answers), save)]
+    else:
+        people = [_end_user(api, t, "business_end_user", "customer_profile_business_information",
+                            f"{legal} business information", business_information(answers, ein=ein, website=website),
+                            save),
+                  _end_user(api, t, "rep_end_user", "authorized_representative_1", f"{legal} authorized rep",
+                            representative(answers), save)]
     if t.get("address_sid"):
         api.post(f"{API}/Accounts/{api.sid}/Addresses/{t['address_sid']}.json",
                  {k: v for k, v in address(answers).items() if k != "IsoCountry"})
@@ -409,11 +445,11 @@ def ensure_profile(api: Api, t: Dict[str, Any], answers: Dict[str, Any], *, ein:
         t["address_document"] = doc["sid"]
         save(t)
     if not t.get("profile_assigned"):
-        for sid in (biz, rep, str(t["address_document"]), primary_profile_sid()):
+        for sid in (*people, str(t["address_document"]), primary_profile_sid()):
             _attach(api, assign, sid)
         t["profile_assigned"] = True
         save(t)
-    ev = api.post(f"{TRUSTHUB}/CustomerProfiles/{bu}/Evaluations", {"PolicySid": PROFILE_POLICY})
+    ev = api.post(f"{TRUSTHUB}/CustomerProfiles/{bu}/Evaluations", {"PolicySid": policy})
     if ev.get("status") != "compliant":
         raise NeedsFix(_reasons(ev))
     api.post(f"{TRUSTHUB}/CustomerProfiles/{bu}", {"Status": "pending-review"})
@@ -423,26 +459,33 @@ def ensure_profile(api: Api, t: Dict[str, Any], answers: Dict[str, Any], *, ein:
 
 def ensure_trust_product(api: Api, t: Dict[str, Any], answers: Dict[str, Any], *, callback: str,
                          save: Save) -> None:
-    """Step 2: the A2P trust product, checked and submitted."""
+    """Step 2: the A2P trust product (the Sole Proprietor bundle for a sole
+    proprietor, which carries the owner's mobile for the YES text), checked
+    and submitted."""
     legal = answers["legal_name"]
+    policy = SOLE_PROP_POLICY if sole_prop(t) else A2P_POLICY
     if not t.get("trust_sid"):
-        found = _find(api, f"{TRUSTHUB}/TrustProducts", "results", lambda p: p.get("policy_sid") == A2P_POLICY)
+        found = _find(api, f"{TRUSTHUB}/TrustProducts", "results", lambda p: p.get("policy_sid") == policy)
         made = found or api.post(f"{TRUSTHUB}/TrustProducts", {
-            "PolicySid": A2P_POLICY, "FriendlyName": f"{legal} A2P trust product"[:64],
+            "PolicySid": policy, "FriendlyName": f"{legal} A2P trust product"[:64],
             "Email": isv_email(), "StatusCallback": callback})
         t["trust_sid"] = made["sid"]
         save(t)
     bu = str(t["trust_sid"])
     if t.get("trust_submitted"):
         return
-    info = _end_user(api, t, "messaging_end_user", "us_a2p_messaging_profile_information",
-                     f"{legal} messaging profile", {"company_type": company_type(answers)}, save)
+    if sole_prop(t):
+        info = _end_user(api, t, "messaging_end_user", "sole_proprietor_information",
+                         f"{legal} sole proprietor information", sole_proprietor_information(answers), save)
+    else:
+        info = _end_user(api, t, "messaging_end_user", "us_a2p_messaging_profile_information",
+                         f"{legal} messaging profile", {"company_type": company_type(answers)}, save)
     if not t.get("trust_assigned"):
         for sid in (info, str(t["profile_sid"])):
             _attach(api, f"{TRUSTHUB}/TrustProducts/{bu}/EntityAssignments", sid)
         t["trust_assigned"] = True
         save(t)
-    ev = api.post(f"{TRUSTHUB}/TrustProducts/{bu}/Evaluations", {"PolicySid": A2P_POLICY})
+    ev = api.post(f"{TRUSTHUB}/TrustProducts/{bu}/Evaluations", {"PolicySid": policy})
     if ev.get("status") != "compliant":
         raise NeedsFix(_reasons(ev))
     api.post(f"{TRUSTHUB}/TrustProducts/{bu}", {"Status": "pending-review"})
@@ -458,9 +501,9 @@ def ensure_brand(api: Api, t: Dict[str, Any], save: Save) -> None:
     found = _find(api, f"{MESSAGING}/a2p/BrandRegistrations", "data", lambda b: b.get("status") != "DELETED")
     if not found:
         time.sleep(1)   # Twilio: one brand/campaign request a second
+    kind = {"BrandType": "SOLE_PROPRIETOR"} if sole_prop(t) else {"SkipAutomaticSecVet": "true"}
     made = found or api.post(f"{MESSAGING}/a2p/BrandRegistrations", {
-        "CustomerProfileBundleSid": t["profile_sid"], "A2PProfileBundleSid": t["trust_sid"],
-        "SkipAutomaticSecVet": "true"})
+        "CustomerProfileBundleSid": t["profile_sid"], "A2PProfileBundleSid": t["trust_sid"], **kind})
     t["brand_sid"] = made["sid"]
     save(t)
 
@@ -479,12 +522,16 @@ def ensure_service(api: Api, t: Dict[str, Any], name: str, save: Save) -> None:
     save(t)
 
 
-def send(t: Dict[str, Any], *, business_id: str, name: str, answers: Dict[str, Any], ein: str,
+def send(t: Dict[str, Any], *, business_id: str, name: str, answers: Dict[str, Any], ein: Optional[str],
          website: str, callback: str, save: Save) -> Dict[str, Any]:
     """Steps 0 to 4. Returns the registration's Twilio ids. Raises NeedsFix
-    (the owner fixes their details), TwilioRefused or TwilioDown."""
+    (the owner fixes their details), TwilioRefused or TwilioDown. A
+    business without an EIN goes Twilio's sole proprietor way (t['path'])."""
+    t.setdefault("path", "standard" if answers.get("has_ein") else "sole_prop")
+    if not sole_prop(t) and not ein:
+        raise NeedsFix(["Add your EIN: it's needed to register the business."])
     api = ensure_account(t, business_id, save)
-    ensure_profile(api, t, answers, ein=ein, website=website, callback=callback, save=save)
+    ensure_profile(api, t, answers, ein=ein or "", website=website, callback=callback, save=save)
     ensure_trust_product(api, t, answers, callback=callback, save=save)
     ensure_brand(api, t, save)
     ensure_service(api, t, name, save)
@@ -563,8 +610,9 @@ def ensure_number(t: Dict[str, Any], *, platform_sid: Optional[str], area_code: 
 
 def check(t: Dict[str, Any], save: Save) -> Dict[str, Any]:
     """Where the registration stands, from Twilio itself, moving it along when
-    it can (the campaign goes in once the brand is approved). Returns
-    {stage: 'brand'|'campaign'|'approved'|'failed', reasons: [...]}."""
+    it can (the campaign goes in once the brand is approved, and for a sole
+    proprietor once the owner has replied YES to Twilio's text). Returns
+    {stage: 'brand'|'confirm'|'campaign'|'approved'|'failed', reasons: [...]}."""
     api = sub_api(str(t["account_sid"]))
     for key, url in (("profile_sid", f"{TRUSTHUB}/CustomerProfiles"), ("trust_sid", f"{TRUSTHUB}/TrustProducts")):
         if t.get(key):
@@ -577,13 +625,18 @@ def check(t: Dict[str, Any], save: Save) -> Dict[str, Any]:
         return {"stage": "failed", "reasons": _errors(brand) or ["The carriers' registry didn't verify the business."]}
     if b != "APPROVED":
         return {"stage": "brand", "reasons": []}
+    if sole_prop(t) and str(brand.get("identity_status") or "").upper() != "VERIFIED":
+        return {"stage": "confirm", "reasons": []}           # waiting on the owner's YES
     if not t.get("campaign_sid"):
         mg = str(t["service_sid"])
         found = _find(api, f"{MESSAGING}/Services/{mg}/Compliance/Usa2p", "compliance", lambda c: True)
         if not found:
             time.sleep(1)
+        words = dict(t["campaign_words"])
+        if sole_prop(t):
+            words["use_case"] = SOLE_PROP_USE_CASE
         made = found or api.post(f"{MESSAGING}/Services/{mg}/Compliance/Usa2p",
-                                 campaign_form(t["campaign_words"], str(t["brand_sid"])),
+                                 campaign_form(words, str(t["brand_sid"])),
                                  headers={"X-Twilio-Api-Version": "v1.2"})
         t["campaign_sid"] = made["sid"]
         save(t)
@@ -595,3 +648,9 @@ def check(t: Dict[str, Any], save: Save) -> Dict[str, Any]:
     if c in ("FAILED", "SUSPENDED"):
         return {"stage": "failed", "reasons": _errors(camp) or ["The carriers didn't approve how the business texts."]}
     return {"stage": "campaign", "reasons": []}
+
+
+def resend_code(t: Dict[str, Any]) -> None:
+    """A fresh YES text to a sole proprietor's mobile (the first is sent when
+    the brand is approved and lasts 24 hours)."""
+    sub_api(str(t["account_sid"])).post(f"{MESSAGING}/a2p/BrandRegistrations/{t['brand_sid']}/SmsOtp", {})

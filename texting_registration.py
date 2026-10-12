@@ -116,6 +116,18 @@ class Answers(BaseModel):
     rep_title: str = Field(min_length=2, max_length=80)
     rep_email: str = Field(min_length=5, max_length=200)
     rep_phone: str
+    # Sole proprietors only: the owner's OWN cell, where Twilio texts the YES
+    # confirmation (a real mobile, never a provider's number).
+    mobile_phone: Optional[str] = None
+
+    @staticmethod
+    def _us_phone(raw: str) -> str:
+        digits = re.sub(r"\D", "", raw or "")
+        if len(digits) == 10:
+            digits = "1" + digits
+        if len(digits) != 11 or not digits.startswith("1"):
+            raise ValueError("Use a US phone number, like (231) 555-0100.")
+        return "+" + digits
 
     @model_validator(mode="after")
     def check(self):
@@ -132,14 +144,14 @@ class Answers(BaseModel):
             raise ValueError("Use the website's full address, starting with https://.")
         if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.rep_email):
             raise ValueError("That email address doesn't look right.")
-        digits = re.sub(r"\D", "", self.rep_phone)
-        if len(digits) == 10:
-            digits = "1" + digits
-        if len(digits) != 11 or not digits.startswith("1"):
-            raise ValueError("Use a US phone number, like (231) 555-0100.")
-        self.rep_phone = "+" + digits
+        self.rep_phone = self._us_phone(self.rep_phone)
+        if self.mobile_phone:
+            self.mobile_phone = self._us_phone(self.mobile_phone)
         if self.business_type == "sole_proprietor" and self.has_ein:
             raise ValueError("A sole proprietor with an EIN registers as an LLC or the business type on the EIN.")
+        if not self.has_ein and self.business_type != "sole_proprietor":
+            raise ValueError("Every LLC, corporation, partnership and nonprofit has an EIN. Without one, "
+                             "choose sole proprietor.")
         return self
 
 
@@ -357,16 +369,27 @@ def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], or
                         "label": "Your industry", "fix": "Choose the industry closest to your business."})
         out.append({"key": "ein", "ok": ein_on_file, "label": "Your EIN is on file",
                     "fix": "Add your EIN below. It's kept with your business's legal details."})
+    elif answers:
+        out.append({"key": "mobile", "ok": bool(answers.get("mobile_phone")),
+                    "label": "Your own cell phone, for Twilio's confirmation text",
+                    "fix": "Add your own cell number: Twilio texts it once, and you reply YES."})
     return out
 
 
-def _stage(status: str) -> List[Dict[str, Any]]:
-    """The three steps the owner watches, each done / now / next / failed."""
-    order = ["business", "campaign", "live"]
+def _stage(status: str, twilio: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The steps the owner watches, each done / now / next. A sole proprietor
+    has one more: replying YES to Twilio's text."""
+    t = twilio or {}
+    sole = texting_isv.sole_prop(t)
+    order = ["business", "confirm", "campaign", "live"] if sole else ["business", "campaign", "live"]
     labels = {"business": "Twilio checks your business (minutes to a few days)",
+              "confirm": "You reply YES to Twilio's text on your cell",
               "campaign": "Carriers review how you text (usually about 2 weeks)",
               "live": "You text under your own name"}
-    at = {"submitted": 0, "brand_pending": 0, "campaign_pending": 1, "approved": 3}.get(status)
+    at = {"submitted": 0, "brand_pending": 0, "campaign_pending": order.index("campaign"),
+          "approved": len(order)}.get(status)
+    if sole and status == "brand_pending" and t.get("confirm_told"):
+        at = order.index("confirm")
     out = []
     for i, key in enumerate(order):
         state = "next"
@@ -410,7 +433,9 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
     ready = all(c["ok"] is True for c in checks)
     twilio = (row or {}).get("twilio") or {}
     rejected = bool(twilio.get("rejected_after_review"))
-    sendable = bool(open_ and ready and status in EDITABLE and not rejected and (answers or {}).get("has_ein"))
+    sendable = bool(open_ and ready and status in EDITABLE and not rejected and answers)
+    waiting_yes = bool(texting_isv.sole_prop(twilio) and status == "brand_pending" and twilio.get("confirm_told"))
+    mobile = str((answers or {}).get("mobile_phone") or "")
     return {
         "status": status,
         "answers": answers,
@@ -423,7 +448,11 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
         "ein": {"on_file": bool(ein), "last4": ein[-4:] if ein else None} if ein_known else None,
         "open": open_,
         "can_send": sendable,
-        "steps": _stage(status),
+        "steps": _stage(status, twilio),
+        # A sole proprietor's YES text: where it went and from whom, and
+        # whether a new one can be sent now.
+        "confirm": {"waiting": True, "to_last4": mobile[-4:] or None, "from": texting_isv.OTP_FROM,
+                    "can_resend": _can_resend(twilio)} if waiting_yes else None,
         "failure": (row or {}).get("failure") if status == "failed" else None,
         "rejected_after_review": rejected,
         "sent_at": twilio.get("sent_at"),
@@ -503,6 +532,10 @@ UPDATES = {
                          "Next, the carriers review how {name} texts its clients. That usually takes about 2 weeks."),
     "approved": ("{name} can text under its own name",
                  "The carriers approved {name}'s texting. We're setting up your number under your own name now."),
+    "confirm": ("Reply YES to Twilio's text",
+                "Twilio verified {name}. To finish, reply YES to the text it just sent your cell from "
+                f"{texting_isv.OTP_FROM}, within 24 hours. If it didn't come or ran out, open Operate, "
+                "Text, Your name on texts and send a new one."),
     "number_ready": ("Your texts now go out under {name}",
                      "{number} is now {name}'s own registered number. Your texts go out from it under your "
                      "own name."),
@@ -552,6 +585,19 @@ async def _tell_owner(business: Dict[str, Any], status: str, reasons: Optional[L
     except Exception as e:
         logger.warning("texting update email failed for %s: %s", bid[:8], e)
     return out
+
+
+RESEND_MINUTES = 10   # a new YES text at most this often
+
+
+def _can_resend(t: Dict[str, Any]) -> bool:
+    last = t.get("code_sent_at") or t.get("confirm_told_at")
+    if not last:
+        return True
+    try:
+        return _now() - datetime.fromisoformat(str(last).replace("Z", "+00:00")) >= timedelta(minutes=RESEND_MINUTES)
+    except ValueError:
+        return True
 
 
 def _pretty(number: str) -> str:
@@ -623,8 +669,8 @@ async def _send(business: Dict[str, Any], row: Dict[str, Any]) -> str:
     answers = row.get("answers") or {}
     t = dict(row.get("twilio") or {})
     try:
-        ein = await asyncio.to_thread(ein_for, bid, business)
-        if not ein:
+        ein = await asyncio.to_thread(ein_for, bid, business) if answers.get("has_ein") else None
+        if answers.get("has_ein") and not ein:
             raise texting_isv.NeedsFix(["Add your EIN: it's needed to register the business."])
         origin = await asyncio.to_thread(site_origin, bid)
         if not origin:
@@ -669,6 +715,14 @@ async def _check(business: Dict[str, Any], row: Dict[str, Any]) -> str:
         return status
     except (texting_isv.TwilioDown, RuntimeError) as e:
         logger.warning("texting check for %s paused: %s", bid[:8], e)
+        return status
+    if res["stage"] == "confirm":
+        # A sole proprietor's brand is approved; Twilio has texted the owner's
+        # cell and waits for YES. Told once (the screen shows it until then).
+        if not t.get("confirm_told"):
+            t.update(confirm_told=True, confirm_told_at=_now().isoformat())
+            if await asyncio.to_thread(_patch, bid, {"twilio": t}, when=(status,)):
+                await _tell_owner(business, "confirm")
         return status
     new = {"brand": "brand_pending", "campaign": "campaign_pending", "approved": "approved",
            "failed": "failed"}[res["stage"]]
@@ -734,8 +788,6 @@ async def send_registration(business_id: str, biz: dict = Depends(business_acces
     if view["rejected_after_review"]:
         raise HTTPException(409, "Twilio sent your registration back after review. Sending the same one again "
                                  "won't fix it, so we're taking it up with Twilio and will tell you what happens.")
-    if not (view["answers"] or {}).get("has_ein"):
-        raise HTTPException(409, "Registration here is for businesses with an EIN.")
     missing = [c["fix"] for c in view["readiness"] if c["ok"] is not True]
     if missing:
         raise HTTPException(400, " ".join(missing))
@@ -745,6 +797,31 @@ async def send_registration(business_id: str, biz: dict = Depends(business_acces
     if not moved:
         raise HTTPException(409, "Your registration is being sent already.")
     _background(_send(biz, moved[0]))
+    return {"ok": True, **await overview(biz)}
+
+
+@router.post("/registration/{business_id}/resend-code")
+async def resend_code(business_id: str, biz: dict = Depends(business_access("owner"))):
+    """A new YES text to a sole proprietor's cell (Twilio's first one lasts 24
+    hours). Owner only; at most one every ten minutes."""
+    bid = str(UUID(str(biz["id"])))
+    try:
+        row = await asyncio.to_thread(registration, bid)
+    except RuntimeError:
+        raise HTTPException(503, "Your registration couldn't be read just now. Try again in a minute.") from None
+    t = dict((row or {}).get("twilio") or {})
+    if not (row and row.get("status") == "brand_pending" and texting_isv.sole_prop(t)
+            and t.get("brand_sid") and t.get("confirm_told")):
+        raise HTTPException(409, "There's no confirmation text waiting for you right now.")
+    if not _can_resend(t):
+        raise HTTPException(429, "A new text went out a few minutes ago. Give it a minute to arrive.")
+    try:
+        await asyncio.to_thread(texting_isv.resend_code, t)
+    except (texting_isv.TwilioRefused, texting_isv.TwilioDown, RuntimeError) as e:
+        logger.warning("texting resend code for %s failed: %s", bid[:8], e)
+        raise HTTPException(502, "Twilio couldn't send a new text just now. Try again in a few minutes.") from None
+    t["code_sent_at"] = _now().isoformat()
+    await asyncio.to_thread(_patch, bid, {"twilio": t})
     return {"ok": True, **await overview(biz)}
 
 
