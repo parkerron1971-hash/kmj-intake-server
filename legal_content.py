@@ -610,8 +610,8 @@ show up across many businesses of the same kind, for example which kinds of remi
 businesses in a trade tend to approve. A pattern is used only if at least three separate
 businesses show it. It never includes message content, customer names, contact details,
 or amounts, and it is stored with no link to the businesses it came from. You can turn
-this off in Settings &rarr; Chief &amp; agents, and law practices start with it off. It is
-currently switched off for every account.</p>
+this off in Settings, under &ldquo;Shared learning,&rdquo; and law practices start with it
+off. It is currently switched off for every account.</p>
 
 <h2>Health information</h2>
 <p>The Service is not designed for protected health information. Please don&rsquo;t use
