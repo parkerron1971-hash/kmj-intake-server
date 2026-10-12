@@ -178,8 +178,8 @@ def test_saving_the_answers_sends_nothing_and_stops_once_with_twilio(api):
 
 def test_owner_only_and_twilio_only_through_texting_isv():
     src = pathlib.Path(tr.__file__).read_text(encoding="utf-8")
-    # get, save, EIN, send: owner only. The status ping takes no business id.
-    assert src.count('business_access("owner")') == 4 and 'business_access("viewer")' not in src
+    # get, save, EIN, send, resend-code: owner only. The status ping takes no business id.
+    assert src.count('business_access("owner")') == 5 and 'business_access("viewer")' not in src
     # Twilio only through texting_isv; twilio_sms only to take a number off our shared pool (step 4).
     assert set(re.findall(r"twilio_sms\.(\w+)", src)) == {"detach_from_service"}
     assert not re.search(r"^import twilio$", src, re.M) and "twilio.com" not in src
@@ -258,12 +258,24 @@ def test_sending_only_when_open_and_ready_and_only_once(sending, monkeypatch):
     assert r.status_code == 409 and len(state["sent"]) == 1                        # a second press sends nothing
 
 
-def test_no_ein_and_sent_back_after_review_are_not_resent(sending):
+def test_a_sole_proprietor_sends_once_their_cell_is_in(sending):
     client, state = sending
-    client.put(f"/texting/registration/{BIZ}", json={**READY, "business_type": "sole_proprietor",
-                                                      "has_ein": False, "industry": None})
+    sole = {**READY, "legal_name": "Andre Smith", "business_type": "sole_proprietor", "has_ein": False,
+            "industry": None}
+    client.put(f"/texting/registration/{BIZ}", json=sole)
+    checks = {c["key"]: c["ok"] for c in client.get(f"/texting/registration/{BIZ}").json()["readiness"]}
+    assert checks.get("mobile") is False and "ein" not in checks and "industry" not in checks
     r = client.post(f"/texting/registration/{BIZ}/send")
-    assert r.status_code == 409 and "with an EIN" in r.json()["detail"]
+    assert r.status_code == 400 and "cell" in r.json()["detail"] and not state["sent"]
+    client.put(f"/texting/registration/{BIZ}", json={**sole, "mobile_phone": "(231) 555-0199"})
+    assert state["row"]["answers"]["mobile_phone"] == "+12315550199"
+    r = client.post(f"/texting/registration/{BIZ}/send")
+    assert r.status_code == 200, r.text
+    assert len(state["sent"]) == 1
+
+
+def test_sent_back_after_review_is_not_resent(sending):
+    client, state = sending
     client.put(f"/texting/registration/{BIZ}", json=READY)
     state["row"].update(status="failed", twilio={"rejected_after_review": True}, failure="TAX_ID mismatch")
     view = client.get(f"/texting/registration/{BIZ}").json()

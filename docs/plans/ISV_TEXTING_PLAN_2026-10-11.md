@@ -85,7 +85,14 @@ several weeks); a rejection restarts the review. Businesses go in parallel.
   registration screen shows only the last four digits.
 - **D5 No EIN (sole proprietors).** Default: the Sole Proprietor path ($4.50
   + $2/month, one number, the owner confirms by a code texted to their own
-  mobile within 24 hours).
+  mobile within 24 hours). **Kevin, 2026-10-11: "Build it now."** Built on
+  the same flow (texting_isv `path = sole_prop`): a Starter profile, the
+  Sole Proprietor bundle with the owner's own cell, a SOLE_PROPRIETOR brand;
+  once approved, Twilio texts the cell from +1 (915) 278-2000 and the owner
+  replies YES (told in the app, by push and email; "Send a new text" on the
+  screen, at most every ten minutes); then a SOLE_PROPRIETOR campaign and
+  one number. Only a sole proprietor may register without an EIN (Twilio:
+  every LLC has one).
 - **D6 Use case.** Default: Low Volume Mixed for everyone (covers marketing
   too, up to ~6,000 texts a day); Standard only for a business that outgrows
   it.
