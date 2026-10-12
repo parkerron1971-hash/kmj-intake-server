@@ -16,6 +16,7 @@ def configure(monkeypatch, lane="BACKGROUND", key_value="sk-test"):
     monkeypatch.setenv(f"CHIEF_PROVIDER_MODEL_{lane}", "small-open-model")
     monkeypatch.setenv(f"CHIEF_PROVIDER_URL_{lane}", "https://models.example.test/v1/")
     monkeypatch.setenv(f"CHIEF_PROVIDER_KEY_ENV_{lane}", "SMALL_MODEL_KEY")
+    monkeypatch.setenv("CHIEF_SUBPROCESSOR_HOSTS", "models.example.test")
     if key_value is not None:
         monkeypatch.setenv("SMALL_MODEL_KEY", key_value)
 
@@ -59,6 +60,35 @@ def test_a_half_configured_lane_stays_on_claude_and_says_so(monkeypatch, capsys)
     r = lane_registry.route_for("background")
     assert r.is_anthropic
     assert "staying on claude-haiku-5-5" in capsys.readouterr().out
+
+
+def test_a_host_the_policy_does_not_name_keeps_client_data_on_claude(monkeypatch, capsys):
+    configure(monkeypatch)
+    monkeypatch.delenv("CHIEF_SUBPROCESSOR_HOSTS")
+    r = lane_registry.route_for("background")
+    assert r.is_anthropic and r.model == "claude-haiku-5-5"
+    assert "CHIEF_SUBPROCESSOR_HOSTS" in capsys.readouterr().out
+
+
+def test_an_unlisted_host_never_receives_the_call(monkeypatch, wire):
+    configure(monkeypatch)
+    monkeypatch.setenv("CHIEF_SUBPROCESSOR_HOSTS", "other-provider.test")
+    llm_call.post_lane("background", dict(PORTABLE), business_id="biz-1")
+    assert [c["url"] for c in wire.calls] == [llm_call.messages_url()]
+
+
+@pytest.mark.parametrize("listed,url,ok", [
+    ("models.example.test", "https://models.example.test/v1", True),
+    ("example.test", "https://models.example.test/v1", True),
+    ("models.example.test", "https://evilmodels.example.test/v1", False),
+    ("models.example.test", "https://models.example.test.evil.io/v1", False),
+    ("models.example.test", "http://models.example.test/v1", False),
+    ("", "https://models.example.test/v1", False),
+    (" Models.Example.Test. , x.test", "https://models.example.test/v1", True),
+])
+def test_listed_subprocessor_matches_whole_host_labels(monkeypatch, listed, url, ok):
+    monkeypatch.setenv("CHIEF_SUBPROCESSOR_HOSTS", listed)
+    assert lane_registry.listed_subprocessor(url) is ok
 
 
 def test_unknown_provider_stays_on_claude(monkeypatch, capsys):

@@ -1860,6 +1860,14 @@ async def startup():
                           "interval", minutes=15, id="referral_tick")
     except Exception as e:
         print(f"   [warn] referral sweep not scheduled: {e}")
+    # Texting under each business's own name (ISV step 3, 2026-10-11): each
+    # registration on its way to Twilio, moved along and the owner told.
+    try:
+        import texting_registration as _texting_reg
+        scheduler.add_job(g("texting_registration_sweep", _texting_reg.sweep_tick),
+                          "interval", minutes=15, id="texting_registration_sweep")
+    except Exception as e:
+        print(f"   [warn] texting registration sweep not scheduled: {e}")
     # Chief Layers arc — trusted-autonomy sweep: executes pending
     # proposals ONLY in categories the practitioner explicitly granted
     # after graduation (Trust Track). Kill switch: TRUSTED_AUTONOMY=off.

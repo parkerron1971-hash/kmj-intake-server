@@ -15,6 +15,17 @@ Unset = Anthropic, exactly as before. The model must have a row in
 api_usage_logger.MODEL_PRICING_CENTS; an unknown one is priced high and
 announced by the meter, never silently cheap.
 
+CLIENT DATA. Every lane carries some business's data, so moving a lane sends
+that data to a new company. A lane may only move to a host the privacy policy
+names as a subprocessor:
+
+    CHIEF_SUBPROCESSOR_HOSTS=api.example-provider.com,other.example   (a listed
+                                                 host also covers its subdomains)
+
+A host that is not listed, or a URL that is not https, keeps the lane on
+Claude and says so on stdout. Listing a host is the record that the policy
+covers it, so the policy changes first and the list second.
+
 What this does NOT do: decide which lanes are ready to move. That is the
 lane-graduation bench's job (workstream G), and Kevin's call. Chief's main
 lanes depend on Anthropic-only features (prompt caching, thinking, native
@@ -25,7 +36,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
+from urllib.parse import urlparse
 
 PROVIDERS = ("anthropic", "openai_compatible")
 
@@ -47,6 +59,22 @@ class Route:
 
 def _env(name: str) -> str:
     return (os.environ.get(name) or "").strip()
+
+
+def subprocessor_hosts() -> Tuple[str, ...]:
+    """The hosts the privacy policy names as AI subprocessors (env)."""
+    raw = _env("CHIEF_SUBPROCESSOR_HOSTS")
+    return tuple(h.strip().lower().strip(".") for h in raw.split(",") if h.strip().strip("."))
+
+
+def listed_subprocessor(url: str) -> bool:
+    """True when `url` is https and its host is a listed subprocessor, or a
+    subdomain of one. `models.example` does not cover `evilmodels.example`."""
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not host:
+        return False
+    return any(host == h or host.endswith("." + h) for h in subprocessor_hosts())
 
 
 def route_for(lane: str, plan: Optional[str] = None) -> Route:
@@ -71,6 +99,10 @@ def route_for(lane: str, plan: Optional[str] = None) -> Route:
         what = ", ".join(f"CHIEF_PROVIDER_{m}_{key}" for m in missing) or f"the key in {key_env}"
         print(f"[route] lane {lane} is set to {provider} but {what} is missing; "
               f"staying on {claude}", flush=True)
+        return Route(lane=lane, provider="anthropic", model=claude)
+    if not listed_subprocessor(base):
+        print(f"[route] lane {lane} points at {base}, which is not an https host listed "
+              f"in CHIEF_SUBPROCESSOR_HOSTS; client data stays on {claude}", flush=True)
         return Route(lane=lane, provider="anthropic", model=claude)
     return Route(lane=lane, provider=provider, model=model, base_url=base,
                  key_env=key_env, fallback_model=claude)
