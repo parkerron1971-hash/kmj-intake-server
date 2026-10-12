@@ -183,6 +183,17 @@ def effort_kwargs(model: str, effort: Optional[str]) -> dict:
     return {"output_config": {"effort": effort}}
 
 
+def opus_55_max_tokens(model: str, text_tokens: int, effort: Optional[str] = "medium") -> int:
+    """Keep the old text allowance plus room for Opus 5.5's mandatory thinking.
+
+    Other models keep their existing budgets. This is a ceiling, not a target;
+    max_tokens still bounds thinking and text together.
+    """
+    if "opus-5-5" not in (model or "").lower():
+        return text_tokens
+    return text_tokens + (8192 if effort in ("high", "xhigh", "max") else 4096)
+
+
 def sdk_effort_kwargs(model: str, effort: Optional[str]) -> dict:
     """effort_kwargs for a call made THROUGH THE ANTHROPIC SDK.
 

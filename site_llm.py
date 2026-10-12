@@ -215,7 +215,7 @@ def _call_moonshot(*, max_tokens: int, temperature: Optional[float],
 def create_message(*, model: str, max_tokens: int, system: str, user_content: str,
                    temperature: Optional[float] = None, timeout: float = 120.0,
                    task: str = "site", provider_name: Optional[str] = None,
-                   thinking: Optional[dict] = None) -> Any:
+                   thinking: Optional[dict] = None, effort: Optional[str] = None) -> Any:
     """Drop-in replacement for `Anthropic().messages.create(...)` in the
     site-build pipeline. `model` is the Anthropic model the call site
     would have used — kept as the fail-open fallback and the default
@@ -252,6 +252,7 @@ def create_message(*, model: str, max_tokens: int, system: str, user_content: st
         "timeout": timeout,
     }
     kwargs.update(model_ladder.sampling_kwargs(model, temperature))
+    kwargs.update(model_ladder.sdk_effort_kwargs(model, effort))
     if thinking:
         # The pinned SDK (0.34.2) predates the `thinking` keyword: passed
         # as one it is a TypeError before any request leaves, which is what

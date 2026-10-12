@@ -53,9 +53,9 @@ import os
 _LANE_DEFAULTS = {
     "chat":       "claude-sonnet-5-5",
     "voice":      "claude-sonnet-5-5",
-    "deep":       "claude-opus-4-8",
+    "deep":       "claude-opus-5-5",
     "draft":      "claude-sonnet-5-5",
-    "insight":    "claude-opus-4-8",
+    "insight":    "claude-opus-5-5",
     # Haiku 5.5 since 2026-10-07 (see `fast` below). Every caller sends
     # quick_call_kwargs: thinking off, as on Haiku 4.5.
     "background": "claude-haiku-5-5",
@@ -129,14 +129,14 @@ _LANE_MAX_TOKENS = {
 
 # Pricing v2 model ladder (Kevin's ruling 2026-07-12, spec §4): the
 # HEAVY lanes (deep/insight) scale with the plan tier — Starter thinks
-# on Sonnet 5, Professional on Opus 4.8, Practice/Elite on Fable 5.
+# on Sonnet 5, Professional on Opus 5.5, Practice/Elite on Fable 5.
 # chat/voice/draft stay Sonnet 5 for EVERY tier on purpose: latency,
 # and the shared per-model prompt cache (splitting would cold-start
 # every conversation). Env overrides (CHIEF_MODEL_<LANE>) still win —
 # they're the platform kill switch, not a per-tier setting.
 _TIER_LADDER = {
     "starter":      "claude-sonnet-5",
-    "professional": "claude-opus-4-8",
+    "professional": "claude-opus-5-5",
     "practice":     "claude-fable-5",
     # Barber/salon plans think on the Standard lane: their value is the
     # front desk and the books, not deep analysis (cost measured 10/04).
@@ -150,7 +150,7 @@ _LADDER_LANES = ("deep", "insight")
 # plan_details). Keyed by model id so a ladder change flows through.
 _TIER_LADDER_LABELS = {
     "claude-sonnet-5": "Claude Sonnet 5",
-    "claude-opus-4-8": "Claude Opus 4.8",
+    "claude-opus-5-5": "Claude Opus 5.5",
     "claude-fable-5": "Claude Fable 5",
 }
 
@@ -224,8 +224,10 @@ def lane_for_chat(mode: str = "", client_surface: str = "") -> str:
     return "chat"
 
 
-def max_tokens_for(lane: str, default: int = 1600) -> int:
-    return _LANE_MAX_TOKENS.get((lane or "").strip().lower(), default)
+def max_tokens_for(lane: str, default: int = 1600, *, model: str = "") -> int:
+    import model_ladder
+    tokens = _LANE_MAX_TOKENS.get((lane or "").strip().lower(), default)
+    return model_ladder.opus_55_max_tokens(model, tokens, effort_for(lane, model=model))
 
 
 # How hard the model thinks before it answers (output_config.effort).
@@ -234,7 +236,8 @@ def max_tokens_for(lane: str, default: int = 1600) -> int:
 # a ~250-token answer — most of a minute of silence was thinking nobody
 # reads. A conversation lane answers at "medium"; a spoken turn, where a
 # pause is felt most, at "low". The deep lane (coaches, heavy analysis)
-# keeps the model default. Override per lane with CHIEF_EFFORT_<LANE>
+# uses high effort on Opus 5.5, as does weekly insight synthesis. Other
+# heavy-lane models keep their prior defaults. Override with CHIEF_EFFORT_<LANE>
 # (low / medium / high / xhigh / max; "default" = the model's own).
 #
 # Chat moved medium -> low with Sonnet 5.5 (2026-09-28), whose levels are
@@ -246,15 +249,19 @@ def max_tokens_for(lane: str, default: int = 1600) -> int:
 _LANE_EFFORT = {
     "chat": "low",
     "voice": "low",
+    "deep": "high",
+    "insight": "high",
 }
 _EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
-def effort_for(lane: str) -> str | None:
+def effort_for(lane: str, *, model: str = "") -> str | None:
     key = (lane or "chat").strip().lower()
     env = (os.environ.get(f"CHIEF_EFFORT_{key.upper()}") or "").strip().lower()
     if env:
         return env if env in _EFFORTS else None
+    if key in _LADDER_LANES and "opus-5-5" not in (model or model_for(key)).lower():
+        return None
     return _LANE_EFFORT.get(key)
 
 

@@ -14,12 +14,13 @@ from typing import Optional
 import httpx
 
 import llm_call
+import model_ladder
 
 from studio_data import VOCABULARIES, LAYOUTS
 from studio_decoration_scheme import validate_decoration_scheme
 
 
-CLAUDE_MODEL = "claude-opus-4-7"
+CLAUDE_MODEL = "claude-opus-5-5"
 GPT_MODEL = "gpt-5.4"
 
 OPENAI_API_BASE = "https://api.openai.com/v1/chat/completions"
@@ -404,7 +405,8 @@ def call_claude(prompt, max_tokens=2500):
         # `content` preserves that encoding path exactly.
         content=json.dumps({
             "model": CLAUDE_MODEL,
-            "max_tokens": max_tokens,
+            "max_tokens": model_ladder.opus_55_max_tokens(CLAUDE_MODEL, max_tokens),
+            **model_ladder.effort_kwargs(CLAUDE_MODEL, "medium"),
             "messages": [{"role": "user", "content": prompt}],
         }, ensure_ascii=False).encode("utf-8"),
         timeout=60,

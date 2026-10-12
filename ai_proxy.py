@@ -100,8 +100,8 @@ ANTHROPIC_VERSION = "2023-06-01"
 TASK_MODEL_MAP: Dict[str, str] = {
     "plan":     os.environ.get("AI_PROXY_PLAN_MODEL") or "claude-sonnet-5-5",
     # Kevin's ruling (2026-07-03): builds (custom modules, page builder)
-    # run on Opus 4.8 — the highest-stakes generation gets the best model.
-    "build":    "claude-opus-4-8",
+    # run on Opus (upgraded to 5.5 on 2026-10-12).
+    "build":    "claude-opus-5-5",
     "score":    os.environ.get("AI_PROXY_SCORE_MODEL") or "claude-sonnet-5-5",
     "draft":    os.environ.get("AI_PROXY_DRAFT_MODEL") or "claude-sonnet-5-5",
     # AI_PROXY_VOLUME_MODEL rolls the volume tier back without a deploy.
@@ -111,9 +111,12 @@ TASK_MODEL_MAP: Dict[str, str] = {
 DEFAULT_MODEL = os.environ.get("AI_PROXY_DEFAULT_MODEL") or "claude-sonnet-5-5"
 
 # A client that still names a retiring model gets its current equivalent
-# instead of having the override dropped (Sonnet 4.5 retires 2026-11-30;
-# Haiku 4.5 is only promised to 2026-10-15; Sonnet 4 is already gone).
+# instead of having the override dropped. Opus 4.7/4.8 are upgraded, too.
+# Sonnet 4.5 retires 2026-11-30;
+# Haiku 4.5 is only promised to 2026-10-15; Sonnet 4 is already gone.
 _RETIRING_MODELS: Dict[str, str] = {
+    "claude-opus-4-7": "claude-opus-5-5",
+    "claude-opus-4-8": "claude-opus-5-5",
     "claude-sonnet-4-5-20250929": "claude-sonnet-5-5",
     "claude-sonnet-4-5": "claude-sonnet-5-5",
     "claude-sonnet-4-20250514": "claude-sonnet-5-5",
@@ -128,7 +131,7 @@ DEFAULT_MAX_TOKENS = 4096
 # are only honored if they name a model the server already uses.
 MAX_PROXY_TOKENS = 8192
 _ALLOWED_OVERRIDE_MODELS = set(TASK_MODEL_MAP.values()) | {
-    DEFAULT_MODEL, "claude-opus-4-8", "claude-sonnet-5", "claude-sonnet-5-5",
+    DEFAULT_MODEL, "claude-opus-5-5", "claude-sonnet-5", "claude-sonnet-5-5",
     "claude-haiku-5-5",
 }
 DEFAULT_TEMPERATURE = 1.0
@@ -311,6 +314,11 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
     # counts against the caller's max_tokens; these tiers never thought on
     # Haiku 4.5 / Sonnet 4.5. Opus keeps its own (it cannot turn it off).
     anthropic_payload.update(model_ladder.thinking_off_kwargs(model))
+    if "opus-5-5" in model:
+        anthropic_payload.update(model_ladder.effort_kwargs(model, "medium"))
+        anthropic_payload["max_tokens"] = min(
+            model_ladder.opus_55_max_tokens(model, anthropic_payload["max_tokens"]),
+            MAX_PROXY_TOKENS)
     if req.system:
         anthropic_payload["system"] = req.system
     if req.metadata:

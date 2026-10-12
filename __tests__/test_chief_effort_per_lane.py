@@ -7,6 +7,7 @@ Sonnet 5 thought at its default ("high") on every conversational turn.
 Chat now answers at "medium", voice at "low"; the deep lane is unchanged.
 2026-09-28: chat moved to "low" with Sonnet 5.5 (recalibrated levels; the
 advice bench answered as fully at low, faster and cheaper).
+2026-10-12: deep and insight use explicit high effort with Opus 5.5.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ def test_lane_defaults(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     assert chief_models.effort_for("chat") == "low"
     assert chief_models.effort_for("voice") == "low"
-    assert chief_models.effort_for("deep") is None
+    assert chief_models.effort_for("deep") == "high"
 
 
 def test_env_overrides_and_default_means_the_models_own(monkeypatch):
@@ -39,6 +40,6 @@ def test_env_overrides_and_default_means_the_models_own(monkeypatch):
 
 def test_the_main_turn_passes_the_lane_effort_and_the_call_sends_it():
     chat_src = inspect.getsource(cos.chief_chat)
-    assert "effort=chief_models.effort_for(lane)" in chat_src
+    assert "lane, model=chief_models.model_for(lane, _plan)" in chat_src
     call_src = inspect.getsource(cos._call_claude)
     assert "effort_kwargs(model, effort)" in call_src
