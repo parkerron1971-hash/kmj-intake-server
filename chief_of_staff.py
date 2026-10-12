@@ -15564,14 +15564,15 @@ async def chief_chat(
             _sentence_streamer = None
             _errand_confirm_token = _TURN_ERRAND_CONFIRMED.set(_is_errand_confirmation(req.message or ""))
             _errand_plans_token = _TURN_ERRAND_PLANS.set(())
-            turn_tokens = chief_models.max_tokens_for(lane, default=1600)
             # Pricing v2 model ladder: heavy lanes scale with the plan
-            # tier (Starter=Sonnet 5, Pro=Opus 4.8, Practice=Fable 5).
+            # tier (Starter=Sonnet 5, Pro=Opus 5.5, Practice=Fable 5).
             try:
                 import feature_gates as _fg
                 _plan = _fg.plan_of(biz) if isinstance(biz, dict) else None
             except Exception:
                 _plan = None
+            turn_tokens = chief_models.max_tokens_for(
+                lane, default=1600, model=chief_models.model_for(lane, _plan))
             _t.mark("prompt")
             # Mid-turn reads (Jarvis arc): the operational Chief gets the
             # audited MCP read surface as tools for THIS turn — it can

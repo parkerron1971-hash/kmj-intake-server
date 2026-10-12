@@ -116,6 +116,23 @@ def test_gate_exception_fails_open(proxy_env, monkeypatch):
     assert out["content"] == "hello from fake claude"
 
 
+@pytest.mark.parametrize("old_model", ["claude-opus-4-7", "claude-opus-4-8"])
+def test_legacy_opus_clients_use_55_with_a_bounded_thinking_budget(proxy_env, monkeypatch, old_model):
+    sent = []
+
+    async def post(self, *args, **kwargs):
+        sent.append(kwargs["json"])
+        return _FakeResp()
+
+    monkeypatch.setattr(_FakeClient, "post", post)
+    asyncio.run(ai_proxy.ai_proxy(
+        _req(task_type="build", model=old_model, max_tokens=99999), _FakeRequest(), _user()))
+    assert sent[0]["model"] == "claude-opus-5-5"
+    assert sent[0]["output_config"] == {"effort": "medium"}
+    assert sent[0]["max_tokens"] == ai_proxy.MAX_PROXY_TOKENS
+    assert "thinking" not in sent[0] and "temperature" not in sent[0]
+
+
 def test_cache_hit_short_circuits(proxy_env, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     import inference_gate

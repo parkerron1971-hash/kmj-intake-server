@@ -310,7 +310,7 @@ BUILD_MODEL_REPOS = [
     "parkerron1971-hash/solutionist-studio",
     "parkerron1971-hash/kmj-intake-server",
 ]
-BUILD_MODELS_ALLOWED = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"]
+BUILD_MODELS_ALLOWED = ["claude-fable-5", "claude-opus-5-5", "claude-sonnet-5"]
 BUILD_MODEL_DEFAULT = "claude-fable-5"
 _BUILD_VAR = "CLAUDE_BUILD_MODEL"
 _AUTOMERGE_VAR = "CLAUDE_AUTO_MERGE"   # absent = 'on' (workflow default)

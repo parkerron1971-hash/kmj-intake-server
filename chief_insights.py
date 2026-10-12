@@ -197,6 +197,8 @@ def _synthesize(biz: Dict[str, Any], digest: Dict[str, Any],
     except Exception:
         _plan = None
     model = chief_models.model_for("insight", _plan)
+    import model_ladder
+    effort = chief_models.effort_for("insight")
 
     mem_lines = "\n".join(
         f"- [{m.get('category')}] {m.get('content')}" for m in memories[:30]
@@ -213,7 +215,8 @@ def _synthesize(biz: Dict[str, Any], digest: Dict[str, Any],
 
     try:
         resp = llm_call.post({
-            "model": model, "max_tokens": 1000,
+            "model": model, "max_tokens": model_ladder.opus_55_max_tokens(model, 1000, effort),
+            **model_ladder.effort_kwargs(model, effort),
             "system": _SYSTEM.replace("{max_n}", str(MAX_INSIGHTS)),
             "messages": [{"role": "user", "content": user_msg}],
         }, timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0), key=key)

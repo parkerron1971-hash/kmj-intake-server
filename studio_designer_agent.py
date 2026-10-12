@@ -22,6 +22,7 @@ from typing import Optional, TypedDict
 import httpx
 
 import llm_call
+import model_ladder
 
 from studio_strands import STYLE_STRANDS, STRAND_IDS, get_strand
 from studio_substrands import SUB_STRANDS, SUBSTRAND_IDS, get_substrands_for_parent
@@ -33,7 +34,7 @@ from studio_design_constants import (
 from studio_data import VOCABULARIES
 
 
-CLAUDE_MODEL = "claude-opus-4-7"
+CLAUDE_MODEL = "claude-opus-5-5"
 
 
 class DesignAlternative(TypedDict, total=False):
@@ -389,7 +390,8 @@ def _call_claude(prompt: str, max_tokens: int = 2500, timeout: float = 60.0) -> 
         # encoding path instead of letting httpx re-serialize.
         content=json.dumps({
             "model": CLAUDE_MODEL,
-            "max_tokens": max_tokens,
+            "max_tokens": model_ladder.opus_55_max_tokens(CLAUDE_MODEL, max_tokens),
+            **model_ladder.effort_kwargs(CLAUDE_MODEL, "medium"),
             "messages": [{"role": "user", "content": prompt}],
         }, ensure_ascii=False).encode("utf-8"),
         timeout=timeout,

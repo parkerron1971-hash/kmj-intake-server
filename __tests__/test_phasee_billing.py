@@ -152,7 +152,7 @@ def test_plans_payload_carries_the_offer_numbers(monkeypatch):
     assert details["professional"]["deep_analysis"] == "Advanced"
     assert details["practice"]["deep_analysis"] == "Maximum"
     assert details["starter"]["deep_model"] == "Claude Sonnet 5"
-    assert details["professional"]["deep_model"] == "Claude Opus 4.8"
+    assert details["professional"]["deep_model"] == "Claude Opus 5.5"
     assert details["practice"]["deep_model"] == "Claude Fable 5"
 
 
