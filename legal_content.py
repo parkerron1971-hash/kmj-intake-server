@@ -19,7 +19,7 @@ import platform_addresses
 # Editable copy — change these in place; routes pick up automatically.
 # ──────────────────────────────────────────────────────────────────────
 
-LAST_UPDATED_DATE = "August 23, 2026"
+LAST_UPDATED_DATE = "October 12, 2026"
 BUSINESS_NAME = "The Solutionist System LLC"
 # No public postal address by choice (2026-07-04): Kevin works from home
 # and a street address is NOT required on the site — A2P checks the SMS
@@ -438,6 +438,13 @@ of our platform. If you use the Service to build a website for your own business
 that website may have its own separate privacy practices for its visitors, which
 are your responsibility and are not covered by this policy.</p>
 
+<p><strong>Information about your customers.</strong> When you keep your customers&rsquo;
+details in the Service (their names, contact details, bookings, invoices, and the
+messages you exchange), we handle that information on your behalf and only to provide
+the Service to you. We don&rsquo;t sell it, we don&rsquo;t market to your customers, and we
+don&rsquo;t use it for any other purpose. You decide what goes in, and you&rsquo;re
+responsible for telling your customers how your business handles their information.</p>
+
 <h2>Information we collect</h2>
 <ul>
   <li><strong>Account information:</strong> the name, email address, and login credentials you
@@ -468,6 +475,7 @@ are your responsibility and are not covered by this policy.</p>
       behalf without your action.</li>
   <li>To respond to your support requests.</li>
   <li>To maintain the security and integrity of the Service.</li>
+  <li>To keep Chief working well for you, as described in &ldquo;How Chief learns&rdquo; below.</li>
 </ul>
 <p><strong>We do not sell your personal information. We do not use your connected social
 account data for advertising, profiling, or any purpose other than publishing the
@@ -514,8 +522,11 @@ and data rates may apply. Reply <strong>STOP</strong> to unsubscribe at any time
 <p>The Service relies on the following third parties, each with its own privacy
 practices:</p>
 <ul>
-  <li><strong>Anthropic</strong>: the AI provider that powers Chief and the assistant features. Your business data and the content you ask Chief about (which may include your customers&rsquo; names, messages, and contact details) are sent to Anthropic to generate responses. Anthropic does not train its models on data submitted through its API.</li>
-  <li><strong>OpenAI</strong>: used for voice transcription, text-to-speech, and related AI features. Audio and text you send to those features are processed by OpenAI. OpenAI does not train its models on data submitted through its API.</li>
+  <li><strong>Anthropic</strong>: the AI provider that powers Chief and the assistant features, including web searches Chief runs for you. Your business data and the content you ask Chief about (which may include your customers&rsquo; names, messages, and contact details) are sent to Anthropic to generate responses. Anthropic does not train its models on data submitted through its API.</li>
+  <li><strong>OpenAI</strong>: used for voice transcription and speech, image generation, indexing Chief&rsquo;s memories so it can find them, and as a backup that answers if Anthropic is unavailable. Audio and text sent to those features, which can include your customers&rsquo; names, are processed by OpenAI. OpenAI does not train its models on data submitted through its API.</li>
+  <li><strong>ElevenLabs</strong>: speech for Chief&rsquo;s voice, only if you choose one of its voices. The text Chief speaks is sent to ElevenLabs to turn into audio.</li>
+  <li><strong>OpenRouter</strong>: finding the best moments in recordings you upload to make clips. The recording, its transcript, and still frames are sent through OpenRouter to AI models from Google, Microsoft, OpenAI, and Anthropic. Anyone who can be seen or heard in a recording you upload is part of what is processed.</li>
+  <li><strong>Vercel (AI Gateway)</strong>: for some accounts, sorting incoming messages so the ones that need you are raised first. The first part of the incoming message is sent for this.</li>
   <li><strong>Meta Platforms (Facebook and Instagram)</strong>: for publishing to connected accounts.</li>
   <li><strong>Supabase</strong>: for secure data storage.</li>
   <li><strong>Railway</strong>: for application hosting.</li>
@@ -545,12 +556,24 @@ practices:</p>
   <li><strong>Vercel</strong>: for hosting the web application.</li>
   <li><strong>Cloudflare</strong>: for DNS, and for serving any custom domain you
       connect to a site you publish.</li>
+  <li><strong>DocuSeal</strong>: for documents you send for signature. The document
+      and the signer&rsquo;s name and email go to DocuSeal.</li>
+  <li><strong>LiveKit</strong>: for live audio and video sessions you host, including
+      the names of the people who join.</li>
+  <li><strong>Post for Me</strong>: for publishing the posts you approve to your
+      connected social accounts.</li>
+  <li><strong>Square</strong>: if you connect Square, a read-only copy of your Square
+      bookings comes into the Service.</li>
+  <li><strong>Sentry</strong>: for error reports that help us find and fix problems.
+      We strip personal details from these reports before they are sent, though an
+      error can occasionally include a fragment of the data it happened on.</li>
 </ul>
 
 <p>One of these is different enough from the rest to describe separately.
 If ledger anchoring is enabled on your account, the Service periodically
 publishes a <em>cryptographic hash</em> of your action ledger to the
-<strong>Hedera</strong> public network. A hash is a one-way fingerprint: it lets
+<strong>Hedera</strong> public network and, through OpenTimestamps, to the
+<strong>Bitcoin</strong> network. A hash is a one-way fingerprint: it lets
 you (or an auditor) later prove a record has not been altered, and it cannot be
 reversed to recover what the record said. Your business data itself is never
 written to any public network. What goes out is the fingerprint and a timestamp
@@ -559,12 +582,41 @@ was written at a given moment is public and cannot be deleted.</p>
 
 <h2>How we use AI</h2>
 <p>Chief and several features of the Service are powered by third-party AI providers
-(Anthropic and OpenAI, listed above). To generate responses, draft messages, and
+(listed above). To generate responses, draft messages, and
 answer questions, we send relevant portions of your business data, which can
 include your customers&rsquo; names, email and message content, and contact details
 to those providers. They process this data only to return a result to us and,
 per their API terms, do not use it to train their models. AI output can be imperfect;
 you remain responsible for reviewing anything sent to your customers.</p>
+
+<h2>How Chief learns</h2>
+<p><strong>Inside your account.</strong> Chief remembers what you tell it, the rules you
+approve, and how you change its drafts, so it gets better at running your business.
+This stays in your account. You can see it on the &ldquo;What Chief knows&rdquo; page in
+Settings, change or remove it there, and it is included when you export or delete your
+data.</p>
+<p><strong>Making Chief better.</strong> We review records of how Chief performed (which
+drafts were changed or dismissed, which answers were held back, how long and how much
+each request took) to find and fix problems, test changes before they reach you, and
+choose which AI model handles which job. We use the least personal detail the review
+needs, and any review that doesn&rsquo;t need your customers&rsquo; details is done
+without them.</p>
+<p><strong>No training on your data.</strong> We do not train AI models on your data or
+your customers&rsquo; data. Our AI providers process it to return results to us, and
+where a provider offers a setting that stops it from using our data for training, we
+keep that setting on.</p>
+<p><strong>Patterns across businesses.</strong> Chief can also learn from patterns that
+show up across many businesses of the same kind, for example which kinds of reminders
+businesses in a trade tend to approve. A pattern is used only if at least three separate
+businesses show it. It never includes message content, customer names, contact details,
+or amounts, and it is stored with no link to the businesses it came from. You can turn
+this off in Settings, under &ldquo;Shared learning,&rdquo; and
+law practices start with it off. It is currently switched off for every account.</p>
+
+<h2>Health information</h2>
+<p>The Service is not designed for protected health information. Please don&rsquo;t use
+it to keep clinical or treatment records, or as a system for a practice covered by
+HIPAA. We don&rsquo;t sign business associate agreements.</p>
 
 <h2>Data retention</h2>
 <p>We retain your information for as long as your account is active or as needed to
@@ -578,7 +630,8 @@ individuals under 18. We do not knowingly collect information from children.</p>
 
 <h2>Changes to this policy</h2>
 <p>We may update this policy from time to time. Material changes will be reflected by
-updating the &ldquo;Last updated&rdquo; date above.</p>
+updating the &ldquo;Last updated&rdquo; date above, and we will email the account owner
+before a material change takes effect.</p>
 
 <h2>Contact us</h2>
 <p>For any questions about this policy or your data, contact:<br>
@@ -722,6 +775,10 @@ by subscription tier and may change as the Service evolves.</p>
       the data you upload, for obtaining any consents your customers&rsquo; data requires
       (including SMS consent where you message your customers), and for how you use
       outputs of the Service in your business.</li>
+  <li><strong>No health records.</strong> The Service is not designed for protected
+      health information. Don&rsquo;t use it to keep clinical or treatment records or as
+      a system for a practice covered by HIPAA. We don&rsquo;t sign business associate
+      agreements.</li>
 </ul>
 
 <h2>6. AI features</h2>
@@ -730,6 +787,8 @@ be wrong. AI output is provided for convenience and does not constitute legal, t
 accounting, financial, or other professional advice. Review AI-generated content
 (including bookkeeping categorizations, drafts, and reports) before relying on it, and
 consult a qualified professional where it matters.</p>
+<p>How Chief learns, and the patterns it may learn across businesses, are described in
+our <a href="/privacy">Privacy Policy</a>. We do not train AI models on your data.</p>
 
 <h2>7. Acceptable use</h2>
 <p>You agree not to: use the Service to send spam or unlawful, deceptive, or harassing
@@ -740,8 +799,8 @@ or terminate accounts that violate these rules or create risk for the platform o
 users.</p>
 
 <h2>8. Third-party services</h2>
-<p>The Service integrates third parties (including Stripe, Plaid, Twilio, Meta, Supabase,
-and Railway). Your use of those features is also subject to the applicable third
+<p>The Service integrates third parties (the full list is in our
+<a href="/privacy">Privacy Policy</a>). Your use of those features is also subject to the applicable third
 party&rsquo;s terms, and we are not responsible for third-party services.</p>
 
 <h2>9. Availability and changes</h2>
