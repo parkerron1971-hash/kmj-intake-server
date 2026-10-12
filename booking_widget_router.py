@@ -437,6 +437,39 @@ def _resolve_offering_for_book(
     }
 
 
+# Texting under the business's own name (ISV plan step 3, 2026-10-11). Once
+# the registration is with Twilio, its reviewers read this booking page's
+# consent boxes, which must name the business (error 30927) word for word as
+# its campaign quotes them. So the words come from texting_registration, the
+# same functions that write the campaign, and the widget shows them as sent.
+_TEXTING_SENT = ("submitted", "brand_pending", "campaign_pending", "approved")
+
+
+def _texting_words(business: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """The two boxes and the business's own texting pages, or None while its
+    registration hasn't gone to Twilio (or can't be read: the boxes then read
+    as before, never half-switched)."""
+    try:
+        import texting_registration as tr
+        bid = str(business["id"])
+        row = tr.registration(bid)
+        if not row:
+            return None
+        sent = row.get("status") in _TEXTING_SENT or (
+            row.get("status") == "failed" and (row.get("twilio") or {}).get("profile_submitted"))
+        if not sent:
+            return None
+        origin = tr.site_origin(bid)
+        name = str(business.get("name") or "").strip()
+        if not origin or not name:
+            return None
+        return {"booking_box": tr.booking_box(name), "offers_box": tr.offers_box(name),
+                "terms": f"{origin}{tr.TERMS_PATH}", "privacy": f"{origin}{tr.PRIVACY_PATH}"}
+    except Exception as e:
+        logger.warning(f"texting boxes unread for {str(business.get('id'))[:8]}: {e}")
+        return None
+
+
 def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[str, Any]:
     """Shared shape for config-anon + config endpoints. Customer-identifying
     data lives ONLY in the authed response; this shape is safe for anon.
@@ -527,6 +560,12 @@ def _config_payload(business: Dict[str, Any], module: Dict[str, Any]) -> Dict[st
     }
     if arrival_window:
         payload["arrival_window_min"] = arrival_window
+    # The texts boxes in the business's own name, once its texting
+    # registration is sent. Key present only then: everyone else's payload
+    # stays byte-identical and their boxes read as before.
+    texting = _texting_words(business)
+    if texting:
+        payload["texting"] = texting
     # Keys present only on a failed bookings read, so normal payloads stay
     # byte-identical.
     if slots_unavailable:

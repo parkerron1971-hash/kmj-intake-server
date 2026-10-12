@@ -459,15 +459,17 @@ async def release_sweep() -> Dict[str, int]:
         due = await _sb_get(
             client,
             f"/sms_numbers?status=eq.releasing&release_after=lt.{_pq(_now().isoformat())}"
-            f"&select=id,business_id,phone_number,provider_sid&limit=100",
+            f"&select=id,business_id,phone_number,provider_sid,account_sid&limit=100",
         ) or []
         for row in due:
             stats["checked"] += 1
             sid = row.get("provider_sid")
             try:
                 if sid:
-                    await run_in_threadpool(twilio_sms.detach_from_service, sid)
-                    await run_in_threadpool(twilio_sms.release_number, sid)
+                    # A business's own number (ISV) is released from its sub-account.
+                    extra = (row["account_sid"],) if row.get("account_sid") else ()
+                    await run_in_threadpool(twilio_sms.detach_from_service, sid, *extra)
+                    await run_in_threadpool(twilio_sms.release_number, sid, *extra)
                 await _sb_patch(client, f"/sms_numbers?id=eq.{_pq(row['id'])}", {
                     "status": "released", "released_at": _now().isoformat(),
                     "updated_at": _now().isoformat(),
