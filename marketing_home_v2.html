@@ -1663,6 +1663,8 @@
   function speakText(v){
     spoken=true; clearTimeout(autoT);
     const t=resolveTrade(v), p=resolveProblem(v), note=$('#sayNote'), sentence=/\s/.test(v);
+    /* a health trade, alone or in a sentence, gets a straight answer; a trade it names first ("medical malpractice attorney") wins */
+    if(!t&&HEALTH.test(v)){pick(trade,{note:'Solutionist isn’t taking on therapy or health care practices yet. Try a trade like attorney, or say what’s going wrong.'});setTimeout(opener,200);openRoom();return}
     if(p||(!t&&sentence)){
       const switching=t&&t!==trade;
       if(switching)pick(t); else if(without){without=false;setMode()}
@@ -1672,7 +1674,6 @@
       setTimeout(()=>ask(v),switching?900:(first?500:250)); return;
     }
     if(t){pick(t,{note:v.toLowerCase()===t?null:`Heard "${v}". Closest of the four in this demo: ${TRADE_LABEL[t]}.`});setTimeout(opener,200);openRoom();return}
-    if(HEALTH.test(v)){pick(trade,{note:'Solutionist isn’t taking on therapy or health care practices yet. Try a trade like attorney, or say what’s going wrong.'});setTimeout(opener,200);openRoom();return}
     pick(trade,{note:`"${v}" is not a trade or a problem I know yet. Try “my clients keep no-showing”, or a trade like attorney. The real system already speaks seven and learns yours on day one.`});
     setTimeout(opener,200);openRoom();
   }

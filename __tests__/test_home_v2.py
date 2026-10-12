@@ -337,3 +337,55 @@ def test_the_site_no_longer_offers_therapy_or_health_care():
     assert "attorney:{" in home and "therapist:{" not in home
     assert "barbers, attorneys, contractors, coaches, consultants, ministries, nonprofits" in home
     assert "isn’t taking on therapy or health care practices yet" in home
+
+
+def _run_speak(inputs):
+    """Run the home page's real speakText (and the real trade, problem and
+    health matchers) in node with the page's DOM calls stubbed, and return
+    the note each input leaves and the trade it picks."""
+    import json
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    html = mp.render_home()
+    script = html[html.index("const SYN={"):]
+
+    def grab(start, end):
+        i = script.index(start)
+        return script[i:script.index(end, i)]
+
+    src = "\n".join([
+        grab("const SYN={", "\n"), grab("const TRADE_LABEL={", "\n"),
+        grab("const PROBLEM_RUBRIC=[", "\n  ];") + "\n  ];",
+        grab("function resolveProblem(", "\n"), grab("function resolveTrade(", "\n  function pick("),
+        grab("const HEALTH=", "\n"), grab("function speakText(", "\n  function typeSay("),
+    ])
+    harness = """
+let trade='barber', spoken=false, autoT=0, without=false, room='operate', roomOpen=true, chat=[], last={};
+const noteEl={textContent:'',hidden:true};
+const $=sel=>noteEl;
+function pick(t,o){trade=t;last={trade:t,note:(o&&o.note)||null};}
+function openRoom(){} function setMode(){} function syncSeg(){} function render(){} function ask(){} function opener(){}
+function setTimeout(){} function clearTimeout(){}
+""" + src + """
+const out={};
+for (const v of %s) { last={}; noteEl.textContent=''; trade='barber'; speakText(v);
+  out[v]={note:last.note||noteEl.textContent, trade:last.trade||trade}; }
+console.log(JSON.stringify(out));
+""" % json.dumps(inputs)
+    res = subprocess.run(["node", "-e", harness], capture_output=True, encoding="utf-8", timeout=30)
+    assert res.returncode == 0, res.stderr
+    return json.loads(res.stdout)
+
+
+def test_a_health_trade_gets_a_straight_not_yet_alone_or_in_a_sentence():
+    out = _run_speak(["therapist", "I'm a therapist", "mental health counselor",
+                      "dental practice", "my therapy clients keep no-showing",
+                      "medical malpractice attorney", "attorney", "barber"])
+    for v in ("therapist", "I'm a therapist", "mental health counselor", "dental practice",
+              "my therapy clients keep no-showing"):
+        assert "isn’t taking on therapy or health care practices yet" in out[v]["note"], (v, out[v])
+    assert out["medical malpractice attorney"]["trade"] == "attorney", "a named trade wins"
+    assert "health care" not in (out["medical malpractice attorney"]["note"] or "")
+    assert out["attorney"]["trade"] == "attorney" and out["barber"]["trade"] == "barber"
