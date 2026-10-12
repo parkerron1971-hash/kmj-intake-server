@@ -135,7 +135,9 @@ Solutions first (its EIN is on file), because a rejection costs two weeks.
   Direct campaign quotes today's words verbatim. So at submit, that
   business's checkbox switches to "from {business}" and links its own
   `/texting-terms` and `/texting-privacy`; other businesses keep today's
-  words. (The site contact form already names the business first.)
+  words. The composed site's contact form box ("from {business} via The
+  Solutionist System") switches the same way, when the page is served
+  (2026-10-12); a hand-built site's form (KMJ's) has no texts box.
 
 **Step 4: send under the business's name.** *Plumbing built 2026-10-11
 (step 4a): on approval the number the business already has with us MOVES

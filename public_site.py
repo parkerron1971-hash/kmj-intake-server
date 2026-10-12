@@ -5696,6 +5696,20 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
         _render_products_section(products, slug, brand_color, biz_settings),
         _render_gallery_section(gallery),
     )
+    # Texting under the business's own name (2026-10-12): once its
+    # registration is sent, the contact form's texts box names only the
+    # business and links its own texting pages, as the booking page's boxes
+    # do. The box is baked into the stored page, so it's switched here,
+    # where every served page passes. Only a page with the box asks.
+    if biz_id:
+        try:
+            import texting_registration
+            if texting_registration.CONTACT_MARK in html:
+                own = await asyncio.to_thread(texting_registration.own_texting_pages, str(biz_id))
+                if own:
+                    html = texting_registration.contact_box_in_own_name(html, own["terms"], own["privacy"])
+        except Exception as _tx_e:
+            logger.info(f"[texting] contact box left as built: {_tx_e}")
     # EVERY DOOR, REACHABLE (2026-10-04, site_doors): a builder page links
     # each live door (booking, events, the shop, giving, courses, sermons,
     # news, the member app), including one opened after the page was built
