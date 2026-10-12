@@ -4,7 +4,7 @@ date: 2026-10-12
 agent: Claude Code (Claude Opus 5.5)
 asked: "I have been thinking of pausing therapist and heath care data ... go. there is no therapist business in the system (Kevin, 2026-10-12)"
 status: waiting on review
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1398]
 migrations: []
 left_undone: ["website copy (separate PR) and the app's type pickers (frontend PR) drop therapists too", "the terms get a no-health-records clause in the privacy/terms PR", "reopening needs a separate health setup with BAAs from every vendor that would touch the data; trigger = a health tier that pays for it"]
 decisions: ["paused at business creation, server side: canonical therapist plus therapy, counseling and clinical health words in a free-text type", "bare 'counsel', law, attorney, legal and massage never match, so lawyers and spas open normally", "env PAUSED_VERTICALS (default therapist,health_care; 'none' reopens); the therapist vertical's code stays, dormant", "corrected the HIPAA reasoning: for a practice that bills insurance, schedule and invoices are PHI, so admin-only was not out of business-associate territory"]
