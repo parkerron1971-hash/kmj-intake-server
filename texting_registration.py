@@ -323,6 +323,61 @@ def registration(business_id: str) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
+SENT = ("submitted", "brand_pending", "campaign_pending", "approved")
+
+
+def is_sent(row: Optional[Dict[str, Any]]) -> bool:
+    """Whether the business's registration has gone to Twilio: from then on
+    its clients agree to texts from the business by name (booking page and
+    contact form), with links to its own texting pages."""
+    if not row:
+        return False
+    return row.get("status") in SENT or (
+        row.get("status") == "failed" and bool((row.get("twilio") or {}).get("profile_submitted")))
+
+
+# The composed site's contact-form texts box (site_modules/contact_footer),
+# baked into the stored page as "...from {business} via The Solutionist
+# System (replies, confirmations, and reminders)...".
+CONTACT_MARK = "via The Solutionist System (replies, confirmations, and reminders)"
+_CONTACT_BOX = re.compile(
+    r"(I agree to receive SMS messages from )([^<]{1,200}?)\s+via The Solutionist System "
+    r"(\(replies, confirmations, and reminders\)\.)(.{0,600}?<strong>HELP</strong> for help\.)", re.S)
+
+
+def contact_box_in_own_name(page: str, terms: str, privacy: str) -> str:
+    """The contact form's texts box in the business's own name: the
+    platform's name taken out, its own texting terms and privacy linked."""
+    links = (f' <a href="{html.escape(terms)}" target="_blank" rel="noopener">Texting terms</a> · '
+             f'<a href="{html.escape(privacy)}" target="_blank" rel="noopener">Privacy</a>')
+    return _CONTACT_BOX.sub(lambda m: f"{m.group(1)}{m.group(2)} {m.group(3)}{m.group(4)}{links}", page)
+
+
+_PAGES_SEEN: Dict[str, Any] = {}
+PAGES_SECONDS = 300
+
+
+def own_texting_pages(business_id: str) -> Optional[Dict[str, str]]:
+    """{terms, privacy} on the business's own site once its registration is
+    sent, else None. Remembered for five minutes per business: the site's
+    contact form asks on every visit. Never raises (None reads as before)."""
+    now = time.monotonic()
+    hit = _PAGES_SEEN.get(business_id)
+    if hit and now - hit[0] < PAGES_SECONDS:
+        return hit[1]
+    out: Optional[Dict[str, str]] = None
+    try:
+        if is_sent(registration(business_id)):
+            origin = site_origin(business_id)
+            if origin:
+                out = {"terms": f"{origin}{TERMS_PATH}", "privacy": f"{origin}{PRIVACY_PATH}"}
+    except Exception as e:
+        logger.warning("texting pages unread for %s: %s", str(business_id)[:8], e)
+        return None
+    _PAGES_SEEN[business_id] = (now, out)
+    return out
+
+
 def site_origin(business_id: str) -> Optional[str]:
     """The business's site address (custom domain first), or None. Raises on
     a failed read."""

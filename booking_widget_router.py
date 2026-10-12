@@ -442,9 +442,6 @@ def _resolve_offering_for_book(
 # consent boxes, which must name the business (error 30927) word for word as
 # its campaign quotes them. So the words come from texting_registration, the
 # same functions that write the campaign, and the widget shows them as sent.
-_TEXTING_SENT = ("submitted", "brand_pending", "campaign_pending", "approved")
-
-
 def _texting_words(business: Dict[str, Any]) -> Optional[Dict[str, str]]:
     """The two boxes and the business's own texting pages, or None while its
     registration hasn't gone to Twilio (or can't be read: the boxes then read
@@ -452,12 +449,7 @@ def _texting_words(business: Dict[str, Any]) -> Optional[Dict[str, str]]:
     try:
         import texting_registration as tr
         bid = str(business["id"])
-        row = tr.registration(bid)
-        if not row:
-            return None
-        sent = row.get("status") in _TEXTING_SENT or (
-            row.get("status") == "failed" and (row.get("twilio") or {}).get("profile_submitted"))
-        if not sent:
+        if not tr.is_sent(tr.registration(bid)):     # the same rule as the site's contact form
             return None
         origin = tr.site_origin(bid)
         name = str(business.get("name") or "").strip()
