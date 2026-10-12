@@ -4,7 +4,7 @@ date: 2026-10-12
 agent: Codex (GPT-6)
 asked: "ok create it and test it. don't spend to much money"
 status: in progress
-prs: []
+prs: [kmj-intake-server#1406]
 migrations: []
 left_undone: ["Production integration is outside this local prototype; independently evaluate representative examples before considering rollout"]
 decisions: ["No paid API calls or Railway deployment", "Standard-library Naive Bayes model trained only on fictional examples", "Scores are not calibrated confidence", "Return recommendations only; never send, book, cancel or charge", "Keep existing Chief business memory and provider routing unchanged"]
