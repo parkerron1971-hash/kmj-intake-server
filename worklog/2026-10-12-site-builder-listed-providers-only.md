@@ -4,7 +4,7 @@ date: 2026-10-12
 agent: Claude Code (Claude Opus 5.5)
 asked: "go ... update the website and anything else you need to (Kevin, 2026-10-12, on the two legal calls)"
 status: waiting on review
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1403]
 migrations: []
 left_undone: []
 decisions: ["site_llm's provider(), provider_for(), judge_provider() and create_message all pass moonshot through lane_registry.listed_subprocessor; unlisted = Claude, said once per process", "scripts/design_acceptance.py lists the host for its own process in moonshot modes: running it is the operator's deliberate choice"]
