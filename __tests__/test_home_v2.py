@@ -242,7 +242,7 @@ def test_the_worth_chapter_reads_the_live_professional_price(monkeypatch):
     assert "$149" not in worth
     assert html.index('id="worth"') < html.index('id="pricing"')
     assert "Assumes Chief fills a third of the missed slots" in worth, "the math says what it assumes"
-    for trade in ("barber", "therapist", "contractor", "coach"):
+    for trade in ("barber", "attorney", "contractor", "coach"):
         assert f'data-t="{trade}"' in worth
     assert "attributeFilter:['aria-pressed']" in html   # it follows the hero's trade chips
 
@@ -318,3 +318,74 @@ def test_the_founding_line_uses_the_founder_price_or_says_nothing(monkeypatch):
     assert marketing_home_v2._founder_sentence() == ""
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
     assert marketing_home_v2._founder_sentence() == ""
+
+
+def test_the_site_no_longer_offers_therapy_or_health_care():
+    """2026-10-12: Solutionist paused therapy and health care practices
+    until a HIPAA setup is worth paying for. No routed public page may
+    show a therapist demo or promise clinical scope; attorney took the
+    therapist's demo slot, and nonprofits keep the trade count at seven."""
+    pages = [mp.render_home(), mp.render_get_started(), mp.render_features(),
+             mp.render_faq(), mp.render_about(), mp.render_compare(), mp.render_download()]
+    for html in pages:
+        low = html.lower()
+        for word in ("therapist", "therapy practice", "superbill", "clinical notes",
+                     "your ehr", "hipaa", "psychology today"):
+            assert word not in low, word
+    home = pages[0]
+    assert 'data-trade="attorney"' in home and 'data-t="attorney"' in home
+    assert "attorney:{" in home and "therapist:{" not in home
+    assert "barbers, attorneys, contractors, coaches, consultants, ministries, nonprofits" in home
+    assert "isn’t taking on therapy or health care practices yet" in home
+
+
+def _run_speak(inputs):
+    """Run the home page's real speakText (and the real trade, problem and
+    health matchers) in node with the page's DOM calls stubbed, and return
+    the note each input leaves and the trade it picks."""
+    import json
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    html = mp.render_home()
+    script = html[html.index("const SYN={"):]
+
+    def grab(start, end):
+        i = script.index(start)
+        return script[i:script.index(end, i)]
+
+    src = "\n".join([
+        grab("const SYN={", "\n"), grab("const TRADE_LABEL={", "\n"),
+        grab("const PROBLEM_RUBRIC=[", "\n  ];") + "\n  ];",
+        grab("function resolveProblem(", "\n"), grab("function resolveTrade(", "\n  function pick("),
+        grab("const HEALTH=", "\n"), grab("function speakText(", "\n  function typeSay("),
+    ])
+    harness = """
+let trade='barber', spoken=false, autoT=0, without=false, room='operate', roomOpen=true, chat=[], last={};
+const noteEl={textContent:'',hidden:true};
+const $=sel=>noteEl;
+function pick(t,o){trade=t;last={trade:t,note:(o&&o.note)||null};}
+function openRoom(){} function setMode(){} function syncSeg(){} function render(){} function ask(){} function opener(){}
+function setTimeout(){} function clearTimeout(){}
+""" + src + """
+const out={};
+for (const v of %s) { last={}; noteEl.textContent=''; trade='barber'; speakText(v);
+  out[v]={note:last.note||noteEl.textContent, trade:last.trade||trade}; }
+console.log(JSON.stringify(out));
+""" % json.dumps(inputs)
+    res = subprocess.run(["node", "-e", harness], capture_output=True, encoding="utf-8", timeout=30)
+    assert res.returncode == 0, res.stderr
+    return json.loads(res.stdout)
+
+
+def test_a_health_trade_gets_a_straight_not_yet_alone_or_in_a_sentence():
+    out = _run_speak(["therapist", "I'm a therapist", "mental health counselor",
+                      "dental practice", "my therapy clients keep no-showing",
+                      "medical malpractice attorney", "attorney", "barber"])
+    for v in ("therapist", "I'm a therapist", "mental health counselor", "dental practice",
+              "my therapy clients keep no-showing"):
+        assert "isn’t taking on therapy or health care practices yet" in out[v]["note"], (v, out[v])
+    assert out["medical malpractice attorney"]["trade"] == "attorney", "a named trade wins"
+    assert "health care" not in (out["medical malpractice attorney"]["note"] or "")
+    assert out["attorney"]["trade"] == "attorney" and out["barber"]["trade"] == "barber"

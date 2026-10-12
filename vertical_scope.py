@@ -19,13 +19,18 @@ THE HIPAA REASONING, STATED PLAINLY
   Twilio, Stripe — plus a hard gate on what Chief may read. None of that is
   in place, and none of it is a checklist row: it is a legal posture.
 
-  So the vertical ships useful and narrow. Scheduling, billing, and admin
-  are genuinely valuable to a private practice and carry no PHI beyond the
-  contact record any business already keeps. Progress notes are the thing
-  that would flip the platform's legal status, and they are refused.
+  The narrowed launch assumed scheduling, billing and admin carry no PHI.
+  For a practice that bills insurance electronically (a HIPAA covered
+  entity) that does not hold: a therapist's client list, appointments and
+  invoices are themselves PHI, because they show a named person is in care.
+  Blocking notes kept the record small; it did not keep the platform out of
+  business-associate territory.
 
-  This is a NARROWED LAUNCH, not a permanent limitation. When a BAA posture
-  exists, the entry here is deleted and the capability lands deliberately.
+  So on 2026-10-12 Kevin PAUSED therapy, counseling and health care
+  practices outright (PAUSED below): no new ones are opened, and none exist
+  today. The rules here stay, dormant, so reopening is a decision rather
+  than a rebuild. Reopen when a health tier pays for a separate setup with
+  BAAs from every vendor that would touch the data.
 
 WHY KEYWORDS AND NOT AN LLM CLASSIFIER
   A blocked-substring list is crude and will produce the occasional false
@@ -38,8 +43,9 @@ WHY KEYWORDS AND NOT AN LLM CLASSIFIER
 """
 from __future__ import annotations
 
+import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 
 class ScopeRule:
@@ -134,6 +140,75 @@ OUT_OF_SCOPE: Dict[str, ScopeRule] = {
         client_surface="denied",
     ),
 }
+
+
+# ─── Paused verticals ────────────────────────────────────────────────────
+# Kinds of practice Solutionist does not open new businesses for. Checked at
+# business creation (launch_access.create_business). Env PAUSED_VERTICALS
+# lists the paused families (default: both below); "none" reopens all.
+#
+# A family matches on the canonical vertical OR on words in a free-text type,
+# because "Northside LMFT practice" resolves to custom, not therapist. Words
+# match at the start of a word ("dental" never matches "incidental"). Bare
+# counselor/counseling is NOT a word here: career, credit, financial, school
+# and pastoral counselors are welcome, so counseling only matches beside a
+# clinical word ("marriage counseling", "grief counselor"). The exact type
+# "counselor" still resolves to the therapist vertical. Legal counsel and
+# "attorney and counselor at law" are lawyers. Massage is personal services.
+#
+# This is a signup gate that keeps the product honest, not a HIPAA control:
+# a practice can still pick another type. The terms' no-health-records
+# clause is the control.
+
+PAUSED_FAMILIES: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "therapist": {
+        "canonical": ("therapist",),
+        "words": ("therap", "psycholog", "psychiatr", "mental health",
+                  "behavioral health", "behavioural health", "lmft", "lcsw", "lpc",
+                  "marriage counsel", "family counsel", "couples counsel",
+                  "grief counsel", "trauma counsel", "addiction counsel",
+                  "substance abuse counsel", "clinical counsel"),
+    },
+    "health_care": {
+        "canonical": (),
+        "words": ("medical", "dental", "dentist", "orthodont", "chiropract",
+                  "physician", "nursing", "home health", "hospice", "healthcare",
+                  "health care", "acupunct", "optometr", "urgent care"),
+    },
+}
+_NOT_PAUSED = re.compile(r"\b(massage|law|lawyers?|attorneys?|legal)\b")
+
+PAUSED_MESSAGE = (
+    "Solutionist isn't set up for therapy, counseling or health care practices "
+    "yet, so we can't open this business. If it's something else, choose the "
+    "type that fits and try again.")
+
+
+def paused_families() -> FrozenSet[str]:
+    raw = os.environ.get("PAUSED_VERTICALS")
+    if raw is None:
+        return frozenset(PAUSED_FAMILIES)
+    names = {v.strip().lower() for v in raw.split(",") if v.strip()}
+    return frozenset(n for n in names if n in PAUSED_FAMILIES)
+
+
+def is_paused(business_type: Optional[str]) -> bool:
+    """True when no new business of this type may be opened."""
+    families = paused_families()
+    if not families:
+        return False
+    text = " ".join(str(business_type or "").lower().replace("_", " ").replace("-", " ").split())
+    if not text:
+        return False
+    canonical = _norm(business_type)
+    for name in families:
+        fam = PAUSED_FAMILIES[name]
+        if canonical in fam["canonical"]:
+            return True
+        if (any(re.search(r"\b" + re.escape(w), text) for w in fam["words"])
+                and not _NOT_PAUSED.search(text)):
+            return True
+    return False
 
 
 def _norm(business_type: Optional[str]) -> str:
