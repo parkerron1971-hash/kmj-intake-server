@@ -1017,10 +1017,10 @@
       <p class="reveal">A chief of staff for your business. It keeps the books, chases what is late, and asks before it acts. <b>Say what you do, or what’s wrong, and the room takes shape around the answer.</b></p>
       <form class="say reveal" id="sayForm" aria-label="Tell it what you do">
         <label class="lbl" for="sayInput">Tell it what you do, or what’s wrong:</label>
-        <div class="field"><input id="sayInput" placeholder="barber, therapist, contractor, coach…" autocomplete="off" spellcheck="false"><span class="go" aria-hidden="true">↵</span></div>
+        <div class="field"><input id="sayInput" placeholder="barber, attorney, contractor, coach…" autocomplete="off" spellcheck="false"><span class="go" aria-hidden="true">↵</span></div>
         <div class="chips">
           <button type="button" class="chip" data-trade="barber" aria-pressed="true">Barber</button>
-          <button type="button" class="chip" data-trade="therapist" aria-pressed="false">Therapist</button>
+          <button type="button" class="chip" data-trade="attorney" aria-pressed="false">Attorney</button>
           <button type="button" class="chip" data-trade="contractor" aria-pressed="false">Contractor</button>
           <button type="button" class="chip" data-trade="coach" aria-pressed="false">Coach</button>
         </div>
@@ -1042,7 +1042,7 @@
         <div id="sharePop" hidden>
           <div class="card-prev"><svg class="mk" aria-hidden="true"><use href="#mark"/></svg><div><b id="shareTitle">The Solutionist System for barbers &amp; salons</b><span>Every problem has a solution. See the room shaped for your trade.</span></div></div>
           <div class="share-row"><input id="shareUrl" readonly aria-label="Link to this shape"><button class="btn sm primary" id="copyBtn">Copy link</button></div>
-          <div class="share-note">Live, this link carries its own social card in the trade’s color, so a therapist who shares it shows the therapist version.</div>
+          <div class="share-note">Live, this link carries its own social card in the trade’s color, so an attorney who shares it shows the attorney version.</div>
         </div>
       </div>
       <div class="surface-wrap" id="winWrap">
@@ -1095,7 +1095,7 @@
       <div class="three-facts">
         <div class="fact reveal"><div class="n">The system</div><h3>Everything a business runs on, in one login.</h3><p>Contacts, booking, invoices and payments, documents and e-signature, expenses, inventory, projects, your website, your brand, your posts. One record of the business, shared by every room.</p></div>
         <div class="fact reveal"><div class="n">Chief</div><h3>A chief of staff who reads your real day.</h3><p>Every turn, Chief reads your calendar, invoices, inbox and goals, then acts: reminders sent, notes prepped, books reconciled, drafts held for your word. It asks before anything that cannot be taken back.</p></div>
-        <div class="fact reveal"><div class="n">Your trade</div><h3>It arrives speaking your language.</h3><p>Seven trades are built in: barbers, therapists, attorneys, contractors, coaches, consultants, ministries. Anything else, tell Chief what you do and it composes the room, the words, the workflows and the site.</p></div>
+        <div class="fact reveal"><div class="n">Your trade</div><h3>It arrives speaking your language.</h3><p>Seven trades are built in: barbers, attorneys, contractors, coaches, consultants, ministries, nonprofits. Anything else, tell Chief what you do and it composes the room, the words, the workflows and the site.</p></div>
       </div>
       <div class="steps3 reveal">
         <div><b><i>1</i>Say what you do</b><p>A trade, or what is wrong this week. The room takes shape around it in seconds.</p></div>
@@ -1228,7 +1228,7 @@
       <div class="hn-calc reveal">
         <div class="hn-in">
           <div class="hn-trades" role="group" aria-label="Trade">
-            <button type="button" data-t="barber" aria-pressed="true">Barber</button><button type="button" data-t="therapist" aria-pressed="false">Therapist</button><button type="button" data-t="contractor" aria-pressed="false">Contractor</button><button type="button" data-t="coach" aria-pressed="false">Coach</button>
+            <button type="button" data-t="barber" aria-pressed="true">Barber</button><button type="button" data-t="attorney" aria-pressed="false">Attorney</button><button type="button" data-t="contractor" aria-pressed="false">Contractor</button><button type="button" data-t="coach" aria-pressed="false">Coach</button>
           </div>
           <label class="hn-sl"><span><em id="worthL1">Average cut</em><output id="worthO1">$35</output></span><input type="range" id="worthS1" min="5" max="120" step="5" value="35"></label>
           <label class="hn-sl"><span><em id="worthL2">No-shows a week</em><output id="worthO2">4</output></span><input type="range" id="worthS2" min="0" max="15" step="1" value="4"></label>
@@ -1344,23 +1344,23 @@
       grow:{campaign:'Back-to-school fades',stages:[['New leads',14,14],['Booked first cut',9,14],['Came back',6,14],['Regular',4,14]],post:'Fresh cuts before the first bell. Book a Tuesday slot this week and the kid’s cut is half off. Link in bio.',postBy:'Draft for Instagram · in your voice'},
       build:{url:'fadeandco.mysolutionist.app',h:'Walk in sharp. Walk out sharper.',p:'Fades, beards and hot-towel shaves · walk-ins welcome',cta:'Book a chair',module:'Chair inventory',steps:[['Read your product list',''],['Laid out par levels and reorder points','done'],['Wired reorder to Chief’s morning brief','run'],['Look-back check: design score','wait']]}
     },
-    therapist:{
-      biz:'Northlake Counseling', owner:'Dana', trade:'a therapy practice', tier:'PRO', c1:'#2DD4BF', c2:'#60A5FA',
-      people:'Clients', room:'The Practice', booking:'Sessions', extra:['Intake forms','Superbills'],
-      counts:{people:41, extra:[2,null]},
-      kpis:[['Sessions this week','22','3 open Thursday'],['Clients','41','2 waiting on intake'],['Revenue · this month','$8,340','▲ 6% vs last month','up','money'],['No-shows · 30 days','1','down from 4']],
-      brief:'Two intake forms are unsigned and Thursday has three open sessions.',
-      items:[['2 intake forms unsigned','since Monday'],['3 open sessions Thursday','fill from waitlist'],['Clinical notes stay in your EHR','by design','ok']],
-      offer:'Want me to send the two intake reminders?',
-      accept:{line:'Sent 2 intake reminders',sub:'from your practice address · consent on file'},
+    attorney:{
+      biz:'Whitlock Law', owner:'Elena', trade:'a law practice', tier:'PRO', c1:'#C9A84C', c2:'#F5D58A',
+      people:'Clients', room:'The Office', booking:'Consultations', extra:['Matters','Trust ledger'],
+      counts:{people:58, extra:[19,null]},
+      kpis:[['Unbilled hours','14.5','across 6 matters'],['Open matters','19','3 with deadlines'],['Collected · this month','$28,600','▲ 11% vs last month','up','money'],['Consultations this week','5','2 requests unbooked']],
+      brief:'The Renner discovery responses are due Thursday and 14.5 hours are still unbilled.',
+      items:[['Renner discovery due Thursday','2 days'],['2 engagement letters unsigned','since Friday'],['Trust account reconciled','three-way','ok']],
+      offer:'Want me to draft this month’s invoices from the unbilled time?',
+      accept:{line:'Drafted 6 invoices from unbilled time',sub:'14.5 hours · waiting on your approval'},
       qa:[
-        ['Who is waiting on intake?','Two new clients have unsigned intake forms: J. Alvarez and the Park family. Both sessions are Thursday. I can send a reminder from your practice address now.','2 unsigned · Thursday'],
-        ['Who owes me money?','Three superbills are unpaid, $1,020 total. Two are with insurers and inside the normal window. One client balance of $180 is 31 days out and could use a gentle note.','1 client balance · $180'],
-        ['What’s open Thursday?','Three sessions: 10:00, 1:00 and 3:00. Four people on the waitlist asked for Thursdays. Want me to offer the slots in waitlist order?','3 open · 4 waiting']
+        ['What’s due this week?','The Renner discovery responses are due Thursday and the Hartline lease review is due Friday. The Morgan estate signing still needs a date. Thursday is at the top of your brief, and I held two hours on Wednesday to finish it.','2 deadlines · Thursday first'],
+        ['Who owes me money?','Two invoices are past due, $4,850 total: Hartline LLC (21 days) and the Morgan estate (9). The Morgan retainer is also below its floor, so I drafted a replenishment request for your approval.','2 overdue · $4,850'],
+        ['Any open consultations?','Two consultation requests came in from your site this week and neither is booked. Wednesday at 10:00 and Thursday at 3:00 are open. I can offer both slots once the conflict check on each name comes back clear.','2 open consultation slots']
       ],
-      log:[['Sent 4 session reminders','48 hours ahead · 06:00'],['Filed 6 superbills','to two insurers · 06:30'],['Flagged: one client balance past 30 days','needs a human · 07:10','you']],
-      grow:{campaign:'Fall availability',stages:[['Inquiries',11,11],['Consult booked',7,11],['Intake signed',5,11],['Ongoing',4,11]],post:'A few daytime openings this fall for adults working through anxiety and life transitions. Free 15-minute consult to see if we fit.',postBy:'Draft for your Psychology Today profile'},
-      build:{url:'northlake.mysolutionist.app',h:'Counsel that holds up.',p:'Individual and couples therapy · in person and online',cta:'Book a consult',module:'Superbill tracker',steps:[['Read your CPT and rate table',''],['Laid out claims by insurer and age','done'],['Wired unpaid claims to Chief’s brief','run'],['Look-back check: design score','wait']]}
+      log:[['Sent 2 invoice reminders','from your address · 04:12'],['Logged 1.5 hours to Renner v. Colby','from your calendar · 06:30'],['Flagged: Morgan retainer below its floor','needs a human · 07:10','you']],
+      grow:{campaign:'Estate planning month',stages:[['Inquiries',16,16],['Consultation',9,16],['Engaged',6,16],['Signed plan',4,16]],post:'Most families put off a will until something forces the question. This month we are reviewing existing wills and trusts for a flat fee. Book a 20-minute consultation.',postBy:'Draft for LinkedIn · in your voice'},
+      build:{url:'whitlocklaw.mysolutionist.app',h:'Plans that hold up.',p:'Estate planning and family law · Ann Arbor, MI',cta:'Book a consultation',module:'Matter deadline tracker',steps:[['Read your open matters',''],['Laid out deadlines by matter and court date','done'],['Wired upcoming deadlines to Chief’s brief','run'],['Look-back check: design score','wait']]}
     },
     contractor:{
       biz:'Reyes Builders', owner:'Luis', trade:'a contractor', tier:'PRO', c1:'#F5A524', c2:'#FF6B3D',
@@ -1402,7 +1402,7 @@
 
   const PROBLEMS={
     barber:['Marcus hasn’t rebooked · 6 weeks','Invoice #041 · 18 days late','Pomade: 2 tubs left','Tuesday 2:00 · chair open','Grace asked by text, no reply','PO-0043 never sent','No-show Thursday 11:30','3 leads went quiet','Neck strips · last box','Instagram post · 9 days ago'],
-    therapist:['2 intake forms unsigned','Client balance · 31 days','Thursday · 3 open sessions','Superbill #212 not filed','Waitlist · 4 asking for Thursdays','Reminder texts not sent','Session notes · 2 unsigned','Insurer follow-up due','Consult request · unanswered','Fall availability · unposted'],
+    attorney:['Renner discovery · due Thursday','Engagement letter · unsigned 4 days','14.5 hours · never billed','Hartline invoice · 21 days late','Morgan retainer · below floor','Consult request · no conflict check','Court date · not on the calendar','Trust ledger · 3 items unmatched','Lease review · due Friday','Review request never sent'],
     contractor:['Estimate #88 · no reply 9 days','Change order unsigned','Permit expires Friday','Invoice · $4,200 · 22 days','Crew short Tuesday','Lumber quote expires','Punch list · 11 open','Client texted at 6:40 AM','Deposit not collected','Review request never sent'],
     coach:['6 check-ins overdue','Priya’s renewal · unasked','Fall cohort · 2 seats open','Discovery calls · 3 unbooked','Invoice · $900 · 12 days','Session notes unsent','LinkedIn post · draft only','Sam asked to move Friday','Program schedule not shared','Testimonial never requested']
   };
@@ -1500,10 +1500,10 @@
   }
 
   /* ---------- say what you do ---------- */
-  const SYN={barber:['barber','barbershop','salon','hair','stylist','cuts','fade'],therapist:['therap','counsel','psycholog','mental','clinic','lcsw','lpc'],contractor:['contract','build','construct','remodel','roof','plumb','electric','hvac','landscap','handyman','carpent','paint'],coach:['coach','consult','trainer','mentor','advis','fitness','tutor']};
-  const TRADE_LABEL={barber:'a barber',therapist:'a therapist',contractor:'a contractor',coach:'a coach'};
-  const SHAPE={barber:'barbers & salons',therapist:'therapists',contractor:'contractors',coach:'coaches'};
-  const WITHOUT_LINE={barber:'No one texted the regulars. No one drafted the pomade order. You find out when the chair sits empty.',therapist:'No one chased the intake forms. Thursday stays open. The unpaid balance turns 45 days.',contractor:'The Harper estimate goes cold. The change order stays unsigned. You eat the $2,150.',coach:'Six check-ins slide. Priya finishes Friday with no renewal in hand.'};
+  const SYN={barber:['barber','barbershop','salon','hair','stylist','cuts','fade'],attorney:['attorney','lawyer','law firm','law office','legal','paralegal','esq','estate plan','family law','litigat'],contractor:['contract','build','construct','remodel','roof','plumb','electric','hvac','landscap','handyman','carpent','paint'],coach:['coach','consult','trainer','mentor','advis','fitness','tutor']};
+  const TRADE_LABEL={barber:'a barber',attorney:'an attorney',contractor:'a contractor',coach:'a coach'};
+  const SHAPE={barber:'barbers & salons',attorney:'attorneys',contractor:'contractors',coach:'coaches'};
+  const WITHOUT_LINE={barber:'No one texted the regulars. No one drafted the pomade order. You find out when the chair sits empty.',attorney:'The Renner deadline creeps up on Thursday. 14.5 hours never reach an invoice. The retainer runs dry mid-matter.',contractor:'The Harper estimate goes cold. The change order stays unsigned. You eat the $2,150.',coach:'Six check-ins slide. Priya finishes Friday with no renewal in hand.'};
   const WITHOUT_HINTS=['not checked since Friday','nobody noticed','unreconciled','no one answered'];
   const PRICING=t=>`For ${t.trade} like ${t.biz}, most people start on Professional: ${{PRO_PRICE}} a month, {{PRO_CREDITS}} AI actions, all three rooms. Starter is ${{STARTER_PRICE}} for the essentials, and Solutionist is ${{SOL_PRICE}} for the biggest workload. Annual takes two months off.{{FOUNDER_SENTENCE}}`;
   const PROBLEM_RUBRIC=[
@@ -1615,8 +1615,8 @@
   $('#replayBtn').onclick=()=>{chat=[];accepted=false;logExtra=[];hiddenLog.clear();room='operate';spoken=false;closeRoom();render();scrollTo({top:0,behavior:'instant'});startIntro()};
 
   /* ---------- the hero field's ghost placeholder ---------- */
-  const SAY={barber:'three regulars haven’t rebooked',therapist:'two intake forms are still unsigned',contractor:'an estimate has gone cold on me',coach:'six check-ins have been missed'};
-  const GHOST=['barber','my clients keep no-showing','therapist','I never chase invoices','contractor','leads go quiet on me','coach','I don’t have a website','attorney','I’m behind on everything'];
+  const SAY={barber:'three regulars haven’t rebooked',attorney:'my hours never make it onto an invoice',contractor:'an estimate has gone cold on me',coach:'six check-ins have been missed'};
+  const GHOST=['barber','my clients keep no-showing','attorney','I never chase invoices','contractor','leads go quiet on me','coach','I don’t have a website','consultant','I’m behind on everything'];
   (function(){
     const inp=$('#sayInput'); let gi=0,gc=0,del=false;
     if(reduce)return;
@@ -1659,6 +1659,7 @@
   }
   function closeRoom(){roomOpen=false;roomEl.hidden=true;roomEl.classList.remove('in');$('#sayHint').hidden=false;if(fmode==='frame')fieldMode('release')}
   function opener(){const t=T[trade];chat=[{t:'c',x:`${GREET}, ${t.owner}. ${t.brief} The first one I can handle tonight; the offer is on the left.`,k:`${t.biz} · ${EDITION} brief`,fresh:true}];accepted=false;logExtra=[];render()}
+  const HEALTH=/therap|psycholog|psychiatr|counsel(?:or|ing|lor|ling)|mental health|lcsw|lmft|\blpc\b|clinic|medical|dental|chiropract/i;
   function speakText(v){
     spoken=true; clearTimeout(autoT);
     const t=resolveTrade(v), p=resolveProblem(v), note=$('#sayNote'), sentence=/\s/.test(v);
@@ -1671,7 +1672,8 @@
       setTimeout(()=>ask(v),switching?900:(first?500:250)); return;
     }
     if(t){pick(t,{note:v.toLowerCase()===t?null:`Heard "${v}". Closest of the four in this demo: ${TRADE_LABEL[t]}.`});setTimeout(opener,200);openRoom();return}
-    pick(trade,{note:`"${v}" is not a trade or a problem I know yet. Try “my clients keep no-showing”, or a trade like therapist. The real system already speaks seven and learns yours on day one.`});
+    if(HEALTH.test(v)){pick(trade,{note:'Solutionist isn’t taking on therapy or health care practices yet. Try a trade like attorney, or say what’s going wrong.'});setTimeout(opener,200);openRoom();return}
+    pick(trade,{note:`"${v}" is not a trade or a problem I know yet. Try “my clients keep no-showing”, or a trade like attorney. The real system already speaks seven and learns yours on day one.`});
     setTimeout(opener,200);openRoom();
   }
   function typeSay(s){
@@ -1723,8 +1725,8 @@
   }
 
   let bootT=null;
-  const WEEK={barber:[[2,.3],[3,.6],[2,.4],[3,1],[3,0],[2,.2],[0,0]],therapist:[[3,.5],[2,.3],[3,.7],[2,1],[2,0],[0,0],[0,0]],contractor:[[2,.6],[1,.2],[2,.4],[2,1],[1,0],[1,0],[0,0]],coach:[[2,.4],[3,.7],[2,.3],[3,1],[2,0],[1,0],[0,0]]};
-  const WEEKSUM={barber:'38 bookings · $6,910 in',therapist:'22 sessions · $8,340 in',contractor:'6 jobs · $31,500 in',coach:'14 sessions · $5,200 in'};
+  const WEEK={barber:[[2,.3],[3,.6],[2,.4],[3,1],[3,0],[2,.2],[0,0]],attorney:[[1,.4],[2,1],[1,.2],[2,.6],[1,0],[0,0],[0,0]],contractor:[[2,.6],[1,.2],[2,.4],[2,1],[1,0],[1,0],[0,0]],coach:[[2,.4],[3,.7],[2,.3],[3,1],[2,0],[1,0],[0,0]]};
+  const WEEKSUM={barber:'38 bookings · $6,910 in',attorney:'9 matters touched · $28,600 in',contractor:'6 jobs · $31,500 in',coach:'14 sessions · $5,200 in'};
   const DAYS=['M','T','W','T','F','S','S'];
   function week(){
     const w=WEEK[trade], today=Math.max(0,(NOW.getDay()+6)%7);
@@ -2011,7 +2013,7 @@
   if(reduce||introSeen&&!/(^|[?&])intro=1/.test(location.search))endIntro(true);else startIntro();
 
   /* ticker */
-  const trades=[['Barbers & salons','#2E7DFF'],['Therapists','#2DD4BF'],['Attorneys','#C9A84C'],['Contractors','#F5A524'],['Coaches','#A78BFA'],['Consultants','#22D3EE'],['Ministries & churches','#F472B6']];
+  const trades=[['Barbers & salons','#2E7DFF'],['Attorneys','#C9A84C'],['Contractors','#F5A524'],['Coaches','#A78BFA'],['Consultants','#22D3EE'],['Ministries & churches','#F472B6'],['Nonprofits','#2DD4BF']];
   $('#track').innerHTML=[...trades,...trades].map(t=>`<span class="t" style="--c:${t[1]}"><i></i>${t[0]}</span>`).join('');
 
   /* reveals + overnight replay */
@@ -2099,7 +2101,7 @@
     var PRO=+worth.getAttribute('data-pro')||0;
     var W={
       barber:{h:'What the quiet chairs cost you.',l:['Average cut','No-shows a week','Regulars gone quiet'],v:[35,4,18],max:120,step:5},
-      therapist:{h:'What the empty hours cost you.',l:['Session fee','Late cancels a week','Clients who drifted'],v:[140,2,6],max:300,step:5},
+      attorney:{h:'What the unbilled hours cost you.',l:['Hourly rate','Hours a week never billed','Consultations that never booked'],v:[250,3,4],max:600,step:10},
       contractor:{h:'What the cold leads cost you.',l:['Average job','Leads gone cold a week','Past clients never asked back'],v:[2400,2,10],max:10000,step:100},
       coach:{h:'What the missed calls cost you.',l:['Monthly package','Missed calls a week','Clients who lapsed'],v:[300,1,5],max:1500,step:25}
     };
@@ -2110,6 +2112,9 @@
       if(cur==='contractor'){
         leak=b*4.3*a*.25+c*a*.1; won=leak*.2;
         note='Assumes one in four cold leads would have closed and one in ten past clients would hire again, and that Chief wins back a fifth of that.';
+      } else if(cur==='attorney'){
+        leak=b*4.3*a+c*a; won=b*4.3*a/3+c*a/2;
+        note='Assumes Chief catches a third of the hours that slip by unbilled and books half of the consultations that went quiet, each counted at one billed hour.';
       } else {
         leak=b*4.3*a+c*a; won=b*4.3*a/3+c*a/2;
         note='Assumes Chief fills a third of the missed slots and wins back half of the quiet clients once a month.';
@@ -2146,7 +2151,7 @@
       {k:/text|message|without ask|permission|on its own|did not want|didn.t want|surprise/i,a:'No. I ask before anything that touches money, messages a client, or cannot be taken back. Everything else I do is logged in plain English with an Undo, and Undo means undo: the action is reversed, not just hidden.',src:'FAQ, will it do something I did not want'},
       {k:/run out|actions|credits|limit/i,a:'Only my AI work pauses, and I tell you. Bookings, invoices, contacts and your site keep working. Top up with a prepaid pack, or wait for the month to roll.',src:'FAQ, running out of AI actions'},
       {k:/trial|free|card|cancel/i,a:'__TRIAL_FREE__ on every plan, the whole room on the plan you pick: __TRIAL_CARD__, and you can leave before then with nothing owed.',src:'FAQ, the free trial',cta:true},
-      {k:/trade|industry|fit|my business|work for/i,a:'Seven trades arrive already speaking your language: barbers, therapists, attorneys, contractors, coaches, consultants and ministries. Anything else, tell me what you do and I compose the room: the words, the workflows, the modules, your site.',src:'what this is, your trade'},
+      {k:/trade|industry|fit|my business|work for/i,a:'Seven trades arrive already speaking your language: barbers, attorneys, contractors, coaches, consultants, ministries and nonprofits. Anything else, tell me what you do and I compose the room: the words, the workflows, the modules, your site.',src:'what this is, your trade'},
       {k:/chatgpt|claude|assistant|own ai|gemini|copilot/i,a:'Yes. The system is the record; the assistant you already talk to can work through it, and the log stays in one place. On Starter your own AI can read; on Professional and up it can keep records here too.',src:'FAQ and the plan cards'},
       {k:/site|website|domain|squarespace|wix/i,a:'Your site is part of the workspace on every plan, next to contacts, invoicing and scheduling. Tell me what you do and I compose it with the rest of the room.',src:'the plan cards, what this is'},
       {k:/book|account|tax|1099|quickbooks|reconcil|bank/i,a:'Every day I reconcile the books as part of the work. Professional adds the full accounting layer: closing, 1099s and year end.',src:'what this is, the plan cards'},

@@ -242,7 +242,7 @@ def test_the_worth_chapter_reads_the_live_professional_price(monkeypatch):
     assert "$149" not in worth
     assert html.index('id="worth"') < html.index('id="pricing"')
     assert "Assumes Chief fills a third of the missed slots" in worth, "the math says what it assumes"
-    for trade in ("barber", "therapist", "contractor", "coach"):
+    for trade in ("barber", "attorney", "contractor", "coach"):
         assert f'data-t="{trade}"' in worth
     assert "attributeFilter:['aria-pressed']" in html   # it follows the hero's trade chips
 
@@ -318,3 +318,22 @@ def test_the_founding_line_uses_the_founder_price_or_says_nothing(monkeypatch):
     assert marketing_home_v2._founder_sentence() == ""
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
     assert marketing_home_v2._founder_sentence() == ""
+
+
+def test_the_site_no_longer_offers_therapy_or_health_care():
+    """2026-10-12: Solutionist paused therapy and health care practices
+    until a HIPAA setup is worth paying for. No routed public page may
+    show a therapist demo or promise clinical scope; attorney took the
+    therapist's demo slot, and nonprofits keep the trade count at seven."""
+    pages = [mp.render_home(), mp.render_get_started(), mp.render_features(),
+             mp.render_faq(), mp.render_about(), mp.render_compare(), mp.render_download()]
+    for html in pages:
+        low = html.lower()
+        for word in ("therapist", "therapy practice", "superbill", "clinical notes",
+                     "your ehr", "hipaa", "psychology today"):
+            assert word not in low, word
+    home = pages[0]
+    assert 'data-trade="attorney"' in home and 'data-t="attorney"' in home
+    assert "attorney:{" in home and "therapist:{" not in home
+    assert "barbers, attorneys, contractors, coaches, consultants, ministries, nonprofits" in home
+    assert "isn’t taking on therapy or health care practices yet" in home

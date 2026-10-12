@@ -1680,16 +1680,6 @@ TRADES_JS = """
       rows: [['3 regulars not rebooked', '6 weeks'], ['2 drafts waiting for you', null], ['$6,910 collected this month', null]],
       sugg: [['Marcus Bell', 'last cut 41 days ago', 'Text'], ['Tia Okonkwo', 'last cut 38 days ago', 'Text'], ['2 drafts pending review', 'from last night\\u2019s run', 'Open']],
       today: ['7', ['9:00 AM', 'Marcus Bell'], ['10:30 AM', 'Devon Pryce'], ['1:00 PM', 'Walk-in hold']] },
-    { word: 'therapist', cap: 'for a therapist', biz: 'Vale Counseling', owner: 'Dana Vale', first: 'Dana',
-      grp: 'The practice', nav: ['Clients', 'Sessions', 'Intake forms', 'Superbills'],
-      kpi: [['Sessions this week', '22', '2 unconfirmed'], ['Active clients', '31', '4 on the waitlist'], ['Revenue \\u00b7 this month', '$9,340', '\\u25b2 9% vs last mo'], ['Business health', '74%', 'steady']],
-      lead: 'Two things before your 9:00. Clinical notes stay in your EHR:',
-      ask: 'Want me to send both a reminder?',
-      read: '2 sessions tomorrow are unconfirmed and 1 intake form is still outstanding. $9,340 came in this month. Clinical notes stay in your EHR.',
-      wk: [[3,.5],[2,.3],[3,.7],[2,1],[2,0],[0,0],[0,0]], wksum: '22 sessions &middot; $9,340 in',
-      rows: [['2 sessions unconfirmed', 'tomorrow'], ['1 intake form outstanding', null], ['$9,340 collected this month', null]],
-      sugg: [['Priya Raman', 'unconfirmed for 9:00 AM', 'Remind'], ['Lewis Barr', 'intake form never opened', 'Resend'], ['3 superbills ready', 'for July sessions', 'Send']],
-      today: ['5', ['9:00 AM', 'Priya Raman'], ['11:00 AM', 'Lewis Barr'], ['2:00 PM', 'Intake &mdash; new']] },
     { word: 'attorney', cap: 'for an attorney', biz: 'Okafor Law', owner: 'Ada Okafor', first: 'Ada',
       grp: 'The office', nav: ['Clients', 'Matters', 'Time &amp; billing', 'Trust ledger'],
       kpi: [['Unbilled hours', '14.5', 'across 6 matters'], ['Open matters', '19', '3 with deadlines'], ['Collected \\u00b7 this month', '$28,600', 'trust reconciled'], ['Business health', '68%', 'steady']],
@@ -3917,7 +3907,7 @@ def render_home_v1() -> str:
 
     <div class="shape-grid reveal reveal-delay-2">
       <div class="shape-copy">
-        <p>A salon doesn&rsquo;t have &ldquo;clients.&rdquo; It has regulars. A contractor doesn&rsquo;t book &ldquo;appointments.&rdquo; They schedule jobs. A bookkeeper&rsquo;s late-payment nudge sounds nothing like a therapist&rsquo;s.</p>
+        <p>A salon doesn&rsquo;t have &ldquo;clients.&rdquo; It has regulars. A contractor doesn&rsquo;t book &ldquo;appointments.&rdquo; They schedule jobs. A bookkeeper&rsquo;s late-payment nudge sounds nothing like an attorney&rsquo;s.</p>
         <p>Tell the system what you do and it loads the whole world of your specialty: the vocabulary, the workflows, the rhythm of the week, what should happen automatically and what should never happen without you. Not a blank assistant waiting to be trained. A system that showed up knowing.</p>
         <div class="shape-steps">
           <div class="shape-step"><span class="n">1</span><span><b>You say what you do.</b><span>One sentence at intake. No setup wizard, no database design.</span></span></div>
@@ -3946,11 +3936,10 @@ def render_home_v1() -> str:
         </div>
 
         <div class="mp-pick">
-          <span class="lbl">Seven it already speaks &middot; pick one</span>
+          <span class="lbl">Six it already speaks &middot; pick one</span>
           <div class="audience-grid" id="shapeChips" role="group" aria-label="See the system as a different business"><button type="button" class="audience-pill" data-trade="coach" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg> Coaches</button>
             <button type="button" class="audience-pill" data-trade="consultant" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> Consultants</button>
             <button type="button" class="audience-pill" data-trade="barber" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7a4 4 0 0 1 8 0v7"/><path d="M8 10V3"/><path d="M14 21V8l6-3v16"/></svg> Barbers &amp; salons</button>
-            <button type="button" class="audience-pill" data-trade="therapist" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l8.8 8.8 8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg> Therapists</button>
             <button type="button" class="audience-pill" data-trade="contractor" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Contractors</button>
             <button type="button" class="audience-pill" data-trade="attorney" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 14h6zM19 7l-3 7h6z"/></svg> Attorneys</button>
             <button type="button" class="audience-pill" data-trade="pastor" aria-pressed="false"><svg class="pill-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 22h18"/><path d="M6 18v-7M10 18v-7M14 18v-7M18 18v-7"/><path d="M12 2 3 8h18Z"/></svg> Ministries &amp; churches</button></div>
@@ -3963,7 +3952,7 @@ def render_home_v1() -> str:
     <p class="audience-note reveal reveal-delay-2">Each one gets its own version of the system, not a generic one with your logo dropped in.</p>
     <p class="audience-ask reveal reveal-delay-2">Don&rsquo;t see yours?
       <a href="/get-started">Tell us what you do &rarr;</a></p>
-    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">Two of those come with the scope stated up front. For therapists, the system runs the practice: scheduling, billing, and reminders. It deliberately keeps clinical notes and records out; those stay in your EHR. For attorneys, it runs the office: clients, matters, and invoicing. It reconciles your trust account three ways: book, client ledgers, and bank. IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
+    <p class="audience-note reveal reveal-delay-2" style="margin-top:10px;">One of those comes with the scope stated up front. For attorneys, it runs the office: clients, matters, and invoicing. It reconciles your trust account three ways: book, client ledgers, and bank. IOLTA report formats vary by jurisdiction, so filing in your state&rsquo;s format stays with you.</p>
   </div>
 </section>
 
@@ -4616,7 +4605,6 @@ def render_home_v1() -> str:
      move together, so they are deliberately the same words. */
   var VOCAB = {
     barber:     {word:'a barber',     people:'Regulars',  room:'The chair',        work:'Chair calendar', rest:['Walk-ins','Payments']},
-    therapist:  {word:'a therapist',  people:'Clients',   room:'The practice',     work:'Sessions',       rest:['Intake forms','Superbills']},
     attorney:   {word:'an attorney',   people:'Clients',   room:'The office',       work:'Matters',        rest:['Time &amp; billing','Trust ledger']},
     contractor: {word:'a contractor', people:'Customers', room:'The jobs',         work:'Jobs',           rest:['Estimates','Change orders']},
     coach:      {word:'a coach',      people:'Clients',   room:'The practice',     work:'Programs',       rest:['Sessions','Payments']},
