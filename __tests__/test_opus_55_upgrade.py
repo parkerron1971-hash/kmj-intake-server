@@ -63,13 +63,18 @@ def test_composer_stages_send_effort_with_the_pinned_sdk(monkeypatch, sdk_wire, 
 def test_moonshot_failure_preserves_effort_in_anthropic_fallback(monkeypatch, sdk_wire):
     import site_llm
     monkeypatch.setattr(site_llm, "provider", lambda: "moonshot")
+    monkeypatch.setenv("CHIEF_SUBPROCESSOR_HOSTS", "api.moonshot.ai")
+    monkeypatch.delenv("SITE_STAGE_PROVIDERS", raising=False)
+    attempted = []
 
     def fail(**kw):
+        attempted.append(True)
         raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(site_llm, "_call_moonshot", fail)
     site_llm.create_message(model="claude-opus-5-5", max_tokens=8096,
                             system="s", user_content="u", effort="medium")
+    assert attempted == [True]
     assert sdk_wire[0]["output_config"] == {"effort": "medium"}
     assert "temperature" not in sdk_wire[0]
 
