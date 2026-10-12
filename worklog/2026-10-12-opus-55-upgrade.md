@@ -30,3 +30,7 @@ both overrides were updated to claude-opus-5-5 and read back successfully,
 without triggering an old-code deployment. They take effect with this release.
 Builder, Director/spec-author and design-coach production overrides already
 use 5.5. The isolated worktree protects the user's unrelated checkout edits.
+
+Both repositories' CLAUDE_BUILD_MODEL GitHub variables also held Opus 4.8;
+they now select claude-opus-5-5 for future coding-agent runs. Neither repo
+overrides CLAUDE_REVIEW_MODEL, so review stays on the workflow's Sonnet 5.5.
