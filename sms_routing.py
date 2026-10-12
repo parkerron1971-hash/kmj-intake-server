@@ -85,11 +85,56 @@ PLATFORM_BRAND = "Solutionist System"
 
 
 def sender_brand(business_id: Optional[str] = None) -> str:
-    """The registered sender identity for outbound copy. Direct model:
-    ALWAYS the platform brand, regardless of practitioner. Under ISV
-    this resolves the practitioner's own registered brand — change it
-    here and nowhere else."""
+    """The registered sender identity for the SHARED number's own copy
+    (keyword replies, connection confirmations): always the platform
+    brand. A business registered under its own name texts from its own
+    number instead, under its own name: see own_registration."""
     return PLATFORM_BRAND
+
+
+async def own_registration(client: httpx.AsyncClient, business_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """{number, since} when this business texts under its OWN registered
+    name (ISV plan step 4: its number lives in its own Twilio sub-account,
+    on its own approved campaign), else None. `since` is when its
+    registration went to Twilio, the moment its booking page started asking
+    for texts in its own name (Kevin, 2026-10-11, the mixed rule: texts it
+    writes and offers go only to people who agreed under its name since, or
+    who have texted it since; confirmations and reminders keep their rule).
+    A failed read is None: the business's texts then go as they do today."""
+    if not business_id:
+        return None
+    rows = await _sb_get(
+        client,
+        f"/sms_numbers?business_id=eq.{business_id}&account_sid=not.is.null"
+        f"&status=in.(active,suspended)&select=phone_number&limit=1",
+    ) or []
+    if not rows:
+        return None
+    reg = await _sb_get(client, f"/texting_registrations?business_id=eq.{business_id}&select=twilio&limit=1") or []
+    since = ((reg[0].get("twilio") or {}) if reg else {}).get("sent_at")
+    return {"number": rows[0].get("phone_number"), "since": since}
+
+
+async def agreed_under_own_name(client: httpx.AsyncClient, business_id: str, phone: str,
+                                since: Optional[str], *, source: Optional[str] = None) -> bool:
+    """The mixed rule's test: this person agreed to texts from this business
+    since its booking page asked in the business's own name (`source` narrows
+    it, e.g. 'booking_marketing' for offers), or has texted it since. No
+    `since` on record reads as any agreement at all."""
+    from urllib.parse import quote
+    when = f"&consented_at=gte.{quote(since, safe='')}" if since else ""
+    kind = f"&source=eq.{source}" if source else ""
+    rows = await _sb_get(
+        client, f"/sms_consents?phone=eq.{_pq(phone)}&business_id=eq.{business_id}{when}{kind}&select=id&limit=1") or []
+    if rows:
+        return True
+    if source:
+        return False                      # an offer needs the offers box, not a reply
+    sent = f"&created_at=gte.{quote(since, safe='')}" if since else ""
+    rows = await _sb_get(
+        client, f"/sms_messages?business_id=eq.{business_id}&phone_number=eq.{_pq(phone)}"
+                f"&direction=eq.inbound{sent}&select=id&limit=1") or []
+    return bool(rows)
 
 
 # Platform consent keywords (carrier-level semantics) — reserved; never

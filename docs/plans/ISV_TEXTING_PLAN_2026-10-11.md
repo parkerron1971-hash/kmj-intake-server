@@ -70,13 +70,29 @@ several weeks); a rejection restarts the review. Businesses go in parallel.
   campaign). Default: any business that wants two-way texting, broadcasts or
   automatic notes registers (and gets a number); fixed confirmations and
   reminders keep going out from the shared number for everyone meanwhile.
-- **D3 Subaccount per business.** Twilio recommends it (isolates billing and
-  suspensions). Default: wait for Twilio's answer on the ticket, then decide.
-- **D4 EIN.** Default: never stored by us. The owner types it at submit time
-  and it goes straight to Twilio; we keep only whether one was given.
+  **Kevin, 2026-10-11:** "offer the text where it's allowed with just our
+  business": appointment confirmations and reminders keep going out from
+  our shared number for every business, one-way (STOP and HELP answered),
+  in our words and our name; owner-written texts need the business's own
+  registration.
+- **D3 Subaccount per business. DECIDED (Kevin, 2026-10-11): a sub-account
+  for each business.** Twilio recommends it (isolates billing and
+  suspensions). Every registration call is made as the sub-account.
+- **D4 EIN. DECIDED (Kevin, 2026-10-11): kept on the platform**, "because we
+  created a place to have them": once, with the business's legal details
+  (`business_profiles.ein`, where About Your Business and the 1099 panel
+  already keep it), never a second copy in `texting_registrations`. The
+  registration screen shows only the last four digits.
 - **D5 No EIN (sole proprietors).** Default: the Sole Proprietor path ($4.50
   + $2/month, one number, the owner confirms by a code texted to their own
-  mobile within 24 hours).
+  mobile within 24 hours). **Kevin, 2026-10-11: "Build it now."** Built on
+  the same flow (texting_isv `path = sole_prop`): a Starter profile, the
+  Sole Proprietor bundle with the owner's own cell, a SOLE_PROPRIETOR brand;
+  once approved, Twilio texts the cell from +1 (915) 278-2000 and the owner
+  replies YES (told in the app, by push and email; "Send a new text" on the
+  screen, at most every ten minutes); then a SOLE_PROPRIETOR campaign and
+  one number. Only a sole proprietor may register without an EIN (Twilio:
+  every LLC has one).
 - **D6 Use case.** Default: Low Volume Mixed for everyone (covers marketing
   too, up to ~6,000 texts a day); Standard only for a business that outgrows
   it.
@@ -102,12 +118,16 @@ calls, no money).** *Started 2026-10-11.*
 the answers form, the readiness checklist, the exact words Twilio will see,
 and later the approval status ("Being approved, usually about 2 weeks").
 
-**Step 3: submit to Twilio (after the ticket and D1–D3).** A Twilio ISV
-client: create the profile, trust product, brand, Messaging Service and
-campaign through the API; the EIN typed at submit; a sweep (and Twilio's
-status callbacks) moves the status along and shows a rejection's reason in
-plain words with what to fix. Pilot on one of Kevin's own businesses first
-(KMJ Creative Solutions or Love City), because a rejection costs two weeks.
+**Step 3: submit to Twilio.** *Built 2026-10-11 (texting_isv.py, the send
+route, the sweep, the owner's updates); goes live when Twilio's ISV guide
+prerequisite is met: our primary profile as "ISV Reseller or Partner"
+(ticket #29903903), then TEXTING_REGISTRATION_OPEN names the pilot.* A
+Twilio ISV client: create the sub-account, profile, trust product, brand,
+Messaging Service and campaign through the API; the EIN read from the
+business's details; a sweep (and Twilio's status callbacks) moves the
+status along and shows a rejection's reason in plain words. Every change
+reaches the owner in the app, by push and by email. Pilot on KMJ Creative
+Solutions first (its EIN is on file), because a rejection costs two weeks.
 
 - The booking page's booking-texts checkbox names "Solutionist System",
   not the business, and links our privacy and terms pages. Under ISV the
@@ -117,7 +137,17 @@ plain words with what to fix. Pilot on one of Kevin's own businesses first
   `/texting-terms` and `/texting-privacy`; other businesses keep today's
   words. (The site contact form already names the business first.)
 
-**Step 4: send under the business's name.** On approval: buy or move the
+**Step 4: send under the business's name.** *Plumbing built 2026-10-11
+(step 4a): on approval the number the business already has with us MOVES
+into its sub-account (clients keep it), or one is bought there in its area
+code; it joins the business's own Messaging Service; sms_numbers.account_sid
+records where it lives; sends from it go through that account, webhooks for
+it are checked with that account's token, and releasing it happens there.
+Step 4b, built 2026-10-11 as Kevin chose: the business's name leads the
+texts from its own number; confirmations and reminders go to all its clients
+from it, owner-written texts and offers only to people who agreed to texts
+from the business itself (since its registration was sent) or who have
+texted it since.* On approval: buy or move the
 business's number into its own Messaging Service; `sms_routing.sender_brand()`
 returns the business; owner-written texts, broadcasts and automatic notes go
 from its line; journeys may text (marketing is inside Low Volume Mixed), so
@@ -135,5 +165,7 @@ exception) and replies for businesses not yet approved.
   privacy line, URL shorteners), and the pilot runs on our own business.
 - Our current campaign must keep working while businesses move: asked in the
   ticket; nothing in steps 1–2 touches it.
-- EIN and the representative's details are sensitive: the EIN is never
-  stored; the rest is the owner's own data, service-role only (RLS on).
+- EIN and the representative's details are sensitive: the EIN lives once, in
+  the business's legal details (owner and the business's team can read it,
+  as for 1099s); the registration screen shows the last four; the rest is
+  the owner's own data, service-role only (RLS on).

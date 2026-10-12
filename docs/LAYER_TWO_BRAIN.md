@@ -51,13 +51,24 @@ One loop around one object, the **business brain**:
 - `POLICY_UNATTENDED_C=allow` restores label-only handling of unattended
   irreversible actions (default: refuse unless the owner set it up).
 
+## Routing a lane to another provider
+
+`lane_registry.route_for` decides each lane's provider; `llm_call.post_lane`
+calls it, falls back to the lane's Claude model on any failure, and keeps any
+call that uses caching, thinking, tools or images on Claude. Setting a lane
+takes four env vars (see `.env.example`), and one more condition: the
+provider's host must be listed in `CHIEF_SUBPROCESSOR_HOSTS`, the record that
+the privacy policy names it as a subprocessor. Every lane carries a business's
+data, so an unlisted or non-https host keeps the lane on Claude. Today no lane
+is moved and the list is empty.
+
 ## Not built yet
 
 - The brain replacing parts of the five-minute business snapshot. That waits
   for a week of real digests, so they can be judged against the blocks they
   would replace, measured on KMJ behind a switch.
-- The lane registry in `llm_call` (workstream D) and the offline replay bench
-  for lane graduation (workstream G).
+- The offline replay bench for lane graduation (workstream G): the evidence
+  a lane is ready to move.
 - Public agent identity (KYA-OS Level 1 on the MCP server, did:web for the
   business). This waits until a client or partner needs it.
 - Any learning use of the interaction record. That waits for consent language
