@@ -180,7 +180,9 @@ def test_owner_only_and_twilio_only_through_texting_isv():
     src = pathlib.Path(tr.__file__).read_text(encoding="utf-8")
     # get, save, EIN, send: owner only. The status ping takes no business id.
     assert src.count('business_access("owner")') == 4 and 'business_access("viewer")' not in src
-    assert "twilio_sms" not in src and not re.search(r"^import twilio$", src, re.M) and "twilio.com" not in src
+    # Twilio only through texting_isv; twilio_sms only to take a number off our shared pool (step 4).
+    assert set(re.findall(r"twilio_sms\.(\w+)", src)) == {"detach_from_service"}
+    assert not re.search(r"^import twilio$", src, re.M) and "twilio.com" not in src
 
 
 # ── 5. step 3: the EIN, sending, updates ──────────────────────────────

@@ -47,6 +47,11 @@ Twilio; a sub-account per business, Kevin's decision D3):
   UPDATES. Every change is told to the owner in the app, by push and by
   email, in plain words, and shows on the registration screen.
 
+Step 4, once approved: the business's number moves into (or is bought in)
+its sub-account and joins its own messaging service (_give_number); the
+sweep keeps trying until it's ready, then the owner hears the number.
+twilio_sms follows sms_numbers.account_sid for sending, webhooks and release.
+
   OPEN. TEXTING_REGISTRATION_OPEN: unset = nobody can send yet (our primary
   profile must be "ISV Reseller or Partner" first, ticket #29903903), `*` =
   every business, or a comma list of business ids (the pilot).
@@ -497,19 +502,24 @@ UPDATES = {
     "campaign_pending": ("Twilio verified {name}",
                          "Next, the carriers review how {name} texts its clients. That usually takes about 2 weeks."),
     "approved": ("{name} can text under its own name",
-                 "The carriers approved {name}'s texting. Your texts can now go out under your own name."),
+                 "The carriers approved {name}'s texting. We're setting up your number under your own name now."),
+    "number_ready": ("Your texts now go out under {name}",
+                     "{number} is now {name}'s own registered number. Your texts go out from it under your "
+                     "own name."),
     "failed": ("Your texting registration needs a fix",
                "{reasons} Open Operate, Text, Your name on texts to see what to change."),
 }
 
 
-async def _tell_owner(business: Dict[str, Any], status: str, reasons: Optional[List[str]] = None) -> Dict[str, bool]:
+async def _tell_owner(business: Dict[str, Any], status: str, reasons: Optional[List[str]] = None,
+                      number: Optional[str] = None) -> Dict[str, bool]:
     """In the app, by push and by email; each best-effort, none can undo the
     status change."""
     if status not in UPDATES:
         return {}
     name = str(business.get("name") or "Your business")
-    title, body = (s.format(name=name, reasons=" ".join(reasons or []) or "Twilio sent it back.")
+    title, body = (s.format(name=name, reasons=" ".join(reasons or []) or "Twilio sent it back.",
+                            number=_pretty(number) if number else "Your number")
                    for s in UPDATES[status])
     out = {"in_app": False, "push": False, "email": False}
     bid = str(business.get("id"))
@@ -542,6 +552,63 @@ async def _tell_owner(business: Dict[str, Any], status: str, reasons: Optional[L
     except Exception as e:
         logger.warning("texting update email failed for %s: %s", bid[:8], e)
     return out
+
+
+def _pretty(number: str) -> str:
+    d = re.sub(r"\D", "", number or "")[-10:]
+    return f"({d[:3]}) {d[3:6]}-{d[6:]}" if len(d) == 10 else (number or "")
+
+
+def _platform_line(business_id: str) -> Optional[Dict[str, Any]]:
+    """The number the business already has on our main account, if any."""
+    rows = _read(f"/sms_numbers?business_id=eq.{business_id}&status=in.(active,suspended)"
+                 f"&account_sid=is.null&select=id,phone_number,provider_sid,area_code&limit=1")
+    return rows[0] if rows else None
+
+
+async def _give_number(business: Dict[str, Any], row: Dict[str, Any]) -> bool:
+    """Step 4, once approved: the business's number in its own sub-account
+    and campaign. The number it already has with us moves (its clients keep
+    it); otherwise one is bought in its area code. Recorded in sms_numbers
+    (account_sid set), so sending, replies and releasing all follow it.
+    True when the number is ready; False to try again on the next sweep."""
+    bid = str(business["id"])
+    t = dict(row.get("twilio") or {})
+    if t.get("number_ready"):
+        return True
+    save = _saver(bid)
+    try:
+        line = await asyncio.to_thread(_platform_line, bid)
+        pn = (line or {}).get("provider_sid")
+        if pn and not t.get("number_sid"):
+            import twilio_sms
+            await asyncio.to_thread(twilio_sms.detach_from_service, pn)   # off our shared pool first
+        phone = re.sub(r"\D", "", ((row.get("answers") or {}).get("rep_phone") or ""))
+        got = await asyncio.to_thread(texting_isv.ensure_number, t, platform_sid=pn,
+                                      area_code=phone[1:4] if len(phone) == 11 else None, save=save)
+    except texting_isv.TwilioRefused as e:
+        logger.warning("texting number for %s refused: %s", bid[:8], e)
+        return False
+    except (texting_isv.TwilioDown, RuntimeError) as e:
+        logger.warning("texting number for %s paused: %s", bid[:8], e)
+        return False
+    now = _now().isoformat()
+    fields = {"account_sid": t["account_sid"], "messaging_service_sid": t["service_sid"],
+              "provider_sid": got["sid"], "updated_at": now}
+    if line:
+        written = await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/sms_numbers?id=eq.{line['id']}", fields)
+    else:
+        written = await asyncio.to_thread(sb_clients.sb_post_as_service, "/sms_numbers", {
+            **fields, "business_id": bid, "phone_number": got["phone_number"], "status": "active",
+            "provider": "twilio", "area_code": re.sub(r"\D", "", got["phone_number"] or "")[1:4] or None,
+            "purchased_at": now})
+    if not written:
+        logger.warning("texting number for %s ready but not recorded; retrying", bid[:8])
+        return False
+    t.update(number_ready=True, number=got["phone_number"])
+    save(t)
+    await _tell_owner(business, "number_ready", number=got["phone_number"])
+    return True
 
 
 def _business(business_id: str) -> Optional[Dict[str, Any]]:
@@ -641,7 +708,16 @@ async def advance(business_id: str) -> Optional[str]:
             return status      # a send is (or just was) running
         return await _send(business, row)
     if status in ("brand_pending", "campaign_pending") and (row.get("twilio") or {}).get("brand_sid"):
-        return await _check(business, row)
+        new = await _check(business, row)
+        if new != "approved":
+            return new
+        try:
+            row = await asyncio.to_thread(registration, business_id) or row
+        except RuntimeError:
+            return new
+        status = new
+    if status == "approved" and not (row.get("twilio") or {}).get("number_ready"):
+        await _give_number(business, row)
     return status
 
 
@@ -723,8 +799,10 @@ async def twilio_status(request: Request):
 async def sweep_tick() -> Dict[str, Any]:
     """Every 15 minutes: each registration on its way, moved along."""
     try:
+        # On its way, or approved with its number not set up yet (step 4).
         rows = await asyncio.to_thread(
-            _read, f"/texting_registrations?status=in.({','.join(IN_FLIGHT)})"
+            _read, f"/texting_registrations?or=(status.in.({','.join(IN_FLIGHT)}),"
+                   f"and(status.eq.approved,twilio->>number_ready.is.null))"
                    f"&select=business_id,status&order=updated_at.asc&limit={SWEEP_LIMIT}")
     except RuntimeError:
         return {"read": False}
