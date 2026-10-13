@@ -58,7 +58,7 @@ API_BASE = "https://kmj-intake-server-production.up.railway.app"
 PAGES = {
     "home": ("Love City Church | Muskegon, Michigan",
              "A loving church in Muskegon, empowered to make a difference in the lives of all people. "
-             "Sundays at 11am at 1084 Allen Ave, and Thursdays at 6pm."),
+             "Sunday service at 11am at 1084 Allen Ave, Muskegon, MI."),
     "visit": ("Plan your visit | Love City Church",
               "Service times, what to expect, and how to find Love City Church at 1084 Allen Ave, Muskegon, MI."),
     "about": ("About us | Love City Church",
@@ -75,7 +75,9 @@ PAGES = {
                "What happens every week at Love City Church in Muskegon, and moments from our church family."),
     "connect": ("Connect | Love City Church",
                 "Fill out a connect card or send a prayer request. We'd love to meet you."),
-    "live": ("Watch live | Love City Church",
+    # /watch, not /live: GET /live is an authenticated API route registered
+    # before the public-site catch-all (live_router.py), so it 401s.
+    "watch": ("Watch live | Love City Church",
              "Join Love City Church online, Sundays at 11am and Thursdays at 6pm."),
 }
 
@@ -137,7 +139,7 @@ def _mark_refs() -> dict:
 def _mark_current(nav: str, page: str) -> str:
     """aria-current on the nav link for the page being built."""
     if page == "home":
-        return nav
+        return nav.replace('<a href="/">Home</a>', '<a href="/" aria-current="page">Home</a>')
     return nav.replace(f'href="/{page}"', f'href="/{page}" aria-current="page"')
 
 

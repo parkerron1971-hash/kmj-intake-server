@@ -15,14 +15,14 @@
       <p class="lead">Tell us a little about yourself, and someone from our team will be in touch.</p>
       <p>Fields marked “required” are the ones we need to reply to you.</p>
     </div>
-    <form class="form" data-church-form="connect-card">
+    <form class="form" data-church-form="connect-card" method="post">
       <div class="row-2">
-        <div class="field"><label for="cc-first">First name <span class="req">required</span></label><input id="cc-first" name="first_name" type="text" autocomplete="given-name" required></div>
-        <div class="field"><label for="cc-last">Last name <span class="req">required</span></label><input id="cc-last" name="last_name" type="text" autocomplete="family-name" required></div>
+        <div class="field"><label for="cc-first">First name <span class="req">required</span></label><input id="cc-first" name="first_name" type="text" autocomplete="given-name" maxlength="90" required></div>
+        <div class="field"><label for="cc-last">Last name <span class="req">required</span></label><input id="cc-last" name="last_name" type="text" autocomplete="family-name" maxlength="90" required></div>
       </div>
       <div class="row-2">
-        <div class="field"><label for="cc-email">Email <span class="req">required</span></label><input id="cc-email" name="email" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="cc-phone">Phone</label><input id="cc-phone" name="phone" type="tel" autocomplete="tel"></div>
+        <div class="field"><label for="cc-email">Email <span class="req">required</span></label><input id="cc-email" name="email" type="email" autocomplete="email" maxlength="200" required></div>
+        <div class="field"><label for="cc-phone">Phone</label><input id="cc-phone" name="phone" type="tel" autocomplete="tel" maxlength="40"></div>
       </div>
       <fieldset class="choices">
         <legend>How many times have you visited? <span class="req">required</span></legend>
@@ -54,9 +54,10 @@
           <option>Something else</option>
         </select>
       </div>
-      <div class="field"><label for="cc-notes">Anything else you’d like us to know?</label><textarea id="cc-notes" name="notes" rows="4"></textarea></div>
+      <div class="field"><label for="cc-notes">Anything else you’d like us to know?</label><textarea id="cc-notes" name="notes" rows="4" maxlength="2500" aria-describedby="cc-notes-hint"></textarea><p class="field-hint" id="cc-notes-hint">Up to 2,500 characters.</p></div>
       <div class="hp" aria-hidden="true"><label for="cc-website">Website</label><input id="cc-website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
-      <button type="submit" class="btn btn-love">Send my connect card</button>
+      <p class="form-fallback" id="cc-fallback" data-form-fallback>This form sends with JavaScript, which is turned off or hasn’t loaded. You can still reach us on <a href="{{FACEBOOK_URL}}">Facebook</a>, or join us for Sunday service at 11am at 1084 Allen Ave.</p>
+      <button type="submit" class="btn btn-love" disabled aria-describedby="cc-fallback">Send my connect card</button>
       <p class="form-note" data-form-note role="status" aria-live="polite"></p>
     </form>
   </div>
@@ -96,19 +97,20 @@
       <p>Our team prays for all the prayer requests we receive on a regular basis.</p>
       <figure class="photo prayer-photo" data-reveal="photo"><img src="{{IMG_PRAY_FOR_YOU}}" alt="A volunteer behind a table with a hand-written sign: Let us pray for you" width="676" height="900" loading="lazy"></figure>
     </div>
-    <form class="form" data-church-form="prayer-request">
-      <div class="field"><label for="pr-request">How can we pray for you? <span class="req">required</span></label><textarea id="pr-request" name="request" rows="6" required></textarea></div>
+    <form class="form" data-church-form="prayer-request" method="post">
+      <div class="field"><label for="pr-request">How can we pray for you? <span class="req">required</span></label><textarea id="pr-request" name="request" rows="6" maxlength="4000" aria-describedby="pr-request-hint" required></textarea><p class="field-hint" id="pr-request-hint">Up to 4,000 characters.</p></div>
       <div class="row-2">
-        <div class="field"><label for="pr-first">First name <span class="req">required</span></label><input id="pr-first" name="first_name" type="text" autocomplete="given-name" required></div>
-        <div class="field"><label for="pr-last">Last name</label><input id="pr-last" name="last_name" type="text" autocomplete="family-name"></div>
+        <div class="field"><label for="pr-first">First name <span class="req">required</span></label><input id="pr-first" name="first_name" type="text" autocomplete="given-name" maxlength="90" required></div>
+        <div class="field"><label for="pr-last">Last name</label><input id="pr-last" name="last_name" type="text" autocomplete="family-name" maxlength="90"></div>
       </div>
       <div class="row-2">
-        <div class="field"><label for="pr-email">Email <span class="req">required</span></label><input id="pr-email" name="email" type="email" autocomplete="email" required></div>
-        <div class="field"><label for="pr-phone">Phone</label><input id="pr-phone" name="phone" type="tel" autocomplete="tel"></div>
+        <div class="field"><label for="pr-email">Email <span class="req">required</span></label><input id="pr-email" name="email" type="email" autocomplete="email" maxlength="200" required></div>
+        <div class="field"><label for="pr-phone">Phone</label><input id="pr-phone" name="phone" type="tel" autocomplete="tel" maxlength="40"></div>
       </div>
       <label class="check"><input type="checkbox" name="follow_up" value="Yes" id="pr-follow"> Please follow up with me</label>
       <div class="hp" aria-hidden="true"><label for="pr-website">Website</label><input id="pr-website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
-      <button type="submit" class="btn btn-love">Send my prayer request</button>
+      <p class="form-fallback" id="pr-fallback" data-form-fallback>This form sends with JavaScript, which is turned off or hasn’t loaded. You can still reach us on <a href="{{FACEBOOK_URL}}">Facebook</a>, or join us for Sunday service at 11am at 1084 Allen Ave.</p>
+      <button type="submit" class="btn btn-love" disabled aria-describedby="pr-fallback">Send my prayer request</button>
       <p class="form-note" data-form-note role="status" aria-live="polite"></p>
     </form>
   </div>

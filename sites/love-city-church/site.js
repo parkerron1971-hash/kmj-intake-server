@@ -11,16 +11,29 @@
   var menu = document.querySelector('[data-menu]');
   var word = document.querySelector('[data-menu-word]');
   each('[data-menu] .menu-links a', function (a, i) { a.style.setProperty('--i', i); });
+  // While the menu is open everything behind it is inert (not focusable,
+  // not clickable, not read), and Tab cycles between the close control and
+  // the menu's links. Closing returns focus to the toggle.
+  var behind = Array.prototype.slice.call(document.querySelectorAll(
+    '.skip, [data-ladder], main, .footer, .masthead .brand, .masthead .quick, .masthead .bar-cta'));
   function setMenu(open) {
     root.classList.toggle('menu-open', open);
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (word) word.textContent = open ? 'Close' : 'Menu';
+    behind.forEach(function (el) { el.inert = open; });
     if (open) { var first = menu.querySelector('a'); if (first) first.focus({ preventScroll: true }); }
+    else toggle.focus({ preventScroll: true });
   }
   if (toggle && menu) {
     toggle.addEventListener('click', function () { setMenu(toggle.getAttribute('aria-expanded') !== 'true'); });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && root.classList.contains('menu-open')) { setMenu(false); toggle.focus(); }
+      if (!root.classList.contains('menu-open')) return;
+      if (e.key === 'Escape') { setMenu(false); return; }
+      if (e.key !== 'Tab') return;
+      var stops = [toggle].concat(Array.prototype.slice.call(menu.querySelectorAll('a[href]')));
+      var at = stops.indexOf(document.activeElement);
+      if (e.shiftKey && at <= 0) { e.preventDefault(); stops[stops.length - 1].focus(); }
+      else if (!e.shiftKey && (at === stops.length - 1 || at === -1)) { e.preventDefault(); stops[0].focus(); }
     });
   }
 
@@ -197,13 +210,15 @@
   if (next && today !== null) {
     try {
       var names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      // Only Sunday names the building: Thursday is "Mid-week Bible study"
+      // and nothing more (Kevin's wording), never tied to an address.
       var gatherings = [
-        { day: 0, start: 11 * 60, length: 150, what: 'Sunday service', at: '11am' },
-        { day: 4, start: 18 * 60, length: 90, what: 'Mid-week Bible study', at: '6pm' }
+        { day: 0, start: 11 * 60, length: 150, what: 'Sunday service', at: '11am', where: ' at 1084 Allen Ave' },
+        { day: 4, start: 18 * 60, length: 90, what: 'Mid-week Bible study', at: '6pm', where: '' }
       ];
       var text = '', best = null;
       gatherings.forEach(function (g) {
-        if (g.day === today && now >= g.start && now < g.start + g.length) text = 'Happening now: ' + g.what + ' at 1084 Allen Ave';
+        if (g.day === today && now >= g.start && now < g.start + g.length) text = 'Happening now: ' + g.what + g.where;
         var wait = ((g.day - today + 7) % 7) * 1440 + g.start - now;
         if (wait <= 0) wait += 7 * 1440;
         if (!best || wait < best.wait) best = { g: g, wait: wait };

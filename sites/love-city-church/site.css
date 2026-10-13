@@ -8,6 +8,31 @@
    Contrast (WCAG AA): ink on paper 16:1; muted on paper 7.2:1; white on
    love 5.9:1; love on paper 5.4:1; paper on ink 16:1; muted-on-ink 10:1. */
 
+/* If Archivo never arrives (blocked, offline, failed), headings fall back
+   to a local font scaled to roughly Archivo's condensed width: Arial Bold
+   measured 1.41-1.45 times wider, hence 68%. Scoped by font-stretch, so
+   only the condensed display type is scaled; reading text falls back at
+   full size. Poster lines may also wrap, so even with no local match a
+   heading never runs off a 360px screen. */
+@font-face {
+  font-family: "Archivo Fallback"; font-stretch: 50% 85%; font-weight: 600 1000; size-adjust: 68%;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Helvetica Neue Bold"), local("HelveticaNeue-Bold"),
+       local("Roboto Bold"), local("Roboto-Bold"), local("Liberation Sans Bold"), local("LiberationSans-Bold"),
+       local("DejaVu Sans Bold"), local("DejaVuSans-Bold");
+}
+@font-face {
+  font-family: "Archivo Fallback"; font-stretch: 86% 200%; font-weight: 600 1000;
+  src: local("Arial Bold"), local("Arial-BoldMT"), local("Helvetica Neue Bold"), local("HelveticaNeue-Bold"),
+       local("Roboto Bold"), local("Roboto-Bold"), local("Liberation Sans Bold"), local("LiberationSans-Bold"),
+       local("DejaVu Sans Bold"), local("DejaVuSans-Bold");
+}
+@font-face {
+  font-family: "Archivo Fallback"; font-stretch: 86% 200%; font-weight: 100 599;
+  src: local("Arial"), local("ArialMT"), local("Helvetica Neue"), local("HelveticaNeue"),
+       local("Roboto"), local("Roboto-Regular"), local("Liberation Sans"), local("LiberationSans-Regular"),
+       local("DejaVu Sans"), local("DejaVuSans");
+}
+
 :root {
   --ink: #1C0B1F;
   --ink-2: #2B1330;
@@ -24,7 +49,7 @@
   --wrap: 1240px;
   --gutter: 20px;
   --space: clamp(64px, 9vw, 136px);
-  --font: "Archivo", "Arial Narrow", Arial, sans-serif;
+  --font: "Archivo", "Archivo Fallback", Arial, sans-serif;
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .11 0 0 0 0 .04 0 0 0 0 .12 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   --grain-light: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
@@ -86,7 +111,7 @@ dl, dd { margin: 0; }
   font-size: calc(100cqi / var(--fit, 6));
 }
 .poster .line { display: block; overflow: hidden; padding-top: 0.04em; }
-.poster .line > span { display: inline-block; white-space: nowrap; }
+.poster .line > span { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
 .tile {
   display: inline-block; position: relative;
   width: var(--w, 2em); height: 0.71em;
@@ -206,7 +231,7 @@ dl, dd { margin: 0; }
 .menu-links a {
   font-stretch: 70%; font-weight: 850; text-transform: uppercase;
   font-size: clamp(2.4rem, 1.5rem + 2.6vw, 3.6rem); line-height: 1.02;
-  text-decoration: none; padding: 2px 0; white-space: nowrap;
+  text-decoration: none; padding: 2px 0; overflow-wrap: anywhere;
 }
 .menu-links a { transition: color .2s ease, transform .3s cubic-bezier(.2, .75, .2, 1); }
 .menu-links a:hover { transform: translateX(10px); }
@@ -250,7 +275,8 @@ dl, dd { margin: 0; }
   font-stretch: 70%; font-weight: 850; text-transform: uppercase; line-height: 0.95;
   font-size: clamp(2.6rem, 1.9rem + 3vw, 4.25rem); color: var(--love); margin: 4px 0 2px;
 }
-.facts .addr { color: var(--ink); white-space: nowrap; }
+.facts .addr { color: var(--ink); overflow-wrap: anywhere; }
+@media (min-width: 900px) { .facts .addr { white-space: nowrap; } }
 .facts dd { color: var(--muted); }
 .facts dd a { color: var(--ink); text-decoration-color: var(--love); text-decoration-thickness: 2px; text-underline-offset: 4px; }
 .join-actions { display: grid; gap: 16px; justify-items: start; }
@@ -682,7 +708,7 @@ dl, dd { margin: 0; }
 /* every pillar sized so "Demonstrate", the longest (6.11em, measured), fits its column */
 .pillar-word {
   display: block; font-stretch: 70%; font-weight: 850; text-transform: uppercase; line-height: 0.9;
-  font-size: min(calc(100cqi / 6.2), 6rem); white-space: nowrap;
+  font-size: min(calc(100cqi / 6.2), 6rem); overflow-wrap: anywhere;
 }
 .pillar-rest { font-stretch: 125%; font-weight: 700; color: var(--on-ink-muted); }
 .vision-note { max-width: 40em; color: var(--on-ink-muted); }
@@ -847,7 +873,8 @@ dl, dd { margin: 0; }
 /* ---------- Events ---------- */
 .week { display: grid; border-top: 3px solid var(--ink); }
 .week li { display: grid; gap: 2px; align-content: start; padding: 14px 0; border-bottom: 1px solid var(--rule); }
-.week li:not(.has) { color: #8C7C8A; }
+.week li:not(.has) { color: var(--muted); }
+.week li:not(.has) .wk-day { font-weight: 500; }
 .wk-day { font-stretch: 125%; font-weight: 750; }
 .wk-time {
   font-stretch: 70%; font-weight: 850; text-transform: uppercase; line-height: 1;
@@ -909,6 +936,11 @@ dl, dd { margin: 0; }
 .choices input, .check input { width: 22px; height: 22px; accent-color: var(--love); flex: none; margin: 0; }
 .hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 .form .btn { justify-self: start; }
+.btn[disabled] { opacity: .55; cursor: not-allowed; }
+.btn[disabled]:hover { background-size: 0% 100%; }
+.form-fallback { margin: 0; padding: 12px 14px; border-left: 4px solid var(--love); background: var(--paper); font-weight: 600; }
+.form-fallback a { color: var(--love-dk); }
+.field-hint { font-size: 0.9rem; color: var(--muted); }
 .form-note { min-height: 1.4em; margin: 0; font-weight: 600; }
 .form-note.ok { color: var(--ink); border-left: 4px solid var(--love); padding-left: 12px; }
 .form-note.err { color: var(--love-dk); }

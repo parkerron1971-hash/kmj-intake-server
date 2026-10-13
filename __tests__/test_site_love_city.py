@@ -135,7 +135,52 @@ def test_forms_post_through_the_one_submission_script(build, pages):
         if "data-church-form" in page:
             assert f"{build.API_BASE}/sites/{build.BUSINESS_ID}/contact-submit" in page, name
             assert page.count("/contact-submit") == 1, name
-        assert 'action="' not in page, name     # nothing posts natively
+
+
+def _forms(page):
+    return re.findall(r"<form\b[^>]*>.*?</form>", page, re.S)
+
+
+def test_without_script_a_form_can_never_put_a_visitors_words_in_a_url(pages):
+    """Review finding 4: a form with no method GETs its fields into the URL
+    when script is off. Each church form is method="post", its submit
+    button is disabled until forms.js enables it, and the disabled button
+    points at a visible note saying how else to reach the church."""
+    forms = _forms(pages["connect"])
+    assert len(forms) == 2
+    for form in forms:
+        opening = re.match(r"<form\b[^>]*>", form).group(0)
+        assert 'method="post"' in opening, opening
+        assert "action=" not in opening, opening
+        button = re.search(r'<button type="submit"[^>]*>', form).group(0)
+        assert " disabled" in button, button
+        fallback_id = re.search(r'aria-describedby="([^"]+)"', button).group(1)
+        fallback = re.search(rf'<p class="form-fallback" id="{fallback_id}" data-form-fallback>(.*?)</p>', form, re.S)
+        assert fallback and "JavaScript" in fallback.group(1), fallback_id
+
+
+def test_every_field_is_limited_and_a_full_card_fits_the_endpoint(pages):
+    """Review finding 7: the endpoint keeps the first 5,000 characters of the
+    message. Every field has a maxlength, every free-text box says its limit
+    out loud, and the longest possible message (every box full, every
+    choice ticked, every question label) stays under 5,000."""
+    forms_js = (SITE + "/forms.js")
+    assert "var MAX_MESSAGE = 5000;" in open(forms_js, encoding="utf-8").read()
+    for form in _forms(pages["connect"]):
+        for tag in re.findall(r'<input\b[^>]*type="(?:text|email|tel)"[^>]*>', form):
+            if 'name="website"' in tag:
+                continue
+            assert re.search(r'maxlength="\d+"', tag), tag
+        worst = len("Prayer request") + 2      # the form's title line
+        for tag in re.findall(r"<textarea\b[^>]*>", form):
+            limit = int(re.search(r'maxlength="(\d+)"', tag).group(1))
+            hint_id = re.search(r'aria-describedby="([^"]+)"', tag).group(1)
+            hint = re.search(rf'id="{hint_id}">([^<]+)<', form).group(1)
+            assert f"{limit:,}" in hint, (hint, limit)
+            worst += limit
+        labels = re.findall(r"<(?:label|legend)\b[^>]*>(.*?)</(?:label|legend)>", form, re.S)
+        worst += sum(len(re.sub(r"<[^>]+>", "", l)) + 3 for l in labels)   # every question and every answer label
+        assert worst < 5000, worst
 
 
 def test_service_times_and_address_are_real_text(pages):
@@ -150,6 +195,84 @@ def test_service_times_and_address_are_real_text(pages):
     assert "Refuel" not in everything
 
 
+class _TextBlocks(html.parser.HTMLParser):
+    """The visible text of every small block: a sentence, a list item, a
+    term or its description, a ticker word. Containers that merely hold
+    several of those (a column, a list) are not one claim."""
+    BLOCKS = {"p", "li", "dt", "dd", "span", "a", "strong", "address", "figcaption",
+              "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "title"}
+
+    def __init__(self):
+        super().__init__()
+        self.open, self.blocks, self.skip = [], [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.skip += 1
+        if tag == "meta" and dict(attrs).get("name") == "description":
+            self.blocks.append(dict(attrs).get("content", ""))
+        if tag in self.BLOCKS:
+            self.open.append([tag, ""])
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style"):
+            self.skip -= 1
+        for i in range(len(self.open) - 1, -1, -1):
+            if self.open[i][0] == tag:
+                self.blocks.append(self.open.pop(i)[1])
+                break
+
+    def handle_data(self, data):
+        if not self.skip:
+            for block in self.open:
+                block[1] += data
+
+
+def test_thursday_is_never_tied_to_the_church_address(pages):
+    """Review finding 3, with Kevin's wording kept: Thursday is "Thursdays
+    6pm, Mid-week Bible study" and no sentence, item or ticker word puts it
+    at 1084 Allen Ave. The address belongs to Sunday (and the pantry)."""
+    for name, page in pages.items():
+        parser = _TextBlocks()
+        parser.feed(page)
+        for text in parser.blocks:
+            assert not ("Thursday" in text and "Allen" in text), f"{name}: {text.strip()[:160]!r}"
+    for name in ("home", "visit", "events"):
+        assert "Mid-week Bible study" in pages[name], name
+    js = open(SITE + "/site.js", encoding="utf-8").read()
+    thursday = next(line for line in js.splitlines() if "day: 4" in line)
+    assert "Allen" not in thursday and "where: ''" in thursday, thursday
+    assert "' at 1084 Allen Ave'" not in js.split("'Happening now: '")[1].split(";")[0]
+
+
+def _contrast(a, b):
+    def lum(hexcol):
+        rgb = [int(hexcol[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_empty_weekday_labels_meet_aa_contrast_on_both_backgrounds():
+    """Review finding 6: the labels of days with nothing on are body-size
+    text, so 4.5:1, on the paper and on the 'today' tint."""
+    css = open(SITE + "/site.css", encoding="utf-8").read()
+    var = lambda n: re.search(rf"--{n}: (#[0-9A-Fa-f]{{6}});", css).group(1)
+    rule = re.search(r"\.week li:not\(\.has\) \{ color: ([^;]+); \}", css).group(1)
+    colour = var(rule[6:-1]) if rule.startswith("var(") else rule
+    for bg in ("paper", "paper-2"):
+        assert _contrast(colour, var(bg)) >= 4.5, (colour, bg, round(_contrast(colour, var(bg)), 2))
+
+
+def test_home_marks_its_own_menu_link_as_the_current_page(pages):
+    """Review finding 10: every page marks its menu link aria-current,
+    Home included."""
+    assert '<a href="/" aria-current="page">Home</a>' in pages["home"]
+    assert pages["visit"].count('aria-current="page"') >= 1
+    assert 'aria-current="page">Home' not in pages["visit"]
+
+
 def test_every_internal_link_lands_on_a_page_the_site_builds(build, pages):
     for name, page in pages.items():
         for href in re.findall(r'href="(/[^"]*)"', page):
@@ -158,6 +281,46 @@ def test_every_internal_link_lands_on_a_page_the_site_builds(build, pages):
             if "#" in href and path:
                 anchor = href.split("#", 1)[1]
                 assert f'id="{anchor}"' in pages[path], f"{name}: {href} has no target"
+
+
+# Both ways a visitor reaches the church: its platform subdomain, and its
+# own domain, which arrives through the Cloudflare worker with the API host
+# in Host and the visitor's hostname in X-Original-Host.
+CHURCH_HOSTS = {
+    "subdomain": {"host": "love-city-church.mysolutionist.app"},
+    "custom-domain": {"host": "kmj-intake-server-production.up.railway.app", "x-original-host": "lovecityc.com"},
+}
+
+
+@pytest.fixture(scope="module")
+def real_app():
+    import kmj_intake_automation
+    return kmj_intake_automation.app
+
+
+@pytest.mark.parametrize("hosts", CHURCH_HOSTS.values(), ids=CHURCH_HOSTS.keys())
+def test_every_page_path_reaches_the_church_site_through_the_real_routers(build, real_app, hosts, monkeypatch):
+    """Review finding 1: the app registers ~100 routers before the public-site
+    catch-all, and the authenticated GET /live answered 401 for the church's
+    /live page. This sends every page path through the real app, routers in
+    their real order, and requires the church-site renderer to answer. Only
+    the renderer at the very end is stubbed (it reads the database)."""
+    from fastapi.responses import HTMLResponse
+    from fastapi.testclient import TestClient
+    import public_site
+
+    async def site(name, path="/"):
+        return HTMLResponse(f"church-site {path}")
+    monkeypatch.setattr(public_site, "_serve_site_by_slug", site)
+    monkeypatch.setattr(public_site, "_serve_site_by_custom_domain", site)
+    monkeypatch.setattr(public_site, "_check_rate", lambda *a, **k: True)
+
+    client = TestClient(real_app)
+    for page in build.PAGES:
+        path = "/" if page == "home" else f"/{page}"
+        r = client.get(path, headers=hosts)
+        assert (r.status_code, r.text) == (200, f"church-site {path}"), \
+            f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
 
 
 def test_the_placeholder_business_id_can_never_install(build, monkeypatch):
@@ -178,3 +341,156 @@ def test_the_placeholder_business_id_can_never_install(build, monkeypatch):
          "html_content": "<html>someone else's</html>", "site_config": {}}])
     assert site_sync.sync_site(mod) == "wrong-business"
     assert patches == []
+
+
+# ---------------------------------------------------------------------------
+# In a real browser (CI installs playwright's chromium before pytest). The
+# production render is served at a made-up origin; every other request
+# (Google Fonts, images, embeds) is refused, which is also how the
+# font-failure check gets its failure. forms.js's fetch is replaced by a
+# stub per test, so nothing is ever sent anywhere.
+# ---------------------------------------------------------------------------
+ORIGIN = "https://church.test/"
+_NEEDS_EMAIL = re.compile(r"<([a-z][a-z0-9]*)\b[^>]*\bdata-needs-email\b[^>]*>.*?</\1>", re.S | re.I)
+FETCH_STUB = """
+window.__sent = [];
+window.__respond = {status: 200, body: {ok: true}};
+window.fetch = function (url, opts) {
+  window.__sent.push({url: url, body: JSON.parse(opts.body)});
+  var r = window.__respond;
+  if (r === 'network') return Promise.reject(new TypeError('Failed to fetch'));
+  return Promise.resolve(new Response(JSON.stringify(r.body), {status: r.status, headers: {'Content-Type': 'application/json'}}));
+};
+"""
+
+
+@pytest.fixture(scope="module")
+def browser():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    try:
+        pw = sync_api.sync_playwright().start()
+        b = pw.chromium.launch()
+    except Exception as e:  # no chromium on this machine
+        pytest.skip(f"chromium is not available: {e}")
+    yield b
+    b.close()
+    pw.stop()
+
+
+def _context(browser, pages, **kw):
+    # The platform drops data-needs-email blocks when no sender is verified.
+    served = {k: _NEEDS_EMAIL.sub("", v) for k, v in pages.items()}
+    ctx = browser.new_context(**kw)
+
+    def route(r):
+        url = r.request.url
+        if not url.startswith(ORIGIN):
+            return r.abort()
+        path = url[len(ORIGIN):].split("#")[0].split("?")[0].strip("/") or "home"
+        if path in served:
+            return r.fulfill(status=200, content_type="text/html; charset=utf-8", body=served[path])
+        return r.fulfill(status=404, body="")
+    ctx.route("**/*", route)
+    return ctx
+
+
+def _send_prayer(page, response):
+    page.evaluate("r => { window.__respond = r; }", response)
+    page.fill("#pr-request", "Please pray for my mother's surgery on Friday.")
+    page.fill("#pr-first", "Ann")
+    page.fill("#pr-email", "ann@example.org")
+    page.click('[data-church-form="prayer-request"] button[type="submit"]')
+    note = page.locator('[data-church-form="prayer-request"] [data-form-note]')
+    page.wait_for_function("el => el.textContent && el.textContent !== 'Sending…'", arg=note.element_handle())
+    return note
+
+
+def test_a_form_only_says_thank_you_when_the_endpoint_says_ok(browser, pages):
+    """Review finding 2: HTTP 200 can carry {ok: false}. Only {ok: true}
+    clears the form and thanks the visitor; anything else keeps every word
+    they wrote and says it didn't go."""
+    ctx = _context(browser, pages)
+    ctx.add_init_script(FETCH_STUB)
+    page = ctx.new_page()
+    page.goto(ORIGIN + "connect")
+    for failure in ({"status": 200, "body": {"ok": False, "error": "Email service error."}},
+                    {"status": 500, "body": {}}, {"status": 429, "body": {}}, "network"):
+        note = _send_prayer(page, failure)
+        assert "err" in note.get_attribute("class"), failure
+        assert "still here" in note.text_content(), failure
+        assert page.input_value("#pr-request").startswith("Please pray"), failure
+        assert page.input_value("#pr-email") == "ann@example.org", failure
+    note = _send_prayer(page, {"status": 200, "body": {"ok": True}})
+    assert "ok" in note.get_attribute("class") and "praying with you" in note.text_content()
+    assert page.input_value("#pr-request") == ""
+    sent = page.evaluate("window.__sent")
+    assert sent[-1]["body"]["form"] == "prayer-request"
+    assert "Please pray for my mother" in sent[-1]["body"]["message"]
+    ctx.close()
+
+
+def test_with_script_off_nothing_is_sent_or_put_in_the_url(browser, pages):
+    """Review finding 4: with JavaScript off the browser would submit the form
+    natively. The submit buttons are disabled, so it can't, and the visitor
+    is told how else to reach the church."""
+    ctx = _context(browser, pages, java_script_enabled=False)
+    page = ctx.new_page()
+    requests = []
+    page.on("request", lambda req: requests.append((req.method, req.url)))
+    page.goto(ORIGIN + "connect")
+    for form in ("connect-card", "prayer-request"):
+        assert page.locator(f'[data-church-form="{form}"] button[type="submit"]').is_disabled()
+        assert page.locator(f'[data-church-form="{form}"] [data-form-fallback]').is_visible()
+    page.fill("#pr-request", "A private prayer")
+    page.fill("#pr-first", "Review")
+    page.fill("#pr-email", "review@example.org")
+    page.press("#pr-first", "Enter")       # implicit submission
+    page.wait_for_timeout(400)
+    assert page.url == ORIGIN + "connect"
+    # Only the page and its (refused) fonts and images were ever asked for:
+    # no POST, and no URL carrying anything the visitor typed.
+    assert all(method == "GET" for method, _ in requests), requests
+    assert not [u for _, u in requests if re.search(r"prayer|Review|example\.org|first_name|request=", u)], requests
+    assert [u for _, u in requests if u.startswith(ORIGIN)] == [ORIGIN + "connect"], requests
+    ctx.close()
+
+
+def test_the_open_menu_holds_keyboard_focus_and_gives_it_back(browser, pages):
+    """Review finding 5: the page behind the open menu is inert, Tab cycles
+    between the close control and the menu's links, and closing returns
+    focus to the toggle."""
+    ctx = _context(browser, pages, viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+    page = ctx.new_page()
+    page.goto(ORIGIN + "connect")
+    page.click("[data-menu-toggle]")
+    assert page.evaluate("document.querySelector('main').inert") is True
+    inside = "el => !!el.closest('[data-menu], [data-menu-toggle]')"
+    for _ in range(14):
+        page.keyboard.press("Tab")
+        assert page.evaluate(f"({inside})(document.activeElement)"), page.evaluate("document.activeElement.outerHTML")
+    page.focus("[data-menu-toggle]")
+    page.keyboard.press("Shift+Tab")
+    assert page.evaluate("document.activeElement.textContent") == "Connect"   # the last menu link
+    page.keyboard.press("Escape")
+    assert page.evaluate("document.activeElement.hasAttribute('data-menu-toggle')")
+    assert page.evaluate("document.querySelector('main').inert") is False
+    ctx.close()
+
+
+def test_when_the_font_fails_nothing_runs_off_a_360px_screen(browser, pages):
+    """Review finding 8: Archivo is refused here (every outside request is),
+    so headings fall back to a local font. No page may scroll sideways, and
+    no poster line may clip its words, at 360px wide."""
+    ctx = _context(browser, pages, viewport={"width": 360, "height": 740})
+    page = ctx.new_page()
+    for name in pages:
+        page.goto(ORIGIN + ("" if name == "home" else name))
+        page.wait_for_timeout(250)
+        # the font really failed: no Archivo face loaded on this page
+        assert page.evaluate("[...document.fonts].some(f => f.family.replace(/\"/g, '') === 'Archivo' && f.status === 'loaded')") is False
+        sizes = page.evaluate("[document.documentElement.scrollWidth, document.documentElement.clientWidth]")
+        assert sizes[0] <= sizes[1], f"{name}: page is {sizes[0]}px wide on a {sizes[1]}px screen"
+        clipped = page.evaluate("""[...document.querySelectorAll('.poster .line')]
+            .filter(l => l.scrollWidth > l.clientWidth + 1).map(l => l.textContent.trim())""")
+        assert clipped == [], f"{name}: clipped {clipped}"
+    ctx.close()
