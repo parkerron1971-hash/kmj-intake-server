@@ -24,9 +24,75 @@
     });
   }
 
+  // ---- The hero: its letters arrive one by one (each wrapped in a span the
+  // CSS staggers), and its tiles wipe through their photos ----
+  each('[data-split]', function (el) {
+    if (!still) {
+      var n = 0;
+      Array.prototype.slice.call(el.childNodes).forEach(function (node) {
+        if (node.nodeType !== 3) return;
+        var frag = document.createDocumentFragment();
+        node.textContent.split('').forEach(function (ch) {
+          if (ch === ' ') { frag.appendChild(document.createTextNode(' ')); return; }
+          var s = document.createElement('span');
+          s.className = 'ch'; s.textContent = ch; s.style.setProperty('--c', n++);
+          frag.appendChild(s);
+        });
+        el.replaceChild(frag, node);
+      });
+    }
+    el.classList.add('is-split');
+  });
+  each('[data-live-tile]', function (tile, t) {
+    var imgs = tile.querySelectorAll('img');
+    if (still || imgs.length < 2) return;
+    var at = 0;
+    imgs[0].classList.add('is-on');
+    window.setTimeout(function () {
+      window.setInterval(function () {
+        var next = (at + 1) % imgs.length;
+        Array.prototype.forEach.call(imgs, function (im) { im.classList.remove('was-on'); });
+        imgs[at].classList.remove('is-on'); imgs[at].classList.add('was-on');
+        imgs[next].classList.add('is-on');
+        at = next;
+      }, 3400);
+    }, 1800 + t * 1100);
+  });
+
+  // ---- Home's pinned scene: the page holds still while the scroll zooms
+  // the photo wall out from the prayer photo, slides the line across, and
+  // the lens lights each word as it passes ----
+  var scene = still ? null : document.querySelector('[data-scene]');
+  var sc = null;
+  if (scene) {
+    scene.classList.add('scene-live');
+    sc = {
+      wall: scene.querySelector('[data-wall]'), line: scene.querySelector('[data-line]'),
+      lens: scene.querySelector('[data-lens]'), lit: scene.querySelector('[data-lit]'),
+      shade: scene.querySelector('[data-shade]'), end: scene.querySelector('[data-scene-end]')
+    };
+  }
+  var clamp = function (v) { return v < 0 ? 0 : v > 1 ? 1 : v; };
+  var ease = function (v) { return 1 - Math.pow(1 - v, 3); };
+  function sceneFrame(vh) {
+    var r = scene.getBoundingClientRect(), vw = root.clientWidth;
+    var p = clamp(-r.top / Math.max(1, r.height - vh));
+    sc.wall.style.transform = 'scale(' + (3.05 - 2.05 * ease(clamp(p / 0.86))).toFixed(4) + ')';
+    var tw = sc.line.scrollWidth, tp = clamp((p - 0.06) / 0.72);
+    var x = vw - tp * (vw + tw);
+    sc.line.style.transform = 'translate3d(' + x.toFixed(1) + 'px,-50%,0)';
+    var lensLeft = sc.lens.getBoundingClientRect().left;
+    sc.lit.style.transform = 'translate3d(' + (x - lensLeft).toFixed(1) + 'px,-50%,0)';
+    sc.lens.style.opacity = (p > 0.03 && p < 0.8) ? 1 : 0;
+    sc.shade.style.opacity = (0.2 + 0.42 * clamp(p / 0.25) - 0.22 * clamp((p - 0.78) / 0.15)).toFixed(3);
+    sc.end.style.opacity = clamp((p - 0.8) / 0.12).toFixed(3);
+    sc.end.style.transform = 'translateY(' + (24 * (1 - clamp((p - 0.8) / 0.12))).toFixed(1) + 'px)';
+  }
+
   // ---- On scroll: the masthead tucks away going down and returns going
   // up; the C.I.T.Y. L.O.V.E. ladder lights a letter per eighth of the
   // page; photos marked data-drift move a little slower than the page ----
+  var hero = still ? null : document.querySelector('[data-hero]');
   var head = document.querySelector('[data-masthead]');
   var ladder = Array.prototype.slice.call(document.querySelectorAll('[data-ladder] span'));
   var drifters = still ? [] : Array.prototype.slice.call(document.querySelectorAll('[data-drift]'));
@@ -50,6 +116,14 @@
       var k = parseFloat(el.getAttribute('data-drift')) || 0.06;
       el.style.transform = 'translate3d(0,' + ((r.top + r.height / 2 - vh / 2) * -k).toFixed(1) + 'px,0)';
     });
+    if (hero) {
+      var hr = hero.getBoundingClientRect();
+      if (hr.bottom > -50) hero.style.setProperty('--hp', clamp(-hr.top / Math.max(1, hr.height)).toFixed(3));
+    }
+    if (sc) {
+      var sr = scene.getBoundingClientRect();
+      if (sr.bottom > -50 && sr.top < vh + 50) sceneFrame(vh);
+    }
     ticking = false;
   }
   window.addEventListener('scroll', function () {
