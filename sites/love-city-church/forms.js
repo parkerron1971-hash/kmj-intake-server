@@ -29,15 +29,23 @@
     return out;
   }
 
+  function textOf(node) {
+    // A label's words without its "required" marker.
+    var copy = node.cloneNode(true);
+    Array.prototype.forEach.call(copy.querySelectorAll('.req, input'), function (n) { n.remove(); });
+    return copy.textContent.replace(/\s+/g, ' ').trim();
+  }
+
   function question(form, name) {
     // A field's question as the visitor saw it: its group's legend, else its label.
     var el = form.elements[name];
     if (el && !el.tagName) el = el[0];
-    var group = el && el.closest('fieldset');
+    if (!el) return name;
+    var group = el.closest('fieldset');
     var legend = group && group.querySelector('legend');
-    if (legend) return legend.textContent.trim();
-    var label = el && el.id && form.querySelector('label[for="' + el.id + '"]');
-    return label ? label.textContent.trim() : name;
+    if (legend) return textOf(legend);
+    var label = (el.id && form.querySelector('label[for="' + el.id + '"]')) || el.closest('label');
+    return label ? textOf(label) : name;
   }
 
   function toPayload(kind, form, v) {

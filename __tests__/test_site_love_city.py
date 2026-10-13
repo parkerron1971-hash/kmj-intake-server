@@ -95,9 +95,10 @@ class _Audit(html.parser.HTMLParser):
     def __init__(self):
         super().__init__()
         self.imgs_without_alt = []
-        self.fields = []           # (tag, id, name, aria-label)
+        self.fields = []           # (tag, id, name, labelled inline or by aria-label)
         self.label_for = set()
         self.iframes_without_title = []
+        self.in_label = 0
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -105,10 +106,16 @@ class _Audit(html.parser.HTMLParser):
             self.imgs_without_alt.append(a.get("src", "")[:60])
         if tag == "iframe" and not a.get("title"):
             self.iframes_without_title.append(a.get("src"))
-        if tag == "label" and a.get("for"):
-            self.label_for.add(a["for"])
+        if tag == "label":
+            self.in_label += 1
+            if a.get("for"):
+                self.label_for.add(a["for"])
         if tag in ("input", "select", "textarea") and a.get("type") not in ("hidden", "submit"):
-            self.fields.append((tag, a.get("id"), a.get("name"), a.get("aria-label")))
+            self.fields.append((tag, a.get("id"), a.get("name"), bool(a.get("aria-label")) or self.in_label > 0))
+
+    def handle_endtag(self, tag):
+        if tag == "label" and self.in_label:
+            self.in_label -= 1
 
 
 def test_images_have_alt_text_frames_have_titles_and_fields_have_labels(pages):
@@ -117,10 +124,10 @@ def test_images_have_alt_text_frames_have_titles_and_fields_have_labels(pages):
         audit.feed(page)
         assert audit.imgs_without_alt == [], name
         assert audit.iframes_without_title == [], name
-        for tag, fid, fname, aria in audit.fields:
+        for tag, fid, fname, labelled in audit.fields:
             if fname == "website":      # the hidden field only bots fill in
                 continue
-            assert aria or (fid and fid in audit.label_for), f"{name}: {tag} {fname} has no label"
+            assert labelled or (fid and fid in audit.label_for), f"{name}: {tag} {fname} has no label"
 
 
 def test_forms_post_through_the_one_submission_script(build, pages):
@@ -136,7 +143,21 @@ def test_service_times_and_address_are_real_text(pages):
         for text in ("Sundays", "11am", "Thursdays", "6pm", "1084 Allen Ave", "Muskegon, MI 49442"):
             assert text in page, f"{name}: {text}"
     assert "We love." in pages["home"] and "Love City Church" in pages["home"]
-    assert "Wednesday" not in "".join(pages.values())       # Kevin: midweek is Thursday 6pm
+    # Kevin: the midweek service is Thursday 6pm. The old site's Wednesday
+    # time (and its "Refuel" name) must not come back.
+    everything = "".join(pages.values())
+    assert not re.search(r"Wednesdays?\W{0,3}(at\W)?\d", everything)
+    assert "Refuel" not in everything
+
+
+def test_every_internal_link_lands_on_a_page_the_site_builds(build, pages):
+    for name, page in pages.items():
+        for href in re.findall(r'href="(/[^"]*)"', page):
+            path = href.split("#")[0].split("?")[0].strip("/")
+            assert path == "" or path in build.PAGES, f"{name}: {href}"
+            if "#" in href and path:
+                anchor = href.split("#", 1)[1]
+                assert f'id="{anchor}"' in pages[path], f"{name}: {href} has no target"
 
 
 def test_the_placeholder_business_id_can_never_install(build, monkeypatch):

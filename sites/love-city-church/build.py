@@ -57,6 +57,22 @@ PAGES = {
              "Sundays at 11am at 1084 Allen Ave, and Thursdays at 6pm."),
     "visit": ("Plan your visit | Love City Church",
               "Service times, what to expect, and how to find Love City Church at 1084 Allen Ave, Muskegon, MI."),
+    "about": ("About us | Love City Church",
+              "Our vision, the eight C.I.T.Y. L.O.V.E. culture keys, and our senior leaders, Pastor Kevin McCloud Jr. and Lady Jessica McCloud."),
+    "beliefs": ("What we believe | Love City Church",
+                "The core beliefs of Love City Church, rooted in the foundational truths of the Bible."),
+    "sermons": ("Sermons | Love City Church",
+                "Watch the latest message and every sermon series from the Love City Experience."),
+    "give": ("Give | Love City Church",
+             "Give online to tithes, offering, the building fund, youth ministry, and love and care."),
+    "ministries": ("Ministries | Love City Church",
+                   "Love Works Food Pantry, youth, Sisters in the City, pastoral care, Next Step, Leaderschool, and ways to serve."),
+    "events": ("Events | Love City Church",
+               "What happens every week at Love City Church in Muskegon, and moments from our church family."),
+    "connect": ("Connect | Love City Church",
+                "Fill out a connect card or send a prayer request. We'd love to meet you."),
+    "live": ("Watch live | Love City Church",
+             "Join Love City Church online, Sundays at 11am and Thursdays at 6pm."),
 }
 
 def _assets() -> dict:
@@ -73,6 +89,7 @@ LINKS = {
     "STORE_URL": "https://lovecity.printify.me/",
     "SUBSPLASH_LATEST": "https://subsplash.com/u/-7MJWGR/media/embed/d/*",
     "SUBSPLASH_GIVE": "https://subsplash.com/u/-7MJWGR/give?embed=true",
+    "SUBSPLASH_GIVE_PAGE": "https://subsplash.com/u/cityofloveministries/give",
     "SERMON_LIBRARY": "https://subsplash.com/u/cityofloveministries/media",
 }
 
