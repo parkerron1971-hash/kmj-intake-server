@@ -67,6 +67,8 @@
   if (scene) {
     scene.classList.add('scene-live');
     sc = {
+      pin: scene.querySelector('.scene-pin'), portal: scene.querySelector('[data-portal]'),
+      mark: scene.querySelector('[data-portal-mark]'),
       wall: scene.querySelector('[data-wall]'), line: scene.querySelector('[data-line]'),
       lens: scene.querySelector('[data-lens]'), lit: scene.querySelector('[data-lit]'),
       shade: scene.querySelector('[data-shade]'), end: scene.querySelector('[data-scene-end]')
@@ -77,16 +79,25 @@
   function sceneFrame(vh) {
     var r = scene.getBoundingClientRect(), vw = root.clientWidth;
     var p = clamp(-r.top / Math.max(1, r.height - vh));
-    sc.wall.style.transform = 'scale(' + (3.05 - 2.05 * ease(clamp(p / 0.86))).toFixed(4) + ')';
-    var tw = sc.line.scrollWidth, tp = clamp((p - 0.06) / 0.72);
+    // 1. The heart opens (p 0 to .22): the mark grows from a third of the
+    // screen until its silhouette holds the whole viewport, slowly at first
+    // and then rushing open; the drawn mark fades as it passes the edges.
+    var o = clamp(p / 0.22), small = Math.min(vw, vh) * (vw < 700 ? 0.66 : 0.46), big = 1.3 * (vw + vh);
+    sc.pin.style.setProperty('--ms', (small + (big - small) * o * o * o).toFixed(1) + 'px');
+    sc.portal.classList.toggle('is-open', o >= 1);
+    sc.mark.style.opacity = (1 - clamp((o - 0.55) / 0.4)).toFixed(3);
+    // 2. The wall pulls back from the church family to all nine photos.
+    sc.wall.style.transform = 'scale(' + (3.05 - 2.05 * ease(clamp((p - 0.2) / 0.7))).toFixed(4) + ')';
+    // 3. The line crosses, lit in the lens; then "This is who we are."
+    var tw = sc.line.scrollWidth, tp = clamp((p - 0.26) / 0.62);
     var x = vw - tp * (vw + tw);
     sc.line.style.transform = 'translate3d(' + x.toFixed(1) + 'px,-50%,0)';
     var lensLeft = sc.lens.getBoundingClientRect().left;
     sc.lit.style.transform = 'translate3d(' + (x - lensLeft).toFixed(1) + 'px,-50%,0)';
-    sc.lens.style.opacity = (p > 0.03 && p < 0.8) ? 1 : 0;
-    sc.shade.style.opacity = (0.2 + 0.42 * clamp(p / 0.25) - 0.22 * clamp((p - 0.78) / 0.15)).toFixed(3);
-    sc.end.style.opacity = clamp((p - 0.8) / 0.12).toFixed(3);
-    sc.end.style.transform = 'translateY(' + (24 * (1 - clamp((p - 0.8) / 0.12))).toFixed(1) + 'px)';
+    sc.lens.style.opacity = (p > 0.27 && p < 0.86) ? 1 : 0;
+    sc.shade.style.opacity = (0.08 + 0.5 * clamp((p - 0.18) / 0.12) - 0.22 * clamp((p - 0.86) / 0.1)).toFixed(3);
+    sc.end.style.opacity = clamp((p - 0.88) / 0.09).toFixed(3);
+    sc.end.style.transform = 'translateY(' + (24 * (1 - clamp((p - 0.88) / 0.09))).toFixed(1) + 'px)';
   }
 
   // ---- On scroll: the masthead tucks away going down and returns going

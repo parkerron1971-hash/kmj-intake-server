@@ -30,7 +30,8 @@ Build-time tokens (filled here):
                            own, from its Facebook page, in the site's plum
                            duotone.
   {{MARK}} {{MARK_MASK}}   the church's heart mark (mark.svg), inline or as a
-                           CSS mask
+                           CSS mask; {{MARK_SOLID_MASK}} its filled
+                           silhouette (mark-solid.svg)
   {{API_BASE}} {{BUSINESS_ID}} and the outside links in LINKS
 
 Scripts: site.js (the phone menu) goes on every page; forms.js (the one
@@ -121,11 +122,16 @@ def _mark_refs() -> dict:
     heart with its side towers, and the centre tower, as two paths.
     {{MARK}} is the inline SVG (coloured and animated by the CSS);
     {{MARK_MASK}} is the same shape as a CSS mask, for small repeats."""
+    def as_mask(svg: str) -> str:
+        viewbox = re.search(r'viewBox="([^"]+)"', svg).group(1)
+        d = "".join(re.findall(r' d="([^"]+)"', svg))
+        mask = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}"><path d="{d}"/></svg>'
+        return 'url("data:image/svg+xml,' + quote(mask, safe=" =:/") + '")'
+
     svg = _read("mark.svg").strip()
-    viewbox = re.search(r'viewBox="([^"]+)"', svg).group(1)
-    d = "".join(re.findall(r' d="([^"]+)"', svg))
-    mask = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}"><path d="{d}"/></svg>'
-    return {"MARK": svg, "MARK_MASK": 'url("data:image/svg+xml,' + quote(mask, safe=" =:/") + '")'}
+    # mark-solid.svg: the same heart's silhouette, filled, for the
+    # heart-shaped window that opens Home's photo-wall scene
+    return {"MARK": svg, "MARK_MASK": as_mask(svg), "MARK_SOLID_MASK": as_mask(_read("mark-solid.svg"))}
 
 
 def _mark_current(nav: str, page: str) -> str:
