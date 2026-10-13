@@ -388,3 +388,36 @@ def test_the_served_page_carries_the_studio_edit_listener(monkeypatch):
     # idempotent across a second serve of the same html
     assert out.count("__solutionistEditModeReady = true") == 1
     assert public_site._apply_manual_source(out, "biz-1", {}).count("__solutionistEditModeReady = true") == 1
+
+
+def test_adoption_keeps_all_ten_custom_pages_in_site_order():
+    ids = ["home", "visit", "about", "beliefs", "sermons", "give",
+           "ministries", "events", "connect", "watch-live"]
+    row = {"html_content": "<h1>Home</h1>", "site_config": {
+        "html_source": "manual", "site_pages": ids,
+        "generated_pages": {pid: f"<h1>{pid}</h1>" for pid in reversed(ids[1:])}}}
+    pages = site_adopt.pages_of(row)
+    assert list(pages) == ids
+    prompt = site_adopt.build_user_prompt({"name": "Church"}, row, pages)
+    for pid in ids[1:]:
+        assert "/" + pid in prompt
+
+
+def test_manual_adoption_matches_servable_page_order_and_validation():
+    from site_page_helpers import secondary_pages
+    cfg = {"html_source": "manual", "site_pages": ["home", "sermons"], "generated_pages": {
+        "visit": "visit", "sermons": "sermons", "connect": "connect", "../bad": "bad",
+        "team": "reserved", "empty": " ", "invalid": None}}
+    row = {"html_content": "home", "site_config": cfg}
+    assert site_adopt.pages_of(row) == {"home": "home", **secondary_pages(cfg)}
+    assert list(site_adopt.pages_of(row)) == ["home", "sermons", "visit", "connect"]
+
+
+def test_adoption_prompt_has_a_total_budget_and_represents_every_page():
+    pages = {"home": "<p>" + "Home " * 3000 + "</p>"}
+    pages.update({f"page-{n}": "<p>" + f"Page {n} " * 3000 + "</p>" for n in range(19)})
+    prompt = site_adopt.build_user_prompt({"name": "Church"}, _row(), pages)
+    assert len(prompt) <= site_adopt.ADOPT_PROMPT_MAX_CHARS
+    for pid in pages:
+        heading = "/" if pid == "home" else "/" + pid
+        assert f"===== PAGE {heading} =====" in prompt

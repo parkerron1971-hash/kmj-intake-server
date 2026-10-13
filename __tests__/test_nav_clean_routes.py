@@ -116,3 +116,32 @@ def test_preview_rewrite_leaves_unrelated_links_alone():
     html = _NAV_HTML + '<a href="/some-other-thing">Other</a>'
     out = public_site._rewrite_nav_for_preview(html, "acme")
     assert 'href="/some-other-thing"' in out
+
+
+def test_custom_manual_preview_links_need_no_composer_class_and_keep_suffixes():
+    cfg = {"html_source": "manual", "generated_pages": {"visit": "page", "give": "page", "events": "page"}}
+    html = ('''<a href="/">Home</a><a href='/visit/?time=10#service'>Visit</a>'''
+            '<a href="/give">Give</a><a href="/events">Events</a>'
+            '<a href="/book">Book</a><a href="/unknown">Unknown</a>')
+    out = public_site._rewrite_nav_for_preview(html, "church", cfg)
+    assert 'href="/public/site/church"' in out
+    assert "href='/public/site/church/visit?time=10#service'" in out
+    assert 'href="/public/site/church/give"' in out
+    assert 'href="/public/site/church/events"' in out
+    assert 'href="https://church.mysolutionist.app/book"' in out
+    assert 'href="/unknown"' in out
+
+
+def test_composed_preview_with_empty_config_keeps_default_nav_inside_frame():
+    out = public_site._rewrite_nav_for_preview(_NAV_HTML, "acme", {})
+    for pid in ("about", "services", "contact"):
+        assert f'href="/public/site/acme/{pid}"' in out
+
+
+def test_composed_preview_ignores_extra_stored_keys_but_keeps_offer_path():
+    cfg = {"html_source": "module-composer", "generated_pages": {"faq": "stale", "offer": "offer"},
+           "offer_page": {"path": "/club"}}
+    html = _NAV_HTML + '<a href="/faq">FAQ</a><a href="/club">Club</a>'
+    out = public_site._rewrite_nav_for_preview(html, "acme", cfg)
+    assert 'href="/faq"' in out and 'href="/public/site/acme/faq"' not in out
+    assert 'href="/public/site/acme/club"' in out

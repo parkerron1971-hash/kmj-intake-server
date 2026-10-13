@@ -38,12 +38,15 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from site_page_helpers import secondary_pages
+
 logger = logging.getLogger("site_check")
 
 WIDTHS: Tuple[int, ...] = (390, 1440)
 PAGE_PATHS: Tuple[str, ...] = ("/", "/about", "/services", "/contact")
 PLATFORM_DOMAIN = "mysolutionist.app"
 MAX_FINDINGS = 12
+DEPLOY_PAGE_LIMIT = 4  # bound automatic browser/vision cost; manual checks see every page
 
 # Elements worth measuring against each other. Layout wrappers are left
 # out on purpose: a section legitimately contains its children, and the
@@ -149,6 +152,8 @@ def site_pages(business_id: str) -> Tuple[Optional[Dict[str, Any]], List[str]]:
     cfg = row.get("site_config") if isinstance(row.get("site_config"), dict) else {}
     custom = str(cfg.get("custom_domain") or "").strip().lower()
     origin = f"https://{custom}" if custom else f"https://{row.get('slug')}.{PLATFORM_DOMAIN}"
+    if cfg.get("html_source") == "manual":
+        return row, [origin + "/"] + [origin + "/" + pid for pid in secondary_pages(cfg)]
     pages = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
     urls = [origin + "/"]
     for p in PAGE_PATHS[1:]:
@@ -387,6 +392,12 @@ def run(business_id: str, *, reason: str = "manual", vision: bool = True,
             report["error"] = "disabled"
             return report
         row, urls = site_pages(business_id)
+        cfg = (row or {}).get("site_config") or {}
+        if (reason == "deploy" and isinstance(cfg, dict)
+                and cfg.get("html_source") == "manual" and len(urls) > DEPLOY_PAGE_LIMIT):
+            report["pages_available"] = len(urls)
+            report["page_limit"] = DEPLOY_PAGE_LIMIT
+            urls = urls[:DEPLOY_PAGE_LIMIT]  # home is always first
         if not urls:
             report["summary"] = "There is no published site to check yet."
             report["error"] = "no_site"
@@ -432,6 +443,9 @@ def run(business_id: str, *, reason: str = "manual", vision: bool = True,
                              f"{n} thing{'s' if n != 1 else ''} to look at"
                              + (f", {high} that matter{'s' if high == 1 else ''}" if high else "")
                              + f", across {len(pages)} page{'s' if len(pages) != 1 else ''}.")
+        if report.get("page_limit"):
+            report["summary"] += (f" Deploy check limited to {len(pages)} of "
+                                  f"{report['pages_available']} pages.")
         report["ok"] = True
         report["seconds"] = round(time.time() - started, 1)
         _persist(row, report)

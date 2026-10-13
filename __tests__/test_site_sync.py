@@ -19,6 +19,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import site_sync  # noqa: E402
+from site_page_helpers import RESERVED_PAGE_IDS  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +89,10 @@ def test_first_install_keeps_the_composer_page_set_as_a_backup(monkeypatch):
 def test_an_unchanged_deploy_writes_nothing(monkeypatch):
     digest = site_sync.content_hash(_mod().render_pages())
     db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "html_content": "x",
-                              "site_config": {"html_source": "manual", "manual_hash": digest}}])
+                              "site_config": {"html_source": "manual", "manual_hash": digest,
+                                              "site_pages": list(_mod().render_pages()),
+                                              "generated_pages": {p: h for p, h in _mod().render_pages().items()
+                                                                  if p != "home"}}}])
     assert site_sync.sync_site(_mod()) == "current"
     assert db.patches == []
 
@@ -147,3 +151,166 @@ def test_the_real_kmj_source_is_discovered_and_renders():
     assert set(pages) == {"home", "about", "services", "contact"}
     assert "{{BUSINESS_EMAIL}}" in pages["contact"]
     assert len(site_sync.content_hash(pages)) == 16
+
+
+CHURCH_IDS = ["home", "visit", "about", "beliefs", "sermons", "give",
+              "ministries", "events", "connect", "watch-live"]
+
+
+def test_ten_page_site_installs_every_page_home_first_and_is_idempotent(monkeypatch):
+    # Home deliberately arrives last; secondary order is the build's order.
+    pages = {pid: f"<html>{pid}</html>" for pid in CHURCH_IDS[1:] + ["home"]}
+    row = {"id": "row-1", "business_id": "biz-1", "site_config": {}}
+    db = _wire(monkeypatch, [row])
+    assert site_sync.sync_site(_mod(pages)) == "installed"
+    body = db.patches[0][1]
+    cfg = body["site_config"]
+    assert body["html_content"] == pages["home"]
+    assert cfg["site_pages"] == CHURCH_IDS
+    assert list(cfg["generated_pages"]) == CHURCH_IDS[1:]
+    assert cfg["generated_pages"] == {p: pages[p] for p in CHURCH_IDS[1:]}
+    row.update(body)
+    db.patches.clear()
+    assert site_sync.sync_site(_mod(pages)) == "current"
+    assert db.patches == []
+
+
+def test_invalid_ids_are_logged_skipped_and_excluded_from_hash(monkeypatch, caplog):
+    pages = {"home": "home", "visit-2": "visit", "123": "digits"}
+    invalid = ["", "About", "bad_id", "two words", "../escape", "a/b", "x?y", "x#y", "é", "live\n", None, 42]
+    pages.update({pid: "bad" for pid in invalid})
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    assert site_sync.sync_site(_mod(pages)) == "installed"
+    cfg = db.patches[0][1]["site_config"]
+    assert cfg["site_pages"] == ["home", "visit-2", "123"]
+    assert cfg["generated_pages"] == {"visit-2": "visit", "123": "digits"}
+    assert cfg["manual_hash"] == site_sync.content_hash({p: pages[p] for p in cfg["site_pages"]})
+    assert sum("invalid page id" in r.message for r in caplog.records) == len(invalid)
+
+
+def test_cap_includes_home_even_when_home_is_last_and_skips_invalid_first(monkeypatch, caplog):
+    pages = {"Invalid": "skip", **{f"page-{n}": f"page {n}" for n in range(25)}, "home": "home"}
+    row = {"id": "row-1", "business_id": "biz-1", "site_config": {}}
+    db = _wire(monkeypatch, [row])
+    assert site_sync.sync_site(_mod(pages)) == "installed"
+    body = db.patches[0][1]
+    cfg = body["site_config"]
+    assert cfg["site_pages"] == ["home"] + [f"page-{n}" for n in range(19)]
+    assert len(cfg["generated_pages"]) == 19
+    assert cfg["manual_hash"] == site_sync.content_hash({p: pages[p] for p in cfg["site_pages"]})
+    assert "page cap 20 reached" in caplog.text
+    row.update(body)
+    db.patches.clear()
+    pages["page-24"] = "changed but not installed"
+    assert site_sync.sync_site(_mod(pages)) == "current"
+    assert db.patches == []
+
+
+def test_missing_home_refuses_install(monkeypatch, caplog):
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    assert site_sync.sync_site(_mod({"visit": "visit"})) == "error"
+    assert db.patches == []
+    assert "no home page" in caplog.text
+
+
+def test_old_install_with_same_hash_but_dropped_custom_pages_is_repaired(monkeypatch):
+    pages = {"home": "home", "visit": "visit", "about": "about"}
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1",
+                              "site_config": {"html_source": "manual",
+                                              "manual_hash": site_sync.content_hash(pages),
+                                              "site_pages": ["home", "about"],
+                                              "generated_pages": {"about": "about"}}}])
+    assert site_sync.sync_site(_mod(pages)) == "updated"
+    assert db.patches[0][1]["site_config"]["site_pages"] == list(pages)
+    assert db.patches[0][1]["site_config"]["generated_pages"]["visit"] == "visit"
+
+
+def test_order_change_updates_even_when_content_hash_is_unchanged(monkeypatch):
+    pages = {"home": "home", "visit": "visit", "about": "about"}
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1",
+                              "site_config": {"html_source": "manual",
+                                              "manual_hash": site_sync.content_hash(pages),
+                                              "site_pages": ["home", "about", "visit"],
+                                              "generated_pages": {"about": "about", "visit": "visit"}}}])
+    assert site_sync.sync_site(_mod(pages)) == "updated"
+    assert db.patches[0][1]["site_config"]["site_pages"] == list(pages)
+
+
+def test_real_kmj_install_matches_legacy_bytes_and_stays_current(monkeypatch):
+    import hashlib
+    import json
+    kmj = next(m for m in site_sync.discover() if m.SLUG == "kmj-creative-solutions")
+    pages = kmj.render_pages()
+    legacy_ids = ["home"] + [p for p in ("about", "services", "contact") if p in pages]
+    legacy_generated = {p: pages[p] for p in legacy_ids[1:]}
+    # The old installer hashed all rendered pages, sorted by key.
+    legacy_blob = json.dumps({k: pages[k] for k in sorted(pages)}, ensure_ascii=False)
+    legacy_hash = hashlib.sha256(legacy_blob.encode("utf-8")).hexdigest()[:16]
+    row = {"id": "row-1", "business_id": kmj.BUSINESS_ID, "site_config": {}}
+    db = _wire(monkeypatch, [row])
+    assert site_sync.sync_site(kmj) == "installed"
+    body = db.patches[0][1]
+    cfg = body["site_config"]
+    assert body["html_content"].encode() == pages["home"].encode()
+    assert json.dumps(cfg["site_pages"]).encode() == json.dumps(legacy_ids).encode()
+    assert json.dumps(cfg["generated_pages"]).encode() == json.dumps(legacy_generated).encode()
+    assert cfg["manual_hash"] == legacy_hash
+    # JSONB can reorder object keys; that must not trigger a reinstall.
+    cfg["generated_pages"] = dict(sorted(cfg["generated_pages"].items()))
+    row.update(body)
+    db.patches.clear()
+    assert site_sync.sync_site(kmj) == "current"
+    assert db.patches == []
+
+
+@pytest.mark.parametrize("page_id", sorted(RESERVED_PAGE_IDS))
+def test_reserved_ids_are_skipped_and_visible_on_stdout(monkeypatch, capsys, page_id):
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    assert site_sync.sync_site(_mod({"home": "home", page_id: "unreachable", "sermons": "library"})) == "installed"
+    cfg = db.patches[0][1]["site_config"]
+    assert cfg["site_pages"] == ["home", "sermons"]
+    assert cfg["generated_pages"] == {"sermons": "library"}
+    output = capsys.readouterr().out
+    assert "reserved page id" in output and repr(page_id) in output
+
+
+@pytest.mark.parametrize("html", ["", " ", None, 42, {}])
+def test_empty_or_non_string_pages_do_not_count_toward_cap(monkeypatch, capsys, html):
+    pages = {"home": "home", "empty": html, **{f"page-{n}": "page" for n in range(19)}}
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    assert site_sync.sync_site(_mod(pages)) == "installed"
+    cfg = db.patches[0][1]["site_config"]
+    assert len(cfg["site_pages"]) == 20 and "empty" not in cfg["site_pages"]
+    assert "page-18" in cfg["generated_pages"]
+    assert "empty or non-string page" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("html", ["", " ", None, 42, {}])
+def test_unservable_home_refuses_the_install(monkeypatch, html):
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    assert site_sync.sync_site(_mod({"home": html, "visit": "visit"})) == "error"
+    assert db.patches == []
+
+
+def test_all_skips_are_visible_in_production_stdout(monkeypatch, capsys):
+    pages = {"home": "home", "Bad": "bad", **{f"page-{n}": "page" for n in range(20)}}
+    _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    site_sync.sync_site(_mod(pages))
+    out = capsys.readouterr().out
+    assert "invalid page id" in out and "'Bad'" in out
+    assert "page cap 20 reached" in out and "'page-19'" in out
+
+
+def test_every_shipped_build_has_only_servable_pages_within_the_cap():
+    from pathlib import Path
+    from site_page_helpers import RESERVED_PAGE_IDS, valid_page_id
+    builds = site_sync.discover()
+    assert {Path(m.__file__) for m in builds} == set(site_sync.SITES_DIR.glob("*/build.py"))
+    assert builds, "the contract test must exercise the shipped sites"
+    for build in builds:
+        pages = build.render_pages()
+        assert "home" in pages, build.SLUG
+        assert 1 <= len(pages) <= site_sync.MAX_SITE_PAGES, build.SLUG
+        for pid, html in pages.items():
+            assert valid_page_id(pid) and pid not in RESERVED_PAGE_IDS, (build.SLUG, pid)
+            assert isinstance(html, str) and html.strip(), (build.SLUG, pid)

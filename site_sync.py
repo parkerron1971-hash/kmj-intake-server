@@ -32,10 +32,12 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from site_page_helpers import RESERVED_PAGE_IDS, valid_page_id
+
 logger = logging.getLogger("site_sync")
 
 SITES_DIR = pathlib.Path(__file__).resolve().parent / "sites"
-SECONDARY_PAGES = ("about", "services", "contact")
+MAX_SITE_PAGES = 20
 
 
 def enabled() -> bool:
@@ -70,6 +72,13 @@ def content_hash(pages: Dict[str, str]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def _skip_page(slug: str, pid: Any, reason: str) -> None:
+    message = f"[site-sync] {slug}: {reason}; skipped {pid!r}"
+    logger.warning(message)
+    # The production boot log is stdout; logging may have no handler.
+    print(message, flush=True)
+
+
 def sync_site(mod: Any) -> str:
     """Install or update one site. Returns one of: current, installed,
     updated, no-row, wrong-business, error."""
@@ -94,10 +103,32 @@ def sync_site(mod: Any) -> str:
     if "home" not in pages:
         logger.error(f"[site-sync] {slug}: render_pages() returned no home page; refusing")
         return "error"
+    if not isinstance(pages["home"], str) or not pages["home"].strip():
+        _skip_page(slug, "home", "empty or non-string home page; refusing install")
+        return "error"
+    # Reserve home even if the build returns it last. Hash only the pages
+    # we install; invalid/over-cap entries must not trigger a reinstall.
+    installed = {"home": pages["home"]}
+    for pid, html in pages.items():
+        if not valid_page_id(pid):
+            _skip_page(slug, pid, "invalid page id")
+        elif pid in RESERVED_PAGE_IDS:
+            _skip_page(slug, pid, "reserved page id")
+        elif not isinstance(html, str) or not html.strip():
+            _skip_page(slug, pid, "empty or non-string page")
+        elif pid != "home":
+            if len(installed) >= MAX_SITE_PAGES:
+                _skip_page(slug, pid, f"page cap {MAX_SITE_PAGES} reached")
+            else:
+                installed[pid] = html
+    pages = installed
+    secondary = {p: html for p, html in pages.items() if p != "home"}
     digest = content_hash(pages)
     cfg = dict(row.get("site_config") or {}) if isinstance(row.get("site_config"), dict) else {}
     was_manual = cfg.get("html_source") == "manual"
-    if was_manual and cfg.get("manual_hash") == digest:
+    if (was_manual and cfg.get("manual_hash") == digest
+            and cfg.get("site_pages") == list(pages)
+            and cfg.get("generated_pages") == secondary):
         # The pages are current; the design record may not be (a site
         # installed before site_adopt existed, or a record that failed
         # to save). Cheap: skipped without a thread when it is current.
@@ -114,12 +145,11 @@ def sync_site(mod: Any) -> str:
             "generated_pages": cfg.get("generated_pages"),
             "site_pages": cfg.get("site_pages"),
         }
-    secondary = [p for p in SECONDARY_PAGES if p in pages]
     new_cfg.update({
         "html_source": "manual",
         "site_type": "multi-page",
-        "site_pages": ["home"] + secondary,
-        "generated_pages": {p: pages[p] for p in secondary},
+        "site_pages": list(pages),
+        "generated_pages": secondary,
         "manual_hash": digest,
         "manual_installed_at": now,
     })

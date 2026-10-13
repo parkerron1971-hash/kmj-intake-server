@@ -44,11 +44,14 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from site_page_helpers import secondary_pages
+
 logger = logging.getLogger("site_adopt")
 
 EDITION = "hand-built"
 PAGE_TEXT_CAP = 6000          # characters of copy per page that ride the call
 ADOPT_MAX_CHARS = 60000
+ADOPT_PROMPT_MAX_CHARS = 24000  # total input budget, shared across all pages
 
 _TOKEN_RE = re.compile(r"\{\{[A-Z_]+\}\}")
 _DROP_RE = re.compile(r"<(script|style|noscript|svg|template)\b.*?</\1\s*>", re.S | re.I)
@@ -100,8 +103,11 @@ def pages_of(row: Dict[str, Any]) -> Dict[str, str]:
     cfg = row.get("site_config") if isinstance(row.get("site_config"), dict) else {}
     pages: Dict[str, str] = {}
     home = row.get("html_content") or ""
-    if home:
+    if isinstance(home, str) and home.strip():
         pages["home"] = home
+    if is_hand_built(cfg):
+        pages.update(secondary_pages(cfg))
+        return pages
     gp = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
     order = [p for p in (cfg.get("site_pages") or []) if isinstance(p, str)]
     for pid in order + sorted(k for k in gp if k not in order):
@@ -195,11 +201,14 @@ def build_user_prompt(business: Dict[str, Any], row: Dict[str, Any],
              f"  fonts: {', '.join(fonts) if fonts else 'not recorded'}",
              f"  colors: {', '.join(hexes) if hexes else 'not recorded'}",
              ""]
-    for pid, html in pages.items():
-        parts.append(f"===== PAGE {'/' if pid == 'home' else '/' + pid} =====")
-        parts.append(page_text(html) or "(no copy)")
-        parts.append("")
-    return "\n".join(parts)
+    headings = [f"===== PAGE {'/' if pid == 'home' else '/' + pid} =====" for pid in pages]
+    # Share a fixed copy budget so later pages are represented too, rather
+    # than allowing 20 pages to multiply the cost of the design-record call.
+    overhead = len("\n".join(parts)) + sum(len(h) + 3 for h in headings) + 1
+    copy_cap = min(PAGE_TEXT_CAP, max(0, (ADOPT_PROMPT_MAX_CHARS - overhead) // max(1, len(pages))))
+    for heading, html in zip(headings, pages.values()):
+        parts.extend([heading, (page_text(html, cap=copy_cap) or "(no copy)")[:copy_cap], ""])
+    return "\n".join(parts)[:ADOPT_PROMPT_MAX_CHARS]
 
 
 def _read_row(business_id: str) -> Optional[Dict[str, Any]]:

@@ -171,3 +171,24 @@ def test_targets_are_read_from_home_and_every_generated_page(monkeypatch):
         {"page": "home", "target_path": "home.hero.lead", "current": "Edited lead"},
         {"page": "about", "target_path": "about.h", "current": "About & more"},
     ]
+
+
+def test_chief_discovers_and_edits_a_custom_manual_page(monkeypatch):
+    import sb_clients
+    from agents.override_system import override_resolver, override_storage
+    row = {"html_content": "<h1>Home</h1>", "site_config": {
+        "html_source": "manual", "generated_pages": {
+            "visit-2": '<h1 data-override-target="visit-2.hero">Visit this Sunday</h1>'}}}
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [row])
+    monkeypatch.setattr(override_resolver, "resolve_html_overrides", lambda html, biz: html)
+    store = _Store()
+    monkeypatch.setattr(override_storage, "upsert_override", store.upsert_override)
+    monkeypatch.setattr(cos, "_site_text_refresh_if_composed",
+                        lambda b: pytest.fail("manual site must not be rebuilt"))
+    targets, manual = cos._site_text_targets("biz-1")
+    assert manual and targets == [{"page": "visit-2", "target_path": "visit-2.hero",
+                                  "current": "Visit this Sunday"}]
+    out = _run(cos.handle_edit_site_text(None, BIZ, {"find": "Visit this Sunday", "text": "Join us Sunday"}))
+    assert not out.get("failed"), out
+    assert store.upserts[0]["path"] == "visit-2.hero"
+    assert store.upserts[0]["value"] == "Join us Sunday"
