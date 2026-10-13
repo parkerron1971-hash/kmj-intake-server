@@ -154,7 +154,7 @@ def test_the_real_kmj_source_is_discovered_and_renders():
 
 
 CHURCH_IDS = ["home", "visit", "about", "beliefs", "sermons", "give",
-              "ministries", "events", "connect", "watch-live"]
+              "ministries", "events", "connect", "watch"]
 
 
 def test_ten_page_site_installs_every_page_home_first_and_is_idempotent(monkeypatch):

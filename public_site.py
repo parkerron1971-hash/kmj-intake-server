@@ -1688,7 +1688,7 @@ async def get_site_html(slug: str, pv: Optional[str] = None):
         )
         # Preview base only — keeps the studio iframe navigable now that
         # the stored nav is root-relative for the real site.
-        html = _rewrite_nav_for_preview(html, slug, site.get("site_config") or {})
+        html = _rewrite_nav_for_preview(html, slug, site.get("site_config") if manual else None)
         return HTMLResponse(
             content=html,
             status_code=200,

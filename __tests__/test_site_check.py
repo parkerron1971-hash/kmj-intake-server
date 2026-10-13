@@ -222,7 +222,7 @@ def test_job_runner_dispatches_site_check(monkeypatch):
 def test_checks_every_custom_page_in_site_order(monkeypatch):
     import sb_clients
     ids = ["home", "visit", "about", "beliefs", "sermons", "give",
-           "ministries", "events", "connect", "watch-live"]
+           "ministries", "events", "connect", "watch"]
     row = {"slug": "church", "html_content": "home", "site_config": {
         "html_source": "manual", "site_pages": ids,
         "generated_pages": {pid: "page" for pid in reversed(ids[1:])}}}

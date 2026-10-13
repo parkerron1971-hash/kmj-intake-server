@@ -218,7 +218,7 @@ def test_pages_carry_override_targets_and_no_leftover_facts(built_pages):
         assert "$25" not in html and "Tues" not in html, name
 
 
-CUSTOM_PAGE_IDS = ["visit", "about", "beliefs", "sermons", "give", "ministries", "events", "connect", "watch-live"]
+CUSTOM_PAGE_IDS = ["visit", "about", "beliefs", "sermons", "give", "ministries", "events", "connect", "watch"]
 
 
 @pytest.fixture
@@ -435,3 +435,32 @@ def test_manual_page_cannot_bypass_no_card_public_gate(monkeypatch, custom_manua
     monkeypatch.setattr(public_site, "_render_offline_page", offline)
     serve = public_site._serve_site_by_custom_domain if custom_domain else public_site._serve_site_by_slug
     assert asyncio.run(serve("church.example" if custom_domain else "church", "/sermons")).body.decode() == "COMING SOON"
+
+
+@pytest.mark.parametrize("source,offer_href", [
+    ("module-composer", "/saturday-shave-club"),
+    ("manual", "/public/site/acme/saturday-shave-club"),
+])
+def test_home_preview_keeps_main_composed_offer_link_and_rewrites_manual_link(
+        monkeypatch, custom_manual_site, source, offer_href):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    custom_manual_site["html_content"] = (
+        '<html><head></head><body><nav class="sxm-header-pagenav">'
+        '<a href="/about">About</a><a href="/saturday-shave-club">Club</a>'
+        '</nav></body></html>')
+    cfg = custom_manual_site["site_config"]
+    cfg.update(html_source=source, offer_page={"path": "/saturday-shave-club"})
+    page_id = "offer" if source == "module-composer" else "saturday-shave-club"
+    cfg["generated_pages"][page_id] = "OFFER"
+    monkeypatch.setattr(public_site, "_use_smart_sites", lambda site: False)
+    monkeypatch.setattr("no_card_trial.preview_blocked", AsyncMock(return_value=False))
+
+    response = asyncio.run(public_site.get_site_html("acme"))
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert f'href="{offer_href}"' in body
+    assert 'href="/public/site/acme/about"' in body
+    if source == "module-composer":
+        assert 'href="/public/site/acme/saturday-shave-club"' not in body

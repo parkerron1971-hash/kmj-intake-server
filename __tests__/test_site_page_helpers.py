@@ -15,10 +15,10 @@ def test_invalid_page_ids(pid):
 
 
 def test_secondary_pages_follow_explicit_order_then_unlisted_pages():
-    cfg = {"site_pages": ["home", "watch-live", "visit", "watch-live", [], "missing"],
+    cfg = {"site_pages": ["home", "watch", "visit", "watch", [], "missing"],
            "generated_pages": {"visit": "visit", "home": "duplicate", "sermons": "sermons",
-                               "watch-live": "watch-live", "empty": " ", "invalid/path": "bad", 12: "bad", "none": None}}
-    assert list(secondary_pages(cfg)) == ["watch-live", "visit", "sermons"]
+                               "watch": "watch", "empty": " ", "invalid/path": "bad", 12: "bad", "none": None}}
+    assert list(secondary_pages(cfg)) == ["watch", "visit", "sermons"]
     assert secondary_pages({"generated_pages": None}) == {}
     assert secondary_pages({"site_pages": "visit", "generated_pages": {"visit": "page"}}) == {"visit": "page"}
 

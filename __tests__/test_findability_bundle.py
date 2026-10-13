@@ -202,7 +202,7 @@ def test_sitemap_includes_all_custom_pages_in_site_order_without_duplicate_doors
     import offering_profiles
     import xml.etree.ElementTree as ET
     monkeypatch.setattr(offering_profiles, "business_state", lambda biz: {"booking_enabled": True})
-    ids = ["home", "visit", "about", "beliefs", "sermons", "give", "ministries", "events", "connect", "watch-live", "book"]
+    ids = ["home", "visit", "about", "beliefs", "sermons", "give", "ministries", "events", "connect", "watch", "book"]
     cfg = {"html_source": "manual", "_business_id": "biz-1", "site_pages": ids,
            "generated_pages": {pid: "page" for pid in reversed(ids[1:])}}
     cfg["generated_pages"].update({"../bad": "bad", "empty": " ", "bad-type": None})

@@ -392,7 +392,7 @@ def test_the_served_page_carries_the_studio_edit_listener(monkeypatch):
 
 def test_adoption_keeps_all_ten_custom_pages_in_site_order():
     ids = ["home", "visit", "about", "beliefs", "sermons", "give",
-           "ministries", "events", "connect", "watch-live"]
+           "ministries", "events", "connect", "watch"]
     row = {"html_content": "<h1>Home</h1>", "site_config": {
         "html_source": "manual", "site_pages": ids,
         "generated_pages": {pid: f"<h1>{pid}</h1>" for pid in reversed(ids[1:])}}}
