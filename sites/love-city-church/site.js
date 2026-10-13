@@ -1,17 +1,21 @@
 (function () {
-  // The phone menu. Without script the links simply show, stacked (the
-  // 'js' class that hides them is set in the head).
-  var toggle = document.querySelector('[data-nav-toggle]');
-  var links = document.querySelector('[data-nav-links]');
-  if (!toggle || !links) return;
+  // The menu: a full-screen panel. Without script its links simply show
+  // under the header (the 'js' class that hides them is set in the head).
+  var root = document.documentElement;
+  var toggle = document.querySelector('[data-menu-toggle]');
+  var menu = document.querySelector('[data-menu]');
+  var word = document.querySelector('[data-menu-word]');
+  if (!toggle || !menu) return;
   function set(open) {
-    links.classList.toggle('open', open);
+    root.classList.toggle('menu-open', open);
     toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (word) word.textContent = open ? 'Close' : 'Menu';
+    if (open) { var first = menu.querySelector('a'); if (first) first.focus(); }
   }
   toggle.addEventListener('click', function () {
     set(toggle.getAttribute('aria-expanded') !== 'true');
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && links.classList.contains('open')) { set(false); toggle.focus(); }
+    if (e.key === 'Escape' && root.classList.contains('menu-open')) { set(false); toggle.focus(); }
   });
 })();

@@ -132,10 +132,10 @@ def test_forms_post_through_the_one_submission_script(build, pages):
 
 
 def test_service_times_and_address_are_real_text(pages):
-    home = pages["home"]
-    for text in ("Sundays", "11am", "Thursdays", "6pm", "1084 Allen Ave, Muskegon, MI 49442",
-                 "Welcome to"):
-        assert text in home, text
+    for name, page in pages.items():
+        for text in ("Sundays", "11am", "Thursdays", "6pm", "1084 Allen Ave", "Muskegon, MI 49442"):
+            assert text in page, f"{name}: {text}"
+    assert "We love." in pages["home"] and "Love City Church" in pages["home"]
     assert "Wednesday" not in "".join(pages.values())       # Kevin: midweek is Thursday 6pm
 
 

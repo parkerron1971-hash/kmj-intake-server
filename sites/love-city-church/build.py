@@ -23,10 +23,12 @@ Serve-time tokens left in the HTML on purpose (public_site.py fills them):
                            platform fills them in place instead of appending
                            sections before </body>
 Build-time tokens (filled here):
-  {{LOGO}} {{PASTORS}} {{STAGE}} {{KEVIN}} {{JESSICA}}
-                           URLs of assets/*.webp, served by
+  {{IMG_<NAME>}}           the URL of assets/<name>.webp ({{IMG_LOGO_INK}} is
+                           logo-ink.webp), served by
                            GET {{API_BASE}}/public/site-assets/{slug}/{file}
-                           (data URIs with --inline)
+                           (data URIs with --inline). Photos are the church's
+                           own, from its Facebook page, in the site's plum
+                           duotone.
   {{API_BASE}} {{BUSINESS_ID}} and the outside links in LINKS
 
 Scripts: site.js (the phone menu) goes on every page; forms.js (the one
@@ -57,19 +59,17 @@ PAGES = {
               "Service times, what to expect, and how to find Love City Church at 1084 Allen Ave, Muskegon, MI."),
 }
 
-ASSETS = {
-    "LOGO": "logo.webp",
-    "PASTORS": "pastors.webp",
-    "STAGE": "stage.webp",
-    "KEVIN": "kevin.webp",
-    "JESSICA": "jessica.webp",
-}
+def _assets() -> dict:
+    """Every assets/<name>.webp as the build-time token IMG_<NAME>
+    (church-family.webp is {{IMG_CHURCH_FAMILY}})."""
+    names = sorted(n for n in os.listdir(os.path.join(HERE, "assets")) if n.endswith(".webp"))
+    return {"IMG_" + n[:-5].upper().replace("-", "_"): n for n in names}
 
 _ADDRESS_Q = "1084+Allen+Ave%2C+Muskegon%2C+MI+49442"
 LINKS = {
     "MAPS_URL": f"https://www.google.com/maps/dir/?api=1&amp;destination={_ADDRESS_Q}",
     "MAPS_EMBED": f"https://www.google.com/maps?q={_ADDRESS_Q}&amp;output=embed",
-    "FACEBOOK_URL": "https://www.facebook.com/thecityofloveministries/",
+    "FACEBOOK_URL": "https://www.facebook.com/lovecitynation/",
     "STORE_URL": "https://lovecity.printify.me/",
     "SUBSPLASH_LATEST": "https://subsplash.com/u/-7MJWGR/media/embed/d/*",
     "SUBSPLASH_GIVE": "https://subsplash.com/u/-7MJWGR/give?embed=true",
@@ -78,8 +78,8 @@ LINKS = {
 
 SERVE_TIME_TOKENS = {"BUSINESS_EMAIL", "PRODUCTS_SECTION", "GALLERY_SECTION", "TESTIMONIALS_SECTION"}
 
-FONTS = "https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,400..800&amp;display=swap"
-THEME_COLOR = "#2A0F2E"
+FONTS = "https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&amp;display=swap"
+THEME_COLOR = "#1C0B1F"
 
 
 def _read(name: str) -> str:
@@ -144,7 +144,7 @@ def render_pages(inline: bool = False) -> dict:
         "site_js": _read("site.js"),
         "forms_js": _read("forms.js"),
     }
-    refs = {token: _asset_ref(name, inline) for token, name in ASSETS.items()}
+    refs = {token: _asset_ref(name, inline) for token, name in _assets().items()}
     refs.update(LINKS)
     refs.update({"API_BASE": API_BASE, "BUSINESS_ID": BUSINESS_ID})
     return {p: assemble(p, parts, refs) for p in PAGES}
