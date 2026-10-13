@@ -29,6 +29,8 @@ Build-time tokens (filled here):
                            (data URIs with --inline). Photos are the church's
                            own, from its Facebook page, in the site's plum
                            duotone.
+  {{MARK}} {{MARK_MASK}}   the church's heart mark (mark.svg), inline or as a
+                           CSS mask
   {{API_BASE}} {{BUSINESS_ID}} and the outside links in LINKS
 
 Scripts: site.js (the phone menu) goes on every page; forms.js (the one
@@ -42,6 +44,7 @@ import hashlib
 import os
 import re
 import sys
+from urllib.parse import quote
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -113,6 +116,18 @@ def _asset_ref(name: str, inline: bool) -> str:
     return f"{API_BASE}/public/site-assets/{SLUG}/{name}?v={hashlib.sha256(data).hexdigest()[:10]}"
 
 
+def _mark_refs() -> dict:
+    """The church's heart mark (mark.svg, traced from its own artwork): the
+    heart with its side towers, and the centre tower, as two paths.
+    {{MARK}} is the inline SVG (coloured and animated by the CSS);
+    {{MARK_MASK}} is the same shape as a CSS mask, for small repeats."""
+    svg = _read("mark.svg").strip()
+    viewbox = re.search(r'viewBox="([^"]+)"', svg).group(1)
+    d = "".join(re.findall(r' d="([^"]+)"', svg))
+    mask = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{viewbox}"><path d="{d}"/></svg>'
+    return {"MARK": svg, "MARK_MASK": 'url("data:image/svg+xml,' + quote(mask, safe=" =:/") + '")'}
+
+
 def _mark_current(nav: str, page: str) -> str:
     """aria-current on the nav link for the page being built."""
     if page == "home":
@@ -162,6 +177,7 @@ def render_pages(inline: bool = False) -> dict:
         "forms_js": _read("forms.js"),
     }
     refs = {token: _asset_ref(name, inline) for token, name in _assets().items()}
+    refs.update(_mark_refs())
     refs.update(LINKS)
     refs.update({"API_BASE": API_BASE, "BUSINESS_ID": BUSINESS_ID})
     return {p: assemble(p, parts, refs) for p in PAGES}

@@ -325,12 +325,24 @@ dl, dd { margin: 0; }
 .hero-xl .hero-foot { margin-top: clamp(28px, 4vh, 56px); }
 @media (min-width: 900px) { .hero-xl { min-height: calc(100svh - 76px); } }
 
-/* a heart that draws itself behind the type, then drifts on scroll */
-.hero-heart {
-  position: absolute; z-index: -1; right: -6vw; top: 50%;
-  width: min(62vw, 980px); height: auto; transform: translateY(-50%);
-  fill: none; stroke: var(--love); stroke-width: 1.4; opacity: .9;
+/* The church's heart mark behind the type, always whole and in
+   proportion: its outline draws itself, it fills with a soft tint, the
+   centre tower rises into place, and then it beats. */
+/* left-aligned with the poster and sized to end before the first photo
+   tile (which starts 3.8em into "We love."), so nothing ever covers it */
+.hero-mark {
+  position: absolute; z-index: 0; top: 44%;
+  left: max(var(--gutter), calc((100vw - 1680px) / 2 + var(--gutter)));
+  width: min(44vw, 68vh, 660px); transform: translateY(-50%); pointer-events: none;
+}
+.hero-mark .mark { display: block; width: 100%; height: auto; overflow: visible; }
+.hero-mark path {
+  fill: var(--love); fill-opacity: .11;
+  stroke: var(--love); stroke-width: 2; vector-effect: non-scaling-stroke;
   stroke-dasharray: 1; stroke-dashoffset: 0;
+}
+@media (max-width: 899.98px) {
+  .hero-mark { top: 46%; width: min(54vw, 46vh); }
 }
 .hero-xl > .wrap { position: relative; z-index: 1; }
 
@@ -352,7 +364,9 @@ dl, dd { margin: 0; }
 @media (min-width: 900px) and (min-height: 760px) { .scroll-cue { display: flex; } }
 
 @media (prefers-reduced-motion: no-preference) {
-  .hero-heart { stroke-dashoffset: 1; animation: draw 2.6s cubic-bezier(.6, 0, .2, 1) .35s forwards; }
+  .hero-mark path { stroke-dashoffset: 1; fill-opacity: 0; animation: draw 2.4s cubic-bezier(.6, 0, .2, 1) .35s forwards, tint 1.2s ease 2.3s forwards; }
+  .hero-mark .mark-tower { transform-box: fill-box; transform-origin: 50% 100%; animation: draw 2.4s cubic-bezier(.6, 0, .2, 1) .35s forwards, tint 1.2s ease 2.3s forwards, tower 1.4s cubic-bezier(.2, .75, .2, 1) 1.2s both; }
+  .hero-mark .mark { transform-origin: 50% 55%; animation: beat 6s ease-in-out 3.6s infinite; }
   /* letters rise one by one out of each line's mask (site.js splits them) */
   .hero .ch { display: inline-block; animation: rise-ch .9s cubic-bezier(.2, .75, .2, 1) both; animation-delay: calc(var(--c) * 32ms + var(--l, 0) * 140ms); }
   .hero .line > span[data-split] { animation: none; }
@@ -362,7 +376,7 @@ dl, dd { margin: 0; }
   .hero .l2 { transform: translateX(calc(var(--hp, 0) * 11vw)); }
   .hero .l3 { transform: translateX(calc(var(--hp, 0) * -7vw)); }
   .hero-xl .hero-foot { opacity: calc(1 - var(--hp, 0) * 1.6); }
-  .hero-heart { translate: 0 calc(var(--hp, 0) * 22vh); }
+  .hero-mark { translate: 0 calc(var(--hp, 0) * 18vh); }
   .js .tile-live img.is-on { animation: kenburns 5s ease-out both; }
   .scroll-cue::after { animation: cue 1.8s cubic-bezier(.6, 0, .2, 1) infinite; }
 }
@@ -371,6 +385,9 @@ dl, dd { margin: 0; }
 .js .hero [data-split]:not(.is-split) { opacity: 0; animation: show-late .01s 1.5s forwards; }
 @keyframes show-late { to { opacity: 1; } }
 @keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes tint { to { fill-opacity: .11; } }
+@keyframes tower { from { transform: translateY(38%); } }
+@keyframes beat { 0%, 14%, 100% { transform: scale(1); } 5% { transform: scale(1.04); } 9% { transform: scale(1.015); } 11% { transform: scale(1.03); } }
 @keyframes rise-ch { from { transform: translateY(110%) rotate(6deg); } }
 @keyframes kenburns { from { transform: scale(1.18); } }
 @keyframes cue { from { background-position: 0 -120%; } to { background-position: 0 220%; } }
@@ -439,6 +456,8 @@ dl, dd { margin: 0; }
   .ladder span.lit { color: var(--love); }
   .ladder span.now { transform: scale(1.35); }
   .menu-open .ladder { display: none; }
+  /* keep the hero's heart mark clear of the ladder */
+  .hero-mark { left: max(76px, calc((100vw - 1680px) / 2 + var(--gutter))); }
 }
 
 /* ---------- Marquee: the stage backdrop's words ---------- */
@@ -454,7 +473,13 @@ dl, dd { margin: 0; }
   font-stretch: 70%; font-weight: 850; text-transform: uppercase; line-height: 1;
   font-size: clamp(1.7rem, 1.2rem + 2vw, 2.8rem); white-space: nowrap;
 }
-.marquee-track svg { width: 0.9em; height: 0.9em; flex: none; fill: currentColor; font-size: clamp(1.7rem, 1.2rem + 2vw, 2.8rem); }
+/* the church's heart mark, as a mask, between the words */
+.sep {
+  display: inline-block; flex: none; width: 1.06em; height: 1em;
+  font-size: clamp(1.7rem, 1.2rem + 2vw, 2.8rem);
+  background: currentColor;
+  -webkit-mask: {{MARK_MASK}} center / contain no-repeat; mask: {{MARK_MASK}} center / contain no-repeat;
+}
 @media (prefers-reduced-motion: no-preference) {
   .marquee-track { animation: marquee 42s linear infinite; }
   .marquee:hover .marquee-track { animation-play-state: paused; }
@@ -724,7 +749,11 @@ dl, dd { margin: 0; }
   font-stretch: 70%; font-weight: 850; text-transform: uppercase; line-height: 1.08;
   font-size: clamp(1.5rem, 1rem + 2vw, 2.7rem); transition: color .2s ease;
 }
-.index-wall li::after { content: "\2665"; content: "\2665" / ""; color: var(--love); font-size: 0.55em; margin: 0 0.45em; vertical-align: 0.25em; }
+.index-wall li::after {
+  content: ""; display: inline-block; width: 0.5em; height: 0.47em; margin: 0 0.4em; vertical-align: 0.1em;
+  background: var(--love);
+  -webkit-mask: {{MARK_MASK}} center / contain no-repeat; mask: {{MARK_MASK}} center / contain no-repeat;
+}
 .index-wall li:last-child::after { content: none; }
 .index-wall li:hover { color: var(--love); }
 .index-wall li:first-child { color: var(--love); }
@@ -896,7 +925,14 @@ dl, dd { margin: 0; }
 .footer-links li { padding: 4px 0; break-inside: avoid; }
 .footer-links a { text-decoration: none; }
 .footer-links a:hover { text-decoration: underline; }
-.footer-logo { width: 100%; max-width: 1160px; margin: 56px 0 28px; }
+/* the mark above the wordmark, as on the church's stage backdrop */
+.footer-lockup { display: grid; justify-items: center; gap: clamp(12px, 2vw, 28px); margin: 64px 0 28px; }
+.footer-mark {
+  display: block; width: clamp(64px, 9vw, 132px); aspect-ratio: 857 / 811;
+  background: var(--love);
+  -webkit-mask: {{MARK_MASK}} center / contain no-repeat; mask: {{MARK_MASK}} center / contain no-repeat;
+}
+.footer-logo { width: 100%; max-width: 1160px; margin: 0; }
 .footer-base {
   display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 32px;
   border-top: 1px solid var(--rule-on-ink); padding-top: 20px;

@@ -1,5 +1,5 @@
 <section class="hero hero-xl" aria-labelledby="home-title" data-hero>
-  <svg class="hero-heart" viewBox="0 0 200 184" aria-hidden="true" focusable="false"><path pathLength="1" d="M100 176C58 146 8 110 8 60 8 30 30 8 58 8c18 0 33 9 42 24C109 17 124 8 142 8c28 0 50 22 50 52 0 50-50 86-92 116z"/></svg>
+  <div class="hero-mark" aria-hidden="true">{{MARK}}</div>
   <div class="wrap wrap-xl fit">
     <p class="kicker"><span>Love City Church</span><span>Muskegon, Michigan</span></p>
     <h1 id="home-title" class="poster" style="--fit: 6.7">
@@ -29,11 +29,11 @@
 <section class="scene" data-scene aria-labelledby="scene-title">
   <div class="scene-pin">
     <div class="wall" data-wall aria-hidden="true">
-      <figure><img src="{{IMG_CHURCH_FAMILY}}" alt="" width="1200" height="899" loading="lazy"></figure>
+      <figure><img src="{{IMG_WORSHIP_TEAM}}" alt="" width="675" height="900" loading="lazy"></figure>
       <figure><img src="{{IMG_STAGE_SINGERS}}" alt="" width="1000" height="749" loading="lazy"></figure>
       <figure><img src="{{IMG_COMMUNITY_DAY}}" alt="" width="676" height="900" loading="lazy"></figure>
       <figure><img src="{{IMG_KEYS}}" alt="" width="676" height="900" loading="lazy"></figure>
-      <figure class="wall-center"><img src="{{IMG_PRAYER}}" alt="" width="1200" height="899" loading="lazy"></figure>
+      <figure class="wall-center"><img src="{{IMG_CHURCH_FAMILY}}" alt="" width="1200" height="899" loading="lazy"></figure>
       <figure><img src="{{IMG_FREE_FOOD}}" alt="" width="676" height="900" loading="lazy"></figure>
       <figure><img src="{{IMG_GRADUATE}}" alt="" width="900" height="602" loading="lazy"></figure>
       <figure><img src="{{IMG_SERVICE_WIDE}}" alt="" width="715" height="952" loading="lazy"></figure>
@@ -48,14 +48,14 @@
 
 <div class="marquee" aria-hidden="true">
   <div class="marquee-track">
-    <span>Sundays 11am</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
-    <span>Thursdays 6pm</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
-    <span>1084 Allen Ave</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
-    <span>Everyone is welcome</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
-    <span>Sundays 11am</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
-    <span>Thursdays 6pm</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
-    <span>1084 Allen Ave</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
-    <span>Everyone is welcome</span><svg viewBox="0 0 24 24"><path d="M12 21s-7.6-4.7-9.7-9.3C.8 8.3 2.9 4.8 6.4 4.8c2.2 0 3.7 1.3 4.6 2.7.9-1.4 2.4-2.7 4.6-2.7 3.5 0 5.6 3.5 4.1 6.9C19.6 16.3 12 21 12 21z"/></svg>
+    <span>Sundays 11am</span><i class="sep"></i>
+    <span>Thursdays 6pm</span><i class="sep"></i>
+    <span>1084 Allen Ave</span><i class="sep"></i>
+    <span>Everyone is welcome</span><i class="sep"></i>
+    <span>Sundays 11am</span><i class="sep"></i>
+    <span>Thursdays 6pm</span><i class="sep"></i>
+    <span>1084 Allen Ave</span><i class="sep"></i>
+    <span>Everyone is welcome</span><i class="sep"></i>
   </div>
 </div>
 
