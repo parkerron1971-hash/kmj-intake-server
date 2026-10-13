@@ -10,10 +10,9 @@ when that row belongs to BUSINESS_ID.
 Writes sites/love-city-church/dist/<page>.html, the assembled pages, for a
 local look in a browser (--inline puts the images in as data URIs).
 
-BUSINESS_ID is a PLACEHOLDER until the church's Solutionist account exists.
-site_sync refuses a row whose business_id doesn't match, and does nothing
-when there is no row, so the placeholder can never install anywhere. When
-the account exists, put its id in BUSINESS_ID; the forms post to it too.
+BUSINESS_ID is Love City Church's Solutionist business; the forms post to
+it too. site_sync refuses a row whose business_id doesn't match, and does
+nothing when there is no row.
 
 Serve-time tokens left in the HTML on purpose (public_site.py fills them):
   {{BUSINESS_EMAIL}}       the church's verified sending address; with none,
@@ -50,9 +49,9 @@ from urllib.parse import quote
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 SLUG = "love-city-church"
-# PLACEHOLDER: the church's Solutionist account doesn't exist yet. Replace
-# with its business id once Kevin has created it.
-BUSINESS_ID = "PLACEHOLDER-love-city-church-account-not-created-yet"
+# Love City Church's business. Its business_sites row (slug SLUG) was made
+# through Giving.
+BUSINESS_ID = "009e9a2c-3e81-4bfc-a92a-205a8806aa99"
 API_BASE = "https://kmj-intake-server-production.up.railway.app"
 
 PAGES = {
@@ -202,7 +201,7 @@ def main() -> None:
         print(f"{p}: {len(html):,} bytes")
     if inline:
         print("--inline: dist/ has data-URI images for a local look")
-    print("install happens on deploy (site_sync.py), once BUSINESS_ID is the church's real id")
+    print(f"install happens on deploy (site_sync.py), into the {SLUG} row")
 
 
 if __name__ == "__main__":

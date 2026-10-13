@@ -2,8 +2,8 @@
 
 Every page renders through build.py, home included; no build-time token is
 left in a page; no recipient email address ever reaches the HTML (the old
-SnapPages forms printed theirs in the page source); and while BUSINESS_ID
-is a placeholder, site_sync can never install the site anywhere.
+SnapPages forms printed theirs in the page source); and site_sync installs
+the site only into the church's own row.
 """
 from __future__ import annotations
 
@@ -323,24 +323,65 @@ def test_every_page_path_reaches_the_church_site_through_the_real_routers(build,
             f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
 
 
-def test_the_placeholder_business_id_can_never_install(build, monkeypatch):
+CHURCH_BUSINESS_ID = "009e9a2c-3e81-4bfc-a92a-205a8806aa99"
+
+
+def _church_mod():
+    return next(m for m in site_sync.discover() if m.SLUG == "love-city-church")
+
+
+def _fake_sites_table(monkeypatch, rows):
+    """site_sync against an in-memory business_sites table; returns its writes."""
+    import sb_clients
     monkeypatch.setenv("SITE_CHECK", "off")
     monkeypatch.setenv("SITE_ADOPT", "off")
-    mod = next(m for m in site_sync.discover() if m.SLUG == "love-city-church")
-    if not build.BUSINESS_ID.startswith("PLACEHOLDER"):
-        pytest.skip("the church's real business id is set")
-    import sb_clients
     patches = []
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda *a, **k: patches.append(a))
 
-    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [])
-    assert site_sync.sync_site(mod) == "no-row"
+    def patch(path, body):
+        patches.append((path, body))
+        for row in rows:
+            row.update(body)
 
-    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: rows)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    return patches
+
+
+def test_the_site_belongs_to_the_churchs_own_business(build):
+    assert (build.SLUG, build.BUSINESS_ID) == ("love-city-church", CHURCH_BUSINESS_ID)
+    assert _church_mod().BUSINESS_ID == CHURCH_BUSINESS_ID
+
+
+def test_without_a_row_nothing_is_installed(monkeypatch):
+    patches = _fake_sites_table(monkeypatch, [])
+    assert site_sync.sync_site(_church_mod()) == "no-row"
+    assert patches == []
+
+
+def test_a_row_owned_by_another_business_is_never_touched(monkeypatch):
+    patches = _fake_sites_table(monkeypatch, [
         {"id": "row-1", "business_id": "3f1c2b9e-0000-4000-8000-000000000001",
          "html_content": "<html>someone else's</html>", "site_config": {}}])
-    assert site_sync.sync_site(mod) == "wrong-business"
+    assert site_sync.sync_site(_church_mod()) == "wrong-business"
     assert patches == []
+
+
+def test_the_churchs_own_row_installs_once_then_stays_current(pages, monkeypatch):
+    patches = _fake_sites_table(monkeypatch, [
+        {"id": "row-1", "business_id": CHURCH_BUSINESS_ID,
+         "html_content": "<html>the row Giving made</html>",
+         "site_config": {"html_source": "module-composer"}}])
+    assert site_sync.sync_site(_church_mod()) == "installed"
+    assert site_sync.sync_site(_church_mod()) == "current"
+    assert len(patches) == 1
+    path, body = patches[0]
+    assert path == "/business_sites?id=eq.row-1"
+    assert body["html_content"] == pages["home"]
+    cfg = body["site_config"]
+    assert cfg["html_source"] == "manual" and cfg["site_pages"][0] == "home"
+    assert set(cfg["site_pages"]) <= set(pages)
+    # What was there before is kept, so the install can be undone.
+    assert cfg["manual_backup"]["html_content"] == "<html>the row Giving made</html>"
 
 
 # ---------------------------------------------------------------------------
