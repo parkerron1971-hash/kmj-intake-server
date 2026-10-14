@@ -37,7 +37,9 @@ within the business using the existing email/phone/name identity rules. New
 records use source "website connect card". Existing status, consent and office
 metadata are preserved. Full answers and the original phone are kept in
 metadata.website_form_messages; latest structured answers also live in
-metadata.website_connect_card. Phone is normalized into the contact column when
+metadata.website_connect_card. Each card is also saved as a full contact_note
+event, visible in Members → select the person → Notes. Both writes must succeed
+before the endpoint acknowledges the card. Phone is normalized into the contact column when
 possible. Messages are never evicted. Updates use updated_at compare-and-swap,
 retrying up to three times so concurrent submissions do not overwrite messages.
 Concurrent first-time visitors may still produce duplicate contacts because the

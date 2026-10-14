@@ -2457,6 +2457,25 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
     # A connect card asks the church to connect personally, not to score
     # somebody's faith interests or start automated outreach.
     if form == "connect_card":
+        # The Members screen reads contact_note events in its Notes tab; it
+        # does not display website_form_messages metadata. Require this write
+        # too, so success means the church can actually read all the answers.
+        import website_forms
+        note = "Website connect card\nName: " + name + "\nEmail: " + email + "\n"
+        note += website_forms.notification_text({
+            "message": message, "phone": phone_raw, "fields": fields or {},
+        })
+        try:
+            saved_note = sb_clients.sb_post_as_service("/events", {
+                "business_id": business_id, "contact_id": contact_id,
+                "event_type": "contact_note", "source": source,
+                "data": {"note": note, "form": form, "fields": fields or {}},
+            })
+            if not isinstance(saved_note, list) or not saved_note or not saved_note[0].get("id"):
+                return None
+        except Exception:
+            logger.warning("[contact-submit] connect card note storage failed biz=%s", business_id[:8])
+            return None
         return contact_id
     try:
         import event_spine
@@ -2518,10 +2537,10 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
                 kwargs.update(form=kind, fields=fields)
             if not _capture_contact_from_form(
                     business_id, name, email, data["phone"], message, **kwargs):
-                return failure(503, "Your submission could not be saved. Please try again.")
+                return failure(503, "Your submission could not be fully saved. Please try again.")
     except Exception:
         logger.warning("[contact-submit] submission storage failed biz=%s", business_id[:8])
-        return failure(503, "Your submission could not be saved. Please try again.")
+        return failure(503, "Your submission could not be fully saved. Please try again.")
 
     if not church_form and body.get("sms_consent") is True and data["phone"]:
         _record_website_sms_consent(business_id, data["phone"], name)

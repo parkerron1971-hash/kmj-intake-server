@@ -88,6 +88,12 @@ def test_connect_card_keeps_every_answer_and_verified_recipient(env):
     assert row["metadata"]["website_form_messages"][0]["fields"] == fields
     assert row["metadata"]["website_connect_card"]["heard_from"] == fields["heard_from"]
     assert env.mail[0]["to"] == ["pastor@church.org"]
+    note_path, note = env.posts[1]
+    assert note_path == "/events" and note["event_type"] == "contact_note"
+    assert note["business_id"] == "church-1" and note["contact_id"] == row.get("id", "saved")
+    for answer in (fields["notes"], fields["heard_from"], "Next Step", "Leaderschool"):
+        assert answer in note["data"]["note"]
+    assert note["data"]["fields"] == fields
     assert not env.events and not env.scores
 
 
@@ -97,7 +103,7 @@ def test_repeat_card_preserves_history_and_existing_contact_state(env):
                      "updated_at": "2026-10-13T12:00:00Z",
                      "metadata": {"office_note": "Keep", "website_form_messages": history}}]
     assert submit(env, form="connect-card", fields={"notes": "New"}).json()["ok"] is True
-    assert not env.posts
+    assert [p[0] for p in env.posts] == ["/events"]
     path, patch = env.patches[0]
     assert "business_id=eq.church-1" in path and "updated_at=eq." in path
     assert patch["metadata"]["website_form_messages"][:-1] == history
@@ -243,3 +249,57 @@ def test_public_email_override_cannot_redirect_private_prayer(env, monkeypatch):
         "sections": {"contact": {"email": "public@example.org"}}}}])
     assert submit(env, form="prayer_request", to="visitor@example.org").json()["ok"] is True
     assert env.mail[0]["to"] == ["pastor@church.org"]
+
+
+@pytest.mark.parametrize("kind", ["", "connect_card", "prayer_request"])
+def test_no_recipient_still_returns_success_after_storage(env, monkeypatch, kind):
+    monkeypatch.setattr(brand_engine, "get_bundle", lambda b: {"business": {"name": "Love City Church"}})
+    monkeypatch.setattr(brand_engine, "_sb_get", lambda p: [{"site_config": {}}])
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: [{"settings": {}}] if p.startswith("/businesses?") else [])
+    monkeypatch.delenv("DEFAULT_CONTACT_FALLBACK_EMAIL", raising=False)
+    fields = {"request": "Please pray for us", "follow_up": True} if kind == "prayer_request" else {"notes": "Please connect with us"}
+    args = {"form": kind, "fields": fields} if kind else {}
+    response = submit(env, **args)
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "notification_sent": False}
+    assert len(env.posts) == (2 if kind == "connect_card" else 1) and not env.mail
+    path, row = env.posts[0]
+    assert row["business_id"] == "church-1"
+    if kind == "prayer_request":
+        assert path == "/ministry_care_requests"
+        assert row["submission"]["prayer_request"] == fields["request"]
+    else:
+        assert path == "/contacts"
+        assert row["metadata"]["website_form_messages"][0]["message"] == "Hello"
+
+
+def test_saved_prayer_is_readable_only_by_the_church_owner(env, monkeypatch):
+    import intake_endpoint
+    from fastapi import HTTPException
+    monkeypatch.setattr(public_site, "_business_public_email", lambda s: "")
+    assert submit(env, form="prayer_request", fields={"request": "A private request"}).json()["ok"] is True
+    record = dict(env.posts[0][1], id="request-1")
+    def get(path):
+        assert "business_id=eq.church-1" in path or "id=eq.church-1" in path
+        if path.startswith("/businesses?"):
+            return [{"id": "church-1", "owner_id": "church-owner"}]
+        assert path.startswith("/ministry_care_requests?")
+        return [record]
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    result = intake_endpoint.private_care_requests("church-1", SimpleNamespace(id="church-owner"))
+    assert result["requests"][0]["submission"]["prayer_request"] == "A private request"
+    with pytest.raises(HTTPException) as denied:
+        intake_endpoint.private_care_requests("church-1", SimpleNamespace(id="other-owner"))
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.parametrize("result", [None, [], [{}]])
+def test_connect_card_requires_a_readable_member_note_before_success(env, monkeypatch, result):
+    def post(path, payload, **kw):
+        env.posts.append((path, copy.deepcopy(payload)))
+        return result if path == "/events" else [{"id": "saved"}]
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    response = submit(env, form="connect_card", fields={"notes": "All my answers"})
+    assert response.status_code == 503 and response.json()["ok"] is False
+    assert [p[0] for p in env.posts] == ["/contacts", "/events"]
+    assert not env.mail and not env.scores

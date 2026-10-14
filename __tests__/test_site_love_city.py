@@ -160,8 +160,8 @@ def test_without_script_a_form_can_never_put_a_visitors_words_in_a_url(pages):
 
 
 def test_every_field_is_limited_and_a_full_card_fits_the_endpoint(pages):
-    """Review finding 7: the endpoint keeps the first 5,000 characters of the
-    message. Every field has a maxlength, every free-text box says its limit
+    """The endpoint rejects messages above 5,000 characters.
+    Every field has a maxlength, every free-text box says its limit
     out loud, and the longest possible message (every box full, every
     choice ticked, every question label) stays under 5,000."""
     forms_js = (SITE + "/forms.js")
@@ -514,7 +514,9 @@ def test_a_form_only_says_thank_you_when_the_endpoint_says_ok(browser, pages):
     assert "ok" in note.get_attribute("class") and "praying with you" in note.text_content()
     assert page.input_value("#pr-request") == ""
     sent = page.evaluate("window.__sent")
-    assert sent[-1]["body"]["form"] == "prayer-request"
+    assert sent[-1]["body"]["form"] == "prayer_request"
+    assert sent[-1]["body"]["fields"]["request"].startswith("Please pray")
+    assert sent[-1]["body"]["fields"]["follow_up"] is False
     assert "Please pray for my mother" in sent[-1]["body"]["message"]
     ctx.close()
 
@@ -583,4 +585,54 @@ def test_when_the_font_fails_nothing_runs_off_a_360px_screen(browser, pages):
         clipped = page.evaluate("""[...document.querySelectorAll('.poster .line')]
             .filter(l => l.scrollWidth > l.clientWidth + 1).map(l => l.textContent.trim())""")
         assert clipped == [], f"{name}: clipped {clipped}"
+    ctx.close()
+
+
+@pytest.mark.parametrize("kind", ["connect-card", "prayer-request"])
+def test_structured_forms_succeed_when_saved_without_notification(browser, pages, kind):
+    """No recipient is configured: saved answers still thank the visitor.
+    Exercise the real form controls and script, then validate the sent payload
+    with the backend contract. No live endpoint or email is contacted.
+    """
+    from website_forms import validate
+    ctx = _context(browser, pages)
+    ctx.add_init_script(FETCH_STUB)
+    page = ctx.new_page()
+    page.goto(ORIGIN + "connect?interest=next-step")
+    response = {"status": 200, "body": {"ok": True, "notification_sent": False}}
+    if kind == "prayer-request":
+        page.check("#pr-follow")
+        note = _send_prayer(page, response)
+        expected = {"request": "Please pray for my mother's surgery on Friday.",
+                    "first_name": "Ann", "follow_up": True}
+        empty_field = "#pr-request"
+    else:
+        page.evaluate("r => { window.__respond = r; }", response)
+        page.fill("#cc-first", "Dana")
+        page.fill("#cc-last", "Rivers")
+        page.fill("#cc-email", "dana@example.org")
+        page.fill("#cc-phone", "555-123-4567")
+        page.check('[name="visits"][value="A few times"]')
+        assert page.is_checked('[data-interest="next-step"]')
+        page.check('[data-interest="leaderschool"]')
+        page.select_option("#cc-heard", label="A Love City member")
+        page.fill("#cc-notes", "Please tell me about the next class.")
+        page.click('[data-church-form="connect-card"] button[type="submit"]')
+        note = page.locator('[data-church-form="connect-card"] [data-form-note]')
+        page.wait_for_function("el => el.textContent && el.textContent !== 'Sending…'", arg=note.element_handle())
+        expected = {"first_name": "Dana", "last_name": "Rivers", "visits": "A few times",
+                    "heard_from": "A Love City member", "notes": "Please tell me about the next class.",
+                    "interests": ["Next Step ministry training", "Leaderschool"]}
+        empty_field = "#cc-notes"
+    assert "ok" in note.get_attribute("class")
+    assert "Thank you" in note.text_content()
+    assert page.input_value(empty_field) == ""
+    sent = page.evaluate("window.__sent")
+    assert len(sent) == 1  # a failed notification must never cause a retry
+    payload = sent[0]["body"]
+    assert payload["form"] == kind.replace("-", "_")
+    assert payload["fields"] == expected
+    assert validate(payload)["fields"] == expected
+    assert "to" not in payload and "recipient" not in payload
+    assert CHURCH_BUSINESS_ID in sent[0]["url"]
     ctx.close()
