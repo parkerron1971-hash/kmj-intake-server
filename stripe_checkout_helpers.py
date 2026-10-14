@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -349,6 +350,41 @@ async def create_booking_checkout(
     )
 
 
+# Embedded Checkout (the payment form inside the church's give page).
+# Stripe renamed ui_mode 'embedded' to 'embedded_page' in API version
+# 2026-03-25.dahlia and made the old value an error. This module sends
+# no Stripe-Version, so requests run at the platform's default version,
+# which a Dashboard click can upgrade. The one request that sets ui_mode
+# pins its version, so an upgrade can't break giving. The page calls
+# whichever Stripe.js name exists (createEmbeddedCheckoutPage, or
+# initEmbeddedCheckout before the rename).
+EMBEDDED_CHECKOUT_STRIPE_VERSION = "2024-06-20"
+
+_PUBLISHABLE_KEY_RE = re.compile(r"^pk_(live|test)_[A-Za-z0-9]+$")
+
+
+def embedded_checkout_publishable_key() -> str:
+    """The platform's publishable key for mounting embedded Checkout, or
+    '' when it's unset, malformed, or in the other mode from the secret
+    key (a test-mode form can't open a live session). '' means the give
+    page keeps sending givers to checkout.stripe.com, so leaving
+    STRIPE_PUBLISHABLE_KEY unset is always safe."""
+    pk = (os.environ.get("STRIPE_PUBLISHABLE_KEY") or "").strip()
+    if not _PUBLISHABLE_KEY_RE.match(pk):
+        return ""
+    live_secret = (os.environ.get("STRIPE_SECRET_KEY") or "").startswith(("sk_live_", "rk_live_"))
+    if pk.startswith("pk_live_") != live_secret:
+        return ""
+    return pk
+
+
+def _giving_checkout_headers(stripe_account_id: str, embedded: bool) -> Dict[str, str]:
+    headers = {"Stripe-Account": stripe_account_id}
+    if embedded:
+        headers["Stripe-Version"] = EMBEDDED_CHECKOUT_STRIPE_VERSION
+    return headers
+
+
 def _giving_checkout_form(
     *,
     amount_cents: int,
@@ -365,10 +401,17 @@ def _giving_checkout_form(
     currency: str = "usd",
     frequency: Optional[str] = None,
     cover_fee_cents: int = 0,
+    embedded: bool = False,
 ) -> Dict[str, Any]:
     """The Checkout-Session form for a gift. Pure so tests can pin the
     metadata + mode contract without touching Stripe (same reason
     _checkout_session_form / _invoice_link_form exist).
+
+    embedded=True: the payment form mounts inside the church's own give
+    page instead of sending the giver to checkout.stripe.com. Stripe
+    rejects success_url/cancel_url in that mode; it returns the giver's
+    window to return_url when they finish, and there is no cancel (the
+    page's own "change my gift" button takes them back).
 
     One-time (monthly=False): mode=payment; metadata mirrored onto the
       payment intent via payment_intent_data so charge-level events
@@ -419,11 +462,13 @@ def _giving_checkout_form(
     if giver_email:
         metadata["giver_email"] = giver_email[:200]
 
-    form: Dict[str, Any] = {
-        "mode": "subscription" if monthly else "payment",
-        "success_url": success_url,
-        "cancel_url": cancel_url,
-    }
+    form: Dict[str, Any] = {"mode": "subscription" if monthly else "payment"}
+    if embedded:
+        form["ui_mode"] = "embedded"
+        form["return_url"] = success_url
+    else:
+        form["success_url"] = success_url
+        form["cancel_url"] = cancel_url
     for k, v in metadata.items():
         form[f"metadata[{k}]"] = v
         if monthly:
@@ -472,11 +517,12 @@ async def create_giving_checkout(
     currency: str = "usd",
     frequency: Optional[str] = None,
     cover_fee_cents: int = 0,
+    embedded: bool = False,
 ) -> Dict[str, Any]:
     """Create the gift Checkout Session on the connected account.
-    Returns the Stripe session dict (key fields: id, url). Raises
-    RuntimeError on Stripe error (same contract as
-    create_checkout_session)."""
+    Returns the Stripe session dict (key fields: id, url; client_secret
+    when embedded). Raises RuntimeError on Stripe error (same contract
+    as create_checkout_session)."""
     if not stripe_account_id:
         raise ValueError("stripe_account_id required")
     form = _giving_checkout_form(
@@ -494,13 +540,14 @@ async def create_giving_checkout(
         currency=currency,
         frequency=frequency,
         cover_fee_cents=cover_fee_cents,
+        embedded=embedded,
     )
     require_stripe_write(stripe_account_id)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(
             f"{STRIPE_API_BASE}/checkout/sessions",
             auth=(_secret_key(), ""),
-            headers={"Stripe-Account": stripe_account_id},
+            headers=_giving_checkout_headers(stripe_account_id, embedded),
             data=form,
         )
     if resp.status_code >= 400:
