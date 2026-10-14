@@ -107,14 +107,14 @@ async def _get_task(c: httpx.AsyncClient, task_id: str) -> Dict[str, Any]:
 
 
 async def _append_note(c: httpx.AsyncClient, task: Dict[str, Any],
-                       sender: str, text: str) -> None:
+                       sender: str, text: str, extra: Optional[Dict[str, Any]] = None) -> None:
     if _is_work(task):
         from chief_local_work import db
         await db('POST', '/rpc/chief_work_note', {'task_id': task['id'], 'note': {
             'id': str(uuid4()), 'from': sender, 'text': text[:4000], 'at': _now()}})
         return
     notes = list(task.get("notes") or [])
-    notes.append({"from": sender, "text": text[:4000], "at": _now()})
+    notes.append({"from": sender, "text": text[:4000], "at": _now(), **(extra or {})})
     await _sb_patch(c, "dev_tasks", {"id": f"eq.{task['id']}"},
                     {"notes": notes, "updated_at": _now()})
 
@@ -279,6 +279,15 @@ class DispatchBody(BaseModel):
 
 class NoteBody(BaseModel):
     text: str
+    # A key to press instead of typing the text: the answer to a prompt the
+    # session is stopped on (a permission menu takes a number, not a
+    # sentence). `text` is what the thread shows for it, like "Yes".
+    keys: Optional[str] = None
+
+
+# What a reply may press. Claude Code's and Codex's menus answer to a digit;
+# Esc backs out of one; Enter takes the highlighted choice.
+_REPLY_KEYS = {"1", "2", "3", "esc", "enter"}
 
 
 class PairBody(BaseModel):
@@ -439,13 +448,21 @@ async def add_owner_note(task_id: str, body: NoteBody, _owner=Depends(require_ow
     text = body.text.strip()
     if not text:
         raise HTTPException(422, "text required")
+    keys = (body.keys or "").strip().lower() or None
+    if keys and keys not in _REPLY_KEYS:
+        raise HTTPException(422, f"keys must be one of {sorted(_REPLY_KEYS)}")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         task = await _get_task(c, task_id)
+        if keys and (task.get("lane") != "local" or _is_work(task)
+                     or task.get("status") not in _ACTIVE_STATUSES):
+            # A key answers a prompt on a live screen; a closed session has
+            # none, and a fresh one would read "1" as a message.
+            raise HTTPException(409, "That session isn't waiting on a prompt now — send a message instead.")
         if _is_work(task):
             from chief_local_work import reply, Reply
             await reply(UUID(task_id), Reply(id=uuid4(), text=text), _owner)
             return {'ok': True, 'posted_to_issue': False, 'reopened': task.get('status') in _FINISHED_STATUSES}
-        await _append_note(c, task, "kevin", text)
+        await _append_note(c, task, "kevin", text, {"keys": keys} if keys else None)
         # Cloud-lane follow-ups go to the issue too, so the cloud builder
         # actually sees them — a note only the Dev Desk shows would dead-end.
         posted_to_issue = False
@@ -516,10 +533,19 @@ class StatusBody(BaseModel):
     note: Optional[str] = None
     sender: Optional[str] = None  # 'device' (default) | 'session'
     # Solution Space's read of whether Kevin is at the machine (no input for
-    # a while). A relayed screen from a session that went quiet while he is
-    # away is the one his phone hears about; a build that predates the field
-    # sends nothing, and nothing is pushed.
+    # a while, or he handed the session to his phone). A relayed screen from
+    # a session that went quiet while he is away is the one his phone hears
+    # about; a build that predates the field sends nothing, and nothing is
+    # pushed.
     away: Optional[bool] = None
+    # A screen sent while the session is still mid-turn, so a session handed
+    # to the phone can be watched as it works. It replaces the screen before
+    # it and never pushes — the session has not stopped.
+    live: Optional[bool] = None
+    # What the session's own hooks say it stopped for: 'needs-you' (a
+    # question or a permission prompt) or 'ready' (its turn is over). Only
+    # changes the words on the lock screen.
+    state: Optional[str] = None
 
 
 class ReportBody(BaseModel):
@@ -547,6 +573,12 @@ async def _bound_work(task, device):
         raise HTTPException(409, 'This conversation is not claimed by this device.')
 
 
+# What a device's build can do beyond opening agents, recorded with them on
+# every poll: Chief's subscription work, and KAI's line to the phone (see
+# dev_kai.py — the phone finds the desktop KAI lives on by this).
+_DEVICE_CAPABILITIES = ('workbench-v1', 'kai-v1')
+
+
 @router.post('/dev-bridge/tasks/{task_id}/claim')
 async def bridge_claim(task_id: UUID, authorization: Optional[str] = Header(None)):
     from chief_local_work import db
@@ -564,10 +596,11 @@ async def bridge_queue(authorization: Optional[str] = Header(None),
     # Only work for an agent this device can open. The rest waits in the
     # queue for a device that can — see _device_agents.
     can_run = _device_agents(agents)
-    workbench = 'workbench-v1' in (capabilities or '').split(',')
+    caps = [x for x in _DEVICE_CAPABILITIES if x in (capabilities or '').split(',')]
+    workbench = 'workbench-v1' in caps
     agent_filter = f"in.({','.join(can_run)})"
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
-        device = await _require_device(c, authorization, can_run + (['workbench-v1'] if workbench else []))
+        device = await _require_device(c, authorization, can_run + caps)
         rows = await _sb_get(c, "dev_tasks", {
             "lane": "eq.local",
             "status": "eq.queued",
@@ -648,7 +681,8 @@ def _undelivered_replies(task: Dict[str, Any]) -> List[Dict[str, str]]:
     out = []
     for n in task.get("notes") or []:
         if n.get("from") == "kevin" and not n.get("delivered_at") and n.get("at"):
-            out.append({"at": n["at"], "text": n.get("text") or ""})
+            out.append({"at": n["at"], "text": n.get("text") or "",
+                        **({"keys": n["keys"]} if n.get("keys") else {})})
     return out
 
 
@@ -717,17 +751,30 @@ async def bridge_status(task_id: str, body: StatusBody,
                 patch["finished_at"] = _now()
             await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
         if body.note:
-            if sender == "session" and task.get("origin") == "desktop":
-                await _put_screen(c, task, body.note)
+            state = (body.state or "").strip().lower() or None
+            if sender == "session" and (task.get("origin") == "desktop" or body.live):
+                await _put_screen(c, task, body.note, state)
             else:
-                await _append_note(c, task, sender, body.note)
+                await _append_note(c, task, sender, body.note,
+                                   {"state": state} if sender == "session" and state in _SCREEN_STATES else None)
         pushed = 0
-        if (sender == "session" and body.away and not settled
+        if (sender == "session" and body.away and not body.live and not settled
                 and not _is_work(task) and not _said_it_itself(task)):
-            pushed = await _tell_kevin(
-                c, task, f"{task.get('title') or 'A session'} — your turn",
-                "It stopped: finished, or waiting on you. Its screen is on the Dev Desk.")
+            pushed = await _tell_kevin(c, task, *_stopped_words(task, body.state))
     return {"ok": True, "pushed": pushed}
+
+
+def _stopped_words(task: Dict[str, Any], state: Optional[str]) -> tuple:
+    """The lock-screen words for a session that went quiet. Its hooks know
+    which kind of quiet it is; an older build doesn't say, and gets both."""
+    name = task.get("title") or "A session"
+    said = {
+        "needs-you": (f"{name} — needs you", "It's waiting on your answer. Its screen is on the Dev Desk."),
+        "ready": (f"{name} — your turn", "It finished its turn. Its screen is on the Dev Desk."),
+    }
+    return said.get((state or "").strip().lower(), (
+        f"{name} — your turn",
+        "It stopped: finished, or waiting on you. Its screen is on the Dev Desk."))
 
 
 # A session that reported in its own words within this window has already
@@ -750,13 +797,18 @@ def _said_it_itself(task: Dict[str, Any]) -> bool:
     return False
 
 
-async def _put_screen(c: httpx.AsyncClient, task: Dict[str, Any], text: str) -> None:
+async def _put_screen(c: httpx.AsyncClient, task: Dict[str, Any], text: str,
+                      state: Optional[str] = None) -> None:
     """A desktop session relays its screen every time it goes quiet — every
     turn, in a session Kevin is using by hand. Consecutive screens replace
     one another instead of piling up: the thread keeps the newest screen
     between two things anyone said, which is all the panel shows anyway."""
     notes = list(task.get("notes") or [])
     screen = {"from": "session", "text": text[:4000], "at": _now()}
+    # What the session's hooks say it is doing, so the phone can offer the
+    # answers to a prompt it is stopped on.
+    if state in _SCREEN_STATES:
+        screen["state"] = state
     if notes and notes[-1].get("from") == "session":
         notes[-1] = screen
     else:
@@ -765,14 +817,25 @@ async def _put_screen(c: httpx.AsyncClient, task: Dict[str, Any], text: str) -> 
                     {"notes": notes, "updated_at": _now()})
 
 
+_SCREEN_STATES = {"working", "needs-you", "ready"}
+
+
 # ─── Telling Kevin: web push to his phone ─────────────────────────────
 
 async def _tell_kevin(c: httpx.AsyncClient, task: Dict[str, Any],
                       title: str, body: str) -> int:
     """One notification per task — the tag makes a newer one replace the
     older on the lock screen instead of stacking — and a tap opens that
-    task's thread on the Dev Desk. Returns how many devices it reached.
-    Fail-soft: a report or a relay never fails because the telling did."""
+    task's thread on the Dev Desk. Returns how many devices it reached."""
+    return await _push_owner(c, title, body,
+                             nav=f"studio:platform-dev-desk:{task['id']}",
+                             tag=f"dev-task-{task['id']}")
+
+
+async def _push_owner(c: httpx.AsyncClient, title: str, body: str, *,
+                      nav: str, tag: str) -> int:
+    """Web push to Kevin's phone. Fail-soft: a report or a relay never fails
+    because the telling did."""
     try:
         import platform_watchdog
         import push_notifications
@@ -785,12 +848,10 @@ async def _tell_kevin(c: httpx.AsyncClient, task: Dict[str, Any],
         # send_to_user posts to each push service synchronously.
         return await asyncio.to_thread(
             push_notifications.send_to_user, owner,
-            title=title[:90], body=body[:220],
-            nav=f"studio:platform-dev-desk:{task['id']}",
-            tag=f"dev-task-{task['id']}",
+            title=title[:90], body=body[:220], nav=nav, tag=tag,
         )
     except Exception as e:
-        logger.warning(f"dev_bridge push failed for {task.get('id')}: {e}")
+        logger.warning(f"dev_bridge push failed ({tag}): {e}")
         return 0
 
 
@@ -899,6 +960,59 @@ async def _close_desktop(c: httpx.AsyncClient, task: Dict[str, Any], why: str) -
                     {"status": "done", "finished_at": _now(), "updated_at": _now()})
     await _append_note(c, task, "device", why)
     return True
+
+
+# ─── Handing a session to the phone ───────────────────────────────────
+
+class HandoffBody(BaseModel):
+    screen: Optional[str] = None  # the session's screen as it is this moment
+    doing: Optional[str] = None   # its own line about what it is doing, from its hooks
+    state: Optional[str] = None   # 'working' | 'needs-you' | 'ready'
+
+
+_HANDOFF_LEADS = {
+    "needs-you": "It's waiting on your answer.",
+    "ready": "It finished its turn.",
+    "working": "It's still working.",
+}
+
+
+@router.post("/dev-bridge/tasks/{task_id}/handoff")
+async def bridge_handoff(task_id: str, body: HandoffBody,
+                         authorization: Optional[str] = Header(None)):
+    """Kevin pressed "Hand off to phone" on a session in Solution Space. The
+    thread gets the screen as it is this moment and a line saying it was
+    handed over, and his phone hears about it straight away: a tap opens
+    the thread, where a reply is typed into the session like any other.
+    From here the device sends the session's screens as it works (`live`)
+    and treats Kevin as away for it until he is back at the keyboard."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        device = await _require_device(c, authorization)
+        task = await _get_task(c, task_id)
+        if (task.get("lane") != "local" or _is_work(task)
+                or (task.get("origin") == "desktop" and task.get("device_id") != device["id"])):
+            raise HTTPException(409, "That session isn't one this desktop can hand off.")
+        notes = list(task.get("notes") or [])
+        screen = (body.screen or "").strip()
+        if screen:
+            shown = {"from": "session", "text": screen[:4000], "at": _now()}
+            if notes and notes[-1].get("from") == "session":
+                notes[-1] = shown
+            else:
+                notes.append(shown)
+        doing = " ".join((body.doing or "").split())[:300]
+        notes.append({"from": "device", "kind": "handoff", "at": _now(),
+                      "text": f"Handed to your phone{': ' + doing if doing else '.'}"})
+        patch: Dict[str, Any] = {"notes": notes, "updated_at": _now()}
+        # A pane that is open is live, whatever an earlier sweep decided.
+        if task.get("origin") == "desktop" and task.get("status") in _FINISHED_STATUSES:
+            patch.update({"status": "working", "finished_at": None})
+        await _sb_patch(c, "dev_tasks", {"id": f"eq.{task_id}"}, patch)
+        lead = _HANDOFF_LEADS.get((body.state or "").strip().lower(), "")
+        words = " ".join(x for x in (doing, lead) if x) or "Its screen is on the Dev Desk."
+        pushed = await _tell_kevin(c, task, f"{task.get('title') or 'Your session'} — on your phone",
+                                   f"{words} Reply there to type into it.")
+    return {"ok": True, "pushed": pushed}
 
 
 _REPORT_STATUSES = {"working", "done", "failed"}

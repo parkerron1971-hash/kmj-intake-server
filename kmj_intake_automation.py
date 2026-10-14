@@ -680,6 +680,12 @@ app.include_router(billing_rehearsal_router)
 # (owner JWT) + /dev-bridge/* (device token / per-task report key).
 from dev_bridge import router as dev_bridge_router
 app.include_router(dev_bridge_router)
+# KAI on the phone (2026-10-14): Solution Space's orchestrator mirrors its
+# conversation to the Dev Desk and takes Kevin's words, spoken or typed,
+# and his answers to approvals back. /platform/dev-desk/kai* (owner JWT)
+# + /dev-bridge/kai/* (device token).
+from dev_kai import router as dev_kai_router
+app.include_router(dev_kai_router)
 from chief_local_work import router as chief_local_work_router
 app.include_router(chief_local_work_router)
 from creative_director import router as creative_director_router, business_router as creative_director_business_router
