@@ -765,12 +765,42 @@ async def intake_health():
 
 @router.get("/intake/private-care/{business_id}")
 def private_care_requests(business_id: str, user: AuthedUser = Depends(require_user)):
-    from private_care import require_owner
-    import sb_clients
-    require_owner(business_id, user)
-    rows = sb_clients.sb_get_as_service(
-        f"/ministry_care_requests?business_id=eq.{business_id}"
-        "&select=id,created_at,status,submission&order=created_at.desc&limit=100")
-    if not isinstance(rows, list):
-        raise HTTPException(503, "Private requests could not be loaded")
-    return {"requests": rows}
+    import private_care
+    private_care.require_owner(business_id, user)
+    return private_care.list_requests(business_id)
+
+
+class CareRequestPatch(BaseModel):
+    status: Optional[str] = None
+    prayed: Optional[bool] = None
+
+
+class CareNoteIn(BaseModel):
+    body: str
+
+
+# The inbox's actions. Owner only, like the read: the browser has no grant
+# on either table, so these are the only way in.
+@router.patch("/intake/private-care/{business_id}/{request_id}")
+def private_care_update(business_id: str, request_id: str, body: CareRequestPatch,
+                        user: AuthedUser = Depends(require_user)):
+    import private_care
+    private_care.require_owner(business_id, user)
+    return private_care.update_request(business_id, request_id,
+                                       status=body.status, prayed=body.prayed)
+
+
+@router.post("/intake/private-care/{business_id}/{request_id}/notes")
+def private_care_add_note(business_id: str, request_id: str, body: CareNoteIn,
+                          user: AuthedUser = Depends(require_user)):
+    import private_care
+    private_care.require_owner(business_id, user)
+    return private_care.add_note(business_id, request_id, body.body, str(user.id))
+
+
+@router.delete("/intake/private-care/{business_id}/notes/{note_id}")
+def private_care_delete_note(business_id: str, note_id: str,
+                             user: AuthedUser = Depends(require_user)):
+    import private_care
+    private_care.require_owner(business_id, user)
+    return private_care.delete_note(business_id, note_id)
