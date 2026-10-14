@@ -853,6 +853,8 @@ dl, dd { margin: 0; }
   font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3.6rem);
 }
 .min-body p { max-width: 34em; }
+/* youth and baptism show the church's own photo above their words, as wide as the words */
+.min-photo { aspect-ratio: 3 / 2; max-width: 34em; margin: 6px 0 20px; }
 @media (min-width: 900px) { .min { grid-template-columns: 5fr 7fr; gap: 40px; padding: 40px 0; } }
 .training-grid { display: grid; gap: 56px; }
 .course { border-top: 3px solid var(--love); padding-top: 16px; }
