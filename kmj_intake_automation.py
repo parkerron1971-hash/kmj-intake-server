@@ -344,6 +344,9 @@ app.include_router(booking_page_router)
 # public_site_router so nothing falls into the subdomain catch-all.
 from giving_router import router as giving_router
 app.include_router(giving_router)
+# Year-end giving statements by email (finance seats, explicit confirm).
+from giving_statement_mail import router as giving_statement_mail_router
+app.include_router(giving_statement_mail_router)
 # Public event RSVP (event_roster modules) — owner config
 # (/events-public/...) + the anonymous signup (/public/events/...).
 # Same discipline: BEFORE public_site_router so nothing falls into the
