@@ -64,6 +64,8 @@
   - Nudge bank giving: $1.20 vs $4.65 on a $150 gift.
   - Revisit Helcim if church volume reaches $100k+ a month.
 
+**How Subsplash does giving (Kevin asked about a "treasury account").** Subsplash's Transfers page says: "Subsplash partners with Stripe Payments Company for money transmission and account services with funds held at Fifth Third Bank." Subsplash runs every church on Stripe under its own name and holds the gifts. That is why a church never sees Stripe, and why Subsplash carries the compliance load. Solutionist gives the same on-screen experience with #1428–#1430, but the church owns its own Stripe account and gets paid straight to its bank. Stripe Treasury was advised against: platform KYC, liability for losses, and Stripe-approved marketing.
+
 **Shipped (backend PRs; frontend in brackets):**
 
 | Step | What | PRs |
@@ -80,13 +82,16 @@
 | 2 | A give link fills the page in (`?amount=&frequency=&fund=&cover_fee=1`), for each recurring giver's move link | #1425 |
 | 2 | Email every giver their year-end statement (`giving_statement_sends`, finance seats, explicit confirm) | #1421 [FE branch `statements-email-ui`, opens after #1421 deploys] |
 | 2 | Givers change, pause or stop their own recurring gift and update the card (`/my/gifts`) | #1424 |
+| 2 | Givers pay on the church's give page itself: embedded Checkout on the church's account, with a redirect fallback (Kevin: "can we embed stripe so people don't have to leave the system?") | #1428 |
+| 2 | Apple Pay / Google Pay inside that form: Payment Method Domains registered on the church's account when giving is turned on, plus Apple's association file on every site | #1429 |
+| 2 | A church signs up for Stripe inside Solutionist: Operate → Payments → "Set up Stripe here" creates its own full Stripe account (Standard-equivalent, no platform liability) and Stripe's form runs in the app | #1430 [FE #1220] |
 | 3 | The member page installs like an app: manifest, icons, service worker (no push), install card | #1422 |
 | 6 | Bible reading plans: 4 computed plans, Home card, `/my/reading`, staff choose in Settings | #1423 [FE #1218] |
 
 **Migrations applied 2026-10-14** (all in `docs/MIGRATIONS.md`): care-inbox-actions, care-assign, giving-statement-sends, reading-progress. The church tables from 9/29–10/02 were verified live and recorded.
 
 **Waiting on Kevin:**
-1. Does Love City have its own Stripe account? Online giving, statements and the recurring-giver move all need one connected (Operate → Giving → Connect Stripe, signed in as the church).
+1. Love City's Stripe. Online giving and statements need one connected. A church with no Stripe account now sets one up in Operate → Payments → "Set up Stripe here", signed in as the church. That needs the church's EIN, bank and a leader's ID, so the church does it, not an agent. Then turn giving on in Operate → Giving, which also registers the wallet domains. `STRIPE_PUBLISHABLE_KEY` was already set in Railway (live), so the embedded form and the in-app signup work as soon as an account exists.
 2. Yes to downloading two Subsplash exports to the laptop: the people list (590) and the 2026 gifts (733). They feed the D3 importer, which isn't built yet because the export format is unseen. The recurring givers list is empty, so it isn't needed.
 3. Open decision 1 (member notifications) gates push in step 3.
 4. A texting number of Love City's own (a paid line) for text GIVE and member texts.
