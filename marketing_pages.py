@@ -5541,7 +5541,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="fit">
         <summary>Does it work for churches and ministries?</summary>
-        <div class="faq-body"><p>It works for the <em>person</em> running a church or ministry: pastors, ministry leaders, faith-based coaches. The product is solo-first: one person runs the workspace. The Solutionist plan adds staff seats when you need them. If you need full church membership tools, we're not the right fit yet (those are on the roadmap).</p></div>
+        <div class="faq-body"><p>Yes. Churches get their own edition, in church words: Members, Giving, Serving, Care. Members sign in to the church&rsquo;s own member page with a code (no password) to watch live with chat, find sermons, read the Bible, join groups and give. Your team checks people in to services and children in to their rooms, with pickup codes. Group chats follow safety rules for teens, prayer requests go to a private care inbox, and giving runs through your church&rsquo;s own Stripe account with year-end statements. Home puts the first-time guests nobody has called yet at the top, and Chief helps with the follow-up. The Solutionist plan adds staff seats when you need them.</p></div>
       </details>
       <details class="faq-item" data-g="how">
         <summary>What does Chief do while I&rsquo;m not logged in?</summary>
