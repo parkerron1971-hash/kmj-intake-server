@@ -168,3 +168,67 @@ def test_tithes_and_offering_are_general_and_building_is_restricted():
             gift("t3", "A", "B", 10, Fund="Building Fund")]
     cats = [g["category"] for g in _plan(rows)["inserts"]]
     assert cats == [None, None, "restricted"]
+
+
+# ─── a second run finishes what a partial run started ─────────────────
+
+def test_bulk_rows_all_carry_the_same_keys():
+    # PostgREST rejects a bulk insert whose objects differ (PGRST102).
+    rows = si._uniform([{"name": "A", "birthdate": "1990-01-01"}, {"name": "B", "first_response_at": NOW}])
+    assert [sorted(r) for r in rows] == [["birthdate", "first_response_at", "name"]] * 2
+    assert rows[1]["birthdate"] is None and rows[0]["first_response_at"] is None
+
+
+def test_givers_added_from_the_gifts_export_are_filled_in_not_duplicated():
+    rows = [person("Gail", "Hart", email="gail@example.com", phone="231-555-0122",
+                   date_of_birth="1960-04-04", membership_status="member", city="Muskegon")]
+    existing = [{"id": "g1", "name": "Gail Hart", "email": "gail@example.com", "source": "subsplash_import",
+                 "metadata": {"imported": {"From": "gifts export", "Other emails": ["gh@old.example"]}}},
+                {"id": "x1", "name": "Staff Added", "email": "staff@example.com", "source": "csv_import",
+                 "metadata": {}}]
+    plan = si.plan_people(rows + [person("Staff", "Added", email="staff@example.com")],
+                          existing=existing, now_iso=NOW)
+    assert plan["inserts"] == []
+    (u,) = plan["updates"]                      # only the importer's own giver record
+    assert u["id"] == "g1"
+    f = u["fields"]
+    assert f["phone"] == "+12315550122" and f["birthdate"] == "1960-04-04" and f["status"] == "active"
+    assert f["metadata"]["imported"]["Other emails"] == ["gh@old.example"]
+    assert "created_at" not in f and "source" not in f
+    assert plan["counts"]["givers_filled_in"] == 1
+
+
+def test_one_existing_record_is_never_matched_twice():
+    rows = [person("Sam", "Ray", date_of_birth="1970-01-01"),
+            person("Sam", "Ray", date_of_birth="2005-06-01")]
+    plan = si.plan_people(rows, existing=[{"id": "c1", "name": "Sam Ray", "metadata": {}}], now_iso=NOW)
+    assert len(plan["matched"]) == 1 and len(plan["inserts"]) == 1
+
+
+def test_gifts_wait_when_the_people_did_not_all_save(monkeypatch, tmp_path):
+    import csv as _csv
+    pf, gf = tmp_path / "people.csv", tmp_path / "gifts.csv"
+    p_rows = [person("A", "One", email="a@example.com"), person("B", "Two", date_of_birth="1980-01-01")]
+    with open(pf, "w", newline="", encoding="utf-8") as f:
+        w = _csv.DictWriter(f, fieldnames=list(p_rows[0])); w.writeheader(); w.writerows(p_rows)
+    g_rows = [gift("g1", "A", "One", 10)]
+    with open(gf, "w", newline="", encoding="utf-8") as f:
+        w = _csv.DictWriter(f, fieldnames=list(g_rows[0])); w.writeheader(); w.writerows(g_rows)
+
+    class SB:
+        posts = []
+        def sb_get_as_service(self, path):
+            return [{"id": "biz", "name": "Church", "type": "ministry"}] if path.startswith("/businesses") else []
+        def sb_post_as_service(self, path, body, prefer=None):
+            SB.posts.append((path, body))
+            return [] if path == "/contacts" else body   # the people insert fails
+        def sb_patch_as_service(self, path, body):
+            return [body]
+
+    import sys, types
+    monkeypatch.setitem(sys.modules, "sb_clients", SB())
+    report = si.run("biz", str(pf), str(gf), write=True)
+    assert report["stopped"] and report["people"]["written"] == 0
+    assert not any(path == "/invoices" for path, _ in SB.posts)
+    (path, body), = [(p, b) for p, b in SB.posts if p == "/contacts"]
+    assert len({tuple(sorted(r)) for r in body}) == 1   # uniform keys went out

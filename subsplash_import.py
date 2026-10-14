@@ -219,8 +219,10 @@ def plan_people(rows: List[Dict[str, str]], *, givers: Iterable[str] = (),
     by_email: Dict[str, str] = {}
     by_phone: Dict[str, str] = {}
     by_name: Dict[str, str] = {}
+    known: Dict[str, Dict[str, Any]] = {}
     for c in existing or []:
         cid = str(c.get("id"))
+        known[cid] = c
         md = c.get("metadata") or {}
         for pid in ((md.get("imported") or {}).get("Subsplash person IDs") or []):
             by_pid[str(pid)] = cid
@@ -232,7 +234,9 @@ def plan_people(rows: List[Dict[str, str]], *, givers: Iterable[str] = (),
             by_name.setdefault(" ".join(_s(c.get("name")).lower().split()), cid)
 
     inserts: List[Dict[str, Any]] = []
+    updates: List[Dict[str, Any]] = []
     matched: List[Tuple[Dict[str, Any], str]] = []
+    claimed: set = set()
     statuses: Counter = Counter()
     for i, p in enumerate(people):
         name_key = norm_name(p["first_name"], p["last_name"])
@@ -242,13 +246,13 @@ def plan_people(rows: List[Dict[str, str]], *, givers: Iterable[str] = (),
                or (by_email.get(email) if email else None)
                or (by_phone.get(phone_match(phone_raw)) if phone_raw else None)
                or by_name.get(name_key))
-        if hit:
-            matched.append((p, hit))
-            continue
+        if hit in claimed:
+            # Someone earlier in this file already matched that contact
+            # (a parent and child with one name): this one is new.
+            hit = None
         gave = (bool(set(p["_emails"]) & giver_keys) or name_key in giver_keys)
         ms = p["membership_status"]
         status = "active" if ms == "member" or (not ms and gave) else "lead"
-        statuses[status] += 1
         imported: Dict[str, Any] = {"Subsplash person IDs": p["_person_ids"],
                                     "Membership status": ms or "(none)"}
         for label, key in (("Gender", "gender"), ("Household role", "household_role"),
@@ -291,12 +295,31 @@ def plan_people(rows: List[Dict[str, str]], *, givers: Iterable[str] = (),
         if status == "lead":
             # Imported, not waiting: keeps them out of "nobody has replied".
             row["first_response_at"] = now_iso
+        if hit:
+            claimed.add(hit)
+            matched.append((p, hit))
+            have = known.get(hit) or {}
+            if _from_gifts_export(have):
+                # A giver this importer added from the gifts export (a run
+                # where the people didn't land first): fill them in now.
+                fields = {k: v for k, v in row.items() if k not in ("created_at", "source")}
+                old_imp = ((have.get("metadata") or {}).get("imported") or {})
+                if old_imp.get("Other emails"):
+                    extra = [e for e in old_imp["Other emails"] if e != fields.get("email")]
+                    imp = fields["metadata"]["imported"]
+                    imp["Other emails"] = sorted(set(imp.get("Other emails") or []) | set(extra))
+                updates.append({"id": hit, "fields": fields})
+            continue
+        statuses[status] += 1
         inserts.append(row)
+    for u in updates:
+        statuses[u["fields"]["status"] + "_filled_in"] += 1
     return {
-        "inserts": inserts, "matched": matched,
+        "inserts": inserts, "matched": matched, "updates": updates,
         "counts": {"rows": len(rows), "people": len(people),
                    "duplicate_rows_dropped": len(rows) - len(people),
                    "already_in_workspace": len(matched), "to_add": len(inserts),
+                   "givers_filled_in": len(updates),
                    "members": statuses["active"], "visitors": statuses["lead"],
                    "children": sum(1 for r in inserts if CHILD_TAG in r["tags"]),
                    "shared_email_or_phone_moved": sum(1 for v in shared_away.values() if v)},
@@ -402,13 +425,25 @@ def giver_keys(gift_rows: List[Dict[str, str]]) -> List[str]:
 
 # ─── the database ────────────────────────────────────────────────────
 
+def _from_gifts_export(contact: Dict[str, Any]) -> bool:
+    imp = ((contact.get("metadata") or {}).get("imported") or {})
+    return contact.get("source") == SOURCE and imp.get("From") == "gifts export"
+
+
+def _uniform(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """PostgREST's bulk insert needs every object to have the same keys
+    (PGRST102), so a row without a birthday carries birthdate: null."""
+    keys = sorted({k for r in rows for k in r})
+    return [{k: r.get(k) for k in keys} for r in rows]
+
+
 def _existing_contacts(business_id: str) -> List[Dict[str, Any]]:
     import sb_clients
     out: List[Dict[str, Any]] = []
     offset = 0
     while True:
         page = sb_clients.sb_get_as_service(
-            f"/contacts?business_id=eq.{business_id}&select=id,name,email,phone,metadata"
+            f"/contacts?business_id=eq.{business_id}&select=id,name,email,phone,source,metadata"
             f"&order=created_at.asc&limit=1000&offset={offset}") or []
         out += page
         if len(page) < 1000:
@@ -437,9 +472,21 @@ def run(business_id: str, people_csv: str, gifts_csv: Optional[str], *, write: b
     created: List[Dict[str, Any]] = []
     if write and people["inserts"]:
         for i in range(0, len(people["inserts"]), 100):
-            chunk = [{**r, "business_id": business_id} for r in people["inserts"][i:i + 100]]
+            chunk = _uniform([{**r, "business_id": business_id} for r in people["inserts"][i:i + 100]])
             created += sb_clients.sb_post_as_service("/contacts", chunk) or []
         report["people"]["written"] = len(created)
+        if len(created) != len(people["inserts"]):
+            # Never link gifts to a half-written people list: the next run
+            # picks up where this one stopped.
+            report["stopped"] = "not every person saved; gifts were not written"
+            return report
+    if write and people["updates"]:
+        filled = 0
+        for u in people["updates"]:
+            if sb_clients.sb_patch_as_service(
+                    f"/contacts?id=eq.{u['id']}&business_id=eq.{business_id}", u["fields"]):
+                filled += 1
+        report["people"]["filled_in"] = filled
 
     # Gifts link to contacts by email, then by name, after the people land.
     contacts = _existing_contacts(business_id) if write else [
@@ -466,8 +513,12 @@ def run(business_id: str, people_csv: str, gifts_csv: Optional[str], *, write: b
         hit = (by_email.get(email) if email else None) or by_name.get(norm_name(first, last))
         if hit:
             return hit
-        key = email or norm_name(first, last)
-        missing.setdefault(key, {"email": email, "first": first, "last": last})
+        # Keyed by name: a giver who left an email on some gifts and not on
+        # others is still one person.
+        key = norm_name(first, last) or email
+        found = missing.setdefault(key, {"email": email, "first": first, "last": last})
+        if email and not found["email"]:
+            found["email"] = email
         return f"missing:{key}"
 
     gifts = plan_gifts(gift_rows, contact_for=contact_for, business_id=business_id,
@@ -485,7 +536,7 @@ def run(business_id: str, people_csv: str, gifts_csv: Optional[str], *, write: b
                  "metadata": {"imported_at": now_iso, "imported_from": "Subsplash",
                               "imported": {"From": "gifts export"}},
                  "created_at": now_iso} for m in missing.values()]
-        made = sb_clients.sb_post_as_service("/contacts", rows) or []
+        made = sb_clients.sb_post_as_service("/contacts", _uniform(rows)) or []
         for k, row in zip(missing, made):
             by_email.setdefault(k, str(row["id"]))
             by_name.setdefault(k, str(row["id"]))
