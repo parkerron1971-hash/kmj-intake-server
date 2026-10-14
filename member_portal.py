@@ -534,6 +534,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     current tab) and `who` (their avatar, which opens Me); the sign-in
     pages pass neither and get no bar. The look is member_app_ui's."""
     import member_app_ui as ui
+    import member_app_install as mai
     from public_form_theme import resolve_theme, css_vars, font_links
     theme = resolve_theme(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
@@ -558,6 +559,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="{ui.palette(biz, theme)['ground']}">
+{mai.head_tags(biz)}
 <title>{_e(title)} — {_e(name)}</title>
 {font_links(theme)}
 <style>{css_vars(theme)}</style>
@@ -571,6 +573,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 </main>
 {ui.nav(tab) if signed_in else ''}
 {script}
+{mai.REGISTER_JS}
 </body>
 </html>"""
 
@@ -671,6 +674,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     import member_app_ui as ui
     import member_portal_church as mpc
     import member_portal_sermons as mps
+    import member_app_install as mai
     pal = palette_for(biz, site)
     hello = first_name(me.get("name") or "") or "there"
     quick = []
@@ -691,6 +695,7 @@ var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+'
 {_live_card(live) if live else mpc.next_card(occasions)}
 <nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
 {reading}
+{mai.install_card(biz.get('name') or '')}
 {mps.latest_card(library, pal)}
 {mpc.week_cards(occasions, groups)}
 {mpc.coming_up(occasions)}""", tab="home", who=me, script=script)
@@ -837,6 +842,13 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     # The owner's preview works before the page is switched on.
     if not portal_active(biz) and not _previewing(request, biz):
         return _page(render_unavailable(biz, site), 404)
+    # Installing the page as an app (member_app_install.py): the manifest,
+    # icons, service worker and offline page need no sign-in.
+    import member_app_install as mai
+    if sub in mai.ASSETS:
+        return mai.serve_asset(biz, site, sub)
+    if sub == "/my/offline":
+        return _page(mai.render_offline(biz, site))
     sess = await asyncio.to_thread(_session_for, request, church)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
