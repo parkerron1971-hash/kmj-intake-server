@@ -222,3 +222,96 @@ def test_migration_is_filed_and_in_the_ledger():
     assert "sms_numbers_one_live_per_business" in sql
     ledger = (root / "docs" / "MIGRATIONS.md").read_text(encoding="utf-8")
     assert "APPLY-2026-09-02-sms-numbers.sql" in ledger
+
+
+# ─── 7. Text GIVE to the church's own number (Subsplash exit, step 2) ─
+
+@pytest.fixture
+def giving(routed, monkeypatch):
+    """BIZ_A gives online at its site; the texter hasn't opted out."""
+    state = {"link": {"name": "Love City Church", "url": "https://lovecityc.com/give"},
+             "own_name": None, "asked": []}
+
+    def give_link(business_id, phone):
+        state["asked"].append((business_id, phone))
+        return state["link"]
+
+    async def own_registration(client, business_id):
+        return state["own_name"]
+
+    monkeypatch.setattr(sms_routing, "give_link", give_link)
+    monkeypatch.setattr(sms_routing, "own_registration", own_registration)
+    return state
+
+
+@pytest.mark.parametrize("text", ["GIVE", "give", "Give!", " tithe. ", "Donate"])
+def test_give_on_own_number_replies_with_the_give_page(routed, giving, text):
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text=text, to_number=OWN_A))
+    assert res["action"] == "give_link" and res["business_id"] == BIZ_A
+    assert "https://lovecityc.com/give" in res["reply"] and "STOP" in res["reply"]
+    # Still the church's conversation: bound, a contact, the text kept.
+    assert routed["bind"] == [(CUSTOMER, BIZ_A)]
+    assert routed["inbound"][0]["text"] == text.strip()
+    assert giving["asked"] == [(BIZ_A, CUSTOMER)]
+
+
+def test_give_reply_is_under_the_platform_brand_until_the_church_registers(routed, giving):
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="GIVE", to_number=OWN_A))
+    assert res["reply"].startswith(sms_routing.sender_brand() + ": Thank you for giving to Love City Church!")
+    giving["own_name"] = {"number": OWN_A}
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="GIVE", to_number=OWN_A))
+    assert res["reply"].startswith("Love City Church: Thank you for giving!")
+
+
+def test_a_sentence_with_give_in_it_is_just_a_message(routed, giving):
+    res = _run(sms_routing.route_inbound(
+        from_number=CUSTOMER, text="can I give my tithe by check?", to_number=OWN_A))
+    assert res["action"] == "routed_direct" and res["reply"] is None
+    assert giving["asked"] == []
+
+
+def test_no_give_page_means_no_reply_and_the_message_still_arrives(routed, giving):
+    giving["link"] = None
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="GIVE", to_number=OWN_A))
+    assert res == {"action": "routed_direct", "business_id": BIZ_A, "reply": None}
+    assert routed["inbound"][0]["text"] == "GIVE"
+
+
+def test_give_on_the_shared_number_is_not_text_to_give(routed, giving):
+    _run(sms_routing.route_inbound(from_number=CUSTOMER, text="GIVE", to_number=PLATFORM))
+    assert giving["asked"] == []
+
+
+def _link_db(monkeypatch, *, biz=None, opted_out=False, site=True):
+    import sb_clients
+    import business_marketing_links as links
+
+    def get(path):
+        if path.startswith("/businesses?"):
+            return [biz] if biz else []
+        if path.startswith("/sms_opt_outs?"):
+            return [{"phone": CUSTOMER}] if opted_out else []
+        return []
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    monkeypatch.setattr(links, "site_for", lambda b: {"slug": "love-city-church", "domain": "lovecityc.com"} if site else None)
+
+
+def _church(**over):
+    b = {"id": BIZ_A, "name": "Love City Church", "type": "church", "stripe_account_id": "acct_1",
+         "settings": {"giving": {"enabled": True}}}
+    b.update(over)
+    return b
+
+
+def test_give_link_needs_giving_on_and_no_opt_out(monkeypatch):
+    _link_db(monkeypatch, biz=_church())
+    assert sms_routing.give_link(BIZ_A, CUSTOMER) == {"name": "Love City Church",
+                                                       "url": "https://lovecityc.com/give"}
+    _link_db(monkeypatch, biz=_church(stripe_account_id=None))
+    assert sms_routing.give_link(BIZ_A, CUSTOMER) is None
+    _link_db(monkeypatch, biz=_church(settings={"giving": {"enabled": False}}))
+    assert sms_routing.give_link(BIZ_A, CUSTOMER) is None
+    _link_db(monkeypatch, biz=_church(), opted_out=True)
+    assert sms_routing.give_link(BIZ_A, CUSTOMER) is None
+    _link_db(monkeypatch, biz=_church(), site=False)
+    assert sms_routing.give_link(BIZ_A, CUSTOMER) is None
