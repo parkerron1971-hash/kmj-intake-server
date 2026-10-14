@@ -366,6 +366,11 @@ app.include_router(kids_checkin_router)
 # Check-in stations: a PIN-locked tablet and a family self check-in kiosk.
 from kids_station import router as kids_station_router
 app.include_router(kids_station_router)
+# The church office's read-only people questions (first-time guests nobody
+# has reached yet). Shared with Chief through church_reads. BEFORE
+# public_site_router.
+from church_router import router as church_router
+app.include_router(church_router)
 # Live: the team runs a live service and moderates its chat (live_router);
 # members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
 from live_router import router as live_router

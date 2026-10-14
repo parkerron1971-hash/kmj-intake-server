@@ -73,7 +73,28 @@ def _benchmark_provider(business_id: str, descriptor: Dict[str, Any]
     return workspace_benchmarks.rows_for(business_id, list(wanted or []))
 
 
-PROVIDERS = {"business_benchmarks": _benchmark_provider}
+def _first_time_guest_provider(business_id: str, descriptor: Dict[str, Any]
+                               ) -> List[Dict[str, Any]]:
+    """church_reads hands back raw rows; the binding's `fields` still map
+    them onto the contract, so a layout reads this like any relation."""
+    import church_reads
+    try:
+        limit = int(descriptor.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    rows = church_reads.first_time_guests(
+        business_id, limit=max(1, min(limit, MAX_LIMIT))) or []
+    fields = descriptor.get("fields") or {}
+    for ref in fields.values():
+        column = ref.get("column") if isinstance(ref, dict) else ref
+        if not isinstance(column, str) or not catalog.column_exists(
+                "first_time_guests", column):
+            raise ResolveError(f"first_time_guests.{column!r} does not resolve")
+    return [_map_row(r, fields) for r in rows]
+
+
+PROVIDERS = {"business_benchmarks": _benchmark_provider,
+             "first_time_guests": _first_time_guest_provider}
 
 
 # ─── derivations ─────────────────────────────────────────────────────
