@@ -177,21 +177,35 @@ def preset_amounts(cfg: Dict[str, Any]) -> List[int]:
     return list(DEFAULT_PRESETS)
 
 
+# A church's general fund often goes by what the gift is, not "General":
+# tithes and offerings are unrestricted giving (Love City's Subsplash funds
+# were Tithes and Offering, 2026-10-14). Filing them as donor-restricted
+# would post every Sunday gift to restricted income.
+_GENERAL_FUND_NAMES = {"", "general", "tithe", "tithes", "offering", "offerings",
+                       "tithes and offerings", "tithes & offerings", "tithe and offering"}
+
+
 def is_designated(fund: Optional[str]) -> bool:
     """A gift to any fund other than the general fund is donor-DESIGNATED
     (restricted) by definition — the giver constrained its use. Rubric,
-    not a lookup table: 'General' in any casing/spacing (with or without
-    the word Fund) is the unrestricted default; everything else is
-    designated."""
+    not a lookup table: the general fund in any casing/spacing (with or
+    without the word Fund, and by its church names, tithes and offerings)
+    is the unrestricted default; everything else is designated."""
     norm = " ".join(str(fund or "").lower().split())
-    return norm not in ("", "general", "general fund")
+    if norm.endswith(" fund"):
+        norm = norm[: -len(" fund")]
+    return norm not in _GENERAL_FUND_NAMES
 
 
 def fund_label(fund: Optional[str]) -> str:
-    """Display label: 'General' → 'General Fund', 'Building Fund' stays.
+    """Display label: 'General' → 'General Fund', 'Building Fund' stays,
+    'Tithes' and 'Offering' stay as they are (nobody says 'Tithes Fund').
     Used in line descriptions ('Gift — Building Fund') and receipts."""
     name = str(fund or "General").strip() or "General"
-    return name if "fund" in name.lower() else f"{name} Fund"
+    norm = " ".join(name.lower().split())
+    if "fund" in norm or (norm in _GENERAL_FUND_NAMES and norm != "general"):
+        return name
+    return f"{name} Fund"
 
 
 def giving_is_active(biz: Dict[str, Any]) -> bool:
