@@ -363,6 +363,8 @@ def _giving_checkout_form(
     giver_name: Optional[str] = None,
     giver_email: Optional[str] = None,
     currency: str = "usd",
+    frequency: Optional[str] = None,
+    cover_fee_cents: int = 0,
 ) -> Dict[str, Any]:
     """The Checkout-Session form for a gift. Pure so tests can pin the
     metadata + mode contract without touching Stripe (same reason
@@ -394,14 +396,24 @@ def _giving_checkout_form(
     if fund_kind not in ("restricted", "general"):
         raise ValueError("fund_kind must be 'restricted' or 'general'")
 
+    # weekly | biweekly | monthly repeat; `monthly` alone (older callers)
+    # still means a monthly gift.
+    repeats = {"weekly": ("week", 1), "biweekly": ("week", 2), "monthly": ("month", 1)}
+    freq = (frequency or ("monthly" if monthly else "once")).lower()
+    if freq != "once" and freq not in repeats:
+        raise ValueError("frequency must be once, weekly, biweekly or monthly")
+    monthly = freq in repeats  # i.e. recurring: a subscription
+    cover_fee_cents = max(0, int(cover_fee_cents or 0))
     metadata: Dict[str, Any] = {
         "source_type": "gift",
         "source_id": gift_id,
         "business_id": business_id,
         "fund": fund,
         "fund_kind": fund_kind,
-        "frequency": "monthly" if monthly else "once",
+        "frequency": freq,
     }
+    if cover_fee_cents:
+        metadata["covered_fee_cents"] = cover_fee_cents
     if giver_name:
         metadata["giver_name"] = giver_name[:120]
     if giver_email:
@@ -426,8 +438,20 @@ def _giving_checkout_form(
     form["line_items[0][price_data][currency]"] = (currency or "usd").lower()
     form["line_items[0][price_data][product_data][name]"] = f"Gift — {name}"
     form["line_items[0][price_data][unit_amount]"] = amount_cents
+    if cover_fee_cents:
+        # Its own line, so the giver sees exactly what covering the fee
+        # added. Both lines are the gift for tax purposes: the giver paid
+        # them, and the church received them.
+        form["line_items[1][quantity]"] = 1
+        form["line_items[1][price_data][currency]"] = (currency or "usd").lower()
+        form["line_items[1][price_data][product_data][name]"] = "Processing fee you covered"
+        form["line_items[1][price_data][unit_amount]"] = cover_fee_cents
     if monthly:
-        form["line_items[0][price_data][recurring][interval]"] = "month"
+        interval, count = repeats[freq]
+        for i in ((0, 1) if cover_fee_cents else (0,)):
+            form[f"line_items[{i}][price_data][recurring][interval]"] = interval
+            if count != 1:
+                form[f"line_items[{i}][price_data][recurring][interval_count]"] = count
     return form
 
 
@@ -446,6 +470,8 @@ async def create_giving_checkout(
     success_url: str,
     cancel_url: str,
     currency: str = "usd",
+    frequency: Optional[str] = None,
+    cover_fee_cents: int = 0,
 ) -> Dict[str, Any]:
     """Create the gift Checkout Session on the connected account.
     Returns the Stripe session dict (key fields: id, url). Raises
@@ -466,6 +492,8 @@ async def create_giving_checkout(
         giver_name=giver_name,
         giver_email=giver_email,
         currency=currency,
+        frequency=frequency,
+        cover_fee_cents=cover_fee_cents,
     )
     require_stripe_write(stripe_account_id)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:

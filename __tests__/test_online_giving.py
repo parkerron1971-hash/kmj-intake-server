@@ -520,3 +520,188 @@ def test_patch_refused_outside_nonprofit_family(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         giving_router.patch_giving_config(BIZ, {"enabled": True}, user)
     assert exc.value.status_code == 409
+
+
+# ─── 11. Weekly / every two weeks, and covering the fee ──────────────
+
+def _gift_form(**over):
+    from stripe_checkout_helpers import _giving_checkout_form
+    kw = dict(amount_cents=5000, fund_display="General Fund", monthly=False,
+              success_url="s", cancel_url="c", gift_id="g", business_id=BIZ,
+              fund="General", fund_kind="general", giver_email="a@example.com")
+    kw.update(over)
+    return _giving_checkout_form(**kw)
+
+
+@pytest.mark.parametrize("freq,interval,count", [
+    ("weekly", "week", None), ("biweekly", "week", "2"), ("monthly", "month", None)])
+def test_recurring_frequencies_become_subscriptions(freq, interval, count):
+    form = _gift_form(frequency=freq)
+    assert form["mode"] == "subscription"
+    assert form["line_items[0][price_data][recurring][interval]"] == interval
+    assert form.get("line_items[0][price_data][recurring][interval_count]") == (int(count) if count else None)
+    assert form["subscription_data[metadata][frequency]"] == freq
+
+
+def test_older_callers_passing_monthly_still_get_monthly():
+    form = _gift_form(monthly=True)
+    assert form["mode"] == "subscription"
+    assert form["metadata[frequency]"] == "monthly"
+
+
+def test_an_unknown_frequency_is_refused_by_the_form():
+    with pytest.raises(ValueError):
+        _gift_form(frequency="twice_monthly")
+
+
+def test_the_fee_is_its_own_line_and_repeats_with_the_gift():
+    form = _gift_form(frequency="weekly", cover_fee_cents=176)
+    assert form["line_items[1][price_data][unit_amount]"] == 176
+    assert form["line_items[1][price_data][product_data][name]"] == "Processing fee you covered"
+    assert form["line_items[1][price_data][recurring][interval]"] == "week"
+    assert form["subscription_data[metadata][covered_fee_cents]"] == 176
+    one = _gift_form(cover_fee_cents=176)
+    assert one["mode"] == "payment" and "line_items[1][price_data][recurring][interval]" not in one
+
+
+def test_covered_fee_leaves_the_church_the_chosen_amount():
+    for gift in (100, 2500, 5000, 100000):
+        add = giving_router.covered_fee_cents(gift)
+        total = gift + add
+        net = total - round(total * giving_router.CARD_FEE_PERCENT) - giving_router.CARD_FEE_FIXED_CENTS
+        assert net >= gift and net - gift <= 2
+    assert giving_router.covered_fee_cents(0) == 0
+
+
+def _checkout(monkeypatch, body, ip):
+    fake = FakeSB(business=_church())
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    monkeypatch.setattr(giving_router, "_give_rate", {})
+    captured = {}
+
+    class StubAdapter:
+        async def create_giving_checkout(self, biz, **kwargs):
+            captured.update(kwargs)
+            return {"url": "https://checkout.stripe.com/c/pay_y"}
+
+    import payments_core
+    monkeypatch.setattr(payments_core, "provider_for", lambda biz: StubAdapter())
+    asyncio.run(giving_router.public_giving_checkout("first-light", body, _request(ip)))
+    return captured
+
+
+def test_checkout_passes_frequency_and_fee(monkeypatch):
+    got = _checkout(monkeypatch, {"amount_cents": 5000, "frequency": "biweekly",
+                                  "email": "b@example.com", "cover_fee": True}, "5.5.5.5")
+    assert got["frequency"] == "biweekly" and got["monthly"] is True
+    assert got["cover_fee_cents"] == giving_router.covered_fee_cents(5000)
+    got = _checkout(monkeypatch, {"amount_cents": 5000}, "6.6.6.6")
+    assert got["frequency"] == "once" and got["cover_fee_cents"] == 0 and got["monthly"] is False
+
+
+def test_only_a_real_true_covers_the_fee(monkeypatch):
+    got = _checkout(monkeypatch, {"amount_cents": 5000, "cover_fee": "yes"}, "7.7.7.7")
+    assert got["cover_fee_cents"] == 0
+
+
+def test_a_weekly_cycle_is_recorded_and_worded_as_weekly(fake_sb):
+    inv = _stripe_cycle_invoice("in_wk")
+    inv["subscription_details"]["metadata"]["frequency"] = "weekly"
+    giving_router.record_gift_from_cycle(inv)
+    assert "weekly" in fake_sb._posted("/invoices")[0]["notes"]
+    note = fake_sb._posted("/chief_notifications")[0]
+    assert note["body"].startswith("A weekly gift")
+
+
+def test_give_page_offers_four_frequencies_and_the_fee_box():
+    html = giving_router.render_give_page(
+        _church(), "https://first-light.mysolutionist.app/give",
+        "first-light", api_origin="https://api.example")
+    for f in ("once", "weekly", "biweekly", "monthly"):
+        assert f'data-freq="{f}"' in html
+    assert 'id="gv-fee"' in html and "cover_fee: feeBox.checked" in html
+    assert "Every 2 weeks" in html
+
+
+# ─── 10. A gift is recorded only from its own church's account ───────
+#
+# A church connects its own Standard account and holds its API keys, so
+# it can create a checkout naming any business_id. The webhook must check
+# that the event's account is the one THAT business connected.
+
+def _post_event(monkeypatch, event):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import json
+    monkeypatch.setattr(stripe_connect_router, "verify_webhook_signature", lambda p, s: True)
+    app = FastAPI()
+    app.include_router(stripe_connect_router.router)
+    return TestClient(app).post("/payments/stripe/webhook", content=json.dumps(event),
+                                headers={"stripe-signature": "t=1,v1=x"})
+
+
+def _gift_session(pi="pi_acct1"):
+    return {"payment_status": "paid", "mode": "payment", "id": "cs_a",
+            "payment_intent": pi, "amount_total": 2500,
+            "customer_details": {"email": "a@example.com", "name": "A Giver"},
+            "metadata": {"source_type": "gift", "source_id": "g", "business_id": BIZ,
+                         "fund": "General", "frequency": "once"}}
+
+
+def _webhook_outcome(fake):
+    return [p for path, p in fake.patches if path.startswith("/stripe_webhook_events")][-1]
+
+
+def test_a_gift_from_the_churchs_own_account_records(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    _post_event(monkeypatch, {"id": "evt_ok", "type": "checkout.session.completed",
+                              "account": "acct_123", "data": {"object": _gift_session()}})
+    assert [i["invoice_number"] for i in fake_sb._posted("/invoices")] == ["GIVE-pi_acct1"]
+    assert _webhook_outcome(fake_sb)["processed_ok"] is True
+
+
+@pytest.mark.parametrize("account", ["acct_other", None])
+def test_a_gift_naming_another_church_is_refused(fake_sb, monkeypatch, account):
+    fake_sb.business = _church()
+    event = {"id": f"evt_{account}", "type": "checkout.session.completed",
+             "data": {"object": _gift_session()}}
+    if account:
+        event["account"] = account
+    _post_event(monkeypatch, event)
+    assert fake_sb._posted("/invoices") == []
+    out = _webhook_outcome(fake_sb)
+    assert out["processed_ok"] is False and "different payment account" in out["processed_error"]
+
+
+def test_a_monthly_cycle_from_another_account_is_refused(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    _post_event(monkeypatch, {"id": "evt_cyc", "type": "invoice.paid", "account": "acct_other",
+                              "data": {"object": _stripe_cycle_invoice("in_bad")}})
+    assert fake_sb._posted("/invoices") == []
+    _post_event(monkeypatch, {"id": "evt_cyc2", "type": "invoice.paid", "account": "acct_123",
+                              "data": {"object": _stripe_cycle_invoice("in_good")}})
+    assert [i["invoice_number"] for i in fake_sb._posted("/invoices")] == ["GIVE-in_good"]
+
+
+def test_a_cancelled_gift_from_another_account_tells_nobody(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    sub = {"id": "sub_x", "metadata": {"source_type": "gift", "business_id": BIZ, "fund": "General"}}
+    _post_event(monkeypatch, {"id": "evt_del", "type": "customer.subscription.deleted",
+                              "account": "acct_other", "data": {"object": sub}})
+    assert fake_sb._posted("/chief_notifications") == []
+    _post_event(monkeypatch, {"id": "evt_del2", "type": "customer.subscription.deleted",
+                              "account": "acct_123", "data": {"object": sub}})
+    assert len(fake_sb._posted("/chief_notifications")) == 1
+
+
+def test_a_refund_from_another_account_leaves_the_gift_alone(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    giving_router.record_gift(BIZ, amount_cents=5000, fund="General", stripe_ref="pi_r9")
+    charge = {"metadata": {"source_type": "gift", "source_id": "g"}, "payment_intent": "pi_r9",
+              "amount_refunded": 5000, "refunded": True}
+    _post_event(monkeypatch, {"id": "evt_ref", "type": "charge.refunded",
+                              "account": "acct_other", "data": {"object": charge}})
+    assert not any("refund_amount_cents" in p for _, p in fake_sb.patches)
+    _post_event(monkeypatch, {"id": "evt_ref2", "type": "charge.refunded",
+                              "account": "acct_123", "data": {"object": charge}})
+    assert any(p.get("refund_amount_cents") == 5000 for _, p in fake_sb.patches)

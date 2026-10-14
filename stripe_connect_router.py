@@ -407,6 +407,8 @@ async def stripe_webhook(request: Request) -> JSONResponse:
             if (obj.get("metadata") or {}).get("discount_checkout_v1") == "true":
                 from discount_settlement import verify_checkout_account
                 verify_checkout_account(obj, account_id)
+            if (obj.get("metadata") or {}).get("source_type") == "gift":
+                _verify_gift_account(obj.get("metadata") or {}, account_id)
             _handle_checkout_session_completed(obj)
         elif evt_type == "payment_intent.succeeded":
             if (obj.get("metadata") or {}).get("discount_checkout_v1") == "true":
@@ -416,12 +418,18 @@ async def stripe_webhook(request: Request) -> JSONResponse:
         elif evt_type == "payment_intent.payment_failed":
             _handle_payment_intent_failed(obj)
         elif evt_type == "invoice.paid":
+            from giving_router import gift_metadata_from_stripe_invoice
+            gift_md = gift_metadata_from_stripe_invoice(obj)
+            if gift_md.get("source_type") == "gift":
+                _verify_gift_account(gift_md, account_id)
             _handle_invoice_paid(obj)
         elif evt_type == "invoice.payment_failed":
             _handle_invoice_failed(obj)
         elif evt_type == "charge.refunded":
-            _handle_charge_refunded(obj)
+            _handle_charge_refunded(obj, account_id)
         elif evt_type == "customer.subscription.deleted":
+            if (obj.get("metadata") or {}).get("source_type") == "gift":
+                _verify_gift_account(obj.get("metadata") or {}, account_id)
             _handle_subscription_deleted(obj)
         elif evt_type == "charge.dispute.created":
             _handle_dispute_created(obj, account_id)
@@ -506,6 +514,35 @@ def _metadata_source(obj: Dict[str, Any]) -> tuple:
     charge when payment_intent_data.metadata is set at create-time."""
     md = obj.get("metadata") or {}
     return md.get("source_type"), md.get("source_id")
+
+
+# ─── whose account a gift came from ──────────────────────────────────
+#
+# A church connects its OWN Standard Stripe account, which means it holds
+# that account's full API keys. Gift metadata (business_id) is written by
+# whoever creates the checkout or subscription, so a church could create
+# one on its own account naming ANOTHER church, and the webhook would
+# write a gift into the other church's books and its donors' tax
+# statements. Discount checkouts already refuse this
+# (discount_settlement.verify_checkout_account); gifts now do too.
+
+_ANY_ACCOUNT = object()
+
+
+def _account_matches(business_id: Any, account_id: Optional[str]) -> bool:
+    """Is `account_id` the Stripe account this business connected?"""
+    if not business_id or not account_id:
+        return False
+    from urllib.parse import quote as _q
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{_q(str(business_id), safe='')}"
+        "&select=stripe_account_id&limit=1") or []
+    return bool(rows) and rows[0].get("stripe_account_id") == account_id
+
+
+def _verify_gift_account(md: Dict[str, Any], account_id: Optional[str]) -> None:
+    if not _account_matches(md.get("business_id"), account_id):
+        raise ValueError("Gift belongs to a different payment account")
 
 
 def _handle_checkout_session_completed(session: Dict[str, Any]) -> None:
@@ -778,7 +815,7 @@ def _mark_invoice_paid(invoice_id: str) -> None:
         logger.warning(f"invoice-paid notification failed (fail-soft): {e}")
 
 
-def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
+def _handle_charge_refunded(charge: Dict[str, Any], account_id: Any = _ANY_ACCOUNT) -> None:
     """Charge was (partially or fully) refunded. Locate the linked
     source via metadata and record refund state.
 
@@ -854,6 +891,13 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> None:
                 f"/invoices?invoice_number=eq.{_q(f'GIVE-{ref}', safe='')}"
                 f"&select=id,business_id&limit=1") or []
             if rows:
+                # The number alone is not a key across churches: only the
+                # church whose account refunded it may be adjusted.
+                if (account_id is not _ANY_ACCOUNT
+                        and not _account_matches(rows[0].get("business_id"), account_id)):
+                    logger.warning(f"gift refund {ref} from account {account_id} "
+                                   "does not match the gift's church; ignored")
+                    break
                 refund_biz = rows[0].get("business_id")
                 sb_clients.sb_patch_as_service(
                     f"/invoices?id=eq.{rows[0]['id']}",
@@ -893,7 +937,7 @@ def _handle_subscription_deleted(sub: Dict[str, Any]) -> None:
     if not business_id:
         return
     try:
-        from giving_router import fund_label
+        from giving_router import fund_label, frequency_word
         label = fund_label(md.get("fund"))
         sb_clients.sb_post_as_service("/chief_notifications", {
             "business_id": business_id,
@@ -901,7 +945,8 @@ def _handle_subscription_deleted(sub: Dict[str, Any]) -> None:
             "title": "A recurring gift ended",
             # Sensitivity: no giver name — individual giving stays on
             # the Donors report + statements surfaces.
-            "body": (f"A monthly gift{f' of ${amount:,.2f}' if amount else ''} "
+            "body": (f"A {frequency_word(md.get('frequency'))} gift"
+                     f"{f' of ${amount:,.2f}' if amount else ''} "
                      f"to the {label} was cancelled. Past gifts stay on the books."),
             "status": "unread",
             "data": {"kind": "recurring_gift_ended",
