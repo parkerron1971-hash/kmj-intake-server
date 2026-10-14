@@ -163,6 +163,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     # Which givers were emailed a year-end statement; before contacts.
     "giving_statement_sends",
+    # Members' notification devices and choices (before contacts), and
+    # the log of what the church sent them.
+    "member_push_subscriptions", "member_push_prefs", "member_push_sends",
     # Who was at each occasion; before module_entries and contacts.
     "attendance", "attendance_headcounts",
     # Which days of the reading plan each member has read; before contacts.
@@ -650,6 +653,9 @@ _IMPORT_SKIP = {
     # They remain in the owner archive and are explicitly reported as skipped.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "giving_statement_sends",  # a send log: a restore must not claim statements went out
+    # Members' phones are devices, not records (like push_subscriptions);
+    # the send log must not claim a restored church already notified anyone.
+    "member_push_subscriptions", "member_push_prefs", "member_push_sends",
     "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication

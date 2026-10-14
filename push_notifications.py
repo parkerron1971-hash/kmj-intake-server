@@ -121,9 +121,12 @@ def send_test(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
 
 # ─── Senders ─────────────────────────────────────────────────────────
 
-def _send_one(sub_row: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+def _send_one(sub_row: Dict[str, Any], payload: Dict[str, Any],
+              table: str = "push_subscriptions") -> bool:
     """Send to a single stored subscription; prune it when the push
-    service says it's gone (404/410). Returns True when delivered."""
+    service says it's gone (404/410). Returns True when delivered.
+    `table` is where the row lives: staff devices here, members' devices
+    in member_push_subscriptions (member_push.py)."""
     try:
         from pywebpush import webpush, WebPushException
     except Exception:  # pragma: no cover — dependency missing
@@ -145,7 +148,7 @@ def _send_one(sub_row: Dict[str, Any], payload: Dict[str, Any]) -> bool:
             endpoint = str(sub_row.get("endpoint") or "")
             if endpoint:
                 sb_clients.sb_delete_as_service(
-                    f"/push_subscriptions?endpoint=eq.{quote(endpoint, safe='')}"
+                    f"/{table}?endpoint=eq.{quote(endpoint, safe='')}"
                 )
             log.info("pruned dead push subscription (%s)", status)
         else:

@@ -675,6 +675,7 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     import member_portal_church as mpc
     import member_portal_sermons as mps
     import member_app_install as mai
+    import member_push
     pal = palette_for(biz, site)
     hello = first_name(me.get("name") or "") or "there"
     quick = []
@@ -696,6 +697,7 @@ var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+'
 <nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
 {reading}
 {mai.install_card(biz.get('name') or '')}
+{member_push.home_card(biz)}
 {mps.latest_card(library, pal)}
 {mpc.week_cards(occasions, groups)}
 {mpc.coming_up(occasions)}""", tab="home", who=me, script=script)
@@ -726,7 +728,9 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
     """Me: this person's giving (a year's total, month by month, each gift
     and the statement), then the ways to look after their own record."""
     import member_portal_messaging as mpm
+    import member_push
     msgs_on = mpm.turned_on(biz)
+    notes_on = bool(member_push.church_kinds(biz.get("settings"))) and member_push.ready()
     import member_app_ui as ui
     years = "".join(
         f'<a href="/my/me?year={y}"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
@@ -777,6 +781,7 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
   {link('/my/prayer', 'lock', 'Prayer', 'A private request to the pastor')}
   {link('/my/details', 'user', 'My details', 'Phone and mailing address')}
   {link('/my/messages', 'chat', 'Messages', 'Your chats and group chats') if msgs_on else ''}
+  {link('/my/notifications', 'bell', 'Notifications', 'What this app tells you about') if notes_on else ''}
 </ul>
 <div class="mp-noprint" style="margin-top:12px">{switch}
 <form method="post" action="/my/signout"><button class="mp-link" type="submit">Sign out</button></form></div>""",
@@ -937,6 +942,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         if not full:
             return _page(render_try_again(biz, site), 503)
         return _page(mpc.render_details(biz, site, request, full))
+    if sub == "/my/notifications":
+        import member_push
+        off = await asyncio.to_thread(member_push.turned_off, biz["id"], me["id"])
+        return _page(member_push.render_page(biz, site, request, me, off))
     from giving_router import giving_is_active
     give_url = "/give" if giving_is_active(biz) else ""
     # A giver's own recurring gifts (member_portal_gifts.py).
@@ -1242,6 +1251,20 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
         "sign_in": sign_in_open(biz),
         "codes_ready": codes_can_go_out(),
         "url": f"https://{host}/my",
+        # Notifications to members' phones (member_push.py): each kind
+        # the church can switch on, whether it is, and whether this
+        # server can send at all.
+        "notifications": _notifications_payload(biz),
+    }
+
+
+def _notifications_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
+    import member_push
+    on = member_push.church_kinds(biz.get("settings"))
+    return {
+        "ready": member_push.ready(),
+        "kinds": [{"key": k, "label": label, "hint": hint, "on": k in on}
+                  for k, label, hint in member_push.KINDS],
     }
 
 
@@ -1282,7 +1305,8 @@ def create_member_preview(business_id: str, body: Dict[str, Any], user: AuthedUs
 @router.patch("/member-portal/{business_id}")
 def patch_member_portal_config(business_id: str, body: Dict[str, Any],
                                user: AuthedUser = Depends(require_user)):
-    """Owner-gated. Body: { enabled?: bool, sign_in?: bool, sign_out_all?: true }.
+    """Owner-gated. Body: { enabled?: bool, sign_in?: bool, sign_out_all?: true,
+    notifications?: {kind: bool} } (the kinds are member_push.KINDS).
 
     Turning the page ON, or "sign everyone out", moves the epoch to now:
     every session issued before it ends (a page switched off and on again
@@ -1296,9 +1320,13 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     if "sign_in" in body and not isinstance(body.get("sign_in"), bool):
         raise HTTPException(400, "sign_in must be true or false")
     sign_out_all = body.get("sign_out_all") is True
+    switches = None
+    if "notifications" in body:
+        import member_push
+        switches = member_push.clean_switches(body.get("notifications"))
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
-    if "enabled" in body or "sign_in" in body or sign_out_all:
+    if "enabled" in body or "sign_in" in body or sign_out_all or switches is not None:
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -1320,6 +1348,8 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             cfg["sign_in"] = body["sign_in"]
         if sign_out_all or (want is True and not was_on):
             cfg["epoch"] = int(time.time())
+        if switches is not None:
+            cfg["notifications"] = {**(cfg.get("notifications") or {}), **switches}
         settings["member_portal"] = cfg
         saved = sb_clients.sb_patch_as_service(
             f"/businesses?id=eq.{quote(str(business_id), safe='')}", {"settings": settings})
