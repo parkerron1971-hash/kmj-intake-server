@@ -92,16 +92,22 @@
 
 **Waiting on Kevin:**
 1. Love City's Stripe. Online giving and statements need one connected. A church with no Stripe account now sets one up in Operate → Payments → "Set up Stripe here", signed in as the church. That needs the church's EIN, bank and a leader's ID, so the church does it, not an agent. Then turn giving on in Operate → Giving, which also registers the wallet domains. `STRIPE_PUBLISHABLE_KEY` was already set in Railway (live), so the embedded form and the in-app signup work as soon as an account exists.
-2. Yes to downloading two Subsplash exports to the laptop: the people list (590) and the 2026 gifts (733). They feed the D3 importer, which isn't built yet because the export format is unseen. The recurring givers list is empty, so it isn't needed.
-3. Open decision 1 (member notifications) gates push in step 3.
-4. A texting number of Love City's own (a paid line) for text GIVE and member texts.
+2. ~~Subsplash exports~~ **Done 2026-10-14** (Kevin: yes to all, and "Don't copy duplicates from the membership list").
+   - **Importer:** `subsplash_import.py` (#1433, #1434; #1432 made Tithes and Offering the general fund) loaded Love City's workspace.
+   - **People:** 490: 148 members and 342 visitors. 101 duplicate Subsplash records were dropped, and no email or phone sits on two records.
+   - **Gifts:** 718 gifts for 2026, **$35,882.59**, matching Subsplash's own total. 663 are tied to a giver; non-deductible gifts and "Loose cash" stay off statements. No receipts were sent.
+   - **Where the exports live:** on the laptop only, never in the repo.
+3. ~~Decision 1, member notifications~~ **Yes (2026-10-14).**
+   - **Server:** member push is #1435, and its migration was applied and verified on 2026-10-14.
+   - **App:** Settings → Member page → Notifications, with switches and "Send a note" (FE #1221).
+   - **Kinds wired so far:** announcements and Go live. Messages, sermons, events and prayer come next.
+4. ~~Texting number~~ **Done:** Love City's own line is **+1 231-625-4974** (2026-10-14). Texting members still needs the church's "Your name on texts" registration, which takes its EIN.
 
 **Still to build:**
-- the giving-history importer (D3, after a sample export). It carries every method (card, ACH, cash, check, other) and the funds, so statements are whole.
 - the "give here now" campaign to the 119 givers of 2026, with no recurring gifts to re-create. It sends from the church's own email and number, using #1425 links, and tracks who gave on the new page. Every send is Kevin's yes.
 - nothing new for hand entry: staff record cash, check and other gifts through the existing `POST /giving/{business_id}/records` (methods cash/check/bank_transfer/other). Over half of Love City's giving arrives that way, so show the church this on day one.
 - sermon import (Love City's YouTube or Facebook, not scraping Subsplash) and audio upload (D4)
-- push (after decision 1)
+- notification triggers for messages, sermons, events and prayer (announcements and live are done)
 - prayer from live chat into Care (step 5)
 - swap the four `LINKS` in `sites/love-city-church/build.py` once giving is live
 
