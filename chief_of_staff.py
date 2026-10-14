@@ -258,6 +258,9 @@ from chief_giving_actions import (
     handle_giving_statement,
     handle_giving_statements_run,
 )
+# A church's people: first-time guests, group drift, attendance, and care
+# counts for the owner or a manager. Read-only; church_reads does the work.
+from chief_church_actions import handle_church_people
 # Undo — makes action_registry's class A a thing a practitioner can press.
 from chief_undo_actions import (
     handle_undo_last,
@@ -12220,6 +12223,7 @@ ACTION_HANDLERS = {
     "write_off_time":                  handle_write_off_time,
     "giving_statement":                handle_giving_statement,
     "giving_statements_run":           handle_giving_statements_run,
+    "church_people":                   handle_church_people,
     # Marketing campaigns (S10). plan drafts and sends nothing; launch is
     # bulk class C and answers to the trust gate; pause is the protective
     # single-target C; status reads the sends ledger.
