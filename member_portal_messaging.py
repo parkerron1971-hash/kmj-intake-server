@@ -806,6 +806,11 @@ async def send(tid: str, request: Request):
         "status": status_, "flag": None if verdict == "ok" else verdict})
     if not isinstance(row, list) or not row:
         return _answer(request, False, "error", back, 503)
+    if status_ == "delivered":
+        # Members with "New messages" on hear that something arrived, never
+        # what it says (member_push.tell_chat; off the request).
+        import member_push
+        member_push.tell_chat(biz, t, acc, str(me["id"]))
     if acc.get("me_state") == "requested":
         # Replying accepts the request.
         await asyncio.to_thread(sb_clients.sb_patch_as_service,

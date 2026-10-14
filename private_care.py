@@ -148,7 +148,7 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
 def _request(biz: str, request_id: str, caller: Optional[CareCaller] = None) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/ministry_care_requests?id=eq.{request_id}&business_id=eq.{biz}"
-        "&select=id,status,prayed_at,status_changed_at,assigned_to&limit=1")
+        "&select=id,status,prayed_at,status_changed_at,assigned_to,contact_id&limit=1")
     if rows is None:
         raise HTTPException(503, "That request couldn't be reached. Nothing was changed — try again.")
     # A request not handed to this teammate reads exactly like one that
@@ -200,6 +200,11 @@ def update_request(business_id: str, request_id: str, *, status: Optional[str] =
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That didn't save. Nothing was changed — try again.")
     row = rows[0]
+    if prayed and not current.get("prayed_at"):
+        # The person who asked can hear that the church prayed (their
+        # "Prayer" notification, if the church and they have it on).
+        import member_push
+        member_push.tell_prayed(biz, current.get("contact_id"), rid)
     return {"ok": True, "request": {k: row.get(k) for k in
                                     ("id", "status", "prayed_at", "status_changed_at",
                                      "assigned_to")}}

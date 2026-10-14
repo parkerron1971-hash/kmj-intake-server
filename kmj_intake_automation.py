@@ -1459,6 +1459,11 @@ async def startup():
             import member_portal_messaging as _msgs
             scheduler.add_job(g("msg_retention", _msgs.retention_tick), "cron",
                               hour=8, minute=30, id="msg_retention")
+            # Members' notifications that come from a clock, not a click: a
+            # new sermon, and tomorrow's events (member_push.sweep_tick).
+            import member_push as _member_push
+            scheduler.add_job(g("member_push_sweep", _member_push.sweep_tick), "interval",
+                              minutes=15, id="member_push_sweep")
             # App-granted trials end on their own, like Stripe trials do.
             import trial_expiry as _trial_expiry
             scheduler.add_job(g("trial_expiry", _trial_expiry.expire_tick), "interval",
