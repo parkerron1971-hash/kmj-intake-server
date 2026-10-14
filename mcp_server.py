@@ -335,6 +335,20 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
             "type": "boolean",
             "description": "Include forms that have been switched off. "
                            "Default false."}})),
+    "church_people": (
+        "A church's people, read-only. section=first_time: who came for the "
+        "first time in the last 30 days and has had no text, email or logged "
+        "call since (with contact ids, for a follow-up). section=groups: each "
+        "group's size and recent meetings, and who has missed their group's "
+        "last 3 meetings. section=attendance: each recent service's named "
+        "check-ins in person and online, first-timers and counted heads. "
+        "section=care: Prayer & care and children's check-in as counts only, "
+        "for the owner or a manager. Default overview = first_time + groups "
+        "+ attendance. Call it before answering any of these; never estimate.",
+        _obj({"section": {
+            "type": "string",
+            "enum": ["overview", "first_time", "groups", "attendance", "care"],
+            "description": "Which part. Default overview."}})),
     "sms_status": (
         "Whether texting is actually working for this business: the keyword "
         "clients text to reach it, whether the provider is switched on, "
