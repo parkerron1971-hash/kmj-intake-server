@@ -352,6 +352,20 @@ def _agent_artifact(path: str, biz_id: Optional[str]):
         return None
 
 
+_APPLE_ASSOCIATION_PATH = "/.well-known/apple-developer-merchantid-domain-association"
+
+
+def _apple_association_response():
+    """Stripe's Apple Pay domain-association file, which Apple fetches
+    from every domain registered for wallets (payment_domains.py), so
+    Apple Pay can show in the give page's embedded payment form."""
+    import payment_domains
+    text = payment_domains.apple_association()
+    if text is None:
+        raise HTTPException(404, "Page not found")
+    return PlainTextResponse(text, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+
+
 def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
     """The address the public actually uses for this site. A connected
     custom domain IS the site's home — the platform subdomain is the
@@ -6834,6 +6848,8 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
             _agent = _agent_artifact(normalized_path, biz_id)
             if _agent is not None:
                 return _agent
+        if normalized_path == _APPLE_ASSOCIATION_PATH:
+            return _apple_association_response()
         if normalized_path == "/sitemap.xml":
             _news_posts, _, _ = await _news_identity(client, biz_id)
             return Response(
@@ -7013,6 +7029,8 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: s
             _agent = _agent_artifact(_norm, biz_id)
             if _agent is not None:
                 return _agent
+        if _norm == _APPLE_ASSOCIATION_PATH:
+            return _apple_association_response()
         if _norm == "/sitemap.xml":
             return Response(
                 content=_site_sitemap_xml(slug, {**_cfg, "_business_id": biz_id}, domain),
