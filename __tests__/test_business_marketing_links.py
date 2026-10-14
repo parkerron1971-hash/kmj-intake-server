@@ -419,11 +419,11 @@ def go(t, monkeypatch):
     import public_site
     t.served = []
 
-    async def by_slug(slug, path='/'):
+    async def by_slug(slug, path='/', **kwargs):
         t.served.append(('slug', slug, path))
         return HTMLResponse('their own 404', status_code=404)
 
-    async def by_domain(domain, path='/'):
+    async def by_domain(domain, path='/', **kwargs):
         t.served.append(('domain', domain, path))
         return HTMLResponse('their own 404', status_code=404)
 
