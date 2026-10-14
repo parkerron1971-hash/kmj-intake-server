@@ -520,3 +520,87 @@ def test_patch_refused_outside_nonprofit_family(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         giving_router.patch_giving_config(BIZ, {"enabled": True}, user)
     assert exc.value.status_code == 409
+
+
+# ─── 10. A gift is recorded only from its own church's account ───────
+#
+# A church connects its own Standard account and holds its API keys, so
+# it can create a checkout naming any business_id. The webhook must check
+# that the event's account is the one THAT business connected.
+
+def _post_event(monkeypatch, event):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import json
+    monkeypatch.setattr(stripe_connect_router, "verify_webhook_signature", lambda p, s: True)
+    app = FastAPI()
+    app.include_router(stripe_connect_router.router)
+    return TestClient(app).post("/payments/stripe/webhook", content=json.dumps(event),
+                                headers={"stripe-signature": "t=1,v1=x"})
+
+
+def _gift_session(pi="pi_acct1"):
+    return {"payment_status": "paid", "mode": "payment", "id": "cs_a",
+            "payment_intent": pi, "amount_total": 2500,
+            "customer_details": {"email": "a@example.com", "name": "A Giver"},
+            "metadata": {"source_type": "gift", "source_id": "g", "business_id": BIZ,
+                         "fund": "General", "frequency": "once"}}
+
+
+def _webhook_outcome(fake):
+    return [p for path, p in fake.patches if path.startswith("/stripe_webhook_events")][-1]
+
+
+def test_a_gift_from_the_churchs_own_account_records(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    _post_event(monkeypatch, {"id": "evt_ok", "type": "checkout.session.completed",
+                              "account": "acct_123", "data": {"object": _gift_session()}})
+    assert [i["invoice_number"] for i in fake_sb._posted("/invoices")] == ["GIVE-pi_acct1"]
+    assert _webhook_outcome(fake_sb)["processed_ok"] is True
+
+
+@pytest.mark.parametrize("account", ["acct_other", None])
+def test_a_gift_naming_another_church_is_refused(fake_sb, monkeypatch, account):
+    fake_sb.business = _church()
+    event = {"id": f"evt_{account}", "type": "checkout.session.completed",
+             "data": {"object": _gift_session()}}
+    if account:
+        event["account"] = account
+    _post_event(monkeypatch, event)
+    assert fake_sb._posted("/invoices") == []
+    out = _webhook_outcome(fake_sb)
+    assert out["processed_ok"] is False and "different payment account" in out["processed_error"]
+
+
+def test_a_monthly_cycle_from_another_account_is_refused(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    _post_event(monkeypatch, {"id": "evt_cyc", "type": "invoice.paid", "account": "acct_other",
+                              "data": {"object": _stripe_cycle_invoice("in_bad")}})
+    assert fake_sb._posted("/invoices") == []
+    _post_event(monkeypatch, {"id": "evt_cyc2", "type": "invoice.paid", "account": "acct_123",
+                              "data": {"object": _stripe_cycle_invoice("in_good")}})
+    assert [i["invoice_number"] for i in fake_sb._posted("/invoices")] == ["GIVE-in_good"]
+
+
+def test_a_cancelled_gift_from_another_account_tells_nobody(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    sub = {"id": "sub_x", "metadata": {"source_type": "gift", "business_id": BIZ, "fund": "General"}}
+    _post_event(monkeypatch, {"id": "evt_del", "type": "customer.subscription.deleted",
+                              "account": "acct_other", "data": {"object": sub}})
+    assert fake_sb._posted("/chief_notifications") == []
+    _post_event(monkeypatch, {"id": "evt_del2", "type": "customer.subscription.deleted",
+                              "account": "acct_123", "data": {"object": sub}})
+    assert len(fake_sb._posted("/chief_notifications")) == 1
+
+
+def test_a_refund_from_another_account_leaves_the_gift_alone(fake_sb, monkeypatch):
+    fake_sb.business = _church()
+    giving_router.record_gift(BIZ, amount_cents=5000, fund="General", stripe_ref="pi_r9")
+    charge = {"metadata": {"source_type": "gift", "source_id": "g"}, "payment_intent": "pi_r9",
+              "amount_refunded": 5000, "refunded": True}
+    _post_event(monkeypatch, {"id": "evt_ref", "type": "charge.refunded",
+                              "account": "acct_other", "data": {"object": charge}})
+    assert not any("refund_amount_cents" in p for _, p in fake_sb.patches)
+    _post_event(monkeypatch, {"id": "evt_ref2", "type": "charge.refunded",
+                              "account": "acct_123", "data": {"object": charge}})
+    assert any(p.get("refund_amount_cents") == 5000 for _, p in fake_sb.patches)
