@@ -19,6 +19,10 @@ The first install of a row that was built by a composer keeps that page
 set under site_config.manual_backup; supabase/ROLLBACK-2026-09-03-
 kmj-site-manual.sql puts it back. SITE_SYNC=off disables the whole
 thing for an emergency deploy.
+
+A build may also declare REDIRECTS ({old path: page}), the site's old
+addresses; they are checked (site_page_helpers.clean_redirects) and stored
+as site_config.manual_redirects, which public_site answers with a 301.
 """
 from __future__ import annotations
 
@@ -32,7 +36,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from site_page_helpers import RESERVED_PAGE_IDS, valid_page_id
+from site_page_helpers import RESERVED_PAGE_IDS, clean_redirects, valid_page_id
 
 logger = logging.getLogger("site_sync")
 
@@ -123,12 +127,17 @@ def sync_site(mod: Any) -> str:
                 installed[pid] = html
     pages = installed
     secondary = {p: html for p, html in pages.items() if p != "home"}
+    redirects, skipped = clean_redirects(getattr(mod, "REDIRECTS", None), pages)
+    for old, reason in skipped:
+        _skip_page(slug, old, reason)
     digest = content_hash(pages)
     cfg = dict(row.get("site_config") or {}) if isinstance(row.get("site_config"), dict) else {}
     was_manual = cfg.get("html_source") == "manual"
-    if (was_manual and cfg.get("manual_hash") == digest
-            and cfg.get("site_pages") == list(pages)
-            and cfg.get("generated_pages") == secondary):
+    pages_current = (was_manual and cfg.get("manual_hash") == digest
+                     and cfg.get("site_pages") == list(pages)
+                     and cfg.get("generated_pages") == secondary)
+    # A build without REDIRECTS leaves a row without manual_redirects alone.
+    if pages_current and (cfg.get("manual_redirects") or {}) == redirects:
         # The pages are current; the design record may not be (a site
         # installed before site_adopt existed, or a record that failed
         # to save). Cheap: skipped without a thread when it is current.
@@ -153,6 +162,10 @@ def sync_site(mod: Any) -> str:
         "manual_hash": digest,
         "manual_installed_at": now,
     })
+    if redirects:
+        new_cfg["manual_redirects"] = redirects
+    else:
+        new_cfg.pop("manual_redirects", None)
     sb_clients.sb_patch_as_service(
         f"/business_sites?id=eq.{row['id']}",
         {"html_content": pages["home"], "site_config": new_cfg,
@@ -161,10 +174,11 @@ def sync_site(mod: Any) -> str:
     logger.info(f"[site-sync] {slug}: {outcome} ({digest}, {len(pages)} pages)")
     # Every deploy that changed the site gets looked at (site_check.py):
     # the pages are live within seconds; the check opens them from the
-    # public address, so it waits a beat before starting.
+    # public address, so it waits a beat before starting. A change to the
+    # redirects alone changes no page, so it isn't worth a browser run.
     try:
         import site_check
-        if site_check.enabled():
+        if site_check.enabled() and not pages_current:
             t = threading.Timer(45.0, lambda: site_check.run(
                 str(mod.BUSINESS_ID), reason="deploy", vision=True))
             t.daemon = True   # never holds a shutdown or a test run open

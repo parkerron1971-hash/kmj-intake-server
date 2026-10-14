@@ -309,7 +309,7 @@ def test_every_page_path_reaches_the_church_site_through_the_real_routers(build,
     from fastapi.testclient import TestClient
     import public_site
 
-    async def site(name, path="/"):
+    async def site(name, path="/", **kwargs):
         return HTMLResponse(f"church-site {path}")
     monkeypatch.setattr(public_site, "_serve_site_by_slug", site)
     monkeypatch.setattr(public_site, "_serve_site_by_custom_domain", site)
@@ -318,6 +318,54 @@ def test_every_page_path_reaches_the_church_site_through_the_real_routers(build,
     client = TestClient(real_app)
     for page in build.PAGES:
         path = "/" if page == "home" else f"/{page}"
+        r = client.get(path, headers=hosts)
+        assert (r.status_code, r.text) == (200, f"church-site {path}"), \
+            f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
+
+
+def test_every_old_address_has_a_home_and_installs_cleanly(build, pages):
+    from site_page_helpers import clean_redirects
+    kept, skipped = clean_redirects(build.REDIRECTS, pages)
+    assert skipped == [] and kept == build.REDIRECTS
+    # The old paths the domain runbook names (risk R5).
+    for old, new in {"/what-we-believe": "/beliefs", "/mission-and-vision": "/about",
+                     "/connect-with-us": "/connect", "/prayer-request": "/connect",
+                     "/volunteer": "/connect", "/i-m-new": "/visit", "/welcomehome": "/visit",
+                     "/services-and-events": "/events", "/media": "/sermons",
+                     "/subsplash-media": "/sermons"}.items():
+        assert build.REDIRECTS[old].split("?")[0].split("#")[0] == new, old
+    # GET /live is an API route ahead of the site. Redirecting it needs the
+    # Worker to vouch for the host first (worklog follow-up).
+    assert "/live" not in build.REDIRECTS
+
+
+def test_every_redirect_anchor_and_ticked_interest_exists(build, pages):
+    for old, new in build.REDIRECTS.items():
+        page = new.split("?")[0].split("#")[0].strip("/") or "home"
+        if "#" in new:
+            assert f'id="{new.split("#", 1)[1]}"' in pages[page], f"{old} -> {new}"
+        if "interest=" in new:
+            interest = new.split("interest=", 1)[1].split("#")[0]
+            assert f'data-interest="{interest}"' in pages[page], f"{old} -> {new}"
+
+
+@pytest.mark.parametrize("hosts", CHURCH_HOSTS.values(), ids=CHURCH_HOSTS.keys())
+def test_every_old_address_reaches_the_church_site(build, real_app, hosts, monkeypatch):
+    """No API route may answer an old address before the church site does,
+    so every entry in the map can actually be served."""
+    from fastapi.responses import HTMLResponse
+    from fastapi.testclient import TestClient
+    import public_site
+
+    async def site(name, path="/", **kwargs):
+        return HTMLResponse(f"church-site {path}")
+    monkeypatch.setattr(public_site, "_serve_site_by_slug", site)
+    monkeypatch.setattr(public_site, "_serve_site_by_custom_domain", site)
+    monkeypatch.setattr(public_site, "_check_rate", lambda *a, **k: True)
+
+    client = TestClient(real_app, follow_redirects=False)
+    for old in build.REDIRECTS:
+        path = old.replace("/*", "/page/2")
         r = client.get(path, headers=hosts)
         assert (r.status_code, r.text) == (200, f"church-site {path}"), \
             f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
@@ -380,6 +428,7 @@ def test_the_churchs_own_row_installs_once_then_stays_current(pages, monkeypatch
     cfg = body["site_config"]
     assert cfg["html_source"] == "manual" and cfg["site_pages"][0] == "home"
     assert set(cfg["site_pages"]) <= set(pages)
+    assert cfg["manual_redirects"] == _church_mod().REDIRECTS
     # What was there before is kept, so the install can be undone.
     assert cfg["manual_backup"]["html_content"] == "<html>the row Giving made</html>"
 

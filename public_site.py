@@ -34,7 +34,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from site_page_helpers import secondary_pages
+from site_page_helpers import manual_redirect, secondary_pages, with_visitor_query
 
 
 def _brand_footer_html(business_id: str) -> str:
@@ -6717,7 +6717,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
                             headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
 
 
-async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
+async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") -> HTMLResponse:
     """Shared logic: look up site by slug and return HTML.
     Pass 3: when site_config.use_smart_sites is true, attempt Smart Sites
     render first. ANY failure falls through to legacy.
@@ -6725,7 +6725,9 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
     sites can route /about, /services, /contact correctly.
     Phase D.2.1: `/book` always serves the hosted booking page
     (regardless of MySite presence); `/` falls back to /book when the
-    site has no html_content (booking_only row)."""
+    site has no html_content (booking_only row).
+    `query` is the visitor's query string, kept on a hand-built site's
+    redirect of an old address."""
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
@@ -6896,6 +6898,14 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
                     headers={"X-Solutionist-Source": "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
+        # A hand-built site's old addresses (build.py REDIRECTS). Checked
+        # here, where the site would otherwise 404, so a redirect never
+        # shadows a page, a hosted door or the news feed.
+        _old_to = manual_redirect(_cfg, normalized_path) if _manual else None
+        if _old_to:
+            return RedirectResponse(url=with_visitor_query(_old_to, query), status_code=301,
+                                    headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+
         # ─── Real 404 for anything else ────────────────────────────
         # Every unknown path used to return the home page with a 200.
         if normalized_path != "/":
@@ -6910,7 +6920,7 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         )
 
 
-async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResponse:
+async def _serve_site_by_custom_domain(domain: str, path: str = "/", *, query: str = "") -> HTMLResponse:
     """Look up a site by its custom domain.
     Pass 3: same flag check as _serve_site_by_slug.
     Pass 3.8g: forwards `path` for multi-page routing.
@@ -7042,6 +7052,12 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
                     content=_page_html, media_type="text/html",
                     headers={"X-Solutionist-Source": "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+
+        # A hand-built site's old addresses, as on the subdomain path.
+        _old_to = manual_redirect(_cfg, _norm) if _manual else None
+        if _old_to:
+            return RedirectResponse(url=with_visitor_query(_old_to, query), status_code=301,
+                                    headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _norm != "/":
             return await _render_not_found(client, slug, biz_id, domain)
@@ -7419,8 +7435,8 @@ async def _site_response_or_none(request: Request, *, charge_page_views: bool = 
     if kind == "slug":
         if charge_page_views and not _check_rate(name):
             raise HTTPException(429, "Rate limit exceeded")
-        return await _serve_site_by_slug(name, path)
-    return await _serve_site_by_custom_domain(name, path)
+        return await _serve_site_by_slug(name, path, query=request.url.query)
+    return await _serve_site_by_custom_domain(name, path, query=request.url.query)
 
 
 async def _platform_page_or_site(request: Request, render):
@@ -7842,12 +7858,12 @@ async def subdomain_catch_all(request: Request, path: str):
     if slug:
         if not _check_rate(slug):
             raise HTTPException(429, "Rate limit exceeded")
-        return await _serve_site_by_slug(slug, request_path)
+        return await _serve_site_by_slug(slug, request_path, query=request.url.query)
 
     # Custom domain check
     is_known_base = any(host == base or host.endswith(f".{base}") for base in BASE_DOMAINS)
     if not is_known_base and "." in host:
-        result = await _serve_site_by_custom_domain(host, request_path)
+        result = await _serve_site_by_custom_domain(host, request_path, query=request.url.query)
         if result:
             return result
 
